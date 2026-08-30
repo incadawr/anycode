@@ -24,7 +24,7 @@
  * and the real `window.anycode`), so tests build the facade over fakes with
  * zero DOM/Electron — same isolation discipline as tab-registry.test.ts.
  */
-import type { PermissionMode, ReasoningEffort } from "@anycode/core";
+import type { ImageAttachment, ImageMediaType, PermissionMode, ReasoningEffort } from "@anycode/core";
 import type {
   ConnectionPhase,
   ContextUsage,
@@ -34,6 +34,7 @@ import type {
   GitSlice,
   Notice,
   PermissionUiRequest,
+  QueuedPromptImage,
   SessionTokens,
   TranscriptBlock,
   TurnState,
@@ -41,6 +42,13 @@ import type {
 import { buildConfirmedGitCommand } from "./store.js";
 import { dispatchTryAgain } from "./App.js";
 import type { CtxPopoverRow } from "./components/Composer.js";
+import {
+  COMPOSER_IMAGE_MAX_BYTES,
+  COMPOSER_IMAGE_MAX_PER_MESSAGE,
+  isSendBlockedByModelImages,
+  sniffComposerImageMediaType,
+} from "./components/Composer.js";
+import { transcriptTextWithImages } from "./queue-format.js";
 import { confirmDialogCopy } from "./components/GitConfirmDialog.js";
 import { buildDiffRequest } from "./components/GitPanel.js";
 import { isAtBottom } from "./components/MessageList.js";
@@ -621,6 +629,13 @@ export interface TryAgainButtonState {
   enabled: boolean;
 }
 
+/** `workflowStepsState`'s ok-shape (TASK.191 slice S4): same "ok:true folded into the DOM reading" shape as `AgentCardState`/`TryAgainButtonState`. */
+export interface WorkflowStepsState {
+  ok: true;
+  rows: WorkflowStepRowView[];
+  activityRows: string[];
+}
+
 /** Parsed read of one `loop_end` block's `.retry-try-again-button` children (TASK.33 W8-FIX #2) — `count` rides through uncollapsed (rather than the facade reducing it to a boolean) so the caller itself can assert "exactly one", since more than one would itself be the defect this probe exists to catch. */
 export interface TryAgainButtonDomState {
   count: number;
@@ -640,6 +655,32 @@ export interface TryAgainButtonDom {
   state(tabId: string, blockId: string): TryAgainButtonDomState | null;
   /** A real `.click()` on the block's own `.retry-try-again-button` — the exact node the rendered button's `onClick` fires from (App.tsx's `dispatchTryAgain`), unlike the `tryAgain` facade method above which calls `dispatchTryAgain` directly. Returns `false` (no-op) if the block isn't rendered, or doesn't carry exactly one such button. */
   click(tabId: string, blockId: string): boolean;
+}
+
+/** One row of `WorkflowStepsBody`'s checklist (TASK.191 slice S4): the button's own `.workflow-step-id` text plus whether it currently carries the click-driven selection (`aria-pressed`, `ToolCallCard.tsx`'s own `selected` prop). Rendered order rides through as-is (`orderStepsByDependency`'s topological order, read straight off the DOM — never re-derived), so a live smoke can assert on it directly. */
+export interface WorkflowStepRowView {
+  stepId: string;
+  selected: boolean;
+}
+
+/** Parsed read of one workflow card's checklist + activity lane (TASK.191 slice S4). `activityRows` is whatever `WorkflowActivityFeed` currently renders — already filtered down to the selected step's rows when one is selected, since that filtering is `workflowActivityRows`' pure client-side slice of `WorkflowSubStatus.activity`, not a separate store fetch. */
+export interface WorkflowStepsDomState {
+  rows: WorkflowStepRowView[];
+  activityRows: string[];
+}
+
+/**
+ * DOM accessor DI for `workflowStepsState`/`workflowStepClick` (TASK.191
+ * slice S4), same injectable-for-tests discipline as `AgentCardDom`/
+ * `TryAgainButtonDom`. `state` returns `null` when the card isn't in the DOM
+ * yet (transcript not mounted for this tab, or no `.tool-call-card` carries
+ * this exact `toolCallId`) — the facade turns that into the valid-empty
+ * reading, never an error.
+ */
+export interface WorkflowStepsDom {
+  state(tabId: string, toolCallId: string): WorkflowStepsDomState | null;
+  /** A real `.click()` on the ONE `.workflow-step-button` whose `.workflow-step-id` text equals `stepId` — the exact node `WorkflowStepsBody`'s `onClick={() => onSelectStep(step.stepId)}` fires from. Returns `false` (no-op) if the card isn't rendered, or no button (or more than one) matches this `stepId`. */
+  click(tabId: string, toolCallId: string, stepId: string): boolean;
 }
 
 /**
@@ -1345,6 +1386,94 @@ export interface ProfilePaneDom {
   clickRebuildConfirm(): boolean;
   /** A real `.click()` on the armed row's Cancel button; `false` unless the row is rendered and armed. Used to leave no armed residue behind a refused rebuild. */
   clickRebuildCancel(): boolean;
+}
+
+/**
+ * One row of the Vision pane's recognizer-connection `<select>` (TASK.198
+ * срез E2c) — a DOM read, byte-parity with what `visionConnectionOptions()`
+ * (`vision-pane-model.ts`) rendered. `label` is the `<option>`'s own rendered
+ * text, which is the DECORATED string `VisionPane.tsx` prints for a
+ * non-selectable row (`${label} — OAuth`), never the underlying option's raw
+ * label — same "byte-parity with what is on screen" posture as every other
+ * probe in this file. `proxyWarning` reads `data-proxy-warning` (a
+ * `VisionPane.tsx` addition for this probe): the component itself only ever
+ * prints the SELECTED option's own warning prose as a separate hint below the
+ * select, never per-option, so this is the one way a caller can see which
+ * OTHER options carry one before picking them.
+ */
+export interface VisionPaneConnectionOption {
+  id: string;
+  label: string;
+  selectable: boolean;
+  proxyWarning: string | null;
+}
+
+/**
+ * Real DOM state of the Vision settings panel (TASK.198 срез E2c) — a DOM
+ * probe, same "no mirrored state" discipline as the Profile pane probe above:
+ * an unmounted pane (Settings closed, or a different pane selected) reads as
+ * the empty defaults, not an error.
+ */
+export interface VisionPaneState {
+  /** Whether `.vision-pane` is currently mounted (Settings open with the "vision" pane selected). */
+  mounted: boolean;
+  /** The badge's own reading — `true` iff `.vision-pane-state-badge` carries `vision-pane-state-badge-on` ("On"). */
+  enabled: boolean;
+  /** `.vision-pane-current-pair`'s rendered text ("<label> · <modelId>"), or `null` when the badge reads "Off" (the component renders no pair span at all in that branch). */
+  currentPairText: string | null;
+  connectionOptions: VisionPaneConnectionOption[];
+  /** The `<select>`'s own live value — `""` for the unselected placeholder, the same sentinel `visionSubmitDisabled` treats as "nothing chosen". */
+  selectedConnectionId: string;
+  /** The model `<input>`'s own live value. */
+  modelValue: string;
+  /** `<datalist>` suggestion ids, in rendered order — each `<option>`'s VALUE (what a pick actually submits), not its display label. */
+  modelHints: string[];
+  saveDisabled: boolean;
+  probeDisabled: boolean;
+  /** `null` when the fallback is off (neither "Turn off" nor "Really turn off?" is rendered at all) — the control reads as ABSENT, not merely "not disabled". Reflects whichever of the two buttons the two-step gesture currently shows. */
+  turnOffDisabled: boolean | null;
+  /** `.vision-pane-error`'s rendered text, or `null` when it isn't rendered. */
+  errorText: string | null;
+  /** `.vision-pane-probe-result`'s rendered text (either branch), or `null` when no probe result is showing. */
+  probeResultText: string | null;
+  /** `null` whenever `probeResultText` is `null`; otherwise whether the result rendered as `.settings-notice-ok` (success) rather than `.settings-notice` (failure). */
+  probeResultOk: boolean | null;
+}
+
+/**
+ * DOM accessor DI for the Vision pane probe/driver (TASK.198 срез E2c), same
+ * injectable-for-tests discipline as `ProfilePaneDom` — the real one is the
+ * only implementation that touches `document`.
+ */
+export interface VisionPaneDom {
+  mounted(): boolean;
+  enabled(): boolean;
+  currentPairText(): string | null;
+  connectionOptions(): VisionPaneConnectionOption[];
+  selectedConnectionId(): string;
+  /** A real `<select>` value-pick + `change` event (`setNativeSelectValue`). `false` when the select is missing/disabled, `connectionId` names no option, or that option is itself disabled (an OAuth connection — a real user cannot pick a disabled `<option>` through the native control either). */
+  selectConnection(connectionId: string): boolean;
+  modelValue(): string;
+  /** A real `<input>` value-set + `input` event (`setNativeInputValue`); `false` when the field is missing/disabled. */
+  setModel(modelId: string): boolean;
+  /** `<datalist>` suggestion ids, in rendered order. */
+  modelHints(): string[];
+  saveButton(): { disabled: boolean } | null;
+  /** A real `.click()` on the Save button; `false` only if it isn't rendered (always rendered once mounted). Same "delivered, not necessarily acted on" posture as `ProfilePaneDom.clickRefresh` — a disabled button swallows it silently, which is why callers check `saveButton()` first. */
+  clickSave(): boolean;
+  probeButton(): { disabled: boolean } | null;
+  /** A real `.click()` on the Probe button; same delivered-not-acted-on posture as `clickSave`. */
+  clickProbe(): boolean;
+  /** The unarmed "Turn off" button — present only while the fallback is on AND the two-step confirm has not been armed yet. */
+  turnOffButton(): { disabled: boolean } | null;
+  /** A real `.click()` on the unarmed "Turn off" button (arms the two-step gesture — a local `useState` flip, no IPC); `false` only if it isn't rendered. */
+  clickTurnOff(): boolean;
+  /** The armed "Really turn off?" button — present only once the gesture above has been armed. */
+  turnOffConfirmButton(): { disabled: boolean } | null;
+  /** A real `.click()` on the armed "Really turn off?" button (the real `recognizerSet` round trip); `false` only if it isn't rendered. */
+  clickTurnOffConfirm(): boolean;
+  errorText(): string | null;
+  probeResultText(): { ok: boolean; text: string } | null;
 }
 
 /**
@@ -2191,7 +2320,23 @@ export interface AnycodeBridge {
 /** Frozen contract (design §3.2) that `window.__anycodeAutomation` exposes to the main-process HTTP server (S3). */
 export interface AutomationFacade {
   snapshot(transcriptTail?: number): SnapshotJson;
-  sendPrompt(tabId: string, text: string): { ok: true; requestId: string } | FacadeErr;
+  /**
+   * TASK.198 live-smoke facade extension: `images`, when present, are already
+   * read + base64-encoded by handlers.ts (main has no way to sniff/size them
+   * against Composer's own rules — that validation is renderer-only, see
+   * `createAutomationFacade`'s implementation). Reasons beyond the pre-image
+   * set (`unknown_tab`/`not_ready`/`busy`): `image_too_many` (over
+   * `COMPOSER_IMAGE_MAX_PER_MESSAGE`), `image_unsupported_type` (the sniffed
+   * bytes aren't one of the four supported formats), `image_too_large` (over
+   * `COMPOSER_IMAGE_MAX_BYTES`), and `images_unsupported` (TASK.56 W3-FIX's
+   * existing `isSendBlockedByModelImages` gate — a blind model with no
+   * configured recognizer fallback, same reason `tryAgain` already reports).
+   */
+  sendPrompt(
+    tabId: string,
+    text: string,
+    images?: readonly { data: string; sourcePath: string }[],
+  ): { ok: true; requestId: string } | FacadeErr;
   // TASK.33 W8: the same click driver as `agentCardExpand` above — no facade
   // guard of its own beyond "does an offer exist" (`retry === null` is a
   // no-op click), everything else is the REAL `dispatchTryAgain` (App.tsx)
@@ -2207,6 +2352,14 @@ export interface AutomationFacade {
   // wiring, not just the dispatch function in isolation.
   tryAgainButtonState(tabId: string, blockId: string): TryAgainButtonState | FacadeErr;
   tryAgainButtonClick(tabId: string, blockId: string): FacadeResult;
+  // TASK.191 slice S4: a DOM-level probe/driver pair for the workflow
+  // checklist's click-to-filter row, same "real click on the actual button"
+  // posture as tryAgainButtonClick above — `WorkflowStepsBody`'s
+  // `onSelectStep` is local component `useState` (`ToolCallCard`'s own
+  // `selectedStepId`), not a store action, so there is no facade shortcut to
+  // call directly the way `tryAgain` calls `dispatchTryAgain`.
+  workflowStepsState(tabId: string, toolCallId: string): WorkflowStepsState | FacadeErr;
+  workflowStepClick(tabId: string, toolCallId: string, stepId: string): Promise<FacadeResult>;
   respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult;
   setMode(tabId: string, mode: string): FacadeResult;
   stop(tabId: string): FacadeResult;
@@ -2393,6 +2546,26 @@ export interface AutomationFacade {
   profileToggleModelsExpanded(): Promise<FacadeResult>;
   profileRefresh(): Promise<ProfilePaneRefreshResult>;
   profileRebuild(): Promise<FacadeResult>;
+  // ── Vision pane probe/driver (TASK.198 срез E2c) — a DEDICATED probe, every
+  // probe above stays byte-untouched. `visionSelectConnection`/`visionSetModel`
+  // drive the pane's own local draft fields (a real `<select>` pick / a real
+  // keystroke into the model `<input>` — a local `useState`, no IPC round
+  // trip); `visionSave`/`visionTurnOff` round-trip the real `recognizerSet`
+  // channel (an atomic settings.json write); `visionProbe` round-trips the
+  // real `recognizerProbe` channel — a genuine network call to whatever
+  // provider the candidate connection names, so it alone needs the file's
+  // longest settle deadline (see `VISION_PANE_PROBE_DEADLINE_MS`'s own doc
+  // comment for why none of the existing long deadlines actually cover its
+  // real worst case). `visionTurnOff` mirrors `profileRebuild`'s two-step-
+  // in-the-pane discipline (arm, then confirm) rather than a modal —
+  // `window.prompt`/`confirm`/`alert` throw under this Electron
+  // configuration. ──
+  visionPaneState(): VisionPaneState;
+  visionSelectConnection(connectionId: string): Promise<FacadeResult>;
+  visionSetModel(modelId: string): Promise<FacadeResult>;
+  visionSave(): Promise<FacadeResult>;
+  visionProbe(): Promise<FacadeResult>;
+  visionTurnOff(): Promise<FacadeResult>;
   // ── Settings geometry probe (TASK.187 S5, plan §S5) — a DEDICATED probe
   // over the layout itself, not over any one pane: `.settings-pane` is the
   // scroll port of ALL fourteen panes, so defect 1 ("the scrollbar sits at
@@ -2937,6 +3110,58 @@ function realTryAgainButtonDom(): TryAgainButtonDom {
         return false;
       }
       buttons[0]!.click();
+      return true;
+    },
+  };
+}
+
+/**
+ * The real Workflow-steps DOM accessor (TASK.191 slice S4): same laziness/
+ * scoping discipline as `realAgentCardDom` above — the card itself is
+ * located by `.tool-call-card[data-tool-call-id]` inside the active tab's
+ * `.message-list[data-tab-id]`. Step rows are matched by their own rendered
+ * `.workflow-step-id` text (the button carries no separate data attribute
+ * for it — `ToolCallCard.tsx`'s own markup, byte-untouched here), the same
+ * "read what the product already renders" posture as every other `real*Dom`
+ * accessor in this file.
+ */
+function realWorkflowStepsDom(): WorkflowStepsDom {
+  function card(tabId: string, toolCallId: string): HTMLElement | null {
+    const containers = document.querySelectorAll<HTMLDivElement>(
+      `.message-list[data-tab-id="${CSS.escape(tabId)}"]`,
+    );
+    const container = containers.length === 1 ? containers[0] : null;
+    return (
+      container?.querySelector<HTMLElement>(`.tool-call-card[data-tool-call-id="${CSS.escape(toolCallId)}"]`) ?? null
+    );
+  }
+  function stepButtons(tabId: string, toolCallId: string): HTMLButtonElement[] {
+    const el = card(tabId, toolCallId);
+    return Array.from(el?.querySelectorAll<HTMLButtonElement>(".workflow-step-button") ?? []);
+  }
+  return {
+    state(tabId, toolCallId) {
+      const el = card(tabId, toolCallId);
+      if (!el) {
+        return null;
+      }
+      const rows = stepButtons(tabId, toolCallId).map((button) => ({
+        stepId: button.querySelector(".workflow-step-id")?.textContent?.trim() ?? "",
+        selected: button.getAttribute("aria-pressed") === "true",
+      }));
+      const activityRows = Array.from(
+        el.querySelectorAll<HTMLLIElement>(".workflow-activity-feed .subagent-activity-row"),
+      ).map((row) => row.textContent?.trim() ?? "");
+      return { rows, activityRows };
+    },
+    click(tabId, toolCallId, stepId) {
+      const matches = stepButtons(tabId, toolCallId).filter(
+        (button) => (button.querySelector(".workflow-step-id")?.textContent?.trim() ?? "") === stepId,
+      );
+      if (matches.length !== 1) {
+        return false;
+      }
+      matches[0]!.click();
       return true;
     },
   };
@@ -3652,6 +3877,141 @@ function realProfilePaneDom(): ProfilePaneDom {
       }
       el.click();
       return true;
+    },
+  };
+}
+
+/**
+ * The real Vision-pane DOM accessor (TASK.198 срез E2c): queries live at call
+ * time, same laziness discipline as `realProfilePaneDom`. `.vision-pane` only
+ * ever mounts while Settings is open with the "vision" pane selected
+ * (`SettingsScreen.tsx`'s own guard), so `mounted()` is an unambiguous
+ * reading. Every accessor scopes through `pane()` first — `.settings-notice`/
+ * `.settings-notice-ok` alone are shared with a dozen other panes (see
+ * `errorText`/`probeResultText`'s own dedicated `vision-pane-*` marker
+ * classes for how this probe tells apart the two DIFFERENT elements that can
+ * carry the bare `settings-notice` class within this one pane).
+ */
+function realVisionPaneDom(): VisionPaneDom {
+  function pane(): HTMLElement | null {
+    return document.querySelector<HTMLElement>(".vision-pane");
+  }
+  function selectEl(): HTMLSelectElement | null {
+    return pane()?.querySelector<HTMLSelectElement>(".vision-pane-connection-select") ?? null;
+  }
+  function inputEl(): HTMLInputElement | null {
+    return pane()?.querySelector<HTMLInputElement>(".vision-pane-model-input") ?? null;
+  }
+  function saveButtonEl(): HTMLButtonElement | null {
+    return pane()?.querySelector<HTMLButtonElement>(".vision-pane-save-button") ?? null;
+  }
+  function probeButtonEl(): HTMLButtonElement | null {
+    return pane()?.querySelector<HTMLButtonElement>(".vision-pane-probe-button") ?? null;
+  }
+  function turnOffButtonEl(): HTMLButtonElement | null {
+    return pane()?.querySelector<HTMLButtonElement>(".vision-pane-turnoff-button") ?? null;
+  }
+  function turnOffConfirmButtonEl(): HTMLButtonElement | null {
+    return pane()?.querySelector<HTMLButtonElement>(".vision-pane-turnoff-confirm-button") ?? null;
+  }
+  return {
+    mounted: () => pane() !== null,
+    enabled: () => (pane()?.querySelector(".vision-pane-state-badge")?.classList.contains("vision-pane-state-badge-on") ?? false),
+    currentPairText: () => pane()?.querySelector(".vision-pane-current-pair")?.textContent?.trim() ?? null,
+    connectionOptions: () =>
+      // The placeholder ("Select a connection…") carries `value=""` — the
+      // same sentinel `visionSubmitDisabled`/`selectedConnectionId()` treat as
+      // "nothing chosen", and no real connection id is ever the empty string
+      // — so filtering it out this way needs no extra DOM marker.
+      Array.from(selectEl()?.options ?? [])
+        .filter((option) => option.value !== "")
+        .map((option) => ({
+          id: option.value,
+          label: option.textContent?.trim() ?? "",
+          selectable: !option.disabled,
+          proxyWarning: option.getAttribute("data-proxy-warning"),
+        })),
+    selectedConnectionId: () => selectEl()?.value ?? "",
+    selectConnection: (connectionId) => {
+      const select = selectEl();
+      if (!select || select.disabled) {
+        return false;
+      }
+      const option = Array.from(select.options).find((candidate) => candidate.value === connectionId);
+      if (!option || option.disabled) {
+        return false;
+      }
+      setNativeSelectValue(select, connectionId);
+      return true;
+    },
+    modelValue: () => inputEl()?.value ?? "",
+    setModel: (modelId) => {
+      const input = inputEl();
+      if (!input || input.disabled) {
+        return false;
+      }
+      setNativeInputValue(input, modelId);
+      return true;
+    },
+    modelHints: () =>
+      Array.from(document.querySelectorAll<HTMLOptionElement>("#vision-model-suggestions option")).map(
+        (option) => option.value,
+      ),
+    saveButton: () => {
+      const el = saveButtonEl();
+      return el ? { disabled: el.disabled } : null;
+    },
+    clickSave: () => {
+      const el = saveButtonEl();
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    probeButton: () => {
+      const el = probeButtonEl();
+      return el ? { disabled: el.disabled } : null;
+    },
+    clickProbe: () => {
+      const el = probeButtonEl();
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    turnOffButton: () => {
+      const el = turnOffButtonEl();
+      return el ? { disabled: el.disabled } : null;
+    },
+    clickTurnOff: () => {
+      const el = turnOffButtonEl();
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    turnOffConfirmButton: () => {
+      const el = turnOffConfirmButtonEl();
+      return el ? { disabled: el.disabled } : null;
+    },
+    clickTurnOffConfirm: () => {
+      const el = turnOffConfirmButtonEl();
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    errorText: () => pane()?.querySelector(".vision-pane-error")?.textContent?.trim() ?? null,
+    probeResultText: () => {
+      const el = pane()?.querySelector<HTMLElement>(".vision-pane-probe-result") ?? null;
+      if (!el) {
+        return null;
+      }
+      return { ok: el.classList.contains("settings-notice-ok"), text: el.textContent?.trim() ?? "" };
     },
   };
 }
@@ -4644,6 +5004,29 @@ async function waitForProfilePaneSettled(dom: ProfilePaneDom, deadlineMs: number
   }
 }
 
+/** Deadline for `visionSelectConnection`/`visionSetModel`'s commit polls and `visionTurnOff`'s arm step (TASK.198 срез E2c) — local React `useState` (`connectionId`/`modelId`/`confirmingOff`), no IPC round-trip at all, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
+const VISION_PANE_COMMIT_DEADLINE_MS = 500;
+
+/** Deadline for `visionSave`/`visionTurnOff`'s confirm-step settle polls (TASK.198 срез E2c) — same rationale as `PROFILE_PANE_APPLY_DEADLINE_MS`: both round-trip the real `recognizerSet` channel, an atomic settings.json write over IPC. */
+const VISION_PANE_APPLY_DEADLINE_MS = 10_000;
+
+/**
+ * Deadline for `visionProbe`'s settle poll (TASK.198 срез E2c) — a genuine
+ * ceiling, not an expected duration, sized against `recognizer-probe.ts`'s OWN
+ * worst case rather than reused from an existing constant: the probe spawns a
+ * child whose own abort budget is `RECOGNIZER_PROBE_TIMEOUT_MS` (60 000 ms),
+ * and the parent then waits a further `RECOGNIZER_PROBE_KILL_GRACE_MS`
+ * (2 000 ms) past that before it can even report a timeout — a true worst
+ * case of ~62 s. This file's own longest existing deadline
+ * (`PROFILE_PANE_SETTLE_DEADLINE_MS`, 60 000 ms) sits BELOW that true ceiling,
+ * so reusing it here would risk this route reporting `did_not_settle` up to
+ * ~2 s before the real IPC call it is waiting on has even resolved — exactly
+ * the failure-path case (an unreachable/hanging recognizer endpoint) a caller
+ * of this route is most likely to be exercising on purpose. Sized with
+ * headroom above the true ceiling rather than flush against it.
+ */
+const VISION_PANE_PROBE_DEADLINE_MS = 65_000;
+
 /** Deadline for `shortcutsStartRecord`'s post-click settle poll (design/slice-P7.24-cut.md §4 W4) — local React `useState`, no IPC round-trip, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const SHORTCUTS_PANE_COMMIT_DEADLINE_MS = 500;
 
@@ -4673,6 +5056,9 @@ const CODEX_IMPORT_LIST_DEADLINE_MS = 10_000;
 
 /** Deadline for `codexImportApply`'s post-click settle poll (W4-F0 probe (c)) — a real import (≤32 MiB rollout parse + session persist) plus the resume-path tab open, same rationale as `MCP_PANE_APPLY_DEADLINE_MS`. */
 const CODEX_IMPORT_APPLY_DEADLINE_MS = 10_000;
+
+/** Deadline for `workflowStepClick`'s post-click settle poll (TASK.191 slice S4) — same 500ms budget as `AGENT_CARD_COMMIT_DEADLINE_MS`: a local `useState` toggle (`selectedStepId`) with no async work of its own. */
+const WORKFLOW_STEP_CLICK_COMMIT_DEADLINE_MS = 500;
 
 /** Reads a button's rendered label + disabled state (shared by the codex pane/import DOM accessors below). */
 function buttonFacts(button: HTMLButtonElement): { label: string; disabled: boolean } {
@@ -5198,6 +5584,27 @@ function realSidebarDom(): SidebarDom {
 }
 
 /**
+ * Reverse of Composer's own `bytesToBase64` — used only by `sendPrompt`'s
+ * image path below, decoding the base64 handlers.ts (main) already read off
+ * disk. `atob` (not `Buffer`) because this module runs in the renderer, same
+ * global Composer's encoder relies on.
+ */
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/** Tail path segment for the queue-list pill / transcript badge (`QueuedPromptImage.name`) — no node:path in a renderer module, same bare-lastIndexOf discipline as core's `imageExtensionOf`. */
+function basenameOfPath(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash === -1 ? path : path.slice(slash + 1);
+}
+
+/**
  * Builds an `AutomationFacade` over the given registry/tabs-store/bridge.
  * `createAutomationFacade()` with no arguments (what `installAutomation`
  * uses) wires the app's real singletons; tests pass fakes built the same way
@@ -5250,6 +5657,12 @@ export function createAutomationFacade(
   sidebarDom: SidebarDom = realSidebarDom(),
   // TASK.187 S5: appended at the END for the same reason.
   settingsLayoutDom: SettingsLayoutDom = realSettingsLayoutDom(),
+  // TASK.191 slice S4: appended at the END for the same reason.
+  workflowStepsDom: WorkflowStepsDom = realWorkflowStepsDom(),
+  // TASK.198 срез E2c: appended at the END for the same reason as every DI
+  // param above it — every existing positional call site would shift
+  // otherwise.
+  visionPaneDom: VisionPaneDom = realVisionPaneDom(),
 ): AutomationFacade {
   /**
    * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
@@ -5320,7 +5733,11 @@ export function createAutomationFacade(
       return { tabs, activeTabId, states, hiddenWorkspaces };
     },
 
-    sendPrompt(tabId: string, text: string): { ok: true; requestId: string } | FacadeErr {
+    sendPrompt(
+      tabId: string,
+      text: string,
+      images?: readonly { data: string; sourcePath: string }[],
+    ): { ok: true; requestId: string } | FacadeErr {
       const store = registry.getStore(tabId);
       if (!store) {
         return { ok: false, reason: "unknown_tab" };
@@ -5329,24 +5746,70 @@ export function createAutomationFacade(
       // Mirrors Composer.handleSend's guard exactly (design §3.2): ready &&
       // idle. The host is still the final word (busy -> turn_rejected,
       // junk -> zod drop) — this is a UX-parity guard, not the security
-      // boundary.
+      // boundary. Runs BEFORE any image work below: a busy/not-ready tab
+      // never even decodes the payload.
       if (state.connection !== "ready") {
         return { ok: false, reason: "not_ready" };
       }
       if (state.turn.status !== "idle") {
         return { ok: false, reason: "busy" };
       }
+      // TASK.198 live-smoke facade extension: `images` arrive as base64 +
+      // sourcePath ONLY — handlers.ts (main) has no way to sniff/size them
+      // (that's Composer's job, and Composer is a renderer-only module), so
+      // this is where a live drag-drop's OWN validation runs: the real
+      // magic-byte sniff (`sniffComposerImageMediaType`, never the extension)
+      // and the SAME size/count caps the composer UI enforces. Rejecting here
+      // fails closed with nothing sent — no partial text-only send — since a
+      // caller that explicitly asked for an image turn is proving something
+      // about that image, and a silent strip would misreport what happened.
+      const queuedImages: QueuedPromptImage[] = [];
+      if (images !== undefined && images.length > 0) {
+        if (images.length > COMPOSER_IMAGE_MAX_PER_MESSAGE) {
+          return { ok: false, reason: "image_too_many" };
+        }
+        for (const image of images) {
+          const bytes = base64ToBytes(image.data);
+          if (bytes.length > COMPOSER_IMAGE_MAX_BYTES) {
+            return { ok: false, reason: "image_too_large" };
+          }
+          const mediaType = sniffComposerImageMediaType(bytes);
+          if (mediaType === null) {
+            return { ok: false, reason: "image_unsupported_type" };
+          }
+          queuedImages.push({
+            name: basenameOfPath(image.sourcePath),
+            sizeBytes: bytes.length,
+            attachment: { mediaType, data: image.data, sourcePath: image.sourcePath },
+          });
+        }
+        // Same TASK.56 W3-FIX gate `tryAgain` already reports as
+        // `images_unsupported` below, and `dispatchInitialPrompt`
+        // (tab-registry.ts) applies on a tab's first turn — a blind model
+        // with no configured recognizer fallback (TASK.198 срез D) refuses
+        // the WHOLE send rather than silently stripping the images, so a
+        // live smoke asserting on this reason can never be lied to by a
+        // facade shortcut.
+        if (isSendBlockedByModelImages(state.imageInput, state.imageFallback, queuedImages.length)) {
+          return { ok: false, reason: "images_unsupported" };
+        }
+      }
       const requestId = crypto.randomUUID();
       // Composer-echo: the wire never echoes the user's own text back (§3
       // MVP) — appendUserText is the transcript write, same as the real
       // button.
-      state.appendUserText(requestId, text);
+      state.appendUserText(requestId, transcriptTextWithImages(text, queuedImages.length));
       // TASK.33 W8: byte-parity with Composer.handleSend's direct-send
       // branch — records what actually went on the wire so a live smoke
       // driving turns through this facade can still exercise the Try-again
       // offer (arming requires `lastSentMessage`).
-      state.recordSentMessage(text, []);
-      const message: UiToHostMessage = { type: "user_message", requestId, text };
+      state.recordSentMessage(text, queuedImages);
+      const message: UiToHostMessage = {
+        type: "user_message",
+        requestId,
+        text,
+        ...(queuedImages.length > 0 ? { images: queuedImages.map((image) => image.attachment) } : {}),
+      };
       registry.sendToTab(tabId, message);
       return { ok: true, requestId };
     },
@@ -5426,6 +5889,60 @@ export function createAutomationFacade(
       // finding 1).
       const clicked = tryAgainButtonDom.click(tabId, blockId);
       return clicked ? { ok: true } : { ok: false, reason: "not_present" };
+    },
+
+    workflowStepsState(tabId: string, toolCallId: string): WorkflowStepsState | FacadeErr {
+      // Same two structural refusals as agentCardState/tryAgainButtonState:
+      // the checklist only ever lives inside the active tab's mounted
+      // transcript.
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const state = workflowStepsDom.state(tabId, toolCallId);
+      if (state === null) {
+        // A valid reading, not an error (agentCardState/tryAgainButtonState
+        // precedent): the transcript isn't mounted for this tab yet, or no
+        // card with this exact toolCallId has landed there yet.
+        return { ok: true, rows: [], activityRows: [] };
+      }
+      return { ok: true, ...state };
+    },
+
+    async workflowStepClick(tabId: string, toolCallId: string, stepId: string): Promise<FacadeResult> {
+      // Same two structural refusals as workflowStepsState above.
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const before = workflowStepsDom.state(tabId, toolCallId);
+      if (before === null || !before.rows.some((row) => row.stepId === stepId)) {
+        return { ok: false, reason: "not_present" };
+      }
+      const wasSelected = before.rows.find((row) => row.stepId === stepId)?.selected === true;
+      // A real click on the step's own `.workflow-step-button` (TASK.191
+      // slice S4) — not a synthetic store poke, since the selection is local
+      // component useState (`ToolCallCard`'s own `selectedStepId`), same
+      // posture as `agentCardExpand`'s `clickToggle`. Re-clicking an already
+      // selected step CLEARS it (`toggleWorkflowStepSelection`), so the
+      // settle condition below waits for `selected` to FLIP, not to become
+      // `true` unconditionally.
+      const clicked = workflowStepsDom.click(tabId, toolCallId, stepId);
+      if (!clicked) {
+        return { ok: false, reason: "not_present" };
+      }
+      // Same commit-race guard as agentCardExpand/ctxPopoverOpen: a real
+      // click schedules a React state update that may not have committed by
+      // the very next synchronous line.
+      const committed = await waitUntil(
+        () => workflowStepsDom.state(tabId, toolCallId)?.rows.find((row) => row.stepId === stepId)?.selected !== wasSelected,
+        WORKFLOW_STEP_CLICK_COMMIT_DEADLINE_MS,
+      );
+      return committed ? { ok: true } : { ok: false, reason: "did_not_settle" };
     },
 
     respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult {
@@ -7059,6 +7576,175 @@ export function createAutomationFacade(
       if (!profilePaneDom.mounted()) {
         return { ok: false, reason: "pane_not_mounted" };
       }
+      return settled ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    visionPaneState(): VisionPaneState {
+      if (!visionPaneDom.mounted()) {
+        // A valid reading, not an error (ProfilePaneState/SubagentsPaneState
+        // precedent): the Settings dialog is closed, or a different pane is
+        // currently active.
+        return {
+          mounted: false,
+          enabled: false,
+          currentPairText: null,
+          connectionOptions: [],
+          selectedConnectionId: "",
+          modelValue: "",
+          modelHints: [],
+          saveDisabled: false,
+          probeDisabled: false,
+          turnOffDisabled: null,
+          errorText: null,
+          probeResultText: null,
+          probeResultOk: null,
+        };
+      }
+      const save = visionPaneDom.saveButton();
+      const probe = visionPaneDom.probeButton();
+      const turnOff = visionPaneDom.turnOffButton();
+      const turnOffConfirm = visionPaneDom.turnOffConfirmButton();
+      const probeResult = visionPaneDom.probeResultText();
+      return {
+        mounted: true,
+        enabled: visionPaneDom.enabled(),
+        currentPairText: visionPaneDom.currentPairText(),
+        connectionOptions: visionPaneDom.connectionOptions(),
+        selectedConnectionId: visionPaneDom.selectedConnectionId(),
+        modelValue: visionPaneDom.modelValue(),
+        modelHints: visionPaneDom.modelHints(),
+        // Both buttons always render once mounted — a `null` reading here
+        // would mean the DOM stopped matching this component's own JSX, so
+        // this defaults to the "can't act on it" (disabled) reading rather
+        // than a permissive one, same posture as `ProfilePaneState.refreshEnabled`.
+        saveDisabled: save?.disabled ?? true,
+        probeDisabled: probe?.disabled ?? true,
+        turnOffDisabled: (turnOff ?? turnOffConfirm)?.disabled ?? null,
+        errorText: visionPaneDom.errorText(),
+        probeResultText: probeResult?.text ?? null,
+        probeResultOk: probeResult?.ok ?? null,
+      };
+    },
+
+    async visionSelectConnection(connectionId: string): Promise<FacadeResult> {
+      if (!visionPaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      if (!visionPaneDom.selectConnection(connectionId)) {
+        return { ok: false, reason: "option_not_present" };
+      }
+      const committed = await waitUntil(
+        () => visionPaneDom.selectedConnectionId() === connectionId,
+        VISION_PANE_COMMIT_DEADLINE_MS,
+      );
+      return committed ? { ok: true } : { ok: false, reason: "did_not_select" };
+    },
+
+    async visionSetModel(modelId: string): Promise<FacadeResult> {
+      if (!visionPaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      if (!visionPaneDom.setModel(modelId)) {
+        return { ok: false, reason: "field_not_present" };
+      }
+      const committed = await waitUntil(() => visionPaneDom.modelValue() === modelId, VISION_PANE_COMMIT_DEADLINE_MS);
+      return committed ? { ok: true } : { ok: false, reason: "did_not_commit" };
+    },
+
+    async visionSave(): Promise<FacadeResult> {
+      if (!visionPaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const button = visionPaneDom.saveButton();
+      if (button === null) {
+        return { ok: false, reason: "save_not_present" };
+      }
+      if (button.disabled) {
+        return { ok: false, reason: "save_disabled" };
+      }
+      if (!visionPaneDom.clickSave()) {
+        return { ok: false, reason: "save_not_present" };
+      }
+      // Two-phase, same reasoning as `profilePaneStarted`/
+      // `waitForProfilePaneSettled`: the button's own `disabled` goes
+      // false -> true -> false across the round trip, so a single "wait until
+      // false" poll could resolve on its ALREADY-false starting reading
+      // without observing the round trip happen at all. Waiting for the
+      // KNOWN-false reading to flip to true first proves the click actually
+      // started something.
+      const started = await waitUntil(() => visionPaneDom.saveButton()?.disabled === true, VISION_PANE_COMMIT_DEADLINE_MS);
+      if (!started) {
+        return { ok: false, reason: "did_not_start" };
+      }
+      const settled = await waitUntil(() => visionPaneDom.saveButton()?.disabled === false, VISION_PANE_APPLY_DEADLINE_MS);
+      return settled ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    async visionProbe(): Promise<FacadeResult> {
+      if (!visionPaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const button = visionPaneDom.probeButton();
+      if (button === null) {
+        return { ok: false, reason: "probe_not_present" };
+      }
+      if (button.disabled) {
+        return { ok: false, reason: "probe_disabled" };
+      }
+      if (!visionPaneDom.clickProbe()) {
+        return { ok: false, reason: "probe_not_present" };
+      }
+      // Same two-phase reasoning as `visionSave` above.
+      const started = await waitUntil(() => visionPaneDom.probeButton()?.disabled === true, VISION_PANE_COMMIT_DEADLINE_MS);
+      if (!started) {
+        return { ok: false, reason: "did_not_start" };
+      }
+      // The one genuine network round trip in this file's whole Vision
+      // surface — see `VISION_PANE_PROBE_DEADLINE_MS`'s own doc comment for
+      // why this is NOT one of the existing long deadlines.
+      const settled = await waitUntil(() => visionPaneDom.probeButton()?.disabled === false, VISION_PANE_PROBE_DEADLINE_MS);
+      return settled ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    async visionTurnOff(): Promise<FacadeResult> {
+      if (!visionPaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      // An already-armed gesture (a previous, abandoned call) is confirmed
+      // directly rather than re-armed — same posture as `profileRebuild`.
+      if (visionPaneDom.turnOffConfirmButton() === null) {
+        const turnOff = visionPaneDom.turnOffButton();
+        if (turnOff === null) {
+          return { ok: false, reason: "turnoff_not_present" };
+        }
+        if (turnOff.disabled) {
+          return { ok: false, reason: "turnoff_disabled" };
+        }
+        if (!visionPaneDom.clickTurnOff()) {
+          return { ok: false, reason: "turnoff_not_present" };
+        }
+        const armed = await waitUntil(() => visionPaneDom.turnOffConfirmButton() !== null, VISION_PANE_COMMIT_DEADLINE_MS);
+        if (!armed) {
+          return { ok: false, reason: "did_not_arm" };
+        }
+      }
+      const confirm = visionPaneDom.turnOffConfirmButton();
+      if (confirm === null) {
+        return { ok: false, reason: "turnoff_not_present" };
+      }
+      if (confirm.disabled) {
+        return { ok: false, reason: "turnoff_disabled" };
+      }
+      if (!visionPaneDom.clickTurnOffConfirm()) {
+        return { ok: false, reason: "turnoff_not_present" };
+      }
+      // A successful `recognizerSet({recognizer: null})` disables the
+      // fallback, which un-mounts BOTH turn-off buttons entirely (VisionPane
+      // .tsx's own `fallback.enabled` gate) — a failed one leaves the armed
+      // "Really turn off?" button standing (re-enabled, with `errorText` now
+      // set), so waiting for it to disappear is an honest settle signal
+      // either way.
+      const settled = await waitUntil(() => visionPaneDom.turnOffConfirmButton() === null, VISION_PANE_APPLY_DEADLINE_MS);
       return settled ? { ok: true } : { ok: false, reason: "did_not_settle" };
     },
 

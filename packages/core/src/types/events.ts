@@ -278,8 +278,39 @@ export type AgentEvent =
   // change (protocol.ts projects new AgentEvent variants automatically). Coarse
 
   // progress surfaces as workflow_step_progress, not subagent_*.
-  | { type: "workflow_start"; toolCallId: string; workflow: string; totalSteps: number }
+  | {
+      type: "workflow_start";
+      toolCallId: string;
+      workflow: string;
+      totalSteps: number;
+      /**
+       * TASK.191 slice S3: the run's step graph (id/agentType/dependsOn), so
+       * the desktop card can hold and order all N steps before the first
+       * `workflow_step_start` arrives, rather than discovering steps one at a
+       * time in event-ARRIVAL order.
+       *
+       * Shape duplicated from `ports/workflow.ts`'s `WorkflowStepGraphNode`
+       * rather than imported: `ports/workflow.ts` already imports `TokenUsage`
+       * FROM this file (for `WorkflowProgress`'s usage fields), so importing
+       * `WorkflowStepGraphNode` back here would close a cycle between
+       * `types/events.ts` and `ports/workflow.ts`. Both fields are
+       * `import type`-only today, which TS tolerates, but this package's
+       * layering elsewhere (e.g. workflow/engine.ts's own header comment)
+       * treats ports/types as a one-way arrow — keeping this inline avoids
+       * relying on TS's tolerance for a cycle the rest of the codebase
+       * otherwise avoids.
+       */
+      steps: readonly { id: string; agentType: string; dependsOn?: readonly string[] }[];
+    }
   | { type: "workflow_step_start"; toolCallId: string; stepId: string; agentType: string }
+  // TASK.191 slice S3: the step's REAL (post-semaphore) start, distinct from
+  // workflow_step_start above — that one fires the instant a step becomes
+  // ready, BEFORE it may have to wait behind the shared subagent semaphore.
+  // A step carrying workflow_step_start but no workflow_step_running yet is
+  // honestly "queued", not "running": a client-side guess from dependsOn
+  // alone cannot tell the two apart (engine.ts emits step_start before ever
+  // calling subagents.run).
+  | { type: "workflow_step_running"; toolCallId: string; stepId: string }
   | {
       type: "workflow_step_progress";
       toolCallId: string;
@@ -287,7 +318,21 @@ export type AgentEvent =
       turns: number;
       toolCalls: number;
       lastTool?: string;
+      /**
+       * TASK.191 slice S2: the step's token spend, cumulative since that step
+       * started. The receiver REPLACES its stored value rather than adding, so
+       * a dropped or duplicated event leaves the total intact. Absent means the
+       * tier reported no spend at all — not that the step spent nothing.
+       */
+      usage?: TokenUsage;
     }
+  // Per-step tool activity (TASK.191 slice S1). The workflow mirror of
+  // `subagent_activity` above, and additive in the same way. Before this
+  // variant a workflow run was a black box: `workflow_step_progress` carries
+  // counters only, so the parent could see THAT a step had made 7 tool calls
+  // but never WHICH. One lane per RUN, not per step — hence `stepId` on every
+  // row (WorkflowProgress's own "step_activity" doc has the rationale).
+  | { type: "workflow_step_activity"; toolCallId: string; stepId: string; toolName: string; summary: string }
   | {
       type: "workflow_step_end";
       toolCallId: string;
@@ -295,6 +340,8 @@ export type AgentEvent =
       status: "completed" | "max_turns" | "cancelled" | "error" | "skipped";
       turns: number;
       durationMs: number;
+      /** TASK.191 slice S2: the step's final spend, from its SubagentOutcome. */
+      usage?: TokenUsage;
     }
   | {
       type: "workflow_end";

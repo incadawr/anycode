@@ -62,12 +62,19 @@
  * `workflow: WorkflowSubStatus | null` field on the `tool_call` variant of
  * `TranscriptBlock` (default null everywhere a tool_call block is created,
  * mirroring `subagent`) tracks a Workflow tool call's coarse DAG progress
- * keyed by `toolCallId` — `workflow_start` seeds it (steps: [], final: null),
- * `workflow_step_start` appends a step entry, `workflow_step_progress`
- * refreshes a step's counters, `workflow_step_end` settles that step, and
- * `workflow_end` fills the run-level terminal status. Purely additive: no
- * existing field, action, or the frozen five-kind `TranscriptBlock` union
- * changes.
+ * keyed by `toolCallId` — `workflow_start` seeds it, `workflow_step_start`
+ * refreshes a step entry, `workflow_step_progress` refreshes a step's
+ * counters, `workflow_step_activity` appends a row to the run-wide activity
+ * lane, `workflow_step_end` settles that step, and `workflow_end` fills the
+ * run-level terminal status. Purely additive: no existing field, action, or
+ * the frozen five-kind `TranscriptBlock` union changes.
+ *
+ * TASK.191 slice S3 revises the `workflow_start`/`workflow_step_start` pair
+ * above: `workflow_start` now PREFILLS `steps` with every step of the run's
+ * graph (not `steps: []`), so the card holds all N steps before the first one
+ * launches; `workflow_step_start` UPDATES the matching prefilled entry in
+ * place rather than appending. See `WorkflowStepStatus`/`WorkflowSubStatus`'s
+ * own doc comments below for the full per-field semantics.
  *
  * Codex-fixes TASK.39 (B2-ui, cut §2(k).3/§3.3) fills in the
  * `engine_settings_changed` branch that B2-host's contracts left as a
@@ -126,6 +133,7 @@ import type {
 import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { type UsageLimitNotice } from "./provider-notices.js";
 import { decodeSubagentCardSnapshot, projectSubagentCard } from "./subagent-card.js";
+import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
 
 /** Lifecycle of the renderer<->host port itself, independent of the agent turn lifecycle. */
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
@@ -222,38 +230,91 @@ export const SUBAGENT_ACTIVITY_RING = 100;
 
 /**
  * Coarse progress of one DAG step within a running Workflow tool call
- * (design/slice-3.4-cut.md §2.3/§6, task 3.4.5). Appended to the parent
- * `WorkflowSubStatus.steps` array by `workflow_step_start` (turns/toolCalls
- * at 0, `final` null); `workflow_step_progress` refreshes the counters;
- * `workflow_step_end` fills `final`. Steps may run concurrently (DAG, not a
- * single lane) — the array order is arrival order of `workflow_step_start`,
- * not necessarily definition order.
+ * (design/slice-3.4-cut.md §2.3/§6, task 3.4.5). TASK.191 slice S3:
+ * `workflow_start` now PREFILLS this array with every step of the run's
+ * graph (`started`/`running` both false, `final` null), so the array order
+ * is `workflow_start`'s own definition order — NOT arrival order of
+ * `workflow_step_start` as it used to be. `workflow_step_start` UPDATES the
+ * matching entry in place (`started: true`) rather than appending;
+ * `workflow_step_running` sets `running: true`; `workflow_step_progress`
+ * refreshes the counters; `workflow_step_end` fills `final` (which can now
+ * arrive for a step that never started at all — a fail-fast "skipped"
+ * terminal, engine.ts's own synthetic outcome for a never-launched step).
  */
 export interface WorkflowStepStatus {
   stepId: string;
   agentType: string;
+  /** The step's declared dependencies (TASK.191 slice S3), straight off the
+   *  run's graph — used to lay the checklist out by dependency level rather
+   *  than trust this array's own order (see `orderStepsByDependency` in
+   *  ToolCallCard.tsx), since a definition may legally declare a step before
+   *  the steps it depends on. */
+  dependsOn: readonly string[];
   turns: number;
   toolCalls: number;
   lastTool: string | null;
+  /**
+   * The step's token spend (TASK.191 slice S2), cumulative since that step
+   * started. `null` means the tier reported none at all — engine and
+   * session-tier children surface no spend, and a card must show nothing there
+   * rather than a zero it cannot vouch for. Wire events REPLACE this value;
+   * an event that omits it leaves the last known number standing rather than
+   * erasing it.
+   */
+  usage: TokenUsage | null;
+  /** `workflow_step_start` observed (TASK.191 slice S3). False means the step
+   *  has never launched — its dependencies aren't all satisfied yet, or
+   *  launches are frozen (fail-fast/cancellation) and never will be. */
+  started: boolean;
+  /** `workflow_step_running` observed (TASK.191 slice S3): the step cleared
+   *  the shared subagent semaphore and its child is actually executing. A
+   *  step with `started: true` but `running: false` is honestly "queued" —
+   *  `started` alone cannot tell the two apart (§B7: step_start fires before
+   *  the engine ever touches the semaphore). */
+  running: boolean;
   final: { status: "completed" | "max_turns" | "cancelled" | "error" | "skipped"; durationMs: number } | null;
 }
 
 /**
  * Sub-status of a Workflow tool call's DAG run (design §2.3/§6, task 3.4.5),
  * keyed onto the Workflow tool_call block by `toolCallId` — the workflow
- * mirror of `SubagentSubStatus`. `workflow_start` seeds it (`steps: []`,
- * `final` null); each `workflow_step_*` event patches the matching entry in
- * `steps` (keyed by `stepId`, appended by `workflow_step_start`); `workflow_end`
- * fills `final`, flipping the card to the terminal status. Like
- * `SubagentSubStatus`, the full step/run output text is NOT here — it arrives
- * capped in the ordinary `tool_result` that settles this same tool_call.
+ * mirror of `SubagentSubStatus`. TASK.191 slice S3: `workflow_start` seeds it
+ * with EVERY step of the run's graph already in `steps` (`started`/`running`
+ * both false, `final` null) — not the empty array it used to seed, since the
+ * card is meant to hold all N steps before the first one launches; each
+ * `workflow_step_*` event patches the matching entry in `steps` (keyed by
+ * `stepId`, found by `.map`, never appended — an event for a `stepId` outside
+ * the seeded graph is a no-op); `workflow_end` fills `final`, flipping the
+ * card to the terminal status. Like `SubagentSubStatus`, the full step/run
+ * output text is NOT here — it arrives capped in the ordinary `tool_result`
+ * that settles this same tool_call.
  */
 export interface WorkflowSubStatus {
   workflow: string;
   totalSteps: number;
   steps: WorkflowStepStatus[];
+  /**
+   * Live per-step-tool activity rows (TASK.191 slice S1), ONE lane for the
+   * whole run rather than one per step. A DAG runs steps concurrently, so a
+   * per-step lane would both grow the card by a lane per step and destroy the
+   * only thing a reader wants here — the chronology BETWEEN steps. Each row
+   * therefore carries its own `stepId`, and the renderer prefixes it.
+   */
+  activity: { stepId: string; toolName: string; summary: string }[];
+  /** Count of activity rows dropped from the front of the ring once the cap was exceeded (honest overflow counter, not a wire field). */
+  activityDropped: number;
   final: { status: "completed" | "failed" | "cancelled"; completedSteps: number; durationMs: number } | null;
 }
+
+/**
+ * Ring cap for `WorkflowSubStatus.activity` (TASK.191 slice S1). Deliberately
+ * larger than SUBAGENT_ACTIVITY_RING: that ring holds ONE child's rows, this
+ * one is shared by every concurrent step of a DAG, so at equal size a
+ * multi-lane run would keep a proportionally shorter stretch of history. The
+ * core's own per-run emission cap (SUBAGENT_ACTIVITY_MAX_EVENTS) still applies
+ * per STEP upstream — this is the renderer's independent retention bound.
+ */
+export const WORKFLOW_ACTIVITY_RING = 200;
 
 /** TASK.33 W7b terminal-error retry metadata — mirrors the core AgentEvent's `error.retry` field (types/events.ts) 1:1. */
 export interface ErrorRetryMeta {
@@ -754,6 +815,17 @@ export interface DesktopState {
    * clear it out from under an in-flight model pick.
    */
   imageInput: boolean | undefined;
+  /**
+   * TASK.198 срез D: whether a recognizer connect is configured, so images can
+   * still be attached to a model that cannot see them — the host runs them
+   * through the `InspectImage` fallback instead of the model's own vision.
+   * `undefined` means the host never sent the field (a legacy host); the
+   * renderer then gates on `imageInput` alone, exactly today's behavior.
+   * Lives beside `imageInput` for the same reason: `host_ready` sets it
+   * explicitly and `performReset` must not clear it out from under a live
+   * recognizer config.
+   */
+  imageFallback: boolean | undefined;
   turn: TurnState;
   transcript: TranscriptBlock[];
   permission: PermissionUiRequest | null;
@@ -1218,11 +1290,15 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
       // is the LAST line of defense here (`loadHistory` parses the item's
       // JSON with no validation of its own, sqlite-persistence.ts), so any
       // structurally-wrong blob degrades to `null` rather than failing the
-      // whole session's hydration. Workflow sub-status has no persisted
-      // counterpart (out of S1 scope) — a hydrated tool_call never has one
-      // to replay.
+      // whole session's hydration. The workflow card (TASK.191 slice S5) has
+      // its own persisted terminal snapshot riding the same `presentation`
+      // envelope (`presentation.workflow`) and is restored the same way,
+      // through the same decode-as-last-line-of-defense.
       const snap = result?.presentation?.subagent !== undefined
         ? decodeSubagentCardSnapshot(result.presentation.subagent, { toolCallId: part.toolCallId, toolName: part.toolName })
+        : null;
+      const workflowSnap = result?.presentation?.workflow !== undefined
+        ? decodeWorkflowCardSnapshot(result.presentation.workflow, { toolCallId: part.toolCallId, toolName: part.toolName })
         : null;
       blocks.push({
         kind: "tool_call",
@@ -1234,7 +1310,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         modelText: result ? result.text : null,
         snapshots: { before: null, after: null },
         subagent: snap !== null ? projectSubagentCard(snap) : null,
-        workflow: null,
+        workflow: workflowSnap !== null ? projectWorkflowCard(workflowSnap) : null,
       });
     });
   }
@@ -1661,27 +1737,52 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
     /**
      * Seeds the sub-status region of the Workflow tool_call block matching
-     * `toolCallId` on `workflow_start` (design §2.3/§6, task 3.4.5): `steps`
-     * starts empty and `final` stays null so the card renders the spinner.
-     * No-op if `toolCallId` doesn't match a tool_call block yet — same
-     * defensive posture as `patchSubagentStart`.
+     * `toolCallId` on `workflow_start` (design §2.3/§6, task 3.4.5; TASK.191
+     * slice S3). `steps` is PREFILLED from the wire's run graph — one entry
+     * per definition step, `started`/`running` both false, `final` null — so
+     * the card holds all N steps before the first `workflow_step_start`
+     * lands, instead of discovering them one at a time. No-op if
+     * `toolCallId` doesn't match a tool_call block yet — same defensive
+     * posture as `patchSubagentStart`.
      */
-    function patchWorkflowStart(toolCallId: string, workflow: string, totalSteps: number): void {
+    function patchWorkflowStart(
+      toolCallId: string,
+      workflow: string,
+      totalSteps: number,
+      steps: readonly { id: string; agentType: string; dependsOn?: readonly string[] }[],
+    ): void {
       flushDeltas();
+      const seededSteps: WorkflowStepStatus[] = steps.map((step) => ({
+        stepId: step.id,
+        agentType: step.agentType,
+        dependsOn: step.dependsOn ?? [],
+        turns: 0,
+        toolCalls: 0,
+        lastTool: null,
+        usage: null,
+        started: false,
+        running: false,
+        final: null,
+      }));
       set((state) => ({
         transcript: state.transcript.map((block) =>
           block.kind === "tool_call" && block.toolCallId === toolCallId
-            ? { ...block, workflow: { workflow, totalSteps, steps: [], final: null } }
+            ? {
+                ...block,
+                workflow: { workflow, totalSteps, steps: seededSteps, activity: [], activityDropped: 0, final: null },
+              }
             : block,
         ),
       }));
     }
 
     /**
-     * Appends a step entry on `workflow_step_start`. Requires a workflow
-     * sub-status already seeded by `workflow_start` to append into — a
-     * step_start with no prior start (or a foreign toolCallId) is a no-op,
-     * same guard rationale as `patchSubagentProgress`.
+     * Marks the step matching `stepId` as started on `workflow_step_start`
+     * (TASK.191 slice S3): UPDATES the entry `workflow_start` already
+     * prefilled — never appends, so a `stepId` outside the seeded graph (a
+     * genuinely foreign id, as opposed to a known-but-not-yet-started one) is
+     * a no-op, same as an unseeded workflow or foreign toolCallId (mirror of
+     * `patchSubagentProgress`'s guard).
      */
     function patchWorkflowStepStart(toolCallId: string, stepId: string, agentType: string): void {
       flushDeltas();
@@ -1692,10 +1793,37 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 ...block,
                 workflow: {
                   ...block.workflow,
-                  steps: [
-                    ...block.workflow.steps,
-                    { stepId, agentType, turns: 0, toolCalls: 0, lastTool: null, final: null },
-                  ],
+                  steps: block.workflow.steps.map((step) =>
+                    step.stepId === stepId ? { ...step, agentType, started: true } : step,
+                  ),
+                },
+              }
+            : block,
+        ),
+      }));
+    }
+
+    /**
+     * Marks the step matching `stepId` as actually running on
+     * `workflow_step_running` (TASK.191 slice S3) — the honest post-semaphore
+     * signal: between this and `workflow_step_start` a step is "queued", not
+     * "running" (§B7 — `started` alone cannot tell the two apart, since
+     * `step_start` fires before the engine ever touches the shared subagent
+     * semaphore). Same existing-workflow + matching-stepId no-op guard as the
+     * sibling patchers.
+     */
+    function patchWorkflowStepRunning(toolCallId: string, stepId: string): void {
+      flushDeltas();
+      set((state) => ({
+        transcript: state.transcript.map((block) =>
+          block.kind === "tool_call" && block.toolCallId === toolCallId && block.workflow
+            ? {
+                ...block,
+                workflow: {
+                  ...block.workflow,
+                  steps: block.workflow.steps.map((step) =>
+                    step.stepId === stepId ? { ...step, running: true } : step,
+                  ),
                 },
               }
             : block,
@@ -1706,9 +1834,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
     /**
      * Refreshes the live counters of the step matching `stepId` on
      * `workflow_step_progress`. No-op if the workflow sub-status isn't
-     * seeded, or if `stepId` doesn't match a step already appended by
-     * `workflow_step_start` (the inner `.map` simply finds nothing to patch —
-     * same "foreign id is a no-op" posture as the toolCallId guards above).
+     * seeded, or if `stepId` doesn't match a step in the graph `workflow_start`
+     * prefilled (the inner `.map` simply finds nothing to patch — same
+     * "foreign id is a no-op" posture as the toolCallId guards above).
      */
     function patchWorkflowStepProgress(
       toolCallId: string,
@@ -1716,6 +1844,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       turns: number,
       toolCalls: number,
       lastTool: string | null,
+      usage: TokenUsage | undefined,
     ): void {
       flushDeltas();
       set((state) => ({
@@ -1726,7 +1855,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 workflow: {
                   ...block.workflow,
                   steps: block.workflow.steps.map((step) =>
-                    step.stepId === stepId ? { ...step, turns, toolCalls, lastTool } : step,
+                    step.stepId === stepId
+                      ? { ...step, turns, toolCalls, lastTool, usage: usage ?? step.usage }
+                      : step,
                   ),
                 },
               }
@@ -1736,9 +1867,46 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
     }
 
     /**
+     * Appends a live per-step-tool row on `workflow_step_activity` (TASK.191
+     * slice S1) — the workflow mirror of `patchSubagentActivity`, including
+     * its two guards: an event for an unseeded or foreign toolCallId is a
+     * no-op (nothing invented), and once the RUN's `final` is set a
+     * late/replayed row is a no-op too.
+     *
+     * `stepId` is NOT validated against `steps` on purpose. The row is
+     * appended even if no `workflow_step_start` for it has been seen yet:
+     * both events originate in the same step's progress callback, so a
+     * reordering on the wire would otherwise silently swallow real activity —
+     * and an unknown prefix is a strictly better failure than a missing row.
+     *
+     * Ring-caps at `WORKFLOW_ACTIVITY_RING`; the dropped count is the
+     * renderer's own honest tally, never a wire-reported value.
+     */
+    function patchWorkflowStepActivity(toolCallId: string, stepId: string, toolName: string, summary: string): void {
+      flushDeltas();
+      set((state) => ({
+        transcript: state.transcript.map((block) => {
+          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.workflow || block.workflow.final !== null) {
+            return block;
+          }
+          const activity = [...block.workflow.activity, { stepId, toolName, summary }];
+          const overflow = activity.length - WORKFLOW_ACTIVITY_RING;
+          const ringed = overflow > 0 ? activity.slice(overflow) : activity;
+          const activityDropped = block.workflow.activityDropped + Math.max(overflow, 0);
+          return { ...block, workflow: { ...block.workflow, activity: ringed, activityDropped } };
+        }),
+      }));
+    }
+
+    /**
      * Records the terminal outcome of the step matching `stepId` on
      * `workflow_step_end`: fills that step's `final`. Same
-     * existing-workflow + matching-stepId guard as `patchWorkflowStepProgress`.
+     * existing-workflow + matching-stepId guard as `patchWorkflowStepProgress`
+     * — deliberately NOT gated on `started`: a step the engine fail-fasted
+     * before it ever launched (TASK.191 slice S3) gets a synthetic
+     * `status:"skipped"` end with `started`/`running` both still false, and
+     * this must still apply so the node stops reading "not started" once the
+     * run is actually over.
      */
     function patchWorkflowStepEnd(
       toolCallId: string,
@@ -1746,6 +1914,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       status: "completed" | "max_turns" | "cancelled" | "error" | "skipped",
       turns: number,
       durationMs: number,
+      usage: TokenUsage | undefined,
     ): void {
       flushDeltas();
       set((state) => ({
@@ -1756,7 +1925,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 workflow: {
                   ...block.workflow,
                   steps: block.workflow.steps.map((step) =>
-                    step.stepId === stepId ? { ...step, turns, final: { status, durationMs } } : step,
+                    step.stepId === stepId
+                      ? { ...step, turns, usage: usage ?? step.usage, final: { status, durationMs } }
+                      : step,
                   ),
                 },
               }
@@ -1965,15 +2136,23 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // divergence between the live ring and the true dropped count
           // collapses to the honest persisted value the instant the call
           // settles). A missing/malformed presentation leaves the live
-          // sub-status (if any) untouched.
-          const presented = event.outcome.result?.presentation?.subagent;
-          const decoded = presented !== undefined
-            ? decodeSubagentCardSnapshot(presented, { toolCallId: event.outcome.toolCallId, toolName: event.outcome.toolName })
+          // sub-status (if any) untouched. TASK.191 slice S5: a settled
+          // Workflow call's `presentation.workflow` is restored the same
+          // way — wholesale replacement on decode success, live state left
+          // untouched on a missing/malformed payload.
+          const presentedSubagent = event.outcome.result?.presentation?.subagent;
+          const decodedSubagent = presentedSubagent !== undefined
+            ? decodeSubagentCardSnapshot(presentedSubagent, { toolCallId: event.outcome.toolCallId, toolName: event.outcome.toolName })
+            : null;
+          const presentedWorkflow = event.outcome.result?.presentation?.workflow;
+          const decodedWorkflow = presentedWorkflow !== undefined
+            ? decodeWorkflowCardSnapshot(presentedWorkflow, { toolCallId: event.outcome.toolCallId, toolName: event.outcome.toolName })
             : null;
           patchToolCall(event.outcome.toolCallId, {
             status: event.outcome.status,
             modelText: event.outcome.modelText,
-            ...(decoded !== null ? { subagent: projectSubagentCard(decoded) } : {}),
+            ...(decodedSubagent !== null ? { subagent: projectSubagentCard(decodedSubagent) } : {}),
+            ...(decodedWorkflow !== null ? { workflow: projectWorkflowCard(decodedWorkflow) } : {}),
           });
           return;
         }
@@ -2212,16 +2391,36 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // toolCallId (patch helpers above no-op on a foreign/unmatched id,
         // mirror of the subagent_* block above). ──
         case "workflow_start":
-          patchWorkflowStart(event.toolCallId, event.workflow, event.totalSteps);
+          patchWorkflowStart(event.toolCallId, event.workflow, event.totalSteps, event.steps);
           return;
         case "workflow_step_start":
           patchWorkflowStepStart(event.toolCallId, event.stepId, event.agentType);
           return;
+        case "workflow_step_running":
+          patchWorkflowStepRunning(event.toolCallId, event.stepId);
+          return;
         case "workflow_step_progress":
-          patchWorkflowStepProgress(event.toolCallId, event.stepId, event.turns, event.toolCalls, event.lastTool ?? null);
+          patchWorkflowStepProgress(
+            event.toolCallId,
+            event.stepId,
+            event.turns,
+            event.toolCalls,
+            event.lastTool ?? null,
+            event.usage,
+          );
+          return;
+        case "workflow_step_activity":
+          patchWorkflowStepActivity(event.toolCallId, event.stepId, event.toolName, event.summary);
           return;
         case "workflow_step_end":
-          patchWorkflowStepEnd(event.toolCallId, event.stepId, event.status, event.turns, event.durationMs);
+          patchWorkflowStepEnd(
+            event.toolCallId,
+            event.stepId,
+            event.status,
+            event.turns,
+            event.durationMs,
+            event.usage,
+          );
           return;
         case "workflow_end":
           patchWorkflowEnd(event.toolCallId, event.status, event.completedSteps, event.totalSteps, event.durationMs);
@@ -2330,6 +2529,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       reasoningEffort: "off",
       availableEffortLevels: undefined,
       imageInput: undefined,
+      imageFallback: undefined,
       ...initialSessionSlice(),
       lastFatal: null,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
@@ -2395,6 +2595,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // wire). Absent on the message -> undefined here -> no
               // model-level gating (today's behavior for a legacy host).
               imageInput: message.imageInput,
+              // TASK.198 срез D: the recognizer verdict rides the same hello.
+              // Absent -> undefined -> attachment gating falls back to
+              // `imageInput` alone.
+              imageFallback: message.imageFallback,
             });
             return;
           case "mode_changed":
@@ -2432,6 +2636,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // switchModel advances the closure). Absent -> undefined -> no
               // gating, matching host_ready's fallback above.
               imageInput: message.imageInput,
+              // TASK.198 срез D: a model switch re-reads the recognizer verdict
+              // too — the fallback is what keeps attachments legal when the new
+              // model is blind.
+              imageFallback: message.imageFallback,
             });
             return;
           case "mode_change_rejected":
@@ -2755,6 +2963,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // mandate reserves that for a later slice). No-op here purely to
             // keep the exhaustive switch below total; not a decision that
             // this data goes unused forever.
+            return;
+          case "image_fallback_changed":
+            // TASK.198 срез D: fires after the host has COMMITTED a recognizer
+            // config change, so the composer re-gates attachments without a
+            // model switch or a host restart.
+            set({ imageFallback: message.imageFallback });
             return;
           default: {
             const _exhaustive: never = message;

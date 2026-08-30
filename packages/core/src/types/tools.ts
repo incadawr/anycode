@@ -23,6 +23,24 @@ import type { ArtifactContext, ArtifactRetention } from "../ports/artifacts.js";
 import type { ResultPreviewDirection } from "../util/result-budget.js";
 import type { ToolResultPresentation } from "./subagent-card.js";
 
+/**
+ * Read-only image-registry lookup handed to tool handlers (TASK.198 plan §2,
+ * slice B1): resolves the `#N` a blind-model stub named back to the actual
+ * attachment bytes. Absence on ToolContext is the fail-closed lock for the
+ * InspectImage tool (slice B2), which returns an "unavailable" outcome
+ * rather than reading history directly — a child subagent receives no port
+ * (buildChildConfig does not copy it), so a child can never resolve an
+ * image ref from a parent turn it never saw.
+ */
+export interface ImageLookupPort {
+  /**
+   * undefined for an unknown ref, or one whose image was cleared by
+   * compaction — an honest tool error ("no longer available"), never a
+   * crash or a silent empty result.
+   */
+  resolve(ref: number): ImageAttachment | undefined;
+}
+
 export type RiskLevel = "low" | "medium" | "high";
 
 export type SideEffectScope = "none" | "filesystem" | "process" | "network";
@@ -180,6 +198,14 @@ export interface ToolContext {
    * does not copy it), so a child's Read never attaches an image.
    */
   media?: MediaCapabilityPort;
+  /**
+   * Vision-fallback image registry (TASK.198 plan §2, slice B1). Optional by
+   * design: its absence is the fail-closed lock — InspectImage (slice B2)
+   * returns an "unavailable" error-outcome instead of reading history. A
+   * child subagent receives no port (buildChildConfig does not copy it), so
+   * a child can never resolve an image ref from a parent turn.
+   */
+  images?: ImageLookupPort;
   /**
    * Interleaves coarse tool-progress events into the parent's stream (design
    * §3.2). Wired by the scheduler; absent when a handler runs outside the

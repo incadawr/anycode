@@ -85,6 +85,31 @@ export const previewSchema = z
   .optional();
 
 /**
+ * The `recognizer` settings section (TASK.198 E1) — the vision-fallback
+ * recognizer's selected connection + model. Additive-optional, version NOT
+ * bumped — same forward-compat reasoning as `preview`/`codex`/`claude` above:
+ * absent means the fallback is disabled (today's `turn_rejected` behaviour on
+ * a blind model). `.catch(undefined)` at the WHOLE-OBJECT boundary (the
+ * `network`/`codex`/`claude` precedent, NOT `previewSchema`'s no-catch shape
+ * above): a corrupt/half-valid `recognizer` value must degrade to "not
+ * configured" alone, never fail `settingsSchema.safeParse` for the WHOLE
+ * document — that would reset `provider`/`permissions`/every other section to
+ * defaults over one bad recognizer field (the hard round-trip/corruption
+ * constraint this slice was built under). Both fields stay required STRINGS
+ * inside the object (not per-field `.catch`) so a half-valid record (e.g.
+ * `connectionId` present, `modelId` missing) fails the object as a whole and
+ * degrades the same way, rather than persisting a structurally-incomplete
+ * setting the resolver would have to special-case.
+ */
+export const recognizerSchema = z
+  .object({
+    connectionId: z.string().min(1),
+    modelId: z.string().min(1),
+  })
+  .optional()
+  .catch(undefined);
+
+/**
  * Strict-shape validator for a settings object. `.passthrough()` at the top
  * level keeps unknown keys from a future version alive across a read-modify-write
  * (design §2) — a v1 binary must not silently drop fields a v2 binary added.
@@ -572,6 +597,11 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // `.passthrough()`) so it validates and survives a read-modify-write
     // cycle; absent on old files, parses to undefined.
     preview: previewSchema,
+    // Vision-fallback recognizer selection (TASK.198 E1, additive-optional;
+    // version NOT bumped, same forward-compat reasoning as `preview` above).
+    // Declared explicitly (not left to `.passthrough()`) so it validates and
+    // survives a read-modify-write cycle.
+    recognizer: recognizerSchema,
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
 

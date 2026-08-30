@@ -424,6 +424,41 @@ describe("fail-fast", () => {
     expect(outcomeOf(outcome.steps, "D").status).toBe("skipped"); // dependent never launched
     expect(port.calls).not.toContain("D");
   });
+
+  // TASK.191 slice S3: before this, a never-launched step's "skipped" fact
+  // lived ONLY in the returned WorkflowRunOutcome.steps array — a client fed
+  // exclusively by onProgress (the desktop card) got no wire event for it at
+  // all and the node stayed "not started" forever, even after the run's own
+  // terminal workflow_end had already landed.
+  it("emits a step_end{skipped} for a step that never launched, BEFORE the run's end event", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      if (id === "B") return statusOutcome("error", "boom");
+      return completedOutcome(`out:${id}`);
+    });
+    const wf = def("ff-events", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "general-purpose", promptTemplate: "${steps.A}", dependsOn: ["A"] },
+      { id: "C", agentType: "general-purpose", promptTemplate: "${steps.B}", dependsOn: ["B"] },
+    ]);
+
+    const events: WorkflowProgress[] = [];
+    const outcome = await createWorkflowRunner(port, [wf]).run(
+      { name: "ff-events", input: "go" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    expect(outcome.status).toBe("failed");
+    expect(outcomeOf(outcome.steps, "C").status).toBe("skipped");
+    // C never launched, so it never got a step_start — but it MUST still get
+    // a terminal step_end, and it must land before the run's own "end".
+    expect(events).not.toContainEqual(expect.objectContaining({ kind: "step_start", stepId: "C" }));
+    const cEnd = events.findIndex((e) => e.kind === "step_end" && e.stepId === "C");
+    const runEnd = events.findIndex((e) => e.kind === "end");
+    expect(cEnd).toBeGreaterThan(-1);
+    expect(events[cEnd]).toEqual({ kind: "step_end", stepId: "C", status: "skipped", turns: 0, durationMs: 0 });
+    expect(runEnd).toBeGreaterThan(cEnd);
+  });
 });
 
 // ===========================================================================
@@ -539,6 +574,30 @@ describe("fail-fast validation", () => {
     expect(outcomeOf(outcome.steps, "B").finalText).toContain("nope");
     expect(outcomeOf(outcome.steps, "A").status).toBe("skipped");
   });
+
+  // TASK.191 slice S3 consequence, NOT a regression of this slice: this
+  // early return sits BEFORE `onProgress?.({kind:"start",...})` at the top
+  // of `run()`, so a caller fed exclusively by onProgress (the desktop card)
+  // never gets a `workflow_start` at all for this outcome — the card simply
+  // never seeds a workflow sub-status, and the failure is visible only
+  // through the returned WorkflowRunOutcome / the settling tool_result. This
+  // is intentional (nothing has streamed yet, so there is nothing for a
+  // client to hold a graph FOR), documented here rather than left implicit.
+  it("emits ZERO progress events for an unknown-agentType fail-fast (documented silence, not a regression)", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, "x"),
+    );
+    const wf = def("badtype-silent", [{ id: "B", agentType: "nope", promptTemplate: "${input}" }]);
+
+    const events: WorkflowProgress[] = [];
+    const outcome = await createWorkflowRunner(port, [wf]).run(
+      { name: "badtype-silent", input: "x" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    expect(outcome.status).toBe("failed");
+    expect(events).toEqual([]);
+  });
 });
 
 // ===========================================================================
@@ -597,6 +656,28 @@ describe("cancellation", () => {
     expect(outcomeOf(outcome.steps, "A").status).toBe("skipped");
     expect(port.calls).toEqual([]);
   });
+
+  // TASK.191 slice S3 consequence, NOT a regression of this slice: the
+  // `if (signal?.aborted)` early return also sits BEFORE the start-progress
+  // emission — same documented silence as the unknown-agentType fail-fast
+  // above, same reason (nothing has streamed yet).
+  it("emits ZERO progress events for a pre-aborted run (documented silence, not a regression)", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, "x"),
+    );
+    const wf = def("pre-silent", [{ id: "A", agentType: "general-purpose", promptTemplate: "${input}" }]);
+
+    const controller = new AbortController();
+    controller.abort();
+    const events: WorkflowProgress[] = [];
+    const outcome = await createWorkflowRunner(port, [wf]).run(
+      { name: "pre-silent" },
+      { signal: controller.signal, onProgress: (progress) => events.push(progress) },
+    );
+
+    expect(outcome.status).toBe("cancelled");
+    expect(events).toEqual([]);
+  });
 });
 
 // ===========================================================================
@@ -654,7 +735,21 @@ describe("progress events", () => {
     );
 
     expect(outcome.status).toBe("completed");
-    expect(events[0]).toEqual({ kind: "start", workflow: "chain2", totalSteps: 2 });
+    // TASK.191 slice S3: the start event now carries the run's step graph so
+    // a client can hold/order all N steps before the first step_start lands
+    // — a client that ignored `steps` entirely would still pass every OTHER
+    // assertion in this file, which is exactly why this needs its own exact
+    // pin (a `toMatchObject` here would silently accept a start event with
+    // the field missing or wrong).
+    expect(events[0]).toEqual({
+      kind: "start",
+      workflow: "chain2",
+      totalSteps: 2,
+      steps: [
+        { id: "A", agentType: "general-purpose" },
+        { id: "B", agentType: "general-purpose", dependsOn: ["A"] },
+      ],
+    });
     const end = events.at(-1);
     expect(end?.kind).toBe("end");
     expect(end).toMatchObject({ status: "completed", completedSteps: 2, totalSteps: 2 });
@@ -664,6 +759,130 @@ describe("progress events", () => {
     expect(aEnd).toBeGreaterThan(0);
     expect(bStart).toBeGreaterThan(aEnd); // chain: A fully precedes B
     expect(events.some((e) => e.kind === "step_progress")).toBe(true);
+  });
+
+  // TASK.191 slice S1. Before this slice the child's `tool` progress had no
+  // branch in the engine at all: counters travelled, the tool names were
+  // dropped on the floor, and a workflow run named not one thing it did.
+  it("forwards each step's child tool activity as step_activity, stamped with that step's id", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      opts.onProgress?.({ kind: "tool", toolName: "Read", summary: `${id}.ts` });
+      opts.onProgress?.({ kind: "tool", toolName: "Bash", summary: "" });
+      return completedOutcome(`out:${id}`);
+    });
+    // Two INDEPENDENT steps: the lane is shared by concurrent steps, so the
+    // stamp is the only thing that attributes a row to its producer.
+    const wf = def("fan2", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "general-purpose", promptTemplate: "${input}" },
+    ]);
+
+    const events: WorkflowProgress[] = [];
+    const outcome = await createWorkflowRunner(port, [wf]).run(
+      { name: "fan2", input: "go" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    expect(outcome.status).toBe("completed");
+    const activity = events.filter((e) => e.kind === "step_activity");
+    expect(activity).toHaveLength(4);
+    expect(activity).toContainEqual({ kind: "step_activity", stepId: "A", toolName: "Read", summary: "A.ts" });
+    expect(activity).toContainEqual({ kind: "step_activity", stepId: "B", toolName: "Read", summary: "B.ts" });
+    // An empty summary is forwarded as-is, not swallowed: it is the producer's
+    // documented fallback for a tool with no per-call subject, and the
+    // renderer already turns it into the bare verb.
+    expect(activity.filter((e) => e.toolName === "Bash").map((e) => e.summary)).toEqual(["", ""]);
+  });
+
+  it("stamps each step's token spend onto step_progress and step_end (TASK.191 slice S2)", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      opts.onProgress?.({
+        kind: "progress",
+        turns: 1,
+        toolCalls: 1,
+        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+      });
+      // The FINAL number comes off the outcome, not off the last progress: a
+      // step whose closing turn calls no tool emits its last progress before
+      // that turn's spend exists.
+      return completedOutcome(`out:${id}`, {
+        usage: { inputTokens: 30, cachedInputTokens: 12, outputTokens: 6, totalTokens: 36 },
+      });
+    });
+    const wf = def("spend", [{ id: "A", agentType: "general-purpose", promptTemplate: "${input}" }]);
+
+    const events: WorkflowProgress[] = [];
+    await createWorkflowRunner(port, [wf]).run({ name: "spend", input: "go" }, {
+      onProgress: (progress) => events.push(progress),
+    });
+
+    expect(events).toContainEqual({
+      kind: "step_progress",
+      stepId: "A",
+      turns: 1,
+      toolCalls: 1,
+      lastTool: undefined,
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+    });
+    const end = events.find((e) => e.kind === "step_end");
+    expect(end).toMatchObject({
+      stepId: "A",
+      usage: { inputTokens: 30, cachedInputTokens: 12, outputTokens: 6, totalTokens: 36 },
+    });
+  });
+
+  it("omits usage entirely for a tier that reports none, rather than stamping zeros", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      opts.onProgress?.({ kind: "progress", turns: 1, toolCalls: 0 });
+      return completedOutcome(`out:${id}`);
+    });
+    const wf = def("silent", [{ id: "A", agentType: "general-purpose", promptTemplate: "${input}" }]);
+
+    const events: WorkflowProgress[] = [];
+    await createWorkflowRunner(port, [wf]).run({ name: "silent", input: "go" }, {
+      onProgress: (progress) => events.push(progress),
+    });
+
+    // "not reported" must stay distinguishable from "reported as none" all the
+    // way out: engine and session-tier children never surface spend at all.
+    for (const event of events) {
+      expect(event).not.toHaveProperty("usage");
+    }
+  });
+
+  // The two SESSION-tier progress kinds stay deliberately unbridged (see the
+  // engine's own comment): a workflow step is inline, so neither can occur —
+  // and inventing a workflow event for them would fabricate a state the
+  // renderer has no honest way to show.
+  it("ignores attention and stalled progress rather than inventing a workflow event", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      opts.onProgress?.({ kind: "attention", waiting: true });
+      opts.onProgress?.({
+        kind: "stalled",
+        agentType: req.agentType,
+        description: req.description,
+        silentMs: 60_000,
+        waitingForApproval: false,
+      });
+      return completedOutcome(`out:${id}`);
+    });
+    const wf = def("solo", [{ id: "A", agentType: "general-purpose", promptTemplate: "${input}" }]);
+
+    const events: WorkflowProgress[] = [];
+    const outcome = await createWorkflowRunner(port, [wf]).run(
+      { name: "solo", input: "go" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    expect(outcome.status).toBe("completed");
+    // step_running (TASK.191 slice S3) rides the same child "start" progress
+    // as attention/stalled just above — it fires between step_start and
+    // step_end, not instead of either.
+    expect(events.map((e) => e.kind)).toEqual(["start", "step_start", "step_running", "step_end", "end"]);
   });
 });
 
@@ -724,16 +943,32 @@ describe("integration with the real subagent runner", () => {
       { id: "s3", agentType: "general-purpose", promptTemplate: "${input}" },
     ]);
 
-    const runPromise = createWorkflowRunner(subagents, [wf]).run({ name: "fan", input: "x" }, {});
+    const events: WorkflowProgress[] = [];
+    const runPromise = createWorkflowRunner(subagents, [wf]).run(
+      { name: "fan", input: "x" },
+      { onProgress: (progress) => events.push(progress) },
+    );
 
     await delay(40);
     expect(started).toBe(2); // the 3rd step is parked behind the shared semaphore
+    // TASK.191 slice S3 (§B7): step_start fires for ALL THREE steps up front —
+    // launchStep's onProgress({kind:"step_start"}) runs BEFORE subagents.run,
+    // which is where the semaphore wait actually happens. So step_start alone
+    // is exactly the wire-indistinguishable signal the plan's rejected
+    // client-side heuristic tried (and failed) to read a queue state from.
+    expect(events.filter((e) => e.kind === "step_start")).toHaveLength(3);
+    // step_running (the honest post-semaphore signal) has landed for the two
+    // that actually acquired a permit, but NOT for the one still parked.
+    const runningIds = events.filter((e) => e.kind === "step_running").map((e) => e.stepId);
+    expect(runningIds.sort()).toEqual(["s1", "s2"]);
 
     releaseGate();
     const outcome = await runPromise;
     expect(started).toBe(3); // it ran only after a permit freed
     expect(outcome.status).toBe("completed");
     expect(outcome.steps.every((step) => step.status === "completed")).toBe(true);
+    // Once the permit frees, s3 finally gets its own step_running too.
+    expect(events.filter((e) => e.kind === "step_running").map((e) => e.stepId).sort()).toEqual(["s1", "s2", "s3"]);
   });
 
   it("lock: a step child carries no spawn ports and its registry excludes Agent AND Workflow (depth stays 1)", () => {

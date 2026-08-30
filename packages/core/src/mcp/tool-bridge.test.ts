@@ -4,24 +4,45 @@
  * annotations (anti "trust downgrade"), naming/sanitize/collision->skip, the
  * per-server caps, result mapping (text-join / isError / non-text marker /
  * MCP_RESULT_MAX_BYTES cap), and the loose zod passthrough slot.
+ *
+ * TASK.198 slice B3 adds the `type:"image"` content-block path: validated
+ * blocks become real `ToolResult.images` attachments instead of the generic
+ * non-text placeholder. The pre-slice placeholder pin ("renders non-text
+ * content as a placeholder marker") used an `image` block as its fixture;
+ * that behavior is EXACTLY what this slice changes, so the fixture is
+ * repointed to a genuinely non-media block type ("audio") to keep proving the
+ * placeholder survives for types slice B3 does not touch. The image-content
+ * describe block below covers acceptance/rejection of `type:"image"` itself.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  IMAGE_MAX_BYTES,
+  IMAGE_MAX_PER_MESSAGE,
   MCP_CALL_TIMEOUT_MS,
   MCP_MAX_TOOLS_PER_SERVER,
   MCP_RESULT_MAX_BYTES,
   MCP_RESULT_MAX_MODEL_BYTES,
   MCP_TOOL_DESCRIPTION_MAX_BYTES,
 } from "../types/config.js";
+import type { ChatMessage, ToolResultPart } from "../types/history.js";
 import type { ToolContext, ToolMetadata } from "../types/tools.js";
+import { toSdkMessages } from "../provider/sdk-mapping.js";
 import {
   bridgeMcpTool,
   bridgeServerTools,
   bridgedToolName,
   type McpCallOutcome,
+  type McpContentBlock,
   type McpRawTool,
 } from "./tool-bridge.js";
+
+/** A real 1x1 PNG (same fixture as image-wire.integration.test.ts): honest magic bytes for a meaningful sniff/round-trip. */
+const PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+/** JPEG magic-byte header only (matches util/images.test.ts's JPEG_HEADER) — sniffImageMediaType reads only the leading bytes. */
+const JPEG_HEADER_B64 = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]).toString("base64");
 
 function ctx(signal?: AbortSignal): ToolContext {
   return {
@@ -134,11 +155,15 @@ describe("bridgeMcpTool — result mapping (handler never throws)", () => {
     expect(res.errorKind).toBeUndefined();
   });
 
-  it("renders non-text content as a placeholder marker", async () => {
-    const def = bridgeMcpTool({ serverName: "srv", transport: "stdio", tool: { name: "t" }, callTool: fixedCall({ kind: "result", content: [{ type: "image", data: "…", mimeType: "image/png" }], isError: false }) });
+  it("renders non-text, non-image content as a placeholder marker", async () => {
+    // TASK.198 slice B3: this pin used to use `type:"image"` as its fixture;
+    // that block type now goes through acceptImageBlock instead of this
+    // generic branch, so the fixture is repointed to "audio" (untouched by
+    // the slice) to keep proving the placeholder survives for other types.
+    const def = bridgeMcpTool({ serverName: "srv", transport: "stdio", tool: { name: "t" }, callTool: fixedCall({ kind: "result", content: [{ type: "audio", data: "…", mimeType: "audio/mpeg" }], isError: false }) });
     const res = await def.handler({}, ctx());
     expect(res.ok).toBe(true);
-    expect(res.output).toBe("[non-text content: image]");
+    expect(res.output).toBe("[non-text content: audio]");
   });
 
   it("caps a large result at MCP_RESULT_MAX_BYTES", async () => {
@@ -174,6 +199,180 @@ describe("bridgeMcpTool — result mapping (handler never throws)", () => {
     const res = await def.handler({}, ctx());
     expect(res.ok).toBe(false);
     expect(res.error).toContain("unexpected");
+  });
+});
+
+describe("bridgeMcpTool — image content (TASK.198 slice B3)", () => {
+  it("accepts a valid image block into `images`, replacing the old placeholder", async () => {
+    const def = bridgeMcpTool({
+      serverName: "srv",
+      transport: "stdio",
+      tool: { name: "t" },
+      callTool: fixedCall({ kind: "result", content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }], isError: false }),
+    });
+    const res = await def.handler({}, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.images).toEqual([{ mediaType: "image/png", data: PNG_B64 }]);
+    expect(res.output).not.toContain("[non-text content:");
+    expect(res.output).toBe("[image attached]");
+  });
+
+  it("drops an image block with invalid base64 data, noting the reason (images stays empty)", async () => {
+    const def = bridgeMcpTool({
+      serverName: "srv",
+      transport: "stdio",
+      tool: { name: "t" },
+      // "…" is a single non-base64 character: fails the strict base64 charset+length check.
+      callTool: fixedCall({ kind: "result", content: [{ type: "image", data: "…", mimeType: "image/png" }], isError: false }),
+    });
+    const res = await def.handler({}, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.images ?? []).toHaveLength(0);
+    expect(res.output).toContain("base64");
+    expect(res.output).not.toBe("[non-text content: image]");
+  });
+
+  it("rejects an over-cap image via a length precheck, without decoding it", async () => {
+    // Encoded length alone (before any decode) already implies a decoded size
+    // over IMAGE_MAX_BYTES: the precheck must reject BEFORE Buffer.from(_,
+    // "base64") is ever called with this payload.
+    const encodedLength = Math.ceil((IMAGE_MAX_BYTES + 3_000_000) / 3) * 4;
+    const huge = "A".repeat(encodedLength);
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+    try {
+      const def = bridgeMcpTool({
+        serverName: "srv",
+        transport: "stdio",
+        tool: { name: "t" },
+        callTool: fixedCall({ kind: "result", content: [{ type: "image", data: huge, mimeType: "image/png" }], isError: false }),
+      });
+      const res = await def.handler({}, ctx());
+      expect(res.ok).toBe(true);
+      expect(res.images ?? []).toHaveLength(0);
+      expect(res.output).toContain(String(IMAGE_MAX_BYTES));
+      expect(bufferFromSpy.mock.calls.some(([arg]) => arg === huge)).toBe(false);
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
+  });
+
+  it("drops an image whose declared mimeType does not match the sniffed bytes", async () => {
+    const def = bridgeMcpTool({
+      serverName: "srv",
+      transport: "stdio",
+      tool: { name: "t" },
+      // Bytes sniff as JPEG; the block declares PNG — an untrusted server's claim loses.
+      callTool: fixedCall({ kind: "result", content: [{ type: "image", data: JPEG_HEADER_B64, mimeType: "image/png" }], isError: false }),
+    });
+    const res = await def.handler({}, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.images ?? []).toHaveLength(0);
+    expect(res.output).toContain("image/png");
+    expect(res.output).toContain("image/jpeg");
+  });
+
+  it(`caps accepted images at IMAGE_MAX_PER_MESSAGE (${IMAGE_MAX_PER_MESSAGE}), noting the tail drop`, async () => {
+    const blocks: McpContentBlock[] = Array.from({ length: IMAGE_MAX_PER_MESSAGE + 1 }, () => ({
+      type: "image",
+      data: PNG_B64,
+      mimeType: "image/png",
+    }));
+    const def = bridgeMcpTool({
+      serverName: "srv",
+      transport: "stdio",
+      tool: { name: "t" },
+      callTool: fixedCall({ kind: "result", content: blocks, isError: false }),
+    });
+    const res = await def.handler({}, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.images).toHaveLength(IMAGE_MAX_PER_MESSAGE);
+    expect(res.output).toContain("cap");
+  });
+
+  it("keeps text and a resource placeholder while attaching a mixed-content image", async () => {
+    const def = bridgeMcpTool({
+      serverName: "srv",
+      transport: "stdio",
+      tool: { name: "t" },
+      callTool: fixedCall({
+        kind: "result",
+        content: [
+          { type: "text", text: "here is the screenshot" },
+          { type: "image", data: PNG_B64, mimeType: "image/png" },
+          { type: "resource", resource: { uri: "file:///x" } },
+        ],
+        isError: false,
+      }),
+    });
+    const res = await def.handler({}, ctx());
+    expect(res.ok).toBe(true);
+    expect(res.images).toEqual([{ mediaType: "image/png", data: PNG_B64 }]);
+    expect(res.output).toContain("here is the screenshot");
+    expect(res.output).toContain("[non-text content: resource]");
+  });
+
+  it("does not attach images on an isError result (falls back to the generic placeholder)", async () => {
+    const def = bridgeMcpTool({
+      serverName: "srv",
+      transport: "stdio",
+      tool: { name: "t" },
+      callTool: fixedCall({ kind: "result", content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }], isError: true }),
+    });
+    const res = await def.handler({}, ctx());
+    expect(res.ok).toBe(false);
+    expect(res.images).toBeUndefined();
+    expect(res.error).toBe("[non-text content: image]");
+  });
+});
+
+describe("bridgeMcpTool — image content across the SDK mapping (TASK.198 slice B3 integration)", () => {
+  it("an MCP tool-result image survives on anthropic-messages and is stripped-with-a-note on the openai transports", async () => {
+    const def = bridgeMcpTool({
+      serverName: "srv",
+      transport: "stdio",
+      tool: { name: "t" },
+      callTool: fixedCall({
+        kind: "result",
+        content: [
+          { type: "text", text: "screenshot" },
+          { type: "image", data: PNG_B64, mimeType: "image/png" },
+        ],
+        isError: false,
+      }),
+    });
+    const result = await def.handler({}, ctx());
+    expect(result.ok).toBe(true);
+    expect(result.images).toHaveLength(1);
+
+    const toolResultPart: ToolResultPart = {
+      type: "tool_result",
+      toolCallId: "call_1",
+      toolName: "mcp__srv__t",
+      text: String(result.output),
+      images: result.images,
+      status: "success",
+    };
+    const toolMessage: ChatMessage = { role: "tool", content: [toolResultPart] };
+
+    interface SdkToolMessage {
+      content: Array<{ output: { type: string; value: unknown } }>;
+    }
+
+    const [anthropicMessage] = toSdkMessages([toolMessage], "anthropic-messages");
+    const anthropicOutput = (anthropicMessage as SdkToolMessage).content[0]!.output;
+    expect(anthropicOutput.type).toBe("content");
+    const anthropicParts = anthropicOutput.value as Array<{ type: string; mediaType?: string; data?: { data: string } }>;
+    expect(
+      anthropicParts.some(
+        (part) => part.type === "file" && part.mediaType === "image/png" && part.data?.data === PNG_B64,
+      ),
+    ).toBe(true);
+
+    const [openaiMessage] = toSdkMessages([toolMessage], "openai-chat-completions");
+    const openaiOutput = (openaiMessage as SdkToolMessage).content[0]!.output;
+    expect(openaiOutput.type).toBe("text");
+    expect(String(openaiOutput.value)).toContain("image omitted");
+    expect(String(openaiOutput.value)).not.toContain(PNG_B64);
   });
 });
 

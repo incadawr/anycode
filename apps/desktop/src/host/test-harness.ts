@@ -37,6 +37,7 @@ import type {
   ModelStreamEvent,
   PermissionMode,
   ReasoningEffort,
+  RecognizerEndpoint,
   TelemetryStatus,
 } from "@anycode/core";
 import type { HostToUiMessage, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
@@ -236,6 +237,21 @@ export interface HarnessOptions {
    * port stays default-enabled.
    */
   imageInputEnabled?: boolean | (() => boolean) | null;
+  /**
+   * TASK.198 срез C: live verdict for the vision fallback, mirroring
+   * `imageInputEnabled`'s own boolean/function/omitted shapes. Omitted ->
+   * `SessionOptions.imageFallbackAvailable` is absent (byte-identical to
+   * pre-TASK.198 for every existing test — the turn-accept gate falls back
+   * to `imageInputEnabled` alone).
+   */
+  imageFallbackAvailable?: boolean | (() => boolean);
+  /**
+   * TASK.198 срез C: the host-owned commit callback a test can inspect
+   * (e.g. `vi.fn()`) to assert what Session's deferred-apply mechanics
+   * actually invoked and when. Omitted -> `SessionOptions.
+   * applyRecognizerConfig` is absent (every existing test unaffected).
+   */
+  applyRecognizerConfig?: (endpoint: RecognizerEndpoint | null) => void;
   /** 6.DP-2: BackgroundTaskPort for the bg-tasks-parity e2e. When present the
    *  harness mirrors host boot EXACTLY: registers backgroundCapableBashTool
    *  (silentDuplicateWarning, over the default Bash) + bashOutputTool +
@@ -474,6 +490,15 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.envStatus ? { envStatus: options.envStatus } : {}),
     ...(options.checkpointsSeam ? { checkpoints: options.checkpointsSeam } : {}),
     ...(options.imageInputEnabled !== null ? { imageInputEnabled: media.imageInputEnabled } : {}),
+    ...(options.imageFallbackAvailable !== undefined
+      ? {
+          imageFallbackAvailable:
+            typeof options.imageFallbackAvailable === "function"
+              ? options.imageFallbackAvailable
+              : () => options.imageFallbackAvailable === true,
+        }
+      : {}),
+    ...(options.applyRecognizerConfig !== undefined ? { applyRecognizerConfig: options.applyRecognizerConfig } : {}),
     ...(options.reasoningSupported !== undefined ? { reasoningSupported: options.reasoningSupported } : {}),
     ...(options.availableEffortLevels !== undefined ? { availableEffortLevels: options.availableEffortLevels } : {}),
     ...(options.selectedEffort !== undefined ? { selectedEffort: options.selectedEffort } : {}),

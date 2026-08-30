@@ -82,6 +82,16 @@ import {
   splitToolDeclarationsByMcpPrefix,
 } from "../context/tokens.js";
 import { classifyProviderFailure, isModelOutputEvent } from "../provider/failure.js";
+import { linkAbortSignal } from "../util/abort.js";
+import {
+  ask,
+  AskCache,
+  buildAskCacheKey,
+  formatImageStub,
+  imageDimensions,
+  OVERVIEW_QUESTION,
+  type RecognizerEndpoint,
+} from "../vision/index.js";
 
 function appendSystemContext(systemPrompt: string | undefined, systemContext: string | undefined): string | undefined {
   if (systemContext === undefined || systemContext.length === 0) return systemPrompt;
@@ -118,6 +128,73 @@ function buildErrorMetadata(
     },
     safe: classification.safe,
   };
+}
+
+/**
+ * Per-image deadline for the bootstrap overview caption (plan §5's
+ * CAPTION_TIMEOUT_MS — the overview is itself one "caption" call). Shorter
+ * than vision/recognizer.ts's own ASK_TIMEOUT_MS default: a live turn is
+ * waiting on this, whereas InspectImage's own follow-up questions (slice B2)
+ * are not.
+ */
+const OVERVIEW_CAPTION_TIMEOUT_MS = 20_000;
+
+/**
+ * Turn-wide deadline for ALL of a turn's bootstrap overview captions combined
+ * (plan §11 "Потолок и бюджет времени"). Without this, a strictly sequential
+ * loop each awaiting its own OVERVIEW_CAPTION_TIMEOUT_MS could block the turn
+ * for up to N * 20s on N attachments — the plan calls this out by name as the
+ * product defect this budget exists to prevent ("8 × 20 с = 160 с блокировки
+ * — продуктовый дефект"), not a figure to reach for. Applied via ONE shared
+ * AbortController (describeImagesForBlindModel) so a slow image can still be
+ * individually capped at OVERVIEW_CAPTION_TIMEOUT_MS while the batch as a
+ * whole never runs past this ceiling.
+ */
+const CAPTIONS_TURN_BUDGET_MS = 30_000;
+
+/**
+ * Concurrent overview-caption calls in flight at once (plan §11). Bounds the
+ * "залп из 8 биллимых вызовов" the plan also calls out — a burst of N
+ * simultaneous provider calls on N attachments — while still finishing well
+ * inside CAPTIONS_TURN_BUDGET_MS.
+ */
+const CAPTIONS_CONCURRENCY = 2;
+
+/**
+ * Text appended after every image stub, telling the model the tool's exact
+ * name and how to address the image (plan §5's "самый сильный сигнал").
+ * Deliberately literal: `formatImageStub`'s output plus this line is what a
+ * blind model actually reads before deciding whether to call InspectImage.
+ */
+function buildInspectImageFollowup(ref: number): string {
+  return `Call InspectImage({image:"#${ref}", question}) to look closer.`;
+}
+
+/**
+ * Vision-fallback wiring bundle (TASK.198 plan §1/§2/§3, slice B1). See
+ * AgentLoopConfig.recognizer's own doc for the field-level contract.
+ */
+export interface AgentLoopRecognizerConfig {
+  /**
+   * ports/persistence.ts's reserveImageRef, closed over the session id by
+   * the wiring layer (host over its live persistence port, CLI over its own
+   * SqlitePersistenceAdapter instance) — an atomic counter, never a history
+   * scan (plan §2 finding: a scan would reuse a number after compaction
+   * drops the highest-ref image).
+   */
+  reserveRef: () => Promise<number>;
+  /**
+   * Present only when a recognizer is actually configured. Absent means
+   * images still get a ref but never a stub/overview caption — the
+   * combination "blind model + no configured recognizer" cannot reach this
+   * loop anyway, since host/session.ts's turn gate (slice C) never accepts
+   * an attachment for it in the first place.
+   */
+  endpoint?: RecognizerEndpoint;
+  /** Shared cache instance (plan §7, vision/ask-cache.ts); a fresh one is built when omitted. */
+  cache?: AskCache;
+  /** Test seam threaded straight into every ask() call (vision/recognizer.ts's own portFactory); production wiring never sets this. */
+  portFactory?: (endpoint: RecognizerEndpoint) => ModelPort;
 }
 
 export interface AgentLoopConfig {
@@ -250,6 +327,19 @@ export interface AgentLoopConfig {
    * Type-only reference — the loop never constructs the closure.
    */
   media?: MediaCapabilityPort;
+  /**
+   * Vision-fallback wiring (TASK.198 plan §1/§2/§3, slice B1) — the ONLY new
+   * AgentLoopConfig field the feature adds. `reserveRef` is called for
+   * EVERY image this loop appends (a user attachment or a tool-result),
+   * regardless of `endpoint`'s presence or the current model's sightedness,
+   * so a live recognizer/model switch mid-session never encounters an
+   * un-numbered image from earlier in the SAME session (plan §2 "assigned
+   * ALWAYS", §9). Absent entirely keeps every image byte-identical to
+   * pre-feature behaviour (no ref, no stub, no overview caption). Never
+   * copied by buildChildConfig — a subagent's own images are never
+   * fallback-annotated (§3: media/recognizer wiring stays parent-only).
+   */
+  recognizer?: AgentLoopRecognizerConfig;
   /**
    * Parent-host worktree relocation port. Deliberately omitted by child-loop
    * config builders, so only the owning session can relocate itself.
@@ -438,6 +528,9 @@ export class AgentLoop {
   private ceilingPreviousRemaining: number | undefined;
   private ceilingSuccessfulToolCalls = 0;
 
+  /** Vision-fallback overview-caption cache (plan §7); shared when the wiring supplies one, private to this loop otherwise. */
+  private readonly askCache: AskCache;
+
   constructor(private readonly config: AgentLoopConfig) {
     const tokenizer = config.tokenizer ?? new HeuristicTokenizer();
     this.tokenizer = tokenizer;
@@ -453,6 +546,204 @@ export class AgentLoop {
     this.schedulerConfig = {
       maxConcurrency: config.toolConcurrency ?? DEFAULT_TOOL_CONCURRENCY,
     };
+    this.askCache = config.recognizer?.cache ?? new AskCache();
+  }
+
+  /**
+   * Resolves a `#N` ref against the LIVE history (TASK.198 plan §2): reads
+   * `this.history.items` at call time, never a snapshot, so a ref cleared
+   * by a compaction that ran AFTER a tool's ToolContext was built still
+   * correctly reads back undefined — an honest "no longer available", not
+   * a stale hit. Scans both user-message attachments and tool-result
+   * images (the same two append sites stampImageRefs numbers).
+   */
+  private resolveImageRef(ref: number): ImageAttachment | undefined {
+    for (const item of this.history.items) {
+      if (item.message.role === "user" && item.message.images !== undefined) {
+        const found = item.message.images.find((image) => image.ref === ref);
+        if (found !== undefined) return found;
+      }
+      if (item.message.role === "tool") {
+        for (const part of item.message.content) {
+          if (part.images === undefined) continue;
+          const found = part.images.find((image) => image.ref === ref);
+          if (found !== undefined) return found;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /** True exactly when the current model can't see images itself but a recognizer is configured to look on its behalf (plan §3's stub/overview gate). */
+  private blindWithRecognizer(): boolean {
+    return this.config.media?.imageInputEnabled() === false && this.config.recognizer?.endpoint !== undefined;
+  }
+
+  /**
+   * Stamps `ref` on every image in array order (plan §2's atomic persistent
+   * counter — never a re-implemented history scan). Sequential awaits, not
+   * Promise.all: the array's own order is the intended numbering order, and
+   * reserveImageRef is one atomic counter step per call.
+   */
+  private async stampImageRefs(images: readonly ImageAttachment[]): Promise<ImageAttachment[]> {
+    const reserveRef = this.config.recognizer?.reserveRef;
+    if (reserveRef === undefined) {
+      return [...images];
+    }
+    const stamped: ImageAttachment[] = [];
+    for (const image of images) {
+      stamped.push({ ...image, ref: await reserveRef() });
+    }
+    return stamped;
+  }
+
+  /**
+   * One bootstrap overview caption (plan §1 step 4 / §3): a single ask()
+   * call with the fixed OVERVIEW_QUESTION, cached by image + recognizer
+   * identity + focus (vision/ask-cache.ts). A failure or timeout degrades to
+   * the bare stub (plan §3 "не успел/упал") — the fallback feature must
+   * never be able to kill the turn. `turnSignal` is linked into the ask()
+   * deadline (not passed to ask() alone, which would then wait forever
+   * absent a cancel) so an aborted turn actually cancels an in-flight
+   * caption instead of leaving it running for up to OVERVIEW_CAPTION_TIMEOUT_MS
+   * after the caller has already moved on.
+   */
+  private async describeImageForBlindModel(
+    image: ImageAttachment,
+    focus: string | undefined,
+    turnSignal: AbortSignal | undefined,
+  ): Promise<string> {
+    const endpoint = this.config.recognizer?.endpoint;
+    const dimensions = imageDimensions(Buffer.from(image.data, "base64"));
+    const stub = formatImageStub({
+      ref: image.ref!,
+      mediaType: image.mediaType,
+      data: image.data,
+      dimensions,
+      sourcePath: image.sourcePath,
+    });
+    const followup = buildInspectImageFollowup(image.ref!);
+    if (endpoint === undefined) {
+      return `${stub}\n${followup}`;
+    }
+    const cacheKey = buildAskCacheKey({ endpoint, image, question: OVERVIEW_QUESTION, focus });
+    let result = this.askCache.get(cacheKey);
+    if (result === undefined) {
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(new DOMException("overview caption timed out", "TimeoutError")),
+        OVERVIEW_CAPTION_TIMEOUT_MS,
+      );
+      const disposeLink = turnSignal ? linkAbortSignal(turnSignal, controller) : () => {};
+      try {
+        result = await ask({
+          endpoint,
+          image,
+          question: OVERVIEW_QUESTION,
+          focus,
+          scale:
+            dimensions !== undefined
+              ? {
+                  pixelWidth: dimensions.width,
+                  pixelHeight: dimensions.height,
+                  ...(image.cssSize !== undefined
+                    ? { cssWidth: image.cssSize.width, cssHeight: image.cssSize.height }
+                    : {}),
+                }
+              : undefined,
+          signal: controller.signal,
+          portFactory: this.config.recognizer?.portFactory,
+        });
+      } finally {
+        clearTimeout(timer);
+        disposeLink();
+      }
+      this.askCache.set(cacheKey, result);
+    }
+    if (!result.ok) {
+      return `${stub}\n${followup}`;
+    }
+    return `${stub}\noverview: ${result.text}\n${followup}`;
+  }
+
+  /**
+   * Runs describeImageForBlindModel for every attachment of a turn under ONE
+   * shared deadline (plan §11): CAPTIONS_TURN_BUDGET_MS total, at most
+   * CAPTIONS_CONCURRENCY calls in flight at once. An indexed worker pool
+   * (not Promise.all over the whole array) so exactly CAPTIONS_CONCURRENCY
+   * calls are ever in flight regardless of attachment count, while writing
+   * each result to its own array slot keeps the returned order identical to
+   * `images`'s order even though completion order can differ.
+   *
+   * One AbortController per batch: `turnSignal` is linked into it (so an
+   * aborted turn still cancels in-flight captions) and a CAPTIONS_TURN_BUDGET_MS
+   * timer aborts it too; ITS signal — not the raw `turnSignal` — is what gets
+   * passed down to each describeImageForBlindModel call, so a per-image call
+   * still gets its own OVERVIEW_CAPTION_TIMEOUT_MS deadline while none of
+   * them can outlive the shared budget. describeImageForBlindModel's own
+   * contract (ask() never throws, a timed-out/aborted call degrades to the
+   * bare stub) is unchanged — exhausting the batch budget just means more
+   * calls degrade that way.
+   */
+  private async describeImagesForBlindModel(
+    images: readonly ImageAttachment[],
+    focus: string | undefined,
+    turnSignal: AbortSignal | undefined,
+  ): Promise<string[]> {
+    const results: string[] = new Array(images.length);
+    const batchController = new AbortController();
+    const timer = setTimeout(
+      () => batchController.abort(new DOMException("captions turn budget exceeded", "TimeoutError")),
+      CAPTIONS_TURN_BUDGET_MS,
+    );
+    const disposeLink = turnSignal ? linkAbortSignal(turnSignal, batchController) : () => {};
+    try {
+      let nextIndex = 0;
+      const runWorker = async (): Promise<void> => {
+        for (;;) {
+          const index = nextIndex;
+          nextIndex += 1;
+          if (index >= images.length) return;
+          results[index] = await this.describeImageForBlindModel(images[index]!, focus, batchController.signal);
+        }
+      };
+      const workerCount = Math.min(CAPTIONS_CONCURRENCY, images.length);
+      await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+    } finally {
+      clearTimeout(timer);
+      disposeLink();
+    }
+    return results;
+  }
+
+  /**
+   * Tool-result image stub (plan §3): reserves refs, then appends one stub
+   * line per image to the outcome's modelText. No ask() call — owner
+   * decision: only user-attached images get a bootstrap overview caption.
+   * Ref reservation itself is gated on `recognizer` being wired at all
+   * (independent of the current model's sightedness, plan §2 "assigned
+   * ALWAYS"); the stub text is gated separately on blindWithRecognizer().
+   */
+  private async annotateToolResultImages(outcome: ToolCallOutcome): Promise<ToolCallOutcome> {
+    const images = outcome.result?.images;
+    if (images === undefined || images.length === 0 || this.config.recognizer === undefined) {
+      return outcome;
+    }
+    const stamped = await this.stampImageRefs(images);
+    const nextResult = { ...outcome.result!, images: stamped };
+    if (!this.blindWithRecognizer()) {
+      return { ...outcome, result: nextResult };
+    }
+    const stubs = stamped.map((image) =>
+      formatImageStub({
+        ref: image.ref!,
+        mediaType: image.mediaType,
+        data: image.data,
+        dimensions: imageDimensions(Buffer.from(image.data, "base64")),
+        sourcePath: image.sourcePath,
+      }),
+    );
+    return { ...outcome, result: nextResult, modelText: [outcome.modelText, ...stubs].join("\n") };
   }
 
   async *runTurn(
@@ -550,11 +841,28 @@ export class AgentLoop {
         return;
       }
 
+      // Vision fallback (plan §2/§3, slice B1): ref reservation is
+      // unconditional whenever the wiring supplied `recognizer` at all —
+      // independent of the CURRENT model's sightedness, so a later live
+      // model/recognizer switch never finds an un-numbered image from
+      // earlier in this session. The stub + overview caption text is a
+      // SEPARATE, narrower gate (blind model AND a configured endpoint).
+      // `config.recognizer === undefined` (every pre-feature caller/test)
+      // takes neither branch, keeping this byte-identical to before.
+      let attachments = options?.attachments;
+      if (attachments !== undefined && attachments.length > 0 && this.config.recognizer !== undefined) {
+        attachments = await this.stampImageRefs(attachments);
+        if (this.blindWithRecognizer()) {
+          const notes = await this.describeImagesForBlindModel(attachments, userInput, signal);
+          promptText = `${promptText}\n\n${notes.join("\n\n")}`;
+        }
+      }
+
       this.history.append(
         {
           role: "user",
           content: promptText,
-          ...(options?.attachments?.length ? { images: options.attachments } : {}),
+          ...(attachments?.length ? { images: attachments } : {}),
         },
         { origin: options?.origin },
       );
@@ -589,6 +897,13 @@ export class AgentLoop {
       tasks: this.config.tasks,
       lsp: this.config.lsp,
       media: this.config.media,
+      // Vision-fallback image lookup (TASK.198 plan §2, slice B1): a closure
+      // over THIS history, resolved live on every call — never a snapshot —
+      // so a ref cleared by a LATER compaction correctly reads back
+      // undefined. Present whenever the wiring supplied `recognizer` at
+      // all, mirroring `media` above; InspectImage (slice B2) is the actual
+      // gate on whether anyone ever calls it.
+      images: this.config.recognizer !== undefined ? { resolve: (ref) => this.resolveImageRef(ref) } : undefined,
       worktrees: this.config.worktrees,
       preview: this.config.preview,
       artifacts: this.config.artifacts,
@@ -893,8 +1208,9 @@ export class AgentLoop {
         for (const call of toolCalls) {
           const outcome = outcomeById.get(call.id);
           if (outcome) {
-            this.history.append(buildToolResultMessage(call, outcome));
-            if (outcome.status === "success") {
+            const annotated = await this.annotateToolResultImages(outcome);
+            this.history.append(buildToolResultMessage(call, annotated));
+            if (annotated.status === "success") {
               this.ceilingSuccessfulToolCalls += 1;
             }
           }

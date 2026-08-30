@@ -741,7 +741,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -812,7 +812,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -865,7 +865,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -943,7 +943,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
     migrated.close();
   });
 
@@ -998,7 +998,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
@@ -1272,7 +1272,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
     migrated.close();
   });
 
@@ -2458,6 +2458,93 @@ describe("SqlitePersistenceAdapter", () => {
   });
 });
 
+describe("SqlitePersistenceAdapter — reserveImageRef (TASK.198 plan §2, slice B1)", () => {
+  it("hands out 1, 2, 3, ... in order for one session and surfaces nextImageRef only once reserved", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+    // Untouched session: the counter column defaults to 1, and rowToSessionMeta
+    // hides it — same "absence, not a false baseline" discipline as every
+    // other NOT-NULL-DEFAULT bookkeeping column on SessionMeta.
+    const fresh = await adapter.getRootSession("s1");
+    expect(fresh !== null && "nextImageRef" in fresh).toBe(false);
+
+    expect(await adapter.reserveImageRef("s1")).toBe(1);
+    expect(await adapter.reserveImageRef("s1")).toBe(2);
+    expect(await adapter.reserveImageRef("s1")).toBe(3);
+
+    const touched = await adapter.getRootSession("s1");
+    expect(touched?.nextImageRef).toBe(4);
+
+    await adapter.close();
+  });
+
+  it("keeps two sessions' counters fully independent", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "a", workspace: "/w", model: "m", mode: "build" });
+    await adapter.createSession({ id: "b", workspace: "/w", model: "m", mode: "build" });
+
+    expect(await adapter.reserveImageRef("a")).toBe(1);
+    expect(await adapter.reserveImageRef("a")).toBe(2);
+    expect(await adapter.reserveImageRef("b")).toBe(1);
+
+    await adapter.close();
+  });
+
+  it("survives a compaction (replaceHistory) that drops the highest-ref item, and a restart — the number is never reused (plan §2 finding, pin against a max(ref)+1 scan)", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-reserve-"));
+    const dbPath = join(tmpDir, "anycode.sqlite");
+    try {
+      let adapter = new SqlitePersistenceAdapter(dbPath);
+      await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+      const firstRef = await adapter.reserveImageRef("s1"); // 1
+      await adapter.appendHistory("s1", [
+        makeItem({ id: "img-1", message: { role: "user", content: "look", images: [{ mediaType: "image/png", data: "AA", ref: firstRef }] } }),
+      ]);
+
+      // Compaction drops the ONLY item carrying a ref — a history scan for
+      // max(ref) would now see nothing at all and could restart numbering at 1.
+      await adapter.replaceHistory("s1", [
+        makeItem({ id: "summary", message: { role: "user", content: "Session continued. Summary." } }),
+      ]);
+      expect(await adapter.loadHistory("s1")).toHaveLength(1);
+
+      const secondRef = await adapter.reserveImageRef("s1");
+      expect(secondRef).toBe(2); // not 1 — the counter, not a scan, is authoritative
+
+      await adapter.close();
+
+      // Restart: a fresh adapter instance over the SAME file must resume
+      // exactly where the counter left off.
+      adapter = new SqlitePersistenceAdapter(dbPath);
+      const thirdRef = await adapter.reserveImageRef("s1");
+      expect(thirdRef).toBe(3);
+      await adapter.close();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hands out distinct, gapless numbers under concurrent reservation (no duplicates)", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+    const refs = await Promise.all(Array.from({ length: 20 }, () => adapter.reserveImageRef("s1")));
+    const sorted = [...refs].sort((a, b) => a - b);
+    expect(new Set(refs).size).toBe(20); // no two calls ever got the same number
+    expect(sorted).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
+
+    await adapter.close();
+  });
+
+  it("throws for an unknown session id instead of silently returning a number", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await expect(adapter.reserveImageRef("does-not-exist")).rejects.toThrow();
+    await adapter.close();
+  });
+});
+
 /**
  * A separate real OS thread (`node:worker_threads`) that opens its OWN
  * `DatabaseSync` connection to the same file, takes an immediate write lock,
@@ -2602,6 +2689,9 @@ describe("WriteBehindHistorySink", () => {
       throw new Error("not used in this test");
     }
     deleteSessions(): Promise<SessionDeleteSummary> {
+      throw new Error("not used in this test");
+    }
+    reserveImageRef(): Promise<number> {
       throw new Error("not used in this test");
     }
     close(): Promise<void> {

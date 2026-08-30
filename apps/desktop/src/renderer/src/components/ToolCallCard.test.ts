@@ -35,8 +35,14 @@ import {
   formatWorkflowCounters,
   isClickableChildBadge,
   moreLinesLabel,
+  layoutWorkflowMap,
+  orderStepsByDependency,
+  workflowMapLabel,
   parseTodos,
-  pendingStepsLabel,
+  workflowActivityRows,
+  workflowStepKind,
+  workflowRunUsage,
+  formatWorkflowUsage,
   promptStripText,
   PROMPT_STRIP_LINES,
   PROMPT_STRIP_MAX_CHARS,
@@ -46,12 +52,15 @@ import {
   summarizeInput,
   SUMMARY_MAX_CHARS,
   todoSummary,
+  toggleWorkflowStepSelection,
   ToolCallCard,
   ToolCallHeaderRow,
   previewablePathOf,
   workflowRunLabel,
   workflowStepAria,
   workflowStepMeta,
+  WorkflowStepsBody,
+  workflowTickLabel,
 } from "./ToolCallCard.js";
 import type { TodoItemView } from "./ToolCallCard.js";
 import type { SubagentSubStatus, ToolCallBlock, WorkflowSubStatus, WorkflowStepStatus } from "../store.js";
@@ -434,9 +443,17 @@ describe("formatWorkflowCounters — running (final: null)", () => {
   const step = (overrides: Partial<WorkflowStepStatus> = {}): WorkflowStepStatus => ({
     stepId: "build",
     agentType: "explore",
+    dependsOn: [],
     turns: 0,
     toolCalls: 0,
     lastTool: null,
+    usage: null,
+    // Defaults to the "actually running" phase (TASK.191 slice S3) so every
+    // pre-existing fixture in this file — built only from `final`/turns/etc.
+    // overrides — keeps exercising the same running ticker it always did;
+    // the new pending/queued describe blocks below override these two.
+    started: true,
+    running: true,
     final: null,
     ...overrides,
   });
@@ -444,6 +461,8 @@ describe("formatWorkflowCounters — running (final: null)", () => {
   it("reports the most-recently-started still-running step, pluralizing tool calls and including lastTool when present", () => {
     const workflow: WorkflowSubStatus = {
       workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
       totalSteps: 3,
       steps: [
         step({ stepId: "fetch", final: { status: "completed", durationMs: 100 } }),
@@ -457,6 +476,8 @@ describe("formatWorkflowCounters — running (final: null)", () => {
   it("uses the singular 'tool call' at count 1 and omits lastTool when null", () => {
     const workflow: WorkflowSubStatus = {
       workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
       totalSteps: 1,
       steps: [step({ turns: 1, toolCalls: 1, lastTool: null })],
       final: null,
@@ -468,6 +489,8 @@ describe("formatWorkflowCounters — running (final: null)", () => {
   it("falls back to a bare step-count line when every started step has already settled (between DAG waves)", () => {
     const workflow: WorkflowSubStatus = {
       workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
       totalSteps: 4,
       steps: [
         step({ stepId: "fetch", final: { status: "completed", durationMs: 100 } }),
@@ -479,13 +502,59 @@ describe("formatWorkflowCounters — running (final: null)", () => {
   });
 
   it("reports zero steps started before the first workflow_step_start lands", () => {
-    const workflow: WorkflowSubStatus = { workflow: "release-flow", totalSteps: 2, steps: [], final: null };
+    const workflow: WorkflowSubStatus = { workflow: "release-flow", activity: [], activityDropped: 0, totalSteps: 2, steps: [], final: null };
     expect(formatWorkflowCounters(workflow)).toBe("step 0/2");
+  });
+
+  // TASK.191 slice S3: `steps` is now PREFILLED with all totalSteps entries
+  // the instant workflow_start lands, most of them not-yet-started. The
+  // count MUST read the `started` flag, not `steps.length` — the naive
+  // `steps.length` count would read "step 5/5" (every seeded step) at second
+  // zero of a run that hasn't launched anything yet, which is the single
+  // most visible number on the card's header.
+  it("counts only STARTED steps against a fully-prefilled array, not the array's own length", () => {
+    const workflow: WorkflowSubStatus = {
+      workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
+      totalSteps: 5,
+      steps: [
+        step({ stepId: "a", final: { status: "completed", durationMs: 100 } }),
+        step({ stepId: "b", turns: 3, toolCalls: 1, lastTool: "Bash" }),
+        step({ stepId: "c", started: false, running: false }),
+        step({ stepId: "d", started: false, running: false }),
+        step({ stepId: "e", started: false, running: false }),
+      ],
+      final: null,
+    };
+    // 2 of 5 have started (a, b) — c/d/e are prefilled placeholders that
+    // never launched. "b" is the in-flight one, so its ticker is reported.
+    expect(formatWorkflowCounters(workflow)).toBe("step 2/5 · b · turn 3 · 1 tool call · Bash");
+  });
+
+  // A QUEUED step (started, not yet running — parked behind the shared
+  // subagent semaphore, TASK.191 §B7) also has `final === null`. The
+  // in-flight lookup must require `running`, not just `final === null`, or a
+  // merely-queued step would print its own (meaningless, all-zero) ticker as
+  // if it were the step actually executing.
+  it("does not report a QUEUED step's ticker as the in-flight step — falls back to the bare aggregate", () => {
+    const workflow: WorkflowSubStatus = {
+      workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
+      totalSteps: 2,
+      steps: [
+        step({ stepId: "queued-one", started: true, running: false }),
+        step({ stepId: "pending-one", started: false, running: false }),
+      ],
+      final: null,
+    };
+    expect(formatWorkflowCounters(workflow)).toBe("step 1/2");
   });
 });
 
 describe("formatWorkflowCounters — settled (final set)", () => {
-  const base: WorkflowSubStatus = { workflow: "release-flow", totalSteps: 3, steps: [], final: null };
+  const base: WorkflowSubStatus = { workflow: "release-flow", activity: [], activityDropped: 0, totalSteps: 3, steps: [], final: null };
 
   it("formats a completed run with singular/plural steps and seconds", () => {
     const workflow: WorkflowSubStatus = {
@@ -510,9 +579,15 @@ describe("formatWorkflowCounters — settled (final set)", () => {
 const mkStep = (overrides: Partial<WorkflowStepStatus> = {}): WorkflowStepStatus => ({
   stepId: "build",
   agentType: "explore",
+  dependsOn: [],
   turns: 0,
   toolCalls: 0,
   lastTool: null,
+  usage: null,
+  // Same "actually running" default rationale as the describe-local `step`
+  // factory above (TASK.191 slice S3) — see its comment.
+  started: true,
+  running: true,
   final: null,
   ...overrides,
 });
@@ -536,6 +611,8 @@ describe("workflowRunLabel", () => {
   it("shows the bare run aggregate — not the per-step ticker — while a step runs (de-dup pin)", () => {
     const workflow: WorkflowSubStatus = {
       workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
       totalSteps: 3,
       steps: [
         mkStep({ stepId: "fetch", final: { status: "completed", durationMs: 100 } }),
@@ -550,6 +627,8 @@ describe("workflowRunLabel", () => {
   it("shows the bare aggregate between DAG waves", () => {
     const workflow: WorkflowSubStatus = {
       workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
       totalSteps: 4,
       steps: [
         mkStep({ stepId: "fetch", final: { status: "completed", durationMs: 100 } }),
@@ -561,13 +640,37 @@ describe("workflowRunLabel", () => {
   });
 
   it("reports zero started before the first step lands", () => {
-    const workflow: WorkflowSubStatus = { workflow: "release-flow", totalSteps: 2, steps: [], final: null };
+    const workflow: WorkflowSubStatus = { workflow: "release-flow", activity: [], activityDropped: 0, totalSteps: 2, steps: [], final: null };
     expect(workflowRunLabel(workflow)).toBe("step 0/2");
+  });
+
+  // TASK.191 slice S3: workflowRunLabel computes its own `started` count
+  // while running (it does NOT delegate to formatWorkflowCounters until
+  // final !== null) — this is the SAME defect surface as
+  // formatWorkflowCounters's own pin above, in a second place.
+  it("counts only STARTED steps against a fully-prefilled array, not the array's own length", () => {
+    const workflow: WorkflowSubStatus = {
+      workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
+      totalSteps: 5,
+      steps: [
+        mkStep({ stepId: "a", final: { status: "completed", durationMs: 100 } }),
+        mkStep({ stepId: "b" }),
+        mkStep({ stepId: "c", started: false, running: false }),
+        mkStep({ stepId: "d", started: false, running: false }),
+        mkStep({ stepId: "e", started: false, running: false }),
+      ],
+      final: null,
+    };
+    expect(workflowRunLabel(workflow)).toBe("step 2/5");
   });
 
   it("delegates to formatWorkflowCounters once settled (frozen export stays rendered)", () => {
     const workflow: WorkflowSubStatus = {
       workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
       totalSteps: 3,
       steps: [],
       final: { status: "completed", completedSteps: 3, durationMs: 12345 },
@@ -638,40 +741,229 @@ describe("workflowStepAria", () => {
   });
 });
 
-describe("pendingStepsLabel", () => {
-  it("returns null when every step has started", () => {
+// TASK.191 slice S3: workflow_start now prefills every step of the run, so
+// "not started" is a real per-step phase (workflowStepKind) rather than the
+// old lump pendingStepsLabel summary line that function replaced.
+describe("workflowStepKind", () => {
+  it("a prefilled step that never started is 'pending'", () => {
+    expect(workflowStepKind(mkStep({ started: false, running: false }))).toBe("pending");
+  });
+
+  it("a step that started but hasn't cleared the semaphore yet is 'queued'", () => {
+    expect(workflowStepKind(mkStep({ started: true, running: false }))).toBe("queued");
+  });
+
+  it("a step whose child is actually executing is 'running'", () => {
+    expect(workflowStepKind(mkStep({ started: true, running: true }))).toBe("running");
+  });
+
+  it("a terminal status always wins, even over stale started/running flags", () => {
     expect(
-      pendingStepsLabel({ workflow: "w", totalSteps: 2, steps: [mkStep(), mkStep()], final: null }),
-    ).toBeNull();
+      workflowStepKind(mkStep({ started: true, running: true, final: { status: "completed", durationMs: 5 } })),
+    ).toBe("completed");
+  });
+});
+
+describe("workflowStepMeta — not started / queued (TASK.191 slice S3)", () => {
+  it("not started: bare word, no ticker", () => {
+    expect(workflowStepMeta(mkStep({ started: false, running: false }))).toBe("Not started");
   });
 
-  it("uses the singular form at 1 remaining", () => {
-    expect(pendingStepsLabel({ workflow: "w", totalSteps: 2, steps: [mkStep()], final: null })).toBe(
-      "1 step not started",
-    );
+  it("queued: bare word, distinct from both not-started and the running ticker", () => {
+    expect(workflowStepMeta(mkStep({ started: true, running: false, turns: 0, toolCalls: 0 }))).toBe("Queued");
+  });
+});
+
+describe("workflowStepAria — not started / queued (TASK.191 slice S3)", () => {
+  it("not started: id · agentType · Not started (meta already leads with the label, no duplication)", () => {
+    expect(workflowStepAria(mkStep({ started: false, running: false }))).toBe("build · explore · Not started");
   });
 
-  it("uses the plural form at 2+ remaining", () => {
-    expect(pendingStepsLabel({ workflow: "w", totalSteps: 3, steps: [mkStep()], final: null })).toBe(
-      "2 steps not started",
-    );
+  it("queued: id · agentType · Queued", () => {
+    expect(workflowStepAria(mkStep({ started: true, running: false }))).toBe("build · explore · Queued");
+  });
+});
+
+describe("orderStepsByDependency (TASK.191 slice S3)", () => {
+  it("leaves an already-topological array untouched", () => {
+    const a = mkStep({ stepId: "A", dependsOn: [] });
+    const b = mkStep({ stepId: "B", dependsOn: ["A"] });
+    expect(orderStepsByDependency([a, b]).map((s) => s.stepId)).toEqual(["A", "B"]);
   });
 
-  it("guards hostile over-delivery (steps.length > totalSteps) to null", () => {
-    expect(
-      pendingStepsLabel({ workflow: "w", totalSteps: 1, steps: [mkStep(), mkStep()], final: null }),
-    ).toBeNull();
+  it("reorders a dependent declared BEFORE its own dependency", () => {
+    // schema.ts allows this: dependsOn only requires the id to exist among the
+    // definition's steps, never that it was declared earlier in the array.
+    const b = mkStep({ stepId: "B", dependsOn: ["A"] });
+    const a = mkStep({ stepId: "A", dependsOn: [] });
+    expect(orderStepsByDependency([b, a]).map((s) => s.stepId)).toEqual(["A", "B"]);
   });
 
-  it("still labels not-started steps after the run settles (post-mortem why completed < total)", () => {
-    expect(
-      pendingStepsLabel({
-        workflow: "w",
-        totalSteps: 3,
-        steps: [mkStep()],
-        final: { status: "failed", completedSteps: 1, durationMs: 1000 },
-      }),
-    ).toBe("2 steps not started");
+  it("keeps relative order among steps at the same dependency level", () => {
+    const a = mkStep({ stepId: "A", dependsOn: [] });
+    const b = mkStep({ stepId: "B", dependsOn: [] });
+    const c = mkStep({ stepId: "C", dependsOn: ["A", "B"] });
+    expect(orderStepsByDependency([c, b, a]).map((s) => s.stepId)).toEqual(["B", "A", "C"]);
+  });
+
+  it("treats a dependsOn id absent from steps as already-satisfied rather than hanging", () => {
+    // Unreachable on a real definition (schema.ts rejects unknown refs at
+    // discovery), but a defensive fixture must degrade, not loop forever.
+    const a = mkStep({ stepId: "A", dependsOn: ["ghost"] });
+    expect(orderStepsByDependency([a]).map((s) => s.stepId)).toEqual(["A"]);
+  });
+
+  it("preserves BOTH steps of a mutual dependency cycle rather than dropping one", () => {
+    // Unreachable on a real definition (schema.ts's Kahn pass rejects a
+    // dependsOn cycle at discovery — this file's own doc comment on
+    // orderStepsByDependency notes the same). The `readyIndex === -1`
+    // fallback below can't hang either way: `remaining` shrinks by exactly
+    // one element every iteration regardless of which branch fires, so this
+    // is a coverage gap on the fallback branch, not a live risk — but a
+    // defensive fixture still must not silently lose a step.
+    const a = mkStep({ stepId: "A", dependsOn: ["B"] });
+    const b = mkStep({ stepId: "B", dependsOn: ["A"] });
+    const result = orderStepsByDependency([a, b]);
+    expect(result.map((s) => s.stepId).sort()).toEqual(["A", "B"]);
+    // Deterministic: the same input yields the same order every time (no
+    // requirement on WHICH order — just that it doesn't vary run to run).
+    expect(orderStepsByDependency([a, b]).map((s) => s.stepId)).toEqual(result.map((s) => s.stepId));
+  });
+});
+
+describe("layoutWorkflowMap (TASK.191 slice S6 — the run map)", () => {
+  it("puts a step with no dependencies in the FIRST column and its dependent in the second", () => {
+    const a = mkStep({ stepId: "A", dependsOn: [] });
+    const b = mkStep({ stepId: "B", dependsOn: ["A"] });
+    const { nodes } = layoutWorkflowMap([a, b]);
+    const xs = new Map(nodes.map((n) => [n.stepId, n.x]));
+    expect(xs.get("A")).toBeLessThan(xs.get("B") as number);
+  });
+
+  it("columns by dependency LEVEL, not by declaration order", () => {
+    // The whole point of the map over the list: declaration order is scrambled
+    // here exactly as graph-flow's real definition scrambles it.
+    const omega = mkStep({ stepId: "omega", dependsOn: ["fan1", "fan2"] });
+    const fan2 = mkStep({ stepId: "fan2", dependsOn: ["root"] });
+    const root = mkStep({ stepId: "root", dependsOn: [] });
+    const fan1 = mkStep({ stepId: "fan1", dependsOn: ["root"] });
+    const { nodes } = layoutWorkflowMap([omega, fan2, root, fan1]);
+    const x = new Map(nodes.map((n) => [n.stepId, n.x]));
+    expect(x.get("root")).toBeLessThan(x.get("fan1") as number);
+    expect(x.get("fan1")).toBe(x.get("fan2"));
+    expect(x.get("fan2")).toBeLessThan(x.get("omega") as number);
+  });
+
+  it("stacks concurrent steps in ONE column at distinct y positions", () => {
+    const root = mkStep({ stepId: "root", dependsOn: [] });
+    const a = mkStep({ stepId: "a", dependsOn: ["root"] });
+    const b = mkStep({ stepId: "b", dependsOn: ["root"] });
+    const c = mkStep({ stepId: "c", dependsOn: ["root"] });
+    const { nodes } = layoutWorkflowMap([root, a, b, c]);
+    const fan = nodes.filter((n) => n.stepId !== "root");
+    expect(new Set(fan.map((n) => n.x)).size).toBe(1);
+    expect(new Set(fan.map((n) => n.y)).size).toBe(3);
+  });
+
+  it("centres a short column against the tallest one", () => {
+    const root = mkStep({ stepId: "root", dependsOn: [] });
+    const a = mkStep({ stepId: "a", dependsOn: ["root"] });
+    const b = mkStep({ stepId: "b", dependsOn: ["root"] });
+    const { nodes, height } = layoutWorkflowMap([root, a, b]);
+    const rootNode = nodes.find((n) => n.stepId === "root");
+    const fanYs = nodes.filter((n) => n.stepId !== "root").map((n) => n.y);
+    const rootMid = (rootNode?.y ?? 0) + 28 / 2;
+    const fanMid = (Math.min(...fanYs) + Math.max(...fanYs) + 28) / 2;
+    expect(rootMid).toBeCloseTo(fanMid, 5);
+    expect(rootMid).toBeCloseTo(height / 2, 5);
+  });
+
+  it("emits one edge per declared dependency, from the dependency to the dependent", () => {
+    const root = mkStep({ stepId: "root", dependsOn: [] });
+    const a = mkStep({ stepId: "a", dependsOn: ["root"] });
+    const b = mkStep({ stepId: "b", dependsOn: ["root", "a"] });
+    const { edges } = layoutWorkflowMap([root, a, b]);
+    expect(edges.map((e) => `${e.from}->${e.to}`).sort()).toEqual(["a->b", "root->a", "root->b"]);
+  });
+
+  it("draws each edge from the dependency's RIGHT edge to the dependent's LEFT edge", () => {
+    const a = mkStep({ stepId: "a", dependsOn: [] });
+    const b = mkStep({ stepId: "b", dependsOn: ["a"] });
+    const { nodes, edges, nodeWidth, nodeHeight } = layoutWorkflowMap([a, b]);
+    const from = nodes.find((n) => n.stepId === "a");
+    const to = nodes.find((n) => n.stepId === "b");
+    const startX = (from?.x ?? 0) + nodeWidth;
+    const startY = (from?.y ?? 0) + nodeHeight / 2;
+    const endX = to?.x ?? 0;
+    const endY = (to?.y ?? 0) + nodeHeight / 2;
+    expect(edges[0]?.path.startsWith(`M ${startX} ${startY} C `)).toBe(true);
+    expect(edges[0]?.path.endsWith(`${endX} ${endY}`)).toBe(true);
+  });
+
+  it("drops an edge whose dependency id is absent from the step list, keeping the node", () => {
+    // schema.ts refuses unknown refs, so this is a malformed-fixture path: the
+    // node must still be drawn (and clickable) rather than silently missing.
+    const orphan = mkStep({ stepId: "orphan", dependsOn: ["nope"] });
+    const { nodes, edges } = layoutWorkflowMap([orphan]);
+    expect(nodes.map((n) => n.stepId)).toEqual(["orphan"]);
+    expect(edges).toEqual([]);
+  });
+
+  it("TERMINATES on a dependency cycle instead of hanging, placing every node", () => {
+    // Past schema.ts this is unreachable; the bounded relaxation exists so a
+    // malformed fixture degrades rather than spinning the renderer forever.
+    const a = mkStep({ stepId: "a", dependsOn: ["b"] });
+    const b = mkStep({ stepId: "b", dependsOn: ["a"] });
+    const { nodes } = layoutWorkflowMap([a, b]);
+    expect(nodes.map((n) => n.stepId).sort()).toEqual(["a", "b"]);
+  });
+
+  it("carries each node's substatus kind, so the map and the list cannot disagree", () => {
+    const running = mkStep({ stepId: "r", dependsOn: [], started: true, running: true, final: null });
+    const done = mkStep({ stepId: "d", dependsOn: ["r"], final: { status: "completed", durationMs: 5 } });
+    const notStarted = mkStep({ stepId: "n", dependsOn: ["r"], started: false, running: false, final: null });
+    const { nodes } = layoutWorkflowMap([running, done, notStarted]);
+    const kinds = new Map(nodes.map((n) => [n.stepId, n.kind]));
+    expect(kinds.get("r")).toBe("running");
+    expect(kinds.get("d")).toBe("completed");
+    expect(kinds.get("n")).toBe("pending");
+  });
+
+  it("returns an empty layout for no steps rather than a zero-sized box", () => {
+    expect(layoutWorkflowMap([])).toEqual({
+      nodes: [],
+      edges: [],
+      width: 0,
+      height: 0,
+      nodeWidth: 132,
+      nodeHeight: 28,
+    });
+  });
+
+  it("is deterministic — the same steps lay out identically twice (a rehydrated card must match the live one)", () => {
+    const steps = [
+      mkStep({ stepId: "root", dependsOn: [] }),
+      mkStep({ stepId: "fan", dependsOn: ["root"] }),
+      mkStep({ stepId: "tail", dependsOn: ["fan"] }),
+    ];
+    expect(layoutWorkflowMap(steps)).toEqual(layoutWorkflowMap([...steps]));
+  });
+});
+
+describe("workflowMapLabel", () => {
+  it("leaves a short id intact", () => {
+    expect(workflowMapLabel("step-root")).toBe("step-root");
+  });
+
+  it("clips a long id with an ellipsis at 16 characters", () => {
+    expect(workflowMapLabel("step-a-very-long-identifier")).toBe("step-a-very-lon\u2026");
+    expect(workflowMapLabel("step-a-very-long-identifier")).toHaveLength(16);
+  });
+
+  it("does not clip an id that is exactly at the limit", () => {
+    const exact = "0123456789abcdef";
+    expect(exact).toHaveLength(16);
+    expect(workflowMapLabel(exact)).toBe(exact);
   });
 });
 
@@ -862,6 +1154,122 @@ function mkSubagent(overrides: Partial<SubagentSubStatus> = {}): SubagentSubStat
     ...overrides,
   };
 }
+
+describe("workflowActivityRows (TASK.191 slice S1)", () => {
+  const lane = (
+    activity: { stepId: string; toolName: string; summary: string }[],
+    activityDropped = 0,
+  ): WorkflowSubStatus => ({
+    workflow: "release-flow",
+    totalSteps: 2,
+    steps: [],
+    activity,
+    activityDropped,
+    final: null,
+  });
+
+  it("prefixes every row with its step id — the lane is shared, so an unstamped row is unattributable", () => {
+    const rows = workflowActivityRows(
+      lane([
+        { stepId: "fetch", toolName: "Bash", summary: "ls -la" },
+        { stepId: "build", toolName: "Read", summary: "/a/b.ts" },
+      ]),
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ text: "fetch · Ran ls -la" });
+    expect(rows[1]).toMatchObject({ text: "build · Read /a/b.ts" });
+    expect(rows.some((row) => row.leading === true)).toBe(false);
+  });
+
+  it("prepends the same honest '+N earlier' leading row as the Agent feed when the ring has dropped rows", () => {
+    const rows = workflowActivityRows(lane([{ stepId: "s1", toolName: "Grep", summary: "TODO" }], 12));
+    expect(rows[0]).toEqual({ key: "dropped", text: "+12 earlier", leading: true });
+    expect(rows[1]).toMatchObject({ text: "s1 · Grep TODO" });
+  });
+
+  it("falls back to the bare verb (still prefixed) when the summary is empty", () => {
+    const rows = workflowActivityRows(lane([{ stepId: "s1", toolName: "Bash", summary: "" }]));
+    expect(rows[0]).toMatchObject({ text: "s1 · Ran" });
+  });
+
+  it("returns an empty list for a run with no activity yet", () => {
+    expect(workflowActivityRows(lane([]))).toEqual([]);
+  });
+
+  describe("selectedStepId filter (TASK.191 slice S4)", () => {
+    it("keeps only the selected step's rows", () => {
+      const rows = workflowActivityRows(
+        lane([
+          { stepId: "fetch", toolName: "Bash", summary: "ls -la" },
+          { stepId: "build", toolName: "Read", summary: "/a/b.ts" },
+          { stepId: "fetch", toolName: "Grep", summary: "TODO" },
+        ]),
+        "fetch",
+      );
+      expect(rows.map((row) => row.text)).toEqual(["fetch · Ran ls -la", "fetch · Grep TODO"]);
+    });
+
+    it("leaves the unfiltered lane untouched when no step is selected", () => {
+      // Regression pin: adding the second parameter must not change the
+      // default (undefined) or explicit-null call shape.
+      const rows = workflowActivityRows(
+        lane([{ stepId: "fetch", toolName: "Bash", summary: "ls -la" }], 3),
+      );
+      expect(rows[0]).toEqual({ key: "dropped", text: "+3 earlier", leading: true });
+      const rowsNull = workflowActivityRows(
+        lane([{ stepId: "fetch", toolName: "Bash", summary: "ls -la" }], 3),
+        null,
+      );
+      expect(rowsNull[0]).toEqual({ key: "dropped", text: "+3 earlier", leading: true });
+    });
+
+    it("reworks the dropped-count row to say 'run-wide' rather than implying the count is this step's own (honesty guard 1)", () => {
+      const rows = workflowActivityRows(
+        lane([{ stepId: "fetch", toolName: "Bash", summary: "ls -la" }], 5),
+        "fetch",
+      );
+      expect(rows[0]).toEqual({ key: "dropped-filtered", text: "+5 earlier (run-wide)", leading: true });
+      // Must not read like the unfiltered "+N earlier" claim about THIS step.
+      expect(rows[0]?.text).not.toBe("+5 earlier");
+    });
+
+    it("replaces a silently-empty filtered list with an explicit unknown note when rows were dropped (honesty guard 2)", () => {
+      const rows = workflowActivityRows(
+        lane([{ stepId: "build", toolName: "Bash", summary: "ls -la" }], 4),
+        "fetch",
+      );
+      expect(rows).toEqual([
+        {
+          key: "dropped-unknown",
+          text: "This step's earlier activity may be among the 4 row(s) dropped run-wide",
+          leading: true,
+        },
+      ]);
+    });
+
+    it("stays honestly empty for a step that really made no calls (activityDropped === 0)", () => {
+      const rows = workflowActivityRows(
+        lane([{ stepId: "build", toolName: "Bash", summary: "ls -la" }], 0),
+        "fetch",
+      );
+      expect(rows).toEqual([]);
+    });
+  });
+});
+
+describe("toggleWorkflowStepSelection (TASK.191 slice S4)", () => {
+  it("selects an unselected step", () => {
+    expect(toggleWorkflowStepSelection(null, "fetch")).toBe("fetch");
+  });
+
+  it("selects a different step outright, replacing the current one", () => {
+    expect(toggleWorkflowStepSelection("fetch", "build")).toBe("build");
+  });
+
+  it("clears the selection when the already-selected step is clicked again", () => {
+    expect(toggleWorkflowStepSelection("fetch", "fetch")).toBeNull();
+  });
+});
 
 describe("activityRows", () => {
   it("returns one row per activity entry, oldest first, no leading row when nothing dropped", () => {
@@ -1431,5 +1839,357 @@ describe("ToolCallCard (SSR) — open-in-preview control (TASK.112)", () => {
     const html = renderToStaticMarkup(createElement(ToolCallCard, { block: docBlock }));
     expect(html).toContain('class="tool-call-toggle-row"');
     expect(html).not.toContain("tool-call-open");
+  });
+});
+
+describe("workflow token spend (TASK.191 slice S2)", () => {
+  const wf = (steps: WorkflowStepStatus[]): WorkflowSubStatus => ({
+    workflow: "release-flow",
+    activity: [],
+    activityDropped: 0,
+    totalSteps: steps.length,
+    steps,
+    final: null,
+  });
+
+  it("sums the run's spend across steps, field by field", () => {
+    const run = wf([
+      mkStep({ stepId: "a", usage: { inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, totalTokens: 110 } }),
+      mkStep({ stepId: "b", usage: { inputTokens: 300, cachedInputTokens: 60, outputTokens: 20, totalTokens: 320 } }),
+    ]);
+    expect(workflowRunUsage(run)).toEqual({
+      inputTokens: 400,
+      cachedInputTokens: 100,
+      outputTokens: 30,
+      totalTokens: 430,
+    });
+  });
+
+  it("returns null when no step reported spend, and skips the steps that did not", () => {
+    expect(workflowRunUsage(wf([mkStep({ stepId: "a" }), mkStep({ stepId: "b" })]))).toBeNull();
+    // A mixed run reports what it has: one silent step must not blank the other.
+    expect(
+      workflowRunUsage(wf([mkStep({ stepId: "a" }), mkStep({ stepId: "b", usage: { inputTokens: 7 } })])),
+    ).toEqual({ inputTokens: 7 });
+  });
+
+  it("renders the owner's shape with the cache share taken against INPUT, not the total", () => {
+    // 40 of 100 input tokens were served from cache => 40%. Against the total
+    // (140) the same hit would read 29% and understate every cache saving.
+    expect(
+      formatWorkflowUsage({ inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, totalTokens: 140 }),
+    ).toBe("in 100 · cached 40 (40%) · out 10 · total 140");
+  });
+
+  it("omits a segment the provider never reported instead of printing a zero", () => {
+    // Absent is not zero: a card that prints `cached 0` claims the provider
+    // reported no cache hits, which is a different statement from silence.
+    expect(formatWorkflowUsage({ inputTokens: 100, outputTokens: 10 })).toBe("in 100 · out 10");
+    expect(formatWorkflowUsage(null)).toBeNull();
+    expect(formatWorkflowUsage({})).toBeNull();
+    // No input to divide by => the ratio is dropped, never rendered as 0% or NaN.
+    expect(formatWorkflowUsage({ cachedInputTokens: 5 })).toBe("cached 5");
+  });
+
+  it("keeps the usage line off the card entirely when nothing was reported", () => {
+    const workflowBlock = (workflow: WorkflowSubStatus): ToolCallBlock =>
+      mkAgentBlock({ toolName: "Workflow", input: { name: "release-flow" }, workflow });
+
+    const silent = renderToStaticMarkup(createElement(ToolCallCard, { block: workflowBlock(wf([mkStep({})])) }));
+    expect(silent).not.toContain("tool-call-workflow-usage");
+
+    const spent = renderToStaticMarkup(
+      createElement(ToolCallCard, {
+        block: workflowBlock(wf([mkStep({ usage: { inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, totalTokens: 140 } })])),
+      }),
+    );
+    expect(spent).toContain("in 100 · cached 40 (40%) · out 10 · total 140");
+  });
+});
+
+// TASK.191 slice S3: a full component-level render, not just the pure
+// selectors above. Proves the CARD ITSELF calls orderStepsByDependency
+// (rather than mapping `workflow.steps` in raw array order) and that the
+// pending/queued phases get the right class + glyph in real markup, not just
+// in the exported formatters' return values.
+describe("workflow step ordering & phases (render, TASK.191 slice S3)", () => {
+  /** Pulls each `<li class="workflow-step substatus-KIND">...</li>` row, in
+   *  DOCUMENT order, as {kind, stepId, hasSvg, hasSpinClass}. Scoped to
+   *  `workflow-step` specifically so the activity feed's own `<li>` rows
+   *  (class "subagent-activity-row") never match. */
+  function parseStepRows(html: string): { kind: string; stepId: string; hasSvg: boolean; hasSpinClass: boolean }[] {
+    const rows: { kind: string; stepId: string; hasSvg: boolean; hasSpinClass: boolean }[] = [];
+    const liRe = /<li class="workflow-step substatus-([a-z_]+)"[^>]*>(.*?)<\/li>/g;
+    for (const li of html.matchAll(liRe)) {
+      const [, kind, inner] = li;
+      const idMatch = /workflow-step-id">([^<]+)</.exec(inner ?? "");
+      rows.push({
+        kind: kind ?? "",
+        stepId: idMatch?.[1] ?? "",
+        hasSvg: (inner ?? "").includes("<svg"),
+        hasSpinClass: (inner ?? "").includes("icon-spin"),
+      });
+    }
+    return rows;
+  }
+
+  it("orders rows by dependency level (not declaration order) and gives pending/queued the right class + glyph", () => {
+    // Declared in a deliberately NON-topological order: every dependent is
+    // listed before the dependency it needs — proves the card itself calls
+    // orderStepsByDependency rather than mapping `workflow.steps` as-is.
+    const steps: WorkflowStepStatus[] = [
+      mkStep({ stepId: "beta", agentType: "explore", dependsOn: ["alpha"], started: false, running: false }),
+      mkStep({ stepId: "delta", agentType: "explore", dependsOn: ["gamma"], started: false, running: false }),
+      mkStep({ stepId: "gamma", agentType: "sonnet", dependsOn: [], started: true, running: false }),
+      mkStep({ stepId: "alpha", agentType: "sonnet", dependsOn: [], started: true, running: true, turns: 2, toolCalls: 1, lastTool: "Read" }),
+    ];
+    const workflow: WorkflowSubStatus = {
+      workflow: "release-flow",
+      activity: [],
+      activityDropped: 0,
+      totalSteps: 4,
+      steps,
+      final: null,
+    };
+    const block: ToolCallBlock = mkAgentBlock({ toolName: "Workflow", input: { name: "release-flow" }, workflow });
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+
+    const rows = parseStepRows(html);
+    expect(rows.map((r) => r.stepId)).toEqual(["gamma", "delta", "alpha", "beta"]);
+
+    const byId = new Map(rows.map((r) => [r.stepId, r]));
+    // alpha: actually running — spinning glyph, "running" class.
+    expect(byId.get("alpha")).toMatchObject({ kind: "running", hasSvg: true, hasSpinClass: true });
+    // gamma: queued (started, not yet running) — a glyph, but NOT spinning.
+    expect(byId.get("gamma")).toMatchObject({ kind: "queued", hasSvg: true, hasSpinClass: false });
+    // beta/delta: never started — "pending" class, and NO glyph icon at all
+    // (nothing has happened yet; StatusGlyph renders an empty cell for it).
+    expect(byId.get("beta")).toMatchObject({ kind: "pending", hasSvg: false });
+    expect(byId.get("delta")).toMatchObject({ kind: "pending", hasSvg: false });
+
+    // The meta text backs up the class for the two new phases (workflowStepMeta).
+    expect(html).toContain(">Queued<");
+    expect(html).toContain(">Not started<");
+  });
+});
+
+// TASK.191 slice S4 (owner ask: "а кликнуть в них нельзя будет? глянуть
+// лог?"). `WorkflowStepsBody` is exported specifically so the "step
+// selected" markup can be rendered honestly under SSR: `renderToStaticMarkup`
+// can't simulate a click (no event system, and a real `WorkflowStatus` mount
+// always starts its `useState` at null), but a controlled `selectedStepId`
+// prop can be passed in already-selected. `WorkflowStatus` itself (the real
+// mount site, owning the actual useState) is therefore NOT directly covered
+// by an SSR "already selected" render — only `WorkflowStepsBody` is, plus
+// `toggleWorkflowStepSelection` above covers the state-transition logic
+// `WorkflowStatus`'s onClick wires to it. That combination is what's covered;
+// simulating an actual DOM click on `WorkflowStatus` itself would need jsdom,
+// which this package's vitest config does not have (file header note).
+describe("workflow step buttons (render, TASK.191 slice S4)", () => {
+  /** Pulls each step row's `<button class="workflow-step-button
+   *  substatus-<kind>" ...>` kind + aria-pressed + aria-label, in document
+   *  order — same fixed-attribute-order convention `parseStepRows` above
+   *  already relies on (JSX declaration order: type, class, aria-pressed,
+   *  aria-label). The class capture requires `substatus-<kind>` to ride on
+   *  the button itself (not just the `<li>`) — see the coordinator-review
+   *  pin below for why that duplication is load-bearing, not decorative. */
+  function parseStepButtons(html: string): { kind: string; pressed: string; label: string }[] {
+    const re =
+      /<button type="button" class="workflow-step-button substatus-([a-z_]+)" aria-pressed="(true|false)" aria-label="([^"]*)"/g;
+    return [...html.matchAll(re)].map((m) => ({ kind: m[1] ?? "", pressed: m[2] ?? "", label: m[3] ?? "" }));
+  }
+
+  const steps: WorkflowStepStatus[] = [
+    mkStep({
+      stepId: "fetch",
+      agentType: "explore",
+      dependsOn: [],
+      started: true,
+      running: true,
+      turns: 1,
+      toolCalls: 1,
+      lastTool: "Read",
+    }),
+    mkStep({ stepId: "build", agentType: "sonnet", dependsOn: ["fetch"], started: false, running: false }),
+  ];
+  const workflow: WorkflowSubStatus = {
+    workflow: "release-flow",
+    totalSteps: 2,
+    steps,
+    activity: [{ stepId: "fetch", toolName: "Bash", summary: "ls -la" }],
+    activityDropped: 0,
+    final: null,
+  };
+
+  it("renders every step row as a real <button> carrying the aria-label, none pressed with nothing selected", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow, selectedStepId: null, onSelectStep: () => {} }),
+    );
+    const buttons = parseStepButtons(html);
+    expect(buttons).toHaveLength(2);
+    expect(buttons.every((b) => b.pressed === "false")).toBe(true);
+    expect(buttons.map((b) => b.label)).toEqual([
+      "fetch · explore · Running · turn 1 · 1 tool call · Read",
+      "build · sonnet · Not started",
+    ]);
+    // The label rides on the button now; the <li> must not ALSO carry it
+    // (would be a silent duplicate — an AT reading both would hear it twice).
+    expect(html).not.toMatch(/<li[^>]*aria-label=/);
+  });
+
+  it("marks exactly the selected step's button aria-pressed, honestly rendered via the controlled prop", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow, selectedStepId: "fetch", onSelectStep: () => {} }),
+    );
+    const buttons = parseStepButtons(html);
+    expect(buttons.find((b) => b.label.startsWith("fetch"))?.pressed).toBe("true");
+    expect(buttons.find((b) => b.label.startsWith("build"))?.pressed).toBe("false");
+    // The activity lane is filtered to the selected step's own rows too.
+    expect(html).toContain("fetch · Ran ls -la");
+  });
+
+  it("filters the activity lane out of the render entirely when the selected step truly has no rows and none were dropped", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow, selectedStepId: "build", onSelectStep: () => {} }),
+    );
+    expect(html).not.toContain("workflow-activity-feed");
+    expect(html).not.toContain("Ran ls -la");
+  });
+
+  it("keeps the glyph a DIRECT CHILD of an element carrying substatus-<kind> — app.css's whole status→color map (.substatus-KIND > .substatus-glyph) is a CHILD combinator, so wrapping the row in a <button> without repeating the class there silently detunes every glyph to its ghost default (coordinator-review regression pin)", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow, selectedStepId: null, onSelectStep: () => {} }),
+    );
+    // Structural check, not a string search for "substatus-running" anywhere
+    // in the document: the opening tag immediately before each glyph span
+    // must itself declare the matching class, i.e. the glyph's real DOM
+    // parent — not merely some ancestor — carries it.
+    const parents = [...html.matchAll(/<\w+([^>]*)>\s*<span class="substatus-glyph">/g)].map(
+      (m) => /class="([^"]*)"/.exec(m[1] ?? "")?.[1] ?? "",
+    );
+    expect(parents).toHaveLength(2);
+    expect(parents[0]).toContain("substatus-running"); // fetch: running
+    expect(parents[1]).toContain("substatus-pending"); // build: not started
+  });
+});
+
+// TASK.191 slice S7 — the plan's collapsed state (`task191/PLAN.md:184`):
+// "Свёрнутое состояние — полоса засечек по числу шагов, карточка не растёт
+// против сегодняшней". The three pins below are the ones that had to be
+// proven red by mutation before this suite was allowed to pass: one tick per
+// step in dependency order with the right kind; no strip at all while the
+// card is expanded; and the state class riding on the SAME node as the
+// painted element.
+describe("collapsed tick strip (TASK.191 slice S7)", () => {
+  const mkRun = (steps: WorkflowStepStatus[], overrides: Partial<WorkflowSubStatus> = {}): WorkflowSubStatus => ({
+    workflow: "release-flow",
+    totalSteps: steps.length,
+    steps,
+    activity: [],
+    activityDropped: 0,
+    final: null,
+    ...overrides,
+  });
+
+  // Declared in a deliberately NON-topological order (every dependent before
+  // its dependency), so a strip that mapped `workflow.steps` as-is renders a
+  // different sequence than one that orders by dependency.
+  const scrambled: WorkflowStepStatus[] = [
+    mkStep({ stepId: "ship", dependsOn: ["pack"], started: false, running: false }),
+    mkStep({ stepId: "pack", dependsOn: ["build"], started: true, running: false }),
+    mkStep({ stepId: "build", dependsOn: [], started: true, running: false, final: { status: "completed", durationMs: 12 } }),
+  ];
+
+  /** Every tick's `substatus-<kind>`, in document order. The pattern requires
+   *  both classes inside ONE class attribute — see the adjacency pin below. */
+  function tickKinds(html: string): string[] {
+    return [...html.matchAll(/<span class="workflow-tick substatus-([a-z_]+)"/g)].map((m) => m[1] ?? "");
+  }
+
+  function renderCollapsedHeader(workflow: WorkflowSubStatus, expanded = false): string {
+    return renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, {
+        block: mkAgentBlock({ toolName: "Workflow", input: { name: "release-flow" }, workflow }),
+        expanded,
+        bodyId: "body-1",
+        onToggleExpanded: () => {},
+      }),
+    );
+  }
+
+  it("PIN 1 — draws one tick per step, in dependency order, each carrying that step's phase", () => {
+    const html = renderCollapsedHeader(mkRun(scrambled));
+    // build (completed) -> pack (started, not running => queued) -> ship
+    // (never started => pending). Declaration order was the exact reverse.
+    expect(tickKinds(html)).toEqual(["completed", "queued", "pending"]);
+  });
+
+  it("PIN 2 — renders nothing at all once the card is expanded (the checklist below is the record then)", () => {
+    expect(renderCollapsedHeader(mkRun(scrambled), true)).not.toContain("workflow-tick");
+    expect(renderCollapsedHeader(mkRun(scrambled), true)).not.toContain("workflow-ticks");
+  });
+
+  it("PIN 3 — the state class and the painted element are ONE node: the strip's children are flat leaf ticks, no wrapper level (app.css's status→colour map is a CHILD combinator, so an extra level detunes every tick silently)", () => {
+    const html = renderCollapsedHeader(mkRun(scrambled));
+    // An exact structural match, not a substring search: any wrapper inserted
+    // around or inside a tick, and any split of the two classes across two
+    // nodes, changes this string.
+    expect(html).toContain(
+      '<span class="workflow-ticks" role="img" aria-label="release-flow: 1 of 3 steps done">' +
+        '<span class="workflow-tick substatus-completed"></span>' +
+        '<span class="workflow-tick substatus-queued"></span>' +
+        '<span class="workflow-tick substatus-pending"></span>' +
+        "</span>",
+    );
+  });
+
+  it("shows on the real card exactly where a reader meets it — a SETTLED run, which auto-collapses", () => {
+    // "Collapsed" is not "running": defaultExpanded keeps a running Workflow
+    // card open, so the strip's actual audience is the settled run scrolled
+    // past in the transcript.
+    const settled = mkRun(
+      [
+        mkStep({ stepId: "build", dependsOn: [], final: { status: "completed", durationMs: 10 } }),
+        mkStep({ stepId: "ship", dependsOn: ["build"], final: { status: "error", durationMs: 4 } }),
+      ],
+      { final: { status: "failed", completedSteps: 1, durationMs: 14 } },
+    );
+    const block = mkAgentBlock({ toolName: "Workflow", input: { name: "release-flow" }, workflow: settled, status: "success" });
+    expect(defaultExpanded("Workflow", "success")).toBe(false);
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+    expect(tickKinds(html)).toEqual(["completed", "error"]);
+
+    // ...and vanishes on the running card, which is expanded by default.
+    const running = mkAgentBlock({ toolName: "Workflow", input: { name: "release-flow" }, workflow: mkRun(scrambled), status: "running" });
+    expect(renderToStaticMarkup(createElement(ToolCallCard, { block: running }))).not.toContain("workflow-tick");
+  });
+
+  it("draws steps.length ticks even when totalSteps disagrees, and says so in the label", () => {
+    // After slice S3's prefill the two agree; if they ever diverge the strip
+    // must describe what it actually knows rather than pad to a count it has
+    // no steps for.
+    const partial = mkRun([mkStep({ stepId: "build", dependsOn: [] })], { totalSteps: 5 });
+    const html = renderCollapsedHeader(partial);
+    expect(tickKinds(html)).toEqual(["running"]);
+    expect(html).toContain('aria-label="release-flow: 0 of 1 steps done"');
+  });
+
+  it("speaks the counts the colours carry — failures and skips included, since a reader of the label cannot see either", () => {
+    expect(workflowTickLabel(mkRun(scrambled))).toBe("release-flow: 1 of 3 steps done");
+    expect(
+      workflowTickLabel(
+        mkRun([
+          mkStep({ stepId: "a", final: { status: "completed", durationMs: 1 } }),
+          mkStep({ stepId: "b", final: { status: "error", durationMs: 1 } }),
+          mkStep({ stepId: "c", final: { status: "max_turns", durationMs: 1 } }),
+          mkStep({ stepId: "d", final: { status: "skipped", durationMs: 0 } }),
+          mkStep({ stepId: "e", started: false, running: false }),
+        ]),
+      ),
+    ).toBe("release-flow: 1 of 5 steps done, 2 failed, 1 skipped");
+    // A clean run says only the one thing worth saying.
+    expect(
+      workflowTickLabel(mkRun([mkStep({ stepId: "a", final: { status: "completed", durationMs: 1 } })])),
+    ).toBe("release-flow: 1 of 1 steps done");
   });
 });

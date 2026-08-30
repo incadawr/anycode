@@ -41,6 +41,12 @@ export {
 export type { BrowserOpenInput, BrowserReadInput } from "./browser-preview.js";
 export { browserScreenshotInputSchema, browserScreenshotTool } from "./browser-screenshot.js";
 export type { BrowserScreenshotInput } from "./browser-screenshot.js";
+export {
+  createInspectImageTool,
+  MAX_QUESTIONS_PER_IMAGE,
+  QUESTION_LIMIT_MESSAGE,
+} from "./inspect-image.js";
+export type { CreateInspectImageToolOptions, InspectImageInput, InspectImageRecognizer } from "./inspect-image.js";
 export { InMemoryTodoStore } from "./todo-store.js";
 export type { TodoItem, TodoStore } from "./todo-store.js";
 export {

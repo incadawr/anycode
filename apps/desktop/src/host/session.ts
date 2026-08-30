@@ -51,6 +51,7 @@ import type {
   LspServerStatus,
   PermissionMode,
   ReasoningEffort,
+  RecognizerEndpoint,
   RewindResult,
   RewindScope,
   SessionPermissionRules,
@@ -624,6 +625,30 @@ export interface SessionOptions {
   /** Multimodal send-path capability gate, mirroring the CLI image staging guard. */
   imageInputEnabled?: () => boolean;
   /**
+   * TASK.198 срез C (plan §1.3/§3/§4): live verdict for the vision fallback —
+   * true exactly when a recognizer endpoint is currently configured for this
+   * session, independent of `imageInputEnabled` above (a blind model can
+   * still accept an attachment through the fallback). Re-evaluated per call,
+   * same discipline as `imageInputEnabled`. Absent (codex/claude engine
+   * boots, and every pre-existing test) is the fail-closed default — no
+   * fallback — so the turn-accept gate below stays byte-identical to
+   * pre-TASK.198 wherever this seam is not wired.
+   */
+  imageFallbackAvailable?: () => boolean;
+  /**
+   * TASK.198 срез C (plan §1.3): host-owned commit for a live recognizer-
+   * config push (main's RecognizerConfigChanged, TASK.198 E1). Session's own
+   * `applyRecognizerConfig` public method decides WHEN to call this (now, if
+   * idle; deferred to the next busy->idle boundary, last-value-wins,
+   * otherwise) — this callback decides HOW: swap the resolved
+   * `RecognizerEndpoint`, (de)register InspectImage, and recompose the
+   * system prompt when its registration actually changed (host/index.ts).
+   * Absent (codex/claude engine boots, and every pre-existing test) makes
+   * `applyRecognizerConfig` a no-op — the plan's "codex/claude НЕ задеты
+   * (замыкание не установлено)".
+   */
+  applyRecognizerConfig?: (endpoint: RecognizerEndpoint | null) => void;
+  /**
    * TASK.45 W11: reports a real request outcome for the connection this session
    * is pinned to (a runtime auth failure, rate limit, network/server error, or a
    * successful generation) so main can classify + persist advisory connection
@@ -761,6 +786,18 @@ export class Session {
   /** Slice P7.26/R2: rewind/list seam (undefined -> checkpoints disabled, fail-closed). */
   private readonly checkpoints: SessionOptions["checkpoints"];
   private readonly imageInputEnabled: (() => boolean) | undefined;
+  /** TASK.198 срез C: see SessionOptions.imageFallbackAvailable's own doc. */
+  private readonly imageFallbackAvailable: (() => boolean) | undefined;
+  /** TASK.198 срез C: see SessionOptions.applyRecognizerConfig's own doc. */
+  private readonly applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
+  /**
+   * TASK.198 срез C (plan §1.3): the last recognizer-config push received
+   * while `busy` — last-value-wins, applied at the very next busy->idle
+   * boundary. `undefined` means nothing is pending (the initial state, and
+   * the state right after a commit); wrapped in an object so `{endpoint:
+   * null}` (an explicit disable) is distinguishable from "nothing pending".
+   */
+  private pendingRecognizerConfig: { endpoint: RecognizerEndpoint | null } | undefined;
   private readonly refineTitle: ((text: string) => Promise<string | null>) | undefined;
   // Slice P7.15 (F14): mutable — re-resolved per new model on a set_model switch.
   private reasoningSupported: boolean;
@@ -912,6 +949,8 @@ export class Session {
     this.envStatus = options.envStatus;
     this.checkpoints = options.checkpoints;
     this.imageInputEnabled = options.imageInputEnabled;
+    this.imageFallbackAvailable = options.imageFallbackAvailable;
+    this.applyRecognizerConfigImpl = options.applyRecognizerConfig;
     this.refineTitle = options.refineTitle;
     this.reasoningSupported = options.reasoningSupported ?? true;
     this.availableEffortLevels = options.availableEffortLevels;
@@ -1135,6 +1174,10 @@ export class Session {
           // capability. Absent seam (legacy hosts/tests) -> field absent, so
           // the renderer applies no model-level attachment gating.
           ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
+          // TASK.198 срез C: the vision-fallback verdict, same additive-
+          // optional discipline as imageInput above — absent seam (codex/
+          // claude, legacy tests) -> field absent, no fallback-aware gating.
+          ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
           ...(presentation !== undefined ? { engine: presentation } : {}),
           // Design TASK.40 §2(f)/§3.2: shell is emitted ONLY alongside a
           // present `engine` (never for core), so the core wire stays
@@ -1341,6 +1384,8 @@ export class Session {
           // reflects the switched-to model (upfront re-gate on vision -> non-
           // vision, mirror of the availableEffortLevels re-resolution).
           ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
+          // TASK.198 срез C: same additive-optional discipline as imageInput above.
+          ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
         });
         break;
       }
@@ -1734,6 +1779,19 @@ export class Session {
   }
 
   /**
+   * TASK.198 срез C (plan §3 gate table): the model-level half of the
+   * image-attachment gate — true when the current model can see images
+   * itself, OR the vision fallback is available (a recognizer is currently
+   * configured for this session). `engine.capabilities.supportsImages` (the
+   * ENGINE-level half) is checked separately by both call sites, unchanged.
+   * `imageFallbackAvailable` absent (codex/claude, legacy tests) makes this
+   * identical to the pre-TASK.198 `imageInputEnabled?.() === true` check.
+   */
+  private imagesAccepted(): boolean {
+    return this.imageInputEnabled?.() === true || this.imageFallbackAvailable?.() === true;
+  }
+
+  /**
    * Parks a busy-time user_message in the child's host-side steer queue
    * (CUT-S2 §1.1: the RENDERER prompt-queue is never used for a child
    * surface — steering must affect the sync-join result, so it lives here,
@@ -1744,7 +1802,7 @@ export class Session {
    */
   private enqueueSteerMessage(requestId: string, text: string, images?: ImageAttachment[]): void {
     const attachments = images?.length ? [...images] : undefined;
-    if (attachments !== undefined && (!this.engine.capabilities.supportsImages || this.imageInputEnabled?.() !== true)) {
+    if (attachments !== undefined && (!this.engine.capabilities.supportsImages || !this.imagesAccepted())) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
       return;
     }
@@ -1790,7 +1848,7 @@ export class Session {
    */
   private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): boolean {
     const attachments = images?.length ? [...images] : undefined;
-    if (attachments !== undefined && (!this.engine.capabilities.supportsImages || this.imageInputEnabled?.() !== true)) {
+    if (attachments !== undefined && (!this.engine.capabilities.supportsImages || !this.imagesAccepted())) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
       return false;
     }
@@ -1848,6 +1906,18 @@ export class Session {
         // only ever described the child-side pause) and is reverted here.
         if (this.child === undefined) {
           this.busy = false;
+          // TASK.198 срез C (plan §1.3): the ONE pending recognizer-config
+          // commit (if any), applied HERE — the exact "busy=false" boundary
+          // the plan names, strictly before every teardown await below.
+          // Last-value-wins: a push received while this turn ran overwrote
+          // any earlier pending one (Session.applyRecognizerConfig), so
+          // there is at most one commit per boundary regardless of how many
+          // pushes arrived mid-turn.
+          if (this.pendingRecognizerConfig !== undefined) {
+            const pending = this.pendingRecognizerConfig;
+            this.pendingRecognizerConfig = undefined;
+            this.commitRecognizerConfig(pending.endpoint);
+          }
         }
         this.abort = null;
         this.turnId = null;
@@ -2539,6 +2609,44 @@ export class Session {
   notifyModeChanged(mode: PermissionMode): void {
     this.persistence?.touch({ mode });
     this.outbound.emit({ type: "mode_changed", mode });
+  }
+
+  /**
+   * Live recognizer-config push from main (TASK.198 срез C, plan §1.3):
+   * called by host/index.ts's parentPort handler on every
+   * `RecognizerConfigChanged`. Applies immediately while idle; while a turn
+   * is running, stashes it as the ONE pending value (overwriting any earlier
+   * pending push — last-write-wins) and defers the actual commit to the very
+   * next busy->idle boundary (this class's own teardown, strictly before any
+   * await there). A session with no wiring at all (codex/claude engine
+   * boots, and every pre-existing test) is a safe no-op — the plan's
+   * "codex/claude НЕ задеты (замыкание не установлено)".
+   */
+  applyRecognizerConfig(endpoint: RecognizerEndpoint | null): void {
+    if (this.applyRecognizerConfigImpl === undefined) {
+      return;
+    }
+    if (this.busy) {
+      this.pendingRecognizerConfig = { endpoint };
+      return;
+    }
+    this.commitRecognizerConfig(endpoint);
+  }
+
+  /**
+   * Runs the host-owned apply (swap the endpoint, (de)register InspectImage,
+   * recompose the prompt when needed — host/index.ts) and, ONLY after that
+   * commit actually lands, emits `image_fallback_changed` with the FULL
+   * live verdict re-read post-commit (never a bare echo of `endpoint`'s
+   * presence on the wire) — mirrors `model_changed`'s own re-read of
+   * `imageInputEnabled` after `switchModelImpl` has already run.
+   */
+  private commitRecognizerConfig(endpoint: RecognizerEndpoint | null): void {
+    this.applyRecognizerConfigImpl!(endpoint);
+    this.outbound.emit({
+      type: "image_fallback_changed",
+      imageFallback: this.imageFallbackAvailable?.() === true,
+    });
   }
 
   /**

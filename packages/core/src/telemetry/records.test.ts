@@ -271,7 +271,7 @@ describe("telemetryRecordFor — unmapped variants -> null (fail-closed)", () =>
     { type: "tool_execution_start", toolCallId: "1", toolName: "Bash", input: { cmd: SENTINEL } },
     { type: "turn_start", turn: 1 },
     { type: "subagent_progress", toolCallId: "1", turns: 1, toolCalls: 1, lastTool: SENTINEL },
-    { type: "workflow_start", toolCallId: "1", workflow: SENTINEL, totalSteps: 2 },
+    { type: "workflow_start", toolCallId: "1", workflow: SENTINEL, totalSteps: 2, steps: [] },
     { type: "workflow_step_start", toolCallId: "1", stepId: "s1", agentType: "sonnet" },
     {
       type: "workflow_step_progress",
@@ -349,7 +349,7 @@ describe("telemetryRecordFor — sentinel-leak invariant across every text carri
     assertNoLeak({ type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 100, reason: SENTINEL }));
   it("error.error", () => assertNoLeak({ type: "error", error: SENTINEL }));
   it("workflow_start.workflow (name)", () =>
-    assertNoLeak({ type: "workflow_start", toolCallId: "1", workflow: SENTINEL, totalSteps: 1 }));
+    assertNoLeak({ type: "workflow_start", toolCallId: "1", workflow: SENTINEL, totalSteps: 1, steps: [] }));
 });
 
 describe("buildTelemetryTap", () => {

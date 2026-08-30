@@ -564,6 +564,9 @@ export function renderEvent(
         paint("progress", `[workflow ${event.toolCallId}] step ${event.stepId} start: ${event.agentType}\n`),
       );
       break;
+    case "workflow_step_running":
+      write(paint("progress", `[workflow ${event.toolCallId}] step ${event.stepId} running\n`));
+      break;
     case "workflow_step_progress":
       write(
         paint(
@@ -571,6 +574,11 @@ export function renderEvent(
           `[workflow ${event.toolCallId}] step ${event.stepId} progress: turns=${event.turns} toolCalls=${event.toolCalls}` +
             `${event.lastTool !== undefined ? ` lastTool=${event.lastTool}` : ""}\n`,
         ),
+      );
+      break;
+    case "workflow_step_activity":
+      write(
+        paint("progress", `[workflow ${event.toolCallId}] step ${event.stepId} ${event.toolName}: ${event.summary}\n`),
       );
       break;
     case "workflow_step_end":

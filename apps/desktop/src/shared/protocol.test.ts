@@ -66,6 +66,33 @@ describe("set_model protocol (slice P7.15 · F14)", () => {
     expect(structuredClone(changed)).toEqual(changed);
     expect(structuredClone(ready)).toEqual(ready);
   });
+
+  // TASK.198 срез C: `imageFallback` rides beside `imageInput` on both
+  // host_ready and model_changed (same additive-optional discipline, same
+  // compile-time proof that the field-absent shapes above stay valid), and
+  // the new `image_fallback_changed` event is structured-clone-safe.
+  it("carries the additive TASK.198 imageFallback verdict as structured-clone-safe data", () => {
+    const changed = {
+      type: "model_changed",
+      model: "glm-4.6",
+      reasoningEffort: "off",
+      imageInput: false,
+      imageFallback: true,
+    } satisfies HostToUiMessage;
+    const ready = {
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "claude-sonnet",
+      sessionId: "s1",
+      imageInput: false,
+      imageFallback: true,
+    } satisfies HostToUiMessage;
+    const fallbackChanged = { type: "image_fallback_changed", imageFallback: false } satisfies HostToUiMessage;
+    expect(structuredClone(changed)).toEqual(changed);
+    expect(structuredClone(ready)).toEqual(ready);
+    expect(structuredClone(fallbackChanged)).toEqual(fallbackChanged);
+  });
 });
 
 describe("set_reasoning_effort protocol", () => {

@@ -104,8 +104,9 @@ import { McpServersPane } from "./McpServersPane.js";
 import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane } from "./SubagentsPane.js";
 import { ProfilePane } from "./ProfilePane.js";
+import { VisionPane } from "./VisionPane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
-import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Person, Plus, Robot, Search, ServerStack, Terminal } from "./icons.js";
+import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Person, Plus, Robot, Search, ServerStack, Sliders, Terminal } from "./icons.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { readTurnNotifyEnabled, TURN_NOTIFY_KEY } from "../notifications.js";
@@ -117,7 +118,7 @@ const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 /** TASK.159: the output-ceiling env rung — same local-literal convention as `API_KEY_ENV_VAR` above (renderer modules don't import main). */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
-export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "network" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
+export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -133,6 +134,9 @@ type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
  * `requestedPane` initial value stays "provider", unrelated to array order.
  * P7.24/F20 W3 (design/slice-P7.24-cut.md §1.4) inserts "shortcuts" between
  * Appearance and About, mirroring the ref's Personal-section grouping.
+ * TASK.198 срез E2a inserts "vision" between Tools and Network — the
+ * fallback-recognizer pane belongs next to the other cross-cutting run-time
+ * knobs, not among the per-provider connection panes.
  */
 export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; description: string; icon: SettingsIcon }> = [
   { id: "profile", label: "Profile", description: "Your usage stats from local telemetry.", icon: Person },
@@ -141,6 +145,12 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
   { id: "claude", label: "Claude", description: "Discover and verify the Claude Code agent engine.", icon: Cube },
   { id: "permissions", label: "Permissions", description: "Rules that let tools run without asking.", icon: Check },
   { id: "tools", label: "Tools", description: "Concurrency, stall timeout, and turn limits.", icon: Terminal },
+  {
+    id: "vision",
+    label: "Vision",
+    description: "The fallback model that answers what an image shows for a model that can't see.",
+    icon: ImageIcon,
+  },
   {
     id: "network",
     label: "Network",
@@ -161,7 +171,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
     icon: Robot,
   },
   { id: "environment", label: "Environment", description: "Telemetry and repo-map status for this workspace.", icon: Info },
-  { id: "appearance", label: "Appearance", description: "Theme, density, and notification preferences.", icon: ImageIcon },
+  { id: "appearance", label: "Appearance", description: "Theme, density, and notification preferences.", icon: Sliders },
   { id: "shortcuts", label: "Keyboard shortcuts", description: "View and customize keyboard shortcuts.", icon: Keyboard },
   { id: "about", label: "About", description: "App identity, updates, and acknowledgements.", icon: BrandMark },
 ];
@@ -179,6 +189,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   claude: ["claude", "agent", "engine", "sign in", "anthropic", "cli", "binary", "proxy"],
   permissions: ["always allow", "rules", "bash", "pattern", "tool", "trusted", "binary", "consent", "security"],
   tools: ["concurrency", "stall timeout", "max turns", "tool"],
+  vision: ["image", "images", "vision", "recognizer", "screenshot", "picture", "attachment", "inspect", "blind model"],
   network: ["proxy", "network", "system proxy", "no proxy", "authentication", "check connection"],
   mcp: ["mcp", "server", "status"],
   skills: ["skill", "skills", "import", "enable"],
@@ -1434,6 +1445,8 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
                 </div>
               </section>
             )}
+
+            {activePane === "vision" && <VisionPane store={store} />}
 
             {/* TASK.141: the app rung — the bottom of every ladder — sits above
                 the registry it picks from, so "what does this app use by

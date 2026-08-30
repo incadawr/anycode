@@ -105,14 +105,16 @@ const HOST_READY = (workspace: string, sessionId: string): HostToUiMessage => ({
 /**
  * A non-core (Codex-shaped) `host_ready` — TASK.81's effort/images dispatch-
  * gate fixtures need `engine.model.effort` (the boot model's resolved
- * effort, compared against a pending pick) and `imageInput` (the boot
- * model's live vision verdict), neither of which the plain `HOST_READY`
- * fixture above carries (legacy core wire).
+ * effort, compared against a pending pick), `imageInput` (the boot model's
+ * live vision verdict), and (TASK.198 срез D) `imageFallback` (a configured
+ * recognizer fallback, which re-opens the same gate for a blind model) —
+ * none of which the plain `HOST_READY` fixture above carries (legacy core
+ * wire).
  */
 function CODEX_HOST_READY(
   workspace: string,
   sessionId: string,
-  options: { effort?: string; imageInput?: boolean } = {},
+  options: { effort?: string; imageInput?: boolean; imageFallback?: boolean } = {},
 ): HostToUiMessage {
   return {
     type: "host_ready",
@@ -121,6 +123,7 @@ function CODEX_HOST_READY(
     model: "gpt-5",
     sessionId,
     ...(options.imageInput !== undefined ? { imageInput: options.imageInput } : {}),
+    ...(options.imageFallback !== undefined ? { imageFallback: options.imageFallback } : {}),
     engine: {
       id: "codex",
       capabilities: {
@@ -1050,6 +1053,20 @@ describe("tab-registry — queueInitialPrompt images (TASK.81)", () => {
     expect(findBlock(transcript, "user_text")?.text).toBe("look at this");
   });
 
+  it("TASK.198 срез D: a configured recognizer fallback on the boot host_ready delivers images to a blind model instead of honestly blocking them", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "look at this", undefined, undefined, undefined, [IMAGE]);
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { imageInput: false, imageFallback: true }));
+
+    const userMessage = port.sent[1] as { type: string; text: string; images?: unknown[] };
+    expect(userMessage).toMatchObject({ type: "user_message", text: "look at this", images: [IMAGE.attachment] });
+    expect(registry.getStore("tab-a")?.getState().notice).toBeNull();
+  });
+
   it("no images passed: user_message carries no images field (current behavior preserved)", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
@@ -1080,6 +1097,26 @@ describe("tab-registry — queueInitialPrompt images (TASK.81)", () => {
       kind: "image_attach_rejected",
       text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT,
     });
+  });
+
+  // TASK.198 срез D: mirrors the boot-time test above, but through the
+  // already-ready shortcut, which reads the tab's LIVE store field
+  // (`state.imageFallback`) rather than the host_ready message directly —
+  // depends on store.ts carrying the `imageFallback` slot off `host_ready`
+  // (срез D's store.ts half, gated separately — see task198-state.md).
+  it("TASK.198 срез D: already-ready shortcut honors a configured recognizer fallback off the tab's LIVE state too", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { imageInput: false, imageFallback: true }));
+    expect(registry.getStore("tab-a")?.getState().connection).toBe("ready");
+
+    registry.queueInitialPrompt("tab-a", "look at this", undefined, undefined, undefined, [IMAGE]);
+
+    const userMessage = port.sent[1] as { type: string; text: string; images?: unknown[] };
+    expect(userMessage).toMatchObject({ type: "user_message", text: "look at this", images: [IMAGE.attachment] });
+    expect(registry.getStore("tab-a")?.getState().notice).toBeNull();
   });
 });
 

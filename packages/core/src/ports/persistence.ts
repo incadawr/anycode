@@ -94,6 +94,17 @@ export interface SessionMeta {
    * call).
    */
   spawnToolCallId?: string;
+  /**
+   * Vision-fallback image registry counter (TASK.198 plan §2): the NEXT
+   * number reserveImageRef will hand out for this session. Surfaced only
+   * once at least one ref has actually been reserved (value > 1) — every
+   * untouched/legacy session decodes to the column's `DEFAULT 1` and omits
+   * this field, matching every other NOT-NULL-DEFAULT bookkeeping column on
+   * this type (continuationPending, worktreeExitNoticePending, ...). Never
+   * settable through SessionMetaPatch — the only writer is reserveImageRef's
+   * own atomic UPDATE.
+   */
+  nextImageRef?: number;
 }
 
 export type SessionMetaPatch = Partial<
@@ -179,6 +190,17 @@ export interface PersistencePort {
    */
   deleteSessionTree(rootId: string): Promise<{ deletedSessionIds: string[]; externalSessionRefs: string[] }>;
   touchSession(id: string, patch?: SessionMetaPatch): Promise<void>;
+  /**
+   * Atomically reserves and returns the session's next vision-fallback image
+   * ref (TASK.198 plan §2), incrementing the persisted counter in the SAME
+   * step — never through touchSession's patch mechanism (a partial UPDATE
+   * with last-write-wins semantics could replay a stale value after a
+   * crash and hand out a number twice). Numbering starts at 1 and is
+   * assigned unconditionally, once per image, for the life of the session —
+   * a compaction that later drops the highest-ref image can never make a
+   * fresh reservation reuse its number.
+   */
+  reserveImageRef(sessionId: string): Promise<number>;
   /** Atomically refuses a path already active or pending cleanup in another session. */
   claimWorktree?(id: string, path: string, patch: SessionMetaPatch): Promise<boolean>;
   appendHistory(sessionId: string, items: readonly HistoryItem[]): Promise<void>;

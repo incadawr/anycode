@@ -420,8 +420,9 @@ function toPermissionRule(rule: { toolName: string; pattern?: string }): { toolN
 // ── env-hardening: scrub secrets from the host's own live process.env (ruling §3) ──
 
 /**
- * Deletes every `SECRET_ENV_KEYS` entry (currently just `ANYCODE_API_KEY`)
- * from the live `process.env` of THIS host process. Called from `boot()`'s
+ * Deletes every `SECRET_ENV_KEYS` entry (`ANYCODE_API_KEY`, and since TASK.198
+ * срез C also `ANYCODE_RECOGNIZER_API_KEY`) from the live `process.env`
+ * of THIS host process. Called from `boot()`'s
  * `finally` in index.ts, which — by construction of `finally` — runs strictly
  * AFTER the try block, i.e. after `AiSdkModelPort` has already captured
  * `envConfig.apiKey` into its own constructor-held config object (the SDK

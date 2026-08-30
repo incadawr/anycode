@@ -204,8 +204,11 @@ import {
   createCommandHook,
   createDefaultTokenizer,
   createDefaultToolRegistry,
+  createInspectImageTool,
+  createMediaProjectionPort,
   createSkillPort,
   createWebSearchTool,
+  AskCache,
   browserOpenTool,
   browserReadTool,
   browserScreenshotTool,
@@ -250,10 +253,13 @@ import type {
   MediaCapabilityPort,
   McpServerSpec,
   ModelPort,
+  ModelRequest,
+  ModelStreamEvent,
   PermissionMode,
   PreviewPort,
   ProviderTransport,
   ReasoningEffort,
+  RecognizerEndpoint,
   ResolvedTelemetryConfig,
   ResolvedWebSearchBackend,
   RepoMapConfig,
@@ -262,6 +268,7 @@ import type {
   SubagentStallReport,
   SystemPromptEnv,
   TelemetryPort,
+  TokenUsage,
   WorktreeControlPort,
   WorkspaceTransition,
 } from "@anycode/core";
@@ -276,6 +283,7 @@ import {
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
+import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
 import { PREVIEW_ARTIFACTS_TYPE } from "../shared/preview.js";
 import type { PreviewEventMessage, PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
 import {
@@ -1422,6 +1430,148 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   console.log(`[host] initialized Claude native session ${connected.sessionRef} session=${rowId} db=${dbPath}`);
 }
 
+// ── TASK.198 срез C: vision-fallback host wiring — pure helpers ──
+
+/**
+ * The three valid `ProviderTransport` ids (packages/core/src/provider/
+ * catalog.ts's `PROVIDER_TRANSPORT_VALUES`/env.ts's validation of the same
+ * set) — copied as a literal because that list is not exported from the
+ * package barrel, and `packages/core/**` is out of reach here regardless.
+ * Same "host stays core-free / cross-layer literal mirror" convention this
+ * file already follows for the ANYCODE_RECOGNIZER_* env-var names below.
+ */
+const RECOGNIZER_TRANSPORT_VALUES: readonly string[] = ["anthropic-messages", "openai-chat-completions", "openai-responses"];
+
+/**
+ * Fills the two fields a resolved connection may leave unset (main/host-env.ts's
+ * `resolveRecognizerConfig` own doc: "a bare/custom connection has no
+ * `providerName`, a keyless local server has no `apiKey`") plus a `transport`
+ * DEFAULT for the one case a wire/env source may omit that core's
+ * `RecognizerEndpoint` (vision/recognizer.ts) does not accept — the SAME
+ * final fallback the primary provider ladder above already uses
+ * (`providerTransport = envConfig.providerTransport ?? catalogEntry?.
+ * defaultTransport ?? "anthropic-messages"`), never a second policy invented
+ * for the recognizer alone.
+ *
+ * Returns `null` (a disabled recognizer, never a "configured but broken" one)
+ * on either of two malformed inputs, checked at this ONE construction point
+ * so both callers below (the boot-env snapshot in `parseRecognizerEnv`, and
+ * main's live config push) are covered by a single check each:
+ *  - `baseUrl` blank after trimming (live-run fix, TASK.198 follow-up): the
+ *    unconfigured-recognizer placeholder a few lines below is literally
+ *    `{transport: "anthropic-messages", baseUrl: "", model: ""}`, the exact
+ *    anthropic+blank-address pair a live run turned into `Invalid Anthropic
+ *    base URL: "" is empty after trimming` after `InspectImage` had already
+ *    registered and been called;
+ *  - `transport` PRESENT but not one of the three known `ProviderTransport`
+ *    ids — parity with core's own `loadEnvConfig` validation (env.ts: an
+ *    invalid transport "is rejected the same way as any other invalid
+ *    value"), restored here because this field's cast to `ProviderTransport`
+ *    was unchecked (any string was silently accepted as a valid transport).
+ *    A transport that is simply ABSENT is NOT malformed — that is the
+ *    documented legacy-fallback default two lines below, shared with the
+ *    primary provider ladder, and is left alone.
+ *
+ * The transport check here is NOT redundant with main/host-env.ts's own
+ * `resolveEffectiveTransport`-based ladder in `resolveRecognizerConfig` — the
+ * two sit at NON-OVERLAPPING injection points. That ladder governs
+ * RESOLUTION (what settings/catalog value main picks, and when it honestly
+ * refuses); this check governs what can arrive AFTER resolution, from a path
+ * that ladder never sees: `applyRecognizerEnv`'s `fillFromSettings` is
+ * env-value-wins, so an ambient `ANYCODE_RECOGNIZER_TRANSPORT` in this
+ * fork's OWN environment can override whatever main resolved, and main's
+ * live RECOGNIZER_CONFIG_CHANGED push (the other caller below) carries a
+ * `transport` string that never passes through main's ladder at all. Drop
+ * either gate and the hole the other one does not cover reopens.
+ */
+function recognizerEndpointFromFields(fields: {
+  transport?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  model: string;
+  providerName?: string;
+}): RecognizerEndpoint | null {
+  if (fields.baseUrl === undefined || fields.baseUrl.trim() === "") {
+    return null;
+  }
+  if (fields.transport !== undefined && !RECOGNIZER_TRANSPORT_VALUES.includes(fields.transport)) {
+    return null;
+  }
+  return {
+    transport: (fields.transport as ProviderTransport | undefined) ?? "anthropic-messages",
+    baseUrl: fields.baseUrl,
+    model: fields.model,
+    ...(fields.apiKey !== undefined && fields.apiKey !== "" ? { apiKey: fields.apiKey } : {}),
+    ...(fields.providerName !== undefined && fields.providerName !== "" ? { providerName: fields.providerName } : {}),
+  };
+}
+
+/**
+ * TASK.198 срез C: `ANYCODE_RECOGNIZER_{TRANSPORT,BASE_URL,API_KEY,MODEL,
+ * PROVIDER_NAME}` -> a core `RecognizerEndpoint`, or null when the fallback
+ * is unconfigured. Literal local var-name copies mirror main/host-env.ts's
+ * `ENV_RECOGNIZER_*` constants by contract — the same "host stays core-free
+ * / cross-layer literal mirror, never a wrong-direction import" convention
+ * every other env-var family in this file already follows (host never
+ * imports from `../main/`). A blank `ANYCODE_RECOGNIZER_MODEL` is one honest
+ * "off" signal, checked here; a blank `ANYCODE_RECOGNIZER_BASE_URL` and an
+ * unknown `ANYCODE_RECOGNIZER_TRANSPORT` are the other two (live-run fix,
+ * TASK.198 follow-up) — `resolveRecognizerConfig` can emit a model with no
+ * resolvable address (an unconfigured `needsBaseUrl` catalog template, or a
+ * legacy/unknown providerId), and this env family carries no validation of
+ * its own on the transport string — both gates live in
+ * `recognizerEndpointFromFields` below, the one construction point this and
+ * the live-push caller both go through.
+ */
+function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint | null {
+  const model = env.ANYCODE_RECOGNIZER_MODEL;
+  if (model === undefined || model.trim() === "") {
+    return null;
+  }
+  return recognizerEndpointFromFields({
+    transport: env.ANYCODE_RECOGNIZER_TRANSPORT,
+    baseUrl: env.ANYCODE_RECOGNIZER_BASE_URL,
+    apiKey: env.ANYCODE_RECOGNIZER_API_KEY,
+    model,
+    providerName: env.ANYCODE_RECOGNIZER_PROVIDER_NAME,
+  });
+}
+
+/**
+ * Wraps a recognizer `ModelPort` with a usage-telemetry tap (plan §8): `ask()`
+ * "reports itself" through the SAME `t:"usage"` shape core's own `finish`
+ * events report (telemetry/records.ts's `telemetryRecordFor`), stamped with
+ * the sub-envelope inline subagents already use (`buildSubagentTelemetryTap`'s
+ * `sub:{agentType, model}` convention, TASK.160) — `agentType:"vision"` — so
+ * a vision call's spend lands in the SAME jsonl session file and the Profile
+ * panel attributes it without a new source type. No AgentEvent is
+ * synthesized (a one-shot `ask()` call is not a nested AgentLoop run) — this
+ * intercepts the raw `ModelStreamEvent` stream one layer below that.
+ */
+class VisionTelemetryModelPort implements ModelPort {
+  constructor(
+    private readonly inner: ModelPort,
+    private readonly report: (usage: TokenUsage) => void,
+  ) {}
+
+  get modelId(): string | undefined {
+    return this.inner.modelId;
+  }
+
+  get lastResponseModel(): string | undefined {
+    return this.inner.lastResponseModel;
+  }
+
+  async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+    for await (const event of this.inner.streamText(request)) {
+      if (event.type === "finish") {
+        this.report(event.usage);
+      }
+      yield event;
+    }
+  }
+}
+
 async function boot(): Promise<void> {
   try {
     // Selection/probe is deliberately before loadEnvConfig: an external engine
@@ -1440,6 +1590,22 @@ async function boot(): Promise<void> {
     }
     const envConfig = loadEnvConfig(process.env);
     const args = parseHostArgs(process.argv.slice(2));
+
+    // TASK.198 срез C: the fork-boot snapshot half of the recognizer's config
+    // delivery (plan §1.2 step 1) — E1's ANYCODE_RECOGNIZER_* family, parsed
+    // once here. `liveRecognizerEndpoint` is a SINGLE mutable object identity
+    // kept for the life of this boot: InspectImage's own factory (below)
+    // destructures `endpoint` out of its options ONCE and never re-reads it,
+    // so a later live-push commit mutates THIS object's fields in place
+    // (never reassigns the reference) — the already-built tool then observes
+    // the current config despite having captured it only once.
+    // `recognizerConfigured` is the cheap boolean readback both
+    // `media.recognizerConfigured` and Session's `imageFallbackAvailable`
+    // consult on every call.
+    const bootRecognizerEndpoint = parseRecognizerEnv(process.env);
+    let recognizerConfigured = bootRecognizerEndpoint !== null;
+    const liveRecognizerEndpoint: RecognizerEndpoint =
+      bootRecognizerEndpoint ?? { transport: "anthropic-messages", baseUrl: "", model: "" };
 
     // Always-allow persistence (design §5, slice 2.2.3): read-only, fail-soft
     // (seedAlwaysAllowRules never throws — see host/boot.ts). Independent of
@@ -1508,10 +1674,10 @@ async function boot(): Promise<void> {
     // `/model` recipe (host-side hot-swap, NOT a respawn). The factory rebuilds a
     // fresh AiSdkModelPort per switch (LanguageModel is built per-attempt, so the
     // factory is cheap; the api key legitimately lives in the closure, precedent
-    // A9); `modelPort` stays a SwitchableModelPort wrapper — the ONE object the
-    // loop/ContextManager/subagents/titling all capture by reference, so a
-    // setPort between turns is instantly visible to every holder. Name/shape are
-    // preserved so config/Session/refineTitle are unchanged.
+    // A9); `switchableModelPort` stays a SwitchableModelPort wrapper — the ONE
+    // object the loop/ContextManager/subagents/titling all capture by reference
+    // (through the `modelPort` decorator below, which forwards every call to
+    // it), so a setPort between turns is instantly visible to every holder.
     const modelPortFactory = (m: string): ModelPort =>
       new AiSdkModelPort(
         {
@@ -1525,7 +1691,16 @@ async function boot(): Promise<void> {
         },
         hostDiagnosticSink,
       );
-    const modelPort = new SwitchableModelPort(modelPortFactory(envConfig.model));
+    const switchableModelPort = new SwitchableModelPort(modelPortFactory(envConfig.model));
+    // TASK.198 срез C (plan §3): the ONE external decorator around the
+    // SwitchableModelPort — mirror of cli/main.ts's own
+    // `modelPortWithMediaProjection` wrap (B1) — so every consumer of
+    // `config.modelPort` (the main turn loop, ceiling verdict, compaction,
+    // inline-subagent wrap-up) projects image bytes off the wire on a blind
+    // model by construction. `media.imageInputEnabled` is declared further
+    // down this function — a safe forward reference: this closure is never
+    // INVOKED until a real turn runs streamText(), long after `media` exists.
+    const modelPort = createMediaProjectionPort(switchableModelPort, () => media.imageInputEnabled());
     // Mutable source of truth for the live model (mirror of the CLI's
     // `currentModel`, loopConfig.mode's model twin). Boot-frozen readers below
     // (`media.imageInputEnabled`, `systemPromptEnv.modelId`) read THIS so a
@@ -2024,12 +2199,15 @@ async function boot(): Promise<void> {
       mcpManager = null;
     }
 
-    // Boot snapshot of tool names for the system prompt's tool-discipline
-    // section (design slice-3.6-cut.md §6/§0.2): taken AFTER the MCP block
-    // above (success OR fail-soft), so this already includes any
-    // mcp__*-bridged tools registered into this SAME registry object — mirrors
-    // cli/main.ts's ordering exactly.
-    const toolNames = registry.list();
+    // TASK.198 срез C (finding #6): the boot-time `toolNames` snapshot this
+    // comment used to describe is GONE — `composeSystemPrompt` below now
+    // reads `registry.list()` LIVE on every composition instead, so a tool
+    // registered/unregistered after boot (InspectImage's own gate flipping
+    // mid-session, plan §5/§9) reaches the system prompt the very next time
+    // it is recomposed, with no rebuild of this closure required. The MCP
+    // block above still runs first for the SAME reason it always did:
+    // mcp__*-bridged tools must already be in the registry before the FIRST
+    // composition (the boot `config.systemPrompt` build a few lines down).
 
     // Session-static env facts (design §2.1/§6), computed ONCE per tab boot so
     // the system prompt's <env> section — and every subagent's, via
@@ -2126,9 +2304,20 @@ async function boot(): Promise<void> {
     // same order); the components now carry the repoMap render, so this no longer
     // calls renderRepoMap() itself (single render per compose). The loop reads
     // config.systemPrompt per-call, so the rebuilt prompt takes effect next turn.
+    // TASK.198 срез C (finding #6): `toolNames` is read LIVE off the registry
+    // on every composition (never a frozen boot snapshot), so a tool
+    // registered/unregistered after boot — InspectImage's own gate, plan
+    // §5/§9 — reaches the model the very next time this is called, without
+    // rebuilding this closure. `visionFallbackEnabled` mirrors that same
+    // live read: true exactly while InspectImage is CURRENTLY registered.
     const composeSystemPrompt = (
       components: NonNullable<AgentLoopConfig["systemPromptComponents"]>,
-    ): string => buildSystemPrompt({ toolNames, env: systemPromptEnv }) + components.map((c) => c.text).join("");
+    ): string =>
+      buildSystemPrompt({
+        toolNames: registry.list(),
+        env: systemPromptEnv,
+        visionFallbackEnabled: registry.has("InspectImage"),
+      }) + components.map((c) => c.text).join("");
 
     // GitBridge wiring (slice 5.7, design slice-5.7-cut.md §2.3-C3): construction
     // is unconditional (zero I/O in the constructor), mirroring the CLI's
@@ -2147,7 +2336,59 @@ async function boot(): Promise<void> {
       // Reads currentModel so a P7.15 model switch re-gates image input on the
       // next send; currentModel === envConfig.model at boot (byte-identical).
       imageInputEnabled: () => resolveImageInput(currentModel, catalogEntry, envConfig.imageInput),
+      // TASK.198 срез C: live verdict for the vision fallback — true whenever
+      // a recognizer endpoint is CURRENTLY configured, independent of the
+      // current model's own sightedness. Consulted by host/session.ts's
+      // turn-accept gate (ORed with imageInputEnabled) and by the InspectImage
+      // registration gate below (ANDed with !imageInputEnabled()).
+      recognizerConfigured: () => recognizerConfigured,
     };
+
+    // TASK.198 срез C (plan §5): the InspectImage tool instance is built
+    // EXACTLY ONCE for the life of this host process — never rebuilt on a
+    // registration toggle or a live recognizer-config push. Its per-image
+    // question counter and Q/A transcript live in the factory's own closure
+    // (tools/inspect-image.ts, срез B2) — plan §5's "resume weakened to
+    // process lifetime" semantics: recreating the tool would silently reset
+    // a mid-session question budget and lose the "what's to the right of
+    // that button?" thread every time the gate flips (blind<->sighted, or a
+    // recognizer toggled off and back on). `liveRecognizerEndpoint` is
+    // captured ONCE by the factory (tools/inspect-image.ts destructures
+    // `endpoint` out of its options immediately); a later live-push commit
+    // mutates ITS FIELDS in place (never replaces the reference) precisely
+    // so this already-built instance keeps seeing the current config.
+    const visionAskCache = new AskCache();
+    let inspectImageTool: ReturnType<typeof createInspectImageTool> | undefined;
+    function ensureInspectImageTool(): ReturnType<typeof createInspectImageTool> {
+      if (inspectImageTool === undefined) {
+        inspectImageTool = createInspectImageTool({
+          recognizer: { endpoint: liveRecognizerEndpoint, cache: visionAskCache, portFactory: recognizerPortFactory },
+        });
+      }
+      return inspectImageTool;
+    }
+
+    /**
+     * (De)registers InspectImage against the CURRENT (recognizer configured
+     * ∧ blind model) verdict — the exact gate TASK.198.md §1 step 5 and plan
+     * §5 specify — and reports whether registration actually flipped, so a
+     * caller knows whether the system prompt needs recomposing (finding #6:
+     * no recompose when nothing changed). Idempotent both ways
+     * (ToolRegistry.register/unregister already are).
+     */
+    function recomputeInspectImageRegistration(): boolean {
+      const shouldRegister = recognizerConfigured && media.imageInputEnabled() === false;
+      const isRegistered = registry.has("InspectImage");
+      if (shouldRegister === isRegistered) {
+        return false;
+      }
+      if (shouldRegister) {
+        registry.register(ensureInspectImageTool());
+      } else {
+        registry.unregister("InspectImage");
+      }
+      return true;
+    }
 
     // TASK.102 CUT-S2 §0.8/§2.6.3: a child-mode boot's broker wraps `emit`
     // with the permission-tap — an `attention` signal bracketing every
@@ -2185,6 +2426,36 @@ async function boot(): Promise<void> {
     // (built inside the AgentLoopConfig literal, read later by a child spawn)
     // sees a fixed value instead of chasing the module-level `let`.
     const subagentTelemetry = telemetry;
+
+    // TASK.198 срез C (plan §8): wraps the plain port ask() would otherwise
+    // build itself (`new AiSdkModelPort(endpoint)`) with a usage-telemetry
+    // tap — see VisionTelemetryModelPort's own doc. Reuses `subagentTelemetry`
+    // (the const capture right above, not the mutable `telemetry` let) for
+    // the SAME reason the subagentEventTap factory a few lines down does.
+    const recognizerPortFactory = (endpoint: RecognizerEndpoint): ModelPort => {
+      const port = new AiSdkModelPort(endpoint, hostDiagnosticSink);
+      if (subagentTelemetry === null) {
+        return port;
+      }
+      return new VisionTelemetryModelPort(port, (usage) => {
+        subagentTelemetry.port.record({
+          v: 1,
+          ts: Date.now(),
+          session: subagentTelemetry.session,
+          sub: { agentType: "vision", model: endpoint.model },
+          t: "usage",
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          totalTokens: usage.totalTokens,
+        });
+      });
+    };
+    // TASK.198 срез C (plan §5 "условная регистрация до композиции"): the
+    // boot-time registration decision, made BEFORE the first
+    // composeSystemPrompt() call below so the very first system prompt
+    // already reflects it (no post-boot recompose needed for the common
+    // case of a blind model booting with a recognizer already configured).
+    recomputeInspectImageRegistration();
 
     // Boot section components computed once (design P7.17/W2): renderRepoMap()'s
     // repoMapStatus side effect fires here, before Session's envStatus seam reads
@@ -2235,6 +2506,19 @@ async function boot(): Promise<void> {
         todos: new InMemoryTodoStore(),
       },
       media,
+      // TASK.198 срез C (plan §1/§2/§3): wired UNCONDITIONALLY — `reserveRef`
+      // is called for EVERY image this loop appends regardless of `endpoint`'s
+      // presence (AgentLoopRecognizerConfig's own doc, срез B1), so a live
+      // recognizer/model switch mid-session never encounters an un-numbered
+      // image from earlier in this SAME session. `endpoint` tracks the live
+      // `recognizerConfigured` flag; `cache`/`portFactory` are shared with
+      // InspectImage's own factory above (ONE process-lifetime cache, plan §7).
+      recognizer: {
+        reserveRef: () => persistence!.reserveImageRef(sessionMeta.id),
+        endpoint: recognizerConfigured ? liveRecognizerEndpoint : undefined,
+        cache: visionAskCache,
+        portFactory: recognizerPortFactory,
+      },
       ...(worktreeAvailable ? { worktrees: worktreeControl } : {}),
       ...(previewAvailable ? { preview: previewPort } : {}),
       cwd: workspace,
@@ -2296,6 +2580,38 @@ async function boot(): Promise<void> {
         ? { context: { contextWindowTokens: bootContextWindow } }
         : {}),
     };
+
+    /**
+     * TASK.198 срез C (plan §1.3): the host-owned HOW of a recognizer-config
+     * commit — Session's own `applyRecognizerConfig` decides WHEN (now, if
+     * idle; deferred to the next busy->idle boundary otherwise) and calls
+     * this. Swaps the live endpoint (mutating `liveRecognizerEndpoint`'s
+     * FIELDS in place, never reassigning the reference — see its own doc),
+     * updates `config.recognizer.endpoint` to match, then (de)registers
+     * InspectImage and recomposes the system prompt ONLY when that
+     * registration actually changed (finding #6 — no wasted recompose when
+     * the model was already sighted, or already blind-without-fallback,
+     * before and after this push).
+     */
+    function applyRecognizerEndpoint(next: RecognizerEndpoint | null): void {
+      if (next === null) {
+        recognizerConfigured = false;
+      } else {
+        liveRecognizerEndpoint.transport = next.transport;
+        liveRecognizerEndpoint.baseUrl = next.baseUrl;
+        liveRecognizerEndpoint.model = next.model;
+        liveRecognizerEndpoint.apiKey = next.apiKey;
+        liveRecognizerEndpoint.providerName = next.providerName;
+        recognizerConfigured = true;
+      }
+      config.recognizer!.endpoint = recognizerConfigured ? liveRecognizerEndpoint : undefined;
+      if (recomputeInspectImageRegistration()) {
+        const components = composeSystemPromptComponents();
+        config.systemPrompt = composeSystemPrompt(components);
+        config.systemPromptComponents = components;
+      }
+    }
+
     // TASK.102 CUT-S2 §2.6.1 (slice S2b B5): non-recursion lock #2. Mutates
     // `config` in place AFTER the object literal above (mirrors
     // `withSubagents`'s own mutate-in-place pattern just below) so
@@ -2452,7 +2768,12 @@ async function boot(): Promise<void> {
         // would still be live in Session while the cell held a stale value.
         selectedEffort = selectedTier;
         const previous = currentModel;
-        modelPort.setPort(modelPortFactory(id));
+        // TASK.198 срез C (plan §3): the SWITCHABLE port, not the outer
+        // media-projection decorator (`modelPort`) — setPort mutates what
+        // that decorator forwards to, so every existing holder (loop,
+        // ContextManager, subagents, titling) sees the new model without a
+        // second wrap.
+        switchableModelPort.setPort(modelPortFactory(id));
         currentModel = id;
 
         // and the rebuilt parent prompt see the new modelId.
@@ -2477,6 +2798,12 @@ async function boot(): Promise<void> {
         const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier);
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
+        // TASK.198 срез C (plan §9): a model switch can flip sighted<->blind,
+        // which flips the InspectImage registration gate too — recomputed
+        // BEFORE the unconditional recompose right below, so this switch's
+        // own prompt rebuild (which runs regardless of whether registration
+        // actually changed) always reflects the post-switch tool set.
+        recomputeInspectImageRegistration();
         // Slice P7.17 (F12): rebuild the accounting components too (repoMap/env
         // changed) and derive the fresh prompt from them, so contextBreakdown()
         // never reports a stale split after a model switch.
@@ -2745,6 +3072,10 @@ async function boot(): Promise<void> {
         flushTelemetry: () => telemetry?.port.flush() ?? Promise.resolve(),
       },
       imageInputEnabled: media.imageInputEnabled,
+      // TASK.198 срез C: core-only wiring (codex/claude Sessions never pass
+      // these two — "codex/claude НЕ задеты (замыкание не установлено)").
+      imageFallbackAvailable: media.recognizerConfigured,
+      applyRecognizerConfig: applyRecognizerEndpoint,
       // Narrow persistence callback (§4.2): Session persists title/mode patches
       // without ever holding the whole port. Fire-and-forget, never blocks a turn.
       persistence: {
@@ -2920,6 +3251,23 @@ process.parentPort.on("message", (event) => {
     for (const listener of credentialResponseListeners) {
       listener(response);
     }
+    return;
+  }
+  // TASK.198 срез C (plan §1.2/§1.3): main's live recognizer-config push
+  // (main/tabs.ts's `broadcastRecognizerConfig`, filtered upstream to live
+  // ROOT core tabs only — a codex/claude fork or a child-session fork never
+  // receives this at all). `session` may still be null here (this fork
+  // hasn't finished boot()) — the push is then simply lost, same recovery
+  // posture as every other pre-Session control-plane message in this
+  // handler: the NEXT fork reads the fresh ANYCODE_RECOGNIZER_* env snapshot
+  // regardless (finding #1's recovery path, no dependency on this push ever
+  // having landed). `session.applyRecognizerConfig` itself is a safe no-op
+  // on a codex/claude Session (its wiring is never installed there).
+  if (data && data.type === RECOGNIZER_CONFIG_CHANGED_TYPE) {
+    const message = data as RecognizerConfigChanged;
+    session?.applyRecognizerConfig(
+      message.endpoint === null ? null : recognizerEndpointFromFields(message.endpoint),
+    );
     return;
   }
   // TASK.102 CUT-S2 §2.6.1 (slice S2b B5): main -> this parent host, a

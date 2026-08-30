@@ -298,7 +298,11 @@ export function dispatchTryAgain(
   if (pending === null) {
     return "no_offer";
   }
-  if (pending.images.length > 0 && state.imageInput === false) {
+  // TASK.198 срез D: a configured recognizer fallback (`imageFallback`,
+  // mirrored off the same host_ready/model_changed wire as `imageInput`)
+  // unblocks this gate too — same pair semantics as the composer's own
+  // `isImageAttachBlockedByModel`/`isSendBlockedByModelImages` predicates.
+  if (pending.images.length > 0 && state.imageInput === false && state.imageFallback !== true) {
     state.setNotice({ kind: "retry_blocked", text: RETRY_BLOCKED_IMAGES_TEXT });
     return "blocked_images";
   }

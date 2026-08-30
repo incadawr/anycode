@@ -33,6 +33,7 @@ import {
   mergeSettings,
   parseSettings,
   previewSchema,
+  recognizerSchema,
   settingsSchema,
 } from "./schema.js";
 
@@ -52,8 +53,8 @@ describe("frozen contract surface (shared/settings.ts)", () => {
     expect(CONNECTION_DELETE_CHANNEL).toBe("anycode:connection-delete");
   });
 
-  it("pins SECRET_ENV_KEYS (ruling R3)", () => {
-    expect(SECRET_ENV_KEYS).toEqual(["ANYCODE_API_KEY"]);
+  it("pins SECRET_ENV_KEYS (ruling R3; TASK.198 срез C widens it with the recognizer's own credential)", () => {
+    expect(SECRET_ENV_KEYS).toEqual(["ANYCODE_API_KEY", "ANYCODE_RECOGNIZER_API_KEY"]);
   });
 });
 
@@ -1357,5 +1358,89 @@ describe("H-03 — one bad profile never blanks the registry", () => {
       expect(parsed.data.network?.proxyProfiles).toEqual([]);
       expect(parsed.data.network?.proxyRef).toBe("proxy-1");
     }
+  });
+});
+
+describe("recognizer (TASK.198 E1, additive-optional) — vision-fallback connection+model selection", () => {
+  it("reads a file with no recognizer field, round-tripping byte-identically (v2)", () => {
+    const legacy = cloneDefaults();
+    const before = JSON.stringify(legacy);
+    const result = parseSettings(JSON.parse(before));
+    expect(result.status).toBe("ok");
+    expect(result.settings.recognizer).toBeUndefined();
+    expect(JSON.stringify(result.settings)).toBe(before); // byte-identical round-trip
+  });
+
+  it("validates a file WITH recognizer.{connectionId,modelId}", () => {
+    const withRecognizer: AnycodeSettings = {
+      ...cloneDefaults(),
+      recognizer: { connectionId: "conn-vision", modelId: "vision-model" },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withRecognizer)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.recognizer).toEqual({ connectionId: "conn-vision", modelId: "vision-model" });
+    }
+  });
+
+  it("recognizerSchema accepts a fully absent recognizer section", () => {
+    const parsed = recognizerSchema.safeParse(undefined);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).toBeUndefined();
+    }
+  });
+
+  // Additive-optional contract, hard constraint: a corrupt `recognizer` value
+  // must degrade to "not configured" WITHOUT taking the rest of the document
+  // down — never the previewSchema-style "no catch" shape (a bad `preview`
+  // value fails the WHOLE settingsSchema.safeParse, per the describe block
+  // above), because that would reset `provider`/`permissions`/every other
+  // section to defaults over one bad recognizer field.
+  it("a garbage (non-object) recognizer value degrades to undefined, whole document still parses ok", () => {
+    const bad = { ...cloneDefaults(), recognizer: "not-an-object" };
+    const parsed = settingsSchema.safeParse(bad);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.recognizer).toBeUndefined();
+    }
+  });
+
+  it("a recognizer object missing modelId degrades to undefined, not a half-valid record", () => {
+    const bad = { ...cloneDefaults(), recognizer: { connectionId: "conn-vision" } };
+    const parsed = settingsSchema.safeParse(bad);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.recognizer).toBeUndefined();
+    }
+  });
+
+  it("parseSettings surfaces the same fail-soft degradation, not a corrupt/quarantine outcome", () => {
+    const bad = { ...cloneDefaults(), recognizer: { connectionId: 42, modelId: null } };
+    const result = parseSettings(JSON.parse(JSON.stringify(bad)));
+    expect(result.status).toBe("ok");
+    expect(result.settings.recognizer).toBeUndefined();
+    // Every OTHER section survives untouched — this is the "never a
+    // corrupt-settings state" half of the hard constraint.
+    expect(result.settings.provider).toEqual(DEFAULT_SETTINGS.provider);
+    expect(result.settings.security).toEqual(DEFAULT_SETTINGS.security);
+  });
+
+  it("survives a read-modify-write cycle (recognizer not stripped on reparse)", () => {
+    const written = mergeSettings(cloneDefaults(), {
+      recognizer: { connectionId: "conn-vision", modelId: "vision-model" },
+    });
+    const reloaded = parseSettings(JSON.parse(JSON.stringify(written)));
+    expect(reloaded.status).toBe("ok");
+    expect(reloaded.settings.recognizer).toEqual({ connectionId: "conn-vision", modelId: "vision-model" });
+  });
+
+  it("a settings-set patch changing an unrelated section round-trips recognizer unchanged", () => {
+    const withRecognizer = mergeSettings(cloneDefaults(), {
+      recognizer: { connectionId: "conn-vision", modelId: "vision-model" },
+    });
+    const afterUnrelatedPatch = mergeSettings(withRecognizer, { ui: { theme: "dark" } });
+    expect(afterUnrelatedPatch.recognizer).toEqual({ connectionId: "conn-vision", modelId: "vision-model" });
+    expect(afterUnrelatedPatch.ui.theme).toBe("dark");
   });
 });

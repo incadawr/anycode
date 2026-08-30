@@ -151,7 +151,20 @@ function createRunner(
         };
       }
 
-      onProgress?.({ kind: "start", workflow: definition.name, totalSteps: steps.length });
+      onProgress?.({
+        kind: "start",
+        workflow: definition.name,
+        totalSteps: steps.length,
+        // TASK.191 slice S3: field-by-field, not `steps` verbatim — the
+        // engine's own WorkflowStepDefinition carries promptTemplate/maxTurns
+        // too, neither of which belongs on the wire (never rendered, and
+        // promptTemplate can hold arbitrary-length user content).
+        steps: steps.map((step) => ({
+          id: step.id,
+          agentType: step.agentType,
+          ...(step.dependsOn !== undefined ? { dependsOn: step.dependsOn } : {}),
+        })),
+      });
 
       // --- run state -------------------------------------------------------
       const outcomes = new Map<string, WorkflowStepOutcome>();
@@ -227,6 +240,10 @@ function createRunner(
                   controller.abort();
                 }, stepTimeoutMs);
               }
+              // TASK.191 slice S3: this SAME post-semaphore moment is the
+              // honest "queued -> running" transition — step_start above
+              // already fired, ready-but-unlaunched, before the semaphore.
+              onProgress?.({ kind: "step_running", stepId: step.id });
             } else if (progress.kind === "progress") {
               onProgress?.({
                 kind: "step_progress",
@@ -234,11 +251,33 @@ function createRunner(
                 turns: progress.turns,
                 toolCalls: progress.toolCalls,
                 lastTool: progress.lastTool,
+                // TASK.191 slice S2: the child's own running spend, restamped
+                // with this step's id. Forwarded unchanged — the engine never
+                // sums across steps, because a run's total is derived from the
+                // per-step numbers by whoever displays them.
+                ...(progress.usage !== undefined ? { usage: progress.usage } : {}),
+              });
+            } else if (progress.kind === "tool") {
+              // TASK.191 slice S1. The child's per-tool one-liner, restamped
+              // with this step's id. Until this branch existed the whole
+              // `tool` kind fell through to nothing here, which is why a
+              // workflow run showed counters and never named a single tool.
+              onProgress?.({
+                kind: "step_activity",
+                stepId: step.id,
+                toolName: progress.toolName,
+                summary: progress.summary,
               });
             }
             // progress.kind === "end" is ignored: step_end is emitted from the
             // resolved outcome so the reported status includes a timeout
             // override the subagent cannot know about.
+            //
+            // `attention` and `stalled` are ignored too: both describe a
+            // SESSION-tier child, and a workflow step is inline (TASK.192 —
+            // an engine-profile step cannot start at all today), so neither
+            // can occur on this path. They get their own branches when a
+            // workflow step can reach the session tier, not before.
           },
         };
 
@@ -292,6 +331,11 @@ function createRunner(
           status: outcome.status,
           turns: outcome.turns,
           durationMs: outcome.durationMs,
+          // TASK.191 slice S2: the step's FINAL spend, taken from the child's
+          // own outcome rather than from the last progress event — a step whose
+          // final turn made no tool call emits its last progress before that
+          // turn's spend is even known.
+          ...(sub.usage !== undefined ? { usage: sub.usage } : {}),
         });
         return { id: step.id, outcome };
       };
@@ -327,9 +371,29 @@ function createRunner(
       signal?.removeEventListener("abort", onRunAbort);
 
       // Never-launched steps (deps failed, or launches frozen) are skipped.
-      const orderedOutcomes = steps.map(
-        (step) => outcomes.get(step.id) ?? skippedOutcome(step),
-      );
+      // TASK.191 slice S3: each ALSO gets a synthetic step_end here, not just
+      // a slot in the returned outcome array — until now a step that never
+      // launched got no wire event at all (this map was the ONLY place its
+      // "skipped" fact was recorded), so a client fed exclusively by
+      // onProgress never learned a pending node was actually done and it sat
+      // "not started" forever after a fail-fast/cancelled run. Emitted BEFORE
+      // kind:"end" so the run's terminal event never lands ahead of a step it
+      // explains.
+      const orderedOutcomes = steps.map((step) => {
+        const outcome = outcomes.get(step.id);
+        if (outcome) {
+          return outcome;
+        }
+        const skipped = skippedOutcome(step);
+        onProgress?.({
+          kind: "step_end",
+          stepId: skipped.stepId,
+          status: skipped.status,
+          turns: skipped.turns,
+          durationMs: skipped.durationMs,
+        });
+        return skipped;
+      });
 
       const status: WorkflowRunOutcome["status"] = aborted
         ? "cancelled"

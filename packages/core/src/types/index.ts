@@ -121,6 +121,15 @@ export {
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
   MAX_WORKFLOWS,
   MAX_WORKFLOW_STEPS,
+  // TASK.191 slice S5: same additive reason as the SUBAGENT_CARD_* entries
+  // above — the desktop renderer's workflow-card decode/project module
+  // re-declares these two caps locally (a value import of core would pull the
+  // whole module graph into the browser bundle) and pins the local copies
+  // against these exports in its own test, which runs on node. Without them
+  // on this curated list that parity test can only compare against a hand-
+  // copied literal, which detects nothing when the real constant changes.
+  WORKFLOW_CARD_ACTIVITY_MAX_BYTES,
+  WORKFLOW_CARD_ACTIVITY_RING,
   WEBFETCH_CACHE_TTL_MS,
   WEBFETCH_MAX_BYTES,
   WEBFETCH_TIMEOUT_MS,

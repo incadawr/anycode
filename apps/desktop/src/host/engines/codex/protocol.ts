@@ -4,7 +4,7 @@
  * or event-to-AgentEvent translation is implied by these shapes.
  */
 
-export const SUPPORTED_CODEX_VERSION = "<0.151.0";
+export const SUPPORTED_CODEX_VERSION = "<0.152.0";
 
 export interface CodexVersion {
   major: number;
@@ -37,8 +37,8 @@ export function parseCodexVersion(output: string): CodexVersion | null {
  * with this ceiling. Support is no longer a closed range ("island") — any
  * codex-cli build below the ceiling is accepted by version number, however
  * old. The ceiling itself stays because it is a real measurement: a real
- * 0.150.1 binary was unpacked and its app-server schema compared against the
- * pinned contract (`contract/README.md`), so anything at or above 0.151.0 is
+ * 0.151.0 binary was unpacked and its app-server schema compared against the
+ * pinned contract (`contract/README.md`), so anything at or above 0.152.0 is
  * genuinely unverified, not merely old. A build old enough to actually lack
  * the consumed wire shapes fails on its own later — an unparseable/missing
  * response at whichever call first needs the missing shape — rather than

@@ -20,8 +20,15 @@
 
 import type { ToolDefinition, ToolEmittedEvent, ToolMetadata } from "../types/tools.js";
 import type { WorkflowProgress } from "../ports/workflow.js";
+import type { ToolResultPresentation } from "../types/subagent-card.js";
 import { WORKFLOW_OUTPUT_MAX_BYTES, WORKFLOW_TOOL_TIMEOUT_MS } from "../types/config.js";
 import { workflowInputSchema, type WorkflowInput, type WorkflowOutput } from "./schemas.js";
+import {
+  createWorkflowCardAccumulator,
+  finalizeWorkflowCard,
+  reduceWorkflowCardEvent,
+  type WorkflowCardEvent,
+} from "../workflow/card-snapshot.js";
 
 const metadata: ToolMetadata = {
   name: "Workflow",
@@ -68,13 +75,38 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
     // as workflow_* events via ctx.emit (design §2.3), each carrying THIS tool
     // call's id so the desktop card correlates them. The engine never throws —
     // an unknown name / structural failure is a failed outcome.
+    //
+    // Presentation accumulation (TASK.191 slice S5, mirror of tools/agent.ts's
+    // own subagent-card accumulation): fed from the SAME mapped event ctx.emit
+    // receives, not the raw WorkflowProgress, so the persisted activity entries
+    // stay byte-identical to what the live renderer saw — same reasoning as the
+    // subagent card. Unconditional (it runs even with no ctx.emit wired) so a
+    // handler invoked outside the batch runner still produces a persisted card.
+    let acc = createWorkflowCardAccumulator();
     const outcome = await ctx.workflows.run(
       { name: input.name, input: input.input },
       {
         signal: ctx.abortSignal,
-        onProgress: (progress) => ctx.emit?.(mapProgressToEvent(progress, ctx.toolCallId)),
+        onProgress: (progress) => {
+          const event = mapProgressToEvent(progress, ctx.toolCallId);
+          // mapProgressToEvent's declared return type is the broader
+          // ToolEmittedEvent (shared with the subagent_*/checkpoint_*
+          // bridges elsewhere) — not narrowed to workflow_* here, per this
+          // slice's own constraint of leaving that bridge untouched. Every
+          // branch of its switch over WorkflowProgress.kind actually stamps
+          // a workflow_* type, so this narrowing is safe.
+          acc = reduceWorkflowCardEvent(acc, event as WorkflowCardEvent);
+          ctx.emit?.(event);
+        },
       },
     );
+
+    // Terminal snapshot, or null when the run never actually started (unknown
+    // name / pre-aborted / unknown agentType all fail before the engine's
+    // first onProgress call — the card is never fabricated from nothing).
+    const snapshot = finalizeWorkflowCard(acc, { status: outcome.status, durationMs: outcome.durationMs });
+    const presentation: { presentation?: ToolResultPresentation } =
+      snapshot !== null ? { presentation: { workflow: snapshot } } : {};
 
     // Project the outcome onto the tool payload (drop per-step finalText/truncated).
     const output: WorkflowOutput = {
@@ -93,7 +125,7 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
     };
 
     if (outcome.status === "completed") {
-      return { ok: true, output };
+      return { ok: true, output, ...presentation };
     }
     if (outcome.status === "cancelled") {
       return {
@@ -101,11 +133,12 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
         errorKind: "cancelled",
         error: `Workflow "${input.name}" was cancelled.`,
         output,
+        ...presentation,
       };
     }
     // failed: one-line summary naming the failed + skipped steps (the rendered
     // output — possibly partial — is added by formatResultForModel).
-    return { ok: false, error: summarizeFailure(input.name, output), output };
+    return { ok: false, error: summarizeFailure(input.name, output), output, ...presentation };
   },
   formatResultForModel: (result) => {
     const output = result.output;
@@ -142,7 +175,7 @@ function summarizeFailure(name: string, output: WorkflowOutput): string {
 
 /**
  * Projects a coarse WorkflowProgress onto the matching workflow_* AgentEvent,
- * stamping the Workflow tool call's id (design §2.3). The five variants map 1:1.
+ * stamping the Workflow tool call's id (design §2.3). The variants map 1:1.
  */
 function mapProgressToEvent(progress: WorkflowProgress, toolCallId: string): ToolEmittedEvent {
   switch (progress.kind) {
@@ -152,6 +185,15 @@ function mapProgressToEvent(progress: WorkflowProgress, toolCallId: string): Too
         toolCallId,
         workflow: progress.workflow,
         totalSteps: progress.totalSteps,
+        // Copied EXPLICITLY, field by field (TASK.191 slice S3): same
+        // discipline as step_progress's usage bridge below — a field added to
+        // WorkflowStepGraphNode and not named here type-checks green and
+        // arrives nowhere.
+        steps: progress.steps.map((step) => ({
+          id: step.id,
+          agentType: step.agentType,
+          ...(step.dependsOn !== undefined ? { dependsOn: step.dependsOn } : {}),
+        })),
       };
     case "step_start":
       return {
@@ -159,6 +201,12 @@ function mapProgressToEvent(progress: WorkflowProgress, toolCallId: string): Too
         toolCallId,
         stepId: progress.stepId,
         agentType: progress.agentType,
+      };
+    case "step_running":
+      return {
+        type: "workflow_step_running",
+        toolCallId,
+        stepId: progress.stepId,
       };
     case "step_progress":
       return {
@@ -168,6 +216,18 @@ function mapProgressToEvent(progress: WorkflowProgress, toolCallId: string): Too
         turns: progress.turns,
         toolCalls: progress.toolCalls,
         lastTool: progress.lastTool,
+        // Copied EXPLICITLY (TASK.191 slice S2): this bridge names every field
+        // it carries, so a field added to WorkflowProgress and not added here
+        // type-checks green and arrives nowhere.
+        ...(progress.usage !== undefined ? { usage: progress.usage } : {}),
+      };
+    case "step_activity":
+      return {
+        type: "workflow_step_activity",
+        toolCallId,
+        stepId: progress.stepId,
+        toolName: progress.toolName,
+        summary: progress.summary,
       };
     case "step_end":
       return {
@@ -177,6 +237,7 @@ function mapProgressToEvent(progress: WorkflowProgress, toolCallId: string): Too
         status: progress.status,
         turns: progress.turns,
         durationMs: progress.durationMs,
+        ...(progress.usage !== undefined ? { usage: progress.usage } : {}),
       };
     case "end":
       return {

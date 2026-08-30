@@ -10,6 +10,8 @@
  * not copy it — and carries no Workflow declaration).
  */
 
+import type { TokenUsage } from "../types/events.js";
+
 /** One step of a declarative workflow DAG (validated at discovery). */
 export interface WorkflowStepDefinition {
   /** ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$; unique within the workflow. */
@@ -47,6 +49,19 @@ export interface WorkflowMeta {
   source: string;
 }
 
+/**
+ * The run's step graph, as carried on `workflow_start` (TASK.191 slice S3):
+ * just enough of `WorkflowStepDefinition` for the desktop card to hold and
+ * lay out all N steps before the first one launches — `promptTemplate` and
+ * `maxTurns` are engine-internal and never rendered, so they stay off the
+ * wire.
+ */
+export interface WorkflowStepGraphNode {
+  id: string;
+  agentType: string;
+  dependsOn?: readonly string[];
+}
+
 export interface WorkflowStepOutcome {
   stepId: string;
   agentType: string;
@@ -72,10 +87,52 @@ export interface WorkflowRunOutcome {
 
 /** Coarse progress events bridged into the parent stream as workflow_* AgentEvents (design §2.3/§3.4). */
 export type WorkflowProgress =
-  | { kind: "start"; workflow: string; totalSteps: number }
+  // `steps` (TASK.191 slice S3) is the run's full step graph, so a client can
+  // hold and order all N steps before the first `step_start` arrives instead
+  // of discovering them one at a time in event-ARRIVAL order.
+  | { kind: "start"; workflow: string; totalSteps: number; steps: readonly WorkflowStepGraphNode[] }
   | { kind: "step_start"; stepId: string; agentType: string }
-  | { kind: "step_progress"; stepId: string; turns: number; toolCalls: number; lastTool?: string }
-  | { kind: "step_end"; stepId: string; status: WorkflowStepOutcome["status"]; turns: number; durationMs: number }
+  // The step's REAL (post-semaphore) start (TASK.191 slice S3), distinct from
+  // `step_start` above: that one fires the instant a step's deps are
+  // satisfied, BEFORE the engine ever calls `subagents.run` — so a step can
+  // sit ready-but-unlaunched behind the runner's shared MAX_CONCURRENT_SUBAGENTS
+  // semaphore for real wall-clock time, and `step_start` alone cannot tell
+  // "queued" apart from "running" (a client-side guess from dependsOn was
+  // tried and disproven — engine.ts emits step_start before ever touching the
+  // semaphore). This variant rides the child's own SubagentProgress "start"
+  // (already the point the engine arms the per-step timeout, for the same
+  // post-semaphore reason).
+  | { kind: "step_running"; stepId: string }
+  // `usage` (TASK.191 slice S2) is the STEP's cumulative token spend since its
+  // own start, forwarded from the child's SubagentProgress unchanged. Cumulative
+  // and REPLACED by the receiver, never added — a lost or repeated progress
+  // event must not shift the number. Optional because a tier that reports no
+  // spend (session-tier / engine children) must read as "not reported", which
+  // is a different fact from zero.
+  | {
+      kind: "step_progress";
+      stepId: string;
+      turns: number;
+      toolCalls: number;
+      lastTool?: string;
+      usage?: TokenUsage;
+    }
+  // Per-step tool activity (TASK.191 slice S1): the step's child emitted one
+  // bounded one-liner for its own tool call, forwarded verbatim with the step
+  // stamped on it. `toolName`/`summary` arrive already capped and sanitized by
+  // the producing SubagentPort (never raw child input) — this variant adds
+  // `stepId` and nothing else, because the run-level feed is ONE lane shared by
+  // every concurrent step and each row must say which lane it came from.
+  | { kind: "step_activity"; stepId: string; toolName: string; summary: string }
+  | {
+      kind: "step_end";
+      stepId: string;
+      status: WorkflowStepOutcome["status"];
+      turns: number;
+      durationMs: number;
+      /** The step's FINAL spend, read off the child's own SubagentOutcome. */
+      usage?: TokenUsage;
+    }
   | {
       kind: "end";
       status: WorkflowRunOutcome["status"];

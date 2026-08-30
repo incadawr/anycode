@@ -48,6 +48,8 @@ import type { ToolRegistry } from "../tools/registry.js";
 import type { WorkspaceTransition } from "../ports/worktrees.js";
 import { CEILING_VERDICT_DECLARATION } from "./ceiling.js";
 import { MAX_CEILING_ROUNDS } from "../types/config.js";
+import { createMediaProjectionPort } from "../provider/media-projection.js";
+import type { RecognizerEndpoint } from "../vision/index.js";
 
 // ---------------------------------------------------------------------------
 // Mock model port: replays scripted stream events, one step per streamText call.
@@ -500,6 +502,570 @@ describe("AgentLoop.runTurn — image attachments (design slice-6.2-cut.md §2-C
     const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: captureTool }), media });
     await collect(loop.runTurn("go"));
     expect(seen).toBe(media);
+  });
+});
+
+describe("AgentLoop.runTurn — vision fallback (TASK.198 plan §1/§2/§3, slice B1)", () => {
+  const img: ImageAttachment = { mediaType: "image/png", data: "AAAA", sourcePath: "/shot.png" };
+  const completeStep: ModelStreamEvent[] = [
+    { type: "start" },
+    { type: "text_delta", id: "t", text: "seen" },
+    { type: "finish", finishReason: "stop", usage: {} },
+  ];
+  const recognizerEndpoint: RecognizerEndpoint = {
+    transport: "anthropic-messages",
+    baseUrl: "https://recognizer.test",
+    model: "vision-model",
+  };
+  const blindMedia: MediaCapabilityPort = { imageInputEnabled: () => false };
+  const sightedMedia: MediaCapabilityPort = { imageInputEnabled: () => true };
+
+  /** Sequential reserveRef stub — never a history scan (plan §2). */
+  function makeReserve(start = 1): { reserveRef: () => Promise<number>; calls: number[] } {
+    const calls: number[] = [];
+    let next = start;
+    return {
+      calls,
+      reserveRef: async () => {
+        const ref = next;
+        next += 1;
+        calls.push(ref);
+        return ref;
+      },
+    };
+  }
+
+  /** One-step fake ModelPort for ask()'s portFactory test seam (vision/recognizer.ts). */
+  function fakeAskPort(behavior: { text?: string; error?: string }): ModelPort {
+    return {
+      streamText: () =>
+        (async function* () {
+          if (behavior.error !== undefined) {
+            yield { type: "error", error: new Error(behavior.error) } as ModelStreamEvent;
+            return;
+          }
+          yield { type: "text_delta", id: "a", text: behavior.text ?? "" } as ModelStreamEvent;
+          yield { type: "finish", finishReason: "stop", usage: {} } as ModelStreamEvent;
+        })(),
+    };
+  }
+
+  it("does NOT reserve a ref or touch the attachment when config.recognizer is absent (byte-lock)", async () => {
+    const loop = makeLoop({ modelPort: new MockModelPort([completeStep]), media: blindMedia });
+    await collect(loop.runTurn("look at this", { attachments: [img] }));
+    const [user] = loop.history.toMessages();
+    expect(user).toEqual({ role: "user", content: "look at this", images: [img] });
+  });
+
+  it("a blind model with NO configured recognizer is today's exact behaviour — no ref, no stub", async () => {
+    const loop = makeLoop({ modelPort: new MockModelPort([completeStep]), media: blindMedia });
+    await collect(loop.runTurn("look", { attachments: [img] }));
+    const [user] = loop.history.toMessages() as { images?: ImageAttachment[] }[];
+    expect(user?.images?.[0]?.ref).toBeUndefined();
+  });
+
+  it("reserves a ref for a user-attached image even for a SIGHTED model (assigned always, plan §2)", async () => {
+    const reserve = makeReserve(1);
+    const loop = makeLoop({
+      modelPort: new MockModelPort([completeStep]),
+      media: sightedMedia,
+      recognizer: reserve,
+    });
+    await collect(loop.runTurn("look", { attachments: [img] }));
+    const [user] = loop.history.toMessages() as { images?: ImageAttachment[] }[];
+    expect(user?.images?.[0]?.ref).toBe(1);
+    expect(reserve.calls).toEqual([1]);
+  });
+
+  it("does not add a stub/overview line for a sighted model even with recognizer configured", async () => {
+    const reserve = makeReserve(1);
+    const loop = makeLoop({
+      modelPort: new MockModelPort([completeStep]),
+      media: sightedMedia,
+      recognizer: { ...reserve, endpoint: recognizerEndpoint },
+    });
+    await collect(loop.runTurn("look at this", { attachments: [img] }));
+    const [user] = loop.history.toMessages() as { content: string }[];
+    expect(user?.content).toBe("look at this");
+  });
+
+  it("appends a stub + overview caption to persisted text for a blind model with a configured recognizer", async () => {
+    const reserve = makeReserve(1);
+    const loop = makeLoop({
+      modelPort: new MockModelPort([completeStep]),
+      media: blindMedia,
+      recognizer: {
+        ...reserve,
+        endpoint: recognizerEndpoint,
+        portFactory: () => fakeAskPort({ text: "a screenshot of a login form" }),
+      },
+    });
+    await collect(loop.runTurn("why is this broken?", { attachments: [img] }));
+    const [user] = loop.history.toMessages() as { content: string; images?: ImageAttachment[] }[];
+    expect(user?.images?.[0]?.ref).toBe(1);
+    expect(user?.content).toContain("why is this broken?");
+    expect(user?.content).toContain("#1");
+    expect(user?.content).toContain("overview: a screenshot of a login form");
+    // Plan §11.1's supporting pin: the model must be told the tool's exact name.
+    expect(user?.content).toContain("InspectImage(");
+  });
+
+  // Real PNG magic bytes + IHDR-shaped payload (1280x800) so imageDimensions()
+  // actually parses — "AAAA" (the shared `img` above) decodes to 3 zero bytes
+  // and never parses, so buildPrompt's whole `scale` block would be skipped
+  // regardless of cssSize, hiding what these two tests exist to pin.
+  const PNG_BASE64 = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0, 0, 5, 0, 0, 0, 3, 0x20,
+  ]).toString("base64");
+  const pngImg: ImageAttachment = { mediaType: "image/png", data: PNG_BASE64, sourcePath: "/shot.png" };
+
+  /** Records every ModelRequest ask() sends, so a test can inspect the built prompt text. */
+  function capturingAskPort(text: string, sink: ModelRequest[]): ModelPort {
+    return {
+      streamText: (request: ModelRequest) => {
+        sink.push(request);
+        return (async function* () {
+          yield { type: "text_delta", id: "a", text } as ModelStreamEvent;
+          yield { type: "finish", finishReason: "stop", usage: {} } as ModelStreamEvent;
+        })();
+      },
+    };
+  }
+
+  it("TASK.198 slice G: forwards a user-attached image's cssSize into the overview caption's Viewport CSS size prompt line", async () => {
+    const reserve = makeReserve(1);
+    const requests: ModelRequest[] = [];
+    const imgWithCss: ImageAttachment = { ...pngImg, cssSize: { width: 550, height: 400 } };
+    const loop = makeLoop({
+      modelPort: new MockModelPort([completeStep]),
+      media: blindMedia,
+      recognizer: {
+        ...reserve,
+        endpoint: recognizerEndpoint,
+        portFactory: () => capturingAskPort("a screenshot", requests),
+      },
+    });
+    await collect(loop.runTurn("why is this broken?", { attachments: [imgWithCss] }));
+    expect(requests).toHaveLength(1);
+    const prompt = requests[0]!.messages[0]!.content as string;
+    expect(prompt).toContain("Image pixel size: 1280x800px.");
+    expect(prompt).toContain("Viewport CSS size: 550x400px");
+  });
+
+  it("TASK.198 slice G additivity pin: a user-attached image with no cssSize omits the Viewport CSS size line from the overview caption prompt (byte-identical to pre-slice behaviour)", async () => {
+    const reserve = makeReserve(1);
+    const requests: ModelRequest[] = [];
+    const loop = makeLoop({
+      modelPort: new MockModelPort([completeStep]),
+      media: blindMedia,
+      recognizer: {
+        ...reserve,
+        endpoint: recognizerEndpoint,
+        portFactory: () => capturingAskPort("a screenshot", requests),
+      },
+    });
+    await collect(loop.runTurn("why is this broken?", { attachments: [pngImg] }));
+    expect(requests).toHaveLength(1);
+    const prompt = requests[0]!.messages[0]!.content as string;
+    expect(prompt).toContain("Image pixel size: 1280x800px.");
+    expect(prompt).not.toContain("Viewport CSS size");
+  });
+
+  it("degrades to a bare stub (no overview line) when ask() fails, without dropping the turn", async () => {
+    const reserve = makeReserve(1);
+    const loop = makeLoop({
+      modelPort: new MockModelPort([completeStep]),
+      media: blindMedia,
+      recognizer: {
+        ...reserve,
+        endpoint: recognizerEndpoint,
+        portFactory: () => fakeAskPort({ error: "boom" }),
+      },
+    });
+    const events = await collect(loop.runTurn("what is this", { attachments: [img] }));
+    const [user] = loop.history.toMessages() as { content: string }[];
+    expect(user?.content).toContain("InspectImage(");
+    expect(user?.content).not.toContain("overview:");
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
+  it("runs overview captions at concurrency exactly CAPTIONS_CONCURRENCY (2), never 1 or 4 (plan §11 budget/concurrency)", async () => {
+    vi.useFakeTimers();
+    try {
+      const state = { inFlight: 0, peak: 0, releases: [] as Array<() => void> };
+      const controlledPort = (): ModelPort => ({
+        streamText: () =>
+          (async function* () {
+            state.inFlight += 1;
+            state.peak = Math.max(state.peak, state.inFlight);
+            await new Promise<void>((resolve) => state.releases.push(resolve));
+            state.inFlight -= 1;
+            yield { type: "text_delta", id: "a", text: "note" } as ModelStreamEvent;
+            yield { type: "finish", finishReason: "stop", usage: {} } as ModelStreamEvent;
+          })(),
+      });
+      const images: ImageAttachment[] = Array.from({ length: 4 }, (_, i) => ({
+        mediaType: "image/png",
+        data: `AAAA${i}`,
+      }));
+      const reserve = makeReserve(1);
+      const loop = makeLoop({
+        modelPort: new MockModelPort([completeStep]),
+        media: blindMedia,
+        recognizer: { ...reserve, endpoint: recognizerEndpoint, portFactory: controlledPort },
+      });
+
+      const eventsPromise = collect(loop.runTurn("look", { attachments: images }));
+      await vi.advanceTimersByTimeAsync(0);
+      // Exactly two of the four calls have claimed a slot — a sequential
+      // implementation would show 1 here, a Promise.all-over-everything
+      // implementation would show 4.
+      expect(state.inFlight).toBe(2);
+
+      while (state.releases.length > 0) {
+        state.releases.shift()!();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      await eventsPromise;
+
+      expect(state.peak).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps ALL of a turn's overview captions under ONE shared CAPTIONS_TURN_BUDGET_MS deadline, not N x per-image timeouts", async () => {
+    vi.useFakeTimers();
+    try {
+      const neverRespondingPort = (): ModelPort => ({
+        streamText: (request: ModelRequest) =>
+          (async function* (): AsyncGenerator<ModelStreamEvent> {
+            const signal = request.abortSignal;
+            await new Promise<never>((_resolve, reject) => {
+              signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+                once: true,
+              });
+            });
+          })(),
+      });
+      const images: ImageAttachment[] = Array.from({ length: 3 }, (_, i) => ({
+        mediaType: "image/png",
+        data: `AAAA${i}`,
+      }));
+      const reserve = makeReserve(1);
+      const loop = makeLoop({
+        modelPort: new MockModelPort([completeStep]),
+        media: blindMedia,
+        recognizer: { ...reserve, endpoint: recognizerEndpoint, portFactory: neverRespondingPort },
+      });
+
+      const eventsPromise = collect(loop.runTurn("look", { attachments: images }));
+      await vi.advanceTimersByTimeAsync(30_000); // CAPTIONS_TURN_BUDGET_MS, exactly
+      const events = await eventsPromise;
+
+      const [user] = loop.history.toMessages() as { content: string }[];
+      // All three degrade to the bare stub within the ONE shared budget — a
+      // sequential per-image-20s implementation only finishes the first
+      // image by t=30s and leaves the second still hanging past it.
+      expect(user?.content).not.toContain("overview:");
+      expect((user?.content.match(/InspectImage\(/g) ?? []).length).toBe(3);
+      expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves attachment order in the assembled captions even when captions complete out of order (concurrency-2 race pin)", async () => {
+    vi.useFakeTimers();
+    try {
+      let callCount = 0;
+      const releases: Array<() => void> = [];
+      const orderedPort = (): ModelPort => {
+        const myCall = callCount;
+        callCount += 1;
+        return {
+          streamText: () =>
+            (async function* () {
+              await new Promise<void>((resolve) => {
+                releases[myCall] = resolve;
+              });
+              yield { type: "text_delta", id: "a", text: `caption-${myCall}` } as ModelStreamEvent;
+              yield { type: "finish", finishReason: "stop", usage: {} } as ModelStreamEvent;
+            })(),
+        };
+      };
+      const images: ImageAttachment[] = Array.from({ length: 3 }, (_, i) => ({
+        mediaType: "image/png",
+        data: `AAAA${i}`,
+      }));
+      const reserve = makeReserve(1);
+      const loop = makeLoop({
+        modelPort: new MockModelPort([completeStep]),
+        media: blindMedia,
+        recognizer: { ...reserve, endpoint: recognizerEndpoint, portFactory: orderedPort },
+      });
+
+      const eventsPromise = collect(loop.runTurn("look", { attachments: images }));
+      await vi.advanceTimersByTimeAsync(0); // calls 0 and 1 claim the two worker slots
+
+      // Resolve out of array order: 1, then 0 (freeing a slot for call 2), then 2.
+      releases[1]!();
+      await vi.advanceTimersByTimeAsync(0);
+      releases[0]!();
+      await vi.advanceTimersByTimeAsync(0);
+      releases[2]!();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await eventsPromise;
+      const [user] = loop.history.toMessages() as { content: string }[];
+      const content = user?.content ?? "";
+      expect(content.indexOf("caption-0")).toBeLessThan(content.indexOf("caption-1"));
+      expect(content.indexOf("caption-1")).toBeLessThan(content.indexOf("caption-2"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reserves a ref for tool-result images and appends a stub to the tool message's text when blind+configured", async () => {
+    const reserve = makeReserve(5);
+    const imageTool = makeTool({
+      handler: async () => ({ ok: true, output: { result: "ok" }, images: [img] }),
+    });
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      completeStep,
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Mock: imageTool }),
+      media: blindMedia,
+      recognizer: { ...reserve, endpoint: recognizerEndpoint, portFactory: () => fakeAskPort({ text: "x" }) },
+    });
+    await collect(loop.runTurn("read the image"));
+    const toolMsg = loop.history.toMessages().find((m) => m.role === "tool");
+    const parts = toolMsg?.content as unknown as Array<{ text: string; images?: ImageAttachment[] }>;
+    expect(parts[0]?.images?.[0]?.ref).toBe(5);
+    expect(parts[0]?.text).toContain("#5");
+    // Owner decision (plan §3): no ask() overview for tool-result images.
+    expect(parts[0]?.text).not.toContain("overview:");
+  });
+
+  it("does not touch a tool result without images even with recognizer configured (byte-lock)", async () => {
+    const reserve = makeReserve(1);
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      completeStep,
+    ]);
+    const loop = makeLoop({ modelPort, media: blindMedia, recognizer: { ...reserve, endpoint: recognizerEndpoint } });
+    await collect(loop.runTurn("plain tool"));
+    const toolMsg = loop.history.toMessages().find((m) => m.role === "tool");
+    const parts = toolMsg?.content as unknown as Array<Record<string, unknown>>;
+    expect("images" in parts[0]!).toBe(false);
+  });
+
+  it("ref numbering is monotonic THROUGH a full compaction that drops the highest-ref image — pin against a max(ref)+1 history scan", async () => {
+    // A scan-based reimplementation would see NOTHING numbered in current
+    // history right after compaction (the only image is gone) and would
+    // restart at 1 — reusing the number handed out below. The counter here
+    // starts at an arbitrary, non-1 value that no scan of local history
+    // could ever guess, so a scan-based implementation fails loudly instead
+    // of by coincidence.
+    const reserve = makeReserve(7);
+    const summaryFallback: ModelStreamEvent[] = [
+      { type: "text_delta", id: "s", text: "Summary of the earlier conversation." },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ];
+    const loop = makeLoop({
+      modelPort: new MockModelPort([completeStep, completeStep], summaryFallback),
+      context: { keepRecentMessages: 0 },
+      recognizer: reserve,
+    });
+
+    // Two full turns so a keepRecentMessages:0 compaction boundary lands
+    // AFTER the image turn, putting the ref-7 item in the compacted-away
+    // prefix (context/manager.ts's compactionBoundary walks back to the
+    // nearest user item at or before len-keepRecentMessages).
+    await collect(loop.runTurn("first image", { attachments: [img] }));
+    await collect(loop.runTurn("a plain follow-up"));
+    expect(reserve.calls).toEqual([7]);
+
+    const compactionEvents = await collect(loop.compactNow());
+    expect(compactionEvents.at(-1)).toMatchObject({ type: "compaction_end", ok: true });
+    expect(loop.history.toMessages().some((m) => m.role === "user" && m.images !== undefined)).toBe(false);
+
+    await collect(loop.runTurn("second image", { attachments: [img] }));
+    const withImages = loop.history
+      .toMessages()
+      .filter(
+        (m): m is { role: "user"; content: string; images: ImageAttachment[] } =>
+          m.role === "user" && m.images !== undefined,
+      );
+    expect(withImages).toHaveLength(1);
+    expect(withImages[0]?.images[0]?.ref).toBe(8); // continues the counter — never reuses 7
+    expect(reserve.calls).toEqual([7, 8]);
+  });
+
+  it("ref numbering also survives microcompact clearing the OLDEST tool-result images (AgentLoop microcompact pressure gate fixture, plan §2)", async () => {
+    // Microcompact only clears the OLDEST kept-back tool results (never the
+    // most recent), so — unlike the full-compaction case above — a naive
+    // scan would coincidentally survive this particular shape too: the
+    // guarantee under test here is that the SAME reserveRef closure keeps
+    // being the sole source of numbers across a microcompact event, not a
+    // distinguishing adversarial pin.
+    const reserve = makeReserve(50);
+    const readOutput = "r".repeat(4_000);
+    const toolCalls = Array.from({ length: 8 }, (_, i) => ({
+      id: `read-${i}`,
+      name: "Mock",
+      input: { value: `${i}` },
+    }));
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        ...toolCalls.map((toolCall) => ({ type: "tool_call" as const, toolCall })),
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [{ type: "start" }, { type: "text_delta", id: "done", text: "done" }, { type: "finish", finishReason: "stop", usage: {} }],
+      completeStep,
+    ]);
+    const imageReadTool = makeTool({
+      handler: async () => ({ ok: true, output: { result: readOutput }, images: [img] }),
+    });
+    const loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Mock: imageReadTool }),
+      context: { contextWindowTokens: 10_000, outputReserveTokens: 0 },
+      recognizer: reserve,
+    });
+
+    const events = await collect(loop.runTurn("read several images"));
+    expect(events.find((event) => event.type === "microcompact")).toMatchObject({ clearedToolResults: 3 });
+    expect(reserve.calls).toEqual([50, 51, 52, 53, 54, 55, 56, 57]); // 8 unique, sequential refs
+
+    await collect(loop.runTurn("one more image", { attachments: [img] }));
+    expect(reserve.calls.at(-1)).toBe(58); // continues past the pre-microcompact batch
+  });
+
+  it("REQUIRED: forced compaction under a blind model sends ZERO image bytes to the wire (media-projection decorator over the loop's own modelPort)", async () => {
+    const recordingPort = new MockModelPort([], [
+      { type: "text_delta", id: "s", text: "Summary of the earlier conversation." },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]);
+    const decoratedPort = createMediaProjectionPort(recordingPort, () => false);
+    const loop = makeLoop({
+      modelPort: decoratedPort,
+      context: { keepRecentMessages: 0 },
+    });
+    loop.history.append({ role: "user", content: "u1", images: [img] });
+    loop.history.append({ role: "assistant", content: [{ type: "text", text: "a1" }] });
+    loop.history.append({ role: "user", content: "u2" });
+    loop.history.append({ role: "assistant", content: [{ type: "text", text: "a2" }] });
+
+    await collect(loop.compactNow());
+
+    expect(recordingPort.requests).toHaveLength(1);
+    for (const message of recordingPort.requests[0]!.messages) {
+      expect(message).not.toHaveProperty("images");
+    }
+  });
+
+  it("threads ctx.images resolving a live ref back to its attachment (plan §2 ImageLookupPort)", async () => {
+    const reserve = makeReserve(1);
+    let seen: ImageAttachment | undefined;
+    const captureTool = makeTool({
+      handler: async (_input, ctx: ToolContext) => {
+        seen = ctx.images?.resolve(1);
+        return { ok: true, output: { result: "ok" } };
+      },
+    });
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      completeStep,
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Mock: captureTool }),
+      media: sightedMedia,
+      recognizer: reserve,
+    });
+    // One turn: the image is attached and stamped with a ref, then the
+    // SAME turn's tool call resolves it — proves ctx.images reads the ref
+    // moments after stampImageRefs set it, on a sighted model.
+    const events = await collect(loop.runTurn("look and check", { attachments: [img] }));
+    expect(seen?.mediaType).toBe("image/png");
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
+  it("ctx.images.resolve returns undefined for an unknown ref, and undefined again once the image was cleared by compaction", async () => {
+    const reserve = makeReserve(1);
+    let unknownResult: ImageAttachment | undefined;
+    let seenBefore: ImageAttachment | undefined;
+    let seenAfter: ImageAttachment | undefined;
+    let probeCalls = 0;
+    const probeTool = makeTool({
+      handler: async (_input, ctx: ToolContext) => {
+        probeCalls += 1;
+        if (probeCalls === 1) {
+          unknownResult = ctx.images?.resolve(999);
+          seenBefore = ctx.images?.resolve(1);
+        } else {
+          seenAfter = ctx.images?.resolve(1);
+        }
+        return { ok: true, output: { result: "ok" } };
+      },
+    });
+    const toolStep: ModelStreamEvent[] = [
+      { type: "start" },
+      { type: "tool_call", toolCall: { id: "c", name: "Mock", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+    const summaryStep: ModelStreamEvent[] = [
+      { type: "text_delta", id: "s", text: "Summary of the earlier conversation." },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ];
+    // Explicit, exhaustive script — no fallback: a fallback that kept
+    // proposing tool calls would run the probe an unbounded number of times.
+    const modelPort = new MockModelPort([
+      toolStep, // turn 1 iter 1: probe call #1 (BEFORE compaction)
+      completeStep, // turn 1 iter 2: ends turn 1
+      completeStep, // turn 2 (plain "another turn"): ends immediately
+      summaryStep, // compactNow's own model call
+      toolStep, // turn 3 iter 1: probe call #2 (AFTER compaction)
+      completeStep, // turn 3 iter 2: ends turn 3
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      registry: makeRegistry({ Mock: probeTool }),
+      media: sightedMedia,
+      recognizer: reserve,
+      context: { keepRecentMessages: 0 },
+    });
+
+    await collect(loop.runTurn("look", { attachments: [img] }));
+    expect(unknownResult).toBeUndefined();
+    expect(seenBefore?.mediaType).toBe("image/png");
+
+    // A second, plain turn so a keepRecentMessages:0 compaction boundary
+    // (context/manager.ts's compactionBoundary) lands AFTER the image turn,
+    // putting the ref-1 item in the compacted-away prefix.
+    await collect(loop.runTurn("another turn"));
+    const compactionEvents = await collect(loop.compactNow());
+    expect(compactionEvents.at(-1)).toMatchObject({ type: "compaction_end", ok: true });
+
+    await collect(loop.runTurn("probe again"));
+    expect(seenAfter).toBeUndefined();
   });
 });
 

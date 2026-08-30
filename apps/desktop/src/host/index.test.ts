@@ -42,6 +42,13 @@ import {
   createWebSearchTool,
   loadWebSearchConfig,
   buildTelemetryTap,
+  AskCache,
+  createDefaultToolRegistry,
+  createInspectImageTool,
+  createMediaProjectionPort,
+  buildSystemPrompt,
+  MAX_QUESTIONS_PER_IMAGE,
+  QUESTION_LIMIT_MESSAGE,
   JsonlTelemetrySink,
   loadTelemetryConfig,
   matchCatalogEntryByBaseUrl,
@@ -52,18 +59,26 @@ import {
   resolveReasoningEffort,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
   SqlitePersistenceAdapter,
+  SwitchableModelPort,
   WriteBehindHistorySink,
   writeTool,
 } from "@anycode/core";
 import type {
   AgentEvent,
   HistoryItem,
+  ImageAttachment,
+  ModelPort,
+  ModelRequest,
+  ModelStreamEvent,
   PermissionMode,
   PermissionRequest,
+  RecognizerEndpoint,
   ResolvedTelemetryConfig,
   ResolvedWebSearchBackend,
   SessionMeta,
   TelemetryPort,
+  ToolContext,
+  TokenUsage,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type { ShellCapabilitiesProjection } from "../shared/protocol.js";
@@ -505,8 +520,12 @@ describe("host subagent model-override wiring", () => {
 
     // A second, independent factory would drift from the live provider/key on
     // the next `/model` switch; both sites must read one closure.
+    // TASK.198 срез C: the mid-session switch now calls `.setPort()` on
+    // `switchableModelPort` (the INNER SwitchableModelPort), not on
+    // `modelPort` (the OUTER media-projection decorator, which has no
+    // `setPort` method at all) — same `modelPortFactory` closure either way.
     expect(source).toContain("resolveChildModelPort: modelPortFactory");
-    expect(source).toContain("modelPort.setPort(modelPortFactory(id))");
+    expect(source).toContain("switchableModelPort.setPort(modelPortFactory(id))");
   });
 });
 
@@ -1851,5 +1870,518 @@ describe("Codex engine-child history flush write primitive (TASK.143)", () => {
     } finally {
       await persistence.close();
     }
+  });
+});
+
+/**
+ * TASK.198 срез C: `parseRecognizerEnv`/`recognizerEndpointFromFields`
+ * (index.ts's own env-var-name literal mirror of main/host-env.ts's
+ * ANYCODE_RECOGNIZER_* family). index.ts is not importable (see file
+ * header) — reproduced verbatim, same idiom as every other describe block
+ * in this file.
+ */
+describe("host recognizer env parsing (TASK.198 срез C)", () => {
+  // Live-run fix (task150-output-ceiling session, TASK.198 follow-up):
+  // `recognizerEndpointFromFields` is the ONE construction point both
+  // `parseRecognizerEnv` (the boot-env snapshot below) AND main's live
+  // RECOGNIZER_CONFIG_CHANGED push (index.ts's parentPort message handler,
+  // `message.endpoint === null ? null : recognizerEndpointFromFields(message.endpoint)`)
+  // go through — so gating a blank `baseUrl` or an unknown `transport` HERE,
+  // and returning `null`, covers a broken recognizer arriving from either
+  // source with one check each.
+  const RECOGNIZER_TRANSPORT_VALUES: readonly string[] = ["anthropic-messages", "openai-chat-completions", "openai-responses"];
+
+  function recognizerEndpointFromFields(fields: {
+    transport?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    model: string;
+    providerName?: string;
+  }): RecognizerEndpoint | null {
+    if (fields.baseUrl === undefined || fields.baseUrl.trim() === "") {
+      return null;
+    }
+    if (fields.transport !== undefined && !RECOGNIZER_TRANSPORT_VALUES.includes(fields.transport)) {
+      return null;
+    }
+    return {
+      transport: (fields.transport as RecognizerEndpoint["transport"] | undefined) ?? "anthropic-messages",
+      baseUrl: fields.baseUrl,
+      model: fields.model,
+      ...(fields.apiKey !== undefined && fields.apiKey !== "" ? { apiKey: fields.apiKey } : {}),
+      ...(fields.providerName !== undefined && fields.providerName !== "" ? { providerName: fields.providerName } : {}),
+    };
+  }
+
+  function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint | null {
+    const model = env.ANYCODE_RECOGNIZER_MODEL;
+    if (model === undefined || model.trim() === "") {
+      return null;
+    }
+    return recognizerEndpointFromFields({
+      transport: env.ANYCODE_RECOGNIZER_TRANSPORT,
+      baseUrl: env.ANYCODE_RECOGNIZER_BASE_URL,
+      apiKey: env.ANYCODE_RECOGNIZER_API_KEY,
+      model,
+      providerName: env.ANYCODE_RECOGNIZER_PROVIDER_NAME,
+    });
+  }
+
+  it("returns null when ANYCODE_RECOGNIZER_MODEL is absent or blank — one of three honest 'off' signals", () => {
+    expect(parseRecognizerEnv({})).toBeNull();
+    expect(parseRecognizerEnv({ ANYCODE_RECOGNIZER_MODEL: "  " })).toBeNull();
+  });
+
+  it("builds a full RecognizerEndpoint from the complete env family", () => {
+    expect(
+      parseRecognizerEnv({
+        ANYCODE_RECOGNIZER_TRANSPORT: "openai-chat-completions",
+        ANYCODE_RECOGNIZER_BASE_URL: "https://vision.example.com",
+        ANYCODE_RECOGNIZER_API_KEY: "sk-vision",
+        ANYCODE_RECOGNIZER_MODEL: "vision-model",
+        ANYCODE_RECOGNIZER_PROVIDER_NAME: "openai",
+      }),
+    ).toEqual({
+      transport: "openai-chat-completions",
+      baseUrl: "https://vision.example.com",
+      apiKey: "sk-vision",
+      model: "vision-model",
+      providerName: "openai",
+    });
+  });
+
+  it("defaults transport to anthropic-messages when absent (same final fallback the primary provider ladder uses)", () => {
+    expect(
+      parseRecognizerEnv({ ANYCODE_RECOGNIZER_MODEL: "vision-model", ANYCODE_RECOGNIZER_BASE_URL: "https://vision.example.com" }),
+    ).toEqual({
+      transport: "anthropic-messages",
+      baseUrl: "https://vision.example.com",
+      model: "vision-model",
+    });
+  });
+
+  it("omits apiKey/providerName when unset — never emits blank-string fields", () => {
+    const endpoint = parseRecognizerEnv({
+      ANYCODE_RECOGNIZER_MODEL: "vision-model",
+      ANYCODE_RECOGNIZER_BASE_URL: "https://vision.example.com",
+    })!;
+    expect("apiKey" in endpoint).toBe(false);
+    expect("providerName" in endpoint).toBe(false);
+  });
+
+  // RED-PROOF (live-run fix, TASK.198 follow-up): a resolved model with a
+  // BLANK baseUrl used to default to `baseUrl: ""` and still count as
+  // "configured" — this is exactly the live-run defect: `InspectImage`
+  // registered and then failed twice with "Invalid Anthropic base URL: ''
+  // is empty after trimming" because the unresolved transport defaults to
+  // anthropic downstream. A blank address must be read the same as a blank
+  // model: the recognizer is OFF, not "on with no address".
+  it("RED: returns null when ANYCODE_RECOGNIZER_BASE_URL is absent or blank, even though MODEL resolved — the second honest 'off' signal", () => {
+    expect(parseRecognizerEnv({ ANYCODE_RECOGNIZER_MODEL: "vision-model" })).toBeNull();
+    expect(parseRecognizerEnv({ ANYCODE_RECOGNIZER_MODEL: "vision-model", ANYCODE_RECOGNIZER_BASE_URL: "   " })).toBeNull();
+  });
+
+  // RED-PROOF (live-run fix, TASK.198 follow-up, second finding): the
+  // transport cast (`fields.transport as RecognizerEndpoint["transport"]`)
+  // was UNCHECKED — any garbage string was declared a valid transport and
+  // the compiler approved it. Core's own `loadEnvConfig` validates the same
+  // input and REJECTS an unknown transport (packages/core/src/provider/env.ts:
+  // "is rejected the same way as any other invalid value") — this restores
+  // that parity for the recognizer's own transport field, the third honest
+  // 'off' signal. A MISSING transport is different and stays untouched: it is
+  // the documented legacy-fallback default shared with the primary provider
+  // ladder, not a malformed input.
+  it("RED: returns null when ANYCODE_RECOGNIZER_TRANSPORT is present but not one of the three known ProviderTransport ids", () => {
+    expect(
+      parseRecognizerEnv({
+        ANYCODE_RECOGNIZER_MODEL: "vision-model",
+        ANYCODE_RECOGNIZER_BASE_URL: "https://vision.example.com",
+        ANYCODE_RECOGNIZER_TRANSPORT: "garbage-transport",
+      }),
+    ).toBeNull();
+  });
+
+  it("a present, known transport still resolves normally", () => {
+    expect(
+      parseRecognizerEnv({
+        ANYCODE_RECOGNIZER_MODEL: "vision-model",
+        ANYCODE_RECOGNIZER_BASE_URL: "https://vision.example.com",
+        ANYCODE_RECOGNIZER_TRANSPORT: "openai-responses",
+      }),
+    ).toEqual({
+      transport: "openai-responses",
+      baseUrl: "https://vision.example.com",
+      model: "vision-model",
+    });
+  });
+
+  // RED-PROOF (live-run fix): the SAME gate, exercised directly on
+  // `recognizerEndpointFromFields` — this is the shape main's live
+  // RECOGNIZER_CONFIG_CHANGED push feeds (a `RecognizerWireConfig` whose
+  // `baseUrl` field can independently be blank), not just the boot-env path
+  // `parseRecognizerEnv` wraps.
+  it("RED: a live-push endpoint with a blank baseUrl is refused the same way as the boot-env path", () => {
+    expect(recognizerEndpointFromFields({ baseUrl: "", model: "vision-model" })).toBeNull();
+    expect(recognizerEndpointFromFields({ baseUrl: "   ", model: "vision-model" })).toBeNull();
+    expect(recognizerEndpointFromFields({ model: "vision-model" })).toBeNull();
+  });
+
+  it("a non-blank baseUrl still resolves normally, from either caller shape", () => {
+    expect(recognizerEndpointFromFields({ baseUrl: "https://vision.example.com", model: "vision-model" })).toEqual({
+      transport: "anthropic-messages",
+      baseUrl: "https://vision.example.com",
+      model: "vision-model",
+    });
+  });
+
+  it("RED: a live-push endpoint with an unknown transport is refused the same way as the boot-env path", () => {
+    expect(
+      recognizerEndpointFromFields({ baseUrl: "https://vision.example.com", model: "vision-model", transport: "garbage-transport" }),
+    ).toBeNull();
+  });
+});
+
+/**
+ * TASK.198 срез C (plan §8): `VisionTelemetryModelPort` (index.ts's own
+ * usage-telemetry wrap around a recognizer's `AiSdkModelPort`). Not
+ * importable (see file header) — reproduced verbatim.
+ */
+class VisionTelemetryModelPort implements ModelPort {
+  constructor(
+    private readonly inner: ModelPort,
+    private readonly report: (usage: TokenUsage) => void,
+  ) {}
+  get modelId(): string | undefined {
+    return this.inner.modelId;
+  }
+  get lastResponseModel(): string | undefined {
+    return this.inner.lastResponseModel;
+  }
+  async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+    for await (const event of this.inner.streamText(request)) {
+      if (event.type === "finish") {
+        this.report(event.usage);
+      }
+      yield event;
+    }
+  }
+}
+
+describe("host VisionTelemetryModelPort (TASK.198 срез C, plan §8)", () => {
+  function fakePort(events: ModelStreamEvent[]): ModelPort {
+    return {
+      modelId: "vision-model",
+      async *streamText() {
+        for (const event of events) yield event;
+      },
+    };
+  }
+
+  it("passes every event through unchanged and reports usage exactly once, on the finish event", async () => {
+    const usage: TokenUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
+    const events: ModelStreamEvent[] = [
+      { type: "text_delta", id: "d1", text: "hi" },
+      { type: "finish", finishReason: "stop", usage },
+    ];
+    const reports: TokenUsage[] = [];
+    const port = new VisionTelemetryModelPort(fakePort(events), (u) => reports.push(u));
+    const seen: ModelStreamEvent[] = [];
+    for await (const event of port.streamText({ messages: [], tools: [] })) {
+      seen.push(event);
+    }
+    expect(seen).toEqual(events);
+    expect(reports).toEqual([usage]);
+  });
+
+  it("reports nothing when the stream never reaches a finish event", async () => {
+    const reports: TokenUsage[] = [];
+    const port = new VisionTelemetryModelPort(fakePort([{ type: "text_delta", id: "d1", text: "partial" }]), (u) =>
+      reports.push(u),
+    );
+    for await (const _event of port.streamText({ messages: [], tools: [] })) {
+      // drain
+    }
+    expect(reports).toEqual([]);
+  });
+});
+
+/**
+ * TASK.198 срез C (plan §8, `agentType:"vision"` envelope): reproduces
+ * `recognizerPortFactory`'s own envelope-construction body — the piece
+ * `VisionTelemetryModelPort` above deliberately does NOT know about (it only
+ * calls the injected `report(usage)`). This is the "телеметрия vision-
+ * вызова в jsonl сессии" acceptance line: a vision ask() call's usage lands
+ * in the session's jsonl with the SAME `t:"usage"` shape
+ * telemetry/records.ts's own whitelist projects for a normal turn, stamped
+ * `sub:{agentType:"vision", model}` — the exact envelope
+ * `buildSubagentTelemetryTap` uses for inline subagents (TASK.160), applied
+ * here to a one-shot recognizer call instead of a nested AgentLoop run.
+ */
+describe("host recognizer telemetry envelope (TASK.198 срез C, plan §8)", () => {
+  function recordedFor(endpoint: RecognizerEndpoint, usage: TokenUsage, session: string): unknown {
+    return {
+      v: 1,
+      ts: expect.any(Number),
+      session,
+      sub: { agentType: "vision", model: endpoint.model },
+      t: "usage",
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+    };
+  }
+
+  it("stamps a vision ask() call's usage into the session's jsonl with sub:{agentType:'vision', model}", async () => {
+    const endpoint: RecognizerEndpoint = { transport: "anthropic-messages", baseUrl: "https://x", model: "vision-model" };
+    const usage: TokenUsage = { inputTokens: 20, outputTokens: 8, totalTokens: 28 };
+    const records: unknown[] = [];
+    const telemetryPort: Pick<TelemetryPort, "record"> = { record: (r) => records.push(r) };
+    const subagentTelemetry = { port: telemetryPort as TelemetryPort, session: "session-1" };
+
+    // Mirror of index.ts's recognizerPortFactory body: wraps a bare port
+    // with the SAME VisionTelemetryModelPort class tested above, closing
+    // over subagentTelemetry + the CURRENT endpoint (read at wrap time).
+    const bare = new VisionTelemetryModelPort(
+      {
+        async *streamText() {
+          yield { type: "text_delta", id: "d1", text: "on this endpoint" };
+          yield { type: "finish", finishReason: "stop", usage };
+        },
+      },
+      (u) => {
+        subagentTelemetry.port.record({
+          v: 1,
+          ts: Date.now(),
+          session: subagentTelemetry.session,
+          sub: { agentType: "vision", model: endpoint.model },
+          t: "usage",
+          inputTokens: u.inputTokens,
+          outputTokens: u.outputTokens,
+          totalTokens: u.totalTokens,
+        });
+      },
+    );
+
+    for await (const _event of bare.streamText({ messages: [], tools: [] })) {
+      // drain
+    }
+
+    expect(records).toEqual([recordedFor(endpoint, usage, "session-1")]);
+  });
+});
+
+/**
+ * TASK.198 срез C (plan §5): `recomputeInspectImageRegistration`'s gate +
+ * the tool-instance-lifetime discipline the coordinator flagged (build the
+ * tool factory EXACTLY ONCE for the host's whole life; only its
+ * REGISTRATION toggles). Uses the REAL ToolRegistry/createInspectImageTool/
+ * buildSystemPrompt (all importable core exports) — only the gate/recompute
+ * closure itself is reproduced (index.ts is not importable).
+ */
+describe("host InspectImage registration gate + instance lifetime (TASK.198 срез C, plan §5)", () => {
+  function makeHarness(opts?: { portFactory?: (endpoint: RecognizerEndpoint) => ModelPort }) {
+    const registry = createDefaultToolRegistry();
+    let recognizerConfigured = false;
+    let imageInputEnabled = true;
+    const endpoint: RecognizerEndpoint = { transport: "anthropic-messages", baseUrl: "https://x", model: "m" };
+    let factoryCalls = 0;
+    let tool: ReturnType<typeof createInspectImageTool> | undefined;
+    function ensureInspectImageTool(): ReturnType<typeof createInspectImageTool> {
+      if (tool === undefined) {
+        factoryCalls += 1;
+        tool = createInspectImageTool({
+          recognizer: { endpoint, cache: new AskCache(), ...(opts?.portFactory ? { portFactory: opts.portFactory } : {}) },
+        });
+      }
+      return tool;
+    }
+    function recompute(): boolean {
+      const shouldRegister = recognizerConfigured && !imageInputEnabled;
+      const isRegistered = registry.has("InspectImage");
+      if (shouldRegister === isRegistered) return false;
+      if (shouldRegister) {
+        registry.register(ensureInspectImageTool());
+      } else {
+        registry.unregister("InspectImage");
+      }
+      return true;
+    }
+    const composePrompt = (): string =>
+      buildSystemPrompt({ toolNames: registry.list(), visionFallbackEnabled: registry.has("InspectImage") });
+    return {
+      registry,
+      recompute,
+      composePrompt,
+      getFactoryCalls: () => factoryCalls,
+      getTool: () => tool,
+      setRecognizerConfigured: (v: boolean) => (recognizerConfigured = v),
+      setImageInputEnabled: (v: boolean) => (imageInputEnabled = v),
+    };
+  }
+
+  it("registers InspectImage only when blind AND a recognizer is configured; returns whether it flipped", () => {
+    const h = makeHarness();
+    expect(h.registry.has("InspectImage")).toBe(false);
+
+    // Sighted + configured -> still not registered.
+    h.setRecognizerConfigured(true);
+    expect(h.recompute()).toBe(false);
+    expect(h.registry.has("InspectImage")).toBe(false);
+
+    // Blind + configured -> registers, reports a flip.
+    h.setImageInputEnabled(false);
+    expect(h.recompute()).toBe(true);
+    expect(h.registry.has("InspectImage")).toBe(true);
+
+    // No change -> no flip reported, idempotent.
+    expect(h.recompute()).toBe(false);
+
+    // Recognizer disabled -> deregisters, reports a flip.
+    h.setRecognizerConfigured(false);
+    expect(h.recompute()).toBe(true);
+    expect(h.registry.has("InspectImage")).toBe(false);
+  });
+
+  it("the tool instance is built EXACTLY ONCE across many register/unregister cycles — coordinator requirement: registration visibility must never mean instance rebuild", () => {
+    const h = makeHarness();
+    h.setRecognizerConfigured(true);
+    h.setImageInputEnabled(false);
+    h.recompute(); // register
+    h.setImageInputEnabled(true);
+    h.recompute(); // unregister
+    h.setImageInputEnabled(false);
+    h.recompute(); // register again
+    h.setRecognizerConfigured(false);
+    h.recompute(); // unregister again
+    h.setRecognizerConfigured(true);
+    h.recompute(); // register a third time
+    expect(h.getFactoryCalls()).toBe(1);
+  });
+
+  /**
+   * Coordinator requirement (task198-state.md "НАХОДКА B2"): the per-image
+   * question counter/transcript live in the FACTORY's closure
+   * (tools/inspect-image.ts) — this proves they survive the SAME
+   * unregister->re-register boundary a live recognizer-config push or a
+   * model switch triggers, by driving the question count to its limit,
+   * cycling registration, and confirming the limit is STILL hit rather than
+   * reset (which is exactly what a rebuilt instance would do).
+   */
+  it("the per-image question counter/transcript SURVIVE an unregister -> re-register cycle", async () => {
+    let calls = 0;
+    const fakePort: ModelPort = {
+      async *streamText() {
+        calls += 1;
+        yield { type: "text_delta", id: `d${calls}`, text: `answer ${calls}` };
+        yield { type: "finish", finishReason: "stop", usage: {} };
+      },
+    };
+    const h = makeHarness({ portFactory: () => fakePort });
+    h.setRecognizerConfigured(true);
+    h.setImageInputEnabled(false);
+    h.recompute(); // register
+
+    const image: ImageAttachment = { mediaType: "image/png", data: "QUJD", ref: 3 };
+    const ctx: ToolContext = {
+      toolCallId: "call-1",
+      abortSignal: new AbortController().signal,
+      cwd: "/work",
+      ports: {} as ToolContext["ports"],
+      images: { resolve: (ref: number) => (ref === 3 ? image : undefined) },
+    };
+
+    // Spend all but one question BEFORE the registration boundary.
+    for (let i = 0; i < MAX_QUESTIONS_PER_IMAGE - 1; i += 1) {
+      const result = await h.getTool()!.handler({ image: "#3", question: `q${i}` }, ctx);
+      expect(result.ok).toBe(true);
+    }
+
+    // Cross the boundary: deregister (model went sighted), then re-register
+    // (model went blind again) — the SAME instance per getFactoryCalls().
+    h.setImageInputEnabled(true);
+    h.recompute(); // unregister
+    h.setImageInputEnabled(false);
+    h.recompute(); // re-register
+    expect(h.getFactoryCalls()).toBe(1);
+
+    // The LAST question the limit allows still succeeds...
+    const last = await h.getTool()!.handler({ image: "#3", question: "last one" }, ctx);
+    expect(last.ok).toBe(true);
+    // ...and the NEXT one is refused — the counter carried the pre-boundary
+    // spend forward instead of resetting to 0 on re-registration.
+    const overLimit = await h.getTool()!.handler({ image: "#3", question: "one too many" }, ctx);
+    expect(overLimit.ok).toBe(false);
+    if (!overLimit.ok) expect(overLimit.error).toBe(QUESTION_LIMIT_MESSAGE);
+  });
+
+  it("live registry.list() means the prompt reflects a registration WITHOUT rebuilding the compose closure — pins against a frozen boot-time toolNames snapshot", () => {
+    const h = makeHarness();
+    const before = h.composePrompt();
+    expect(before).not.toContain("InspectImage");
+
+    h.setRecognizerConfigured(true);
+    h.setImageInputEnabled(false);
+    h.recompute();
+
+    // SAME closure (composePrompt), called again — no reconstruction anywhere.
+    const after = h.composePrompt();
+    expect(after).toContain("InspectImage");
+    expect(after).not.toBe(before);
+  });
+});
+
+/**
+ * TASK.198 срез C (plan §3): the ONE external media-projection decorator
+ * around the SwitchableModelPort — both `createMediaProjectionPort` and
+ * `SwitchableModelPort` are real, importable core exports, so this
+ * exercises the ACTUAL composition index.ts builds (`modelPort =
+ * createMediaProjectionPort(switchableModelPort, ...)`), not a
+ * reproduction — only the "which object does index.ts call .setPort() on"
+ * wiring choice is host-specific and worth pinning here.
+ */
+describe("host media-projection decorator composition (TASK.198 срез C, plan §3)", () => {
+  function scriptedPort(id: string): ModelPort {
+    return {
+      modelId: id,
+      async *streamText(request: ModelRequest) {
+        yield { type: "text_delta", id: "d1", text: `${id}:${request.messages.length}` };
+        yield { type: "finish", finishReason: "stop", usage: {} };
+      },
+    };
+  }
+
+  it("setPort on the INNER SwitchableModelPort is instantly visible through the OUTER decorator — no rewrap needed", async () => {
+    const switchable = new SwitchableModelPort(scriptedPort("a"));
+    let sighted = true;
+    const decorated = createMediaProjectionPort(switchable, () => sighted);
+
+    const image = { mediaType: "image/png" as const, data: "QUJD" };
+    const request: ModelRequest = { messages: [{ role: "user", content: "hi", images: [image] }], tools: [] };
+
+    const firstEvents: ModelStreamEvent[] = [];
+    for await (const event of decorated.streamText(request)) firstEvents.push(event);
+    expect(firstEvents[0]).toEqual({ type: "text_delta", id: "d1", text: "a:1" });
+
+    // A model switch replaces the port on the SWITCHABLE, never the decorator.
+    switchable.setPort(scriptedPort("b"));
+    const secondEvents: ModelStreamEvent[] = [];
+    for await (const event of decorated.streamText(request)) secondEvents.push(event);
+    expect(secondEvents[0]).toEqual({ type: "text_delta", id: "d1", text: "b:1" });
+
+    // Blind (sighted=false) strips the image bytes off the SAME composition.
+    sighted = false;
+    const capturedRequests: ModelRequest[] = [];
+    const capturingSwitchable = new SwitchableModelPort({
+      modelId: "c",
+      async *streamText(req: ModelRequest) {
+        capturedRequests.push(req);
+        yield { type: "finish", finishReason: "stop", usage: {} };
+      },
+    });
+    const blindDecorated = createMediaProjectionPort(capturingSwitchable, () => sighted);
+    for await (const _event of blindDecorated.streamText(request)) {
+      // drain
+    }
+    expect((capturedRequests[0]!.messages[0] as { images?: unknown }).images).toBeUndefined();
   });
 });

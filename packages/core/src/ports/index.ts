@@ -64,6 +64,7 @@ export type {
   WorkflowRunOptions,
   WorkflowRunOutcome,
   WorkflowStepDefinition,
+  WorkflowStepGraphNode,
   WorkflowStepOutcome,
 } from "./workflow.js";
 export type {

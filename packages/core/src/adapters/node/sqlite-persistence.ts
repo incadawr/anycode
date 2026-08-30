@@ -307,6 +307,26 @@ const MIGRATIONS: readonly Migration[] = [
                  FROM history_items h WHERE h.session_id = sessions.id) > updated_at`,
     ],
   },
+  {
+    // Vision-fallback image registry counter (TASK.198 plan §2, slice B1):
+    // the NEXT ref reserveImageRef will hand out for this session. An atomic
+    // persistent counter, not a history scan — a scan would reuse a number
+    // after compaction dropped the highest-ref image (plan §2 finding). Every
+    // pre-v18 row (and every row that has never reserved a ref) reads back
+    // the column's own default, decoding to "no ref ever reserved" — never a
+    // NULL, so no separate legacy-row branch is needed in rowToSessionMeta.
+    //
+    // FROZEN, and not by preference: this exact statement is ALREADY APPLIED to
+    // the owner's live database (`schema_migrations` row 18, 2026-08-30
+    // 21:38:45) — a dev run in the shared checkout resolved the db path to
+    // `~/.anycode/anycode.sqlite` while it was still uncommitted here. The
+    // runner skips any version already recorded, so an edit to this statement
+    // would never reach that database and no error would say so: the code
+    // would read a schema that matches the draft, not the release. Change the
+    // shape only by adding a NEW version below; never by editing this one.
+    version: 18,
+    statements: ["ALTER TABLE sessions ADD COLUMN next_image_ref INTEGER NOT NULL DEFAULT 1"],
+  },
 ];
 
 /**
@@ -405,6 +425,7 @@ interface SessionRow {
   codex_profile_id: string | null;
   parent_session_id: string | null;
   spawn_tool_call_id: string | null;
+  next_image_ref: number;
 }
 
 function parseWorktreeTransitionJson(raw: string | null): SessionMeta["worktreeTransition"] {
@@ -516,6 +537,11 @@ function rowToSessionMeta(row: SessionRow): SessionMeta {
     ...(typeof row.spawn_tool_call_id === "string" && row.spawn_tool_call_id.length > 0
       ? { spawnToolCallId: row.spawn_tool_call_id }
       : {}),
+    // Surfaced only once a ref has actually been reserved (plan §2) — an
+    // untouched/legacy session decodes to the column's DEFAULT 1 and omits
+    // the field, matching every other NOT-NULL-DEFAULT bookkeeping column
+    // above (continuation_pending, worktree_exit_notice_pending, ...).
+    ...(row.next_image_ref !== 1 ? { nextImageRef: row.next_image_ref } : {}),
   };
 }
 
@@ -1113,6 +1139,29 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       .prepare("SELECT data FROM history_items WHERE session_id = ? ORDER BY seq ASC")
       .all(sessionId) as unknown as { data: string }[];
     return rows.map((row) => JSON.parse(row.data) as HistoryItem);
+  }
+
+  /**
+   * Atomically reserves and returns the session's next vision-fallback image
+   * ref (TASK.198 plan §2). ONE UPDATE statement does the whole job: the
+   * RETURNING expression is evaluated against the row's POST-update state
+   * (SQLite semantics), so `next_image_ref - 1` there is exactly the
+   * pre-increment value — the number to hand out — while the stored column
+   * already holds the next caller's number. No read-then-write window
+   * exists for a concurrent caller to land in. Deliberately NOT built on
+   * touchSession: that method issues a partial UPDATE with last-write-wins
+   * semantics on a caller-supplied snapshot, which could replay a stale
+   * counter value after a crash and hand out the same ref twice.
+   */
+  async reserveImageRef(sessionId: string): Promise<number> {
+    const db = this.open();
+    const row = db
+      .prepare("UPDATE sessions SET next_image_ref = next_image_ref + 1 WHERE id = ? RETURNING next_image_ref - 1 AS reserved")
+      .get(sessionId) as { reserved: number } | undefined;
+    if (row === undefined) {
+      throw new Error(`reserveImageRef: unknown session ${sessionId}`);
+    }
+    return row.reserved;
   }
 
   // -------------------------------------------------------------------------

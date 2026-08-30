@@ -1930,3 +1930,401 @@ describe("B-03 — every explicit-direct outcome emits the sentinel", () => {
     expect(engineProxyCarrierValue(settings(), {}, "claude", true)).toBeUndefined();
   });
 });
+
+describe("buildHostEnv — vision-fallback recognizer (TASK.198 E1)", () => {
+  const visionConnection = connectionFixture({
+    id: "openai",
+    connectionId: "conn-vision",
+    baseUrl: "https://vision.example.com",
+    transport: "openai-chat-completions",
+  });
+
+  it("materialises ANYCODE_RECOGNIZER_* from the selected connection + settings.recognizer.modelId", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: {
+        ...settings(),
+        provider: providerV2Multi(undefined, [visionConnection]),
+        recognizer: { connectionId: "conn-vision", modelId: "vision-model" },
+      },
+      getSecret: vaultSecret("sk-vision"),
+    });
+    expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBe("openai-chat-completions");
+    expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://vision.example.com");
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBe("sk-vision");
+    expect(env.ANYCODE_RECOGNIZER_MODEL).toBe("vision-model");
+    expect(env.ANYCODE_RECOGNIZER_PROVIDER_NAME).toBe("openai");
+  });
+
+  it("emits nothing when settings.recognizer is absent — byte-identical to today", async () => {
+    const env = await buildHostEnv({ bootEnv: {}, settings: settings(), getSecret: noSecret });
+    expect(env.ANYCODE_RECOGNIZER_MODEL).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_PROVIDER_NAME).toBeUndefined();
+  });
+
+  it("emits nothing when the recognizer's connectionId no longer resolves (dangling) — fail-soft, never a stale credential", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: {
+        ...settings(),
+        recognizer: { connectionId: "conn-gone", modelId: "vision-model" },
+      },
+      getSecret: vaultSecret("sk-vision"),
+    });
+    expect(env.ANYCODE_RECOGNIZER_MODEL).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
+  });
+
+  it("emits nothing for an OAuth-authenticated connection — unsupported as a recognizer source in slice 1 (coordinator decision)", async () => {
+    const oauthConnection = connectionFixture({ id: "anthropic", connectionId: "conn-oauth-vision" });
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: {
+        ...settings(),
+        provider: providerV2Multi(undefined, [oauthConnection]),
+        recognizer: { connectionId: "conn-oauth-vision", modelId: "vision-model" },
+      },
+      getSecret: vaultSecret("sk-should-never-be-read"),
+      recognizerAuthKindFor: () => "oauth",
+    });
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_MODEL).toBeUndefined();
+  });
+
+  it("a bare/custom connection (providerId '') is always treated as api_key, never oauth", async () => {
+    const bareConnection = connectionFixture({ connectionId: "conn-bare-vision", baseUrl: "https://bare.example.com" });
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: {
+        ...settings(),
+        provider: providerV2Multi(undefined, [bareConnection]),
+        recognizer: { connectionId: "conn-bare-vision", modelId: "vision-model" },
+      },
+      getSecret: vaultSecret("sk-bare"),
+      // A caller-supplied authKindFor is irrelevant for providerId === "" — it
+      // is never even consulted for the bare/custom bucket.
+      recognizerAuthKindFor: () => "oauth",
+    });
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBe("sk-bare");
+    expect(env.ANYCODE_RECOGNIZER_MODEL).toBe("vision-model");
+  });
+
+  // Pinned behavior (transport-ladder fix, task150-output-ceiling session): a
+  // bare connection (providerId "") has NO catalog entry, so a MISSING
+  // `transport` there resolves `resolveEffectiveTransport` to `"unset"` —
+  // this is NOT a malformed input. The recognizer still resolves fully (a
+  // real, explicitly-supported case: a hand-typed address with no transport
+  // chosen), only `ANYCODE_RECOGNIZER_TRANSPORT` itself is left unemitted so
+  // the host applies its own documented "anthropic-messages" default
+  // downstream — the SAME default the primary provider path already shares.
+  it("a bare connection with a real address and NO transport resolves fully — the transport var is simply not emitted, never a disabled recognizer", async () => {
+    const bareNoTransportConnection = connectionFixture({
+      connectionId: "conn-bare-vision-no-transport",
+      baseUrl: "https://bare-no-transport.example.com",
+    });
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: {
+        ...settings(),
+        provider: providerV2Multi(undefined, [bareNoTransportConnection]),
+        recognizer: { connectionId: "conn-bare-vision-no-transport", modelId: "vision-model" },
+      },
+      getSecret: vaultSecret("sk-bare-no-transport"),
+    });
+    expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://bare-no-transport.example.com");
+    expect(env.ANYCODE_RECOGNIZER_MODEL).toBe("vision-model");
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBe("sk-bare-no-transport");
+    expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBeUndefined();
+  });
+
+  it("an ambient ANYCODE_RECOGNIZER_* override in the boot env always wins (env > settings, same law as every other var here)", async () => {
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_RECOGNIZER_MODEL: "shell-model" },
+      settings: {
+        ...settings(),
+        provider: providerV2Multi(undefined, [visionConnection]),
+        recognizer: { connectionId: "conn-vision", modelId: "vision-model" },
+      },
+      getSecret: vaultSecret("sk-vision"),
+    });
+    expect(env.ANYCODE_RECOGNIZER_MODEL).toBe("shell-model");
+  });
+
+  // Recovery path (finding #1): buildHostEnv is a pure function of its
+  // `settings` argument — a fork spawned AFTER a settings mutation that no
+  // live host was around to receive as a push (the host crashed) still reads
+  // the fresh value, with no dependency on any prior call or in-memory
+  // broadcast/fingerprint state.
+  it("is a pure function of settings — the NEXT fork always reads the current value regardless of any earlier call", async () => {
+    const base = {
+      ...settings(),
+      provider: providerV2Multi(undefined, [visionConnection]),
+      recognizer: { connectionId: "conn-vision", modelId: "model-a" },
+    };
+    const first = await buildHostEnv({ bootEnv: {}, settings: base, getSecret: vaultSecret("sk-1") });
+    expect(first.ANYCODE_RECOGNIZER_MODEL).toBe("model-a");
+
+    const updated = { ...base, recognizer: { connectionId: "conn-vision", modelId: "model-b" } };
+    const second = await buildHostEnv({ bootEnv: {}, settings: updated, getSecret: vaultSecret("sk-1") });
+    expect(second.ANYCODE_RECOGNIZER_MODEL).toBe("model-b");
+  });
+
+  // ⚠ Хвост от E1 (task198-state.md): resolveRecognizerConfig read
+  // connection.baseUrl/a connection-scoped vault key directly and never
+  // followed a `custom:<slug>` providerId to its CustomProviderRecord the
+  // way buildHostEnv's own customId branch does above (line ~942) — a
+  // recognizer pointed at a custom-provider connection got no baseUrl and no
+  // credential at all, even though the record carried both.
+  it("RED-PROOF: a custom-provider connection (providerId custom:<slug>) resolves baseUrl/apiKey from the CustomProviderRecord — mirrors buildHostEnv's own customId branch, not a second mechanism", async () => {
+    const customConnection = connectionFixture({
+      id: "custom:vision-slug",
+      connectionId: "conn-vision-custom",
+      model: "connection-level-model",
+      // Deliberately no baseUrl of its own — only the CustomProviderRecord carries one.
+    });
+    const s: AnycodeSettings = {
+      ...settings(),
+      provider: providerV2Multi(undefined, [customConnection]),
+      recognizer: { connectionId: "conn-vision-custom", modelId: "vision-model" },
+    };
+    s.provider.custom = [
+      {
+        id: "custom:vision-slug",
+        name: "Vision endpoint",
+        baseUrl: "https://vision-custom.example.com/v1",
+        kind: "openai-compatible",
+        models: ["vision-model"],
+      },
+    ];
+    const reads: string[] = [];
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: s,
+      getSecret: async (key) => {
+        reads.push(key);
+        return key === "provider.custom:vision-slug.apiKey" ? "sk-custom-vision" : undefined;
+      },
+    });
+    expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://vision-custom.example.com/v1");
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBe("sk-custom-vision");
+    expect(env.ANYCODE_RECOGNIZER_MODEL).toBe("vision-model");
+    // The connection-scoped namespace must never be consulted for a custom
+    // provider — mirrors buildHostEnv's own "ONE shared provider key" test.
+    expect(reads.some((key) => key.startsWith("provider.connection."))).toBe(false);
+  });
+
+  it("RED-PROOF: a DELETED custom-provider record fails closed for the recognizer too — never falls back to the connection-scoped key", async () => {
+    const customConnection = connectionFixture({
+      id: "custom:gone-slug",
+      connectionId: "conn-vision-gone",
+      model: "connection-level-model",
+    });
+    const s: AnycodeSettings = {
+      ...settings(),
+      provider: providerV2Multi(undefined, [customConnection]),
+      recognizer: { connectionId: "conn-vision-gone", modelId: "vision-model" },
+    };
+    // No `s.provider.custom` entry — the record was deleted.
+    const reads: string[] = [];
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: s,
+      getSecret: async (key) => {
+        reads.push(key);
+        return "sk-should-never-be-read";
+      },
+    });
+    expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
+    expect(reads.some((key) => key.startsWith("provider.connection."))).toBe(false);
+  });
+
+  // Live-run regression (task150-output-ceiling session, TASK.198 follow-up):
+  // a CATALOG connection's own baseUrl/transport can be blank (`z-ai`/`kimi`
+  // in real settings.json carry `baseUrl: ""` and no `transport` key at all —
+  // the real endpoint lives in the CATALOG, mirrored today only for the
+  // PRIMARY provider ladder via `ResolvedProviderSelection`/`resolveCatalog`,
+  // never for the recognizer). Without a catalog fallback, `InspectImage`
+  // registered and then failed twice with "Invalid Anthropic base URL: ''"
+  // (resolved transport defaulted to anthropic-messages downstream). Mirrors
+  // provider-ipc.ts's `handleConnectionFetchModels` resolution verbatim:
+  // `connection.baseUrl?.trim() ? ... : entry.baseUrl` /
+  // `connection.transport ?? entry.defaultTransport`.
+  describe("catalog fallback for a blank connection baseUrl/transport (live-run fix)", () => {
+    it("RED: falls back to the catalog's baseUrl/defaultTransport when the connection's own fields are blank/absent", async () => {
+      const zaiConnection = connectionFixture({
+        id: "z-ai",
+        connectionId: "conn-vision-zai",
+        // Deliberately mirrors the live settings.json record: blank baseUrl,
+        // no `transport` key at all.
+        baseUrl: "",
+      });
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: {
+          ...settings(),
+          provider: providerV2Multi(undefined, [zaiConnection]),
+          recognizer: { connectionId: "conn-vision-zai", modelId: "vision-model" },
+        },
+        getSecret: vaultSecret("sk-zai-vision"),
+        recognizerCatalogFor: (id) =>
+          id === "z-ai" ? { baseUrl: "https://api.z.ai/api/anthropic", defaultTransport: "anthropic-messages" } : undefined,
+      });
+      expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://api.z.ai/api/anthropic");
+      expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBe("anthropic-messages");
+      expect(env.ANYCODE_RECOGNIZER_API_KEY).toBe("sk-zai-vision");
+    });
+
+    it("a catalog connection's OWN non-blank baseUrl/transport still win over the catalog default", async () => {
+      const overrideConnection = connectionFixture({
+        id: "z-ai",
+        connectionId: "conn-vision-zai-override",
+        baseUrl: "https://z.example.internal/proxy",
+        transport: "anthropic-messages",
+      });
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: {
+          ...settings(),
+          provider: providerV2Multi(undefined, [overrideConnection]),
+          recognizer: { connectionId: "conn-vision-zai-override", modelId: "vision-model" },
+        },
+        getSecret: vaultSecret("sk-zai-vision-2"),
+        recognizerCatalogFor: () => ({ baseUrl: "https://api.z.ai/api/anthropic", defaultTransport: "openai-chat-completions" }),
+      });
+      expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://z.example.internal/proxy");
+      expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBe("anthropic-messages");
+    });
+
+    // Measurement-trap guard: `z-ai`'s/`kimi`'s catalog `defaultTransport` is
+    // `"anthropic-messages"` — the SAME value the old, buggy hardcoded
+    // default happened to produce, so a test built on them cannot tell
+    // "resolved from the catalog" apart from "fell through to the default and
+    // coincidentally matched". This one uses an openai-FAMILY catalog entry
+    // (`openai`, `defaultTransport: "openai-responses"` — packages/core/src/
+    // provider/catalog-data.ts) specifically so the asserted value can only
+    // have come from the catalog ladder.
+    it("resolves the catalog's defaultTransport for an openai-family provider — a value the old hardcoded anthropic default could never produce", async () => {
+      const openaiConnection = connectionFixture({
+        id: "openai",
+        connectionId: "conn-vision-openai",
+        baseUrl: "",
+      });
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: {
+          ...settings(),
+          provider: providerV2Multi(undefined, [openaiConnection]),
+          recognizer: { connectionId: "conn-vision-openai", modelId: "vision-model" },
+        },
+        getSecret: vaultSecret("sk-openai-vision"),
+        recognizerCatalogFor: (id) =>
+          id === "openai" ? { baseUrl: "https://api.openai.com/v1", defaultTransport: "openai-responses" } : undefined,
+      });
+      expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://api.openai.com/v1");
+      expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBe("openai-responses");
+    });
+
+    // Pinned behavior (transport-ladder fix): an unresolvable transport
+    // (`resolveEffectiveTransport` reaching `source: "unset"` — no
+    // connection-level override AND no catalog default) does NOT disable a
+    // recognizer whose address DID resolve — it only leaves the transport
+    // var unemitted, mirroring the primary provider path's own handling of
+    // "unset" (nothing emitted, the host applies its shared default).
+    it("an unresolvable transport (no connection transport, no catalog default) leaves ANYCODE_RECOGNIZER_TRANSPORT unset — the resolvable address/model/key still come through", async () => {
+      const noTransportConnection = connectionFixture({
+        id: "unknown-legacy-provider",
+        connectionId: "conn-vision-no-transport",
+        baseUrl: "https://legacy.example.com",
+      });
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: {
+          ...settings(),
+          provider: providerV2Multi(undefined, [noTransportConnection]),
+          recognizer: { connectionId: "conn-vision-no-transport", modelId: "vision-model" },
+        },
+        getSecret: vaultSecret("sk-legacy-no-transport"),
+        recognizerCatalogFor: () => undefined,
+      });
+      expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://legacy.example.com");
+      expect(env.ANYCODE_RECOGNIZER_MODEL).toBe("vision-model");
+      expect(env.ANYCODE_RECOGNIZER_API_KEY).toBe("sk-legacy-no-transport");
+      expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBeUndefined();
+    });
+
+    it("an unknown/legacy providerId (absent from the catalog) keeps today's connection-verbatim behavior — no invented values", async () => {
+      const legacyConnection = connectionFixture({
+        id: "legacy-provider-no-longer-in-catalog",
+        connectionId: "conn-vision-legacy",
+        baseUrl: "https://legacy.example.com",
+        transport: "openai-responses",
+      });
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: {
+          ...settings(),
+          provider: providerV2Multi(undefined, [legacyConnection]),
+          recognizer: { connectionId: "conn-vision-legacy", modelId: "vision-model" },
+        },
+        getSecret: vaultSecret("sk-legacy-vision"),
+        recognizerCatalogFor: () => undefined,
+      });
+      expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://legacy.example.com");
+      expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBe("openai-responses");
+    });
+
+    it("RED: a custom-provider connection never consults the catalog — the CustomProviderRecord fail-closed posture is unchanged", async () => {
+      const customConnection = connectionFixture({
+        id: "custom:vision-slug-2",
+        connectionId: "conn-vision-custom-2",
+      });
+      const s: AnycodeSettings = {
+        ...settings(),
+        provider: providerV2Multi(undefined, [customConnection]),
+        recognizer: { connectionId: "conn-vision-custom-2", modelId: "vision-model" },
+      };
+      s.provider.custom = [
+        { id: "custom:vision-slug-2", name: "Vision endpoint 2", baseUrl: "https://vision-custom-2.example.com/v1", kind: "openai-compatible", models: [] },
+      ];
+      let catalogForCalled = false;
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: s,
+        getSecret: async (key) => (key === "provider.custom:vision-slug-2.apiKey" ? "sk-custom-vision-2" : undefined),
+        recognizerCatalogFor: () => {
+          catalogForCalled = true;
+          return { baseUrl: "https://should-never-be-used.example.com" };
+        },
+      });
+      expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://vision-custom-2.example.com/v1");
+      expect(catalogForCalled).toBe(false);
+    });
+
+    it("RED: a resolved-but-still-blank address (an unconfigured needsBaseUrl catalog template, e.g. vLLM) disables the recognizer entirely — a broken tool must never register", async () => {
+      const vllmConnection = connectionFixture({
+        id: "vllm",
+        connectionId: "conn-vision-vllm",
+        // No baseUrl of its own either — mirrors an unconfigured needsBaseUrl
+        // catalog template (vLLM/the bare `custom` sentinel).
+      });
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: {
+          ...settings(),
+          provider: providerV2Multi(undefined, [vllmConnection]),
+          recognizer: { connectionId: "conn-vision-vllm", modelId: "vision-model" },
+        },
+        getSecret: vaultSecret("sk-should-never-be-read"),
+        recognizerCatalogFor: (id) => (id === "vllm" ? { baseUrl: "", defaultTransport: "openai-chat-completions" } : undefined),
+      });
+      expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBeUndefined();
+      expect(env.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
+      expect(env.ANYCODE_RECOGNIZER_MODEL).toBeUndefined();
+      expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBeUndefined();
+    });
+  });
+});

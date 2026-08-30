@@ -7,9 +7,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
 
  *  - main: window/lifecycle entry, plus the host utilityProcess as a second
- *    entry of the same (Node, ESM) target — they share externalization rules
- *    and both need `@anycode/core`'s TS sources bundled directly (no core
- *    build step; its `exports` field points at `./src/index.ts`).
+ *    entry of the same (Node, ESM) target, plus the Vision panel's recognizer-
+ *    probe child (TASK.198 срез E2) as a THIRD — all three share
+ *    externalization rules and all three need `@anycode/core`'s TS sources
+ *    bundled directly (no core build step; its `exports` field points at
+ *    `./src/index.ts`).
  *  - preload: bundled to a single CJS file — sandboxed preload cannot load ESM.
  *  - renderer: plain web target, zero Node.
  * Output module format/extension is left to electron-vite's own presets
@@ -40,6 +42,13 @@ export default defineConfig(({ command }) => {
           input: {
             index: resolve(__dirname, "src/main/index.ts"),
             host: resolve(__dirname, "src/host/index.ts"),
+            // Input key IS the output filename (`host` -> `host.js`) — the
+            // literal here must match main/index.ts's own path resolution
+            // (`resolveRecognizerProbeChildEntry`'s
+            // `join(__dirname, "recognizer-probe-child.js")`) verbatim, or the
+            // probe fails ENOENT only at spawn time, past every test and
+            // typecheck.
+            "recognizer-probe-child": resolve(__dirname, "src/main/recognizer-probe-child.ts"),
           },
         },
       },

@@ -1103,6 +1103,117 @@ describe("try-again-button click route (TASK.33 W8-FIX #2)", () => {
   });
 });
 
+describe("workflow-steps route (TASK.191 slice S4)", () => {
+  it("401s GET /tabs/:tabId/agent-card/:toolCallId/workflow-steps without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps"));
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /tabs/:tabId/agent-card/:toolCallId/workflow-steps -> workflowStepsState", async () => {
+    const facadeResult = { ok: true, rows: [{ stepId: "step-1", selected: false }], activityRows: ["did a thing"] };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"workflowStepsState"');
+    expect(calls[0]).toContain('["tab-a","call-1"]');
+  });
+
+  it("GET /tabs/:tabId/agent-card/:toolCallId/workflow-steps decodes URL-encoded tabId AND toolCallId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true, rows: [], activityRows: [] });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(
+      url(h, `/tabs/${encodeURIComponent("tab a")}/agent-card/${encodeURIComponent("call 1")}/workflow-steps`),
+      { headers: auth() },
+    );
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a","call 1"]');
+  });
+
+  // The workflow-steps GET probe sits one segment deeper than the plain
+  // agent-card GET probe (`parts.length===5` vs `3`) — proves the router
+  // doesn't fold the deeper path into the shallower handler (or vice versa)
+  // by firing both against the same recorder and checking each landed on
+  // its own facade method.
+  it("does not collide with the shallower agent-card GET probe (different depth, same method)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    await fetch(url(h, "/tabs/tab-a/agent-card/call-1"), { headers: auth() });
+    await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps"), { headers: auth() });
+    expect(calls[0]).toContain('"agentCardState"');
+    expect(calls[1]).toContain('"workflowStepsState"');
+  });
+
+  it("POST on the probe's own path does not match (method mismatch) -> 404", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps"), {
+      method: "POST",
+      headers: auth(),
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("workflow-step click route (TASK.191 slice S4)", () => {
+  it("401s POST /tabs/:tabId/agent-card/:toolCallId/workflow-steps/:stepId/click without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps/step-1/click"), {
+      method: "POST",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /tabs/:tabId/agent-card/:toolCallId/workflow-steps/:stepId/click -> workflowStepClick", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps/step-1/click"), {
+      method: "POST",
+      headers: auth(),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(calls[0]).toContain('"workflowStepClick"');
+    expect(calls[0]).toContain('["tab-a","call-1","step-1"]');
+  });
+
+  it("POST .../workflow-steps/:stepId/click decodes URL-encoded tabId, toolCallId AND stepId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(
+      url(
+        h,
+        `/tabs/${encodeURIComponent("tab a")}/agent-card/${encodeURIComponent("call 1")}/workflow-steps/${encodeURIComponent("step 1")}/click`,
+      ),
+      { method: "POST", headers: auth() },
+    );
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a","call 1","step 1"]');
+  });
+
+  // The click driver sits two segments deeper than the workflow-steps GET
+  // probe (`parts.length===7` vs `5`) — same collision proof as the probe's
+  // own test above, one level down.
+  it("does not collide with the shallower workflow-steps GET probe (different depth, different method)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps"), { headers: auth() });
+    await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps/step-1/click"), {
+      method: "POST",
+      headers: auth(),
+    });
+    expect(calls[0]).toContain('"workflowStepsState"');
+    expect(calls[1]).toContain('"workflowStepClick"');
+  });
+
+  it("GET on the driver's own path does not match (method mismatch) -> 404", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps/step-1/click"), { headers: auth() });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("host-kill route (TASK.33 FIX-A)", () => {
   it("401s POST /tabs/:tabId/host/kill without a token", async () => {
     const h = await boot();
@@ -1594,6 +1705,65 @@ describe("prompt-queue routes (design/slice-P7.14-cut.md §5 W3)", () => {
       method: "POST",
       headers: auth(),
       body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("POST /tabs/:tabId/prompt — image attachments (TASK.198 live-smoke facade)", () => {
+  const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+
+  it("without images -> unchanged {text} forward (byte-parity with pre-image behavior)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true, requestId: "req-1" });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/prompt"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ text: "hello" }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"sendPrompt"');
+    expect(calls[0]).toContain('["tab-a","hello"]');
+  });
+
+  it("with an absolute path to a real file -> reads+base64-encodes it and forwards {data, sourcePath}", async () => {
+    const path = join(tmpdir(), `automation-server-image-${randomUUID()}.png`);
+    writeFileSync(path, PNG_HEADER);
+    const { window, calls } = fakeWindowCapture({ ok: true, requestId: "req-1" });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/prompt"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ text: "look", images: [path] }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"sendPrompt"');
+    expect(calls[0]).toContain(JSON.stringify(PNG_HEADER.toString("base64")));
+    expect(calls[0]).toContain(JSON.stringify(path));
+  });
+
+  it("with a path to a nonexistent file -> 200 {ok:false, reason:'image_not_found'}, facade never invoked", async () => {
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window });
+    const missing = join(tmpdir(), `automation-server-image-missing-${randomUUID()}.png`);
+    const res = await fetch(url(h, "/tabs/tab-a/prompt"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ text: "look", images: [missing] }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, reason: "image_not_found" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("with images not an array -> 400, facade never invoked", async () => {
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/prompt"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ text: "look", images: "not-an-array" }),
     });
     expect(res.status).toBe(400);
     expect(calls).toHaveLength(0);
@@ -3161,6 +3331,168 @@ describe("Profile pane routes (design/slice-P7.22-cut.md §4 W4, period/models/r
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual(facadeResult);
       expect(calls[0]).toContain('"profileRebuild"');
+      expect(calls[0]).toContain("[]");
+    });
+  });
+});
+
+describe("Vision pane routes (TASK.198 срез E2c)", () => {
+  const VISION_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
+    { path: "/settings/vision/connection", body: { connectionId: "conn-1" } },
+    { path: "/settings/vision/model", body: { modelId: "glm-5.3-flash" } },
+    { path: "/settings/vision/save", body: {} },
+    { path: "/settings/vision/probe", body: {} },
+    { path: "/settings/vision/turnoff", body: {} },
+  ];
+
+  it("401s GET /settings/vision without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/settings/vision"));
+    expect(res.status).toBe(401);
+  });
+
+  it("401s every POST /settings/vision/* route without a token", async () => {
+    const h = await boot();
+    for (const route of VISION_POST_ROUTES) {
+      const res = await fetch(url(h, route.path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(route.body),
+      });
+      expect(res.status, `${route.path} should 401 without a token`).toBe(401);
+    }
+  });
+
+  it("GET /settings/vision -> visionPaneState (dedicated route, distinct from every other /settings* probe)", async () => {
+    const facadeResult = {
+      mounted: true,
+      enabled: true,
+      currentPairText: "GLM · glm-5.3-flash",
+      connectionOptions: [{ id: "conn-1", label: "GLM", selectable: true, proxyWarning: null }],
+      selectedConnectionId: "conn-1",
+      modelValue: "glm-5.3-flash",
+      modelHints: ["glm-5.3-flash"],
+      saveDisabled: false,
+      probeDisabled: false,
+      turnOffDisabled: false,
+      errorText: null,
+      probeResultText: null,
+      probeResultOk: null,
+    };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/settings/vision"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"visionPaneState"');
+    expect(calls[0]).toContain("[]");
+  });
+
+  describe("zod fail-closed on POST /settings/vision/* bodies — callFacade never reached", () => {
+    it("POST /settings/vision/connection — missing connectionId -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/vision/connection"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /settings/vision/connection — empty connectionId -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/vision/connection"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ connectionId: "" }),
+      });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("POST /settings/vision/model — missing modelId -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/vision/model"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
+    it("junk JSON on every POST /settings/vision/* route -> 400, facade never invoked", async () => {
+      for (const route of VISION_POST_ROUTES) {
+        const { window, calls } = fakeWindowCapture();
+        const h = await boot({ getWindow: () => window });
+        const res = await fetch(url(h, route.path), { method: "POST", headers: auth(), body: "{not json" });
+        expect(res.status, `${route.path} should 400 on junk JSON`).toBe(400);
+        expect(calls).toHaveLength(0);
+      }
+    });
+  });
+
+  describe("happy path — each route forwards to its facade method and returns the facade result", () => {
+    it("POST /settings/vision/connection -> visionSelectConnection([connectionId])", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/vision/connection"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ connectionId: "conn-1" }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"visionSelectConnection"');
+      expect(calls[0]).toContain('["conn-1"]');
+    });
+
+    it("POST /settings/vision/model -> visionSetModel([modelId])", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/vision/model"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ modelId: "glm-5.3-flash" }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"visionSetModel"');
+      expect(calls[0]).toContain('["glm-5.3-flash"]');
+    });
+
+    it("POST /settings/vision/save -> visionSave()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/vision/save"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"visionSave"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/vision/probe -> visionProbe()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/vision/probe"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"visionProbe"');
+      expect(calls[0]).toContain("[]");
+    });
+
+    it("POST /settings/vision/turnoff -> visionTurnOff()", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/vision/turnoff"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"visionTurnOff"');
       expect(calls[0]).toContain("[]");
     });
   });

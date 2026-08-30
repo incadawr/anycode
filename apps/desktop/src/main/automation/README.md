@@ -105,7 +105,7 @@ missing/bad token → `401`.
 
 | Method / path | Body | Returns |
 |---|---|---|
-| `POST /tabs/:tabId/prompt` | `{text}` | `{ok:true, requestId}` |
+| `POST /tabs/:tabId/prompt` | `{text, images?}` | `{ok:true, requestId}` \| `{ok:false, reason:"image_not_found"\|"image_too_many"\|"image_unsupported_type"\|"image_too_large"\|"images_unsupported"}` — `images` (TASK.198 live-smoke facade) is a list of ABSOLUTE on-disk paths, never base64 over the wire. handlers.ts (main, the only side with fs access) reads + base64-encodes each path, failing closed on ANY unreadable/non-absolute path with `image_not_found` before the facade is even called. The renderer facade then runs the SAME validation a live drag-drop does: `sniffComposerImageMediaType` (content, never the extension) against `image_too_large`/`image_unsupported_type`, `COMPOSER_IMAGE_MAX_PER_MESSAGE` against `image_too_many`, and the TASK.56 W3-FIX `isSendBlockedByModelImages` gate — a blind model with no configured recognizer fallback (TASK.198 срез D) refuses the whole send as `images_unsupported`, same reason `/tabs/:tabId/retry` already reports, rather than silently stripping the images |
 | `POST /tabs/:tabId/permission` | `{behavior:"allow"\|"deny", requestId?}` | `{ok:true}` |
 | `POST /tabs/:tabId/mode` | `{mode}` | `{ok:true}` |
 | `POST /tabs/:tabId/stop` | `{}` | `{ok:true}` |
@@ -983,6 +983,94 @@ production default is always the real `os.homedir()`). Profile has no
 per-tab workspace concept at all — this is the ONLY home lever the pane
 needs (unlike skills/subagents, which also take a `workspaceForTab`). See
 `apps/desktop/scripts/profile-ui-smoke.mjs` for the reference wiring.
+
+### Vision pane probe/driver (TASK.198 срез E2c)
+
+Mirrors `VisionPane.tsx` (the Settings "Vision" recognizer-fallback page) — a
+DOM probe/driver, same "no mirrored state" discipline as the Profile pane
+probe above. `GET /settings/vision` is a DEDICATED route: every prior
+`/settings*` probe stays byte-untouched. An unmounted pane (Settings closed,
+or a different pane selected) reads as the empty defaults below, not an
+error. `enabled`/`currentPairText` mirror the on-screen "On"/"Off" badge and
+the "`<label>` · `<modelId>`" text beside it; `connectionOptions` is every row
+of the recognizer `<select>` in storage order (`id`, the option's own
+rendered `label` — the DECORATED " — OAuth" string for a non-selectable row,
+byte-parity with what is on screen — `selectable`, and `proxyWarning`, a
+`VisionPane.tsx`-only `data-proxy-warning` attribute this probe needed: the
+component itself only ever prints the SELECTED option's own warning prose as
+a separate hint, never per-option, so this is the one way to see which
+OTHER options carry one before picking them). `modelHints` is the model
+`<datalist>`'s suggestion ids, in rendered order. `saveDisabled`/
+`probeDisabled` are the Save/Probe buttons' own live `disabled` reading;
+`turnOffDisabled` is `null` when the fallback is off (neither "Turn off" nor
+"Really turn off?" is rendered at all — the control reads as ABSENT, not
+merely "not disabled"), else whichever of the two the two-step gesture
+currently shows. `errorText`/`probeResultText`/`probeResultOk` read two
+DIFFERENT elements this probe needed its own `vision-pane-error`/
+`vision-pane-probe-result` marker classes to tell apart — both can render
+under the bare `settings-notice`/`settings-notice-ok` classes VisionPane.tsx
+shares with a dozen other panes, and error vs. probe result are never both
+showing at once (every handler clears the other before it runs), so the
+marker class is what tells a caller WHICH one it is looking at.
+
+`POST .../vision/connection` drives a REAL `<select>` value-pick (a native
+`change` event, `visionSubmitDisabled`'s own local `useState`, no IPC round
+trip) — `{ok:false, reason:"option_not_present"}` when `connectionId` names
+no option in the select, OR names one that is itself disabled (an OAuth
+connection; a real user cannot pick a disabled `<option>` through the native
+control either). `POST .../vision/model` drives a REAL keystroke into the
+model `<input>` (`setNativeInputValue`, same local `useState`, no IPC round
+trip) — the empty string is a legal body (typing a blank field is not the
+same refusal as trying to Save one). `POST .../vision/save` and
+`POST .../vision/probe` each drive a REAL click on their own button and then
+wait for it to go busy and back — `{ok:false, reason:"save_disabled"}` /
+`{ok:false, reason:"probe_disabled"}` when the button is currently disabled
+(most commonly `visionSubmitDisabled`'s own blank-model/no-connection guard),
+`{ok:false, reason:"did_not_start"}` if the click never visibly began
+anything, `{ok:false, reason:"did_not_settle"}` on timeout. Both round-trip a
+REAL channel — `recognizerSet`/`recognizerProbe` — never a synthetic bridge
+poke: Save persists `settings.recognizer`, Probe resolves the CANDIDATE pair
+through the exact same production ladder a live run uses, whether or not it
+has ever been saved (`main/recognizer-probe.ts`). Probe's own settle deadline
+is the file's single longest (65 s, see `VISION_PANE_PROBE_DEADLINE_MS` in
+`automation.ts` for why) — it spawns a real child process against whatever
+provider the candidate connection names, and a caller of this route may well
+be exercising the failure path (an unreachable/hanging endpoint) on purpose.
+
+`POST .../vision/turnoff` drives the pane's own two-step "off" switch. It is
+two steps in the pane ("Turn off" then "Really turn off?"), NOT a modal —
+`window.prompt`/`confirm`/`alert` throw under this Electron configuration, so
+a dialog-guarded switch would be dead in production with a green gate — and
+this single route performs both clicks (an already-armed gesture from a
+previous, abandoned call is confirmed directly rather than re-armed, same
+posture as `POST /settings/profile/rebuild`). `{ok:false,
+reason:"turnoff_not_present"}` covers "the fallback is already off" (neither
+button is rendered) and a click landing on a since-removed button;
+`{ok:false, reason:"turnoff_disabled"}` when the currently-showing button is
+disabled; `{ok:false, reason:"did_not_arm"}` if the first click never
+produced the confirm button; `{ok:false, reason:"did_not_settle"}` if the
+confirm click's real `recognizerSet({recognizer: null})` never resolved (a
+failure leaves the armed button standing, re-enabled, with `errorText` now
+set — an honest timeout, not a false `ok:true`).
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /settings/vision` | — | `{mounted, enabled, currentPairText, connectionOptions:[{id, label, selectable, proxyWarning}], selectedConnectionId, modelValue, modelHints:[id], saveDisabled, probeDisabled, turnOffDisabled, errorText, probeResultText, probeResultOk}` |
+| `POST /settings/vision/connection` | `{connectionId}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"option_not_present"\|"did_not_select"}` |
+| `POST /settings/vision/model` | `{modelId}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"field_not_present"\|"did_not_commit"}` |
+| `POST /settings/vision/save` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"save_not_present"\|"save_disabled"\|"did_not_start"\|"did_not_settle"}` |
+| `POST /settings/vision/probe` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"probe_not_present"\|"probe_disabled"\|"did_not_start"\|"did_not_settle"}` |
+| `POST /settings/vision/turnoff` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"turnoff_not_present"\|"turnoff_disabled"\|"did_not_arm"\|"did_not_settle"}` |
+
+```bash
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/pane -d '{"paneId":"vision"}'
+curl "${A[@]}" "$B/settings/vision"
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/vision/connection -d '{"connectionId":"conn-1"}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/vision/model -d '{"modelId":"glm-5.3-flash"}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/vision/save -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/vision/probe -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/vision/turnoff -d '{}'
+```
 
 ### Slash-command menu probe/driver (slice P7.23 F24, W4)
 

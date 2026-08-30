@@ -65,8 +65,12 @@ export const imageCapableReadTool: ToolDefinition<ReadInput, ReadOutput> = {
       return readTool.handler(input, ctx);
     }
 
-    // history, with an actionable error naming the override.
-    if (!ctx.media?.imageInputEnabled()) {
+    // history, with an actionable error naming the override. TASK.198 plan §3
+    // widens this: a blind model with a configured vision recognizer attaches
+    // exactly like a sighted one — agent-loop.ts's tool-result annotation
+    // (slice B1) appends the model-visible stub afterward.
+    const canAttachImage = ctx.media?.imageInputEnabled() === true || ctx.media?.recognizerConfigured?.() === true;
+    if (!canAttachImage) {
       return {
         ok: false,
         error: `${input.file_path} is an image, and the current model is not marked image-capable (switch /model, or set ANYCODE_IMAGE_INPUT=on to override)`,

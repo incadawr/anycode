@@ -15,17 +15,19 @@ import {
   createDesktopStore,
   projectHistoryToBlocks,
   SUBAGENT_ACTIVITY_RING,
+  WORKFLOW_ACTIVITY_RING,
   type FrameScheduler,
   type GitDestructiveIntent,
   type SubagentSubStatus,
   type TranscriptBlock,
+  type WorkflowSubStatus,
 } from "./store.js";
 import { createAutomationFacade, type AnycodeBridge } from "./automation.js";
 // Pure formatter reused ONLY for assertion (TASK.102 slice S1 W5, CUT-S1 §3
 // W5 test 9): NOT a component render — ToolCallCard.tsx itself is untouched
 // by this slice. Same "pure function exported from a .tsx, imported by a
 // .test.ts" precedent as ToolCallCard.test.ts's own import below it.
-import { activityRows } from "./components/ToolCallCard.js";
+import { activityRows, workflowStepKind } from "./components/ToolCallCard.js";
 import { createTabRegistry } from "./tab-registry.js";
 import { createTabsStore } from "./tabs-store.js";
 import type {
@@ -45,6 +47,7 @@ import type {
   LspServerStatus,
   McpServerStatus,
   SubagentCardSnapshotV1,
+  WorkflowCardSnapshotV1,
 } from "@anycode/core";
 import type { CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
 
@@ -2777,7 +2780,7 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
   const findByToolCallId = (store: ReturnType<typeof createDesktopStore>, id: string) =>
     store.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === id);
 
-  it("start seeds the sub-status (empty steps, final null); step_start appends a step; step_progress×N refreshes its counters; step_end settles it; end fills the run-level terminal status — keyed by toolCallId/stepId", () => {
+  it("start PREFILLS all N steps from the graph (TASK.191 slice S3) in DEFINITION order, not arrival order; step_start/step_running/step_progress×N patch fetch in place; step_end settles it; end fills the run-level terminal status — keyed by toolCallId/stepId", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
     const turnId = "turn-1";
@@ -2789,22 +2792,110 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId,
-      event: { type: "workflow_start", toolCallId: "call-1", workflow: "release-flow", totalSteps: 2 },
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 2,
+        steps: [
+          { id: "fetch", agentType: "explore" },
+          { id: "build", agentType: "general-purpose", dependsOn: ["fetch"] },
+        ],
+      },
     });
     block = findByToolCallId(store, "call-1");
-    expect(block).toMatchObject({ workflow: { workflow: "release-flow", totalSteps: 2, steps: [], final: null } });
+    // RED on old code: before this slice, workflow_start seeded `steps: []`
+    // and a step only appeared once its own workflow_step_start landed —
+    // this pin holds even before EITHER step has started.
+    expect(block).toMatchObject({
+      workflow: {
+        workflow: "release-flow",
+        totalSteps: 2,
+        final: null,
+        steps: [
+          {
+            stepId: "fetch",
+            agentType: "explore",
+            dependsOn: [],
+            turns: 0,
+            toolCalls: 0,
+            lastTool: null,
+            usage: null,
+            started: false,
+            running: false,
+            final: null,
+          },
+          {
+            stepId: "build",
+            agentType: "general-purpose",
+            dependsOn: ["fetch"],
+            turns: 0,
+            toolCalls: 0,
+            lastTool: null,
+            usage: null,
+            started: false,
+            running: false,
+            final: null,
+          },
+        ],
+      },
+    });
+
+    // "build" starts (and settles) FIRST on the wire, "fetch" second — proving
+    // the array stays in DEFINITION order rather than reverting to arrival
+    // order (store.ts's own note on WorkflowStepStatus, B6(a)).
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_start", toolCallId: "call-1", stepId: "build", agentType: "general-purpose" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_running", toolCallId: "call-1", stepId: "build" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_end", toolCallId: "call-1", stepId: "build", status: "completed", turns: 1, durationMs: 700 },
+    });
+    block = findByToolCallId(store, "call-1");
+    expect((block as { workflow: { steps: { stepId: string }[] } }).workflow.steps.map((s) => s.stepId)).toEqual([
+      "fetch",
+      "build",
+    ]);
+    expect(block).toMatchObject({
+      workflow: {
+        steps: [
+          { stepId: "fetch", started: false, running: false, final: null },
+          { stepId: "build", started: true, running: true, final: { status: "completed", durationMs: 700 } },
+        ],
+      },
+    });
+
+    // Now "fetch": step_start marks it started but NOT running — honestly
+    // "queued" (TASK.191 slice S3, §B7) until its own step_running lands.
+    // `steps` holds BOTH entries from here on, so these assertions target
+    // "fetch" directly rather than toMatchObject-ing the whole (length-
+    // sensitive) array against a single-element expectation.
+    const fetchStep = (): unknown =>
+      (findByToolCallId(store, "call-1") as { workflow: { steps: { stepId: string }[] } }).workflow.steps.find(
+        (s) => s.stepId === "fetch",
+      );
 
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId,
       event: { type: "workflow_step_start", toolCallId: "call-1", stepId: "fetch", agentType: "explore" },
     });
-    block = findByToolCallId(store, "call-1");
-    expect(block).toMatchObject({
-      workflow: {
-        steps: [{ stepId: "fetch", agentType: "explore", turns: 0, toolCalls: 0, lastTool: null, final: null }],
-      },
+    expect(fetchStep()).toMatchObject({ stepId: "fetch", started: true, running: false, final: null });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_running", toolCallId: "call-1", stepId: "fetch" },
     });
+    expect(fetchStep()).toMatchObject({ stepId: "fetch", started: true, running: true, final: null });
 
     store.getState().applyHostMessage({
       type: "agent_event",
@@ -2816,44 +2907,19 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
       turnId,
       event: { type: "workflow_step_progress", toolCallId: "call-1", stepId: "fetch", turns: 2, toolCalls: 3, lastTool: "Grep" },
     });
-    block = findByToolCallId(store, "call-1");
-    expect(block).toMatchObject({
-      workflow: {
-        steps: [{ stepId: "fetch", agentType: "explore", turns: 2, toolCalls: 3, lastTool: "Grep", final: null }],
-      },
+    expect(fetchStep()).toMatchObject({
+      stepId: "fetch",
+      agentType: "explore",
+      turns: 2,
+      toolCalls: 3,
+      lastTool: "Grep",
+      final: null,
     });
 
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId,
       event: { type: "workflow_step_end", toolCallId: "call-1", stepId: "fetch", status: "completed", turns: 3, durationMs: 500 },
-    });
-    block = findByToolCallId(store, "call-1");
-    expect(block).toMatchObject({
-      workflow: {
-        steps: [
-          {
-            stepId: "fetch",
-            agentType: "explore",
-            turns: 3,
-            toolCalls: 3,
-            lastTool: "Grep",
-            final: { status: "completed", durationMs: 500 },
-          },
-        ],
-      },
-    });
-
-    // A second concurrent step starting and settling appends independently of the first.
-    store.getState().applyHostMessage({
-      type: "agent_event",
-      turnId,
-      event: { type: "workflow_step_start", toolCallId: "call-1", stepId: "build", agentType: "general-purpose" },
-    });
-    store.getState().applyHostMessage({
-      type: "agent_event",
-      turnId,
-      event: { type: "workflow_step_end", toolCallId: "call-1", stepId: "build", status: "completed", turns: 1, durationMs: 700 },
     });
     store.getState().applyHostMessage({
       type: "agent_event",
@@ -2874,6 +2940,258 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
     });
   });
 
+  // ── TASK.191 slice S1: the run-wide activity lane ──
+  it("workflow_step_activity appends stamped rows to ONE run-wide lane, interleaving concurrent steps in arrival order", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 2,
+        steps: [
+          { id: "fetch", agentType: "explore" },
+          { id: "build", agentType: "explore" },
+        ],
+      },
+    });
+    for (const stepId of ["fetch", "build"]) {
+      store.getState().applyHostMessage({
+        type: "agent_event",
+        turnId,
+        event: { type: "workflow_step_start", toolCallId: "call-1", stepId, agentType: "explore" },
+      });
+    }
+
+    // Interleaved on purpose: two steps of a DAG run at once, and the lane
+    // must preserve the chronology BETWEEN them, not group by step.
+    for (const [stepId, toolName, summary] of [
+      ["fetch", "Bash", "git fetch"],
+      ["build", "Read", "src/index.ts"],
+      ["fetch", "Grep", "TODO"],
+    ] as const) {
+      store.getState().applyHostMessage({
+        type: "agent_event",
+        turnId,
+        event: { type: "workflow_step_activity", toolCallId: "call-1", stepId, toolName, summary },
+      });
+    }
+
+    expect(findByToolCallId(store, "call-1")).toMatchObject({
+      workflow: {
+        activity: [
+          { stepId: "fetch", toolName: "Bash", summary: "git fetch" },
+          { stepId: "build", toolName: "Read", summary: "src/index.ts" },
+          { stepId: "fetch", toolName: "Grep", summary: "TODO" },
+        ],
+        activityDropped: 0,
+      },
+    });
+  });
+
+  it("rings the workflow lane at WORKFLOW_ACTIVITY_RING: the oldest row drops and activityDropped counts it honestly", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "s1", agentType: "explore" }],
+      },
+    });
+
+    for (let i = 0; i < WORKFLOW_ACTIVITY_RING + 5; i += 1) {
+      store.getState().applyHostMessage({
+        type: "agent_event",
+        turnId,
+        event: { type: "workflow_step_activity", toolCallId: "call-1", stepId: "s1", toolName: "Bash", summary: `cmd ${i}` },
+      });
+    }
+
+    const block = findByToolCallId(store, "call-1");
+    const workflow = (block as { workflow: { activity: unknown[]; activityDropped: number } }).workflow;
+    expect(workflow.activity).toHaveLength(WORKFLOW_ACTIVITY_RING);
+    expect(workflow.activityDropped).toBe(5);
+    expect(workflow.activity[0]).toEqual({ stepId: "s1", toolName: "Bash", summary: "cmd 5" });
+  });
+
+  it("appends a row whose stepId has no step_start yet — a reordering on the wire must not swallow real activity", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "known", agentType: "explore" }],
+      },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_activity", toolCallId: "call-1", stepId: "unseen", toolName: "Read", summary: "a.ts" },
+    });
+
+    // "unseen" is outside the graph workflow_start prefilled entirely — the
+    // activity lane appends it regardless (it never validates stepId), while
+    // the prefilled "known" step is untouched by an activity row for someone
+    // else's id.
+    expect(findByToolCallId(store, "call-1")).toMatchObject({
+      workflow: {
+        steps: [{ stepId: "known", started: false }],
+        activity: [{ stepId: "unseen", toolName: "Read", summary: "a.ts" }],
+      },
+    });
+  });
+
+  it("workflow_step_progress REPLACES a step's usage rather than accumulating it (TASK.191 slice S2)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "fetch", agentType: "explore" }],
+      },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_start", toolCallId: "call-1", stepId: "fetch", agentType: "explore" },
+    });
+    // A freshly started step has no numbers to show yet — null, not a zeroed
+    // TokenUsage, so the card can distinguish "nothing reported" from "zero".
+    expect(findByToolCallId(store, "call-1")).toMatchObject({
+      workflow: { steps: [{ stepId: "fetch", usage: null }] },
+    });
+
+    // The wire value is CUMULATIVE per step. Two events carrying overlapping
+    // totals must leave the LAST one standing: summing them here would double
+    // every number the child already counted once.
+    for (const usage of [
+      { inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, totalTokens: 110 },
+      { inputTokens: 300, cachedInputTokens: 100, outputTokens: 30, totalTokens: 330 },
+    ]) {
+      store.getState().applyHostMessage({
+        type: "agent_event",
+        turnId,
+        event: {
+          type: "workflow_step_progress",
+          toolCallId: "call-1",
+          stepId: "fetch",
+          turns: 2,
+          toolCalls: 3,
+          lastTool: "Grep",
+          usage,
+        },
+      });
+    }
+    expect(findByToolCallId(store, "call-1")).toMatchObject({
+      workflow: {
+        steps: [{ stepId: "fetch", usage: { inputTokens: 300, cachedInputTokens: 100, outputTokens: 30, totalTokens: 330 } }],
+      },
+    });
+
+    // An event that omits usage leaves the last known number standing rather
+    // than erasing it — silence is not a report of zero.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_progress", toolCallId: "call-1", stepId: "fetch", turns: 3, toolCalls: 4, lastTool: "Read" },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({
+      workflow: { steps: [{ stepId: "fetch", turns: 3, usage: { inputTokens: 300 } }] },
+    });
+
+    // step_end carries the step's FINAL number and replaces once more.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_step_end",
+        toolCallId: "call-1",
+        stepId: "fetch",
+        status: "completed",
+        turns: 4,
+        durationMs: 500,
+        usage: { inputTokens: 500, cachedInputTokens: 150, outputTokens: 50, totalTokens: 550 },
+      },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({
+      workflow: {
+        steps: [{ stepId: "fetch", usage: { inputTokens: 500, cachedInputTokens: 150, outputTokens: 50, totalTokens: 550 } }],
+      },
+    });
+  });
+
+  it("drops a workflow_step_activity for a foreign toolCallId, for an unseeded workflow, and for a run already settled", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+
+    // (a) no workflow_start yet — nothing to append into, nothing invented.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_activity", toolCallId: "call-1", stepId: "s1", toolName: "Read", summary: "early" },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ workflow: null });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "s1", agentType: "explore" }],
+      },
+    });
+    // (b) foreign toolCallId.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_activity", toolCallId: "foreign-call", stepId: "s1", toolName: "Read", summary: "foreign" },
+    });
+    // (c) settled run: a late/replayed row never reopens a finished lane.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_end", toolCallId: "call-1", status: "completed", completedSteps: 1, totalSteps: 1, durationMs: 10 },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_activity", toolCallId: "call-1", stepId: "s1", toolName: "Read", summary: "late" },
+    });
+
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ workflow: { activity: [], activityDropped: 0 } });
+  });
+
   it("ignores workflow_start/step_start/step_progress/step_end/end events carrying a foreign toolCallId (no matching tool_call block in the transcript)", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -2885,7 +3203,13 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId,
-      event: { type: "workflow_start", toolCallId: "foreign-call", workflow: "other", totalSteps: 1 },
+      event: {
+        type: "workflow_start",
+        toolCallId: "foreign-call",
+        workflow: "other",
+        totalSteps: 1,
+        steps: [{ id: "s1", agentType: "explore" }],
+      },
     });
     expect(store.getState().transcript).toEqual(before);
 
@@ -2893,7 +3217,13 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId,
-      event: { type: "workflow_start", toolCallId: "call-1", workflow: "release-flow", totalSteps: 1 },
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "s1", agentType: "explore" }],
+      },
     });
     const seeded = store.getState().transcript;
 
@@ -2943,7 +3273,12 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
     expect(store.getState().transcript).toEqual(before);
   });
 
-  it("workflow_step_progress/step_end for a stepId with no prior workflow_step_start is a no-op even once the run itself is seeded", () => {
+  // TASK.191 slice S3: workflow_start now prefills the graph, so "no prior
+  // workflow_step_start" is no longer one case — it splits into a genuinely
+  // FOREIGN stepId (outside the graph entirely, still a no-op) and a KNOWN
+  // stepId that simply hasn't started yet (now a real patch, since the entry
+  // already exists to patch).
+  it("workflow_step_progress/step_end for a stepId OUTSIDE the seeded graph is a no-op", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
     const turnId = "turn-1";
@@ -2951,7 +3286,13 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId,
-      event: { type: "workflow_start", toolCallId: "call-1", workflow: "release-flow", totalSteps: 1 },
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "known-step", agentType: "explore" }],
+      },
     });
 
     const seeded = store.getState().transcript;
@@ -2959,16 +3300,450 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId,
-      event: { type: "workflow_step_progress", toolCallId: "call-1", stepId: "unknown-step", turns: 1, toolCalls: 1, lastTool: "Bash" },
+      event: { type: "workflow_step_progress", toolCallId: "call-1", stepId: "ghost-step", turns: 1, toolCalls: 1, lastTool: "Bash" },
     });
     expect(store.getState().transcript).toEqual(seeded);
 
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId,
-      event: { type: "workflow_step_end", toolCallId: "call-1", stepId: "unknown-step", status: "completed", turns: 1, durationMs: 10 },
+      event: { type: "workflow_step_end", toolCallId: "call-1", stepId: "ghost-step", status: "completed", turns: 1, durationMs: 10 },
     });
     expect(store.getState().transcript).toEqual(seeded);
+  });
+
+  it("workflow_step_progress/step_end for a KNOWN-but-not-yet-started stepId APPLIES (patches the prefilled entry)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "known-step", agentType: "explore" }],
+      },
+    });
+
+    // No workflow_step_start was ever sent for "known-step" — production
+    // ordering never does this (step_start always precedes step_progress for
+    // the SAME step), but the reordering tolerance documented on
+    // patchWorkflowStepActivity applies here too: a re-ordered wire must not
+    // lose real data just because it arrived "early".
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_progress", toolCallId: "call-1", stepId: "known-step", turns: 1, toolCalls: 1, lastTool: "Bash" },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({
+      workflow: { steps: [{ stepId: "known-step", started: false, turns: 1, toolCalls: 1, lastTool: "Bash" }] },
+    });
+
+    // The never-started step can still receive a terminal — the fail-fast
+    // "skipped" synthetic step_end (TASK.191 slice S3, engine.ts) is exactly
+    // this shape: a step_end for a stepId that never got its own step_start.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_end", toolCallId: "call-1", stepId: "known-step", status: "skipped", turns: 0, durationMs: 0 },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({
+      workflow: {
+        steps: [{ stepId: "known-step", started: false, running: false, final: { status: "skipped", durationMs: 0 } }],
+      },
+    });
+  });
+
+  it("workflow_step_start for a stepId OUTSIDE the seeded graph is a no-op (mirrors the step_progress/step_end guard)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "known-step", agentType: "explore" }],
+      },
+    });
+    const seeded = store.getState().transcript;
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_start", toolCallId: "call-1", stepId: "ghost-step", agentType: "explore" },
+    });
+    expect(store.getState().transcript).toEqual(seeded);
+  });
+
+  it("workflow_start with an EMPTY step list seeds an empty steps array without throwing", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_start", toolCallId: "call-1", workflow: "release-flow", totalSteps: 0, steps: [] },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({
+      workflow: { workflow: "release-flow", totalSteps: 0, steps: [], final: null },
+    });
+  });
+
+  // A duplicate/late workflow_step_running arriving AFTER the step's own
+  // terminal step_end cannot happen in production (the runner emits the
+  // child's own "start" progress exactly once per tier — verified live), so
+  // this is NOT a production guard to add; it pins that the RENDER-side read
+  // (workflowStepKind) is safe regardless, matching its own "terminal always
+  // wins" pure-function pin in ToolCallCard.test.ts, but exercised through
+  // the real store reducer this time.
+  it("a workflow_step_running that arrives AFTER the step's step_end does not un-settle it for rendering", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "fetch", agentType: "explore" }],
+      },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_start", toolCallId: "call-1", stepId: "fetch", agentType: "explore" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_running", toolCallId: "call-1", stepId: "fetch" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_end", toolCallId: "call-1", stepId: "fetch", status: "completed", turns: 1, durationMs: 500 },
+    });
+
+    // Late/redundant signal after settle.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_running", toolCallId: "call-1", stepId: "fetch" },
+    });
+
+    const block = findByToolCallId(store, "call-1") as {
+      workflow: { steps: Parameters<typeof workflowStepKind>[0][] };
+    };
+    const fetchStep = block.workflow.steps.find((s) => s.stepId === "fetch");
+    expect(fetchStep).toMatchObject({ final: { status: "completed", durationMs: 500 } });
+    if (!fetchStep) throw new Error("fetch step missing");
+    expect(workflowStepKind(fetchStep)).toBe("completed");
+  });
+});
+
+describe("desktop store — persisted workflow card (TASK.191 slice S5)", () => {
+  function beginWorkflowToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: toolCallId, name: "Workflow", input: { name: "release-flow" } },
+      },
+    });
+  }
+
+  const findByToolCallId = (store: ReturnType<typeof createDesktopStore>, id: string) =>
+    store.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === id);
+
+  function requireWorkflow(block: TranscriptBlock | undefined): WorkflowSubStatus {
+    if (block?.kind !== "tool_call" || !block.workflow) {
+      throw new Error("expected a seeded/hydrated workflow block");
+    }
+    return block.workflow;
+  }
+
+  /** A valid persisted v1 snapshot (workflow-card.ts's own decode contract), same shape core's finalizeWorkflowCard writer produces. Callers override via a shallow spread to keep each test's fixture independent. */
+  function workflowPresentation(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      kind: "workflow" as const,
+      version: 1 as const,
+      workflow: "release-flow",
+      totalSteps: 2,
+      steps: [
+        { id: "fetch", agentType: "explore", result: { status: "completed" as const, turns: 2, durationMs: 500 } },
+        {
+          id: "build",
+          agentType: "general-purpose",
+          dependsOn: ["fetch"],
+          result: { status: "completed" as const, turns: 1, durationMs: 700 },
+        },
+      ],
+      activity: {
+        entries: [
+          { stepId: "fetch", toolName: "Read", summary: "src/index.ts" },
+          { stepId: "build", toolName: "Bash", summary: "npm test" },
+        ],
+        dropped: 1,
+      },
+      final: { status: "completed" as const, durationMs: 1200 },
+      ...overrides,
+    };
+  }
+
+  it("1. hydrates a FULL WorkflowSubStatus (name/totalSteps/steps/final) from a valid v1 presentation on the paired Workflow tool_result", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Workflow", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [
+            { type: "tool_result", toolCallId: "call-1", toolName: "Workflow", text: "done", status: "success", presentation: { workflow: workflowPresentation() } },
+          ],
+        },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({
+      status: "success",
+      workflow: {
+        workflow: "release-flow",
+        totalSteps: 2,
+        steps: [
+          { stepId: "fetch", agentType: "explore", final: { status: "completed", durationMs: 500 } },
+          { stepId: "build", agentType: "general-purpose", dependsOn: ["fetch"], final: { status: "completed", durationMs: 700 } },
+        ],
+        final: { status: "completed", completedSteps: 2, durationMs: 1200 },
+      },
+    });
+    const workflow = requireWorkflow(block);
+    expect(workflow.final).not.toBeNull();
+  });
+
+  it("2. a legacy tool_result with no presentation field hydrates workflow:null, byte-identical to pre-S5 behavior", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Workflow", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: { role: "tool", content: [{ type: "tool_result", toolCallId: "call-1", toolName: "Workflow", text: "done", status: "success" }] },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ status: "success", modelText: "done", workflow: null });
+  });
+
+  it("3. a structurally malformed presentation.workflow (wrong version, steps not an array) hydrates workflow:null without failing hydration of the rest of the session", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      { id: "u1", createdAt: 1, message: { role: "user", content: "hi" } },
+      {
+        id: "a1",
+        createdAt: 2,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Workflow", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 3,
+        message: {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              toolCallId: "call-1",
+              toolName: "Workflow",
+              text: "done",
+              status: "success",
+              // Deliberately not shaped like ToolResultPresentation (wrong
+              // version, `steps` not an array) — typed past the compiler the
+              // same way the persisted-subagent-card suite's own garbage
+              // fixture is.
+              presentation: { workflow: { kind: "workflow", version: 2, steps: "nope" } } as unknown as { workflow: WorkflowCardSnapshotV1 },
+            },
+          ],
+        },
+      },
+      { id: "u2", createdAt: 4, message: { role: "user", content: "next" } },
+    ];
+
+    expect(() =>
+      store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false }),
+    ).not.toThrow();
+
+    expect(store.getState().transcript.map((b) => b.kind)).toEqual(["user_text", "tool_call", "user_text"]);
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ status: "success", workflow: null });
+  });
+
+  it("4. a live settle: a tool_result agent_event carrying a valid presentation.workflow fills the matching tool_call's workflow", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ workflow: null });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_result",
+        outcome: {
+          toolCallId: "call-1",
+          toolName: "Workflow",
+          status: "success",
+          modelText: "done",
+          durationMs: 1,
+          result: { ok: true, presentation: { workflow: workflowPresentation() } },
+        },
+      },
+    });
+
+    const workflow = requireWorkflow(findByToolCallId(store, "call-1"));
+    expect(workflow).toMatchObject({
+      workflow: "release-flow",
+      totalSteps: 2,
+      final: { status: "completed", completedSteps: 2, durationMs: 1200 },
+    });
+  });
+
+  it("5. a live settle with a missing/malformed presentation.workflow does NOT wipe the already-accumulated live workflow sub-status (the case a wholesale-replace-on-null bug would silently break)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 1,
+        steps: [{ id: "fetch", agentType: "explore" }],
+      },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_start", toolCallId: "call-1", stepId: "fetch", agentType: "explore" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_running", toolCallId: "call-1", stepId: "fetch" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_progress", toolCallId: "call-1", stepId: "fetch", turns: 2, toolCalls: 3, lastTool: "Grep" },
+    });
+
+    const beforeSettle = requireWorkflow(findByToolCallId(store, "call-1"));
+    expect(beforeSettle.final).toBeNull();
+
+    // A missing presentation (e.g. a legacy/foreign result shape) reaches this
+    // already-live card — same guard as the subagent side's "malformed
+    // presentation leaves the live sub-status untouched" rule.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_result",
+        outcome: { toolCallId: "call-1", toolName: "Workflow", status: "error", modelText: "boom", durationMs: 1, result: { ok: false } },
+      },
+    });
+
+    const afterMissing = requireWorkflow(findByToolCallId(store, "call-1"));
+    expect(afterMissing).toEqual(beforeSettle);
+
+    // A structurally malformed presentation.workflow is equally inert.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_result",
+        outcome: {
+          toolCallId: "call-1",
+          toolName: "Workflow",
+          status: "error",
+          modelText: "boom",
+          durationMs: 1,
+          result: { ok: false, presentation: { workflow: { kind: "workflow", version: 2 } } as unknown as { workflow: WorkflowCardSnapshotV1 } },
+        },
+      },
+    });
+
+    const afterMalformed = requireWorkflow(findByToolCallId(store, "call-1"));
+    expect(afterMalformed).toEqual(beforeSettle);
+  });
+
+  it("6. a workflow presentation planted on a non-Workflow tool result is ignored (decode rejects on toolName mismatch)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Bash", input: { command: "ls" } }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [{ type: "tool_result", toolCallId: "call-1", toolName: "Bash", text: "a.ts", status: "success", presentation: { workflow: workflowPresentation() } }],
+        },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ toolName: "Bash", status: "success", modelText: "a.ts", workflow: null });
   });
 });
 

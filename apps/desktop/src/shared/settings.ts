@@ -495,6 +495,29 @@ export interface AnycodeSettings {
     autoOpen?: boolean;
     displayMode?: "panel" | "window";
   };
+  /**
+   * Vision-fallback recognizer selection (TASK.198 E1): which ALREADY-
+   * CONFIGURED connection + model answers `InspectImage` calls when the main
+   * session's own model cannot see images (`resolveImageInput` is `false`).
+   * Additive-optional, version NOT bumped — same forward-compat reasoning as
+   * `preview`/`codex`/`claude` above: an existing settings.json with no
+   * `recognizer` key round-trips byte-identically. Absent, a `connectionId`
+   * that no longer resolves to a connection, or an OAuth connection
+   * (unsupported as a recognizer source in slice 1 — a static env key cannot
+   * refresh an OAuth token the way the primary connection's broker does) all
+   * read as "fallback disabled" at resolve time — today's `turn_rejected`
+   * behaviour on a blind model, never a corrupt-settings state.
+   *
+   * `apiKey`/`baseUrl`/`transport` are NOT duplicated here — they are read off
+   * the referenced `ProviderConnection` at resolve time
+   * (main/host-env.ts `resolveRecognizerConfig`), so a credential never gets a
+   * second settings home and a connection edit (baseUrl, key rotation) is
+   * picked up for free on the next resolve.
+   */
+  recognizer?: {
+    connectionId: string;
+    modelId: string;
+  };
 }
 
 /**
@@ -643,8 +666,22 @@ export interface CatalogSummaryEntry {
    * when the catalog declares it (conditional spread), optional/additive so
    * legacy fixtures stay byte-identical. The drawer uses it to NAME the
    * effective ceiling for an otherwise-blank field instead of guessing.
+   *
+   * TASK.198: `imageInput` joins by the same conditional-spread rule. Core has
+   * carried the flag per model since phase 6.2 (`provider/catalog.ts`), but the
+   * projection dropped it, so the renderer could not tell a vision-capable
+   * model from a blind one at all — the Vision pane's model suggestions would
+   * have been limited to a connection's live-fetched list, with the catalog
+   * half contributing nothing.
    */
-  models: { id: string; name?: string; reasoning?: boolean; effortLevels?: string[]; maxOutputTokens?: number }[];
+  models: {
+    id: string;
+    name?: string;
+    reasoning?: boolean;
+    effortLevels?: string[];
+    maxOutputTokens?: number;
+    imageInput?: boolean;
+  }[];
   needsBaseUrl?: boolean;
   /**
    * True ONLY for the literal `custom` sentinel entry (TASK.43 W5-FIX). Distinct
@@ -907,8 +944,20 @@ export interface PermissionRuleAddRequest {
  * host process right after their value is captured in memory (ruling §3). Single
  * source of truth for both processes; value-only (the lanes consume it, never
  * edit it). 2.5 extends this list with provider credentials.
+ *
+ * TASK.198 срез C durable (TASK.139 precedent): `ANYCODE_RECOGNIZER_API_KEY`
+ * is a second, independently-resolved credential (main/host-env.ts's
+ * `resolveRecognizerConfig`/`applyRecognizerEnv`) that rides a host fork's
+ * env exactly like `ANYCODE_API_KEY` does — without an entry here it would
+ * survive `scrubSecretEnv()` and leak into every Bash-tool child a core
+ * session spawns (`node-execution.ts` builds a child's env as `{...process.
+ * env, ...request.env}`). The engine-child builders
+ * (`buildCodexChildEnv`/`buildClaudeChildEnv`) are unaffected either way —
+ * they are ALLOW-lists of named vars, not a scrub of `process.env`, so a
+ * name absent from those lists never reaches a `codex`/`claude` child
+ * regardless of this array.
  */
-export const SECRET_ENV_KEYS = ["ANYCODE_API_KEY"] as const;
+export const SECRET_ENV_KEYS = ["ANYCODE_API_KEY", "ANYCODE_RECOGNIZER_API_KEY"] as const;
 
 export type SecretEnvKey = (typeof SECRET_ENV_KEYS)[number];
 

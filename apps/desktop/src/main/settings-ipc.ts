@@ -25,6 +25,8 @@ import { z } from "zod";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { keybindingsSchema, mergeSettings, settingsSchema } from "../settings/schema.js";
+import { RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
+import type { RecognizerSetRequest } from "../shared/recognizer.js";
 import type { ProxyProfile, ProxyProfileDeleteResult } from "../shared/proxy.js";
 import {
   findProxyProfile,
@@ -67,6 +69,7 @@ import {
   SETTINGS_SET_CHANNEL,
   activeConnection,
   activeProviderView,
+  connectionById,
   isProxyUrl,
 } from "../shared/settings.js";
 import type {
@@ -482,14 +485,39 @@ const proxyRefSetSchema = z
   })
   .strict();
 
+/**
+ * recognizer-set payload (TASK.198): `recognizer: null` deletes
+ * `settings.recognizer` (the fallback is off); the object variant is the
+ * candidate to persist. `modelId`'s `.min(1)` catches a flatly empty string —
+ * the whitespace-only case (`"  "`) is caught in the handler, which mirrors
+ * host/index.ts's `parseRecognizerEnv` trim-then-check rather than duplicating
+ * a stricter regex here. `.strict()` on both variants, same discipline as
+ * every other write-payload schema in this file.
+ */
+const recognizerSetSchema = z
+  .object({
+    recognizer: z.union([
+      z.object({ connectionId: z.string().min(1), modelId: z.string().min(1) }).strict(),
+      z.null(),
+    ]),
+  })
+  .strict();
+
 /** Structural view of ONE catalog entry the projection needs (avoids a core value-import). */
 export interface CatalogEntryShape {
   id: string;
   name: string;
   auth: { kind: string };
   baseUrl: string;
-  /** `reasoning`/`effortLevels` (TASK.131) and `maxOutputTokens` (TASK.159) ride along for the draft-time effort picker / ceiling display; `string[]`-typed to keep this module core-import-free. */
-  models: { id: string; name?: string; reasoning?: boolean; effortLevels?: readonly string[]; maxOutputTokens?: number }[];
+  /** `reasoning`/`effortLevels` (TASK.131), `maxOutputTokens` (TASK.159) and `imageInput` (TASK.198) ride along for the draft-time effort picker / ceiling display / vision-model suggestions; `string[]`-typed to keep this module core-import-free. */
+  models: {
+    id: string;
+    name?: string;
+    reasoning?: boolean;
+    effortLevels?: readonly string[];
+    maxOutputTokens?: number;
+    imageInput?: boolean;
+  }[];
   /** True for the literal `custom` sentinel (TASK.43 W5-FIX); main supplies it from core's `isCustomProvider`. */
   isCustom?: boolean;
   /** Wire transport fields (TASK.43 W5); `string`-typed to keep this module core-import-free. */
@@ -524,6 +552,10 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
       // TASK.159: same conditional-spread precedent — only when the catalog
       // declares a ceiling, so legacy fixtures stay byte-identical.
       ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
+      // TASK.198: only the models the catalog MARKS as accepting image input,
+      // matching core's own reading of the flag (absent = not marked, never
+      // "unknown"): the Vision pane suggests these as recognizer models.
+      ...(m.imageInput === true ? { imageInput: true } : {}),
     })),
     ...(entry.baseUrl === "" ? { needsBaseUrl: true } : {}),
     ...(entry.isCustom === true ? { isCustom: true } : {}),
@@ -770,6 +802,19 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   // membership check. Same shape as the `provider` and `security.trustedBinaries`
   // refusals above.
   if (patchTouchesProxy(rawPatch)) {
+    return { ok: false, reason: "invalid" };
+  }
+  // TASK.198: `settings.recognizer` is written ONLY by its dedicated
+  // `recognizer-set` channel — a generic patch carrying it is refused loudly
+  // rather than silently stripped (a buggy caller must not believe it
+  // persisted). Unlike the two refusals above, this one is not (only) about
+  // custody: `mergeSettings`'s `deepMerge` skips every `undefined` patch value,
+  // so the generic path is PHYSICALLY unable to delete the key — it can only
+  // ADD or REPLACE `recognizer`, never turn the fallback off. Leaving it half
+  // of a two-writer field (one that can enable, one that can also disable)
+  // would let a caller believe `settings-set` fully owns the field when it can
+  // only ever move it one direction.
+  if ("recognizer" in rawPatch) {
     return { ok: false, reason: "invalid" };
   }
 
@@ -2173,6 +2218,70 @@ export async function handleProxyRefSet(deps: SettingsIpcDeps, raw: unknown): Pr
 }
 
 /**
+ * recognizer-set (TASK.198): the ONLY writer of `settings.recognizer`, and
+ * the ONLY way to turn the vision-fallback recognizer OFF. A separate channel
+ * from `settings-set` for the reason `shared/recognizer.ts`'s docstring on
+ * `RECOGNIZER_SET_CHANNEL` spells out: `settings/schema.ts`'s `deepMerge`
+ * skips every `undefined` patch value (`if (value === undefined) continue;`),
+ * so the generic path can only ever ADD or REPLACE `recognizer`, never delete
+ * it — `recognizer: null` here is the explicit delete this handler alone
+ * accepts.
+ *
+ * A `{connectionId, modelId}` pair is checked against the LIVE connection
+ * graph before it is persisted (same membership discipline as
+ * `handleProxyRefSet`'s `findProxyProfile` check): a dangling `connectionId`
+ * would resolve as "fallback disabled" at every consumer
+ * (`resolveRecognizerConfig`) with no visible signal to the user, so it is
+ * refused here instead of saved silently-broken. A blank/whitespace `modelId`
+ * is refused for the same reason — host/index.ts's `parseRecognizerEnv`
+ * already treats an empty-after-trim model as "fallback disabled"
+ * (`if (model === undefined || model.trim() === "") return null;`), so saving
+ * one here would let this layer and that layer disagree about what "set"
+ * means.
+ *
+ * Deliberately does NOT re-check the connection's auth kind (oauth): that
+ * refusal belongs to `resolveRecognizerConfig` alone (main/host-env.ts), which
+ * already fails closed on an oauth connection — a third copy of that rule
+ * here would be the first of the three to drift.
+ *
+ * Saves via the same plain load -> mutate -> save -> snapshot -> emit shape
+ * `handleAddRule`/`handleBinaryTrustGrant` use, not `persistProxyDraft`:
+ * that helper's only work beyond the save is `deps.refreshProxySecrets?.()`,
+ * which refreshes main's in-memory PROXY password cache — meaningless for a
+ * recognizer mutation, so reusing it here would be borrowing a side effect
+ * that has nothing to do with this field.
+ */
+export async function handleRecognizerSet(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
+  const parsed = recognizerSetSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid" };
+  }
+  const { recognizer } = parsed.data;
+  if (recognizer !== null && recognizer.modelId.trim() === "") {
+    return { ok: false, reason: "invalid" };
+  }
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    if (recognizer !== null && connectionById(loaded.settings, recognizer.connectionId) === undefined) {
+      return { ok: false, reason: "invalid" };
+    }
+    const draft = structuredClone(loaded.settings);
+    if (recognizer === null) {
+      delete draft.recognizer;
+    } else {
+      draft.recognizer = recognizer;
+    }
+    await saveSettings(deps.settingsPath, draft);
+    const snapshot = await snapshotFrom(deps, draft, false);
+    await emitMutation(deps, snapshot);
+    return { ok: true, snapshot };
+  });
+}
+
+/**
  * Wires the frozen channels onto ipcMain. A payload the handler cannot validate
  * is answered with that channel's safe negative (never thrown across the bridge).
  * The Vault concrete type satisfies VaultLike structurally. The two OAuth
@@ -2202,4 +2311,7 @@ export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vau
   ipcMain.handle(PROXY_PROFILE_UPSERT_CHANNEL, (_event, raw: unknown) => handleProxyProfileUpsert(deps, raw));
   ipcMain.handle(PROXY_PROFILE_DELETE_CHANNEL, (_event, raw: unknown) => handleProxyProfileDelete(deps, raw));
   ipcMain.handle(PROXY_REF_SET_CHANNEL, (_event, raw: unknown) => handleProxyRefSet(deps, raw));
+  // TASK.198: the vision-fallback recognizer's dedicated write channel — the
+  // only path that can DELETE `settings.recognizer` (see handleRecognizerSet).
+  ipcMain.handle(RECOGNIZER_SET_CHANNEL, (_event, raw: unknown) => handleRecognizerSet(deps, raw));
 }

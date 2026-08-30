@@ -7,6 +7,10 @@
  * and that each thin command forwards the right method/args to the facade.
  */
 import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildFacadeExpr,
   childOpen,
@@ -64,6 +68,8 @@ import {
   agentCardExpand,
   tryAgainButtonState,
   tryAgainButtonClick,
+  workflowStepsState,
+  workflowStepClick,
   settingsState,
   settingsOpen,
   settingsClose,
@@ -119,6 +125,12 @@ import {
   profileToggleModelsExpanded,
   profileRefresh,
   profileRebuild,
+  visionPaneState,
+  visionSelectConnection,
+  visionSetModel,
+  visionSave,
+  visionProbe,
+  visionTurnOff,
   settingsLayoutState,
   lspPanelState,
   lspPanelToggle,
@@ -274,6 +286,78 @@ describe("thin facade commands forward method + args", () => {
   });
 });
 
+describe("sendPrompt — image attachments (TASK.198 live-smoke facade)", () => {
+  const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+
+  function writeTempImage(bytes: Buffer): string {
+    const path = join(tmpdir(), `automation-handlers-image-${randomUUID()}.png`);
+    writeFileSync(path, bytes);
+    return path;
+  }
+
+  it("with images explicitly undefined -> unchanged 2-arg forward (byte-parity)", async () => {
+    const deps = fakeDeps();
+    await sendPrompt(deps, "tab-a", "hello", undefined);
+    expect(deps.callFacade).toHaveBeenCalledWith("sendPrompt", ["tab-a", "hello"]);
+  });
+
+  it("with an empty images array -> same 2-arg forward as undefined", async () => {
+    const deps = fakeDeps();
+    await sendPrompt(deps, "tab-a", "hello", []);
+    expect(deps.callFacade).toHaveBeenCalledWith("sendPrompt", ["tab-a", "hello"]);
+  });
+
+  it("reads a real file off disk, base64-encodes it, and forwards {data, sourcePath} to the facade", async () => {
+    const path = writeTempImage(PNG_HEADER);
+    const deps = fakeDeps();
+    await sendPrompt(deps, "tab-a", "look", [path]);
+    expect(deps.callFacade).toHaveBeenCalledWith("sendPrompt", [
+      "tab-a",
+      "look",
+      [{ data: PNG_HEADER.toString("base64"), sourcePath: path }],
+    ]);
+  });
+
+  it("reads multiple files in order", async () => {
+    const first = writeTempImage(PNG_HEADER);
+    const second = writeTempImage(Buffer.from([0xff, 0xd8, 0xff, 0x00]));
+    const deps = fakeDeps();
+    await sendPrompt(deps, "tab-a", "look", [first, second]);
+    expect(deps.callFacade).toHaveBeenCalledWith("sendPrompt", [
+      "tab-a",
+      "look",
+      [
+        { data: PNG_HEADER.toString("base64"), sourcePath: first },
+        { data: Buffer.from([0xff, 0xd8, 0xff, 0x00]).toString("base64"), sourcePath: second },
+      ],
+    ]);
+  });
+
+  it("a missing file -> {ok:false, reason:'image_not_found'}, facade never invoked", async () => {
+    const deps = fakeDeps();
+    const missing = join(tmpdir(), `automation-handlers-image-missing-${randomUUID()}.png`);
+    const result = await sendPrompt(deps, "tab-a", "look", [missing]);
+    expect(result).toEqual({ ok: false, reason: "image_not_found" });
+    expect(deps.callFacade).not.toHaveBeenCalled();
+  });
+
+  it("a non-absolute path -> {ok:false, reason:'image_not_found'}, facade never invoked (contract requires absolute paths)", async () => {
+    const deps = fakeDeps();
+    const result = await sendPrompt(deps, "tab-a", "look", ["relative/path.png"]);
+    expect(result).toEqual({ ok: false, reason: "image_not_found" });
+    expect(deps.callFacade).not.toHaveBeenCalled();
+  });
+
+  it("the first unreadable path short-circuits before any later path is read", async () => {
+    const good = writeTempImage(PNG_HEADER);
+    const deps = fakeDeps();
+    const missing = join(tmpdir(), `automation-handlers-image-missing2-${randomUUID()}.png`);
+    const result = await sendPrompt(deps, "tab-a", "look", [missing, good]);
+    expect(result).toEqual({ ok: false, reason: "image_not_found" });
+    expect(deps.callFacade).not.toHaveBeenCalled();
+  });
+});
+
 describe("git thin facade commands forward method + args (slice-5.8-R8-cut.md §2.2)", () => {
   it("gitCommand -> callFacade('gitCommand', [tabId, command])", async () => {
     const deps = fakeDeps();
@@ -375,6 +459,26 @@ describe("try-again-button thin facade commands forward method + args (TASK.33 W
     const deps = fakeDeps();
     await tryAgainButtonClick(deps, "tab-a", "loop_end:t1");
     expect(deps.callFacade).toHaveBeenCalledWith("tryAgainButtonClick", ["tab-a", "loop_end:t1"]);
+  });
+});
+
+describe("workflow-steps thin facade commands forward method + args (TASK.191 slice S4)", () => {
+  it("workflowStepsState -> callFacade('workflowStepsState', [tabId, toolCallId])", async () => {
+    const deps = fakeDeps();
+    await workflowStepsState(deps, "tab-a", "call-1");
+    expect(deps.callFacade).toHaveBeenCalledWith("workflowStepsState", ["tab-a", "call-1"]);
+  });
+
+  it("workflowStepClick -> callFacade('workflowStepClick', [tabId, toolCallId, stepId])", async () => {
+    const deps = fakeDeps();
+    await workflowStepClick(deps, "tab-a", "call-1", "step-1");
+    expect(deps.callFacade).toHaveBeenCalledWith("workflowStepClick", ["tab-a", "call-1", "step-1"]);
+  });
+
+  it("workflowStepClick threads the exact stepId requested, not a hardcoded/first one", async () => {
+    const deps = fakeDeps();
+    await workflowStepClick(deps, "tab-a", "call-1", "step-2");
+    expect(deps.callFacade).toHaveBeenCalledWith("workflowStepClick", ["tab-a", "call-1", "step-2"]);
   });
 });
 
@@ -674,6 +778,44 @@ describe("Profile pane thin facade commands forward method + args (design/slice-
     const deps = fakeDeps();
     await settingsLayoutState(deps);
     expect(deps.callFacade).toHaveBeenCalledWith("settingsLayoutState", []);
+  });
+});
+
+describe("Vision pane thin facade commands forward method + args (TASK.198 срез E2c)", () => {
+  it("visionPaneState -> callFacade('visionPaneState', [])", async () => {
+    const deps = fakeDeps();
+    await visionPaneState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("visionPaneState", []);
+  });
+
+  it("visionSelectConnection -> callFacade('visionSelectConnection', [connectionId])", async () => {
+    const deps = fakeDeps();
+    await visionSelectConnection(deps, "conn-1");
+    expect(deps.callFacade).toHaveBeenCalledWith("visionSelectConnection", ["conn-1"]);
+  });
+
+  it("visionSetModel -> callFacade('visionSetModel', [modelId])", async () => {
+    const deps = fakeDeps();
+    await visionSetModel(deps, "glm-5.3-flash");
+    expect(deps.callFacade).toHaveBeenCalledWith("visionSetModel", ["glm-5.3-flash"]);
+  });
+
+  it("visionSave -> callFacade('visionSave', [])", async () => {
+    const deps = fakeDeps();
+    await visionSave(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("visionSave", []);
+  });
+
+  it("visionProbe -> callFacade('visionProbe', [])", async () => {
+    const deps = fakeDeps();
+    await visionProbe(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("visionProbe", []);
+  });
+
+  it("visionTurnOff -> callFacade('visionTurnOff', [])", async () => {
+    const deps = fakeDeps();
+    await visionTurnOff(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("visionTurnOff", []);
   });
 });
 

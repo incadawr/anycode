@@ -373,30 +373,51 @@ describe("buildQuotaPopoverView (cut §6.2 — hidden block, never 0%)", () => {
   });
 });
 
-describe("isImageAttachBlockedByModel (TASK.56 W3 — model-level attach gate, layered on the engine-level supportsImages)", () => {
-  it("blocks ONLY on an explicit false verdict for the current model", () => {
-    expect(isImageAttachBlockedByModel(false)).toBe(true);
+describe("isImageAttachBlockedByModel (TASK.56 W3 — model-level attach gate, layered on the engine-level supportsImages; TASK.198 срез D — a configured recognizer fallback unblocks a blind model)", () => {
+  it("blocks on an explicit false verdict when no recognizer fallback is configured", () => {
+    expect(isImageAttachBlockedByModel(false, undefined)).toBe(true);
   });
 
   it("does not block on true or on an absent verdict (legacy host / no seam = today's behavior)", () => {
-    expect(isImageAttachBlockedByModel(true)).toBe(false);
-    expect(isImageAttachBlockedByModel(undefined)).toBe(false);
+    expect(isImageAttachBlockedByModel(true, undefined)).toBe(false);
+    expect(isImageAttachBlockedByModel(undefined, undefined)).toBe(false);
+  });
+
+  it("TASK.198: a configured recognizer fallback unblocks a blind model", () => {
+    expect(isImageAttachBlockedByModel(false, true)).toBe(false);
+  });
+
+  it("TASK.198: an explicit non-true fallback (false) does NOT unblock a blind model", () => {
+    expect(isImageAttachBlockedByModel(false, false)).toBe(true);
+  });
+
+  it("TASK.198: a vision-capable model is never blocked regardless of fallback state", () => {
+    expect(isImageAttachBlockedByModel(true, true)).toBe(false);
+    expect(isImageAttachBlockedByModel(true, false)).toBe(false);
   });
 });
 
-describe("isSendBlockedByModelImages (TASK.56 W3(c) — attached images on a vision -> non-vision switch block send, never vanish)", () => {
-  it("blocks send only when the model rejects images AND the draft actually has some attached", () => {
-    expect(isSendBlockedByModelImages(false, 1)).toBe(true);
-    expect(isSendBlockedByModelImages(false, 3)).toBe(true);
+describe("isSendBlockedByModelImages (TASK.56 W3(c) — attached images on a vision -> non-vision switch block send, never vanish; TASK.198 срез D — recognizer fallback pair)", () => {
+  it("blocks send only when the model rejects images AND the draft actually has some attached AND no fallback is configured", () => {
+    expect(isSendBlockedByModelImages(false, undefined, 1)).toBe(true);
+    expect(isSendBlockedByModelImages(false, undefined, 3)).toBe(true);
   });
 
   it("does not block a text-only draft even on a false verdict (nothing image-related to block)", () => {
-    expect(isSendBlockedByModelImages(false, 0)).toBe(false);
+    expect(isSendBlockedByModelImages(false, undefined, 0)).toBe(false);
   });
 
   it("does not block when the verdict is true or absent, regardless of attachment count", () => {
-    expect(isSendBlockedByModelImages(true, 2)).toBe(false);
-    expect(isSendBlockedByModelImages(undefined, 2)).toBe(false);
+    expect(isSendBlockedByModelImages(true, undefined, 2)).toBe(false);
+    expect(isSendBlockedByModelImages(undefined, undefined, 2)).toBe(false);
+  });
+
+  it("TASK.198: a configured recognizer fallback unblocks send for a blind model with attachments", () => {
+    expect(isSendBlockedByModelImages(false, true, 3)).toBe(false);
+  });
+
+  it("TASK.198: fallback unblocking still respects the zero-attachment short-circuit", () => {
+    expect(isSendBlockedByModelImages(false, true, 0)).toBe(false);
   });
 });
 
