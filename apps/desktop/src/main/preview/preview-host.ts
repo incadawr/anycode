@@ -207,6 +207,17 @@ export interface MdPreviewWindowLike {
   onClosed(listener: () => void): void;
   capturePage(): Promise<PreviewCapturedImage>;
   setBackgroundThrottling(enabled: boolean): void;
+  /**
+   * TASK.198 slice G: the window's content area size in DIP (CSS px) —
+   * Electron's `BrowserWindow.getContentSize()` already returns device-
+   * independent pixels, so no further conversion is needed at the call site.
+   * Optional (unlike every other member here) so that `preview-host.test.ts`'s
+   * existing `FakeMdWindow` — a file this slice does not own and must not
+   * edit — keeps satisfying this interface unchanged; the real adapter always
+   * implements it, and the call site treats its absence the same as any other
+   * best-effort CSS-size failure (falls back to no CSS size).
+   */
+  getContentSize?(): { width: number; height: number };
 }
 
 export interface CreateWindowOpts {
@@ -543,6 +554,34 @@ function selectorReadScript(selector: string, format: "text" | "html"): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * TASK.198 slice G: narrows an arbitrary size-shaped value to a CSS viewport
+ * size that can actually be used.
+ *
+ * The CSS size is only ever consumed as a DIVISOR — `vision/recognizer.ts`'s
+ * prompt tells the recognizer to divide the pixel size by it to recover the
+ * device pixel ratio — so a zero, negative or non-finite dimension is not a
+ * less precise hint, it is an unusable one, and omitting it (the same
+ * degradation every other failure on this path takes) is strictly better than
+ * shipping a divisor the reader will divide by. Both producers can genuinely
+ * yield one: Electron's `getContentSize()` reports 0x0 for a minimized or
+ * not-yet-laid-out window, and `executeJavaScript` can hand back NaN/Infinity,
+ * which a `typeof x === "number"` check admits.
+ */
+function usableCssSize(raw: unknown): { width: number; height: number } | undefined {
+  if (raw === null || typeof raw !== "object") {
+    return undefined;
+  }
+  const { width, height } = raw as { width?: unknown; height?: unknown };
+  if (typeof width !== "number" || typeof height !== "number") {
+    return undefined;
+  }
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return undefined;
+  }
+  return { width, height };
 }
 
 /**
@@ -1284,6 +1323,23 @@ class PreviewHost implements PreviewHostHandle {
         }
       }
       const { width, height } = image.getSize();
+      // TASK.198 slice G (Decision 3): capturePage() captures the visible
+      // viewport only, never the full scrollable page, so window.inner{Width,
+      // Height} — the CSS-px size of that SAME visible region — pairs
+      // correctly with the pixel size just captured above. A future
+      // full-page (scroll-stitched) capture would break this pairing and
+      // must revisit this call. Best-effort only: a page mid-navigation or
+      // otherwise unresponsive to executeJavaScript must not fail the
+      // screenshot itself, so a failure here just omits the CSS size.
+      //
+      // The pixel size and the CSS size come from two separate round-trips, so
+      // a resize landing between them yields a ratio that describes neither
+      // frame. Reading the CSS size FIRST does not shrink that window by a
+      // single millisecond — it only swaps which half goes stale — and the two
+      // cannot be read atomically across this boundary, so the order is left
+      // as-is and the hint stays advisory: it tells the recognizer what scale
+      // to assume, and nothing downstream computes on it.
+      const cssSize = await this.readCssViewportSize(wc);
       return {
         ok: true,
         value: {
@@ -1293,12 +1349,33 @@ class PreviewHost implements PreviewHostHandle {
           data: image.toPNG().toString("base64"),
           width,
           height,
+          ...(cssSize !== undefined ? { cssWidth: cssSize.width, cssHeight: cssSize.height } : {}),
         },
       };
     } catch (error) {
       return this.fail("load_failed", `screenshot failed: ${String(error)}`);
     } finally {
       wc.setBackgroundThrottling(true);
+    }
+  }
+
+  /**
+   * TASK.198 slice G helper: best-effort CSS viewport read shared by the web
+   * preview screenshot leg. Never throws — any executeJavaScript rejection
+   * (unresponsive page, mid-navigation, destroyed webContents) or a
+   * malformed/non-numeric result degrades to `undefined`, which callers treat
+   * as "no CSS size available" rather than an error.
+   */
+  private async readCssViewportSize(
+    wc: Pick<PreviewWebContentsLike, "executeJavaScript">,
+  ): Promise<{ width: number; height: number } | undefined> {
+    try {
+      const raw = await wc.executeJavaScript<{ width: number; height: number }>(
+        "({ width: window.innerWidth, height: window.innerHeight })",
+      );
+      return usableCssSize(raw);
+    } catch {
+      return undefined;
     }
   }
 
@@ -1327,6 +1404,17 @@ class PreviewHost implements PreviewHostHandle {
         image = await win.capturePage();
       }
       const { width, height } = image.getSize();
+      // TASK.198 slice G: getContentSize() is optional on the interface (see
+      // its doc comment) and best-effort here too, guarded the same way as
+      // the web-preview leg — a window mid-teardown between the
+      // isDestroyed() check above and this call must not fail the
+      // screenshot itself.
+      let cssSize: { width: number; height: number } | undefined;
+      try {
+        cssSize = usableCssSize(win.getContentSize?.());
+      } catch {
+        cssSize = undefined;
+      }
       return {
         ok: true,
         value: {
@@ -1336,6 +1424,7 @@ class PreviewHost implements PreviewHostHandle {
           data: image.toPNG().toString("base64"),
           width,
           height,
+          ...(cssSize !== undefined ? { cssWidth: cssSize.width, cssHeight: cssSize.height } : {}),
         },
       };
     } catch (error) {
@@ -1400,6 +1489,10 @@ class PreviewHost implements PreviewHostHandle {
       return this.fail("unavailable", HIDDEN_REFUSAL);
     }
     const { width, height } = image.getSize();
+    // TASK.198 slice G: `bounds` (shared/preview-panel.ts's PreviewPanelBounds)
+    // is already documented as "panel body rect in CSS px" — the exact rect
+    // `captureMainWindowRect` just captured — so it is the CSS-px pairing for
+    // this capture with no extra read needed, unlike the other two legs.
     return {
       ok: true,
       value: {
@@ -1409,6 +1502,11 @@ class PreviewHost implements PreviewHostHandle {
         data: image.toPNG().toString("base64"),
         width,
         height,
+        // Same usability rule as the other two legs: a degenerate rect would
+        // otherwise be forwarded as a divisor the recognizer is told to divide
+        // by. A real panel rect always passes, so this only ever fires on a
+        // shape the capture above could not have produced a usable image from.
+        ...(usableCssSize(bounds) !== undefined ? { cssWidth: bounds.width, cssHeight: bounds.height } : {}),
       },
     };
   }

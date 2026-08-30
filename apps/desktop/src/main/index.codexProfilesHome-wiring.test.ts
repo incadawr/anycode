@@ -65,7 +65,11 @@ const { ipcHandlers, mockIsPackaged, fakeHomeRef, manifestCalls, hostEnvScrubCal
 
 /** Minimal fake BrowserWindow (index.appVersion-wiring.test.ts's shape). */
 class FakeBrowserWindow {
-  webContents = { on: vi.fn(), send: vi.fn() };
+  // `isDestroyed` on both the window and its webContents models a LIVE window:
+  // a real BrowserWindow always answers it, destroyed or not, and
+  // sendToMainWindow asks before touching `.webContents` (TASK.199).
+  webContents = { on: vi.fn(), send: vi.fn(), isDestroyed: vi.fn(() => false) };
+  isDestroyed = vi.fn(() => false);
   on = vi.fn();
   isMaximized = vi.fn(() => false);
   isFullScreen = vi.fn(() => false);

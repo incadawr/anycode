@@ -55,6 +55,7 @@ import {
   listPersonaNames,
   type PersonaDefinition,
 } from "./personas.js";
+import type { TokenUsage } from "../types/events.js";
 import { summarizeChildToolCall } from "./summarize-tool.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
 
@@ -743,6 +744,30 @@ export function createSubagentRunner(
         let finalText = "";
         let toolCalls = 0;
         let lastTool: string | undefined;
+        // TASK.191 slice S2: the run's own token spend, summed from the
+        // per-model-call `finish` events the child's loop already yields into
+        // this very iterator (nobody read them before this slice).
+        //
+        // Two slots, not one, because a `finish` is not yet a fact: a stall
+        // retry is "classified as a retryable stall REGARDLESS of
+        // hadModelOutput" (provider/model-port.ts), so a call can finish, be
+        // discarded, and be replayed from scratch. The loop discards its own
+        // copy on that edge (`usage = {};`) and this mirrors it one tier out —
+        // `finish` only PARKS a value; `turn_end` consumes it; `stream_retry`
+        // drops it. Adding straight on `finish` would bill the thrown-away
+        // attempt on top of the winning one.
+        let usage: TokenUsage | undefined;
+        let pendingUsage: TokenUsage | undefined;
+        // Folds the parked call into the run total and empties the slot, so a
+        // value can never be counted twice. `turn_end` and `loop_end` arrive
+        // back-to-back on a tool-free final turn (agent-loop.ts yields
+        // turn_end then emitLoopEnd immediately), which is exactly why this
+        // consumes rather than commits: the second caller finds the slot empty.
+        const consumePendingUsage = (): void => {
+          if (pendingUsage === undefined) return;
+          usage = mergeUsage(usage, pendingUsage);
+          pendingUsage = undefined;
+        };
         // Per-run activity-event emission counter (slice P7.18/F16b): the feed is
         // bounded — tool-activity stops emitting past SUBAGENT_ACTIVITY_MAX_EVENTS,
         // while counters (subagent_progress) and start/end continue unaffected.
@@ -774,9 +799,23 @@ export function createSubagentRunner(
               case "text_delta":
                 currentTurnText += event.text;
                 break;
+              case "finish":
+                // TASK.191 slice S2. Until this branch existed the child's
+                // token spend rode this iterator past a switch that had no
+                // case for it — the numbers were never missing, only unread.
+                //
+                // A finish that reports NO field at all parks nothing, so a run
+                // whose provider reports nothing keeps `usage` undefined rather
+                // than acquiring an empty object: the card must be able to tell
+                // "not reported" from "reported as none".
+                pendingUsage = hasAnyUsage(event.usage) ? event.usage : undefined;
+                break;
               case "stream_retry":
                 // The step is replayed from scratch; discard the aborted attempt's text.
                 currentTurnText = "";
+                // ...and its spend: the attempt is not billed to the run (see
+                // the pendingUsage comment above).
+                pendingUsage = undefined;
                 break;
               case "tool_execution_start":
                 // Dispatch-time start (name + raw input), keyed by toolCallId until
@@ -797,7 +836,13 @@ export function createSubagentRunner(
                 // the silence window, once per event — the "tool" activity
                 // branch below shares this same boundary, not a second reset.
                 stallClock?.noteProgress(lastTool);
-                onProgress?.({ kind: "progress", turns: turnEndCount, toolCalls, lastTool });
+                onProgress?.({
+                  kind: "progress",
+                  turns: turnEndCount,
+                  toolCalls,
+                  lastTool,
+                  ...(usage !== undefined ? { usage } : {}),
+                });
                 // Activity emission rides the SAME stable boundary as the toolCalls
                 // counter directly above (design §4 W1-FIX, was the "tool_call"
                 // proposal event pre-fix — retry-unsafe, see runner.test.ts for the
@@ -834,9 +879,22 @@ export function createSubagentRunner(
                 // Sign of life (TASK.148 slice 1): a turn boundary is progress
                 // even on a turn that made no tool calls at all.
                 stallClock?.noteProgress();
-                onProgress?.({ kind: "progress", turns: turnEndCount, toolCalls, lastTool });
+                // The turn survived; its parked spend is now owed. Consumed
+                // BEFORE the emission below so this event already carries it.
+                consumePendingUsage();
+                onProgress?.({
+                  kind: "progress",
+                  turns: turnEndCount,
+                  toolCalls,
+                  lastTool,
+                  ...(usage !== undefined ? { usage } : {}),
+                });
                 break;
               case "loop_end":
+                // Only the REMAINDER: a turn cut off mid-dispatch produced a
+                // finish that no turn_end will ever claim. A normal run finds
+                // the slot already emptied above, so this is a no-op there.
+                consumePendingUsage();
                 // Child configs never receive WorktreeControlPort. Treat an
                 // impossible terminal relocation defensively as an error rather
                 // than widening the public SubagentOutcome status contract.
@@ -916,6 +974,7 @@ export function createSubagentRunner(
           turns,
           toolCalls,
           durationMs: Date.now() - startedAt,
+          ...(usage !== undefined ? { usage } : {}),
         };
 
         onProgress?.({
@@ -954,6 +1013,51 @@ export function createSubagentRunner(
       }
     },
   };
+}
+
+/** True when the provider reported at least one token field on this call. */
+function hasAnyUsage(usage: TokenUsage): boolean {
+  return (
+    usage.inputTokens !== undefined ||
+    usage.cachedInputTokens !== undefined ||
+    usage.outputTokens !== undefined ||
+    usage.totalTokens !== undefined
+  );
+}
+
+/**
+ * Folds one model call's reported spend into a run total (TASK.191 slice S2).
+ *
+ * Fields are summed INDEPENDENTLY and an absent field stays absent rather than
+ * becoming zero: "the provider did not report this" and "the provider reported
+ * none" are different answers, and only the second may be shown as a number.
+ * `cachedInputTokens` is summed alongside `inputTokens` and never added to it —
+ * the cached count is a SUBSET of input (types/events.ts), so adding them would
+ * bill the cached reads twice.
+ */
+function mergeUsage(base: TokenUsage | undefined, delta: TokenUsage): TokenUsage {
+  const merged: TokenUsage = { ...base };
+  for (const key of ["inputTokens", "cachedInputTokens", "outputTokens"] as const) {
+    const value = delta[key];
+    if (value !== undefined) {
+      merged[key] = (merged[key] ?? 0) + value;
+    }
+  }
+  // The provider's own `totalTokens` is carried SEPARATELY from input+output by
+  // the stream translator, and for a reasoning model it is the larger of the
+  // two — reasoning tokens are billed but appear in neither. So the fallback to
+  // in+out is applied PER CALL, not once over the finished sum: a provider that
+  // reports the total on some calls and omits it on others must keep the ones
+  // it did report instead of having the whole run recomputed without them.
+  const deltaTotal =
+    delta.totalTokens ??
+    (delta.inputTokens !== undefined || delta.outputTokens !== undefined
+      ? (delta.inputTokens ?? 0) + (delta.outputTokens ?? 0)
+      : undefined);
+  if (deltaTotal !== undefined) {
+    merged.totalTokens = (merged.totalTokens ?? 0) + deltaTotal;
+  }
+  return merged;
 }
 
 /**

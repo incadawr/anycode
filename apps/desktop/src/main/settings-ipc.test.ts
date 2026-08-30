@@ -42,6 +42,7 @@ import {
   handleProxyProfileDelete,
   handleProxyProfileUpsert,
   handleProxyRefSet,
+  handleRecognizerSet,
   handleSet,
   handleSetSecret,
   mapProviderFailureCodeToHealthStatus,
@@ -620,6 +621,30 @@ describe("projectCatalogSummary — value-only projection", () => {
     ]);
   });
 
+  it("TASK.198: projects each model's imageInput only when the catalog MARKS it, so a blind model stays byte-identical", () => {
+    const summary = projectCatalogSummary([
+      {
+        id: "z-ai",
+        name: "Z.AI",
+        auth: { kind: "api_key" },
+        baseUrl: "https://z",
+        models: [
+          { id: "glm-5.3v", name: "GLM-5.3V", imageInput: true },
+          // An explicit `false` is NOT "unknown" and NOT projected: core reads
+          // an absent flag as "not marked" (catalog.ts's own doc), so both
+          // spellings of "no vision" must reach the renderer identically.
+          { id: "glm-5.3", name: "GLM-5.3", imageInput: false },
+          { id: "sonnet-ish" },
+        ],
+      },
+    ]);
+    expect(summary[0]?.models).toEqual([
+      { id: "glm-5.3v", name: "GLM-5.3V", imageInput: true },
+      { id: "glm-5.3", name: "GLM-5.3" },
+      { id: "sonnet-ish" },
+    ]);
+  });
+
   it("projects defaultTransport/supportedTransports/authOptional only when the source entry declares them (TASK.43 W5)", () => {
     const summary = projectCatalogSummary([
       {
@@ -915,6 +940,94 @@ describe("handleSet — provider refine-reject (TASK.45 W12: the connection grap
     expect(res).toEqual({ ok: false, reason: "invalid" });
     const loaded = await loadSettings(settingsPath);
     expect(loaded.settings.ui.theme).toBe("system"); // untouched
+  });
+});
+
+describe("handleSet — recognizer refine-reject (TASK.198: settings.recognizer is written ONLY by recognizer-set)", () => {
+  it("rejects a `recognizer` key sent through the generic settings-set path, writing nothing", async () => {
+    const res = await handleSet(makeDeps(), { recognizer: { connectionId: "conn-1", modelId: "glm-vision" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.recognizer).toBeUndefined();
+  });
+
+  it("still refuses the whole call when `recognizer` rides alongside an otherwise-valid sibling section", async () => {
+    const res = await handleSet(makeDeps(), {
+      recognizer: { connectionId: "conn-1", modelId: "glm-vision" },
+      ui: { theme: "dark" },
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.ui.theme).toBe("system"); // untouched
+  });
+});
+
+describe("handleRecognizerSet (TASK.198): the only writer that can also DELETE settings.recognizer", () => {
+  it("sets settings.recognizer for a connectionId that exists in the live graph", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const res = await handleRecognizerSet(makeDeps(), { recognizer: { connectionId: "conn-1", modelId: "glm-vision" } });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.recognizer).toEqual({ connectionId: "conn-1", modelId: "glm-vision" });
+  });
+
+  it("deletes settings.recognizer when the request carries `recognizer: null`", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    await handleRecognizerSet(makeDeps(), { recognizer: { connectionId: "conn-1", modelId: "glm-vision" } });
+    const res = await handleRecognizerSet(makeDeps(), { recognizer: null });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.recognizer).toBeUndefined();
+    expect("recognizer" in loaded.settings).toBe(false);
+  });
+
+  it("refuses a connectionId that names no connection in the live graph — nothing persisted", async () => {
+    const res = await handleRecognizerSet(makeDeps(), { recognizer: { connectionId: "conn-nope", modelId: "glm-vision" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.recognizer).toBeUndefined();
+  });
+
+  it("refuses a blank modelId", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const res = await handleRecognizerSet(makeDeps(), { recognizer: { connectionId: "conn-1", modelId: "" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("refuses a whitespace-only modelId — the same 'off' reading host/index.ts's parseRecognizerEnv gives it", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const res = await handleRecognizerSet(makeDeps(), { recognizer: { connectionId: "conn-1", modelId: "   " } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.recognizer).toBeUndefined();
+  });
+
+  it("rejects a malformed payload (missing modelId) as invalid", async () => {
+    const res = await handleRecognizerSet(makeDeps(), { recognizer: { connectionId: "conn-1" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("rejects an unknown sibling field on the object variant (.strict())", async () => {
+    const res = await handleRecognizerSet(makeDeps(), {
+      recognizer: { connectionId: "conn-1", modelId: "glm-vision", apiKey: "sneak" },
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("refuses read_only when settings.json is a newer version than CURRENT", async () => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 3,
+        provider: { connections: [] },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+    const res = await handleRecognizerSet(makeDeps(), { recognizer: null });
+    expect(res).toEqual({ ok: false, reason: "read_only" });
   });
 });
 

@@ -22,7 +22,7 @@ import { toToolDeclarations } from "../tools/to-model-tools.js";
 import { ModePermissionEngine, DenyPermissionBroker } from "../permissions/index.js";
 import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
 import { agentTool } from "../tools/agent.js";
-import type { AgentEvent, ModelStreamEvent } from "../types/events.js";
+import type { AgentEvent, ModelStreamEvent, TokenUsage } from "../types/events.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { CorePorts, ExecutionPort, FileSystemPort, HttpPort } from "../ports/index.js";
 import type {
@@ -3033,5 +3033,129 @@ describe("stall clock wiring — inline tier (TASK.148 slice 1)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.191 slice S2 — the child's token spend.
+//
+// Every test below drives the REAL seam (runner -> buildChildConfig -> AgentLoop)
+// with only the ModelPort scripted, so what is pinned is the actual path a live
+// run takes, not a hand-fed accumulator. The defect this slice closes was not a
+// missing transport: `finish` already rode the iterator the runner consumes, and
+// the switch simply had no case for it.
+// ---------------------------------------------------------------------------
+
+/** A one-turn text step whose finish reports spend. */
+function usageTextStep(text: string, usage: TokenUsage): ModelStreamEvent[] {
+  return [
+    { type: "start" },
+    { type: "text_delta", id: "t", text },
+    { type: "finish", finishReason: "stop", usage },
+  ];
+}
+
+/** A tool-calling step whose finish reports spend (keeps the run going). */
+function usageToolStep(id: string, usage: TokenUsage): ModelStreamEvent[] {
+  return [
+    { type: "start" },
+    { type: "tool_call", toolCall: { id, name: "TodoRead", input: {} } },
+    { type: "finish", finishReason: "tool_calls", usage },
+  ];
+}
+
+describe("subagent token spend (TASK.191 slice S2)", () => {
+  it("sums the child's per-call usage into the outcome and onto progress events", async () => {
+    let step = 0;
+    const model = new ScriptedModelPort(() => {
+      step += 1;
+      return step === 1
+        ? usageToolStep("c1", { inputTokens: 100, cachedInputTokens: 40, outputTokens: 10, totalTokens: 110 })
+        : usageTextStep("done", { inputTokens: 200, cachedInputTokens: 60, outputTokens: 20, totalTokens: 220 });
+    });
+    const progress: SubagentProgress[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ }, { onProgress: (p) => progress.push(p) });
+
+    expect(outcome.status).toBe("completed");
+    // Fields are summed independently; cached is a SUBSET of input and is never
+    // folded into it.
+    expect(outcome.usage).toEqual({
+      inputTokens: 300,
+      cachedInputTokens: 100,
+      outputTokens: 30,
+      totalTokens: 330,
+    });
+    // The running total also reaches the parent live, not only at the end.
+    const withUsage = progress.filter(
+      (p): p is Extract<SubagentProgress, { kind: "progress" }> => p.kind === "progress" && p.usage !== undefined,
+    );
+    expect(withUsage.length).toBeGreaterThan(0);
+    // Cumulative, never decreasing, and the last one equals the final total.
+    expect(withUsage[withUsage.length - 1]?.usage).toEqual(outcome.usage);
+  });
+
+  it("does not bill a stream_retry's discarded attempt — only the winning one counts", async () => {
+    // The retry edge is the reason the accumulator parks rather than adds: a
+    // stall retry is permitted AFTER model output has already been delivered,
+    // so a finish can be produced and then thrown away.
+    let step = 0;
+    const model = new ScriptedModelPort(() => {
+      step += 1;
+      if (step === 1) {
+        return [
+          { type: "start" },
+          { type: "text_delta", id: "t", text: "abandoned" },
+          { type: "finish", finishReason: "stop", usage: { inputTokens: 999, outputTokens: 999 } },
+          { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 0, reason: "stall" },
+          { type: "text_delta", id: "t", text: "winner" },
+          { type: "finish", finishReason: "stop", usage: { inputTokens: 10, outputTokens: 5 } },
+        ];
+      }
+      return usageTextStep("done", {});
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ }, {});
+
+    // 999 belonged to the attempt that was replayed from scratch.
+    expect(outcome.usage).toEqual({ inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+  });
+
+  it("counts the final tool-free turn ONCE, though turn_end and loop_end arrive back-to-back", async () => {
+    // agent-loop yields `turn_end` and then immediately `emitLoopEnd` for a turn
+    // that proposed no tools. A protocol that committed on BOTH would double the
+    // last turn; this consumes, so the second caller finds the slot empty.
+    const model = new ScriptedModelPort(() => usageTextStep("one and done", { inputTokens: 7, outputTokens: 3 }));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ }, {});
+
+    expect(outcome.turns).toBe(1);
+    expect(outcome.usage).toEqual({ inputTokens: 7, outputTokens: 3, totalTokens: 10 });
+  });
+
+  it("keeps a provider total that exceeds input+output (reasoning tokens are billed but unlisted)", async () => {
+    const model = new ScriptedModelPort(() =>
+      usageTextStep("thought hard", { inputTokens: 10, outputTokens: 5, totalTokens: 100 }),
+    );
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ }, {});
+
+    // Recomputing the total as in+out would silently drop the 85 reasoning
+    // tokens the provider billed.
+    expect(outcome.usage?.totalTokens).toBe(100);
+  });
+
+  it("reports no usage at all when the provider reports none — absent, not zero", async () => {
+    const model = new ScriptedModelPort(() => textStep("nothing reported"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.usage).toBeUndefined();
   });
 });

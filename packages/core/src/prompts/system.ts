@@ -20,6 +20,7 @@ import {
   SECTION_SAFETY,
   SECTION_TOOL_DISCIPLINE_GENERIC,
   SECTION_TOOL_DISCIPLINE_TEMPLATE,
+  SECTION_VISION_FALLBACK,
 } from "./sections.js";
 
 /**
@@ -45,6 +46,13 @@ export interface SystemPromptOptions {
    */
   toolNames?: readonly string[];
   env?: SystemPromptEnv;
+  /**
+   * TASK.198 plan §5: true exactly while InspectImage is registered for this
+   * turn (blind model + a configured recognizer, decided by the wiring
+   * layer). Absent/false renders nothing, so every existing caller's output
+   * stays byte-identical — this is additive-optional, not a behavior change.
+   */
+  visionFallbackEnabled?: boolean;
 }
 
 /**
@@ -89,6 +97,16 @@ export function renderEnvSection(env?: SystemPromptEnv): string {
 }
 
 /**
+ * Vision-fallback section (TASK.198 plan §5, sample conditional section —
+ * renderToolDisciplineSection above). Rendered only while the wiring layer
+ * says InspectImage is actually registered; "" otherwise so buildSystemPrompt's
+ * empty-section filter drops it with no gap.
+ */
+export function renderVisionFallbackSection(enabled?: boolean): string {
+  return enabled === true ? SECTION_VISION_FALLBACK : "";
+}
+
+/**
  * Builds the base system prompt. A zero-arg call stays valid (every existing call
  * site / test compiles unchanged); enrichment is opt-in through `options`.
  */
@@ -98,6 +116,7 @@ export function buildSystemPrompt(options?: SystemPromptOptions): string {
     SECTION_CONVENTIONS,
     SECTION_SAFETY,
     renderToolDisciplineSection(options?.toolNames),
+    renderVisionFallbackSection(options?.visionFallbackEnabled),
     renderEnvSection(options?.env),
   ];
   return sections.filter((section) => section.length > 0).join("\n\n");

@@ -150,6 +150,58 @@ describe("buildSystemPrompt", () => {
     expect(IDENTITY_PROMPT).toBe(SECTION_IDENTITY);
   });
 
+  it("TASK.198 slice B2: omits the vision-fallback section when the flag is absent", () => {
+    const prompt = buildSystemPrompt({ toolNames: ["Read"], env: ENV });
+    expect(prompt).not.toContain("InspectImage");
+  });
+
+  it("TASK.198 slice B2: omits the vision-fallback section when the flag is explicitly false", () => {
+    const prompt = buildSystemPrompt({ toolNames: ["Read"], env: ENV, visionFallbackEnabled: false });
+    expect(prompt).not.toContain("InspectImage");
+  });
+
+  it("TASK.198 slice B2: adds a vision-fallback section naming InspectImage when the flag is true", () => {
+    const prompt = buildSystemPrompt({ toolNames: ["Read"], env: ENV, visionFallbackEnabled: true });
+    expect(prompt).toContain("InspectImage");
+  });
+
+  it("TASK.198 slice B2: the vision-fallback section sits after tool-discipline and before env", () => {
+    const prompt = buildSystemPrompt({ toolNames: ["Read"], env: ENV, visionFallbackEnabled: true });
+    const iTools = prompt.indexOf(SECTION_TOOL_DISCIPLINE_TEMPLATE);
+    const iVision = prompt.indexOf("InspectImage");
+    const iEnv = prompt.indexOf("<env>");
+    expect(iTools).toBeGreaterThanOrEqual(0);
+    expect(iTools).toBeLessThan(iVision);
+    expect(iVision).toBeLessThan(iEnv);
+  });
+
+  it("TASK.198 slice B2: the reviewed full-prompt snapshot is unchanged when visionFallbackEnabled is not passed", () => {
+    // Same fixture as the snapshot test above, called without the new option —
+    // a new optional field must never change any existing caller's output.
+    expect(buildSystemPrompt({ toolNames: SNAPSHOT_TOOLS, env: ENV })).toMatchInlineSnapshot(`
+      "You are AnyCode, a coding agent that operates inside the user's local workspace. You get work done strictly through the tools available to you, and everything you do runs on the user's own machine. A session is a single CLI conversation or one tab of the desktop app.
+
+      Answer concisely — no filler, no echoing the request before acting. Learn the code before touching it: search with Read, Grep, and Glob instead of guessing. Prefer targeted Edits over rewriting files with Write. For multi-step work, keep the plan current with TodoWrite. Independent tool calls issued together in one response run concurrently — batch your reads and searches.
+
+      Anything with side effects goes through the user's permission gate — never slip past it, e.g. by hiding a blocked action inside Bash. Run destructive or irreversible operations only when the user clearly asked. Never echo secrets, tokens, or credentials.
+
+      The tools you may call are exactly those in the \`tools\` array of the CURRENT request; trust it over anything you remember — it can shrink between turns, e.g. when an MCP server reconnects.
+      Do not call a tool absent from it or assume a capability exists because another product offers one; your only tools are those named to you, \`mcp__*\` included.
+      If none of your tools cover a need, use Bash where that fits; otherwise tell the user plainly you cannot do it — never invent a tool name to paper over the gap.
+      These are the tools available to you as this session begins:
+      Agent, Bash, Edit, Glob, Grep, Read, Skill, TodoRead, TodoWrite, WebFetch, Workflow, Write, mcp__example__do_thing
+
+      <env>
+      Working directory: /work/project
+      Platform: darwin
+      OS version: 24.6.0
+      Today's date: 2026-07-04
+      Model: test-model
+      Git repository: yes
+      </env>"
+    `);
+  });
+
   it("the prompt builder modules are pure: no clock, process.env, or Date reads", () => {
     const dir = dirname(fileURLToPath(import.meta.url));
     const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));

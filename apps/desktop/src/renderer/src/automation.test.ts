@@ -21,6 +21,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import type { GitBranchInfo, GitCommitInfo } from "@anycode/core";
+import { COMPOSER_IMAGE_MAX_BYTES, COMPOSER_IMAGE_MAX_PER_MESSAGE } from "./components/Composer.js";
 import {
   createAutomationFacade,
   derivePendingForGitCommand,
@@ -43,12 +44,16 @@ import {
   type ProfilePaneToolState,
   type ProfilePaneModelRow,
   type ProfilePaneRefreshResult,
+  type VisionPaneDom,
+  type VisionPaneConnectionOption,
   type SettingsLayoutDom,
   type LspPanelDom,
   type HooksPanelDom,
   type CheckpointPanelDom,
   type TranscriptBlockDom,
   type TryAgainButtonDom,
+  type WorkflowStepsDom,
+  type WorkflowStepsDomState,
   type ProviderPaneDom,
   type ProviderConnectionRowView,
   type ProviderDrawerDomState,
@@ -365,6 +370,107 @@ describe("automation facade — sendPrompt", () => {
     for (const message of sentMessages) {
       expect(uiToHostMessageSchema.safeParse(message).success).toBe(true);
     }
+  });
+});
+
+describe("automation facade — sendPrompt with images (TASK.198 live-smoke facade)", () => {
+  const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const PNG_BASE64 = PNG_HEADER.toString("base64");
+
+  it("on a vision-capable model: sniffs the real bytes and sends the SAME wire shape a real drag-drop would (images[].{mediaType,data,sourcePath}), valid against uiToHostMessageSchema", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const result = facade.sendPrompt(tabId, "why?", [{ data: PNG_BASE64, sourcePath: "/tmp/shot.png" }]);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+
+    const sentMessages = port.sent.filter((m) => (m as { type: string }).type !== "ui_ready");
+    expect(sentMessages).toEqual([
+      {
+        type: "user_message",
+        requestId: result.requestId,
+        text: "why?",
+        images: [{ mediaType: "image/png", data: PNG_BASE64, sourcePath: "/tmp/shot.png" }],
+      },
+    ]);
+    for (const message of sentMessages) {
+      expect(uiToHostMessageSchema.safeParse(message).success).toBe(true);
+    }
+  });
+
+  // The load-bearing test for this whole slice: a blind model with no fallback
+  // configured must refuse, through the SAME `isSendBlockedByModelImages` gate
+  // Composer's own send button and tab-registry's first-turn dispatch use —
+  // never a facade shortcut that could silently defeat the gate.
+  it("a blind model with NO configured recognizer fallback -> {ok:false, reason:'images_unsupported'}, nothing sent (the real send-gate, not bypassed)", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false });
+
+    const result = facade.sendPrompt(tabId, "why?", [{ data: PNG_BASE64, sourcePath: "/tmp/shot.png" }]);
+
+    expect(result).toEqual({ ok: false, reason: "images_unsupported" });
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
+  });
+
+  it("a blind model WITH a configured recognizer fallback -> unblocked, images still go out (TASK.198 срез D carve-out)", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false, imageFallback: true });
+
+    const result = facade.sendPrompt(tabId, "why?", [{ data: PNG_BASE64, sourcePath: "/tmp/shot.png" }]);
+
+    expect(result.ok).toBe(true);
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(1);
+  });
+
+  it("a payload whose bytes don't sniff to any of the four supported formats -> {ok:false, reason:'image_unsupported_type'}, nothing sent", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    const notAnImage = Buffer.from("hello, world, not an image", "utf-8").toString("base64");
+
+    const result = facade.sendPrompt(tabId, "why?", [{ data: notAnImage, sourcePath: "/tmp/notimage.txt" }]);
+
+    expect(result).toEqual({ ok: false, reason: "image_unsupported_type" });
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
+  });
+
+  it("a payload over COMPOSER_IMAGE_MAX_BYTES -> {ok:false, reason:'image_too_large'}, nothing sent", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    const oversized = Buffer.concat([PNG_HEADER, Buffer.alloc(COMPOSER_IMAGE_MAX_BYTES)]).toString("base64");
+
+    const result = facade.sendPrompt(tabId, "why?", [{ data: oversized, sourcePath: "/tmp/big.png" }]);
+
+    expect(result).toEqual({ ok: false, reason: "image_too_large" });
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
+  });
+
+  it("more than COMPOSER_IMAGE_MAX_PER_MESSAGE images -> {ok:false, reason:'image_too_many'}, nothing sent", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    const images = Array.from({ length: COMPOSER_IMAGE_MAX_PER_MESSAGE + 1 }, (_, i) => ({
+      data: PNG_BASE64,
+      sourcePath: `/tmp/shot-${i}.png`,
+    }));
+
+    const result = facade.sendPrompt(tabId, "why?", images);
+
+    expect(result).toEqual({ ok: false, reason: "image_too_many" });
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
+  });
+
+  it("not_ready/busy/unknown_tab checks still run BEFORE any image validation", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const result = facade.sendPrompt(tabId, "why?", [{ data: "not-even-base64!!", sourcePath: "/tmp/x.png" }]);
+
+    expect(result).toEqual({ ok: false, reason: "busy" });
+    expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
   });
 });
 
@@ -5343,6 +5449,498 @@ async function withElapsedClock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+describe("automation facade — Vision pane probe/driver (TASK.198 срез E2c)", () => {
+  /** Builds a facade wired ONLY for the Vision pane methods — every other DI slot keeps its own lazy real default, same posture as the Profile block's `buildFacade`. */
+  function buildFacade(dom: VisionPaneDom) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined, // 4  dom
+      undefined, // 5  todoPanelDom
+      undefined, // 6  startScreenDom
+      undefined, // 7  modelPillDom
+      undefined, // 8  settingsStore
+      undefined, // 9  settingsDom
+      undefined, // 10 ctxPopoverDom
+      undefined, // 11 agentCardDom
+      undefined, // 12 mcpPaneDom
+      undefined, // 13 skillsPaneDom
+      undefined, // 14 subagentsPaneDom
+      undefined, // 15 profilePaneDom
+      undefined, // 16 composerSlashDom
+      undefined, // 17 shortcutsPaneDom
+      undefined, // 18 lspPanelDom
+      undefined, // 19 hooksPanelDom
+      undefined, // 20 checkpointPanelDom
+      undefined, // 21 transcriptBlockDom
+      undefined, // 22 tryAgainButtonDom
+      undefined, // 23 providerPaneDom
+      undefined, // 24 codexPaneDom
+      undefined, // 25 codexProfileChipDom
+      undefined, // 26 codexImportDom
+      undefined, // 27 binaryTrustDialogDom
+      undefined, // 28 trustedBinariesSectionDom
+      undefined, // 29 childLayoutStore
+      undefined, // 30 sidebarDom
+      undefined, // 31 settingsLayoutDom
+      undefined, // 32 workflowStepsDom
+      dom, // 33 visionPaneDom
+    );
+  }
+
+  const DEFAULT_OPTIONS: VisionPaneConnectionOption[] = [
+    { id: "conn-1", label: "GLM", selectable: true, proxyWarning: null },
+    { id: "conn-2", label: "OpenAI", selectable: false, proxyWarning: null },
+  ];
+
+  /**
+   * A fully-controllable fake `VisionPaneDom`, same discipline as
+   * `fakeProfilePaneDom`: most reads are frozen at construction, but
+   * `selectedConnectionId`/`modelValue`/the Save+Probe buttons' `disabled`
+   * reading/the turn-off gesture's phase are genuinely mutable internally, so
+   * a test exercises the facade's real `waitUntil` polling against a moving
+   * target rather than a frozen snapshot. `saveBehavior`/`probeBehavior`
+   * model the button's real busy round trip (`disabled` goes
+   * false -> true -> false via a real `setTimeout(0)`, same idiom
+   * `fakeProfilePaneDom`'s `scheduleSettle` uses) — `"never_start"` never
+   * flips it at all (a delivered click that does nothing), `"never_settle"`
+   * flips it true and leaves it there.
+   */
+  function fakeVisionPaneDom(
+    overrides: Partial<{
+      mounted: boolean;
+      enabled: boolean;
+      currentPairText: string | null;
+      connectionOptions: VisionPaneConnectionOption[];
+      selectedConnectionId: string;
+      modelValue: string;
+      modelHints: string[];
+      saveDisabled: boolean;
+      saveButtonPresent: boolean;
+      probeDisabled: boolean;
+      probeButtonPresent: boolean;
+      /** `"off"` models the fallback disabled — neither turn-off button renders. */
+      turnOffPhase: "off" | "unarmed" | "armed";
+      turnOffDisabled: boolean;
+      errorText: string | null;
+      probeResultText: { ok: boolean; text: string } | null;
+      selectConnectionResult: boolean;
+      /** `false` simulates a delivered pick that never actually commits — the `did_not_select` scenario. */
+      selectConnectionCommits: boolean;
+      setModelResult: boolean;
+      /** `false` simulates a delivered keystroke that never actually commits — the `did_not_commit` scenario. */
+      setModelCommits: boolean;
+      clickSaveResult: boolean;
+      saveBehavior: "settle" | "never_start" | "never_settle";
+      clickProbeResult: boolean;
+      probeBehavior: "settle" | "never_start" | "never_settle";
+      clickTurnOffResult: boolean;
+      /** `false` simulates a delivered arming click that never produces the confirm button — the `did_not_arm` scenario. */
+      armBehavior: "arms" | "never_arms";
+      clickTurnOffConfirmResult: boolean;
+      /** `false` simulates a delivered confirm click whose real `recognizerSet` never actually turns the fallback off — the `did_not_settle` scenario. */
+      confirmBehavior: "settles" | "never_settles";
+    }> = {},
+  ): VisionPaneDom {
+    const mounted = overrides.mounted ?? true;
+    let selectedConnectionId = overrides.selectedConnectionId ?? "";
+    let modelValue = overrides.modelValue ?? "";
+    let saveDisabled = overrides.saveDisabled ?? false;
+    let probeDisabled = overrides.probeDisabled ?? false;
+    let turnOffPhase = overrides.turnOffPhase ?? "unarmed";
+    const turnOffDisabled = overrides.turnOffDisabled ?? false;
+    const connectionOptions = overrides.connectionOptions ?? DEFAULT_OPTIONS;
+    return {
+      mounted: () => mounted,
+      enabled: () => overrides.enabled ?? false,
+      currentPairText: () => overrides.currentPairText ?? null,
+      connectionOptions: () => connectionOptions,
+      selectedConnectionId: () => selectedConnectionId,
+      selectConnection: vi.fn((connectionId: string) => {
+        if (overrides.selectConnectionResult === false) {
+          return false;
+        }
+        const option = connectionOptions.find((candidate) => candidate.id === connectionId);
+        if (!option || !option.selectable) {
+          return false;
+        }
+        if (overrides.selectConnectionCommits !== false) {
+          selectedConnectionId = connectionId;
+        }
+        return true;
+      }),
+      modelValue: () => modelValue,
+      setModel: vi.fn((modelId: string) => {
+        if (overrides.setModelResult === false) {
+          return false;
+        }
+        if (overrides.setModelCommits !== false) {
+          modelValue = modelId;
+        }
+        return true;
+      }),
+      modelHints: () => overrides.modelHints ?? [],
+      saveButton: () => (overrides.saveButtonPresent === false ? null : { disabled: saveDisabled }),
+      clickSave: vi.fn(() => {
+        if (overrides.clickSaveResult === false || overrides.saveButtonPresent === false) {
+          return false;
+        }
+        const behavior = overrides.saveBehavior ?? "settle";
+        if (behavior === "never_start") {
+          return true;
+        }
+        saveDisabled = true;
+        if (behavior === "settle") {
+          setTimeout(() => {
+            saveDisabled = false;
+          }, 0);
+        }
+        return true;
+      }),
+      probeButton: () => (overrides.probeButtonPresent === false ? null : { disabled: probeDisabled }),
+      clickProbe: vi.fn(() => {
+        if (overrides.clickProbeResult === false || overrides.probeButtonPresent === false) {
+          return false;
+        }
+        const behavior = overrides.probeBehavior ?? "settle";
+        if (behavior === "never_start") {
+          return true;
+        }
+        probeDisabled = true;
+        if (behavior === "settle") {
+          setTimeout(() => {
+            probeDisabled = false;
+          }, 0);
+        }
+        return true;
+      }),
+      turnOffButton: () => (turnOffPhase === "unarmed" ? { disabled: turnOffDisabled } : null),
+      clickTurnOff: vi.fn(() => {
+        if (overrides.clickTurnOffResult === false || turnOffPhase !== "unarmed") {
+          return false;
+        }
+        if ((overrides.armBehavior ?? "arms") === "arms") {
+          turnOffPhase = "armed";
+        }
+        return true;
+      }),
+      turnOffConfirmButton: () => (turnOffPhase === "armed" ? { disabled: turnOffDisabled } : null),
+      clickTurnOffConfirm: vi.fn(() => {
+        if (overrides.clickTurnOffConfirmResult === false || turnOffPhase !== "armed") {
+          return false;
+        }
+        if ((overrides.confirmBehavior ?? "settles") === "settles") {
+          turnOffPhase = "off";
+        }
+        return true;
+      }),
+      errorText: () => overrides.errorText ?? null,
+      probeResultText: () => overrides.probeResultText ?? null,
+    };
+  }
+
+  describe("visionPaneState", () => {
+    it("reads the empty defaults when unmounted, never an error", () => {
+      const dom = fakeVisionPaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      expect(facade.visionPaneState()).toEqual({
+        mounted: false,
+        enabled: false,
+        currentPairText: null,
+        connectionOptions: [],
+        selectedConnectionId: "",
+        modelValue: "",
+        modelHints: [],
+        saveDisabled: false,
+        probeDisabled: false,
+        turnOffDisabled: null,
+        errorText: null,
+        probeResultText: null,
+        probeResultOk: null,
+      });
+    });
+
+    it("maps every mounted observable straight off the DOM", () => {
+      const dom = fakeVisionPaneDom({
+        enabled: true,
+        currentPairText: "GLM · glm-5.3-flash",
+        connectionOptions: DEFAULT_OPTIONS,
+        selectedConnectionId: "conn-1",
+        modelValue: "glm-5.3-flash",
+        modelHints: ["glm-5.3-flash", "glm-5.3"],
+        saveDisabled: false,
+        probeDisabled: true,
+        turnOffDisabled: false,
+        errorText: null,
+        probeResultText: { ok: true, text: "The two squares are red and blue." },
+      });
+      const facade = buildFacade(dom);
+      expect(facade.visionPaneState()).toEqual({
+        mounted: true,
+        enabled: true,
+        currentPairText: "GLM · glm-5.3-flash",
+        connectionOptions: DEFAULT_OPTIONS,
+        selectedConnectionId: "conn-1",
+        modelValue: "glm-5.3-flash",
+        modelHints: ["glm-5.3-flash", "glm-5.3"],
+        saveDisabled: false,
+        probeDisabled: true,
+        turnOffDisabled: false,
+        errorText: null,
+        probeResultText: "The two squares are red and blue.",
+        probeResultOk: true,
+      });
+    });
+
+    it("reports a failed probe result with probeResultOk:false", () => {
+      const dom = fakeVisionPaneDom({ probeResultText: { ok: false, text: "The recognizer timed out." } });
+      const facade = buildFacade(dom);
+      const state = facade.visionPaneState();
+      expect(state.probeResultText).toBe("The recognizer timed out.");
+      expect(state.probeResultOk).toBe(false);
+    });
+
+    it("reads turnOffDisabled as null when the fallback is off (no turn-off control rendered at all)", () => {
+      const dom = fakeVisionPaneDom({ turnOffPhase: "off" });
+      const facade = buildFacade(dom);
+      expect(facade.visionPaneState().turnOffDisabled).toBeNull();
+    });
+
+    it("reads turnOffDisabled off the ARMED confirm button once the gesture is armed", () => {
+      const dom = fakeVisionPaneDom({ turnOffPhase: "armed", turnOffDisabled: true });
+      const facade = buildFacade(dom);
+      expect(facade.visionPaneState().turnOffDisabled).toBe(true);
+    });
+  });
+
+  describe("visionSelectConnection", () => {
+    it("refuses when the pane isn't mounted", async () => {
+      const dom = fakeVisionPaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionSelectConnection("conn-1")).resolves.toEqual({
+        ok: false,
+        reason: "pane_not_mounted",
+      });
+    });
+
+    it("refuses option_not_present for an id naming no option, or a disabled (OAuth) one", async () => {
+      const dom = fakeVisionPaneDom();
+      const facade = buildFacade(dom);
+      await expect(facade.visionSelectConnection("no-such-id")).resolves.toEqual({
+        ok: false,
+        reason: "option_not_present",
+      });
+      await expect(facade.visionSelectConnection("conn-2")).resolves.toEqual({
+        ok: false,
+        reason: "option_not_present",
+      });
+    });
+
+    it("picks a real selectable connection and reports ok:true", async () => {
+      const dom = fakeVisionPaneDom();
+      const facade = buildFacade(dom);
+      await expect(facade.visionSelectConnection("conn-1")).resolves.toEqual({ ok: true });
+      expect(facade.visionPaneState().selectedConnectionId).toBe("conn-1");
+    });
+
+    it("reports did_not_select when the pick is delivered but never commits", async () => {
+      const dom = fakeVisionPaneDom({ selectConnectionCommits: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionSelectConnection("conn-1")).resolves.toEqual({
+        ok: false,
+        reason: "did_not_select",
+      });
+    });
+  });
+
+  describe("visionSetModel", () => {
+    it("refuses when the pane isn't mounted", async () => {
+      const dom = fakeVisionPaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionSetModel("glm-5.3-flash")).resolves.toEqual({
+        ok: false,
+        reason: "pane_not_mounted",
+      });
+    });
+
+    it("refuses field_not_present when the field is missing/disabled", async () => {
+      const dom = fakeVisionPaneDom({ setModelResult: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionSetModel("glm-5.3-flash")).resolves.toEqual({
+        ok: false,
+        reason: "field_not_present",
+      });
+    });
+
+    it("types a real value and reports ok:true", async () => {
+      const dom = fakeVisionPaneDom();
+      const facade = buildFacade(dom);
+      await expect(facade.visionSetModel("glm-5.3-flash")).resolves.toEqual({ ok: true });
+      expect(facade.visionPaneState().modelValue).toBe("glm-5.3-flash");
+    });
+
+    it("reports did_not_commit when the keystroke is delivered but never commits", async () => {
+      const dom = fakeVisionPaneDom({ setModelCommits: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionSetModel("glm-5.3-flash")).resolves.toEqual({
+        ok: false,
+        reason: "did_not_commit",
+      });
+    });
+  });
+
+  describe("visionSave", () => {
+    it("refuses when the pane isn't mounted", async () => {
+      const dom = fakeVisionPaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionSave()).resolves.toEqual({ ok: false, reason: "pane_not_mounted" });
+    });
+
+    it("refuses save_not_present when the button isn't rendered", async () => {
+      const dom = fakeVisionPaneDom({ saveButtonPresent: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionSave()).resolves.toEqual({ ok: false, reason: "save_not_present" });
+    });
+
+    it("refuses save_disabled without ever clicking", async () => {
+      const dom = fakeVisionPaneDom({ saveDisabled: true });
+      const facade = buildFacade(dom);
+      await expect(facade.visionSave()).resolves.toEqual({ ok: false, reason: "save_disabled" });
+      expect(dom.clickSave).not.toHaveBeenCalled();
+    });
+
+    it("clicks Save and reports ok:true once the round trip settles", async () => {
+      const dom = fakeVisionPaneDom();
+      const facade = buildFacade(dom);
+      await expect(facade.visionSave()).resolves.toEqual({ ok: true });
+      expect(dom.clickSave).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports did_not_start when the click never visibly begins anything", async () => {
+      const dom = fakeVisionPaneDom({ saveBehavior: "never_start" });
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.visionSave())).resolves.toEqual({
+        ok: false,
+        reason: "did_not_start",
+      });
+    });
+
+    it("reports did_not_settle when the round trip never finishes", async () => {
+      const dom = fakeVisionPaneDom({ saveBehavior: "never_settle" });
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.visionSave())).resolves.toEqual({
+        ok: false,
+        reason: "did_not_settle",
+      });
+    });
+  });
+
+  describe("visionProbe", () => {
+    it("refuses when the pane isn't mounted", async () => {
+      const dom = fakeVisionPaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionProbe()).resolves.toEqual({ ok: false, reason: "pane_not_mounted" });
+    });
+
+    it("refuses probe_not_present when the button isn't rendered", async () => {
+      const dom = fakeVisionPaneDom({ probeButtonPresent: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionProbe()).resolves.toEqual({ ok: false, reason: "probe_not_present" });
+    });
+
+    it("refuses probe_disabled without ever clicking", async () => {
+      const dom = fakeVisionPaneDom({ probeDisabled: true });
+      const facade = buildFacade(dom);
+      await expect(facade.visionProbe()).resolves.toEqual({ ok: false, reason: "probe_disabled" });
+      expect(dom.clickProbe).not.toHaveBeenCalled();
+    });
+
+    it("clicks Probe and reports ok:true once the real network round trip settles", async () => {
+      const dom = fakeVisionPaneDom();
+      const facade = buildFacade(dom);
+      await expect(facade.visionProbe()).resolves.toEqual({ ok: true });
+      expect(dom.clickProbe).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports did_not_start when the click never visibly begins anything", async () => {
+      const dom = fakeVisionPaneDom({ probeBehavior: "never_start" });
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.visionProbe())).resolves.toEqual({
+        ok: false,
+        reason: "did_not_start",
+      });
+    });
+
+    it("reports did_not_settle when the network round trip never finishes (its own 65s ceiling, not the file's other deadlines)", async () => {
+      const dom = fakeVisionPaneDom({ probeBehavior: "never_settle" });
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.visionProbe())).resolves.toEqual({
+        ok: false,
+        reason: "did_not_settle",
+      });
+    });
+  });
+
+  describe("visionTurnOff", () => {
+    it("refuses when the pane isn't mounted", async () => {
+      const dom = fakeVisionPaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      await expect(facade.visionTurnOff()).resolves.toEqual({ ok: false, reason: "pane_not_mounted" });
+    });
+
+    it("refuses turnoff_not_present when the fallback is already off", async () => {
+      const dom = fakeVisionPaneDom({ turnOffPhase: "off" });
+      const facade = buildFacade(dom);
+      await expect(facade.visionTurnOff()).resolves.toEqual({ ok: false, reason: "turnoff_not_present" });
+    });
+
+    it("refuses turnoff_disabled without ever clicking, when the unarmed button is disabled", async () => {
+      const dom = fakeVisionPaneDom({ turnOffDisabled: true });
+      const facade = buildFacade(dom);
+      await expect(facade.visionTurnOff()).resolves.toEqual({ ok: false, reason: "turnoff_disabled" });
+      expect(dom.clickTurnOff).not.toHaveBeenCalled();
+    });
+
+    it("arms, confirms, and reports ok:true once the real recognizerSet round trip settles", async () => {
+      const dom = fakeVisionPaneDom();
+      const facade = buildFacade(dom);
+      await expect(facade.visionTurnOff()).resolves.toEqual({ ok: true });
+      expect(dom.clickTurnOff).toHaveBeenCalledTimes(1);
+      expect(dom.clickTurnOffConfirm).toHaveBeenCalledTimes(1);
+    });
+
+    it("confirms directly without re-arming when the gesture is already armed", async () => {
+      const dom = fakeVisionPaneDom({ turnOffPhase: "armed" });
+      const facade = buildFacade(dom);
+      await expect(facade.visionTurnOff()).resolves.toEqual({ ok: true });
+      expect(dom.clickTurnOff).not.toHaveBeenCalled();
+      expect(dom.clickTurnOffConfirm).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports did_not_arm when the arming click never produces the confirm button", async () => {
+      const dom = fakeVisionPaneDom({ armBehavior: "never_arms" });
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.visionTurnOff())).resolves.toEqual({
+        ok: false,
+        reason: "did_not_arm",
+      });
+      expect(dom.clickTurnOffConfirm).not.toHaveBeenCalled();
+    });
+
+    it("reports did_not_settle when the confirm round trip never actually turns the fallback off", async () => {
+      const dom = fakeVisionPaneDom({ turnOffPhase: "armed", confirmBehavior: "never_settles" });
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.visionTurnOff())).resolves.toEqual({
+        ok: false,
+        reason: "did_not_settle",
+      });
+    });
+  });
+});
+
 describe("automation facade — settings geometry probe (TASK.187 S5, defect 1)", () => {
   /** Wires ONLY the geometry slot; positions 4-30 keep their own lazy real defaults, same posture as the Profile block's `buildFacade`. */
   function buildFacade(settingsLayoutDom: SettingsLayoutDom) {
@@ -6018,6 +6616,272 @@ describe("automation facade — tryAgainButtonState/tryAgainButtonClick (TASK.33
       expect(result).toEqual({ ok: true });
       expect(store.getState().retry).toMatchObject({ text: "look at this", images: [image] });
       expect(store.getState().notice?.kind).toBe("retry_blocked");
+    });
+  });
+});
+
+describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 slice S4)", () => {
+  /** Builds a facade wired ONLY for the workflow-steps methods — every other DOM/store slot keeps its own real default (never exercised by these tests). */
+  function buildFacade(registry: TabRegistry, tabsStore: TabsStoreApi, workflowStepsDom?: WorkflowStepsDom) {
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined, // 4  dom
+      undefined, // 5  todoPanelDom
+      undefined, // 6  startScreenDom
+      undefined, // 7  modelPillDom
+      undefined, // 8  settingsStore
+      undefined, // 9  settingsDom
+      undefined, // 10 ctxPopoverDom
+      undefined, // 11 agentCardDom
+      undefined, // 12 mcpPaneDom
+      undefined, // 13 skillsPaneDom
+      undefined, // 14 subagentsPaneDom
+      undefined, // 15 profilePaneDom
+      undefined, // 16 composerSlashDom
+      undefined, // 17 shortcutsPaneDom
+      undefined, // 18 lspPanelDom
+      undefined, // 19 hooksPanelDom
+      undefined, // 20 checkpointPanelDom
+      undefined, // 21 transcriptBlockDom
+      undefined, // 22 tryAgainButtonDom
+      undefined, // 23 providerPaneDom
+      undefined, // 24 codexPaneDom
+      undefined, // 25 codexProfileChipDom
+      undefined, // 26 codexImportDom
+      undefined, // 27 binaryTrustDialogDom
+      undefined, // 28 trustedBinariesSectionDom
+      undefined, // 29 childLayoutStore
+      undefined, // 30 sidebarDom
+      undefined, // 31 settingsLayoutDom
+      workflowStepsDom, // 32
+    );
+  }
+
+  describe("workflowStepsState", () => {
+    it("refuses a tabId that isn't the active tab (tab_not_active)", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
+      registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
+      tabsStore.getState().setActiveTab("tab-b");
+      const workflowStepsDom: WorkflowStepsDom = { state: () => null, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      expect(facade.workflowStepsState(tabId, "call-1")).toEqual({ ok: false, reason: "tab_not_active" });
+    });
+
+    it("rejects an unknown tabId (unknown_tab)", () => {
+      const tabsStore = createTabsStore();
+      const registry = createTabRegistry(tabsStore);
+      tabsStore.setState({ activeTabId: "ghost" });
+      const workflowStepsDom: WorkflowStepsDom = { state: () => null, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      expect(facade.workflowStepsState("ghost", "call-1")).toEqual({ ok: false, reason: "unknown_tab" });
+    });
+
+    it("reports the empty default shape (not an error) when no card with this toolCallId is rendered yet", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const workflowStepsDom: WorkflowStepsDom = { state: () => null, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      expect(facade.workflowStepsState(tabId, "call-1")).toEqual({ ok: true, rows: [], activityRows: [] });
+    });
+
+    it("queries workflowStepsDom.state with the EXACT tabId + toolCallId requested", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const seen: Array<[string, string]> = [];
+      const workflowStepsDom: WorkflowStepsDom = {
+        state: (t, id) => {
+          seen.push([t, id]);
+          return null;
+        },
+        click: vi.fn(() => false),
+      };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      facade.workflowStepsState(tabId, "call-42");
+      expect(seen).toEqual([[tabId, "call-42"]]);
+    });
+
+    it("spreads a found card's rows/activityRows verbatim, in the rendered order", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const domState: WorkflowStepsDomState = {
+        rows: [
+          { stepId: "step-1", selected: false },
+          { stepId: "step-2", selected: true },
+        ],
+        activityRows: ["step-2: wrote file.ts"],
+      };
+      const workflowStepsDom: WorkflowStepsDom = { state: () => domState, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      expect(facade.workflowStepsState(tabId, "call-1")).toEqual({
+        ok: true,
+        rows: [
+          { stepId: "step-1", selected: false },
+          { stepId: "step-2", selected: true },
+        ],
+        activityRows: ["step-2: wrote file.ts"],
+      });
+    });
+  });
+
+  describe("workflowStepClick", () => {
+    it("refuses a tabId that isn't the active tab (tab_not_active), touching no DOM click", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
+      registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
+      tabsStore.getState().setActiveTab("tab-b");
+      const workflowStepsDom: WorkflowStepsDom = { state: () => null, click: vi.fn(() => true) };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      await expect(facade.workflowStepClick(tabId, "call-1", "step-1")).resolves.toEqual({
+        ok: false,
+        reason: "tab_not_active",
+      });
+      expect(workflowStepsDom.click).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown tabId (unknown_tab), touching no DOM click", async () => {
+      const tabsStore = createTabsStore();
+      const registry = createTabRegistry(tabsStore);
+      tabsStore.setState({ activeTabId: "ghost" });
+      const workflowStepsDom: WorkflowStepsDom = { state: () => null, click: vi.fn(() => true) };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      await expect(facade.workflowStepClick("ghost", "call-1", "step-1")).resolves.toEqual({
+        ok: false,
+        reason: "unknown_tab",
+      });
+      expect(workflowStepsDom.click).not.toHaveBeenCalled();
+    });
+
+    it("returns {ok:false, reason:'not_present'} without clicking when no card is rendered at all", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const click = vi.fn(() => true);
+      const workflowStepsDom: WorkflowStepsDom = { state: () => null, click };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      await expect(facade.workflowStepClick(tabId, "call-1", "step-1")).resolves.toEqual({
+        ok: false,
+        reason: "not_present",
+      });
+      expect(click).not.toHaveBeenCalled();
+    });
+
+    it("returns {ok:false, reason:'not_present'} without clicking when the requested stepId isn't among the rendered rows", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const click = vi.fn(() => true);
+      const workflowStepsDom: WorkflowStepsDom = {
+        state: () => ({ rows: [{ stepId: "step-1", selected: false }], activityRows: [] }),
+        click,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      await expect(facade.workflowStepClick(tabId, "call-1", "step-ghost")).resolves.toEqual({
+        ok: false,
+        reason: "not_present",
+      });
+      expect(click).not.toHaveBeenCalled();
+    });
+
+    it("returns {ok:false, reason:'not_present'} when the DOM click itself refuses (e.g. an ambiguous match), even though the row read as present", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const workflowStepsDom: WorkflowStepsDom = {
+        state: () => ({ rows: [{ stepId: "step-1", selected: false }], activityRows: [] }),
+        click: vi.fn(() => false),
+      };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      await expect(facade.workflowStepClick(tabId, "call-1", "step-1")).resolves.toEqual({
+        ok: false,
+        reason: "not_present",
+      });
+    });
+
+    // PIN: with two rows present, the click MUST land on the one whose
+    // stepId was requested, not the first row in DOM order — a facade bug
+    // that clicked row[0] regardless of the requested stepId would still
+    // pass every guard test above (both rows are "present"), so this test
+    // exists specifically to catch that class of defect.
+    it("clicks the exact button whose stepId was requested, not the first row in DOM order", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const rows = [
+        { stepId: "step-1", selected: false },
+        { stepId: "step-2", selected: false },
+      ];
+      const seen: Array<[string, string, string]> = [];
+      const workflowStepsDom: WorkflowStepsDom = {
+        state: () => ({ rows: rows.map((r) => ({ ...r })), activityRows: [] }),
+        click: (t, id, stepId) => {
+          seen.push([t, id, stepId]);
+          const row = rows.find((r) => r.stepId === stepId);
+          if (!row) return false;
+          row.selected = !row.selected;
+          return true;
+        },
+      };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      await expect(facade.workflowStepClick(tabId, "call-1", "step-2")).resolves.toEqual({ ok: true });
+      expect(seen).toEqual([[tabId, "call-1", "step-2"]]);
+      expect(rows).toEqual([
+        { stepId: "step-1", selected: false },
+        { stepId: "step-2", selected: true },
+      ]);
+    });
+
+    it("clicks the toggle and succeeds once the row reports selected:true only after a tick (same commit-race guard as agentCardExpand)", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      let selected = false;
+      const click = vi.fn(() => {
+        setTimeout(() => {
+          selected = true;
+        }, 0);
+        return true;
+      });
+      const workflowStepsDom: WorkflowStepsDom = {
+        state: () => ({ rows: [{ stepId: "step-1", selected }], activityRows: [] }),
+        click,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      await expect(facade.workflowStepClick(tabId, "call-1", "step-1")).resolves.toEqual({ ok: true });
+      expect(click).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-clicking an already-selected step also settles to {ok:true} once selected flips back to false (toggleWorkflowStepSelection clears, it doesn't just set)", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      let selected = true;
+      const click = vi.fn(() => {
+        setTimeout(() => {
+          selected = false;
+        }, 0);
+        return true;
+      });
+      const workflowStepsDom: WorkflowStepsDom = {
+        state: () => ({ rows: [{ stepId: "step-1", selected }], activityRows: [] }),
+        click,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      await expect(facade.workflowStepClick(tabId, "call-1", "step-1")).resolves.toEqual({ ok: true });
+    });
+
+    it("refuses with did_not_settle when the click never flips selected, bounded by the commit-poll deadline", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const click = vi.fn(() => true);
+      const workflowStepsDom: WorkflowStepsDom = {
+        state: () => ({ rows: [{ stepId: "step-1", selected: false }], activityRows: [] }),
+        click,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      const start = Date.now();
+      await expect(facade.workflowStepClick(tabId, "call-1", "step-1")).resolves.toEqual({
+        ok: false,
+        reason: "did_not_settle",
+      });
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(450);
+      expect(elapsed).toBeLessThan(2000);
+      expect(click).toHaveBeenCalledTimes(1);
     });
   });
 });

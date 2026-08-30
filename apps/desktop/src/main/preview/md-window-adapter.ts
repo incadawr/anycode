@@ -76,5 +76,12 @@ export function createMdPreviewWindow(
     },
     capturePage: async () => wrapCapturedImage(await win.webContents.capturePage()),
     setBackgroundThrottling: (enabled) => win.webContents.setBackgroundThrottling(enabled),
+    getContentSize: () => {
+      // Electron's BrowserWindow.getContentSize() always returns exactly
+      // [width, height] — the non-null assertions just satisfy
+      // noUncheckedIndexedAccess, they do not paper over a real gap.
+      const size = win.getContentSize();
+      return { width: size[0]!, height: size[1]! };
+    },
   };
 }

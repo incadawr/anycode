@@ -73,6 +73,7 @@ import type {
   ModelStreamEvent,
   PermissionMode,
   ReasoningEffort,
+  RecognizerEndpoint,
   TelemetryStatus,
 } from "@anycode/core";
 import type { SessionEngine } from "./engines/session-engine.js";
@@ -1001,6 +1002,145 @@ describe("Session — multimodal attachments", () => {
       const rejected = await h.waitFor(isTurnRejected);
       expect(rejected).toMatchObject({ requestId: "r1", reason: "unsupported_images" });
       expect((h.config.modelPort as ScriptedModelPort).requests).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+const isImageFallbackChanged = (m: HostToUiMessage): m is Of<"image_fallback_changed"> =>
+  m.type === "image_fallback_changed";
+
+describe("Session — vision fallback (TASK.198 срез C)", () => {
+  const image: ImageAttachment = { mediaType: "image/png", data: "QUJD", sourcePath: "shot.png" };
+
+  it("accepts an image turn on a blind model when the recognizer fallback is available", async () => {
+    const h = createHarness({
+      steps: [textStep("ok"), finishStep()],
+      imageInputEnabled: false,
+      imageFallbackAvailable: true,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "look", images: [image] });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      expect((h.config.modelPort as ScriptedModelPort).requests.length).toBe(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("still rejects an image turn on a blind model with NO fallback configured — unchanged pre-TASK.198 behavior", async () => {
+    const h = createHarness({
+      steps: [textStep("must not run")],
+      imageInputEnabled: false,
+      imageFallbackAvailable: false,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "look", images: [image] });
+      const rejected = await h.waitFor(isTurnRejected);
+      expect(rejected).toMatchObject({ requestId: "r1", reason: "unsupported_images" });
+      expect((h.config.modelPort as ScriptedModelPort).requests).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("host_ready carries the imageFallback verdict alongside imageInput", async () => {
+    const h = createHarness({ steps: [], imageInputEnabled: false, imageFallbackAvailable: true });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready).toMatchObject({ imageInput: false, imageFallback: true });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("model_changed carries the imageFallback verdict re-read for the new model", async () => {
+    const h = createHarness({
+      steps: [],
+      imageInputEnabled: false,
+      imageFallbackAvailable: true,
+      switchModel: () => ({ model: "m2", reasoningEffort: "off" as const }),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_model", model: "m2" });
+      const changed = await h.waitFor(isModelChanged);
+      expect(changed).toMatchObject({ imageFallback: true });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("applies a live recognizer-config push immediately while idle, and emits image_fallback_changed AFTER the commit", async () => {
+    const applied: (RecognizerEndpoint | null)[] = [];
+    let current: RecognizerEndpoint | null = null;
+    const h = createHarness({
+      steps: [],
+      imageFallbackAvailable: () => current !== null,
+      applyRecognizerConfig: (endpoint) => {
+        applied.push(endpoint);
+        current = endpoint;
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.applyRecognizerConfig({ transport: "anthropic-messages", baseUrl: "https://x", model: "m" });
+      const changed = await h.waitFor(isImageFallbackChanged);
+      expect(applied).toEqual([{ transport: "anthropic-messages", baseUrl: "https://x", model: "m" }]);
+      expect(changed.imageFallback).toBe(true);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("defers a live push received mid-turn to the busy->idle boundary, last-value-wins", async () => {
+    const applied: (RecognizerEndpoint | null)[] = [];
+    const h = createHarness({
+      steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
+      applyRecognizerConfig: (endpoint) => applied.push(endpoint),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      const req = await h.waitFor(isPermissionRequest); // turn parked -> busy === true
+
+      h.session.applyRecognizerConfig({ transport: "anthropic-messages", baseUrl: "https://a", model: "m-a" });
+      h.session.applyRecognizerConfig({ transport: "anthropic-messages", baseUrl: "https://b", model: "m-b" });
+      // Not applied yet — the turn is still running (deferred, not dropped).
+      expect(applied).toEqual([]);
+
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitFor(isImageFallbackChanged);
+      // Only the LAST pending value was committed — the busy-window's first push never applied on its own.
+      expect(applied).toEqual([{ transport: "anthropic-messages", baseUrl: "https://b", model: "m-b" }]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a session with no vision wiring at all (codex/claude, legacy tests) treats a push as a safe no-op", async () => {
+    const h = createHarness({ steps: [] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      expect(() =>
+        h.session.applyRecognizerConfig({ transport: "anthropic-messages", baseUrl: "https://x", model: "m" }),
+      ).not.toThrow();
     } finally {
       h.close();
     }

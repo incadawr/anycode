@@ -100,6 +100,34 @@ describe("BrowserScreenshot", () => {
       await browserScreenshotTool.handler(browserScreenshotInputSchema.parse({}), context({ preview, media: mediaOff }));
       expect(screenshot).not.toHaveBeenCalled();
     });
+
+    it("TASK.198 slice B2: passes when the model is blind but a vision recognizer is configured", async () => {
+      const preview = previewWith(vi.fn<PreviewPort["screenshot"]>(async () => ({ ok: true, value: screenshotSuccess })));
+      const mediaBlindWithRecognizer: MediaCapabilityPort = {
+        imageInputEnabled: () => false,
+        recognizerConfigured: () => true,
+      };
+      const result = await browserScreenshotTool.handler(
+        browserScreenshotInputSchema.parse({}),
+        context({ preview, media: mediaBlindWithRecognizer }),
+      );
+      expect(result.ok).toBe(true);
+      expect(result.images).toHaveLength(1);
+    });
+
+    it("TASK.198 slice B2: still refuses when blind and recognizerConfigured() is false", async () => {
+      const preview = previewWith(vi.fn<PreviewPort["screenshot"]>(async () => ({ ok: true, value: screenshotSuccess })));
+      const mediaBlindNoRecognizer: MediaCapabilityPort = {
+        imageInputEnabled: () => false,
+        recognizerConfigured: () => false,
+      };
+      const result = await browserScreenshotTool.handler(
+        browserScreenshotInputSchema.parse({}),
+        context({ preview, media: mediaBlindNoRecognizer }),
+      );
+      expect(result.ok).toBe(false);
+      expect(result.images).toBeUndefined();
+    });
   });
 
   it("forwards preview_id as previewId", async () => {
@@ -135,6 +163,34 @@ describe("BrowserScreenshot", () => {
     expect(img!.data).toBe(screenshotSuccess.data);
     expect(img!.sourcePath).toBe(screenshotSuccess.url);
     expect(result.output).toEqual(screenshotSuccess);
+  });
+
+  it("TASK.198 slice G: forwards a port-supplied cssWidth/cssHeight as attachment.cssSize", async () => {
+    const withCss: PreviewScreenshotSuccess = { ...screenshotSuccess, cssWidth: 550, cssHeight: 400 };
+    const preview = previewWith(async () => ({ ok: true, value: withCss }));
+    const result = await browserScreenshotTool.handler(
+      browserScreenshotInputSchema.parse({}),
+      context({ preview, media: mediaOn }),
+    );
+    expect(result.ok).toBe(true);
+    const [img] = result.images!;
+    expect(img!.cssSize).toEqual({ width: 550, height: 400 });
+  });
+
+  it("TASK.198 slice G additivity pin: without a port-supplied CSS size, the attachment has no cssSize KEY at all (not just undefined) — byte-identical to pre-slice behaviour", async () => {
+    const preview = previewWith(async () => ({ ok: true, value: screenshotSuccess }));
+    const result = await browserScreenshotTool.handler(
+      browserScreenshotInputSchema.parse({}),
+      context({ preview, media: mediaOn }),
+    );
+    expect(result.ok).toBe(true);
+    const [img] = result.images!;
+    expect("cssSize" in img!).toBe(false);
+    expect(img).toEqual({
+      mediaType: "image/png",
+      data: screenshotSuccess.data,
+      sourcePath: screenshotSuccess.url,
+    });
   });
 
   it("rejects a screenshot over IMAGE_MAX_BYTES (decoded) with a size error and no images", async () => {

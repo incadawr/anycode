@@ -73,6 +73,7 @@ import type { CatalogProviderEntry } from "../provider/catalog.js";
 import type { EndpointConfig } from "../provider/endpoint.js";
 import { ENV_API_KEY, ENV_MODEL, loadEnvConfig } from "../provider/env.js";
 import { AiSdkModelPort } from "../provider/model-port.js";
+import { createMediaProjectionPort } from "../provider/media-projection.js";
 import { resolveIncludeUsage } from "../provider/openai-compatible.js";
 import type { RetryPolicy } from "../provider/retry.js";
 import { createSkillPort } from "../skills/discovery.js";
@@ -844,6 +845,20 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
       resolveImageInput(systemPromptEnv.modelId ?? "", catalogEntry, envConfig.imageInput),
   };
 
+  // Vision-fallback media-projection decorator (TASK.198 plan §3, slice B1):
+  // ONE external wrapper around the SwitchableModelPort built above, so
+  // every consumer of loopConfig.modelPort (the main turn loop, the
+  // ceiling-ladder verdict request, LLM auto/manual compaction, and inline-
+  // subagent wrap-up) strips image bytes the instant `media.imageInputEnabled()`
+  // reports false — including the "sighted history, live switch to a blind
+  // model" route that was a silent 400 before this decorator existed. The
+  // inner SwitchableModelPort (`modelPort`) is untouched and stays the
+  // target of every `.setPort()` call below; the decorator itself is never
+  // swapped. This CLI does not parse ANYCODE_RECOGNIZER_* (that lives in the
+  // desktop host, plan §10 slice C) — the loop's own `recognizer` field
+  // below wires ref reservation only, no endpoint.
+  const modelPortWithMediaProjection = createMediaProjectionPort(modelPort, () => media.imageInputEnabled());
+
   /**
    * Loads + validates one local path as an attachable image (design
 
@@ -1171,7 +1186,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   const loopConfig = withWorkflows(
     withSubagents(
       {
-        modelPort,
+        modelPort: modelPortWithMediaProjection,
         registry,
         hooks,
         permissionEngine,
@@ -1198,6 +1213,18 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         // — unlike checkpoints/tasks/lsp below, images carry no lifecycle to
 
         media,
+        // Vision-fallback ref reservation (TASK.198 plan §2, slice B1):
+        // wired UNCONDITIONALLY (this CLI always has a real persistence
+        // adapter by this point) so every image gets a stable #N the
+        // instant it is appended — independent of the current model's
+        // sightedness or whether a recognizer endpoint is configured at
+        // all. No `endpoint` here: this CLI does not parse
+        // ANYCODE_RECOGNIZER_*/expose recognizer settings (desktop-only,
+        // plan §10 slices E1/C) — the loop degrades to "ref, but no
+        // stub/overview caption", which is the correct behaviour for a
+        // model that is never actually blind-with-a-configured-recognizer
+        // in this CLI.
+        recognizer: { reserveRef: () => persistence.reserveImageRef(session.id) },
         // Context window (design §2.5 + slice 6.4): resolved above (env > catalog > absent).
         ...(bootContextWindow !== undefined
           ? { context: { contextWindowTokens: bootContextWindow } }

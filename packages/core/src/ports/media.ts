@@ -9,4 +9,12 @@
 export interface MediaCapabilityPort {
   /** Live verdict for the CURRENT session model; re-evaluated per call so a /model switch is honored immediately. */
   imageInputEnabled(): boolean;
+  /**
+   * Live verdict for the vision fallback (TASK.198 plan §3/§4): true when a
+   * recognizer endpoint is currently configured for this session, regardless
+   * of whether the current model can see images itself. Optional and
+   * re-evaluated per call, same discipline as imageInputEnabled — its
+   * absence is the fail-closed default (no fallback), not a false negative.
+   */
+  recognizerConfigured?(): boolean;
 }

@@ -83,7 +83,12 @@ export const browserScreenshotTool: ToolDefinition<BrowserScreenshotInput, Previ
     if (!ctx.preview) {
       return { ok: false, error: "Browser preview is unavailable in this session." };
     }
-    if (!ctx.media?.imageInputEnabled()) {
+    // TASK.198 plan §3 widens this: a blind model with a configured vision
+    // recognizer captures exactly like a sighted one — agent-loop.ts's
+    // tool-result annotation (slice B1) appends the model-visible stub
+    // afterward.
+    const canAttachImage = ctx.media?.imageInputEnabled() === true || ctx.media?.recognizerConfigured?.() === true;
+    if (!canAttachImage) {
       return { ok: false, error: MEDIA_GATE_ERROR };
     }
     const result = await ctx.preview.screenshot(
@@ -109,6 +114,9 @@ export const browserScreenshotTool: ToolDefinition<BrowserScreenshotInput, Previ
       mediaType: value.mediaType,
       data: value.data,
       sourcePath: value.url,
+      ...(value.cssWidth !== undefined && value.cssHeight !== undefined
+        ? { cssSize: { width: value.cssWidth, height: value.cssHeight } }
+        : {}),
     };
     return {
       ok: true,

@@ -36,10 +36,10 @@ protocol AnyCode's Codex adapter is built against (design
 
 ## Supported version ceiling
 
-`<0.151.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`<0.152.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). TASK.173 (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
-closed range, so any codex-cli build below 0.151.0 is accepted by version
+closed range, so any codex-cli build below 0.152.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
 wire shapes fails on its own later, at whichever call first needs a shape it
 lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
@@ -49,12 +49,23 @@ generated JSON-schema differs only in property insertion order, which is why
 before comparing.
 
 The pin itself stays on 0.144.x — it is the baseline the adapter was written
-and live-smoked against, not a moving target. `0.145.0 .. 0.150.x` was admitted
+and live-smoked against, not a moving target. `0.145.0 .. 0.151.x` was admitted
 on the weaker evidence layer 2 now checks: regenerated from the real 0.147.0,
-0.149.0 and 0.150.1 binaries, `methods` and `decisionEnums` came back byte-identical and no
+0.149.0, 0.150.1 and 0.151.0 binaries, `methods` and `decisionEnums` came back byte-identical and no
 union variant disappeared, and the handful of removed fields
 (`Account.amazonBedrock.credentialSource`, `McpToolCallAppContext.templateId`)
-are unconsumed and named in the test's `REVIEWED_REMOVALS`. `codex-support.json`
+are unconsumed and named in the test's `REVIEWED_REMOVALS`.
+
+0.151.0's own diff against the pin, reviewed for the ceiling raise: `methods`
+and `decisionEnums` identical; no definition removed; one added
+(`CommandExecutionApprovalKind`, reached through a new optional `kind` on
+`CommandExecutionRequestApprovalParams` that defaults to `command`); three
+shapes changed, none of them consumed — `CodexErrorInfo` gained
+`rateLimitExceeded` and `misalignmentPolicyViolation` and lost NOTHING,
+`CommandAction`'s read variant re-pointed `path` at `LegacyAppPathString`, and
+`v2.AmazonBedrockCredentialSource` disappeared along with the already-reviewed
+field that referenced it. Neither `CommandAction` nor `credentialSource`
+appears anywhere in AnyCode's own source. `codex-support.json`
 records the two grades separately (`tested` vs `contract-verified`), and
 `recommended` deliberately stays on the live-smoked patch: the ceiling says
 which Codex a user may bring, `recommended` says which one AnyCode downloads

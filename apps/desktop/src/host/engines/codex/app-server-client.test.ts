@@ -367,6 +367,11 @@ describe("AppServerClient", () => {
       HTTPS_PROXY: "https://proxy",
       SSL_CERT_FILE: "/cert.pem",
       ANYCODE_API_KEY: "must-not-pass",
+      // TASK.198 срез C durable (TASK.139 precedent): the vision-fallback
+      // recognizer's OWN credential must never reach a codex child either —
+      // this allowlist projection excludes it structurally, the same way it
+      // already excludes the primary provider key.
+      ANYCODE_RECOGNIZER_API_KEY: "must-not-pass",
       UNRELATED_SECRET: "must-not-pass",
     });
     // PATH gains the well-known GUI-launch prefixes (augmentCodexPathForGui);
@@ -378,6 +383,7 @@ describe("AppServerClient", () => {
       HTTPS_PROXY: "https://proxy",
     });
     expect(env.ANYCODE_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
     expect(env.UNRELATED_SECRET).toBeUndefined();
 
     const client = makeClient(["--env"], { sourceEnv: env });
@@ -388,6 +394,7 @@ describe("AppServerClient", () => {
       const childEnv = notification.params as NodeJS.ProcessEnv;
       expect(childEnv.CODEX_HOME).toBe("/codex");
       expect(childEnv.ANYCODE_API_KEY).toBeUndefined();
+      expect(childEnv.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
       expect(childEnv.UNRELATED_SECRET).toBeUndefined();
     } finally {
       await client.close();

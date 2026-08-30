@@ -659,6 +659,34 @@
   color: var(--danger);
 }
 
+/* ── TASK.198 срез E2a: Vision panel's on/off state badge, same soft-pill
+   idiom as .settings-secret-status above (neutral at rest, --success once
+   the fallback actually resolves — never a hard border, matching the rest of
+   this file's status-pill vocabulary) ── */
+
+.vision-pane-state {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.vision-pane-state-badge {
+  font-size: var(--fs-xs);
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.vision-pane-state-badge-on {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
 .settings-env-warning {
   font-size: var(--fs-xs);
   color: var(--warning);
@@ -1288,6 +1316,19 @@
   border-left: 2px solid var(--danger);
   color: var(--text-1);
   font-size: var(--fs-sm);
+}
+
+/* TASK.198 срез E2a: a successful Vision-panel probe answer is informational,
+   not a failure — it must not read in the same danger tint `.settings-notice`
+   carries for every other notice in this file. Wraps long model answers. */
+.settings-notice-ok {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--success-soft);
+  border-left: 2px solid var(--success);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
 }
 
 /* ── R16 About pane (R21 upgrades .settings-about-name to the wordmark) ── */

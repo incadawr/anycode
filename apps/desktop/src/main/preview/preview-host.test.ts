@@ -39,7 +39,9 @@ import {
 // the "too_large" test derives its fixture size from the SAME constant
 // preview-host.ts's `readMarkdownSource` enforces, never a hand-copied number.
 import { MD_PREVIEW_MAX_SOURCE_BYTES } from "./md-doc.js";
+import { PREVIEW_CHANGED_CHANNEL } from "../../shared/preview-panel.js";
 import type { PreviewChangedPayload, PreviewPanelBounds, PreviewPanelStatePayload } from "../../shared/preview-panel.js";
+import { sendToMainWindow, type MainWindowLike } from "../main-window-send.js";
 
 const TAB = "tab-1";
 const WORKSPACE_ROOT = "/workspace";
@@ -646,6 +648,36 @@ describe("PreviewHost — lifecycle: closeForTab / closeAll", () => {
     expect(rig.windows.every((w) => w.destroyed)).toBe(true);
     expect(rig.host.listForTab("tab-a")).toEqual([]);
     expect(rig.host.listForTab("tab-b")).toEqual([]);
+  });
+
+  /**
+   * TASK.199: `closeAll()` runs INSIDE the main window's own `closed` handler,
+   * where that window is already destroyed — and it pushes `onPreviewsChanged`
+   * once per destroyed record. Wired the way main wires it (through
+   * `sendToMainWindow`), those pushes are silent no-ops. Before the fix main
+   * passed `win?.webContents.send(...)`, whose optional chain covers the NULL
+   * window only, so quitting with a preview open threw `TypeError: Object has
+   * been destroyed` out of this very path and raised a modal error dialog.
+   */
+  it("closeAll survives a main window destroyed mid-teardown (main's own push wiring)", async () => {
+    const destroyedMainWindow: MainWindowLike = {
+      isDestroyed: () => true,
+      // Electron's own behaviour: the GETTER throws on a destroyed window.
+      get webContents(): MainWindowLike["webContents"] {
+        throw new TypeError("Object has been destroyed");
+      },
+    };
+    const rig = makeRig({
+      onPreviewsChanged: (payload) => sendToMainWindow(destroyedMainWindow, PREVIEW_CHANGED_CHANNEL, payload),
+    });
+    const opened = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await opened;
+
+    expect(() => rig.host.closeAll()).not.toThrow();
+    expect(rig.windows[0]!.destroyed).toBe(true);
+    expect(rig.host.listForTab(TAB)).toEqual([]);
   });
 
   it("a preview closed externally (native window close) is removed from listForTab", async () => {

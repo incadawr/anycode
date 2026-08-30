@@ -372,6 +372,24 @@ export const SUBAGENT_CARD_DESCRIPTION_MAX_CHARS = 500;
 export const SUBAGENT_CARD_MODEL_MAX_CHARS = 200;
 
 /**
+ * Persisted workflow card constants (TASK.191 slice S5). Deliberately its OWN
+ * ring, not a reuse of SUBAGENT_CARD_ACTIVITY_RING: a workflow's activity feed
+ * is ONE lane shared by every concurrent step of the run (WorkflowCardSnapshotV1's
+ * own doc), not one child's own history, so at equal size a multi-step DAG would
+ * retain a proportionally shorter stretch of history than a single subagent card
+ * does. This must equal the desktop renderer's own WORKFLOW_ACTIVITY_RING
+ * (apps/desktop/src/renderer/src/store.ts) for the same reload-parity reason
+ * SUBAGENT_CARD_ACTIVITY_RING must equal SUBAGENT_ACTIVITY_RING there: after a
+ * reload, "+N earlier" must never read shorter than the live feed already showed.
+ * That live ring is already 2x SUBAGENT_ACTIVITY_RING for this exact reason
+ * (TASK.191 slice S1) — mirrored here at the same 2x factor, including the byte
+ * cap, which has no live-side analog but scales with the same reasoning.
+ */
+export const WORKFLOW_CARD_ACTIVITY_RING = 200;
+/** Combined UTF-8 byte cap across all retained activity entries' toolName+summary (2x SUBAGENT_CARD_ACTIVITY_MAX_BYTES). */
+export const WORKFLOW_CARD_ACTIVITY_MAX_BYTES = 65_536;
+
+/**
  * TASK.145 срез 1 (cli/child-notification.ts): cap on a detached child's
  * report `summary` field inside the `<task-notification>` block delivered to
  * the parent session. Bigger than a card description (500) — this is a real

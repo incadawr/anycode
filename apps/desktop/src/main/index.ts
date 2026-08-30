@@ -59,6 +59,12 @@ import { defaultSecretsPath, defaultSettingsPath, loadSettings, readTrustedBinar
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById, resolveProviderConnection } from "../shared/settings.js";
 import {
+  RECOGNIZER_CONFIG_CHANGED_TYPE,
+  recognizerFingerprint,
+  recognizerFingerprintsEqual,
+  type RecognizerFingerprint,
+} from "../shared/recognizer.js";
+import {
   applyCodexProfilesHomeOverride,
   applySubagentsHomeOverride,
   buildHostEnv,
@@ -74,6 +80,7 @@ import {
   findCustomProviderRecord,
   isCustomProviderRecordId,
   resolveEffectiveTransport,
+  resolveRecognizerConfig,
   scrubSecretEnv,
   shouldSkipConnectionHealthBinding,
   snapshotBootEnv,
@@ -82,7 +89,10 @@ import {
 } from "./host-env.js";
 import { registerNetworkIpc } from "./network-ipc.js";
 import { spawnProxyProbe } from "./proxy-probe.js";
+import { spawnRecognizerProbeChild } from "./recognizer-probe.js";
+import { registerRecognizerProbeIpc } from "./recognizer-probe-ipc.js";
 import { createSystemProxyResolver, type SystemProxyCache } from "./system-proxy.js";
+import { sendToMainWindow } from "./main-window-send.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
@@ -502,6 +512,11 @@ function resolveHostEntry(): string {
   return join(__dirname, "host.js");
 }
 
+/** Same dev-vs-packaged idiom as `resolveHostEntry` above — electron-vite emits both entries into the same output directory in either mode, so ONE path resolution serves both. */
+function resolveRecognizerProbeChildEntry(): string {
+  return join(__dirname, "recognizer-probe-child.js");
+}
+
 function resolveRendererIndex(): string {
   return join(__dirname, "../renderer/index.html");
 }
@@ -633,8 +648,14 @@ function createWindow(): void {
     // goes away, so `window-all-closed` (below) would never fire and the app
     // would linger. Destroying them here first (cut §2.5) keeps the existing
     // single-window-MVP quit-on-close behavior intact.
-    previewHost?.closeAll();
+    //
+    // The reference is dropped BEFORE that teardown, not after: the window is
+    // already destroyed by the time this fires, and `closeAll()` calls back
+    // into this file (onPreviewsChanged) once per destroyed preview. Nulling
+    // second left a non-null-but-dead `win` visible to those callbacks for the
+    // whole teardown.
     win = null;
+    previewHost?.closeAll();
   });
 
   // Forward maximize/fullscreen transitions to the renderer so the custom
@@ -648,7 +669,7 @@ function createWindow(): void {
   // no state and must be told the live maximize/fullscreen values immediately.
   win.webContents.on("did-finish-load", () => {
     manager?.deliverAllTabPorts();
-    win?.webContents.send(WINDOW_STATE_CHANNEL, readWindowState(win));
+    sendToMainWindow(win, WINDOW_STATE_CHANNEL, readWindowState(win));
     // panel-track CUT.md D7: a reloaded/crashed renderer boots with no panel
     // state at all — reset every panel to hidden until the fresh renderer
     // republishes its own setPanelState/setPanelBounds. A reloaded renderer
@@ -836,6 +857,42 @@ function currentSettings(): AnycodeSettings {
 }
 
 /**
+ * Last recognizer fingerprint pushed to hosts (TASK.198 E1 §1.2/§7) —
+ * undefined means "never pushed yet" AND "fallback currently off", so the
+ * first push after boot only fires once a recognizer is actually configured.
+ * Comparing against this (rather than recomputing from settings alone) is
+ * what makes an UNRELATED mutation a no-op: the decrypted secret is resolved
+ * and the wire message built ONLY when the fingerprint actually moved.
+ */
+let lastRecognizerFingerprint: RecognizerFingerprint | undefined;
+
+/**
+ * Recomputes the vision-fallback recognizer's resolved endpoint after a
+ * settings/connection/custom-provider mutation and pushes it to every live
+ * root core tab WHEN — and only when — its fingerprint actually changed
+ * (TASK.198 E1 §1.2, finding #7: a resolved secret must never ride an
+ * unrelated mutation's wire). Called from BOTH `onMutation` hooks below
+ * (settings-ipc's generic-patch + connection-CRUD path, AND provider-ipc's
+ * custom-provider CRUD path) — either can change what `settings.recognizer`
+ * currently resolves to. `manager` may be null pre-boot; the push is then
+ * simply skipped (there are no tabs yet to receive it) — the NEXT fork picks
+ * up the fresh settings from disk regardless (recovery path, finding #1).
+ */
+async function refreshRecognizerFallback(): Promise<void> {
+  const current = currentSettings();
+  const fingerprint = recognizerFingerprint(current);
+  if (recognizerFingerprintsEqual(fingerprint, lastRecognizerFingerprint)) {
+    return;
+  }
+  lastRecognizerFingerprint = fingerprint;
+  const endpoint = await resolveRecognizerConfig(current, getSecret, authKindFor, resolveCatalog);
+  manager?.broadcastRecognizerConfig({
+    type: RECOGNIZER_CONFIG_CHANGED_TYPE,
+    endpoint: endpoint ?? null,
+  });
+}
+
+/**
  * The allow-list `isKnownSecretKey`/`Vault.statuses` (via settingsIpcDeps)
  * check a `provider.<id>.{apiKey,oauth}` vault key against: every builtin
  * catalog id, unioned with every custom-provider id currently in `current`
@@ -1009,6 +1066,14 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
     // FRESH `session.resolveProxy` before composing the env (§4); the sync call
     // sites below can only read the cache these deps expose.
     proxy: proxyMaterialization,
+    // TASK.198 E1: host-env stays core-free, so the catalog auth-kind lookup
+    // for the recognizer's OWN (separate) connection is injected the same way
+    // as every other catalog-backed dep on this call.
+    recognizerAuthKindFor: authKindFor,
+    // Live-run fix (TASK.198 follow-up): the recognizer's baseUrl/transport
+    // fallback for a CATALOG connection is the SAME projection the primary
+    // provider ladder above already resolves through — no second catalog dep.
+    recognizerCatalogFor: resolveCatalog,
   });
   applySubagentsHomeOverride(env, resolveSubagentsHome(bootEnv, app.isPackaged));
   // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
@@ -1514,10 +1579,13 @@ void app.whenReady().then(async () => {
     displayMode: () => settings?.preview?.displayMode ?? "panel",
     // D7: pushes the tab's current preview set to the renderer on every
     // record-set mutation (open-settle, status change, select, close, tab
-    // close). `win` may be torn down mid-teardown; a null/gone window is a
-    // safe no-op, mirroring every other `win?.webContents.send(...)` call site.
+    // close). It also runs under `closeAll()`, i.e. INSIDE the main window's
+    // own `closed` handler, where the window is already destroyed — reading
+    // `.webContents` off it throws `Object has been destroyed`, which in main
+    // is a modal error dialog. `sendToMainWindow` is what makes a gone window
+    // a no-op there; an optional-chained send guards only the NULL case.
     onPreviewsChanged: (payload) => {
-      win?.webContents.send(PREVIEW_CHANGED_CHANNEL, payload);
+      sendToMainWindow(win, PREVIEW_CHANGED_CHANNEL, payload);
     },
     resolveArtifact: (tabId, path) => resolveContainedPath(artifactsIpcDeps, tabId, path),
     // TASK.99 M4 (CUT.md GAP 2): the SAME `fsStat`/`NodeArtifactsFs.readFileNoFollow`
@@ -1717,7 +1785,7 @@ void app.whenReady().then(async () => {
       void applyConnectionHealthEvent(settingsIpcDeps, connectionId, healthEvent)
         .then((persisted) => {
           if (persisted) {
-            win?.webContents.send(PROVIDER_HEALTH_CHANGED_CHANNEL);
+            sendToMainWindow(win, PROVIDER_HEALTH_CHANGED_CHANNEL);
           }
         })
         .catch((error) => {
@@ -1873,7 +1941,13 @@ void app.whenReady().then(async () => {
     // W10-FIX F3: "in use" is registered ∪ pending — a resume that has RESERVED a
     // pin but not yet registered its tab counts too, closing the resume/delete race.
     connectionInUse: (connectionId) =>
-      (manager?.pinnedConnectionIds().has(connectionId) ?? false) || pinReservations.has(connectionId),
+      (manager?.pinnedConnectionIds().has(connectionId) ?? false) ||
+      pinReservations.has(connectionId) ||
+      // TASK.198 E1: the recognizer's own connection is also "in use" — its
+      // credential/baseUrl is resolved on demand from THIS connection, so
+      // deleting it out from under a stable `connectionId` would silently
+      // turn the fallback off rather than refusing the delete with a reason.
+      currentSettings().recognizer?.connectionId === connectionId,
     // TASK.103 (D-S4-5): the grant handler's fingerprint seam — main
     // computes it from the LIVE filesystem at grant time, synchronously
     // (realpathSync -> statSync), never accepting one from the renderer.
@@ -1901,6 +1975,10 @@ void app.whenReady().then(async () => {
       // patch channel too, so re-derive the union defensively here as well
       // (not just from registerProviderIpc's own onMutation below).
       settingsIpcDeps.catalogIds = catalogIdsFor(settings);
+      // TASK.198 E1: covers both a direct `recognizer` patch AND a connection
+      // CRUD mutation (settings-ipc.ts owns both channels) that changes what
+      // an EXISTING recognizer selection resolves to.
+      await refreshRecognizerFallback();
       await refreshProviderState();
       if (
         providerReady &&
@@ -1937,6 +2015,26 @@ void app.whenReady().then(async () => {
     spawn: spawnProxyProbe,
   });
 
+  // TASK.198 срез E2: the Vision panel's "Probe" button. Same spawned-child
+  // canon as the proxy probe just above (`process.execPath` +
+  // ELECTRON_RUN_AS_NODE=1), but the candidate is resolved through
+  // `resolveRecognizerConfig` (the SAME ladder the live recognizer fork-env
+  // and live-push both use) rather than a network target string — `env` here
+  // is the plain boot snapshot, not `composeProbeEnv`'s proxy materialisation,
+  // because a recognizer endpoint carries no per-connection proxy field
+  // (coordinator ruling, plan §1/§6): it rides the host process's own ambient
+  // proxy, same as every other recognizer call.
+  registerRecognizerProbeIpc({
+    readSettings: () => settings,
+    getSecret,
+    authKindFor,
+    catalogFor: resolveCatalog,
+    execPath: process.execPath,
+    childEntry: resolveRecognizerProbeChildEntry(),
+    env: bootEnv,
+    spawn: spawnRecognizerProbeChild,
+  });
+
   // Custom OpenAI-compatible model-provider control plane (TASK.54, cut
   // §9.2/§13.1): CRUD for `settings.provider.custom[]` + the guarded
   // `/v1/models` preview fetch, behind its own four invoke channels. Mirrors
@@ -1959,6 +2057,22 @@ void app.whenReady().then(async () => {
     onMutation: async (fresh) => {
       settings = fresh;
       settingsIpcDeps.catalogIds = catalogIdsFor(fresh);
+      // TASK.198 E1 §1.2: wired here too (both mutation hooks).
+      //
+      // KNOWN GAP (TASK.202, found by the closing review): the resolver DOES
+      // now follow a `custom:*` connection to its backing CustomProviderRecord
+      // for both address and credential (host-env.ts's `customRecord?.baseUrl`
+      // / `customProviderSecretKey`), but `recognizerFingerprint` still reads
+      // the CONNECTION's own baseUrl — empty for a custom connection. So
+      // editing the record's address changes what the selection resolves to
+      // while leaving the fingerprint still, and the early return in
+      // `refreshRecognizerFallback` swallows the push. Live sessions keep the
+      // stale endpoint until restart. The same shape hides an API-key
+      // rotation, which no field of the fingerprint covers at all by design
+      // (see shared/recognizer.ts: the fingerprint deliberately costs no vault
+      // read). Not fixed here because the cheap-fingerprint property is a
+      // deliberate one and trading it away needs its own measurement.
+      await refreshRecognizerFallback();
       await refreshProviderState();
       if (
         providerReady &&
@@ -2014,12 +2128,12 @@ void app.whenReady().then(async () => {
       // a window-shell-level signal, the same unconditional-send shape as
       // WINDOW_STATE_CHANNEL/UPDATE_STATUS_CHANNEL — the renderer's listener
       // is registered at bundle load, well before this can ever fire.
-      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+      sendToMainWindow(win, ENGINES_CHANGED_CHANNEL);
     },
     // Profile CRUD (create/delete/set-active/repair) changes what the Agent
     // selector / Settings pane should show — same re-fetch push as above.
     onProfilesChanged: () => {
-      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+      sendToMainWindow(win, ENGINES_CHANGED_CHANNEL);
     },
   });
 
@@ -2085,11 +2199,11 @@ void app.whenReady().then(async () => {
       // this snapshot MATERIALLY differs from the last one (belt fix) — an
       // identical routine recheck must not re-trigger every OTHER
       // subscriber's own refresh.
-      win?.webContents.send(CLAUDE_SNAPSHOT_CHANGED_CHANNEL, snapshot);
+      sendToMainWindow(win, CLAUDE_SNAPSHOT_CHANGED_CHANNEL, snapshot);
       const changed = isClaudeSnapshotChangeMaterial(lastClaudeSnapshot, snapshot);
       lastClaudeSnapshot = snapshot;
       if (changed) {
-        win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+        sendToMainWindow(win, ENGINES_CHANGED_CHANNEL);
       }
     },
   });
@@ -2120,7 +2234,7 @@ void app.whenReady().then(async () => {
     readRiskAcceptedVersions: async () => settings?.codex?.riskAcceptedVersions ?? [],
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
     onChanged: () => {
-      win?.webContents.send(ENGINES_CHANGED_CHANNEL);
+      sendToMainWindow(win, ENGINES_CHANGED_CHANNEL);
       // TASK.65: an install / risk-acceptance changed the binary or its support
       // verdict, so the cached doctor result is stale — force past the TTL.
       void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});

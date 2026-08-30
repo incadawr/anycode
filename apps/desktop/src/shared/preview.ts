@@ -69,6 +69,15 @@ export interface PreviewScreenshotSuccess {
   data: string;
   width: number;
   height: number;
+  /**
+   * Logical/CSS viewport size (DIP) at capture time (TASK.198 slice G) —
+   * kept verbatim in sync with `packages/core/src/ports/preview.ts`'s own
+   * `PreviewScreenshotSuccess.cssWidth/cssHeight` per this file's header
+   * comment. Additive-optional: absent whenever the capture path could not
+   * observe a CSS size.
+   */
+  cssWidth?: number;
+  cssHeight?: number;
 }
 
 export type PreviewResult<T> =

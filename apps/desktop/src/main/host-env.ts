@@ -36,8 +36,9 @@ import {
   PROXY_PROFILE_SECRET_KEY_RE,
   resolveProxyLadder,
 } from "../shared/proxy.js";
-import type { AnycodeSettings, CustomProviderRecord, SecretEnvKey, SecretKey } from "../shared/settings.js";
-import { activeProviderView, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
+import type { AnycodeSettings, CustomProviderRecord, ProviderTransportId, SecretEnvKey, SecretKey } from "../shared/settings.js";
+import { activeProviderView, connectionById, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
+import type { RecognizerWireConfig } from "../shared/recognizer.js";
 
 // ── env var names (mirror core/provider/env.ts by contract; local literals so
 // main never value-imports the core runtime, same reasoning as main/index.ts) ──
@@ -96,6 +97,21 @@ export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
  * never baked into the shared boot env, so a legacy (unpinned) tab carries none.
  */
 export const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
+
+/**
+ * The vision-fallback recognizer's env family (TASK.198 E1) — the fork-boot
+ * snapshot half of the recognizer's config delivery (the live half is
+ * `RecognizerConfigChanged` over parentPort, shared/recognizer.ts). Mirrors
+ * `RecognizerWireConfig` field-for-field so a host's live-update handler
+ * builds the identical shape from either source. Independent of the primary
+ * provider ladder above — a different connection, its own vault key — so
+ * these never interact with `ENV_API_KEY`/`ENV_MODEL`/`ENV_BASE_URL`.
+ */
+export const ENV_RECOGNIZER_TRANSPORT = "ANYCODE_RECOGNIZER_TRANSPORT";
+export const ENV_RECOGNIZER_BASE_URL = "ANYCODE_RECOGNIZER_BASE_URL";
+export const ENV_RECOGNIZER_API_KEY = "ANYCODE_RECOGNIZER_API_KEY";
+export const ENV_RECOGNIZER_MODEL = "ANYCODE_RECOGNIZER_MODEL";
+export const ENV_RECOGNIZER_PROVIDER_NAME = "ANYCODE_RECOGNIZER_PROVIDER_NAME";
 
 /**
  * The four proxy env vars a connection's `proxyUrl` materialises as (TASK.132),
@@ -868,6 +884,48 @@ export interface HostEnvParams {
    * both are honest answers, never an error.
    */
   proxy?: ProxyMaterializationDeps;
+  /**
+   * TASK.198 E1: catalog auth-kind lookup for the vision-fallback recognizer's
+   * SELECTED connection — host-env stays core-free, so main injects this from
+   * `@anycode/core/catalog` (same reason `resolveSelection`/
+   * `resolveActiveCredential` are callbacks rather than lookups on this
+   * module). Absent, or an unknown providerId, is read as "api_key" — the
+   * same fail-open-to-api_key posture `activeCredential` (main/index.ts) takes
+   * for the bare/custom bucket; never consulted at all for a bare/custom
+   * connection (`providerId === ""`), which is always api_key.
+   */
+  recognizerAuthKindFor?: (providerId: string) => "api_key" | "oauth" | undefined;
+  /**
+   * Live-run fix (task150-output-ceiling session, TASK.198 follow-up): the
+   * catalog projection `resolveRecognizerConfig` needs to fall back to when a
+   * CATALOG (non-custom) recognizer connection's OWN baseUrl/transport are
+   * blank/absent — real settings.json connections for `z-ai`/`kimi` carry
+   * `baseUrl: ""` and no `transport` key at all, exactly like the primary
+   * provider ladder's connections (host-env stays core-free, so main injects
+   * this the same way as `recognizerAuthKindFor` above; main can hand this the
+   * very same `resolveCatalog` function it already built for
+   * `ResolvedProviderSelection`). Absent, or an unknown providerId, resolves
+   * NOTHING: the connection's own baseUrl is used verbatim (possibly blank,
+   * exactly as before this fix — and a blank result still fails closed), and
+   * its transport falls through `resolveEffectiveTransport` to `"unset"` when
+   * the connection sets none either — which leaves `transport` unset on the
+   * resolved config (see `resolveRecognizerConfig`'s own doc on `"unset"`),
+   * exactly as before this fix.
+   */
+  recognizerCatalogFor?: (providerId: string) => RecognizerCatalogInfo | undefined;
+}
+
+/**
+ * Catalog projection `resolveRecognizerConfig` needs for the baseUrl/transport
+ * fallback (live-run fix, TASK.198 follow-up) — the same two fields main's
+ * `resolveCatalog` (index.ts, feeding `ResolvedProviderSelection`) already
+ * returns, so main injects THAT function directly rather than a second
+ * projection. `defaultTransport` stays a plain `string` (not
+ * `ProviderTransportId`) to match `CatalogSelectionInfo`'s own field verbatim.
+ */
+export interface RecognizerCatalogInfo {
+  baseUrl: string;
+  defaultTransport?: string;
 }
 
 /**
@@ -1012,7 +1070,208 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     await resolveProxyForAsync(settings, hostForkProxyChain(settings.provider.activeConnectionId), proxyDeps),
   );
 
+  // TASK.198 E1: the vision-fallback recognizer's OWN env family, resolved
+  // independently of the primary provider ladder above (a different
+  // connection, its own vault key) — applied last so it can never interact
+  // with ENV_API_KEY/ENV_MODEL/ENV_BASE_URL.
+  applyRecognizerEnv(
+    env,
+    await resolveRecognizerConfig(settings, getSecret, params.recognizerAuthKindFor, params.recognizerCatalogFor),
+  );
+
   return env;
+}
+
+/**
+ * TASK.198 E1: resolves `settings.recognizer` (a connectionId + modelId
+ * pointing at an ALREADY-CONFIGURED connection, never a second credential
+ * home) into the wire shape a host needs, or undefined when the fallback is
+ * disabled:
+ *  - no `settings.recognizer` at all;
+ *  - a dangling `connectionId` (the connection was deleted out from under a
+ *    stable id) — fail-closed, never falls back to a different connection's
+ *    credential;
+ *  - an OAuth connection (coordinator decision, plan §1): a static env key
+ *    cannot refresh an OAuth token the way the existing broker does for the
+ *    PRIMARY connection, and the credential-request protocol
+ *    (shared/credentials.ts) cannot name a SECOND, unrelated connection —
+ *    main only ever answers for "the process it spawned"'s own selection.
+ *
+ * `authKindFor` is main-injected (host-env stays core-free) — the same reason
+ * `resolveSelection`/`resolveActiveCredential` are callbacks rather than
+ * lookups on this module. A bare/custom connection (`providerId === ""`) is
+ * always `api_key` and never consults `authKindFor` at all — mirrors
+ * `activeCredential`'s own posture in main/index.ts for the same bucket.
+ *
+ * `catalogFor` (live-run fix, TASK.198 follow-up) is the SAME kind of
+ * main-injected catalog projection, consulted ONLY for a CATALOG (non-custom)
+ * providerId: a live settings.json connection for a catalog provider
+ * (`z-ai`, `kimi`, ...) carries a blank `baseUrl` and no `transport` key at
+ * all — its real endpoint lives in the catalog, exactly as the PRIMARY
+ * provider ladder already resolves via `ResolvedProviderSelection`. Without
+ * this fallback the recognizer registered `InspectImage` and then failed on
+ * every call ("Invalid Anthropic base URL: '' is empty after trimming" — the
+ * unresolved transport defaulted to anthropic downstream). Never consulted
+ * for a `custom:<slug>` connection (fail-closed exactly like today: its
+ * address lives ONLY on its CustomProviderRecord, never on a catalog entry a
+ * synthetic `custom:` id could not resolve to anyway). A blank RESOLVED
+ * address (still empty after the whole ladder — connection, then catalog) is
+ * the one thing that disables the recognizer entirely (`undefined`), the
+ * same fail-closed posture as an oauth/dangling connection: a
+ * registered-but-guaranteed-to-fail tool call is worse than none.
+ *
+ * The TRANSPORT rung is different, deliberately: it CONSUMES
+ * `resolveEffectiveTransport` — this module's own single normative ladder
+ * ("the single authority every readiness guard and every fork-env emission
+ * consumes, so they can never disagree", see that function's doc) — rather
+ * than inventing a second, one-line policy next to it. `bootEnv: {}` is
+ * passed deliberately instead of the real boot snapshot: that ladder's env
+ * rung is `ANYCODE_PROVIDER_TRANSPORT`, the PRIMARY provider's own var —
+ * feeding it the real bootEnv would let a user who pinned the primary
+ * provider's transport silently leak it onto the (unrelated) recognizer
+ * connection. When the ladder comes back `"unset"` (no connection-level
+ * override AND no catalog default), that is NOT treated as a malformed
+ * input to refuse — it is the absence of an explicit choice, and `transport`
+ * is simply left `undefined` on the returned config. This mirrors the
+ * PRIMARY path's own handling of `"unset"` EXACTLY: `transportToEmit`
+ * (below) emits nothing for it there either, and core's `loadEnvConfig`
+ * applies the implicit anthropic default downstream. Refusing the whole
+ * recognizer on `"unset"` was tried and reverted (task150-output-ceiling
+ * session): it made the SAME ladder value mean two different things on its
+ * two consumers — contradicting the ladder's own "can never disagree"
+ * contract — and it silently disabled a real, explicitly-supported case (a
+ * bare connection, `providerId === ""`, with a genuine hand-typed address
+ * and simply no transport set). The recognizer's OWN env rung
+ * (`ANYCODE_RECOGNIZER_TRANSPORT`) is applied separately, downstream, by
+ * `applyRecognizerEnv`'s `fillFromSettings` (env-value-wins there already),
+ * and host/index.ts's `recognizerEndpointFromFields` is where the shared
+ * "anthropic-messages" default for an absent transport actually lives (its
+ * own doc: "the SAME final fallback the primary provider ladder above
+ * already uses ... never a second policy invented for the recognizer
+ * alone") — this function must not duplicate or contradict that default.
+ *
+ * host/index.ts's `recognizerEndpointFromFields` ALSO refuses an UNKNOWN
+ * transport STRING (as opposed to an absent one) — that check is not
+ * redundant with this ladder; the two sit at NON-OVERLAPPING injection
+ * points. This function governs RESOLUTION (what settings/catalog value to
+ * pick, or that none was chosen); but `applyRecognizerEnv`'s
+ * `fillFromSettings` is env-value-wins, so an ambient
+ * `ANYCODE_RECOGNIZER_TRANSPORT` in the fork's environment can override
+ * whatever THIS function resolved (or left unset), and main's live
+ * RECOGNIZER_CONFIG_CHANGED push carries a `transport` string that never
+ * passes through this ladder at all. Only the host-side check catches a
+ * garbage value arriving through either of those two paths.
+ */
+export async function resolveRecognizerConfig(
+  settings: AnycodeSettings,
+  getSecret: SecretReader,
+  authKindFor?: (providerId: string) => "api_key" | "oauth" | undefined,
+  catalogFor?: (providerId: string) => RecognizerCatalogInfo | undefined,
+): Promise<RecognizerWireConfig | undefined> {
+  const setting = settings.recognizer;
+  if (setting === undefined) {
+    return undefined;
+  }
+  const connection = connectionById(settings, setting.connectionId);
+  if (connection === undefined) {
+    return undefined;
+  }
+  const providerId = connection.providerId;
+  const kind = providerId === "" ? "api_key" : (authKindFor?.(providerId) ?? "api_key");
+  if (kind === "oauth") {
+    return undefined;
+  }
+  // Custom-provider route (mirrors buildHostEnv's own customId branch above,
+  // F-G-B — SAME mechanism, not a second one): a `custom:<slug>` providerId's
+  // baseUrl AND credential live on the CustomProviderRecord, never on the
+  // connection itself (a connection only POINTS at the record via its
+  // providerId) — reading `connection.baseUrl`/a connection-scoped vault key
+  // here left both blank for every custom-provider recognizer (task198-state.md
+  // "Хвост от E1"). A missing record (deleted while a connection still
+  // references it) is FAIL-CLOSED exactly like the primary branch: neither
+  // field falls back to the connection-scoped key/baseUrl. Its transport is
+  // untouched by the catalog ladder below — a `custom:` id has no catalog
+  // entry, and this branch keeps `connection.transport` verbatim (possibly
+  // undefined; the host's own final "anthropic-messages" default handles that
+  // absence, same as always).
+  const customId = isCustomProviderRecordId(providerId) ? providerId : undefined;
+  const customRecord = customId !== undefined ? findCustomProviderRecord(settings, customId) : undefined;
+  // Catalog fallback (live-run fix, TASK.198 follow-up) — the baseUrl half
+  // mirrors provider-ipc.ts's `handleConnectionFetchModels` resolution
+  // verbatim (SAME idiom, not a second one): `connection.baseUrl?.trim() ? ...
+  // : entry.baseUrl`. NEVER consulted for a `custom:<slug>` connection — its
+  // address/credential live ONLY on its CustomProviderRecord, and a synthetic
+  // `custom:` id has no catalog entry to fall back to anyway; the guard keeps
+  // that fail-closed posture explicit.
+  const catalogInfo = customId === undefined ? catalogFor?.(providerId) : undefined;
+  const trimmedConnectionBaseUrl = connection.baseUrl?.trim();
+  const baseUrl =
+    customId !== undefined
+      ? customRecord?.baseUrl
+      : catalogInfo !== undefined
+        ? trimmedConnectionBaseUrl ? trimmedConnectionBaseUrl : catalogInfo.baseUrl
+        : connection.baseUrl;
+  if (baseUrl === undefined || baseUrl.trim() === "") {
+    return undefined;
+  }
+  let transport: ProviderTransportId | undefined;
+  if (customId !== undefined) {
+    transport = connection.transport;
+  } else {
+    const effectiveTransport = resolveEffectiveTransport({
+      bootEnv: {},
+      settingsTransport: connection.transport,
+      defaultTransport: catalogInfo?.defaultTransport,
+    });
+    // "unset" (no connection-level override AND no catalog default — an
+    // unknown/legacy providerId, `catalogFor` not injected at all, or a
+    // real bare connection whose owner simply never set a transport) is NOT
+    // a malformed input to refuse — it is the absence of an explicit choice,
+    // resolved the SAME way the primary provider path already resolves it:
+    // `transport` is left undefined, `applyRecognizerEnv` then emits nothing
+    // for `ANYCODE_RECOGNIZER_TRANSPORT`, and the host applies the one
+    // documented default it shares with the primary path
+    // (`recognizerEndpointFromFields`'s own `?? "anthropic-messages"`,
+    // host/index.ts). Refusing here instead would be exactly the "second,
+    // one-line policy invented for the recognizer alone" this ladder exists
+    // to avoid — the SAME `"unset"` value would then mean "apply the shared
+    // default" on the primary path and "disable the feature" here, which
+    // contradicts `resolveEffectiveTransport`'s own doc ("the single
+    // authority ... so they can never disagree").
+    transport = effectiveTransport.value as ProviderTransportId | undefined;
+  }
+  const apiKey =
+    customId !== undefined
+      ? customRecord !== undefined
+        ? await getSecret(customProviderSecretKey(customRecord.id))
+        : undefined
+      : await getSecret(connectionSecretKey(connection.id, "api_key"));
+  return {
+    transport,
+    baseUrl,
+    apiKey: apiKey !== undefined && apiKey !== "" ? apiKey : undefined,
+    model: setting.modelId,
+    providerName: providerId !== "" ? providerId : undefined,
+  };
+}
+
+/**
+ * ANYCODE_RECOGNIZER_* fork-env materialisation of a resolved recognizer
+ * endpoint (TASK.198 E1). `undefined` emits nothing — a fork whose recognizer
+ * is unset/oauth/dangling boots byte-identical to today. `fillFromSettings`
+ * (env-value-wins) is reused here for the same reason it governs every other
+ * var in this module: a launching shell's own ANYCODE_RECOGNIZER_* always
+ * wins over the resolved connection.
+ */
+export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: RecognizerWireConfig | undefined): void {
+  if (recognizer === undefined) {
+    return;
+  }
+  fillFromSettings(env, ENV_RECOGNIZER_TRANSPORT, recognizer.transport);
+  fillFromSettings(env, ENV_RECOGNIZER_BASE_URL, recognizer.baseUrl);
+  fillFromSettings(env, ENV_RECOGNIZER_API_KEY, recognizer.apiKey);
+  fillFromSettings(env, ENV_RECOGNIZER_MODEL, recognizer.model);
+  fillFromSettings(env, ENV_RECOGNIZER_PROVIDER_NAME, recognizer.providerName);
 }
 
 function fillFromSettings(env: NodeJS.ProcessEnv, name: string, value: string | undefined): void {

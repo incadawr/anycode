@@ -25,6 +25,8 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import type { CreateTabResult, TabHost, TabSummary } from "../tabs.js";
 import type { PreviewHostHandle, PreviewSummary } from "../preview/preview-host.js";
 import type { PreviewConsoleEntry, PreviewOpenSuccess, PreviewResult } from "../../shared/preview.js";
@@ -482,8 +484,49 @@ export async function previewNavigateMdDoc(
 
 // --- Action commands (§4.2) ---
 
-export function sendPrompt(deps: HandlerDeps, tabId: string, text: string): Promise<unknown> {
-  return deps.callFacade("sendPrompt", [tabId, text]);
+/** One image the renderer facade still has to sniff/size/count-check against Composer's own helpers — main only proves the bytes existed on disk. */
+export interface PromptImageInput {
+  data: string;
+  sourcePath: string;
+}
+
+/**
+ * TASK.198 live-smoke facade extension: `imagePaths`, when present, are
+ * absolute on-disk paths (design note above the route in server.ts) — the
+ * HTTP body carries paths rather than base64 so a large fixture never
+ * inflates the request. Main is the ONLY side with filesystem access, so this
+ * is the ONLY place in the whole channel that reads image bytes; it does
+ * nothing else with them (no sniff, no size cap, no per-message count check
+ * — that validation lives renderer-side, against the SAME Composer helpers a
+ * live drag-drop uses, see automation.ts's `sendPrompt`). A read failure
+ * (missing file, a directory, a permission error) and a non-absolute path
+ * both collapse to the one reason `image_not_found` rather than leaking host
+ * filesystem detail over the loopback channel. No images (undefined or an
+ * empty array) forwards the original 2-arg call, byte-identical to before
+ * this field existed.
+ */
+export async function sendPrompt(
+  deps: HandlerDeps,
+  tabId: string,
+  text: string,
+  imagePaths?: readonly string[],
+): Promise<unknown> {
+  if (imagePaths === undefined || imagePaths.length === 0) {
+    return deps.callFacade("sendPrompt", [tabId, text]);
+  }
+  const images: PromptImageInput[] = [];
+  for (const path of imagePaths) {
+    if (!isAbsolute(path)) {
+      return { ok: false, reason: "image_not_found" };
+    }
+    try {
+      const bytes = await readFile(path);
+      images.push({ data: bytes.toString("base64"), sourcePath: path });
+    } catch {
+      return { ok: false, reason: "image_not_found" };
+    }
+  }
+  return deps.callFacade("sendPrompt", [tabId, text, images]);
 }
 
 /** TASK.33 W8: thin wrapper over the facade's `tryAgain` — clicks the real Try-again driver (App.tsx's `dispatchTryAgain`), no guard logic of its own. */
@@ -818,6 +861,24 @@ export function tryAgainButtonState(deps: HandlerDeps, tabId: string, blockId: s
 
 export function tryAgainButtonClick(deps: HandlerDeps, tabId: string, blockId: string): Promise<unknown> {
   return deps.callFacade("tryAgainButtonClick", [tabId, blockId]);
+}
+
+// --- Workflow-step checklist probe/driver (TASK.191 slice S4): same
+// thin-wrapper discipline as the agent-card / try-again-button probe/driver
+// pairs above — the facade owns every guard, this layer only forwards
+// method + args. ---
+
+export function workflowStepsState(deps: HandlerDeps, tabId: string, toolCallId: string): Promise<unknown> {
+  return deps.callFacade("workflowStepsState", [tabId, toolCallId]);
+}
+
+export function workflowStepClick(
+  deps: HandlerDeps,
+  tabId: string,
+  toolCallId: string,
+  stepId: string,
+): Promise<unknown> {
+  return deps.callFacade("workflowStepClick", [tabId, toolCallId, stepId]);
 }
 
 // --- Settings probe/driver (slice-P7.16-cut.md §5 W4): thin wrappers over the
@@ -1168,6 +1229,39 @@ export function profileRebuild(deps: HandlerDeps): Promise<unknown> {
 
 export function settingsLayoutState(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("settingsLayoutState", []);
+}
+
+// --- Vision pane probe/driver (TASK.198 срез E2c): thin wrappers over the
+// frozen facade contract, same discipline as the Profile pane probe/driver
+// above — the facade owns every guard (pane_not_mounted / option_not_present /
+// field_not_present / save_not_present / save_disabled / probe_not_present /
+// probe_disabled / turnoff_not_present / turnoff_disabled / did_not_select /
+// did_not_commit / did_not_arm / did_not_start / did_not_settle). Global
+// (app-level) command: no `:tabId` — the Vision pane lives inside the global
+// Settings dialog, same posture as the Profile pane probe/driver. ---
+
+export function visionPaneState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("visionPaneState", []);
+}
+
+export function visionSelectConnection(deps: HandlerDeps, connectionId: string): Promise<unknown> {
+  return deps.callFacade("visionSelectConnection", [connectionId]);
+}
+
+export function visionSetModel(deps: HandlerDeps, modelId: string): Promise<unknown> {
+  return deps.callFacade("visionSetModel", [modelId]);
+}
+
+export function visionSave(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("visionSave", []);
+}
+
+export function visionProbe(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("visionProbe", []);
+}
+
+export function visionTurnOff(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("visionTurnOff", []);
 }
 
 // --- Slash-command menu probe/driver (design/slice-P7.23-cut.md §7 W4): thin

@@ -58,6 +58,7 @@ import {
   type PreviewRequestMessage,
 } from "../shared/preview.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
+import type { RecognizerConfigChanged } from "../shared/recognizer.js";
 import { ENV_CONNECTION_ID, ENV_MODEL } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import {
@@ -1193,6 +1194,32 @@ export class TabHostManager {
       tab.proc.postMessage(event);
     } catch (error) {
       this.logger.warn(`[main] failed to relay child-run event to tab ${tab.tabId}`, error);
+    }
+  }
+
+  /**
+   * Pushes a fresh (or cleared) vision-fallback recognizer endpoint to every
+   * live ROOT core tab (TASK.198 E1 §1.2) — filtered to `engine === "core"`
+   * and no `childOf`: a child-session tab has no media/vision wiring of its
+   * own (fallback is wired only in the core branch), and codex/claude engines
+   * have no vision-fallback machinery to receive this at all. There is no
+   * `sendChildRunEvent`/generic broadcast helper for this — main iterates
+   * tabs itself here (same style as `deliverAllTabPorts` below) rather than
+   * generalizing `replyChildRunEvent`, which is typed to one message kind and
+   * stays that way. A dead/respawning proc (`tab.proc === null`) is silently
+   * skipped, and a live proc's `postMessage` throw is swallowed — the same
+   * best-effort discipline as `replyChildRunEvent`.
+   */
+  broadcastRecognizerConfig(event: RecognizerConfigChanged): void {
+    for (const tab of this.tabs.values()) {
+      if (tab.engine !== "core" || tab.childOf !== undefined || tab.proc === null) {
+        continue;
+      }
+      try {
+        tab.proc.postMessage(event);
+      } catch (error) {
+        this.logger.warn(`[main] failed to relay recognizer config to tab ${tab.tabId}`, error);
+      }
     }
   }
 

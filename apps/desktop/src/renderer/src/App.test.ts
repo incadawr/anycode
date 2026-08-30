@@ -386,4 +386,24 @@ describe("dispatchTryAgain — TASK.56 W3-FIX entry gate against the live model 
     expect(sent[0]).toMatchObject({ type: "user_message", text: "look at this", images: [IMAGE.attachment] });
     expect(store.getState().retry).toBeNull();
   });
+
+  it("T8 — TASK.198 срез D: a configured recognizer fallback unblocks the retry gate for a blind model, same as the composer's own predicates", () => {
+    const store = createDesktopStore();
+    armRetryViaRealPath(store, "look at this", [IMAGE]);
+    store.getState().applyHostMessage({
+      type: "model_changed",
+      model: "glm-5.2",
+      reasoningEffort: "off",
+      imageInput: false,
+      imageFallback: true,
+    });
+    const sent: UiToHostMessage[] = [];
+
+    const outcome = dispatchTryAgain(store, (m) => sent.push(m));
+
+    expect(outcome).toBe("sent");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ type: "user_message", text: "look at this", images: [IMAGE.attachment] });
+    expect(store.getState().retry).toBeNull();
+  });
 });

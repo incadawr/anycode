@@ -118,6 +118,8 @@ import type {
   ProxyProfileUpsertRequest,
   ProxyRefSetRequest,
 } from "../shared/proxy.js";
+import { RECOGNIZER_PROBE_CHANNEL, RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
+import type { RecognizerProbeRequest, RecognizerProbeResult, RecognizerSetRequest } from "../shared/recognizer.js";
 import {
   BINARY_TRUST_GRANT_CHANNEL,
   BINARY_TRUST_REVOKE_CHANNEL,
@@ -816,6 +818,19 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CONNECTION_DELETE_CHANNEL, req) as Promise<SettingsMutationResult>,
     connectionCheck: (req: ConnectionCheckRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(CONNECTION_CHECK_CHANNEL, req) as Promise<SettingsMutationResult>,
+    // TASK.198 срез E2: the Vision panel's "Probe" button — resolves a
+    // {connectionId, modelId} pair (not necessarily saved yet) through the
+    // SAME production ladder a live run uses and sends one real vision
+    // question through it. Always resolves a tagged `RecognizerProbeResult`,
+    // never rejects (main/recognizer-probe.ts's own contract).
+    recognizerProbe: (req: RecognizerProbeRequest): Promise<RecognizerProbeResult> =>
+      ipcRenderer.invoke(RECOGNIZER_PROBE_CHANNEL, req) as Promise<RecognizerProbeResult>,
+    // TASK.198: the Vision panel's save/off write — a SEPARATE channel from
+    // `settings.set` because the generic merge can never DELETE a key
+    // (shared/recognizer.ts's own docstring on this channel spells out why);
+    // `{recognizer: null}` is the only way to turn the fallback off.
+    recognizerSet: (req: RecognizerSetRequest): Promise<SettingsMutationResult> =>
+      ipcRenderer.invoke(RECOGNIZER_SET_CHANNEL, req) as Promise<SettingsMutationResult>,
     // TASK.45 W11-FIX (W13 live-dogfood finding): push fired after a real
     // request outcome updates a connection's advisory health (main's
     // `onProviderHealthEvent`). No payload — same "thin unsubscribe-returning

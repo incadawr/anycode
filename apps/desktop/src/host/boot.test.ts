@@ -144,6 +144,34 @@ describe("scrubSecretEnv", () => {
     expect(env.ANYCODE_API_KEY).toBeUndefined();
   });
 
+  // TASK.198 срез C durable (TASK.139 precedent): the recognizer's OWN
+  // resolved credential rides ANYCODE_RECOGNIZER_API_KEY on a host fork's env
+  // exactly like the primary provider's rides ANYCODE_API_KEY — without a
+  // scrub it would survive into every Bash-tool child a core session spawns
+  // (node-execution.ts builds a child's env as `{...process.env, ...request.
+  // env}`). The other four ANYCODE_RECOGNIZER_* vars are NOT secrets
+  // (transport/baseUrl/model/providerName) and stay untouched, mirroring
+  // ANYCODE_MODEL/ANYCODE_BASE_URL above.
+  it("also deletes ANYCODE_RECOGNIZER_API_KEY but leaves the recognizer's non-secret vars untouched", () => {
+    const env = {
+      ANYCODE_API_KEY: "sk-secret",
+      ANYCODE_RECOGNIZER_API_KEY: "sk-recognizer-secret",
+      ANYCODE_RECOGNIZER_TRANSPORT: "anthropic-messages",
+      ANYCODE_RECOGNIZER_BASE_URL: "https://vision.example.com",
+      ANYCODE_RECOGNIZER_MODEL: "vision-model",
+      ANYCODE_RECOGNIZER_PROVIDER_NAME: "anthropic",
+    } as NodeJS.ProcessEnv;
+
+    scrubSecretEnv(env);
+
+    expect(env.ANYCODE_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBe("anthropic-messages");
+    expect(env.ANYCODE_RECOGNIZER_BASE_URL).toBe("https://vision.example.com");
+    expect(env.ANYCODE_RECOGNIZER_MODEL).toBe("vision-model");
+    expect(env.ANYCODE_RECOGNIZER_PROVIDER_NAME).toBe("anthropic");
+  });
+
   it("defaults to scrubbing the real process.env when called with no argument", () => {
     const original = process.env.ANYCODE_API_KEY;
     process.env.ANYCODE_API_KEY = "sk-test-default-arg";

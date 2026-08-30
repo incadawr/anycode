@@ -84,6 +84,8 @@ import {
   agentCardExpand,
   tryAgainButtonState,
   tryAgainButtonClick,
+  workflowStepsState,
+  workflowStepClick,
   settingsState,
   sidebarFilter,
   sidebarGroups,
@@ -142,6 +144,12 @@ import {
   profileToggleModelsExpanded,
   profileRefresh,
   profileRebuild,
+  visionPaneState,
+  visionSelectConnection,
+  visionSetModel,
+  visionSave,
+  visionProbe,
+  visionTurnOff,
   settingsLayoutState,
   slashMenuState,
   composerType,
@@ -219,6 +227,16 @@ export interface AutomationServerHandle {
 // --- zod body schemas (design §4: bodies validated in server.ts) ---
 
 const promptBody = z.object({ text: z.string() });
+/**
+ * TASK.198 live-smoke facade extension: only `POST /tabs/:tabId/prompt` gets
+ * `images` — `/start-screen/prompt` and `/queue/prompt` keep the plain
+ * `promptBody` above untouched. `images` is a list of ABSOLUTE on-disk paths
+ * (never base64 over the wire — handlers.ts's `sendPrompt` reads and encodes
+ * them main-side, the only side with filesystem access); no length cap here,
+ * the per-message count limit is enforced renderer-side against the SAME
+ * Composer constant a live drag-drop is capped by.
+ */
+const tabPromptBody = z.object({ text: z.string(), images: z.array(z.string().min(1)).optional() });
 const permissionBody = z.object({
   behavior: z.enum(["allow", "deny"]),
   requestId: z.string().min(1).optional(),
@@ -446,6 +464,18 @@ const subagentsNameBody = z.object({ name: z.string().min(1).max(64) });
 // rather than importing the component's own type, same "server.ts owns zod,
 // not the shared vocabulary" posture as `skillsImportApplyBody.scope` above. ──
 const profilePeriodBody = z.object({ period: z.enum(["today", "7d", "30d", "all"]) }).strict();
+
+// ── Vision pane bodies (TASK.198 срез E2c): global (app-level) routes, no
+// `:tabId` segment — same posture as the Profile bodies above. `connectionId`
+// shares the same 256-char cap `startScreenModelMenuSelectBody` already uses
+// for the identical field, min 1 (the empty string names no real connection —
+// it is the `<select>`'s own disabled placeholder value, never a legal pick).
+// `modelId` allows the empty string on purpose: it is a real keystroke into a
+// free-text field (`visionSetModel` mirrors typing, not submitting — Save's
+// own "blank model" refusal is the facade's `save_disabled` reading, not an
+// HTTP-boundary shape error), capped the same. ──
+const visionConnectionBody = z.object({ connectionId: z.string().min(1).max(256) }).strict();
+const visionModelBody = z.object({ modelId: z.string().max(256) }).strict();
 
 // ── Slash-command menu bodies (slice-P7.23-cut.md §7 W4): `tabId` rides in
 // the path (`/tabs/:tabId/slash-menu/...`), same posture as the model-pill/
@@ -769,6 +799,19 @@ async function route(
   if (method === "GET" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "try-again-button") {
     return tryAgainButtonState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
+  // Workflow-steps checklist probe (TASK.191 slice S4): `/tabs/:tabId/agent-card/:toolCallId/workflow-steps`
+  // — one segment deeper than the agent-card GET probe above (a per-card,
+  // per-checklist read, not a per-tab singleton), same
+  // decodeURIComponent-both-segments posture.
+  if (
+    method === "GET" &&
+    parts[0] === "tabs" &&
+    parts.length === 5 &&
+    parts[2] === "agent-card" &&
+    parts[4] === "workflow-steps"
+  ) {
+    return workflowStepsState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
   // Child-layout probe (TASK.102 S3c, CUT-S3 §6.2): `/tabs/:tabId/child/layout`
   // — read-only counterpart of `POST .../child/open` below, same
   // `parts.length === 4` shape as the try-again-button/agent-card GET probes
@@ -859,6 +902,12 @@ async function route(
   // "own probe, no widening" posture as the Subagents pane probe.
   if (method === "GET" && pathname === "/settings/profile") {
     return profilePaneState(deps);
+  }
+  // Vision pane probe (TASK.198 срез E2c): a DEDICATED route — every prior
+  // `/settings*` probe above stays byte-untouched (§4 custody), same "own
+  // probe, no widening" posture as the Profile pane probe.
+  if (method === "GET" && pathname === "/settings/vision") {
+    return visionPaneState(deps);
   }
   // Settings geometry probe (TASK.187 S5): a DEDICATED route — every prior
   // `/settings*` probe above stays byte-untouched, same "own probe, no
@@ -1231,6 +1280,32 @@ async function route(
     parseBody(rawBody, emptyBody);
     return profileRebuild(deps);
   }
+  // Vision pane routes (TASK.198 срез E2c): mirror the SAME DOM paths
+  // VisionPane.tsx itself uses (the connection `<select>`, the model
+  // `<input>`, Save/Probe, and the "Turn off" -> "Really turn off?" two-step
+  // gesture), through the facade's thin wrappers — no second path.
+  // `/settings/vision/turnoff` is unary like `/settings/profile/rebuild`
+  // above: the facade drives BOTH steps of the in-pane arm/confirm pair.
+  if (method === "POST" && pathname === "/settings/vision/connection") {
+    const body = parseBody(rawBody, visionConnectionBody);
+    return visionSelectConnection(deps, body.connectionId);
+  }
+  if (method === "POST" && pathname === "/settings/vision/model") {
+    const body = parseBody(rawBody, visionModelBody);
+    return visionSetModel(deps, body.modelId);
+  }
+  if (method === "POST" && pathname === "/settings/vision/save") {
+    parseBody(rawBody, emptyBody);
+    return visionSave(deps);
+  }
+  if (method === "POST" && pathname === "/settings/vision/probe") {
+    parseBody(rawBody, emptyBody);
+    return visionProbe(deps);
+  }
+  if (method === "POST" && pathname === "/settings/vision/turnoff") {
+    parseBody(rawBody, emptyBody);
+    return visionTurnOff(deps);
+  }
   // Keyboard shortcuts pane routes (slice-P7.24-cut.md §4 W4): mirror the
   // SAME DOM paths KeyboardShortcutsPane.tsx itself uses (a slot's pencil /
   // the "+ Add" button, the Reset button, a badge's "×"), through the
@@ -1292,8 +1367,10 @@ async function route(
     const tabId = decodeURIComponent(parts[1]!);
     const action = parts[2]!;
     switch (action) {
-      case "prompt":
-        return sendPrompt(deps, tabId, parseBody(rawBody, promptBody).text);
+      case "prompt": {
+        const body = parseBody(rawBody, tabPromptBody);
+        return sendPrompt(deps, tabId, body.text, body.images);
+      }
       case "permission": {
         const body = parseBody(rawBody, permissionBody);
         return respondPermission(deps, tabId, body.behavior, body.requestId);
@@ -1461,6 +1538,31 @@ async function route(
   ) {
     parseBody(rawBody, emptyBody);
     return tryAgainButtonClick(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
+  // Workflow-step click driver (TASK.191 slice S4):
+  // `/tabs/:tabId/agent-card/:toolCallId/workflow-steps/:stepId/click` — one
+  // segment deeper than the workflow-steps GET probe above (which is itself
+  // one segment deeper than the agent-card GET probe), same
+  // decodeURIComponent-every-segment posture. Fires a REAL DOM click on the
+  // step's own `.workflow-step-button` — the exact node `WorkflowStepsBody`'s
+  // `onClick={() => onSelectStep(step.stepId)}` fires from, not a synthetic
+  // store poke (the selection is local component `useState`, there is no
+  // store action to call instead).
+  if (
+    method === "POST" &&
+    parts[0] === "tabs" &&
+    parts.length === 7 &&
+    parts[2] === "agent-card" &&
+    parts[4] === "workflow-steps" &&
+    parts[6] === "click"
+  ) {
+    parseBody(rawBody, emptyBody);
+    return workflowStepClick(
+      deps,
+      decodeURIComponent(parts[1]!),
+      decodeURIComponent(parts[3]!),
+      decodeURIComponent(parts[5]!),
+    );
   }
 
   throw new HttpError(404, { error: "not_found" });

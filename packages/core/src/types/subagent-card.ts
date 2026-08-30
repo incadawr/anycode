@@ -7,6 +7,8 @@
  * file for `ToolResult.presentation`, so importing back would create a cycle.
  */
 
+import type { WorkflowCardSnapshotV1 } from "./workflow-card.js";
+
 /** Terminal status of a settled subagent — same union as SubagentOutcome["status"]. */
 export type SubagentCardFinalStatus = "completed" | "max_turns" | "cancelled" | "error";
 
@@ -69,4 +71,6 @@ export interface SubagentCardSnapshotV1 {
 /** Envelope on a tool result. Extensible: other presentation kinds (e.g. workflow cards) add sibling keys later. */
 export interface ToolResultPresentation {
   subagent?: SubagentCardSnapshotV1;
+  /** TASK.191 slice S5: the workflow tool's own persisted card, riding the same envelope. */
+  workflow?: WorkflowCardSnapshotV1;
 }

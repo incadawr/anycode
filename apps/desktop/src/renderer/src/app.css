@@ -3314,6 +3314,15 @@ body {
   color: var(--text-3);
 }
 
+/* Run token spend (TASK.191 slice S2). Same secondary register as the counters
+   line directly above it — the numbers are context for the run, not its
+   headline. Tabular figures so the digits stop jittering as they climb. */
+.tool-call-workflow-usage {
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Shared sub-status atoms (R14): one glyph cell + one status→color map serve the
    agent line, the workflow header, and every step row. Color appears exactly once
    per row — on this cell. */
@@ -3535,10 +3544,12 @@ body {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
-.workflow-step-pending {
-  font-size: var(--fs-2xs);
-  color: var(--text-ghost);
-}
+/* Not-yet-started / queued step rows (TASK.191 slice S3): the prefilled
+   graph renders these as real rows now, not a lump trailer line —
+   .substatus-pending falls through to .substatus-glyph's own ghost default
+   (same tone the old lump line used), .substatus-queued gets a step up from
+   ghost ("alive but waiting", between ghost-pending and accent-running). */
+.substatus-queued > .substatus-glyph { color: var(--text-3); }
 
 .tool-call-diff-slot:empty {
   display: none;

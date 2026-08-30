@@ -26,6 +26,7 @@ export {
 } from "./openai-responses.js";
 export { translateStreamPart } from "./stream-translator.js";
 export { AiSdkModelPort } from "./model-port.js";
+export { createMediaProjectionPort, projectMessagesForMedia } from "./media-projection.js";
 export { OPENAI_TOOL_RESULT_IMAGE_OMITTED_NOTE, toSdkMessages, toSdkTools } from "./sdk-mapping.js";
 export { DEFAULT_RETRY_POLICY, isRetryableStreamError, retryDelayMs } from "./retry.js";
 export type { RetryPolicy } from "./retry.js";

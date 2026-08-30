@@ -473,6 +473,15 @@ export type HostToUiMessage =
        * model-level attachment gating — exactly the pre-TASK.56 behavior.
        */
       imageInput?: boolean;
+      /**
+       * TASK.198 срез C (plan §1.3/§4): live verdict for the vision-fallback
+       * recognizer — true exactly when `settings.recognizer` currently
+       * resolves to a usable endpoint, independent of `imageInput` above (a
+       * blind model can still accept images through the fallback). Additive
+       * + optional, same discipline as `imageInput`: absent (older host / no
+       * seam wired) means the renderer applies no fallback-aware gating.
+       */
+      imageFallback?: boolean;
       /** Present only for a non-core engine; absent retains legacy core wire exactly. */
       engine?: EnginePresentation;
       /** Present only alongside `engine` (never for core, cut §3.2/§2(f)); absent = every shell feature enabled. */
@@ -528,6 +537,8 @@ export type HostToUiMessage =
       reasoningEffort: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];
       imageInput?: boolean;
+      /** TASK.198 срез C: the fallback verdict re-read for the NEW model, same precedent as `imageInput` above. */
+      imageFallback?: boolean;
     }
   | { type: "mode_change_rejected"; reason: string }
   // Codex-fixes TASK.39 (cut §3.3): host acknowledges a `set_engine_preset` or a
@@ -642,6 +653,15 @@ export type HostToUiMessage =
   // still unacknowledged and re-`sendDirect` them on the NEXT `ui_ready`
   // (session.ts) if this attempt never reached a live renderer.
   | { type: "child_report"; id: string; text: string }
+  // TASK.198 срез C (plan §1.3): fires strictly AFTER a live recognizer-config
+  // push (main's RecognizerConfigChanged, TASK.198 E1) has been COMMITTED
+  // host-side — applied immediately while idle, or deferred to the very next
+  // busy->idle boundary and applied there, last-pending-value-wins (mirrors
+  // model_changed's own imageInput re-read, never a bare echo of the
+  // endpoint's presence on the wire). Lets the composer re-gate attachments
+  // without waiting for an unrelated model switch. No zod schema (host->
+  // renderer direction, trusted, precedent mode_changed/title_changed).
+  | { type: "image_fallback_changed"; imageFallback: boolean }
   | { type: "fatal"; message: string };
 
 /** Minimal port abstraction — host logic is unit-tested over worker_threads MessageChannel. */

@@ -43,6 +43,7 @@ import {
   type WorktreeTransitionMessage,
 } from "../shared/worktrees.js";
 import { ENV_MODEL } from "./host-env.js";
+import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
 import {
   DEFAULT_BREAKER_LIMITS,
   TabHostManager,
@@ -4387,5 +4388,89 @@ describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
     expect(seenArgs[1]).toContain("--resume");
     expect(seenArgs[1]).toContain("s-resume-argv");
     expect(seenArgs[1]).not.toContain("--session");
+  });
+});
+
+describe("TabHostManager — recognizer live-config broadcast (TASK.198 E1 §1.2)", () => {
+  it("delivers to every live root CORE tab, and skips a codex root, a child-session tab, and a dead proc", () => {
+    const hosts: FakeHost[] = [];
+    const fork: HostForkFn = () => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    };
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      engineReady: () => true,
+      engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
+      logger: silentLogger,
+      limits: {},
+    });
+
+    const rootA = manager.createTab({ workspace: "/a", sessionId: "root-a", resume: false });
+    const rootB = manager.createTab({ workspace: "/b", sessionId: "root-b", resume: false });
+    const codexRoot = manager.createTab({ workspace: "/c", sessionId: "root-codex", resume: false, engine: "codex" });
+    expect(rootA.ok).toBe(true);
+    expect(rootB.ok).toBe(true);
+    expect(codexRoot.ok).toBe(true);
+
+    // A child-session tab spawned under root A (fork #4, index 3).
+    const rootAHost = hosts[0]!;
+    rootAHost.emit("message", spawnRequest({ requestId: "recognizer-child-1" }));
+    const childHost = hosts[3];
+    expect(childHost).toBeDefined();
+
+    // Simulate root B's host being dead/mid-respawn (its live proc is null).
+    const rootBTab = rootB.ok ? manager.getTab(rootB.tab.tabId) : undefined;
+    expect(rootBTab).toBeDefined();
+    if (rootBTab !== undefined) {
+      rootBTab.proc = null;
+    }
+
+    const event: RecognizerConfigChanged = {
+      type: RECOGNIZER_CONFIG_CHANGED_TYPE,
+      endpoint: { model: "vision-model" },
+    };
+    expect(() => manager.broadcastRecognizerConfig(event)).not.toThrow();
+
+    expect(rootAHost.postMessage).toHaveBeenCalledWith(event);
+    expect(hosts[1]!.postMessage).not.toHaveBeenCalledWith(event); // root B — dead proc
+    expect(hosts[2]!.postMessage).not.toHaveBeenCalledWith(event); // codex root — non-core engine
+    expect(childHost?.postMessage).not.toHaveBeenCalledWith(event); // child-session tab
+  });
+
+  it("swallows a live proc's postMessage throw — best-effort, same discipline as replyChildRunEvent", () => {
+    const throwing = new FakeHost();
+    throwing.postMessage.mockImplementation(() => {
+      throw new Error("EPIPE");
+    });
+    const fork: HostForkFn = () => throwing as unknown as UtilityProcess;
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      logger: silentLogger,
+      limits: {},
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "root-throw", resume: false });
+    expect(created.ok).toBe(true);
+
+    expect(() =>
+      manager.broadcastRecognizerConfig({ type: RECOGNIZER_CONFIG_CHANGED_TYPE, endpoint: null }),
+    ).not.toThrow();
+    expect(throwing.postMessage).toHaveBeenCalled();
+  });
+
+  it("is a no-op with zero live tabs", () => {
+    const manager = makeManager(() => new FakeHost() as unknown as UtilityProcess, windowRig().window);
+    expect(() =>
+      manager.broadcastRecognizerConfig({ type: RECOGNIZER_CONFIG_CHANGED_TYPE, endpoint: null }),
+    ).not.toThrow();
   });
 });

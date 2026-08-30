@@ -9,6 +9,8 @@
  * receives no port).
  */
 
+import type { TokenUsage } from "../types/events.js";
+
 export interface SubagentRequest {
   /** 3.1 personas: "general-purpose" | "explore"; 3.3 widens with md-profiles. */
   agentType: string;
@@ -54,6 +56,16 @@ export interface SubagentOutcome {
   turns: number;
   toolCalls: number;
   durationMs: number;
+  /**
+   * TASK.191 slice S2: the child's own token spend over the whole run, summed
+   * from the per-model-call `finish` events its loop already emits. OPTIONAL
+   * on purpose — "not reported" is a distinct answer from zero: the
+   * session-tier and engine children never surface a `finish` at all, and
+   * three in-process paths (wrap-up rescue, ceiling verdict, compaction) call
+   * the model outside the turn stream, so this is an honest LOWER BOUND on a
+   * run's spend, never a ledger.
+   */
+  usage?: TokenUsage;
 }
 
 /**
@@ -86,7 +98,12 @@ export type SubagentProgress =
   // one-shot foreign CLI run (Codex or Claude Code) in place of an in-process
   // child.
   | { kind: "start"; agentType: string; description: string; model?: string; engine?: "codex" | "claude" }
-  | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
+  // `usage` (TASK.191 slice S2) is CUMULATIVE from the start of the run, not a
+  // per-turn delta: the receiver REPLACES rather than adds, so a dropped or
+  // duplicated progress event cannot corrupt the total. Same discipline as
+  // `turns`/`toolCalls` above. Absent while the run has yet to complete a turn,
+  // and absent for tiers that report no spend at all.
+  | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string; usage?: TokenUsage }
   // Per-child-tool activity (slice P7.18/F16b): one bounded one-liner per child
   // tool call for the renderer's live feed. `summary` is a pre-capped, sanitized
   // subject (never raw child input); bridged as a subagent_activity AgentEvent.

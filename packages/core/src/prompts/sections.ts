@@ -53,6 +53,18 @@ export const SECTION_TOOL_DISCIPLINE_GENERIC = [
   "If none of your tools cover a need, use Bash where that fits; otherwise tell the user plainly you cannot do it — never invent a tool name to paper over the gap.",
 ].join("\n");
 
+/**
+ * Vision-fallback section (TASK.198 plan §5): present ONLY while InspectImage
+ * is actually registered (a blind model with a configured recognizer). Names
+ * the tool literally — the plan's own risk analysis (spec §5, "molча мёртвая
+ * фича") calls this the strongest lever after the inline stub text for
+ * getting a model to actually call it.
+ */
+export const SECTION_VISION_FALLBACK = [
+  "Some images in this conversation are shown to you only as `[image #N — ...]` placeholders, because the current model has no direct image input.",
+  "Call InspectImage with that number and a question to have a separate vision model look at it and answer in text; call it again with follow-up questions about the same image.",
+].join(" ");
+
 export const SECTION_SUBAGENT_IDENTITY = [
   "You are a subagent that a parent agent has spun up to handle one specific task.",
   "You have no way to ask the user anything, so make your own decisions and stay tightly focused — your turn budget is limited, so use it well.",

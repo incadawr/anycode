@@ -28,6 +28,7 @@ import type {
 import type { ProposedToolCall } from "../types/events.js";
 import type {
   AnyToolDefinition,
+  ImageLookupPort,
   ToolContext,
   ToolEmittedEvent,
   ToolMetadata,
@@ -989,6 +990,33 @@ describe("executeToolCall — media plumbing (design slice-6.2-cut.md §2/R3)", 
     const ctx = makeCtx({ registry: makeRegistry({ Mock: captureTool(sink) }) });
     await executeToolCall(ctx, call());
     expect(sink.media).toBeUndefined();
+  });
+});
+
+describe("executeToolCall — images plumbing (TASK.198 plan §2, slice B1)", () => {
+  const imagesPort: ImageLookupPort = { resolve: () => undefined };
+
+  function captureTool(sink: { images?: ImageLookupPort }): AnyToolDefinition {
+    return makeTool({
+      handler: async (_input, ctx: ToolContext) => {
+        sink.images = ctx.images;
+        return { ok: true } as ToolResult;
+      },
+    });
+  }
+
+  it("threads DispatchContext.images into the handler's ctx", async () => {
+    const sink: { images?: ImageLookupPort } = {};
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: captureTool(sink) }), images: imagesPort });
+    await executeToolCall(ctx, call());
+    expect(sink.images).toBe(imagesPort);
+  });
+
+  it("leaves ctx.images undefined when the DispatchContext carries none (fail-closed lock)", async () => {
+    const sink: { images?: ImageLookupPort } = { images: imagesPort };
+    const ctx = makeCtx({ registry: makeRegistry({ Mock: captureTool(sink) }) });
+    await executeToolCall(ctx, call());
+    expect(sink.images).toBeUndefined();
   });
 });
 

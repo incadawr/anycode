@@ -375,8 +375,9 @@ describe("CLI render of subagent coarse-progress events (task 3.1.3, design §3.
 describe("CLI render of workflow coarse-progress events (design slice-3.4-cut.md §2.3/§3.4)", () => {
   it("renders workflow_start -> step_start/progress/end x2 -> workflow_end as prefixed status lines, in order", () => {
     const events: AgentEvent[] = [
-      { type: "workflow_start", toolCallId: "call-1", workflow: "release-notes", totalSteps: 2 },
+      { type: "workflow_start", toolCallId: "call-1", workflow: "release-notes", totalSteps: 2, steps: [] },
       { type: "workflow_step_start", toolCallId: "call-1", stepId: "gather", agentType: "explore" },
+      { type: "workflow_step_running", toolCallId: "call-1", stepId: "gather" },
       { type: "workflow_step_progress", toolCallId: "call-1", stepId: "gather", turns: 1, toolCalls: 2, lastTool: "Read" },
       { type: "workflow_step_end", toolCallId: "call-1", stepId: "gather", status: "completed", turns: 1, durationMs: 111 },
       { type: "workflow_step_start", toolCallId: "call-1", stepId: "write", agentType: "general-purpose" },
@@ -396,6 +397,7 @@ describe("CLI render of workflow coarse-progress events (design slice-3.4-cut.md
     expect(text).toBe(
       "\n[workflow call-1] start: release-notes (2 step(s))\n" +
         "[workflow call-1] step gather start: explore\n" +
+        "[workflow call-1] step gather running\n" +
         "[workflow call-1] step gather progress: turns=1 toolCalls=2 lastTool=Read\n" +
         "[workflow call-1] step gather end (completed): turns=1 durationMs=111\n" +
         "[workflow call-1] step write start: general-purpose\n" +
@@ -407,7 +409,7 @@ describe("CLI render of workflow coarse-progress events (design slice-3.4-cut.md
 
   it("renders a fail-fast run: a failed step, a skipped step, and a failed workflow_end", () => {
     const events: AgentEvent[] = [
-      { type: "workflow_start", toolCallId: "call-2", workflow: "risky", totalSteps: 2 },
+      { type: "workflow_start", toolCallId: "call-2", workflow: "risky", totalSteps: 2, steps: [] },
       { type: "workflow_step_start", toolCallId: "call-2", stepId: "a", agentType: "general-purpose" },
       { type: "workflow_step_end", toolCallId: "call-2", stepId: "a", status: "error", turns: 3, durationMs: 50 },
       { type: "workflow_step_end", toolCallId: "call-2", stepId: "b", status: "skipped", turns: 0, durationMs: 0 },
@@ -3444,6 +3446,11 @@ describe("CLI image-input e2e (design slice-6.2-cut.md §6#8a): /image stage dra
     expect(turn1.images![0]!.mediaType).toBe("image/png");
     expect(turn1.images![0]!.data).toBe(TINY_PNG_BASE64);
     expect(turn1.images![0]!.sourcePath).toBe(pngPath);
+    // TASK.198 plan §2/B1: this CLI wires AgentLoopConfig.recognizer's
+    // reserveRef unconditionally over its own SqlitePersistenceAdapter, so
+    // every attached image gets a real, persisted #N — proven end-to-end
+    // here, not just against the mocked closure in loop/agent-loop.test.ts.
+    expect(turn1.images![0]!.ref).toBe(1);
 
 
     const turn2 = lastUserMessageWithImages(port.requests[1]);

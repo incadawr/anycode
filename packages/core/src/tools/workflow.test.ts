@@ -205,11 +205,40 @@ describe("workflowTool", () => {
   });
 
   it("bridges every WorkflowProgress kind to a workflow_* event stamped with the tool call id", async () => {
+    // Every field this bridge is supposed to copy field-by-field (S3's own
+    // discipline note) gets a NON-default value here on purpose: a bridge
+    // case that drops a spread still type-checks green (the field is
+    // optional on the wire type) and a toMatchObject elsewhere would miss it
+    // if the fixture never carried the field in the first place.
     const progressSequence: WorkflowProgress[] = [
-      { kind: "start", workflow: "build", totalSteps: 2 },
+      {
+        kind: "start",
+        workflow: "build",
+        totalSteps: 2,
+        steps: [
+          { id: "a", agentType: "general-purpose" },
+          { id: "b", agentType: "explore", dependsOn: ["a"] },
+        ],
+      },
       { kind: "step_start", stepId: "a", agentType: "general-purpose" },
-      { kind: "step_progress", stepId: "a", turns: 1, toolCalls: 2, lastTool: "Grep" },
-      { kind: "step_end", stepId: "a", status: "completed", turns: 2, durationMs: 7 },
+      { kind: "step_running", stepId: "a" },
+      {
+        kind: "step_progress",
+        stepId: "a",
+        turns: 1,
+        toolCalls: 2,
+        lastTool: "Grep",
+        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+      },
+      { kind: "step_activity", stepId: "a", toolName: "Read", summary: "a.ts" },
+      {
+        kind: "step_end",
+        stepId: "a",
+        status: "completed",
+        turns: 2,
+        durationMs: 7,
+        usage: { inputTokens: 30, outputTokens: 6, totalTokens: 36 },
+      },
       { kind: "end", status: "completed", completedSteps: 2, totalSteps: 2, durationMs: 20 },
     ];
     const port: WorkflowPort = {
@@ -231,15 +260,183 @@ describe("workflowTool", () => {
     expect(emitted.map((e) => e.type)).toEqual([
       "workflow_start",
       "workflow_step_start",
+      "workflow_step_running",
       "workflow_step_progress",
+      "workflow_step_activity",
       "workflow_step_end",
       "workflow_end",
     ]);
     for (const event of emitted) {
       expect((event as { toolCallId: string }).toolCallId).toBe("wf-7");
     }
-    expect(emitted[0]).toMatchObject({ type: "workflow_start", workflow: "build", totalSteps: 2 });
-    expect(emitted[2]).toMatchObject({ type: "workflow_step_progress", stepId: "a", turns: 1, toolCalls: 2, lastTool: "Grep" });
-    expect(emitted[4]).toMatchObject({ type: "workflow_end", status: "completed", completedSteps: 2, totalSteps: 2 });
+    expect(emitted[0]).toMatchObject({
+      type: "workflow_start",
+      workflow: "build",
+      totalSteps: 2,
+      steps: [
+        { id: "a", agentType: "general-purpose" },
+        { id: "b", agentType: "explore", dependsOn: ["a"] },
+      ],
+    });
+    expect(emitted[2]).toMatchObject({ type: "workflow_step_running", stepId: "a" });
+    expect(emitted[3]).toMatchObject({
+      type: "workflow_step_progress",
+      stepId: "a",
+      turns: 1,
+      toolCalls: 2,
+      lastTool: "Grep",
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+    });
+    expect(emitted[4]).toMatchObject({ type: "workflow_step_activity", stepId: "a", toolName: "Read", summary: "a.ts" });
+    expect(emitted[5]).toMatchObject({
+      type: "workflow_step_end",
+      stepId: "a",
+      status: "completed",
+      usage: { inputTokens: 30, outputTokens: 6, totalTokens: 36 },
+    });
+    expect(emitted[6]).toMatchObject({ type: "workflow_end", status: "completed", completedSteps: 2, totalSteps: 2 });
+  });
+});
+
+// Persisted workflow card snapshot (TASK.191 slice S5). This pins that the
+// accumulator built in workflow/card-snapshot.ts actually reaches the tool
+// result via `presentation.workflow` — the reducer's own unit tests
+// (workflow/card-snapshot.test.ts) prove the reducer is correct in isolation,
+// but only THIS file proves the wiring in tools/workflow.ts actually attaches
+// it, mirroring tools/agent.test.ts's own "presentation attach" describe.
+describe("workflowTool — presentation attach (TASK.191 slice S5)", () => {
+  function progressSequence(): WorkflowProgress[] {
+    return [
+      {
+        kind: "start",
+        workflow: "build",
+        totalSteps: 2,
+        steps: [
+          { id: "a", agentType: "general-purpose" },
+          { id: "b", agentType: "explore", dependsOn: ["a"] },
+        ],
+      },
+      { kind: "step_start", stepId: "a", agentType: "general-purpose" },
+      { kind: "step_running", stepId: "a" },
+      { kind: "step_activity", stepId: "a", toolName: "Read", summary: "a.ts" },
+      {
+        kind: "step_end",
+        stepId: "a",
+        status: "completed",
+        turns: 2,
+        durationMs: 7,
+        usage: { inputTokens: 30, outputTokens: 6, totalTokens: 36 },
+      },
+      // "b" never actually launched — the synthetic skipped end (TASK.191 S3).
+      { kind: "step_end", stepId: "b", status: "skipped", turns: 0, durationMs: 0 },
+      { kind: "end", status: "failed", completedSteps: 1, totalSteps: 2, durationMs: 20 },
+    ];
+  }
+
+  it("carries result.presentation.workflow with dependsOn, the skipped step's result, and per-step usage", async () => {
+    const port: WorkflowPort = {
+      list: () => [meta("build")],
+      run: async (_req, opts) => {
+        for (const p of progressSequence()) {
+          opts.onProgress?.(p);
+        }
+        return {
+          status: "failed",
+          output: "partial",
+          truncated: false,
+          steps: [step({ stepId: "a" }), step({ stepId: "b", status: "skipped" })],
+          durationMs: 20,
+        };
+      },
+    };
+
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ toolCallId: "wf-9", workflows: port }));
+
+    expect(result.presentation?.workflow).toMatchObject({
+      kind: "workflow",
+      version: 1,
+      workflow: "build",
+      totalSteps: 2,
+      final: { status: "failed", durationMs: 20 },
+    });
+    expect(result.presentation?.workflow?.steps).toEqual([
+      {
+        id: "a",
+        agentType: "general-purpose",
+        result: {
+          status: "completed",
+          turns: 2,
+          durationMs: 7,
+          usage: { inputTokens: 30, outputTokens: 6, totalTokens: 36 },
+        },
+      },
+      {
+        id: "b",
+        agentType: "explore",
+        dependsOn: ["a"],
+        result: { status: "skipped", turns: 0, durationMs: 0 },
+      },
+    ]);
+    expect(result.presentation?.workflow?.activity.entries).toEqual([{ stepId: "a", toolName: "Read", summary: "a.ts" }]);
+  });
+
+  it("a completed run (ok branch) also carries presentation", async () => {
+    const port: WorkflowPort = {
+      list: () => [meta("build")],
+      run: async (_req, opts) => {
+        opts.onProgress?.({ kind: "start", workflow: "build", totalSteps: 1, steps: [{ id: "a", agentType: "explore" }] });
+        opts.onProgress?.({ kind: "step_end", stepId: "a", status: "completed", turns: 1, durationMs: 5 });
+        opts.onProgress?.({ kind: "end", status: "completed", completedSteps: 1, totalSteps: 1, durationMs: 5 });
+        return { status: "completed", output: "ok", truncated: false, steps: [step({ stepId: "a" })], durationMs: 5 };
+      },
+    };
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+    expect(result.ok).toBe(true);
+    expect(result.presentation?.workflow?.final).toEqual({ status: "completed", durationMs: 5 });
+  });
+
+  it("a cancelled run (errorKind branch) also carries presentation", async () => {
+    const port: WorkflowPort = {
+      list: () => [meta("build")],
+      run: async (_req, opts) => {
+        opts.onProgress?.({ kind: "start", workflow: "build", totalSteps: 1, steps: [{ id: "a", agentType: "explore" }] });
+        opts.onProgress?.({ kind: "end", status: "cancelled", completedSteps: 0, totalSteps: 1, durationMs: 3 });
+        return { status: "cancelled", output: "", truncated: false, steps: [step({ status: "cancelled" })], durationMs: 3 };
+      },
+    };
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+    expect(result.errorKind).toBe("cancelled");
+    expect(result.presentation?.workflow?.final).toEqual({ status: "cancelled", durationMs: 3 });
+  });
+
+  it("a run that never reaches workflow_start (e.g. an unknown-name failure resolved with no progress at all) attaches NO presentation — the card is not fabricated", async () => {
+    // Mirrors the port's own contract for the unknown-name/pre-aborted/
+    // unknown-agentType early-return paths (workflow/engine.ts): onProgress is
+    // never called at all.
+    const port = fakePort(["build"], {
+      status: "failed",
+      output: "",
+      truncated: false,
+      steps: [],
+      durationMs: 1,
+    });
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+    expect(result.presentation).toBeUndefined();
+  });
+
+  it("accumulates presentation even with no ctx.emit wired (accumulation is unconditional, emission is not)", async () => {
+    const port: WorkflowPort = {
+      list: () => [meta("build")],
+      run: async (_req, opts) => {
+        opts.onProgress?.({ kind: "start", workflow: "build", totalSteps: 1, steps: [{ id: "a", agentType: "explore" }] });
+        opts.onProgress?.({ kind: "step_activity", stepId: "a", toolName: "Bash", summary: "cmd-0" });
+        opts.onProgress?.({ kind: "step_end", stepId: "a", status: "completed", turns: 1, durationMs: 5 });
+        opts.onProgress?.({ kind: "end", status: "completed", completedSteps: 1, totalSteps: 1, durationMs: 5 });
+        return { status: "completed", output: "ok", truncated: false, steps: [step({ stepId: "a" })], durationMs: 5 };
+      },
+    };
+    // makeCtx() carries no `emit` override.
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+    expect(result.presentation?.workflow?.activity.entries).toEqual([{ stepId: "a", toolName: "Bash", summary: "cmd-0" }]);
   });
 });

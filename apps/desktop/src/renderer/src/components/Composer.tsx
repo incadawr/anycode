@@ -103,20 +103,35 @@ export function hasSendableDraft(text: string, imageCount: number): boolean {
  * has explicitly resolved the CURRENT model as not accepting images.
  * `undefined` (no seam/legacy host) and `true` both mean "not blocked" —
  * the engine-level `supportsImages` gate (button visibility) is untouched by
- * this, this is model-level and rides ON TOP of it. Exported for unit testing.
+ * this, this is model-level and rides ON TOP of it.
+ *
+ * TASK.198 срез D: a configured recognizer fallback (`imageFallback === true`,
+ * off the same hello/model_changed wire) unblocks a blind model — the host
+ * now honestly accepts attachments for it (session.ts's `imagesAccepted()`),
+ * so the composer's own gate must stop lying about it. Any value other than
+ * `true` (including `undefined` — no fallback configured, or a legacy host
+ * that never sends the field) leaves the block in place. Exported for unit
+ * testing.
  */
-export function isImageAttachBlockedByModel(imageInput: boolean | undefined): boolean {
-  return imageInput === false;
+export function isImageAttachBlockedByModel(imageInput: boolean | undefined, imageFallback: boolean | undefined): boolean {
+  return imageInput === false && imageFallback !== true;
 }
 
 /**
  * Attachments already on the draft become send-blocking, not vanishing, the
  * moment the model swings vision -> non-vision mid-session (cut §3/W3(c)):
  * the user must switch back or remove them, never lose them silently.
+ *
+ * TASK.198 срез D: same recognizer-fallback carve-out as
+ * `isImageAttachBlockedByModel` — a configured fallback unblocks send too.
  * Exported for unit testing.
  */
-export function isSendBlockedByModelImages(imageInput: boolean | undefined, imageCount: number): boolean {
-  return imageInput === false && imageCount > 0;
+export function isSendBlockedByModelImages(
+  imageInput: boolean | undefined,
+  imageFallback: boolean | undefined,
+  imageCount: number,
+): boolean {
+  return imageInput === false && imageFallback !== true && imageCount > 0;
 }
 
 export const MODEL_IMAGE_ATTACH_BLOCKED_TEXT = "This model does not accept image attachments.";
@@ -955,6 +970,10 @@ export function Composer() {
   const mode = useTabStore((state) => state.mode);
   const model = useTabStore((state) => state.model);
   const imageInput = useTabStore((state) => state.imageInput);
+  // TASK.198 срез D: mirrors `imageInput` off the same wire messages — a
+  // configured recognizer fallback re-opens the gates below without waiting
+  // for the model itself to report vision support.
+  const imageFallback = useTabStore((state) => state.imageFallback);
   const connection = useTabStore((state) => state.connection);
   const contextUsage = useTabStore((state) => state.contextUsage);
   const contextBreakdown = useTabStore((state) => state.contextBreakdown);
@@ -974,8 +993,8 @@ export function Composer() {
   // above — `supportsImages` hides the attach UI entirely for an engine that
   // never does images; `imageInput` disables it (with an explanation) for a
   // model on an engine that DOES, when this particular model doesn't.
-  const modelBlocksAttach = isImageAttachBlockedByModel(imageInput);
-  const attachmentsBlockedByModel = isSendBlockedByModelImages(imageInput, attachedImages.length);
+  const modelBlocksAttach = isImageAttachBlockedByModel(imageInput, imageFallback);
+  const attachmentsBlockedByModel = isSendBlockedByModelImages(imageInput, imageFallback, attachedImages.length);
   const supportsContextUsage = engine?.capabilities.supportsContextUsage ?? true;
   const supportsContextBreakdown = engine?.capabilities.supportsContextBreakdown ?? true;
   // Shell (AnyCode chrome) capabilities (design TASK.40 §2(f)): independent

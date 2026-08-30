@@ -107,6 +107,10 @@ import type {
   ProxyProfileUpsertRequest,
   ProxyRefSetRequest,
 } from "../../shared/proxy";
+// TASK.198: the vision-fallback recognizer's probe + save/off contracts (a
+// frozen shared/** module, imported directly — same convention as
+// preview-panel/md-preview above).
+import type { RecognizerProbeRequest, RecognizerProbeResult, RecognizerSetRequest } from "../../shared/recognizer";
 
 import type {
   McpConfigDeleteRequest,
@@ -464,6 +468,17 @@ declare global {
         proxyProfileDelete(req: ProxyProfileDeleteRequest): Promise<ProxyProfileDeleteResult>;
         proxyRefSet(req: ProxyRefSetRequest): Promise<SettingsMutationResult>;
         proxyCheck(req: ProxyCheckRequest): Promise<ProxyCheckResult>;
+        // TASK.198 срез E2: the Vision panel's "Probe" button — resolves a
+        // {connectionId, modelId} pair (not necessarily saved yet) through the
+        // SAME production ladder a live run uses. Always resolves a tagged
+        // `RecognizerProbeResult`, never rejects.
+        recognizerProbe(req: RecognizerProbeRequest): Promise<RecognizerProbeResult>;
+        // TASK.198: the Vision panel's save/off write — a SEPARATE channel
+        // from `settings.set` because the generic merge can never DELETE a
+        // key (shared/recognizer.ts's own docstring on `RECOGNIZER_SET_CHANNEL`
+        // spells out why); `{recognizer: null}` is the only way to turn the
+        // fallback off.
+        recognizerSet(req: RecognizerSetRequest): Promise<SettingsMutationResult>;
       };
       // TASK.54 (cut §9.2/§13.1): custom OpenAI-compatible model-provider
       // CRUD + guarded `/v1/models` preview fetch (main/provider-ipc.ts owns

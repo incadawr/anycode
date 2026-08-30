@@ -59,6 +59,16 @@ export interface PreviewScreenshotSuccess {
   data: string;
   width: number;
   height: number;
+  /**
+   * Logical/CSS viewport size (DIP, not device pixels) at capture time, when
+   * the capture path could observe one (TASK.198 slice G) — mirrors
+   * ImageAttachment.cssSize's own additive-optional contract. Absent when
+   * the underlying page/window could not report a CSS size (unresponsive,
+   * destroyed, panel bounds unset); callers must not treat its absence as an
+   * error.
+   */
+  cssWidth?: number;
+  cssHeight?: number;
 }
 
 export type PreviewResult<T> =

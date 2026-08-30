@@ -447,6 +447,26 @@ describe("buildClaudeChildEnv", () => {
     const env = buildClaudeChildEnv({ HOME: "/home/test", PATH: "/usr/bin" }, undefined, "darwin");
     expect("CLAUDE_CONFIG_DIR" in env).toBe(false);
   });
+
+  // TASK.198 срез C durable (TASK.139 precedent): the ALLOWLIST projection
+  // excludes any name it does not enumerate — AnyCode's own provider
+  // credential and the vision-fallback recognizer's OWN, separately-resolved
+  // credential are both structurally excluded exactly like any other unnamed
+  // secret, never a name-by-name blocklist that could miss one.
+  it("never forwards ANYCODE_API_KEY or ANYCODE_RECOGNIZER_API_KEY", () => {
+    const env = buildClaudeChildEnv(
+      {
+        HOME: "/home/test",
+        PATH: "/usr/bin",
+        ANYCODE_API_KEY: "must-not-pass",
+        ANYCODE_RECOGNIZER_API_KEY: "must-not-pass",
+      },
+      undefined,
+      "darwin",
+    );
+    expect(env.ANYCODE_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
+  });
 });
 
 describe("buildClaudeChildEnv — engine proxy carrier (TASK.139)", () => {

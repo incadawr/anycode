@@ -97,6 +97,7 @@ export {
 export type { AppendRuleResult } from "./cli/settings-rules.js";
 export * from "./provider/index.js";
 export * from "./tools/index.js";
+export * from "./vision/index.js";
 export * from "./permissions/index.js";
 export * from "./dispatch/index.js";
 export * from "./loop/index.js";
@@ -122,6 +123,22 @@ export type {
   SubagentCardTarget,
   ToolResultPresentation,
 } from "./types/subagent-card.js";
+// Persisted workflow card snapshot contract (TASK.191 slice S5): mirrors the
+// subagent block above, and exports the NESTED types too rather than the
+// envelope alone. The renderer's decode function validates a snapshot field by
+// field, so it needs to name each part; with only the top type exported it has
+// to reach them through indexed-access types, which reads worse and silently
+// stops compiling the moment a field is renamed rather than pointing at the
+// rename.
+export type {
+  WorkflowCardActivityEntry,
+  WorkflowCardRunStatus,
+  WorkflowCardSnapshotV1,
+  WorkflowCardStep,
+  WorkflowCardStepResult,
+  WorkflowCardStepStatus,
+  WorkflowCardTokenUsage,
+} from "./types/workflow-card.js";
 export { HeuristicTokenizer, createDefaultTokenizer } from "./context/tokenizer.js";
 export type { Tokenizer } from "./context/tokenizer.js";
 export {

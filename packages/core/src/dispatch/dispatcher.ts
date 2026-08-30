@@ -26,6 +26,7 @@ import type {
 import type { ProposedToolCall } from "../types/events.js";
 import type {
   AnyToolDefinition,
+  ImageLookupPort,
   ToolCallOutcome,
   ToolCallStatus,
   ToolContext,
@@ -121,6 +122,15 @@ export interface DispatchContext {
    * the port only rides along on the context.
    */
   media?: MediaCapabilityPort;
+  /**
+   * Vision-fallback image registry (TASK.198 plan §2, slice B1), threaded
+   * into every ToolContext. Optional: absent => InspectImage (slice B2)
+   * fails closed as "unavailable" (a child loop's DispatchContext leaves it
+   * unset, so a child never resolves a parent turn's image ref). The
+   * dispatch pipeline is unchanged — the port only rides along on the
+   * context.
+   */
+  images?: ImageLookupPort;
   /**
    * Sanctioned plan-mode exit (design slice-4.3-cut.md §2.4), threaded into
    * every ToolContext. Optional: absent => the ExitPlanMode tool fails closed
@@ -352,6 +362,7 @@ export async function executeToolCall(
         tasks: ctx.tasks,
         lsp: ctx.lsp,
         media: ctx.media,
+        images: ctx.images,
         planMode: ctx.planMode,
         worktrees: ctx.worktrees,
         preview: ctx.preview,

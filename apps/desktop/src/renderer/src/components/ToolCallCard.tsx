@@ -32,6 +32,7 @@
  * already rendered by formatSubagentCounters when expanded.
  */
 import { useContext, useEffect, useId, useRef, useState } from "react";
+import type { TokenUsage } from "@anycode/core";
 import type { SubagentSubStatus, ToolCallBlock, WorkflowStepStatus, WorkflowSubStatus } from "../store.js";
 import { TabContext } from "../tab-context.js";
 import { isPreviewableDocPath } from "../../../shared/previewable.js";
@@ -167,15 +168,22 @@ const WORKFLOW_FINAL_LABELS: Record<NonNullable<WorkflowSubStatus["final"]>["sta
  * Pure formatter for the workflow sub-status counter line, exported for
  * direct unit testing (mirror of `formatSubagentCounters`). While running
  * (`final === null`): "step i/N · <id> · turn T · M tool call(s)[ · lastTool]"
- * for the most-recently-started step still in flight, or just "step i/N" if
- * every started step has already settled (between DAG waves — a step is
- * "ready" but its `workflow_step_start` hasn't landed yet). Once settled:
+ * for the most-recently-started step still ACTUALLY RUNNING, or just
+ * "step i/N" if every started step has already settled (between DAG waves)
+ * or is merely queued behind the shared semaphore. Once settled:
  * "<label> · completed/total steps · D.Ds".
+ *
+ * TASK.191 slice S3: `steps` is now prefilled with every step of the run
+ * (pending ones included) rather than only the ones that have started, so
+ * `steps.length` can no longer stand in for "how many have started" — `i`
+ * counts the `started` flag instead, and the in-flight lookup additionally
+ * requires `running` (a queued step also has `final === null` now, but it
+ * is not the one to report as "in flight").
  */
 export function formatWorkflowCounters(workflow: WorkflowSubStatus): string {
   if (workflow.final === null) {
-    const stepsStarted = workflow.steps.length;
-    const running = [...workflow.steps].reverse().find((step) => step.final === null);
+    const stepsStarted = workflow.steps.filter((step) => step.started).length;
+    const running = [...workflow.steps].reverse().find((step) => step.running && step.final === null);
     if (!running) {
       return `step ${stepsStarted}/${workflow.totalSteps}`;
     }
@@ -187,9 +195,17 @@ export function formatWorkflowCounters(workflow: WorkflowSubStatus): string {
   return `${WORKFLOW_FINAL_LABELS[workflow.final.status]} · ${workflow.final.completedSteps}/${workflow.totalSteps} steps · ${seconds}s`;
 }
 
-/** Union of every sub-status outcome across subagent/step/run vocabularies, plus synthetic "running". */
+/**
+ * Union of every sub-status outcome across subagent/step/run vocabularies,
+ * plus synthetic "running". `queued`/`pending` (TASK.191 slice S3) exist ONLY
+ * for a workflow STEP row (`workflowStepKind`) — a run's own status and a
+ * subagent's never produce them, since `substatusKind` below can only ever
+ * return one of the wire's settled statuses or "running".
+ */
 export type SubStatusKind =
   | "running"
+  | "queued"
+  | "pending"
   | "completed"
   | "max_turns"
   | "cancelled"
@@ -204,15 +220,35 @@ export function substatusKind(final: { status: Exclude<SubStatusKind, "running">
   return final === null ? "running" : final.status;
 }
 
+/**
+ * Phase for one workflow step row (TASK.191 slice S3): "pending" before its
+ * `workflow_step_start` lands (blocked on `dependsOn`, or launches are frozen
+ * by fail-fast/cancellation and it will never start), "queued" once
+ * `step_start` lands but `step_running` hasn't (parked behind the shared
+ * subagent semaphore — engine.ts's launchStep emits step_start BEFORE ever
+ * calling subagents.run, so a step can sit here for real wall-clock time,
+ * §B7), "running" once `step_running` lands, else the terminal wire status. A
+ * terminal `final` always wins even over a stale `running`/`started` flag.
+ */
+export function workflowStepKind(step: WorkflowStepStatus): SubStatusKind {
+  if (step.final !== null) return step.final.status;
+  if (step.running) return "running";
+  if (step.started) return "queued";
+  return "pending";
+}
+
 /** Header line 2. final !== null → formatWorkflowCounters(workflow) (delegation
- *  keeps the frozen export rendered); else `step ${steps.length}/${totalSteps}`
- *  — the bare aggregate, so the header never duplicates the per-step ticker
- *  rendered in the row directly below it. */
+ *  keeps the frozen export rendered); else `step ${started}/${totalSteps}` —
+ *  the bare aggregate, so the header never duplicates the per-step ticker
+ *  rendered in the row directly below it. TASK.191 slice S3: `started` counts
+ *  the `started` flag, not `steps.length` — prefilled pending steps must not
+ *  inflate this count (see formatWorkflowCounters's own note). */
 export function workflowRunLabel(workflow: WorkflowSubStatus): string {
   if (workflow.final !== null) {
     return formatWorkflowCounters(workflow);
   }
-  return `step ${workflow.steps.length}/${workflow.totalSteps}`;
+  const started = workflow.steps.filter((step) => step.started).length;
+  return `step ${started}/${workflow.totalSteps}`;
 }
 
 /** Settled worded outcomes for step rows — reuses the subagent wording so the
@@ -229,9 +265,17 @@ const WORKFLOW_STEP_FINAL_LABELS: Record<"error" | "max_turns" | "cancelled", st
  *  suffix omitted when null — re-implemented inline, frozen body untouched).
  *  Settled: completed → duration only; error/max_turns/cancelled → "<label> ·
  *  D.Ds"; skipped → "Skipped" (durationMs of a skipped step is scheduling
- *  noise — omitted). */
+ *  noise — omitted). TASK.191 slice S3: a `final === null` step is no longer
+ *  necessarily running — "Not started"/"Queued" cover the two phases the
+ *  prefilled graph can now sit in before it ever reaches the ticker. */
 export function workflowStepMeta(step: WorkflowStepStatus): string {
   if (step.final === null) {
+    if (!step.started) {
+      return "Not started";
+    }
+    if (!step.running) {
+      return "Queued";
+    }
     const toolCalls = `${step.toolCalls} tool call${step.toolCalls === 1 ? "" : "s"}`;
     const lastTool = step.lastTool ? ` · ${step.lastTool}` : "";
     return `turn ${step.turns} · ${toolCalls}${lastTool}`;
@@ -247,29 +291,216 @@ export function workflowStepMeta(step: WorkflowStepStatus): string {
 }
 
 /** Full row sentence for the li's aria-label (the glyph is the only visual
- *  status carrier on completed/running rows — AT must not lose it). running and
- *  completed inject the status word; other settled states rely on the meta
- *  string already leading with the label. */
+ *  status carrier on completed/running rows — AT must not lose it). Running
+ *  and completed inject the status word; every other case (settled
+ *  error/max_turns/cancelled/skipped, TASK.191 slice S3's not-started/queued)
+ *  relies on `workflowStepMeta` already leading with the label. */
 export function workflowStepAria(step: WorkflowStepStatus): string {
   const meta = workflowStepMeta(step);
-  if (step.final === null) {
+  if (step.final === null && step.running) {
     return `${step.stepId} · ${step.agentType} · Running · ${meta}`;
   }
-  if (step.final.status === "completed") {
+  if (step.final?.status === "completed") {
     return `${step.stepId} · ${step.agentType} · Completed · ${meta}`;
   }
   return `${step.stepId} · ${step.agentType} · ${meta}`;
 }
 
-/** Pending aggregate. n = totalSteps − steps.length; n <= 0 → null (hostile
- *  over-delivery guarded). Renders live AND post-final (explains why
- *  completedSteps < totalSteps after a failed/cancelled run). */
-export function pendingStepsLabel(workflow: WorkflowSubStatus): string | null {
-  const n = workflow.totalSteps - workflow.steps.length;
-  if (n <= 0) {
-    return null;
+/**
+ * Orders workflow steps for display by dependency level rather than the raw
+ * array order the store holds (TASK.191 slice S3). `WorkflowStepStatus`'s own
+ * doc comment carries the warning this fixes: post-prefill the array is
+ * `workflow_start`'s DEFINITION order, and a definition is free to declare a
+ * step before the steps it depends on — schema.ts's structural pass rejects
+ * cycles and unknown refs, never declaration order — so trusting raw array
+ * order can put a dependent above its own dependency. A step becomes
+ * eligible once every id in its `dependsOn` has already been placed; ties
+ * keep their relative array order. A `dependsOn` id absent from `steps` is
+ * unreachable past schema.ts validation on any real definition — treated as
+ * already-satisfied so a malformed fixture degrades to array order instead
+ * of hanging.
+ *
+ * A flat REORDERED list: dependency order without connector lines. The
+ * connector graph the plan calls for on expand is NOT this function's job —
+ * it is `layoutWorkflowMap`/`WorkflowMap` below (slice S6), which renders
+ * beside this list rather than replacing it, because the two carry different
+ * facts: this list carries ORDER, the map carries DEPENDENCY.
+ *
+ * [CORRECTED] An earlier revision of this comment claimed the plan left
+ * "strip vs. graph" to the builder. It did not: `task191/PLAN.md` §S3 states
+ * "раскрытие — граф по уровням зависимостей" as a requirement and leaves open
+ * only WHICH OF THE TWO IS THE DEFAULT. Slice S6 is therefore the repair of an
+ * under-delivered S3, not an extra. (Slice S4 turned each row into a real
+ * `<button>` that filters the activity lane below — see `WorkflowStepsBody`;
+ * R14's "ledger lines, not a control surface" applies to the visual layout
+ * only, not to clickability.)
+ */
+export function orderStepsByDependency(steps: readonly WorkflowStepStatus[]): WorkflowStepStatus[] {
+  const known = new Set(steps.map((step) => step.stepId));
+  const placed = new Set<string>();
+  const remaining = [...steps];
+  const ordered: WorkflowStepStatus[] = [];
+  while (remaining.length > 0) {
+    const readyIndex = remaining.findIndex((step) =>
+      step.dependsOn.every((dep) => placed.has(dep) || !known.has(dep)),
+    );
+    const index = readyIndex === -1 ? 0 : readyIndex;
+    const [step] = remaining.splice(index, 1) as [WorkflowStepStatus];
+    ordered.push(step);
+    placed.add(step.stepId);
   }
-  return `${n} step${n === 1 ? "" : "s"} not started`;
+  return ordered;
+}
+
+/* ── Run map (TASK.191 slice S6) ──────────────────────────────────────────
+ * Owner 30.08, asked twice: "а где красивый граф?". The flat reordered list
+ * above stays — it is the record — and the map is a second VIEW of the same
+ * steps and the same selection, opened on demand.
+ *
+ * Geometry is pure and measurement-free: a node's column is its dependency
+ * LEVEL and its row is its position within that column, so the SVG needs no
+ * refs, no ResizeObserver and no layout effect. That is not a stylistic
+ * preference — a rehydrated card renders from persisted data into a DOM that
+ * has never been measured, and a layout that depended on measurement would
+ * differ between the live and the restored view of the same run.
+ */
+
+const MAP_NODE_W = 132;
+const MAP_NODE_H = 28;
+const MAP_COL_GAP = 46;
+const MAP_ROW_GAP = 10;
+const MAP_PAD = 10;
+
+export interface WorkflowMapNode {
+  stepId: string;
+  kind: SubStatusKind;
+  x: number;
+  y: number;
+}
+
+export interface WorkflowMapEdge {
+  from: string;
+  to: string;
+  /** SVG cubic path, dependency's right edge -> dependent's left edge. */
+  path: string;
+}
+
+export interface WorkflowMapLayout {
+  nodes: readonly WorkflowMapNode[];
+  edges: readonly WorkflowMapEdge[];
+  width: number;
+  height: number;
+  nodeWidth: number;
+  nodeHeight: number;
+}
+
+/** Halves round to 1dp so a layout assertion pins a number, not a float tail. */
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+/**
+ * Column index per step: 0 with no known dependency, else 1 + the deepest
+ * known dependency. Same eligibility rule `orderStepsByDependency` walks, read
+ * as a column instead of a sort key — steps that may run at the same time
+ * share a column, which is exactly the fact the flat list cannot show.
+ *
+ * Resolved by bounded relaxation rather than recursion: schema.ts rejects
+ * cycles, but a malformed fixture must still TERMINATE rather than blow the
+ * stack, so the pass count is capped by the step count. A `dependsOn` id
+ * absent from `steps` is treated as already-satisfied (same degradation as the
+ * ordering function). Anything still unresolved after the cap — reachable only
+ * past a cycle schema.ts would have refused — is parked in column 0 rather
+ * than dropped: a node the user can see and click beats a silently missing box.
+ */
+export function layoutWorkflowMap(steps: readonly WorkflowStepStatus[]): WorkflowMapLayout {
+  if (steps.length === 0) {
+    return { nodes: [], edges: [], width: 0, height: 0, nodeWidth: MAP_NODE_W, nodeHeight: MAP_NODE_H };
+  }
+  const known = new Set(steps.map((step) => step.stepId));
+  const level = new Map<string, number>();
+  for (let pass = 0; pass < steps.length; pass += 1) {
+    let changed = false;
+    for (const step of steps) {
+      const deps = step.dependsOn.filter((dep) => known.has(dep));
+      if (!deps.every((dep) => level.has(dep))) {
+        continue;
+      }
+      const next = deps.reduce((deepest, dep) => Math.max(deepest, (level.get(dep) ?? 0) + 1), 0);
+      if (level.get(step.stepId) !== next) {
+        level.set(step.stepId, next);
+        changed = true;
+      }
+    }
+    if (!changed) {
+      break;
+    }
+  }
+
+  const byColumn = new Map<number, WorkflowStepStatus[]>();
+  for (const step of steps) {
+    const column = level.get(step.stepId) ?? 0;
+    const bucket = byColumn.get(column);
+    if (bucket === undefined) {
+      byColumn.set(column, [step]);
+    } else {
+      bucket.push(step);
+    }
+  }
+  // Compacted so a hole in the level numbering (impossible past the rule
+  // above, but cheap to survive) never renders as an empty gap column.
+  const columns = [...byColumn.keys()].sort((a, b) => a - b).map((key) => byColumn.get(key) ?? []);
+
+  const tallest = columns.reduce((most, column) => Math.max(most, column.length), 1);
+  const width = MAP_PAD * 2 + columns.length * MAP_NODE_W + (columns.length - 1) * MAP_COL_GAP;
+  const height = MAP_PAD * 2 + tallest * MAP_NODE_H + (tallest - 1) * MAP_ROW_GAP;
+
+  const nodes: WorkflowMapNode[] = [];
+  const placed = new Map<string, WorkflowMapNode>();
+  columns.forEach((column, columnIndex) => {
+    // Each column is centred against the tallest one, so a fan reads as a fan
+    // rather than as a top-aligned staircase.
+    const columnHeight = column.length * MAP_NODE_H + (column.length - 1) * MAP_ROW_GAP;
+    const top = round1((height - columnHeight) / 2);
+    column.forEach((step, rowIndex) => {
+      const node: WorkflowMapNode = {
+        stepId: step.stepId,
+        kind: workflowStepKind(step),
+        x: MAP_PAD + columnIndex * (MAP_NODE_W + MAP_COL_GAP),
+        y: round1(top + rowIndex * (MAP_NODE_H + MAP_ROW_GAP)),
+      };
+      nodes.push(node);
+      placed.set(step.stepId, node);
+    });
+  });
+
+  const edges: WorkflowMapEdge[] = [];
+  for (const step of steps) {
+    const to = placed.get(step.stepId);
+    if (to === undefined) {
+      continue;
+    }
+    for (const dep of step.dependsOn) {
+      const from = placed.get(dep);
+      if (from === undefined) {
+        continue;
+      }
+      const x1 = from.x + MAP_NODE_W;
+      const y1 = round1(from.y + MAP_NODE_H / 2);
+      const x2 = to.x;
+      const y2 = round1(to.y + MAP_NODE_H / 2);
+      const mid = round1((x1 + x2) / 2);
+      edges.push({ from: dep, to: step.stepId, path: `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}` });
+    }
+  }
+
+  return { nodes, edges, width, height, nodeWidth: MAP_NODE_W, nodeHeight: MAP_NODE_H };
+}
+
+/** Node caption. Long ids are clipped rather than shrunk: a smaller font on
+ *  one box would read as a status difference it does not carry. */
+export function workflowMapLabel(stepId: string): string {
+  return stepId.length <= 16 ? stepId : `${stepId.slice(0, 15)}\u2026`;
 }
 
 /** Human status word for the SR-only span beside a step's glyph (R17 a11y):
@@ -277,6 +508,8 @@ export function pendingStepsLabel(workflow: WorkflowSubStatus): string | null {
  *  spotty SR support, so the word rides inline as real (visually-hidden) text. */
 const SUBSTATUS_WORD: Record<SubStatusKind, string> = {
   running: "Running",
+  queued: "Queued",
+  pending: "Not started",
   completed: "Completed",
   max_turns: "Max turns reached",
   cancelled: "Cancelled",
@@ -287,13 +520,20 @@ const SUBSTATUS_WORD: Record<SubStatusKind, string> = {
 
 /** Shared status glyph cell: one shape per outcome, color supplied by the
  *  parent's `substatus-*` class (error/failed/cancelled all fall through to X).
- *  Private — the pure formatters carry the test surface. */
+ *  `queued` (TASK.191 slice S3) reuses the Spinner shape WITHOUT `.icon-spin`
+ *  — a paused version of "about to run", distinct from both the spinning
+ *  "running" glyph and the empty "pending" cell. `pending` renders no icon at
+ *  all (nothing has happened yet) — same empty-cell posture the old
+ *  "N steps not started" summary row used before this slice replaced it with
+ *  real per-step rows. Private — the pure formatters carry the test surface. */
 function StatusGlyph({ kind }: { kind: SubStatusKind }) {
   return (
     <span className="substatus-glyph">
       {kind === "running" ? (
         <Spinner className="icon-spin" />
-      ) : kind === "completed" ? (
+      ) : kind === "queued" ? (
+        <Spinner />
+      ) : kind === "pending" ? null : kind === "completed" ? (
         <Check />
       ) : kind === "max_turns" ? (
         <Warning />
@@ -306,12 +546,364 @@ function StatusGlyph({ kind }: { kind: SubStatusKind }) {
   );
 }
 
-/** Sub-status region mounted below the input summary when `block.workflow` is
- *  set (Workflow tool only). A run header (glyph · workflow name · aggregate)
- *  above a flat vertical checklist of started steps + one honest pending line. */
+/**
+ * The run's total token spend (TASK.191 slice S2): the sum over the steps the
+ * card is already holding, computed on read rather than stored. A second
+ * mutable aggregate beside `steps` would be a second source of truth that a
+ * dropped or reordered event could desynchronize; a selector cannot drift from
+ * the rows it is derived from.
+ *
+ * A field absent from EVERY step stays absent in the sum — "no tier reported
+ * this" must not become a zero the card would then display as fact. Returns
+ * null when no step reported spend at all.
+ */
+export function workflowRunUsage(workflow: WorkflowSubStatus): TokenUsage | null {
+  let total: TokenUsage | null = null;
+  for (const step of workflow.steps) {
+    if (step.usage === null) continue;
+    const merged: TokenUsage = { ...total };
+    for (const key of ["inputTokens", "cachedInputTokens", "outputTokens", "totalTokens"] as const) {
+      const value = step.usage[key];
+      if (value !== undefined) {
+        merged[key] = (merged[key] ?? 0) + value;
+      }
+    }
+    total = merged;
+  }
+  return total;
+}
+
+/**
+ * The owner's requested shape, absolute numbers rather than a bar:
+ * `in X · cached Y (N%) · out Z · total T`.
+ *
+ * The percentage is of INPUT, not of the total, because cached tokens are a
+ * SUBSET of input (`TokenUsage.cachedInputTokens` — "included in inputTokens"),
+ * which is also how the composer's own cache readout computes it. Computing it
+ * against the total would silently understate every cache hit.
+ *
+ * Each segment appears only if its field was reported; the whole line is null
+ * when nothing was. Absent is rendered as absent, never as `0` — a zero here
+ * would be a claim about the provider that we are not in a position to make.
+ */
+export function formatWorkflowUsage(usage: TokenUsage | null): string | null {
+  if (usage === null) return null;
+  const segments: string[] = [];
+  if (usage.inputTokens !== undefined) {
+    segments.push(`in ${usage.inputTokens}`);
+  }
+  if (usage.cachedInputTokens !== undefined) {
+    // The percentage is omitted rather than shown as 0% or NaN when there is no
+    // input to divide by — a cache ratio against nothing is not a fact.
+    const share =
+      usage.inputTokens !== undefined && usage.inputTokens > 0
+        ? ` (${Math.round((usage.cachedInputTokens / usage.inputTokens) * 100)}%)`
+        : "";
+    segments.push(`cached ${usage.cachedInputTokens}${share}`);
+  }
+  if (usage.outputTokens !== undefined) {
+    segments.push(`out ${usage.outputTokens}`);
+  }
+  if (usage.totalTokens !== undefined) {
+    segments.push(`total ${usage.totalTokens}`);
+  }
+  return segments.length > 0 ? segments.join(" · ") : null;
+}
+
+/**
+ * Row list for the workflow run's single activity lane (TASK.191 slice S1) —
+ * `activityRows`' sibling, same honest-overflow leading row, same oldest-first
+ * order. The one difference is the `stepId` prefix on every row: this lane is
+ * shared by every concurrent step of the DAG, so without it a reader cannot
+ * tell which step produced a line. The prefix costs nothing on the wire —
+ * `stepId` has to ride along anyway for the store to attribute the row.
+ *
+ * TASK.191 slice S4: `selectedStepId` filters the lane to one step's rows
+ * (clicking a step row in `WorkflowStepsBody`). `activityDropped` is a
+ * RUN-WIDE count — a dropped row carried no surviving `stepId` once evicted
+ * from the ring, so which step(s) it belonged to is genuinely unknown. Two
+ * honesty guards follow from that:
+ *  - With matches: the leading row is reworded "(run-wide)" rather than the
+ *    unfiltered "+N earlier", so it never reads as "N of THIS step's rows
+ *    were dropped" — a claim this data cannot support.
+ *  - With zero matches: an empty list would read as "this step made no
+ *    calls", which is a different (and possibly false) claim from "some of
+ *    this step's rows may be among the ones the ring already dropped". The
+ *    two are told apart by a dedicated row, present only when
+ *    `activityDropped > 0` — the true-empty case (`activityDropped === 0`)
+ *    still returns `[]`, same as the unfiltered lane with no activity.
+ */
+export function workflowActivityRows(workflow: WorkflowSubStatus, selectedStepId?: string | null): ActivityRowView[] {
+  const filtering = selectedStepId !== undefined && selectedStepId !== null;
+  const matched = filtering ? workflow.activity.filter((entry) => entry.stepId === selectedStepId) : workflow.activity;
+  const rows: ActivityRowView[] = [];
+  if (workflow.activityDropped > 0) {
+    if (!filtering) {
+      rows.push({ key: "dropped", text: `+${workflow.activityDropped} earlier`, leading: true });
+    } else if (matched.length > 0) {
+      rows.push({ key: "dropped-filtered", text: `+${workflow.activityDropped} earlier (run-wide)`, leading: true });
+    } else {
+      rows.push({
+        key: "dropped-unknown",
+        text: `This step's earlier activity may be among the ${workflow.activityDropped} row(s) dropped run-wide`,
+        leading: true,
+      });
+    }
+  }
+  matched.forEach((entry, index) => {
+    rows.push({ key: `activity-${index}`, text: `${entry.stepId} · ${activityRowText(entry)}` });
+  });
+  return rows;
+}
+
+/** The workflow run's live activity lane — same well, same auto-scroll
+ *  behaviour and same CSS as the Agent card's `ActivityFeed`, reading the
+ *  run-wide ring instead of one child's. Rendered while running and after
+ *  settle: the trail is the post-mortem, not just the live view. TASK.191
+ *  slice S4: `selectedStepId` threads straight through to
+ *  `workflowActivityRows` — this component owns no selection state itself,
+ *  `WorkflowStatus` does. */
+function WorkflowActivityFeed({ workflow, selectedStepId }: { workflow: WorkflowSubStatus; selectedStepId: string | null }) {
+  const rows = workflowActivityRows(workflow, selectedStepId);
+  const listRef = useRef<HTMLUListElement>(null);
+  const running = workflow.final === null;
+  useEffect(() => {
+    if (running && listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+    }
+  }, [rows.length, running]);
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <ul className="subagent-activity-feed workflow-activity-feed" ref={listRef}>
+      {rows.map((row) => (
+        <li
+          key={row.key}
+          className={`subagent-activity-row${row.leading === true ? " subagent-activity-row-dropped" : ""}`}
+        >
+          {row.text}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Pure toggle for the step-selection click (TASK.191 slice S4): re-clicking
+ * the already-selected step clears the selection rather than being a one-way
+ * ratchet. Without this, once a step is examined the only way back to the
+ * unfiltered view would be picking a DIFFERENT step — a state with no exit of
+ * its own. Exported for direct unit testing (same pure-logic-only rationale
+ * as this file's other exported formatters).
+ */
+export function toggleWorkflowStepSelection(current: string | null, stepId: string): string | null {
+  return current === stepId ? null : stepId;
+}
+
+/**
+ * The checklist + activity lane, given an explicit `selectedStepId` rather
+ * than owning the selection itself (TASK.191 slice S4). Split out of
+ * `WorkflowStatus` — which owns the real `useState` — so
+ * ToolCallCard.test.ts can render the "step selected" markup directly via
+ * `renderToStaticMarkup`: a real click can't be simulated under SSR, but a
+ * controlled prop can be passed in already-selected (same rationale as
+ * `AgentCardBody` being split out of `ToolCallCard` itself).
+ *
+ * Each row's content moved from the `<li>` straight into a `<button>` (owner
+ * ask: "а кликнуть в них нельзя будет?") — a real button gives keyboard
+ * focus, Enter/Space activation, and an implicit role for free, none of which
+ * a `<li onClick>` would carry. `aria-label` rides on the button now (it used
+ * to sit on the `<li>`).
+ *
+ * `substatus-<kind>` is deliberately duplicated onto BOTH the `<li>` and the
+ * `<button>`, not moved. The `<li>` keeps it because
+ * `.workflow-step.substatus-running .workflow-step-id` (app.css) needs
+ * `workflow-step` and `substatus-*` on the SAME element. The button also
+ * needs it because `StatusGlyph`'s whole color map (app.css's shared R14
+ * atoms, `.substatus-<kind> > .substatus-glyph`) is written with a CHILD
+ * combinator — it colors the glyph only when the status class sits on the
+ * glyph's own immediate parent. Before this button existed that parent was
+ * the `<li>`; wrapping the row's content in a button without repeating the
+ * class here would silently detune every glyph to its ghost default (a real
+ * regression this slice shipped once and a coordinator review caught: the
+ * S3 "queued vs. not-started" distinction depends on this color, and a green
+ * gate cannot see a CSS selector stop matching).
+ */
+/**
+ * The run map: one SVG, geometry straight from `layoutWorkflowMap`. Nodes are
+ * real buttons driving the SAME `onSelectStep` the ledger rows drive — the map
+ * is a second view of one selection, never a second selection of its own, so
+ * clicking a box and clicking its row are indistinguishable downstream.
+ *
+ * The SVG carries no intrinsic width/height, only a viewBox: the card is a
+ * flexible column and a fixed pixel width would either overflow it on a narrow
+ * window or refuse to use a wide one. Status travels on the group's
+ * `substatus-*` class, the same vocabulary the rows use, so a status can never
+ * mean one thing in the list and another in the map.
+ */
+function WorkflowMap({
+  workflow,
+  selectedStepId,
+  onSelectStep,
+}: {
+  workflow: WorkflowSubStatus;
+  selectedStepId: string | null;
+  onSelectStep: (stepId: string) => void;
+}) {
+  const layout = layoutWorkflowMap(workflow.steps);
+  if (layout.nodes.length === 0) {
+    return null;
+  }
+  const byId = new Map(workflow.steps.map((step) => [step.stepId, step]));
+  return (
+    <div className="workflow-map">
+      <svg
+        className="workflow-map-svg"
+        viewBox={`0 0 ${layout.width} ${layout.height}`}
+        style={{ maxWidth: `${layout.width}px` }}
+        aria-hidden={false}
+        role="group"
+        aria-label="Workflow run map"
+      >
+        {layout.edges.map((edge) => (
+          <path key={`${edge.from}->${edge.to}`} className="workflow-map-edge" d={edge.path} />
+        ))}
+        {layout.nodes.map((node) => {
+          const step = byId.get(node.stepId);
+          const selected = node.stepId === selectedStepId;
+          return (
+            <g
+              key={node.stepId}
+              className={`workflow-map-node substatus-${node.kind}${selected ? " is-selected" : ""}`}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selected}
+              aria-label={step !== undefined ? workflowStepAria(step) : node.stepId}
+              onClick={() => onSelectStep(node.stepId)}
+              onKeyDown={(event) => {
+                // Space/Enter must act here: an SVG <g> gets no implicit button
+                // activation from the platform, so without this the map is
+                // keyboard-reachable but keyboard-DEAD.
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelectStep(node.stepId);
+                }
+              }}
+            >
+              <rect
+                className="workflow-map-box"
+                x={node.x}
+                y={node.y}
+                width={layout.nodeWidth}
+                height={layout.nodeHeight}
+                rx={6}
+              />
+              <text
+                className="workflow-map-label"
+                x={node.x + layout.nodeWidth / 2}
+                y={node.y + layout.nodeHeight / 2}
+                textAnchor="middle"
+                dominantBaseline="central"
+              >
+                {workflowMapLabel(node.stepId)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+export function WorkflowStepsBody({
+  workflow,
+  selectedStepId,
+  onSelectStep,
+}: {
+  workflow: WorkflowSubStatus;
+  selectedStepId: string | null;
+  onSelectStep: (stepId: string) => void;
+}) {
+  const orderedSteps = orderStepsByDependency(workflow.steps);
+  // Closed by default: the map answers "what is the SHAPE of this run", a
+  // question a one-step or straight-line run does not raise, and the card must
+  // not grow for every reader who never asks it.
+  // Open by default: the map answers "what waits on what", which the ordered
+  // checklist above cannot express at all (it carries order, not dependency).
+  // That makes it the view worth arriving at, not one to be discovered behind
+  // a control; the toggle stays for collapsing it back.
+  const [mapOpen, setMapOpen] = useState(true);
+  // A map is only worth offering once there is a shape to see — a single step
+  // has none, so the toggle stays absent rather than opening onto one box.
+  const mapWorthOffering = workflow.steps.length > 1;
+  return (
+    <>
+      {orderedSteps.length > 0 && (
+        <ul className="workflow-steps">
+          {orderedSteps.map((step) => {
+            const kind = workflowStepKind(step);
+            const selected = step.stepId === selectedStepId;
+            return (
+              <li key={step.stepId} className={`workflow-step substatus-${kind}`}>
+                <button
+                  type="button"
+                  className={`workflow-step-button substatus-${kind}`}
+                  aria-pressed={selected}
+                  aria-label={workflowStepAria(step)}
+                  onClick={() => onSelectStep(step.stepId)}
+                >
+                  <StatusGlyph kind={kind} />
+                  <span className="visually-hidden">{SUBSTATUS_WORD[kind]}</span>
+                  <span className="workflow-step-id">{step.stepId}</span>
+                  <span className="workflow-step-agent">{step.agentType}</span>
+                  <span className="workflow-step-meta">{workflowStepMeta(step)}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {mapWorthOffering && mapOpen && (
+        <WorkflowMap workflow={workflow} selectedStepId={selectedStepId} onSelectStep={onSelectStep} />
+      )}
+      {mapWorthOffering && (
+        <button
+          type="button"
+          className="workflow-map-toggle"
+          aria-expanded={mapOpen}
+          onClick={() => setMapOpen((open) => !open)}
+        >
+          {mapOpen ? "Hide map" : "Show map"}
+        </button>
+      )}
+      <WorkflowActivityFeed workflow={workflow} selectedStepId={selectedStepId} />
+    </>
+  );
+}
+
+/**
+ * Sub-status region mounted below the input summary when `block.workflow` is
+ * set (Workflow tool only). A run header (glyph · workflow name · aggregate)
+ * above a flat vertical checklist, with the run-wide activity lane (TASK.191
+ * slice S1) below both.
+ *
+ * TASK.191 slice S3: the checklist now renders EVERY step of the run's graph
+ * — `workflow_start` prefills all N of them, so there is no longer a
+ * separate lump "N steps not started" trailer row; each not-yet-started step
+ * is a real row with its own id/agentType, honestly labeled "Not started" or
+ * "Queued" (`workflowStepKind`/`workflowStepMeta`). Ordered by
+ * `orderStepsByDependency`, not raw store order.
+ *
+ * TASK.191 slice S4: owns the selected-step `useState` — view-only state that
+ * lives and dies with this card's mount, never the store (a dropped or
+ * reordered event cannot desync something the store never held). The
+ * checklist/feed rendering itself lives in `WorkflowStepsBody` above.
+ */
 function WorkflowStatus({ workflow }: { workflow: WorkflowSubStatus }) {
+  const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const runKind = substatusKind(workflow.final);
-  const pending = pendingStepsLabel(workflow);
+  const usageLine = formatWorkflowUsage(workflowRunUsage(workflow));
   return (
     <div className="tool-call-workflow">
       <div className={`tool-call-workflow-line substatus-${runKind}`}>
@@ -319,32 +911,12 @@ function WorkflowStatus({ workflow }: { workflow: WorkflowSubStatus }) {
         <span className="tool-call-workflow-label">{workflow.workflow}</span>
       </div>
       <div className="tool-call-workflow-counters">{workflowRunLabel(workflow)}</div>
-      {(workflow.steps.length > 0 || pending !== null) && (
-        <ul className="workflow-steps">
-          {workflow.steps.map((step) => {
-            const kind = substatusKind(step.final);
-            return (
-              <li
-                key={step.stepId}
-                className={`workflow-step substatus-${kind}`}
-                aria-label={workflowStepAria(step)}
-              >
-                <StatusGlyph kind={kind} />
-                <span className="visually-hidden">{SUBSTATUS_WORD[kind]}</span>
-                <span className="workflow-step-id">{step.stepId}</span>
-                <span className="workflow-step-agent">{step.agentType}</span>
-                <span className="workflow-step-meta">{workflowStepMeta(step)}</span>
-              </li>
-            );
-          })}
-          {pending !== null && (
-            <li className="workflow-step workflow-step-pending">
-              <span className="substatus-glyph" aria-hidden="true" />
-              {pending}
-            </li>
-          )}
-        </ul>
-      )}
+      {usageLine !== null && <div className="tool-call-workflow-usage">{usageLine}</div>}
+      <WorkflowStepsBody
+        workflow={workflow}
+        selectedStepId={selectedStepId}
+        onSelectStep={(stepId) => setSelectedStepId((current) => toggleWorkflowStepSelection(current, stepId))}
+      />
     </div>
   );
 }
@@ -985,6 +1557,71 @@ function diffPath(block: ToolCallBlock): string {
   return typeof record.file_path === "string" ? record.file_path : block.toolName;
 }
 
+/* ── Collapsed tick strip (TASK.191 slice S7) ────────────────────────
+ * The plan's collapsed state, `task191/PLAN.md:184` verbatim: "Свёрнутое
+ * состояние — полоса засечек по числу шагов, карточка не растёт против
+ * сегодняшней". One tick per step, in dependency order, coloured from the same
+ * `substatus-<kind>` vocabulary the checklist rows and the map already speak.
+ *
+ * "Collapsed" is NOT a synonym for "running" here: `defaultExpanded` keeps a
+ * running Workflow card OPEN and auto-collapses it only on success/cancel
+ * (`shouldAutoCollapse`). So this strip serves a SETTLED run scrolled past in
+ * the transcript, plus any card the reader folded by hand mid-run — which is
+ * why it has to carry terminal states legibly, not just a progress fraction.
+ */
+
+/** Failure statuses a STEP can actually settle to. The run-level vocabulary's
+ *  "failed" is deliberately absent: `workflowStepKind` can never return it
+ *  (a step's wire `final.status` has no such member), so counting it here
+ *  would be a branch no fixture could ever reach. */
+const WORKFLOW_STEP_FAILURE_KINDS: readonly SubStatusKind[] = ["error", "max_turns", "cancelled"];
+
+/**
+ * The strip's spoken form. It is ONE `role="img"` with a summarising label
+ * rather than N announced nodes, because a screen reader walking 12 nameless
+ * ticks learns nothing: the fact lives in the aggregate, not in the elements.
+ *
+ * Colour is precisely what a reader of this label cannot see, so the label
+ * carries what the colours encode — including the failures, which a bare
+ * "N of M done" would hide inside the unstated remainder. Running/queued/
+ * pending stay unstated on purpose: they are the "not finished yet" rest, and
+ * naming all six phases turns a glance into a sentence.
+ */
+export function workflowTickLabel(workflow: WorkflowSubStatus): string {
+  const kinds = workflow.steps.map(workflowStepKind);
+  const done = kinds.filter((kind) => kind === "completed").length;
+  const failed = kinds.filter((kind) => WORKFLOW_STEP_FAILURE_KINDS.includes(kind)).length;
+  const skipped = kinds.filter((kind) => kind === "skipped").length;
+  // Counted against steps.length — the ticks actually drawn — not against
+  // `totalSteps`. After slice S3's prefill the two agree, but if they ever
+  // diverge the label must describe the strip the reader is looking at.
+  const parts = [`${done} of ${kinds.length} steps done`];
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (skipped > 0) parts.push(`${skipped} skipped`);
+  return `${workflow.workflow}: ${parts.join(", ")}`;
+}
+
+export function WorkflowCollapsedTicks({ workflow }: { workflow: WorkflowSubStatus }) {
+  return (
+    <span className="workflow-ticks" role="img" aria-label={workflowTickLabel(workflow)}>
+      {/* Dependency order, not `steps` order: `steps` arrives in the run's
+          DEFINITION order, so an unordered strip would reshuffle against the
+          checklist the instant the card is expanded — the same tick would
+          point at a different step in the two states. */}
+      {orderStepsByDependency(workflow.steps).map((step) => (
+        // Both classes on ONE node, deliberately: app.css's shared status->
+        // colour map is written `.substatus-<kind> > .substatus-glyph`, a
+        // CHILD combinator, so a tick that reused `.substatus-glyph` (or
+        // leaned on an ancestor's class) would lose its colour silently the
+        // moment this markup gained a level — the regression that already
+        // killed the step rows' colour once. `.workflow-tick.substatus-<kind>`
+        // is immune to depth, the form the map's nodes already use.
+        <span key={step.stepId} className={`workflow-tick substatus-${workflowStepKind(step)}`} />
+      ))}
+    </span>
+  );
+}
+
 /**
  * The card's header row (TASK.120): the disclosure toggle, plus — while a
  * session-tier child is blocked on a permission ask — the actionable child
@@ -1055,6 +1692,12 @@ export function ToolCallHeaderRow({
               <span className="tool-call-summary">{flattenSummary(summarizeInput(block.toolName, block.input))}</span>
             )}
           </>
+        )}
+        {/* TASK.191 slice S7: the run's shape while the card is folded. Guarded
+            on a non-empty `steps` so a card seeded before `workflow_start`
+            lands renders no empty strip. */}
+        {block.workflow !== null && !expanded && block.workflow.steps.length > 0 && (
+          <WorkflowCollapsedTicks workflow={block.workflow} />
         )}
         <span className="tool-call-status-badge">{STATUS_LABELS[block.status]}</span>
         {/* TASK.102 CUT-S2 §2.5 (C3): the session-child badge lives in the

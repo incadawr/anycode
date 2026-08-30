@@ -214,6 +214,206 @@
   font-style: italic;
 }
 
+/* The same well inside a Workflow card (TASK.191 slice S1). It sits at the
+   BOTTOM of the workflow block rather than above a result, so the separator
+   moves to the top edge — otherwise the lane draws a rule against nothing. */
+.workflow-activity-feed {
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+}
+
+/* Workflow step row's real interactive element (TASK.191 slice S4 — owner
+   ask: "а кликнуть в них нельзя будет?"). The `<li>` keeps its
+   `workflow-step substatus-<kind>` classes rather than handing them to the
+   button, because app.css's row selectors need them on THAT element —
+   `.workflow-step.substatus-running .workflow-step-id` requires both
+   classes on one node, and `.substatus-<kind> > .substatus-glyph` (the R14
+   shared status→color map) is a CHILD combinator that also needs the class
+   repeated on the button itself now that it sits between the `<li>` and the
+   glyph (ToolCallCard.tsx's `WorkflowStepsBody` does that duplication). With
+   the row's real content now inside the button, app.css's `.workflow-step`
+   flex/gap rule is left with a single full-width flex-item child and is
+   effectively inert — this button duplicates the same flex/gap/width
+   declarations itself rather than editing that app.css rule (out of this
+   slice's file scope), keeping the visible layout byte-identical to the
+   pre-button `<li>` while resetting every default a bare <button> would
+   otherwise add. */
+.workflow-step-button {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+  padding: 0.1rem 0.25rem;
+  margin: -0.1rem -0.25rem;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.workflow-step-button:hover {
+  background: var(--bg-hover);
+}
+.workflow-step-button:focus-visible {
+  outline-offset: -2px;
+}
+/* Selected step (aria-pressed) — same "record, not a control surface" tone
+   as the rest of the checklist: a quiet fill, not a border or shadow. */
+.workflow-step-button[aria-pressed="true"] {
+  background: var(--bg-active);
+}
+
+/* Run map (TASK.191 slice S6 — owner ask, twice: "а где красивый граф?").
+   Opened on demand by `.workflow-map-toggle`; the checklist above stays the
+   record and this is a second view of it. Colour comes from the SAME
+   `substatus-<kind>` vocabulary the rows use — never a second palette, or a
+   status would mean one thing in the list and another in the map. */
+.workflow-map {
+  margin-top: var(--sp-2);
+  overflow-x: auto;              /* a wide DAG scrolls INSIDE the card */
+}
+.workflow-map-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.workflow-map-edge {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+.workflow-map-node {
+  cursor: pointer;
+}
+.workflow-map-box {
+  fill: var(--bg-inset);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.workflow-map-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  fill: var(--text-2);
+}
+.workflow-map-node:hover .workflow-map-box {
+  fill: var(--bg-hover);
+}
+.workflow-map-node:focus-visible {
+  outline: none;
+}
+.workflow-map-node:focus-visible .workflow-map-box {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+/* Selected node — the quiet fill the selected ROW uses, so the two views
+   agree on what "selected" looks like. */
+.workflow-map-node.is-selected .workflow-map-box {
+  fill: var(--bg-active);
+  stroke: var(--border-strong);
+}
+/* Status tiers. `pending` (never started) is the only DASHED outline: it is
+   the one state that says "this has not happened", which a colour alone
+   cannot carry for a reader who cannot distinguish them. */
+.workflow-map-node.substatus-running    .workflow-map-box { stroke: var(--accent); }
+.workflow-map-node.substatus-running    .workflow-map-label { fill: var(--text-1); }
+.workflow-map-node.substatus-completed  .workflow-map-box { stroke: var(--success); }
+.workflow-map-node.substatus-queued     .workflow-map-box { stroke: var(--text-3); }
+.workflow-map-node.substatus-pending    .workflow-map-box {
+  stroke: var(--border);
+  stroke-dasharray: 3 3;
+}
+.workflow-map-node.substatus-pending    .workflow-map-label { fill: var(--text-3); }
+.workflow-map-node.substatus-skipped    .workflow-map-box {
+  stroke: var(--border);
+  stroke-dasharray: 3 3;
+}
+.workflow-map-node.substatus-skipped    .workflow-map-label { fill: var(--text-3); }
+.workflow-map-node.substatus-error      .workflow-map-box,
+.workflow-map-node.substatus-failed     .workflow-map-box,
+.workflow-map-node.substatus-cancelled  .workflow-map-box,
+.workflow-map-node.substatus-max_turns  .workflow-map-box { stroke: var(--danger); }
+
+/* Map toggle: a text affordance, not a button chrome — the card's own tone
+   for "there is more here if you want it". */
+.workflow-map-toggle {
+  align-self: flex-start;
+  margin-top: var(--sp-1);
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  cursor: pointer;
+}
+.workflow-map-toggle:hover {
+  color: var(--text-2);
+}
+
+/* Collapsed-card tick strip (TASK.191 slice S7 — the plan's collapsed state:
+   "полоса засечек по числу шагов, карточка не растёт против сегодняшней").
+   It rides INLINE in the toggle row, unlike `.subagent-collapsed-progress`
+   above, which claims a line of its own (flex-basis: 100% + wrap on the
+   toggle) — that form grows the card by a whole line, which is exactly what
+   this state forbids. The height is set in `em` and stays inside the row's
+   existing line box, so the strip adds no height at all. */
+.workflow-ticks {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 30%;
+  overflow: hidden;
+}
+/* A tick SHRINKS rather than wrapping: a long DAG has to stay one
+   glance-wide strip, never a second row. `min-width` is the floor it shrinks
+   to; under extreme narrowness the strip's own `overflow: hidden` clips the
+   tail rather than letting the strip break the header row — the aria-label
+   above still states the true counts, so the clipped case stays honest to a
+   reader who cannot see the strip at all.
+
+   The size is `width`, NOT `flex-basis` — measured, not assumed. A tick is an
+   EMPTY element, so its max-content size is 0; with a flex-basis and
+   `flex-shrink: 1` the strip's own auto width then resolves at the ticks'
+   MINIMUM instead of their basis, and every tick renders 2px wide however
+   much room the row has (headless-Chrome stand on this exact markup:
+   `flex: 0 1 8px` -> tick 2px / strip 18px; the form below -> 8px / 48px).
+   A definite width gives the flex item a real max-content contribution, and
+   `flex-basis: auto` then reads it. */
+.workflow-tick {
+  flex: 0 1 auto;
+  width: 8px;
+  min-width: 2px;
+  height: 0.7em;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+/* Status colour, same `substatus-<kind>` vocabulary as the rows and the map.
+   Both classes sit on the SAME node deliberately: app.css's shared map is
+   `.substatus-<kind> > .substatus-glyph`, a CHILD combinator, so any rule
+   leaning on ancestry dies silently the moment the markup gains a level —
+   the regression that already killed the step rows' colour once. */
+.workflow-tick.substatus-running   { background: var(--accent); }
+.workflow-tick.substatus-completed { background: var(--success); }
+.workflow-tick.substatus-queued    { background: var(--text-3); }
+.workflow-tick.substatus-error,
+.workflow-tick.substatus-failed,
+.workflow-tick.substatus-cancelled,
+.workflow-tick.substatus-max_turns { background: var(--danger); }
+/* "Never started" and "skipped" are HOLLOW, not merely paler. The plan asks
+   that a step parked behind the concurrency cap ("queued", filled above) read
+   differently from one that never ran at all — today they are
+   indistinguishable — and two tones of grey cannot carry that difference for
+   a reader who cannot tell them apart. */
+.workflow-tick.substatus-pending,
+.workflow-tick.substatus-skipped {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 /* Provider-reported model pill (TASK.161 slice C1) — follows the child-model
    pill in `.tool-call-subagent-line`. A MATCH with the requested model proves
    nothing beyond "the provider accepted the id", so the base state is neutral,

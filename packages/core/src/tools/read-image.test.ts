@@ -143,6 +143,34 @@ describe("imageCapableReadTool — capability gate (fail-closed, poison-proof)",
     expect(result.error).toContain("ANYCODE_IMAGE_INPUT");
     expect(result.images).toBeUndefined();
   });
+
+  it("TASK.198 slice B2: passes when the model is blind but a vision recognizer is configured", async () => {
+    const files = { "/work/shot.png": PNG_BYTES };
+    const mediaBlindWithRecognizer: MediaCapabilityPort = {
+      imageInputEnabled: () => false,
+      recognizerConfigured: () => true,
+    };
+    const result = await imageCapableReadTool.handler(
+      { file_path: "/work/shot.png" },
+      ctxFor(files, { media: mediaBlindWithRecognizer }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.images).toHaveLength(1);
+  });
+
+  it("TASK.198 slice B2: still refuses when blind and recognizerConfigured() is false", async () => {
+    const files = { "/work/shot.png": PNG_BYTES };
+    const mediaBlindNoRecognizer: MediaCapabilityPort = {
+      imageInputEnabled: () => false,
+      recognizerConfigured: () => false,
+    };
+    const result = await imageCapableReadTool.handler(
+      { file_path: "/work/shot.png" },
+      ctxFor(files, { media: mediaBlindNoRecognizer }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.images).toBeUndefined();
+  });
 });
 
 describe("imageCapableReadTool — attach path", () => {
