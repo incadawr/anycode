@@ -151,6 +151,7 @@ import type {
 } from "../../shared/subagents-config";
 import type {
   ProfileRevealDirResult,
+  ProfileStatsCachedResult,
   ProfileStatsResult,
   ProfileTelemetrySetResult,
 } from "../../shared/profile-config";
@@ -537,6 +538,14 @@ declare global {
       // and resolves with a fresh stats view on success.
       profile: {
         getStats(): Promise<ProfileStatsResult>;
+        /** TASK.187 S3: the instant view rebuilt from main's aggregation
+         *  cache, with no directory scan; `{ok:false, reason:"no_cache"}`
+         *  before the first pass has ever completed. */
+        getStatsCached(): Promise<ProfileStatsCachedResult>;
+        /** TASK.187 S3: discard the aggregation cache and re-enter the normal
+         *  incremental cycle from empty — budget-cut like any other pass, so
+         *  the first answer carries a backlog rather than blocking. */
+        rebuildStats(): Promise<ProfileStatsResult>;
         setTelemetry(enabled: boolean): Promise<ProfileTelemetrySetResult>;
         revealDir(): Promise<ProfileRevealDirResult>;
       };

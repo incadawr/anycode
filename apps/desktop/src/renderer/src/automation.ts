@@ -53,6 +53,7 @@ import {
   resolvePillTarget,
 } from "./components/ModelPill.js";
 import { PROFILE_PERIODS, type ProfilePeriod } from "./components/ProfilePane.js";
+import type { ProfilePhase } from "./components/profile-loader.js";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { tabRegistry, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabInfo, type TabsStoreApi } from "./tabs-store.js";
@@ -1028,13 +1029,20 @@ export interface SubagentsPaneDom {
  * `subagentsPaneState()` stay byte-untouched (§4 custody: dedicated route
  * family). Same "no mirrored state" discipline as the Subagents pane probe
  * above: an unmounted pane (Settings closed, or a different pane selected)
- * reads as the empty defaults below, not an error — likewise the pre-fetch
- * "Loading profile…" moment (the `.profile-pane` root is mounted but
- * `ProfileBody` has not rendered yet) reads as `mounted:true` with every
- * other field at its empty default, exactly like an unmounted pane; the
- * smoke's own polling loop is what distinguishes "still loading" from
- * "genuinely empty" (same posture as the Skills pane probe's import-scan
- * poll). `tiles`/`insights`/`topTools` are read straight off the rendered
+ * reads as the empty defaults below, not an error — likewise the cold first
+ * paint (the `.profile-pane` root is mounted but `ProfileBody` has not
+ * rendered yet) reads as `mounted:true` with every other field at its empty
+ * default, exactly like an unmounted pane.
+ *
+ * TASK.187 S5 REPLACES THE OLD "just poll past it" ADVICE THAT STOOD HERE.
+ * The pre-187 text told a caller that the "Loading profile…" line was a
+ * moment to wait out, and its own polling loop was the only thing that could
+ * tell "still loading" from "genuinely empty". That advice is what let a
+ * sixteen-second first paint (TASK.187 defect 2) look like normal operation
+ * to every tool in this file. The pane now stamps `data-profile-phase` on its
+ * root, and this probe reads it as `phase` below: `skeleton` IS "still
+ * loading", `ready` with empty values IS "genuinely empty", and no polling
+ * heuristic has to guess between them. `tiles`/`insights`/`topTools` are read straight off the rendered
  * tile captions/values, insight label/value rows, and top-tools row names
  * (`ProfilePane.tsx`'s own `buildProfileTiles`/`ActivityInsights`/
  * `topToolRows` output, byte-parity with the on-screen strip — this probe
@@ -1116,7 +1124,41 @@ export interface ProfilePaneState {
   /** Total row count backing the "Show all (N)" expander, independent of how many rows are currently rendered — equals `models.length` whenever the expander itself isn't rendered (<= `PROFILE_MODELS_COLLAPSED_ROWS` rows total, nothing to collapse). */
   modelsTotalCount: number;
   modelsExpanded: boolean;
+  /** `data-profile-phase` off the pane root (TASK.187 S5) — `"unknown"` when the pane isn't mounted or carries no such attribute (a build predating the S4 wire contract). */
+  phase: ProfilePaneRenderPhase;
+  /** Whether the pane root carries `data-profile-catchup` — an automatic backlog pass is running underneath a `ready` phase (the numbers on screen are real, more history is still arriving). */
+  catchingUp: boolean;
+  /** `data-profile-backlog` — sink files the last pass left unread, or `null` when the pane publishes no counter at all (unmounted, or nothing on screen: the `skeleton` phase and the io-error branch both render without a view). `0` is a real reading: a pass that left nothing behind. */
+  backlogRemaining: number | null;
+  /** `data-profile-pending-exact` — cross-file sessions whose exact activity pass has not converged, `null` on the same "no view" readings as `backlogRemaining`. The pane is finished only when BOTH counters are `0`: the catch-up chain continues while either is non-zero. */
+  pendingExactSessions: number | null;
+  /** Whether `.profile-refining-note` is rendered — the RENDER fact behind `pendingExactSessions > 0` (`Longest task` is flagged as an estimate). Kept beside the counter, not replaced by it: one is the number, the other is whether the pane actually says so. */
+  activityRefining: boolean;
+  /** Whether the toolbar's Refresh button is present AND clickable (not held by an in-flight pass). A `false` reading is exactly what makes `profileRefresh()`'s `busy` refusal honest. */
+  refreshEnabled: boolean;
+  /** Whether the footer's cache-rebuild row is rendered with its primary action clickable. */
+  rebuildAvailable: boolean;
+  /** Whether the rebuild row's two-step gesture is currently armed (the "Rebuild now" / "Cancel" pair is showing instead of "Rebuild the stats cache"). */
+  rebuildArmed: boolean;
+  /**
+   * `.profile-stale-note`'s rendered text, or `null` when no coverage
+   * collapse stands. The pane raises it when an `{ok:true}` pass came back
+   * with an EMPTY aggregate while admitting it was truncated — the newest
+   * sink file could not be read, or is over the per-file limit — and the
+   * numbers on screen were therefore kept from the previous pass rather than
+   * replaced by zeros. Without this field the guard is invisible from
+   * outside: `tiles` look identical either way, and the pane's other two
+   * notes (`coverageNotice`, `updateError`) are different elements that stay
+   * `null` through a collapse. The text itself distinguishes the three
+   * readings (`retrying` / `stopped` / `permanent`) the pane may be in.
+   */
+  coverageCollapseNote: string | null;
+  /** `.profile-update-error`'s rendered text, or `null` when no update has failed. This is the ONLY way to see plan D-4's honesty guarantee from outside — a failed update renders its message OVER the previously loaded numbers instead of wiping them, so `tiles` alone cannot tell a successful read from a stale one under a standing error. */
+  updateError: string | null;
 }
+
+/** `data-profile-phase`'s four values (imported straight from `profile-loader.ts` — the producer of the attribute, so the vocabulary cannot drift), plus the reading for "no such attribute in the DOM at all". */
+export type ProfilePaneRenderPhase = ProfilePhase | "unknown";
 
 /** The empty-defaults reading (design §4 W4) — same "valid empty defaults, not an error" posture as `blankSubagentsEditorState`. `periods` is the one field that stays the real static catalog even unmounted (TASK.172 — see the interface doc above). */
 function blankProfilePaneState(): ProfilePaneState {
@@ -1138,11 +1180,99 @@ function blankProfilePaneState(): ProfilePaneState {
     models: [],
     modelsTotalCount: 0,
     modelsExpanded: false,
+    phase: "unknown",
+    catchingUp: false,
+    backlogRemaining: null,
+    pendingExactSessions: null,
+    activityRefining: false,
+    refreshEnabled: false,
+    rebuildAvailable: false,
+    rebuildArmed: false,
+    coverageCollapseNote: null,
+    updateError: null,
   };
 }
 
-/** `profileRefresh()`'s ok-shape (TASK.172): `changed` is a real before/after diff of the rendered tiles/branch/insight-rows/models/coverage-notice signature — `false` is a normal, honest reading (a genuinely fast re-fetch that returned identical data, e.g. no new telemetry recorded since the last read), not a failure. The click itself (a real `.click()` on `.profile-refresh-button`, refused when that button isn't in the DOM at all) is what proves this route did something real; `changed` is the extra transparency the last-smoke warning asked for — a caller that needs to know whether NEW numbers actually landed reads this instead of trusting a bare `ok:true`. */
+/**
+ * `profileRefresh()`'s ok-shape (TASK.172): `changed` is a real before/after
+ * diff of the rendered tiles/branch/insight-rows/models/notice signature —
+ * `false` is a normal, honest reading (a genuinely fast re-fetch that
+ * returned identical data, e.g. no new telemetry recorded since the last
+ * read), not a failure.
+ *
+ * TASK.187 S5 — WHY THE CLICK ALONE IS NO LONGER PROOF. Before S4 the Refresh
+ * button was always enabled, so a `.click()` that returned `true` had
+ * necessarily delivered. S4 holds the button (`disabled={busy}`) for the
+ * length of every pass, INCLUDING the automatic catch-up chain that runs
+ * while the phase still reads `ready` — and a disabled button swallows a
+ * `.click()` without a trace. A route that reported `ok:true` off the click
+ * would therefore certify a gesture that never happened, the same false-`ok`
+ * class as TASK.145's `HTTP 200`. So this route now refuses `busy` on a held
+ * button, requires the busy window to actually OPEN after the click
+ * (`did_not_start`), and waits for it to close again including the catch-up
+ * flag (`did_not_settle`) — a wait that stops at `refreshing → ready` while
+ * `data-profile-catchup` is still set would be the same lie one step later.
+ */
 export type ProfilePaneRefreshResult = { ok: true; changed: boolean } | { ok: false; reason: string };
+
+/** One horizontal `getBoundingClientRect` slice, in CSS pixels, rounded to 2 decimals (sub-hundredth noise from fractional layout carries no information and only makes two readings of an unchanged layout differ). */
+export interface SettingsLayoutRect {
+  left: number;
+  right: number;
+  width: number;
+}
+
+/**
+ * `settingsLayoutState()`'s shape (TASK.187 S5, build/task187-plan.md §S5) —
+ * the probe defect 1 never had. The scrollbar's position was invisible to
+ * every existing route because no route measured geometry at all: the bug
+ * (`max-width` and `overflow-y` on the SAME element, so the scroll port is
+ * the 46rem column and the bar is drawn at its edge rather than the window's)
+ * is a pure layout fact with no state, no text and no attribute behind it.
+ *
+ * `scrollbarGap` is the single number that states it: `container.right -
+ * pane.right`, i.e. how much dead space sits to the right of the scroll port
+ * inside the settings content column. Pre-fix it is the full width of the
+ * content area minus 46rem (measured ~540 px on the owner's window); post-fix
+ * it is 0 — the scroll port spans the container and only its INNER wrapper
+ * (`content`) keeps the 46rem cap. `header` is read alongside because
+ * `.settings-content-header` carries its own `max-width: 46rem` OUTSIDE the
+ * scroll port: the pane title is pinned above the scroll port by decision
+ * (TASK.187), so the probe asserts that its column stays aligned with the
+ * content column instead of drifting apart from it.
+ *
+ * Every field reads `null` while the Settings dialog is closed — a valid
+ * empty reading, not an error, same posture as every pane probe above.
+ */
+export interface SettingsLayoutState {
+  /** Whether `.settings-pane` is in the DOM at all (Settings open with some pane selected). */
+  mounted: boolean;
+  /** Which pane is rendered, off `.settings-pane`'s own `id="settings-pane-<id>"`. */
+  activePane: string | null;
+  windowInnerWidth: number;
+  windowInnerHeight: number;
+  /** `.settings-content` — the column that holds the header and the scroll port; the reference edge `scrollbarGap` is measured against. */
+  container: SettingsLayoutRect | null;
+  /** `.settings-pane` — the scroll port. `scrollable` is the only thing that makes a gap reading meaningful: with no overflow there is no bar to be in the wrong place. */
+  pane: (SettingsLayoutRect & { scrollHeight: number; clientHeight: number; scrollable: boolean }) | null;
+  /** `.settings-pane-content` — the width-capped wrapper the fix introduces; `null` on a build that predates it, which is itself the finding. */
+  content: SettingsLayoutRect | null;
+  /** `.settings-content-header` — pinned outside the scroll port. */
+  header: SettingsLayoutRect | null;
+  /** `container.right - pane.right`: dead space to the right of the scroll port, i.e. how far the scrollbar sits from where it belongs. `null` when either rect is missing. */
+  scrollbarGap: number | null;
+}
+
+/** DOM accessor DI for the settings-geometry probe (TASK.187 S5), same injectable-for-tests discipline as `ProfilePaneDom` — the real one is the only implementation that touches `getBoundingClientRect`. */
+export interface SettingsLayoutDom {
+  activePane(): string | null;
+  windowInnerWidth(): number;
+  windowInnerHeight(): number;
+  containerRect(): SettingsLayoutRect | null;
+  paneRect(): (SettingsLayoutRect & { scrollHeight: number; clientHeight: number }) | null;
+  contentRect(): SettingsLayoutRect | null;
+  headerRect(): SettingsLayoutRect | null;
+}
 
 /**
  * DOM accessor DI for the Profile pane probe/driver (design §4 W4), same
@@ -1187,8 +1317,34 @@ export interface ProfilePaneDom {
   clickModelsExpand(): boolean;
   /** Every `.profile-top-row` under the tools `<ul>` (the FIRST `.profile-top-list`, same scoping `topToolNames()` uses), name + parsed "N calls" count, in rendered (count-desc) order. */
   toolRows(): { name: string; count: number }[];
-  /** A real `.click()` on the toolbar's `.profile-refresh-button`; `false` if the pane isn't mounted (the button renders unconditionally once mounted, in every branch — `ProfilePane`'s own toolbar sits ABOVE the loading/hero/banner/normal split). */
+  /** A real `.click()` on the toolbar's `.profile-refresh-button`; `false` if the pane isn't mounted (the button renders unconditionally once mounted, in every branch — `ProfilePane`'s own toolbar sits ABOVE the loading/hero/banner/normal split). NOTE (TASK.187 S5): a `true` here means the click was DELIVERED to the element, never that the element acted on it — a `disabled` button swallows it silently, which is why `refreshButton()` below exists and every caller reads it first. */
   clickRefresh(): boolean;
+  /** `data-profile-phase` off the `.profile-pane` root, or `null` when the pane isn't mounted / the attribute is absent (TASK.187 S4 wire contract). */
+  phase(): string | null;
+  /** Whether the pane root carries `data-profile-catchup` (present only while an automatic backlog pass runs). */
+  catchingUp(): boolean;
+  /** The Refresh button's live presence + `disabled` reading, or `null` when the button isn't in the DOM at all. Distinct from `clickRefresh()` on purpose: this is the ONLY way to tell "the click will be acted on" from "the click will be swallowed". */
+  refreshButton(): { disabled: boolean } | null;
+  /** `.profile-truncated-note`'s rendered text, or `null` when it isn't rendered. Part of the rendered signature `profileRefresh` diffs; it is NOT a counter source — see `backlogAttr()`. */
+  truncatedNoteText(): string | null;
+  /** Raw `data-profile-backlog` off the pane root (sink files the last pass left unread), or `null` when the attribute is absent — no view is on screen yet. */
+  backlogAttr(): string | null;
+  /** Raw `data-profile-pending-exact` off the pane root (cross-file sessions whose exact activity pass has not converged), or `null` when the attribute is absent. */
+  pendingExactAttr(): string | null;
+  /** Whether `.profile-refining-note` is rendered (`pendingExactSessions > 0`). */
+  refiningNoteVisible(): boolean;
+  /** `.profile-stale-note`'s rendered text — the coverage-collapse banner — or `null` when it isn't rendered. */
+  collapseNoteText(): string | null;
+  /** `.profile-update-error`'s rendered text, or `null` when it isn't rendered. */
+  updateErrorText(): string | null;
+  /** The footer rebuild row's reading — `armed` is the two-step gesture's state (`data-profile-rebuild-armed`), `disabled` the current primary action's own `disabled`; `null` when the row isn't rendered at all. */
+  rebuildRow(): { armed: boolean; disabled: boolean } | null;
+  /** A real `.click()` on the row's arming button ("Rebuild the stats cache"); `false` if the row is missing or already armed. */
+  clickRebuild(): boolean;
+  /** A real `.click()` on `.profile-rebuild-confirm` ("Rebuild now"); `false` unless the row is rendered and armed. */
+  clickRebuildConfirm(): boolean;
+  /** A real `.click()` on the armed row's Cancel button; `false` unless the row is rendered and armed. Used to leave no armed residue behind a refused rebuild. */
+  clickRebuildCancel(): boolean;
 }
 
 /**
@@ -2221,12 +2377,29 @@ export interface AutomationFacade {
   // reports whether the rendered numbers actually changed (`changed`) — a
   // genuinely fast re-fetch that returns identical data is a normal, honest
   // `changed:false`, not a failure (see `ProfilePaneRefreshResult`'s own doc
-  // comment). ──
+  // comment). TASK.187 S5 rebuilds `profileRefresh` on the S4 wire contract
+  // (`data-profile-phase` / `data-profile-catchup` / the held button) so it
+  // can no longer certify a click a disabled button swallowed, extends
+  // `profilePaneState` with the same observables plus BOTH work-left
+  // counters the pane publishes (`data-profile-backlog` /
+  // `data-profile-pending-exact` — the catch-up chain runs while either is
+  // non-zero, so neither alone answers "has it finished?"),
+  // and adds `profileRebuild` for the footer's two-step cache-rebuild
+  // gesture (two real clicks in the pane — the pane deliberately uses no
+  // modal, since `window.prompt`/`confirm`/`alert` throw here). ──
   profilePaneState(): ProfilePaneState;
   profileToggleTelemetry(): Promise<FacadeResult>;
   profileSelectPeriod(period: ProfilePeriod): Promise<FacadeResult>;
   profileToggleModelsExpanded(): Promise<FacadeResult>;
   profileRefresh(): Promise<ProfilePaneRefreshResult>;
+  profileRebuild(): Promise<FacadeResult>;
+  // ── Settings geometry probe (TASK.187 S5, plan §S5) — a DEDICATED probe
+  // over the layout itself, not over any one pane: `.settings-pane` is the
+  // scroll port of ALL fourteen panes, so defect 1 ("the scrollbar sits at
+  // the 46rem column edge, not the window edge") is one measurement that
+  // covers every one of them. No prior probe measured geometry at all, which
+  // is exactly why the defect survived to a release. ──
+  settingsLayoutState(): SettingsLayoutState;
   // ── Slash-command menu probe/driver (design/slice-P7.23-cut.md §7 W4) — a
   // DEDICATED probe, every prior probe above stays byte-untouched. `draft`
   // doubles as the insert-assert (§7). `composerType`/`composerKey` drive the
@@ -3318,6 +3491,12 @@ function realProfilePaneDom(): ProfilePaneDom {
   function switchEl(): HTMLButtonElement | null {
     return pane()?.querySelector<HTMLButtonElement>(".profile-telemetry-block .settings-switch") ?? null;
   }
+  function refreshButtonEl(): HTMLButtonElement | null {
+    return pane()?.querySelector<HTMLButtonElement>(".profile-refresh-button") ?? null;
+  }
+  function rebuildRowEl(): HTMLElement | null {
+    return pane()?.querySelector<HTMLElement>(".profile-rebuild-row") ?? null;
+  }
   return {
     mounted: () => pane() !== null,
     branch: () => heroEl()?.getAttribute("data-profile-branch") ?? null,
@@ -3402,13 +3581,120 @@ function realProfilePaneDom(): ProfilePaneDom {
         };
       }),
     clickRefresh: () => {
-      const el = pane()?.querySelector<HTMLButtonElement>(".profile-refresh-button") ?? null;
+      const el = refreshButtonEl();
       if (!el) {
         return false;
       }
       el.click();
       return true;
     },
+    phase: () => pane()?.getAttribute("data-profile-phase") ?? null,
+    // Presence, not value: the component stamps `catchingUp || undefined`, so
+    // the attribute is absent whenever the flag is false and carries "true"
+    // whenever it is set. Testing presence survives any later change of the
+    // rendered value (empty string, "1") without silently reading `false`.
+    catchingUp: () => pane()?.hasAttribute("data-profile-catchup") ?? false,
+    refreshButton: () => {
+      const el = refreshButtonEl();
+      return el ? { disabled: el.disabled } : null;
+    },
+    truncatedNoteText: () => pane()?.querySelector(".profile-truncated-note")?.textContent?.trim() ?? null,
+    backlogAttr: () => pane()?.getAttribute("data-profile-backlog") ?? null,
+    pendingExactAttr: () => pane()?.getAttribute("data-profile-pending-exact") ?? null,
+    refiningNoteVisible: () => (pane()?.querySelector(".profile-refining-note") ?? null) !== null,
+    collapseNoteText: () => pane()?.querySelector(".profile-stale-note")?.textContent?.trim() ?? null,
+    updateErrorText: () => pane()?.querySelector(".profile-update-error")?.textContent?.trim() ?? null,
+    rebuildRow: () => {
+      const row = rebuildRowEl();
+      if (!row) {
+        return null;
+      }
+      const armed = row.hasAttribute("data-profile-rebuild-armed");
+      // Armed, the primary action is the confirm button; unarmed, it is the
+      // single arming button. Cancel is never the primary and never disabled.
+      const primary = armed
+        ? row.querySelector<HTMLButtonElement>(".profile-rebuild-confirm")
+        : row.querySelector<HTMLButtonElement>(".profile-rebuild-action");
+      return { armed, disabled: primary?.disabled ?? true };
+    },
+    clickRebuild: () => {
+      const row = rebuildRowEl();
+      if (!row || row.hasAttribute("data-profile-rebuild-armed")) {
+        return false;
+      }
+      const el = row.querySelector<HTMLButtonElement>(".profile-rebuild-action");
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    clickRebuildConfirm: () => {
+      const row = rebuildRowEl();
+      if (!row || !row.hasAttribute("data-profile-rebuild-armed")) {
+        return false;
+      }
+      const el = row.querySelector<HTMLButtonElement>(".profile-rebuild-confirm");
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    clickRebuildCancel: () => {
+      const row = rebuildRowEl();
+      if (!row || !row.hasAttribute("data-profile-rebuild-armed")) {
+        return false;
+      }
+      const el = row.querySelector<HTMLButtonElement>(".profile-rebuild-action:not(.profile-rebuild-confirm)");
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+  };
+}
+
+/**
+ * The real settings-geometry accessor (TASK.187 S5): queries live at call
+ * time, same laziness discipline as `realProfilePaneDom` (safe to evaluate as
+ * a default parameter outside a browser; tests always pass an explicit
+ * `settingsLayoutDom` and never reach this).
+ */
+function realSettingsLayoutDom(): SettingsLayoutDom {
+  // Sub-hundredth-pixel noise from fractional layout carries no information
+  // and would make two readings of an unchanged layout compare unequal.
+  function round(n: number): number {
+    return Math.round(n * 100) / 100;
+  }
+  function rectOf(selector: string): SettingsLayoutRect | null {
+    const el = document.querySelector<HTMLElement>(selector);
+    if (!el) {
+      return null;
+    }
+    const r = el.getBoundingClientRect();
+    return { left: round(r.left), right: round(r.right), width: round(r.width) };
+  }
+  return {
+    activePane: () => {
+      const id = document.querySelector<HTMLElement>(".settings-pane")?.id ?? "";
+      const prefix = "settings-pane-";
+      return id.startsWith(prefix) ? id.slice(prefix.length) : null;
+    },
+    windowInnerWidth: () => window.innerWidth,
+    windowInnerHeight: () => window.innerHeight,
+    containerRect: () => rectOf(".settings-content"),
+    paneRect: () => {
+      const el = document.querySelector<HTMLElement>(".settings-pane");
+      const base = rectOf(".settings-pane");
+      if (!el || !base) {
+        return null;
+      }
+      return { ...base, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    },
+    contentRect: () => rectOf(".settings-pane-content"),
+    headerRect: () => rectOf(".settings-content-header"),
   };
 }
 
@@ -4196,6 +4482,168 @@ const PROFILE_PANE_APPLY_DEADLINE_MS = 10_000;
 /** Deadline for `profileSelectPeriod`/`profileToggleModelsExpanded`'s post-click settle polls (TASK.172) — local React `useState` inside `ProfileBody` (`period`/`modelsExpanded`), no IPC round-trip at all, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. Also `profileRefresh`'s poll — that one IS a real IPC round trip (a `getStats()` telemetry-directory scan), but deliberately the SHORT deadline anyway: a local-disk read bounded by the scan's own byte budget, and a "no new data" outcome would otherwise always burn a much longer deadline for no benefit. */
 const PROFILE_PANE_COMMIT_DEADLINE_MS = 500;
 
+/**
+ * Deadline for the SETTLE poll of `profileRefresh`/`profileRebuild`
+ * (TASK.187 S5) — a genuine ceiling, not an expected duration. Three things
+ * stack up behind one gesture: a full uncached pass over the owner's own
+ * telemetry directory measured 16.2 s to `JSON.parse` alone (TASK.187 defect
+ * 3, 60 767 files), a rebuild deliberately re-reads every one of them, and
+ * both routes wait out the automatic catch-up chain rather than returning at
+ * the first `ready`. The short commit deadline above stays in force for the
+ * two things that must happen promptly — the busy window opening after the
+ * click, and the rebuild row arming — so a genuinely dead click still fails
+ * in half a second instead of a minute.
+ */
+const PROFILE_PANE_SETTLE_DEADLINE_MS = 60_000;
+
+/**
+ * Whether the Profile pane currently has ANY pass outstanding (TASK.187 S5).
+ * Three independent DOM readings, deliberately OR-ed rather than trusting one:
+ * the Refresh button's own `disabled` (`busy = inFlight !== null`), the
+ * `data-profile-catchup` flag (an automatic pass that keeps the phase at
+ * `ready` on purpose — numbers on screen are real, more history is arriving),
+ * and any non-`ready` phase. A pane that reads busy on any of the three is
+ * busy; only the conjunction of all three being clear is a settled pane.
+ */
+function profilePaneWorkInFlight(dom: ProfilePaneDom): boolean {
+  const phase = dom.phase();
+  return (
+    dom.refreshButton()?.disabled === true ||
+    dom.catchingUp() ||
+    phase === "skeleton" ||
+    phase === "cached-updating" ||
+    phase === "refreshing"
+  );
+}
+
+/** The rendered signature `profileRefresh` diffs across a pass — everything this probe can see change, including the honesty note that carries the backlog counter (so a catch-up pass that only shrank the backlog still reads as `changed`). */
+function profilePaneSignature(dom: ProfilePaneDom): string {
+  return JSON.stringify({
+    tiles: dom.tiles(),
+    branch: dom.branch(),
+    insightRows: dom.insightRows(),
+    models: dom.modelRows(),
+    notice: dom.coverageNoticeText(),
+    truncatedNote: dom.truncatedNoteText(),
+    collapseNote: dom.collapseNoteText(),
+  });
+}
+
+/**
+ * Everything a pass leaves behind once it is over: the rendered signature
+ * plus the update-error line. Used as the "it really ran" evidence after a
+ * click, NOT as the `changed` diff — see `profilePaneStarted`.
+ */
+function profilePaneAftermath(dom: ProfilePaneDom): string {
+  return JSON.stringify([profilePaneSignature(dom), dom.updateErrorText()]);
+}
+
+/**
+ * Whether the click just delivered actually set a pass going. The busy window
+ * is the primary evidence, but it is NOT the only one, and treating it as the
+ * only one produced a live false negative: a rebuild whose cache-file delete
+ * fails with EACCES refuses inside main before any directory work, so the
+ * whole request opened and closed between two polls and the route reported
+ * `did_not_start` for a pass that had demonstrably run and printed its own
+ * error banner.
+ *
+ * So a pass that is already over counts too, recognised by what it left on
+ * the pane: a new update-error line, or any change to the rendered
+ * signature. A click a disabled button swallowed leaves neither, which is the
+ * case this gate exists to catch, and it still fails.
+ */
+async function profilePaneStarted(dom: ProfilePaneDom, aftermathBefore: string): Promise<boolean> {
+  return waitUntil(
+    () => profilePaneWorkInFlight(dom) || profilePaneAftermath(dom) !== aftermathBefore,
+    PROFILE_PANE_COMMIT_DEADLINE_MS,
+  );
+}
+
+/**
+ * One work-left counter off the pane root's `data-*` contract, or `null` when
+ * the attribute is absent (no view on screen: the `skeleton` phase, or a
+ * refusal with nothing to show).
+ *
+ * WHY AN ATTRIBUTE AND NOT THE COPY (TASK.187 S5 final pass). This probe used
+ * to parse "N files left" out of the honesty notes. That copy was rewritten
+ * three times inside TASK.187 alone, and a fourth rewording would have turned
+ * the reading into a silent `0` — a probe reporting "nothing left" over a
+ * backlog of sixty thousand files, with every unit test still green because
+ * the tests fed the fake the same sentence the parser expected.
+ * `profilePaneDataAttributes` publishes both counters as digits from ONE
+ * pinned source, so the probe and the pane cannot drift apart.
+ *
+ * A non-numeric attribute value reads `null` rather than `0`, for the same
+ * reason: "I cannot see it" and "I see nothing left" are different facts.
+ */
+function profilePaneCounter(raw: string | null): number | null {
+  // The empty string is excluded by hand: `Number("")` is 0, so an attribute
+  // stamped with no value would otherwise read as the very "nothing left"
+  // this function exists to stop being invented.
+  if (raw === null || raw.trim() === "") {
+    return null;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Whether the pane's own counters say a further pass has something to do.
+ *
+ * BOTH counters, not just the backlog: the S4 catch-up chain continues while
+ * EITHER the unread-file backlog or the count of unconverged exact sessions
+ * is non-zero (`shouldAutoContinue` -> `profileWorkLeft`), so a "did it
+ * finish?" test written on the backlog alone reports done one pass early on
+ * any directory whose last budget cut fell inside the exact-activity pass.
+ * An absent counter is not work: the pane has no view at all.
+ */
+function profilePaneWorkLeft(dom: ProfilePaneDom): boolean {
+  return (profilePaneCounter(dom.backlogAttr()) ?? 0) > 0 || (profilePaneCounter(dom.pendingExactAttr()) ?? 0) > 0;
+}
+
+/**
+ * Waits out everything one gesture set in motion — the pass itself plus the
+ * automatic catch-up chain behind it — and answers whether the pane really
+ * came to rest inside `deadlineMs`. Shared by `profileRefresh` and
+ * `profileRebuild`; `true` is also the reading for a pane that unmounted
+ * mid-wait (the caller checks `mounted()` itself and turns that into its own
+ * refusal).
+ *
+ * TWO CONDITIONS, because since S4 "no pass is outstanding right now" stopped
+ * being the same fact as "the pane has finished". The chain issues its next
+ * pass from the previous pass's own settle callback, so the two React updates
+ * are batched into one commit and the idle frame between them is invisible
+ * TODAY — but that is a property of React's batching, not of anything this
+ * probe can see, and a route whose only stop condition is the busy flag would
+ * report `ok:true` mid-chain the moment that batching stopped holding. The
+ * pane's own counters are the durable statement of work left, so an idle pane
+ * that still publishes work gets one commit window to reopen the busy
+ * window.
+ *
+ * Nothing reopening is a legitimate end, not a timeout: an idle pane with
+ * work left is a chain the progress guard stopped for good (`autoStalled` —
+ * an unreadable newest file, repeated passes returning identical numbers),
+ * and the pane is honest about it in the coverage-collapse note. Waiting for
+ * counters that nothing is working on would turn that state into a 60-second
+ * `did_not_settle` instead of the `ok:true` it is.
+ */
+async function waitForProfilePaneSettled(dom: ProfilePaneDom, deadlineMs: number): Promise<boolean> {
+  const deadline = Date.now() + deadlineMs;
+  for (;;) {
+    const idle = await waitUntil(() => !dom.mounted() || !profilePaneWorkInFlight(dom), deadline - Date.now());
+    if (!idle) {
+      return false;
+    }
+    if (!dom.mounted() || !profilePaneWorkLeft(dom)) {
+      return true;
+    }
+    const grace = Math.min(PROFILE_PANE_COMMIT_DEADLINE_MS, deadline - Date.now());
+    if (!(await waitUntil(() => profilePaneWorkInFlight(dom), grace))) {
+      return true;
+    }
+  }
+}
+
 /** Deadline for `shortcutsStartRecord`'s post-click settle poll (design/slice-P7.24-cut.md §4 W4) — local React `useState`, no IPC round-trip, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const SHORTCUTS_PANE_COMMIT_DEADLINE_MS = 500;
 
@@ -4800,6 +5248,8 @@ export function createAutomationFacade(
   // TASK.125: appended at the END for the reason spelled out at positions
   // 27-28 above — every existing positional call site would shift otherwise.
   sidebarDom: SidebarDom = realSidebarDom(),
+  // TASK.187 S5: appended at the END for the same reason.
+  settingsLayoutDom: SettingsLayoutDom = realSettingsLayoutDom(),
 ): AutomationFacade {
   /**
    * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
@@ -6384,6 +6834,21 @@ export function createAutomationFacade(
       // itself is already the full list.
       const collapsedTotal = expandText?.match(/\((\d+)\)/)?.[1];
       const modelsTotalCount = !modelsExpanded && collapsedTotal !== undefined ? Number(collapsedTotal) : modelRows.length;
+      // TASK.187 S5. The phase attribute is the S4 wire contract; a build that
+      // predates it reads `unknown` rather than being coerced into one of the
+      // four real values. The two work-left counters come off the same
+      // contract (`profilePaneDataAttributes`), so they are readable in every
+      // branch that has a view behind it — including the hero branch, where
+      // the pane renders no note but the numbers still exist. They read
+      // `null` ("not observable") exactly where the pane publishes nothing:
+      // no view at all, i.e. the `skeleton` phase and the io-error branch.
+      const rawPhase = profilePaneDom.phase();
+      const phase: ProfilePaneRenderPhase =
+        rawPhase === "skeleton" || rawPhase === "cached-updating" || rawPhase === "refreshing" || rawPhase === "ready"
+          ? rawPhase
+          : "unknown";
+      const refresh = profilePaneDom.refreshButton();
+      const rebuild = profilePaneDom.rebuildRow();
       return {
         mounted: true,
         tiles: profilePaneDom.tiles(),
@@ -6409,6 +6874,16 @@ export function createAutomationFacade(
         models: modelRows,
         modelsTotalCount,
         modelsExpanded,
+        phase,
+        catchingUp: profilePaneDom.catchingUp(),
+        backlogRemaining: profilePaneCounter(profilePaneDom.backlogAttr()),
+        pendingExactSessions: profilePaneCounter(profilePaneDom.pendingExactAttr()),
+        activityRefining: profilePaneDom.refiningNoteVisible(),
+        refreshEnabled: refresh !== null && !refresh.disabled,
+        rebuildAvailable: rebuild !== null && !rebuild.disabled,
+        rebuildArmed: rebuild?.armed ?? false,
+        coverageCollapseNote: profilePaneDom.collapseNoteText(),
+        updateError: profilePaneDom.updateErrorText(),
       };
     },
 
@@ -6483,34 +6958,128 @@ export function createAutomationFacade(
         return { ok: false, reason: "pane_not_mounted" };
       }
       // A real getStats() IPC round trip (design's own doc: "a genuine
-      // main-process read, not cosmetic") — `refresh()` sets `result`
-      // directly with no intermediate loading state, so there is no DOM
-      // signal for "request in flight". `changed` is a real before/after
-      // diff of everything this probe can see; identical data after a
-      // genuinely fast re-fetch is a normal, honest `changed:false` (see
-      // `ProfilePaneRefreshResult`'s own doc comment), not folded into `ok`.
-      // Deliberately the SHORT commit deadline, not the 10s write-apply one
-      // above: this is a local-disk read (bounded by the scan's own byte
-      // budget, the same reason `truncated`/`coverageStartTs` exist), and a
-      // "no new data" outcome would otherwise always burn the full deadline
-      // for no benefit — this file's own tests never wait one out.
-      const signature = () =>
-        JSON.stringify({
-          tiles: profilePaneDom.tiles(),
-          branch: profilePaneDom.branch(),
-          insightRows: profilePaneDom.insightRows(),
-          models: profilePaneDom.modelRows(),
-          notice: profilePaneDom.coverageNoticeText(),
-        });
-      const before = signature();
+      // main-process read, not cosmetic"). Since TASK.187 S4 the pane HAS a
+      // DOM signal for "request in flight" — the held button, the phase
+      // attribute and the catch-up flag — and this route is built entirely
+      // out of it, because the click alone stopped being evidence the moment
+      // the button could be disabled (see `ProfilePaneRefreshResult`).
+      //
+      // Order of the three gates matters. `busy` BEFORE the click: a click
+      // into a held button is swallowed with no trace, so delivering one and
+      // then measuring would be measuring nothing. `did_not_start` AFTER it:
+      // the button holds synchronously within the click's own discrete-event
+      // commit, so a pass that really began is always visible on the next
+      // poll, and a click that did nothing is caught in half a second.
+      // `did_not_settle` last, over the LONG deadline, through
+      // `waitForProfilePaneSettled` — S4 keeps the phase at `ready` during an
+      // automatic catch-up pass on purpose, so a wait that watched only
+      // `refreshing → ready` would report a finished refresh while the
+      // backlog was still being eaten, and a wait on the busy flag alone
+      // would do the same the moment two chained passes stopped landing in
+      // one React commit (see that helper for both counters it reads).
+      if (profilePaneDom.refreshButton() === null) {
+        return { ok: false, reason: "refresh_not_present" };
+      }
+      if (profilePaneWorkInFlight(profilePaneDom)) {
+        return { ok: false, reason: "busy" };
+      }
+      const before = profilePaneSignature(profilePaneDom);
+      const aftermathBefore = profilePaneAftermath(profilePaneDom);
       if (!profilePaneDom.clickRefresh()) {
         return { ok: false, reason: "refresh_not_present" };
       }
-      await waitUntil(() => !profilePaneDom.mounted() || signature() !== before, PROFILE_PANE_COMMIT_DEADLINE_MS);
+      if (!(await profilePaneStarted(profilePaneDom, aftermathBefore))) {
+        return { ok: false, reason: "did_not_start" };
+      }
+      const settled = await waitForProfilePaneSettled(profilePaneDom, PROFILE_PANE_SETTLE_DEADLINE_MS);
       if (!profilePaneDom.mounted()) {
         return { ok: false, reason: "pane_not_mounted" };
       }
-      return { ok: true, changed: signature() !== before };
+      if (!settled) {
+        return { ok: false, reason: "did_not_settle" };
+      }
+      // `changed` is a real before/after diff of everything this probe can
+      // see; identical data after a genuinely fast re-fetch is a normal,
+      // honest `changed:false`, not folded into `ok`.
+      return { ok: true, changed: profilePaneSignature(profilePaneDom) !== before };
+    },
+
+    async profileRebuild(): Promise<FacadeResult> {
+      if (!profilePaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      const row = profilePaneDom.rebuildRow();
+      if (row === null) {
+        return { ok: false, reason: "rebuild_not_present" };
+      }
+      if (profilePaneWorkInFlight(profilePaneDom)) {
+        return { ok: false, reason: "busy" };
+      }
+      // The gesture is two-step IN THE PANE (arm, then confirm), not a modal:
+      // `window.prompt`/`confirm`/`alert` throw under this Electron
+      // configuration, so a dialog-guarded rebuild would be dead in
+      // production with a green gate. This route therefore drives two real
+      // clicks on two real buttons, and an already-armed row (a previous,
+      // abandoned gesture) is confirmed directly rather than re-armed.
+      if (!row.armed) {
+        if (row.disabled) {
+          return { ok: false, reason: "busy" };
+        }
+        if (!profilePaneDom.clickRebuild()) {
+          return { ok: false, reason: "rebuild_not_present" };
+        }
+        const armed = await waitUntil(() => profilePaneDom.rebuildRow()?.armed === true, PROFILE_PANE_COMMIT_DEADLINE_MS);
+        if (!armed) {
+          return { ok: false, reason: "did_not_arm" };
+        }
+      }
+      const confirmRow = profilePaneDom.rebuildRow();
+      if (confirmRow === null || !confirmRow.armed) {
+        return { ok: false, reason: "rebuild_not_present" };
+      }
+      if (confirmRow.disabled) {
+        // Leave no armed residue behind a refusal — the pane would otherwise
+        // stay showing "Rebuild now" to the next reader of this probe.
+        profilePaneDom.clickRebuildCancel();
+        return { ok: false, reason: "busy" };
+      }
+      const aftermathBefore = profilePaneAftermath(profilePaneDom);
+      if (!profilePaneDom.clickRebuildConfirm()) {
+        profilePaneDom.clickRebuildCancel();
+        return { ok: false, reason: "rebuild_not_present" };
+      }
+      // The confirm handler disarms the row and calls `rebuild()` in the same
+      // commit, and `rebuild()` can still be refused by the loader's own
+      // in-flight guard — so a disarmed row proves nothing on its own and the
+      // pass has to be observed, either running or already finished.
+      if (!(await profilePaneStarted(profilePaneDom, aftermathBefore))) {
+        return { ok: false, reason: "did_not_start" };
+      }
+      const settled = await waitForProfilePaneSettled(profilePaneDom, PROFILE_PANE_SETTLE_DEADLINE_MS);
+      if (!profilePaneDom.mounted()) {
+        return { ok: false, reason: "pane_not_mounted" };
+      }
+      return settled ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    settingsLayoutState(): SettingsLayoutState {
+      const pane = settingsLayoutDom.paneRect();
+      const container = settingsLayoutDom.containerRect();
+      return {
+        mounted: pane !== null,
+        activePane: settingsLayoutDom.activePane(),
+        windowInnerWidth: settingsLayoutDom.windowInnerWidth(),
+        windowInnerHeight: settingsLayoutDom.windowInnerHeight(),
+        container,
+        pane: pane === null ? null : { ...pane, scrollable: pane.scrollHeight > pane.clientHeight },
+        content: settingsLayoutDom.contentRect(),
+        header: settingsLayoutDom.headerRect(),
+        // Measured against the CONTAINER's right edge, not the window's: the
+        // settings dialog does not span the window, so a window-relative gap
+        // would fold the dialog's own right margin into the defect's number
+        // and never reach 0 even once the layout is correct.
+        scrollbarGap: pane === null || container === null ? null : Math.round((container.right - pane.right) * 100) / 100,
+      };
     },
 
     slashMenuState(tabId: string): SlashMenuState | FacadeErr {

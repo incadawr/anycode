@@ -902,11 +902,13 @@ instead of trusting a bare `ok:true`.
 
 | Method / path | Body | Returns |
 |---|---|---|
-| `GET /settings/profile` | — | `{mounted, tiles:[{label, value}], insights:{tokensInPeriod, totalSessions, totalRuns, toolCalls, subagentRuns, mostUsedModel}, topTools:[name], tools:[{name, count}], heatmapNonEmptyCells, telemetryEnabled, killSwitchActive, truncated, emptyStateHero, frozenBanner, period, periods:[{period, label}], coverageNotice, models:[{model, tokens}], modelsTotalCount, modelsExpanded}` |
+| `GET /settings/profile` | — | `{mounted, tiles:[{label, value}], insights:{tokensInPeriod, totalSessions, totalRuns, toolCalls, subagentRuns, mostUsedModel}, topTools:[name], tools:[{name, count}], heatmapNonEmptyCells, telemetryEnabled, killSwitchActive, truncated, emptyStateHero, frozenBanner, period, periods:[{period, label}], coverageNotice, models:[{model, tokens}], modelsTotalCount, modelsExpanded, phase:"skeleton"\|"cached-updating"\|"refreshing"\|"ready"\|"unknown", catchingUp, backlogRemaining, pendingExactSessions, activityRefining, refreshEnabled, rebuildAvailable, rebuildArmed, coverageCollapseNote, updateError}` |
 | `POST /settings/profile/telemetry` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"toggle_not_present"\|"toggle_disabled"\|"did_not_toggle"}` |
 | `POST /settings/profile/period` | `{period:"today"\|"7d"\|"30d"\|"all"}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"invalid_period"\|"control_not_present"\|"did_not_switch"}` |
 | `POST /settings/profile/models/toggle` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"expander_not_present"\|"did_not_toggle"}` |
-| `POST /settings/profile/refresh` | `{}` | `{ok:true, changed:boolean}` \| `{ok:false, reason:"pane_not_mounted"\|"refresh_not_present"}` |
+| `POST /settings/profile/refresh` | `{}` | `{ok:true, changed:boolean}` \| `{ok:false, reason:"pane_not_mounted"\|"refresh_not_present"\|"busy"\|"did_not_start"\|"did_not_settle"}` |
+| `POST /settings/profile/rebuild` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"rebuild_not_present"\|"busy"\|"did_not_arm"\|"did_not_start"\|"did_not_settle"}` |
+| `GET /settings/layout` | — | `{mounted, activePane, windowInnerWidth, windowInnerHeight, container:{left,right,width}, pane:{left,right,width,scrollHeight,clientHeight,scrollable}, content:{left,right,width}, header:{left,right,width}, scrollbarGap}` |
 
 ```bash
 curl "${A[@]}" "${J[@]}" -X POST $B/settings/pane -d '{"paneId":"profile"}'
@@ -915,7 +917,60 @@ curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/telemetry -d '{}'
 curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/period -d '{"period":"7d"}'
 curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/models/toggle -d '{}'
 curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/refresh -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/settings/profile/rebuild -d '{}'
+curl "${A[@]}" "$B/settings/layout"
 ```
+
+**TASK.187 S5 — why `refresh` grew three more refusals.** Before TASK.187 the
+Refresh button was always enabled, so a delivered `.click()` was proof the
+gesture happened. It no longer is: the button is held (`disabled`) for the
+length of every pass, including the automatic catch-up chain that runs while
+`data-profile-phase` still reads `ready`, and a disabled button swallows a
+click silently. The route therefore refuses `busy` instead of clicking into a
+held button, requires the busy window to actually open (`did_not_start`), and
+waits for it to close **including** `data-profile-catchup` before reporting
+`ok` (`did_not_settle` on timeout, 60 s — a full uncached pass over the
+owner's own 60 767-file telemetry directory measured 16.2 s). Stopping at
+`refreshing -> ready` while the catch-up flag is still set would be the same
+false `ok:true` one step later. `GET /settings/profile` exposes every one of
+those observables (`phase`, `catchingUp`, `refreshEnabled`, and both work-left
+counters), so a caller can watch a pass instead of inferring it.
+
+**The two counters, and why both.** `backlogRemaining` (sink files the last
+pass left unread) and `pendingExactSessions` (cross-file sessions whose exact
+activity pass has not converged) are read straight off the pane root's
+`data-profile-backlog` / `data-profile-pending-exact` — NOT parsed out of the
+rendered "N files left" copy, which TASK.187 reworded three times and whose
+next rewording would have turned the probe's reading into a silent `0`. The
+pane is done only when BOTH are `0`: the automatic catch-up chain continues
+while either is non-zero, so a caller polling the backlog alone stops one pass
+early whenever the budget cut fell inside the exact-activity pass. Both read
+`null` when the pane publishes no view at all (the `skeleton` phase, the
+io-error branch, or an unmounted pane) — "not observable", never "nothing
+left".
+
+**`coverageCollapseNote`** is the pane's coverage-collapse banner
+(`.profile-stale-note`), and the only outside view of the guard behind it: an
+`{ok:true}` pass whose aggregate came back EMPTY while the same answer admitted
+it was truncated does NOT replace the numbers on screen. `tiles` look identical
+with and without the guard, and the pane's other two notes (`coverageNotice`,
+`updateError`) stay `null` through it, so a driver that did not read this field
+could not tell live numbers from held-over ones. The text names which of three
+states the pane is in: the next pass retries by itself, repeated passes made no
+progress (Refresh to try again), or the newest file is over the per-file scan
+limit and no pass will ever get behind it.
+
+**`POST /settings/profile/rebuild`** drives the footer's cache-rebuild
+gesture. It is two steps in the pane ("Rebuild the stats cache" then "Rebuild
+now"), NOT a modal — `window.prompt`/`confirm`/`alert` throw under this
+Electron configuration, so a dialog-guarded action would be dead in
+production with a green gate — and this single route performs both clicks,
+cancelling the armed state again if the confirm cannot be delivered.
+
+**`GET /settings/layout`** is the geometry probe TASK.187 defect 1 needed and
+no route had: `scrollbarGap` is `container.right - pane.right`, the dead space
+to the right of the scroll port. It is a property of `.settings-pane`, the
+scroll port shared by every settings pane, so one reading covers all of them.
 
 `ANYCODE_PROFILE_HOME=<absolute dir>` is a **dev/test-only** override for the
 Profile pane's user-scope `home` directory (`main/index.ts`'s

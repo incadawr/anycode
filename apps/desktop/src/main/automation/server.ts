@@ -141,6 +141,8 @@ import {
   profileSelectPeriod,
   profileToggleModelsExpanded,
   profileRefresh,
+  profileRebuild,
+  settingsLayoutState,
   slashMenuState,
   composerType,
   composerKey,
@@ -858,6 +860,13 @@ async function route(
   if (method === "GET" && pathname === "/settings/profile") {
     return profilePaneState(deps);
   }
+  // Settings geometry probe (TASK.187 S5): a DEDICATED route — every prior
+  // `/settings*` probe above stays byte-untouched, same "own probe, no
+  // widening" posture. Not pane-scoped on purpose: `.settings-pane` is the
+  // scroll port of every pane, so one reading covers all fourteen.
+  if (method === "GET" && pathname === "/settings/layout") {
+    return settingsLayoutState(deps);
+  }
   // Keyboard shortcuts pane probe (slice-P7.24-cut.md §4 W4): a DEDICATED
   // route — every prior `/settings*` probe above stays byte-untouched (§4
   // custody), same "own probe, no widening" posture as the Profile pane
@@ -1214,6 +1223,13 @@ async function route(
   if (method === "POST" && pathname === "/settings/profile/refresh") {
     parseBody(rawBody, emptyBody);
     return profileRefresh(deps);
+  }
+  // TASK.187 S5: the footer's cache-rebuild gesture. Unary like the routes
+  // above — the facade drives BOTH steps of the in-pane arm/confirm pair, so
+  // there is no "arm" route to call separately and no body to send.
+  if (method === "POST" && pathname === "/settings/profile/rebuild") {
+    parseBody(rawBody, emptyBody);
+    return profileRebuild(deps);
   }
   // Keyboard shortcuts pane routes (slice-P7.24-cut.md §4 W4): mirror the
   // SAME DOM paths KeyboardShortcutsPane.tsx itself uses (a slot's pencil /

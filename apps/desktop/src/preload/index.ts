@@ -91,11 +91,14 @@ import type {
 } from "../shared/subagents-config.js";
 import {
   PROFILE_REVEAL_DIR_CHANNEL,
+  PROFILE_STATS_CACHED_CHANNEL,
   PROFILE_STATS_GET_CHANNEL,
+  PROFILE_STATS_REBUILD_CHANNEL,
   PROFILE_TELEMETRY_SET_CHANNEL,
 } from "../shared/profile-config.js";
 import type {
   ProfileRevealDirResult,
+  ProfileStatsCachedResult,
   ProfileStatsResult,
   ProfileTelemetrySetRequest,
   ProfileTelemetrySetResult,
@@ -925,6 +928,13 @@ contextBridge.exposeInMainWorld("anycode", {
   profile: {
     getStats: (): Promise<ProfileStatsResult> =>
       ipcRenderer.invoke(PROFILE_STATS_GET_CHANNEL) as Promise<ProfileStatsResult>,
+    // TASK.187 S3: the instant, cache-only view (no directory scan main-side).
+    getStatsCached: (): Promise<ProfileStatsCachedResult> =>
+      ipcRenderer.invoke(PROFILE_STATS_CACHED_CHANNEL) as Promise<ProfileStatsCachedResult>,
+    // TASK.187 S3: drop the cache and start over — still budget-cut, so this
+    // returns promptly with a backlog rather than blocking on the whole dir.
+    rebuildStats: (): Promise<ProfileStatsResult> =>
+      ipcRenderer.invoke(PROFILE_STATS_REBUILD_CHANNEL) as Promise<ProfileStatsResult>,
     setTelemetry: (enabled: boolean): Promise<ProfileTelemetrySetResult> =>
       ipcRenderer.invoke(PROFILE_TELEMETRY_SET_CHANNEL, { enabled } satisfies ProfileTelemetrySetRequest) as Promise<ProfileTelemetrySetResult>,
     revealDir: (): Promise<ProfileRevealDirResult> =>
