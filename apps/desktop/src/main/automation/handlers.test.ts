@@ -118,6 +118,8 @@ import {
   profileSelectPeriod,
   profileToggleModelsExpanded,
   profileRefresh,
+  profileRebuild,
+  settingsLayoutState,
   lspPanelState,
   lspPanelToggle,
   hooksPanelState,
@@ -660,6 +662,18 @@ describe("Profile pane thin facade commands forward method + args (design/slice-
     const deps = fakeDeps();
     await profileRefresh(deps);
     expect(deps.callFacade).toHaveBeenCalledWith("profileRefresh", []);
+  });
+
+  it("profileRebuild -> callFacade('profileRebuild', [])", async () => {
+    const deps = fakeDeps();
+    await profileRebuild(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("profileRebuild", []);
+  });
+
+  it("settingsLayoutState -> callFacade('settingsLayoutState', [])", async () => {
+    const deps = fakeDeps();
+    await settingsLayoutState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("settingsLayoutState", []);
   });
 });
 

@@ -1368,6 +1368,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
             aria-labelledby={`settings-tab-${activePane}`}
             tabIndex={0}
           >
+            <div className="settings-pane-content">
             {activePane === "profile" && <ProfilePane />}
 
             {activePane === "provider" && <ProviderSettings store={store} />}
@@ -1684,6 +1685,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
               </section>
             </>
           )}
+            </div>
           </div>
           )}
         </div>
