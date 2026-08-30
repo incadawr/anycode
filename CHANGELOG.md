@@ -5,6 +5,38 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.22] — 2026-08-30
+
+### Added
+
+- Screenshots and images can now be attached on GLM-5.3 Flash. The model
+  reads them; only the catalog said otherwise, and the composer believed the
+  catalog. The plain GLM-5.3 row is unchanged — it is a text model, and
+  guessing in that direction would repeat the same mistake backwards.
+
+### Changed
+
+- The Profile panel opens immediately instead of making you wait. It used to
+  sit on "Loading profile…" for around sixteen seconds on every open, because
+  it re-read the whole telemetry directory before drawing anything at all. It
+  now paints its layout at once and fills the numbers from a durable
+  aggregate, typically within a fifth of a second. The aggregate rebuilds in
+  small chunks in the background, so a cold start no longer freezes the
+  window.
+
+- Every settings panel now scrolls at the edge of the window. The scrollbar
+  used to be drawn against the right edge of the text column, leaving a wide
+  dead strip beside it that swallowed the scroll gesture.
+
+### Fixed
+
+- The Profile panel could report an empty history as if it were a successful
+  reading. A telemetry file being written while the panel scanned looked like
+  a gap in the record, and because that file is always the newest one,
+  everything older than it was dropped from the total. The numbers stay honest
+  now, and a genuinely unreadable file says so instead of quietly lowering the
+  count.
+
 ## [0.0.21] — 2026-08-29
 
 ### Changed
