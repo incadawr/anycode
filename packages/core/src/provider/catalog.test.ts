@@ -144,11 +144,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
   // TASK.163 (2026-08-28): docs.z.ai/guides/vlm/glm-5.3-flash states "Text
   // parameters are consistent with GLM-5.3" (1M-token context window) and
   // "`thinking.type` only supports `enabled`; thinking cannot be disabled" —
-  // same low/high/max family as glm-5.3, no `off`. Multimodality is documented
-  // only via the native API's Chat Completions image_url examples, never
-  // verified through the Anthropic-messages endpoint this catalog entry
-  // speaks, so `imageInput` stays OMITTED (fail-closed; ANYCODE_IMAGE_INPUT=on
-  // remains the escape hatch).
+  // same low/high/max family as glm-5.3, no `off`.
   //
   // TASK.170 (2026-08-29): the page's spec card now states "Maximum Output
   // Tokens: 128K" (re-verified via raw-HTML fetch, not just the summarized
@@ -157,16 +153,33 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
   // was filled in after that pass. Leaving `maxOutputTokens` empty meant a
   // subagent spawned on this model fell to DEFAULT_MAX_OUTPUT_TOKENS (32_768)
   // instead of the real 131_072 the parent glm-5.3 already declared.
-  it("declares the glm-5.3-flash row with its documented 128K output ceiling and no unverified image-input claim (docs.z.ai/guides/vlm/glm-5.3-flash, accessed 2026-08-29)", () => {
+  //
+  // TASK.197 (2026-08-30): `imageInput: true`. The row is the catalog's VLM
+  // entry (docs.z.ai/guides/vlm/, spec card "Input Modality: Video / Image /
+  // Text / File") and the owner runs it daily with images. Two earlier passes
+  // withheld the flag pending an Anthropic-messages-endpoint proof that was
+  // never demanded of the kimi.com or moonshot rows on the SAME transport;
+  // this test no longer pins that asymmetry.
+  it("declares the glm-5.3-flash row with its documented 128K output ceiling and its image-input capability (docs.z.ai/guides/vlm/glm-5.3-flash, accessed 2026-08-29; owner ruling 2026-08-30)", () => {
     const flash = findCatalogEntry("z-ai")?.models.find((model) => model.id === "glm-5.3-flash");
     expect(flash).toEqual({
       id: "glm-5.3-flash",
       name: "GLM-5.3 Flash",
       contextWindow: 1_000_000,
       maxOutputTokens: 131_072,
+      imageInput: true,
       reasoning: true,
       effortLevels: ["low", "high", "max"],
     });
+  });
+
+  // The sibling LLM row stays text-only on purpose: glm-5.3 is documented
+  // under guides/llm/, its own spec card claims no image modality, and nobody
+  // has reported images working on it. A guess here would repeat exactly the
+  // mistake TASK.197 corrected, in the other direction.
+  it("leaves the non-flash glm-5.3 row without an image-input claim", () => {
+    const glm53 = findCatalogEntry("z-ai")?.models.find((model) => model.id === "glm-5.3");
+    expect(glm53?.imageInput).toBeUndefined();
   });
 
   it("findCatalogEntry returns undefined for an unknown id", () => {
