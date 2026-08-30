@@ -43,6 +43,7 @@ import {
   type ProfilePaneToolState,
   type ProfilePaneModelRow,
   type ProfilePaneRefreshResult,
+  type SettingsLayoutDom,
   type LspPanelDom,
   type HooksPanelDom,
   type CheckpointPanelDom,
@@ -4579,18 +4580,140 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
       clickModelsExpandCommits: boolean;
       coverageNoticeText: string | null;
       clickRefreshResult: boolean;
+      // ── TASK.187 S5 additions ──
+      /** Initial `data-profile-phase`; `null` models a build that stamps no such attribute at all. */
+      phase: string | null;
+      /** `false` models the button missing from the DOM entirely (`refreshButton()` reads `null`). */
+      refreshButtonPresent: boolean;
+      /** The pane starts with a pass already outstanding: the button is held and `data-profile-phase` reads `refreshing`. */
+      busy: boolean;
+      /** The pane starts inside an automatic catch-up pass: button held, `data-profile-catchup` set, phase deliberately still `ready`. */
+      catchingUp: boolean;
+      /** How many EXTRA automatic catch-up passes chain behind the pass a click starts (0 = the click's own pass is the last one). */
+      chainPasses: number;
+      /** The chain reads fully IDLE for a few milliseconds between passes instead of handing over inside one commit — what a lapse in React's batching of the settle+start pair would look like from the DOM, and the only thing that makes a busy-flag-only wait answer mid-chain. */
+      idleGapBetweenPasses: boolean;
+      /** The `[backlog, pendingExact]` pair the pane publishes after each settled pass; entry 0 is the reading before the first one, and the last entry stays published once the chain runs past the list. Overrides the static `backlogAttr`/`pendingExactAttr` defaults. */
+      counterPasses: [number, number][];
+      /** Whether each settled pass mutates the rendered numbers, so the signature diff moves (`changed:true`). */
+      mutateOnPass: boolean;
+      /** The pass never settles: the busy window opens on the click and stays open — the `did_not_settle` shape. */
+      neverSettles: boolean;
+      truncatedNoteText: string | null;
+      /** Raw `data-profile-backlog`. Defaults to `"0"` whenever the pane has a view on screen and to `null` otherwise — the real pane stamps both counters only alongside a view, i.e. never in the `skeleton` phase or the `io-error` branch. */
+      backlogAttr: string | null;
+      /** Raw `data-profile-pending-exact`, same defaulting rule as `backlogAttr`. */
+      pendingExactAttr: string | null;
+      refiningNoteVisible: boolean;
+      collapseNoteText: string | null;
+      updateErrorText: string | null;
+      /** `null` models the footer row missing entirely. */
+      rebuildRow: { armed: boolean; disabled: boolean } | null;
+      /** `false` simulates an arming click that is delivered but never commits — the `did_not_arm` scenario. */
+      clickRebuildArms: boolean;
+      /** `false` simulates a confirm click that is delivered but starts no pass (the loader's own in-flight guard refused it) — the `did_not_start` scenario. */
+      clickRebuildConfirmStarts: boolean;
     }> = {},
   ): ProfilePaneDom {
     let activePeriodIndex = overrides.activePeriodIndex ?? 3;
     const periodLabels = overrides.periodLabels ?? ALL_PERIOD_LABELS;
     let modelsExpanded = overrides.modelsExpanded ?? false;
     const modelsTotal = overrides.modelsTotal ?? null;
+    // TASK.187 S5: a REAL busy lifecycle, not a frozen reading. The pane the
+    // facade now drives holds its Refresh button for the length of every pass
+    // and keeps `data-profile-phase` at `ready` while an automatic catch-up
+    // pass runs, so a fake that reports a permanently idle pane could not
+    // exercise (or falsify) a single one of the route's new gates.
+    const tiles = [...(overrides.tiles ?? [])];
+    let phase = overrides.phase === undefined ? "ready" : overrides.phase;
+    let busy = overrides.busy ?? false;
+    let catchingUp = overrides.catchingUp ?? false;
+    let passSerial = 0;
+    if (busy) {
+      phase = "refreshing";
+    }
+    if (catchingUp) {
+      busy = true;
+      phase = "ready";
+    }
+    function mutate(): void {
+      if (overrides.mutateOnPass !== true) {
+        return;
+      }
+      passSerial += 1;
+      tiles[0] = { label: "Lifetime tokens", value: `1.${passSerial}bn` };
+    }
+    const counterPasses = overrides.counterPasses ?? null;
+    let settledPasses = 0;
+    /** The counter pair currently published; the last entry stands once the chain runs past the list. */
+    function counters(): [number, number] {
+      if (counterPasses === null || counterPasses.length === 0) {
+        return [0, 0];
+      }
+      return counterPasses[Math.min(settledPasses, counterPasses.length - 1)] as [number, number];
+    }
+    function counterAttr(slot: 0 | 1, override: string | null | undefined): string | null {
+      if (override !== undefined) {
+        return override;
+      }
+      if (counterPasses !== null) {
+        return String(counters()[slot]);
+      }
+      return paneHasView ? "0" : null;
+    }
+    /** Models one settled pass, then either chains an automatic catch-up pass (phase stays `ready`, the flag goes up) or goes idle. */
+    function scheduleSettle(remaining: number): void {
+      setTimeout(() => {
+        if (overrides.neverSettles === true) {
+          return;
+        }
+        mutate();
+        settledPasses += 1;
+        if (remaining > 0) {
+          if (overrides.idleGapBetweenPasses === true) {
+            busy = false;
+            catchingUp = false;
+            phase = "ready";
+            // Long enough that the poll loop is certain to see the gap, so
+            // the test measures the wait's stop condition rather than its
+            // sampling luck.
+            setTimeout(() => {
+              busy = true;
+              catchingUp = true;
+              phase = "ready";
+              scheduleSettle(remaining - 1);
+            }, 5);
+            return;
+          }
+          catchingUp = true;
+          phase = "ready";
+          scheduleSettle(remaining - 1);
+          return;
+        }
+        busy = false;
+        catchingUp = false;
+        phase = "ready";
+      }, 0);
+    }
+    function startPass(): void {
+      busy = true;
+      catchingUp = false;
+      phase = "refreshing";
+      scheduleSettle(overrides.chainPasses ?? 0);
+    }
+    // The real pane publishes the two work-left counters only when it has a
+    // view to publish them from, and `view === null` is exactly the pair
+    // "`skeleton` phase" / "`io-error` branch" (`computeProfilePhase` +
+    // `computeProfileBranch`). The fake reproduces that coupling instead of
+    // letting a test hand out a counter the real DOM could never carry.
+    const paneHasView = (overrides.phase === undefined ? "ready" : overrides.phase) !== "skeleton" && overrides.branch !== "io-error";
+    let rebuildRow = overrides.rebuildRow === undefined ? { armed: false, disabled: false } : overrides.rebuildRow;
     return {
       mounted: () => overrides.mounted ?? true,
       branch: () => overrides.branch ?? null,
       bannerVisible: () => overrides.bannerVisible ?? false,
       truncatedVisible: () => overrides.truncatedVisible ?? false,
-      tiles: () => overrides.tiles ?? [],
+      tiles: () => [...tiles],
       insightRows: () => overrides.insightRows ?? [],
       topToolNames: () => overrides.topToolNames ?? [],
       toolRows: () => overrides.toolRows ?? [],
@@ -4624,7 +4747,59 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
         }
         return true;
       }),
-      clickRefresh: vi.fn(() => overrides.clickRefreshResult ?? true),
+      clickRefresh: vi.fn(() => {
+        if (overrides.clickRefreshResult === false || overrides.refreshButtonPresent === false) {
+          return false;
+        }
+        // The point of the whole S5 rework: a held button ACCEPTS the click
+        // and does nothing with it. The fake reproduces that exactly, so a
+        // route that reported success off this `true` would be reporting a
+        // gesture that never happened.
+        if (!busy) {
+          startPass();
+        }
+        return true;
+      }),
+      phase: () => phase,
+      catchingUp: () => catchingUp,
+      refreshButton: () => (overrides.refreshButtonPresent === false ? null : { disabled: busy }),
+      truncatedNoteText: () => overrides.truncatedNoteText ?? null,
+      backlogAttr: () => counterAttr(0, overrides.backlogAttr),
+      pendingExactAttr: () => counterAttr(1, overrides.pendingExactAttr),
+      refiningNoteVisible: () => overrides.refiningNoteVisible ?? false,
+      collapseNoteText: () => overrides.collapseNoteText ?? null,
+      updateErrorText: () => overrides.updateErrorText ?? null,
+      rebuildRow: () => (rebuildRow === null ? null : { ...rebuildRow, disabled: rebuildRow.disabled || busy }),
+      clickRebuild: vi.fn(() => {
+        if (rebuildRow === null || rebuildRow.armed) {
+          return false;
+        }
+        if (overrides.clickRebuildArms !== false) {
+          rebuildRow = { ...rebuildRow, armed: true };
+        }
+        return true;
+      }),
+      clickRebuildConfirm: vi.fn(() => {
+        if (rebuildRow === null || !rebuildRow.armed) {
+          return false;
+        }
+        // Mirrors `ProfileRebuildRow`'s own handler: it disarms and calls
+        // `rebuild()` in the same commit, and `rebuild()` can still be
+        // refused by the loader's in-flight guard — so a disarmed row is
+        // never on its own proof that a pass began.
+        rebuildRow = { ...rebuildRow, armed: false };
+        if (overrides.clickRebuildConfirmStarts !== false && !busy) {
+          startPass();
+        }
+        return true;
+      }),
+      clickRebuildCancel: vi.fn(() => {
+        if (rebuildRow === null || !rebuildRow.armed) {
+          return false;
+        }
+        rebuildRow = { ...rebuildRow, armed: false };
+        return true;
+      }),
     };
   }
 
@@ -4650,6 +4825,16 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
         models: [],
         modelsTotalCount: 0,
         modelsExpanded: false,
+        phase: "unknown",
+        catchingUp: false,
+        backlogRemaining: null,
+        pendingExactSessions: null,
+        activityRefining: false,
+        coverageCollapseNote: null,
+        refreshEnabled: false,
+        rebuildAvailable: false,
+        rebuildArmed: false,
+        updateError: null,
       });
     });
 
@@ -4812,6 +4997,103 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
     });
   });
 
+  describe("profilePaneState — TASK.187 S5 observables", () => {
+    it("reads the four real phases straight off `data-profile-phase`", () => {
+      for (const phase of ["skeleton", "cached-updating", "refreshing", "ready"] as const) {
+        expect(buildFacade(fakeProfilePaneDom({ mounted: true, phase })).profilePaneState().phase).toBe(phase);
+      }
+    });
+
+    it("reads `unknown` — never a real phase — when the attribute is absent or carries a value outside the contract", () => {
+      expect(buildFacade(fakeProfilePaneDom({ mounted: true, phase: null })).profilePaneState().phase).toBe("unknown");
+      expect(buildFacade(fakeProfilePaneDom({ mounted: true, phase: "loading" })).profilePaneState().phase).toBe("unknown");
+    });
+
+    it("reports `catchingUp` with the phase still at `ready` — the two are separate facts, not one", () => {
+      const state = buildFacade(fakeProfilePaneDom({ mounted: true, catchingUp: true })).profilePaneState();
+      expect(state).toMatchObject({ phase: "ready", catchingUp: true, refreshEnabled: false });
+    });
+
+    it("reads BOTH work-left counters off the pane's `data-*` contract, not out of the rendered copy", () => {
+      const dom = fakeProfilePaneDom({
+        mounted: true,
+        backlogAttr: "1873",
+        pendingExactAttr: "4",
+        // Deliberately contradictory human copy: the counters must come from
+        // the attributes, so a reworded note (this one was rewritten three
+        // times inside TASK.187) cannot move the probe's reading.
+        truncatedNoteText: "Still aggregating — 7 files left, filling in automatically.",
+      });
+      expect(buildFacade(dom).profilePaneState()).toMatchObject({ backlogRemaining: 1873, pendingExactSessions: 4 });
+    });
+
+    it("reads 0 when the pane publishes a settled view, and `null` where it publishes no view at all", () => {
+      expect(buildFacade(fakeProfilePaneDom({ mounted: true })).profilePaneState()).toMatchObject({
+        backlogRemaining: 0,
+        pendingExactSessions: 0,
+      });
+      // `skeleton` has nothing on screen yet and the io-error branch failed
+      // with nothing to show — the pane stamps no counter in either, so this
+      // is "not observable", not "nothing left". Reporting 0 there would be
+      // an invented fact.
+      const skeleton = buildFacade(fakeProfilePaneDom({ mounted: true, phase: "skeleton" })).profilePaneState();
+      expect(skeleton).toMatchObject({ backlogRemaining: null, pendingExactSessions: null });
+      const ioError = buildFacade(fakeProfilePaneDom({ mounted: true, branch: "io-error" })).profilePaneState();
+      expect(ioError).toMatchObject({ backlogRemaining: null, pendingExactSessions: null });
+    });
+
+    it("reads `null`, never 0, for an attribute that is present but not a number", () => {
+      const dom = fakeProfilePaneDom({ mounted: true, backlogAttr: "lots", pendingExactAttr: "" });
+      expect(buildFacade(dom).profilePaneState()).toMatchObject({ backlogRemaining: null, pendingExactSessions: null });
+    });
+
+    it("reports the imprecise-activity footnote and the rebuild row's own availability/armed state", () => {
+      const plain = buildFacade(fakeProfilePaneDom({ mounted: true })).profilePaneState();
+      expect(plain).toMatchObject({ activityRefining: false, rebuildAvailable: true, rebuildArmed: false, refreshEnabled: true });
+      const refining = buildFacade(
+        fakeProfilePaneDom({ mounted: true, refiningNoteVisible: true, rebuildRow: { armed: true, disabled: false } }),
+      ).profilePaneState();
+      expect(refining).toMatchObject({ activityRefining: true, rebuildAvailable: true, rebuildArmed: true });
+      const missing = buildFacade(fakeProfilePaneDom({ mounted: true, rebuildRow: null })).profilePaneState();
+      expect(missing).toMatchObject({ rebuildAvailable: false, rebuildArmed: false });
+    });
+
+    it("reports the coverage-collapse banner — the only outside view of a pass whose empty answer was REFUSED as a replacement", () => {
+      const plain = buildFacade(fakeProfilePaneDom({ mounted: true })).profilePaneState();
+      expect(plain.coverageCollapseNote).toBeNull();
+      // Identical tiles either way: the banner's text is the only thing that
+      // says the numbers on screen are older than the last pass.
+      const collapsed = buildFacade(
+        fakeProfilePaneDom({
+          mounted: true,
+          collapseNoteText:
+            "The last scan came back empty — the newest telemetry file could not be read, and repeated passes made no progress. The numbers below are from the last successful pass; Refresh to try again.",
+        }),
+      ).profilePaneState();
+      expect(collapsed.coverageCollapseNote).toContain("repeated passes made no progress");
+      expect(collapsed.coverageNotice).toBeNull();
+      expect(collapsed.updateError).toBeNull();
+    });
+
+    it("reports `updateError` beside the numbers a failed update did NOT wipe (plan D-4)", () => {
+      const dom = fakeProfilePaneDom({
+        mounted: true,
+        tiles: [{ label: "Lifetime tokens", value: "1.0bn" }],
+        updateErrorText: "Couldn't refresh the stats — the telemetry folder could not be read. Showing the previously loaded numbers.",
+      });
+      const state = buildFacade(dom).profilePaneState();
+      expect(state.updateError).toContain("Showing the previously loaded numbers.");
+      // The point of the field: the tiles are still there, so `tiles` alone
+      // cannot tell this apart from a clean read.
+      expect(state.tiles).toEqual([{ label: "Lifetime tokens", value: "1.0bn" }]);
+    });
+
+    it("reports `refreshEnabled:false` while a pass holds the button — the reading that makes the `busy` refusal honest", () => {
+      expect(buildFacade(fakeProfilePaneDom({ mounted: true, busy: true })).profilePaneState().refreshEnabled).toBe(false);
+      expect(buildFacade(fakeProfilePaneDom({ mounted: true, refreshButtonPresent: false })).profilePaneState().refreshEnabled).toBe(false);
+    });
+  });
+
   describe("profileRefresh", () => {
     it("refuses when the pane isn't mounted", async () => {
       const dom = fakeProfilePaneDom({ mounted: false });
@@ -4827,15 +5109,11 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
     });
 
     it("changed:true when the click's real getStats() round trip lands new numbers before the deadline", async () => {
-      const tiles = [{ label: "Lifetime tokens", value: "1.0bn" }];
-      const dom: ProfilePaneDom = {
-        ...fakeProfilePaneDom({ mounted: true }),
-        tiles: () => tiles,
-        clickRefresh: vi.fn(() => {
-          tiles[0] = { label: "Lifetime tokens", value: "1.1bn" };
-          return true;
-        }),
-      };
+      const dom = fakeProfilePaneDom({
+        mounted: true,
+        tiles: [{ label: "Lifetime tokens", value: "1.0bn" }],
+        mutateOnPass: true,
+      });
       const facade = buildFacade(dom);
       const result: ProfilePaneRefreshResult = await facade.profileRefresh();
       expect(result).toEqual({ ok: true, changed: true });
@@ -4848,6 +5126,306 @@ describe("automation facade — Profile pane probe/driver (design/slice-P7.22-cu
       expect(result).toEqual({ ok: true, changed: false });
       expect(dom.clickRefresh).toHaveBeenCalled();
     });
+
+    // ── TASK.187 S5: the false-`ok` class the S4 rework opened ──
+
+    it("refuses `busy` WITHOUT clicking when the Refresh button is held — a disabled button swallows the click, so a delivered click is not evidence (TASK.187 S5 / TASK.145 false-ok class)", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, busy: true });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRefresh()).resolves.toEqual({ ok: false, reason: "busy" });
+      // The pre-S5 route clicked here and answered `ok:true`.
+      expect(dom.clickRefresh).not.toHaveBeenCalled();
+    });
+
+    it("refuses `busy` during an automatic catch-up pass even though `data-profile-phase` still reads `ready` — the phase alone would have said the pane was idle", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, catchingUp: true });
+      const facade = buildFacade(dom);
+      expect(dom.phase()).toBe("ready");
+      await expect(facade.profileRefresh()).resolves.toEqual({ ok: false, reason: "busy" });
+      expect(dom.clickRefresh).not.toHaveBeenCalled();
+    });
+
+    it("refuses `busy` while the cold skeleton is still painting (phase `skeleton`)", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, phase: "skeleton" });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRefresh()).resolves.toEqual({ ok: false, reason: "busy" });
+    });
+
+    it("reports refresh_not_present when the button element itself is absent, before any click is attempted", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, refreshButtonPresent: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRefresh()).resolves.toEqual({ ok: false, reason: "refresh_not_present" });
+      expect(dom.clickRefresh).not.toHaveBeenCalled();
+    });
+
+    it("reports did_not_start when the click is delivered but no busy window ever opens", async () => {
+      const dom: ProfilePaneDom = {
+        ...fakeProfilePaneDom({ mounted: true }),
+        clickRefresh: vi.fn(() => true),
+      };
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.profileRefresh())).resolves.toEqual({ ok: false, reason: "did_not_start" });
+    });
+
+    it("does not call a pass that finished between two polls `did_not_start` — a refusal that left its error banner behind DID run", async () => {
+      // Measured live (TASK.187 final pass): a rebuild whose cache-file
+      // delete fails with EACCES refuses inside main before any directory
+      // work, so the whole request opens and closes inside one commit and the
+      // busy window is never sampled. The pass still happened, and the pane
+      // says so.
+      let errorText: string | null = null;
+      const inner = fakeProfilePaneDom({ mounted: true });
+      const dom: ProfilePaneDom = {
+        ...inner,
+        updateErrorText: () => errorText,
+        clickRefresh: vi.fn(() => {
+          errorText = "Couldn't refresh the stats — the telemetry folder could not be read. Showing the previously loaded numbers.";
+          return true;
+        }),
+      };
+      const facade = buildFacade(dom);
+      await expect(facade.profileRefresh()).resolves.toMatchObject({ ok: true });
+    });
+
+    it("does NOT return at the first `ready`: it waits out the whole automatic catch-up chain, so `ok:true` means the backlog pass really finished", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, chainPasses: 2, mutateOnPass: true });
+      const facade = buildFacade(dom);
+      const result: ProfilePaneRefreshResult = await facade.profileRefresh();
+      expect(result).toEqual({ ok: true, changed: true });
+      // Both flags clear at the moment the route answers — the reading a
+      // `refreshing -> ready`-only wait would have made three passes early.
+      expect(dom.catchingUp()).toBe(false);
+      expect(dom.refreshButton()).toEqual({ disabled: false });
+    });
+
+    it("waits out a chain whose only remaining work is an unconverged exact session — a backlog-only stop condition calls it finished one pass early", async () => {
+      const dom = fakeProfilePaneDom({
+        mounted: true,
+        chainPasses: 1,
+        idleGapBetweenPasses: true,
+        // After the click's own pass the FILE backlog is already empty and
+        // only the exact-activity pass is outstanding. The catch-up chain
+        // keeps running on that alone (`shouldAutoContinue` -> both
+        // counters), so a wait that watched the backlog would answer here.
+        counterPasses: [
+          [3, 2],
+          [0, 1],
+          [0, 0],
+        ],
+      });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRefresh()).resolves.toMatchObject({ ok: true });
+      expect([dom.backlogAttr(), dom.pendingExactAttr()]).toEqual(["0", "0"]);
+    });
+
+    it("ends the wait on an idle pane that still publishes work — a chain the progress guard stopped is settled, not a timeout", async () => {
+      // Identical numbers pass after pass: the newest sink file is
+      // unreadable every time, so S4's progress guard gives up and nothing
+      // runs by itself any more. Waiting for the counters to reach zero
+      // would turn that into a 60-second `did_not_settle`.
+      const dom = fakeProfilePaneDom({ mounted: true, counterPasses: [[9, 0]] });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRefresh()).resolves.toMatchObject({ ok: true });
+      expect(dom.backlogAttr()).toBe("9");
+    });
+
+    it("reports did_not_settle when the pass never finishes, instead of certifying it", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, neverSettles: true });
+      const facade = buildFacade(dom);
+      const result = await withElapsedClock(() => facade.profileRefresh());
+      expect(result).toEqual({ ok: false, reason: "did_not_settle" });
+    });
+
+    it("reports pane_not_mounted when Settings is closed mid-pass rather than diffing a pane that is gone", async () => {
+      let mounted = true;
+      const inner = fakeProfilePaneDom({ mounted: true, neverSettles: true });
+      const dom: ProfilePaneDom = { ...inner, mounted: () => mounted };
+      const facade = buildFacade(dom);
+      const pending = facade.profileRefresh();
+      setTimeout(() => {
+        mounted = false;
+      }, 0);
+      await expect(pending).resolves.toEqual({ ok: false, reason: "pane_not_mounted" });
+    });
+  });
+
+  describe("profileRebuild (TASK.187 S5 — the footer's two-step cache-rebuild gesture)", () => {
+    it("refuses when the pane isn't mounted", async () => {
+      const dom = fakeProfilePaneDom({ mounted: false });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRebuild()).resolves.toEqual({ ok: false, reason: "pane_not_mounted" });
+    });
+
+    it("refuses rebuild_not_present when the footer row isn't rendered", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, rebuildRow: null });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRebuild()).resolves.toEqual({ ok: false, reason: "rebuild_not_present" });
+    });
+
+    it("refuses busy while a pass is outstanding, without arming anything", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, busy: true });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRebuild()).resolves.toEqual({ ok: false, reason: "busy" });
+      expect(dom.clickRebuild).not.toHaveBeenCalled();
+    });
+
+    it("drives BOTH steps (arm, then confirm) and waits for the rebuild pass to settle", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, chainPasses: 1 });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRebuild()).resolves.toEqual({ ok: true });
+      expect(dom.clickRebuild).toHaveBeenCalledTimes(1);
+      expect(dom.clickRebuildConfirm).toHaveBeenCalledTimes(1);
+      expect(dom.rebuildRow()).toEqual({ armed: false, disabled: false });
+    });
+
+    it("confirms directly when a previous gesture left the row already armed", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, rebuildRow: { armed: true, disabled: false } });
+      const facade = buildFacade(dom);
+      await expect(facade.profileRebuild()).resolves.toEqual({ ok: true });
+      expect(dom.clickRebuild).not.toHaveBeenCalled();
+      expect(dom.clickRebuildConfirm).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports did_not_arm when the arming click is delivered but the row never arms", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, clickRebuildArms: false });
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.profileRebuild())).resolves.toEqual({ ok: false, reason: "did_not_arm" });
+      expect(dom.clickRebuildConfirm).not.toHaveBeenCalled();
+    });
+
+    it("reports did_not_start when the confirm disarms the row but starts no pass — a disarmed row is not proof", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, clickRebuildConfirmStarts: false });
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.profileRebuild())).resolves.toEqual({ ok: false, reason: "did_not_start" });
+    });
+
+    it("leaves no armed residue behind a refused confirm", async () => {
+      const armed = fakeProfilePaneDom({ mounted: true, rebuildRow: { armed: true, disabled: false } });
+      const dom: ProfilePaneDom = { ...armed, clickRebuildConfirm: vi.fn(() => false) };
+      const facade = buildFacade(dom);
+      await expect(facade.profileRebuild()).resolves.toEqual({ ok: false, reason: "rebuild_not_present" });
+      expect(dom.clickRebuildCancel).toHaveBeenCalledTimes(1);
+      expect(dom.rebuildRow()).toEqual({ armed: false, disabled: false });
+    });
+
+    it("reports did_not_settle when the rebuild pass never finishes", async () => {
+      const dom = fakeProfilePaneDom({ mounted: true, neverSettles: true });
+      const facade = buildFacade(dom);
+      await expect(withElapsedClock(() => facade.profileRebuild())).resolves.toEqual({
+        ok: false,
+        reason: "did_not_settle",
+      });
+    });
+  });
+});
+
+/**
+ * Runs `fn` with `Date.now` jumped far past every `waitUntil` deadline after
+ * the first reading, so a timeout branch is exercised in milliseconds instead
+ * of waiting out the real 60 s ceiling. `waitUntil` (automation.ts) samples
+ * `Date.now()` once at entry and again per poll, and polls through
+ * `setTimeout` — real timers, so no fake-timer clock has to be pumped.
+ */
+async function withElapsedClock<T>(fn: () => Promise<T>): Promise<T> {
+  // Strictly increasing by more than any deadline in the file, so EVERY poll
+  // that finds its predicate false times out on its very first check. A
+  // constant "far future" would not do: `waitUntil` measures `now - start`
+  // with both readings taken from this same clock.
+  let t = 0;
+  const spy = vi.spyOn(Date, "now").mockImplementation(() => {
+    t += 10 * 60 * 1000;
+    return t;
+  });
+  try {
+    return await fn();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+describe("automation facade — settings geometry probe (TASK.187 S5, defect 1)", () => {
+  /** Wires ONLY the geometry slot; positions 4-30 keep their own lazy real defaults, same posture as the Profile block's `buildFacade`. */
+  function buildFacade(settingsLayoutDom: SettingsLayoutDom) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      // positions 4-30: transcript/todo/start/pill/settings-store/settings/
+      // ctx/agent-card/mcp/skills/subagents/profile/slash/shortcuts/lsp/hooks/
+      // checkpoint/block/try-again/provider/codex/chip/import/trust-dialog/
+      // trusted-binaries/child-layout/sidebar
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      settingsLayoutDom,
+    );
+  }
+
+  /** The post-fix layout: the scroll port spans the settings content column, and only its inner wrapper keeps the 46rem cap. */
+  function fixedLayoutDom(overrides: Partial<SettingsLayoutDom> = {}): SettingsLayoutDom {
+    return {
+      activePane: () => "profile",
+      windowInnerWidth: () => 1440,
+      windowInnerHeight: () => 900,
+      containerRect: () => ({ left: 220, right: 1432, width: 1212 }),
+      paneRect: () => ({ left: 220, right: 1432, width: 1212, scrollHeight: 2400, clientHeight: 820 }),
+      contentRect: () => ({ left: 220, right: 956, width: 736 }),
+      headerRect: () => ({ left: 220, right: 956, width: 736 }),
+      ...overrides,
+    };
+  }
+
+  it("reads the empty shape when Settings is closed — a valid reading, not an error", () => {
+    const facade = buildFacade(
+      fixedLayoutDom({
+        activePane: () => null,
+        containerRect: () => null,
+        paneRect: () => null,
+        contentRect: () => null,
+        headerRect: () => null,
+      }),
+    );
+    expect(facade.settingsLayoutState()).toEqual({
+      mounted: false,
+      activePane: null,
+      windowInnerWidth: 1440,
+      windowInnerHeight: 900,
+      container: null,
+      pane: null,
+      content: null,
+      header: null,
+      scrollbarGap: null,
+    });
+  });
+
+  it("reports scrollbarGap 0 on the fixed layout: the scroll port reaches the container edge while the content column stays capped at 46rem", () => {
+    const state = buildFacade(fixedLayoutDom()).settingsLayoutState();
+    expect(state.scrollbarGap).toBe(0);
+    expect(state.content?.width).toBe(736);
+    expect(state.pane).toEqual({ left: 220, right: 1432, width: 1212, scrollHeight: 2400, clientHeight: 820, scrollable: true });
+  });
+
+  it("reports the defect as a number: with `max-width` still on the scroll port, the gap is the dead space to its right", () => {
+    // The pre-fix shape — `.settings-pane` itself capped at 46rem, no inner
+    // wrapper at all — is exactly what TASK.187 defect 1 describes.
+    const state = buildFacade(
+      fixedLayoutDom({
+        paneRect: () => ({ left: 220, right: 956, width: 736, scrollHeight: 2400, clientHeight: 820 }),
+        contentRect: () => null,
+      }),
+    ).settingsLayoutState();
+    expect(state.scrollbarGap).toBe(476);
+    expect(state.content).toBeNull();
+  });
+
+  it("reports `scrollable:false` when the pane does not overflow — a gap reading means nothing without a bar to misplace", () => {
+    const state = buildFacade(
+      fixedLayoutDom({ paneRect: () => ({ left: 220, right: 1432, width: 1212, scrollHeight: 400, clientHeight: 820 }) }),
+    ).settingsLayoutState();
+    expect(state.pane?.scrollable).toBe(false);
   });
 });
 

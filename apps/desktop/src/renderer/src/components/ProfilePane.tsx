@@ -31,26 +31,54 @@
  * simply omitted in that branch — the pane-level Refresh button is the retry
  * affordance).
  *
+ * LOADING (TASK.187 S4, defect 2 — "show it immediately and let the parts
+ * arrive"): the pane no longer replaces itself with a "Loading profile…"
+ * line for the length of a full telemetry scan. On mount it fires the
+ * cache-only read and the fresh scan in PARALLEL, paints whichever answers
+ * first, and keeps the numbers on screen while the other one lands; a cold
+ * start paints `ProfileSkeleton` (tile strip, heatmap block, section
+ * headings — each with its own spinner) instead of a bare line. Refresh no
+ * longer looks inert either: the button holds, the toolbar says so, and the
+ * body dims via the `data-profile-phase` stamped on the pane root. All of
+ * that orchestration — five request kinds, generation ordering, the four
+ * phases — lives in `profile-loader.ts`, NOT in this file's effects.
+ *
  * TESTABILITY (mirrors SkillsPane.test.ts/SubagentsPane.test.ts exactly):
  * this package's vitest config runs `environment: "node"` with no jsdom/
  * @testing-library in the tree, so — same as every other Settings pane —
  * there is no mounted-DOM click-simulation test here. Every behavior the
  * gate asks for is instead pinned at the pure-function level: tile/duration/
- * token formatting, the branch matrix, heatmap cell/bucket math, and the
+ * token formatting, the branch matrix, heatmap cell/bucket math, the honesty
+ * notes (`coverageNotice`/`truncatedNoteText`/`isActivityRefining`), and the
  * toggle's flip/disabled logic (`nextTelemetryToggleValue`/
- * `isTelemetryToggleDisabled`) — the exact values the click handlers below
- * feed into `bridge.setTelemetry`. Wiring-level assurance (does a real click
- * actually call the bridge) is the W4 automation smoke's job, same division
- * of labor as every sibling pane in this directory.
+ * `isTelemetryToggleDisabled`/`isTelemetryToggleHeld`) — the exact values the
+ * click handlers below feed into `bridge.setTelemetry`. The load controller
+ * has its own file and its own test (`profile-loader.test.ts`) for the same
+ * reason. Wiring-level assurance (does a real click actually call the bridge)
+ * is the W4/TASK.187-S5 automation smoke's job, same division of labor as
+ * every sibling pane in this directory.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ProfileDayStatsView,
   ProfileRevealDirResult,
+  ProfileStatsCachedResult,
   ProfileStatsResult,
   ProfileStatsView,
   ProfileTelemetrySetResult,
 } from "../../../shared/profile-config.js";
+import {
+  computeCollapseProgress,
+  computeProfilePhase,
+  createProfileLoader,
+  initialProfileLoadState,
+  isProfileCatchingUp,
+  profileUpdateErrorText,
+  type ProfileCollapseProgress,
+  type ProfileLoaderBridge,
+  type ProfileLoadState,
+  type ProfilePhase,
+} from "./profile-loader.js";
 import "../profile-pane.css";
 
 // ── bridge (DI, same ethic as SkillsPane's SkillsBridge) ──
@@ -58,8 +86,29 @@ import "../profile-pane.css";
 /** Subset of `window.anycode.profile` this pane drives, injectable so tests never touch a real `window`. */
 export interface ProfileBridge {
   getStats(): Promise<ProfileStatsResult>;
+  /** TASK.187 S3: the cache-only read behind the instant first paint. */
+  getStatsCached(): Promise<ProfileStatsCachedResult>;
   setTelemetry(enabled: boolean): Promise<ProfileTelemetrySetResult>;
   revealDir(): Promise<ProfileRevealDirResult>;
+  /** TASK.187 S3: drop the aggregation cache and re-aggregate from empty (the footer's recovery action). */
+  rebuildStats(): Promise<ProfileStatsResult>;
+}
+
+/**
+ * The ONE place this pane touches the preload bridge (TASK.187 S4). The
+ * controller is deliberately given its own narrow interface instead of
+ * `ProfileBridge` itself, so that reconciling the renderer with whatever the
+ * real preload ends up exposing is an edit to this function and nothing else.
+ * `revealDir` is not part of it — it drives no load state at all and is
+ * called straight from the click handler.
+ */
+export function toProfileLoaderBridge(bridge: ProfileBridge): ProfileLoaderBridge {
+  return {
+    getStats: () => bridge.getStats(),
+    getStatsCached: () => bridge.getStatsCached(),
+    setTelemetry: (enabled: boolean) => bridge.setTelemetry(enabled),
+    rebuildStats: () => bridge.rebuildStats(),
+  };
 }
 
 // ── pure formatters (unit-tested directly — see ProfilePane.test.ts) ──
@@ -412,6 +461,20 @@ export function tokensByDay(days: Record<string, ProfileDayStatsView>): Record<s
   return result;
 }
 
+/** "1 file" / "N files" — the backlog counter both honesty notes below quote. */
+function pluralFiles(n: number): string {
+  return `${n} file${n === 1 ? "" : "s"}`;
+}
+
+/**
+ * Whether the remaining backlog is still being eaten automatically
+ * (TASK.187 S4 catch-up), or the loader's progress guard has stopped the
+ * self-advancing loop. Both honesty notes below branch on it: a note may
+ * only say "it continues by itself" while that is actually true, and must
+ * say what the user has to do once it stops.
+ */
+export type ProfileBacklogProgress = "advancing" | "stalled";
+
 /**
  * Honesty plashka for a period whose lower bound reaches past what the scan
  * actually covered (TASK.158 slice 0's `coverageStartTs`): `null` when the
@@ -421,8 +484,22 @@ export function tokensByDay(days: Record<string, ProfileDayStatsView>): Record<s
  * time-dependent helper in this file takes a live clock reference) — the
  * coverage date itself is already fully disambiguated (YYYY-MM-DD includes
  * the year), so nothing here currently branches on it.
+ *
+ * TASK.187 S4 (plan D-2): the copy now depends on `backlogRemaining`, because
+ * with the incremental cache the two ways history can be missing stopped
+ * being the same thing. A non-zero backlog is TEMPORARY — the next pass eats
+ * into it, so the note may promise that Refresh continues. A zero backlog
+ * with a truncated view is PERMANENT — the missing history sits behind a file
+ * over the per-file size ceiling, which is never read, and promising Refresh
+ * there would be a standing lie.
  */
-export function coverageNotice(coverageStartTs: number | null, startKey: string | null, now: Date): string | null {
+export function coverageNotice(
+  coverageStartTs: number | null,
+  startKey: string | null,
+  now: Date,
+  backlogRemaining: number,
+  progress: ProfileBacklogProgress,
+): string | null {
   if (coverageStartTs === null) {
     return null;
   }
@@ -430,8 +507,129 @@ export function coverageNotice(coverageStartTs: number | null, startKey: string 
   if (startKey !== null && startKey >= coverageDayKey) {
     return null;
   }
-  return `History before ${coverageDayKey} not included — telemetry folder exceeds the scan budget.`;
+  if (backlogRemaining === 0) {
+    return `History before ${coverageDayKey} not included — a telemetry file exceeds the per-file limit.`;
+  }
+  return progress === "advancing"
+    ? `History before ${coverageDayKey} not aggregated yet — still collecting (${pluralFiles(backlogRemaining)} left).`
+    : `History before ${coverageDayKey} not aggregated yet — collection stopped with ${pluralFiles(backlogRemaining)} left; Refresh to retry.`;
 }
+
+/**
+ * The global `.profile-truncated-note` copy (TASK.187 S4). Pre-187 this was a
+ * bare JSX string with no test of its own — "Stats truncated (very large
+ * telemetry dir)." — which was also the wrong diagnosis once the scan became
+ * incremental: the usual reason for a truncated view is now simply that the
+ * first pass has not finished eating the directory yet.
+ */
+export function truncatedNoteText(backlogRemaining: number, progress: ProfileBacklogProgress): string {
+  if (backlogRemaining === 0) {
+    return "Stats truncated — a telemetry file is over the per-file scan limit and is never read.";
+  }
+  return progress === "advancing"
+    ? `Still aggregating — ${pluralFiles(backlogRemaining)} left, filling in automatically.`
+    : `Aggregation stopped with ${pluralFiles(backlogRemaining)} left — Refresh to retry.`;
+}
+
+/**
+ * The banner shown when a scan came back empty over real numbers and the
+ * loader refused to let it wipe them (see the coverage-collapse guard in
+ * profile-loader.ts). Every reading says BOTH things: that the figures on
+ * screen are older than the last pass, and why the pass brought nothing
+ * back.
+ *
+ * The three readings differ in what, if anything, will fix it — and none of
+ * them may promise work that is not going to happen. `permanent` names the
+ * only thing that helps, because no pass ever gets behind an oversized
+ * newest file. `retrying` is the one reading allowed to promise a pass,
+ * and only while the chain is actually armed. `stopped` is what a
+ * permanently unreadable newest file becomes once the progress guard has
+ * seen two passes return the same numbers: still transient in principle,
+ * but nothing is running any more, so the text asks.
+ */
+export function coverageCollapseNoteText(progress: ProfileCollapseProgress): string {
+  const head = "The last scan came back empty — ";
+  const tail = "The numbers below are from the last successful pass";
+  switch (progress) {
+    case "permanent":
+      return `${head}the newest telemetry file is over the per-file scan limit and hides every older file behind it. ${tail} and will not change until that file is removed or truncated.`;
+    case "stopped":
+      return `${head}the newest telemetry file could not be read, and repeated passes made no progress. ${tail}; Refresh to try again.`;
+    case "retrying":
+      return `${head}the newest telemetry file could not be read this pass. ${tail}; the next pass retries by itself.`;
+  }
+}
+
+/**
+ * The `data-*` attributes the pane root carries for the automation probe
+ * (TASK.187 S4 + review round). Kept as one pure function rather than four
+ * inline expressions on the JSX, so the published contract is pinned by a
+ * unit test instead of by a DOM read nothing in this package can run.
+ *
+ * `data-profile-backlog` / `data-profile-pending-exact` exist because the
+ * probe used to parse those numbers out of the human copy of the honesty
+ * notes ("N files left"), which is copy this task rewrote twice — the next
+ * rewording would have silently turned the probe's reading into zero. Both
+ * are read off the DISPLAYED view, so the attribute can never disagree with
+ * the number on screen: under the coverage-collapse guard the displayed view
+ * and the last answer carry different backlogs, and the notes quote the
+ * displayed one. The catch-up flag is absent rather than `"false"` so the
+ * probe's own truthiness test stays simple.
+ */
+export function profilePaneDataAttributes(state: ProfileLoadState): {
+  "data-profile-phase": ProfilePhase;
+  "data-profile-catchup"?: "true";
+  "data-profile-backlog"?: string;
+  "data-profile-pending-exact"?: string;
+} {
+  return {
+    "data-profile-phase": computeProfilePhase(state),
+    ...(isProfileCatchingUp(state) ? { "data-profile-catchup": "true" as const } : {}),
+    ...(state.view === null
+      ? {}
+      : {
+          "data-profile-backlog": String(state.view.backlogRemaining),
+          "data-profile-pending-exact": String(state.view.pendingExactSessions),
+        }),
+  };
+}
+
+/**
+ * The toolbar's in-flight line, or `null` when nothing is outstanding. Three
+ * distinct readings, because they mean three different things to the person
+ * looking at the pane: a cold first collection (nothing on screen yet), a
+ * catch-up pass the pane started by itself (real numbers on screen, more
+ * history still arriving), and a replacement the user asked for.
+ */
+export function profileBusyNoteText(state: ProfileLoadState): string | null {
+  if (state.inFlight === null) {
+    return null;
+  }
+  if (state.autoPass) {
+    const left = state.view?.backlogRemaining ?? 0;
+    return `Catching up — ${pluralFiles(left)} left…`;
+  }
+  return state.view === null ? "Collecting telemetry…" : "Updating…";
+}
+
+/**
+ * Whether the pane must flag `longestSessionMs` as provisional (TASK.187 S4,
+ * plan §2 "Блокер 1"): main has not finished its exact second pass over the
+ * sessions whose activity spans several files. A named predicate rather than
+ * an inline comparison, so the renderer reads this wire field in exactly one
+ * place.
+ */
+export function isActivityRefining(view: ProfileStatsView): boolean {
+  return view.pendingExactSessions > 0;
+}
+
+/**
+ * The `.profile-refining-note` copy. The transitional figure is an ESTIMATE
+ * WITH NO GUARANTEED SIGN — the bridge formula can land either side of the
+ * truth (measured: 20 against 15 on one shape, 500 000 against 700 000 on
+ * another), so the wording must not claim it is an upper bound.
+ */
+export const PROFILE_REFINING_NOTE = "Longest task is still being refined — the figure above is an estimate.";
 
 /** Collapsed row count for the full models list before a "Show all (N)" expander appears (design §S7 item 3). */
 export const PROFILE_MODELS_COLLAPSED_ROWS = 8;
@@ -455,6 +653,17 @@ export function isTelemetryToggleDisabled(view: ProfileStatsView | null): boolea
   return view === null || view.killSwitchActive;
 }
 
+/**
+ * What the rendered switch actually reads (TASK.187 S4): the pre-187
+ * conditions above, plus the window in which the user's own toggle write is
+ * still in flight. Only that write holds it — a background stats read must
+ * never make a settings switch unclickable, which is why the controller
+ * lets `set-telemetry` start on top of a live read (`isProfileRequestAllowed`).
+ */
+export function isTelemetryToggleHeld(view: ProfileStatsView | null, telemetryBusy: boolean): boolean {
+  return isTelemetryToggleDisabled(view) || telemetryBusy;
+}
+
 // ── component ──
 
 export interface ProfilePaneProps {
@@ -471,47 +680,190 @@ export interface ProfilePaneProps {
 }
 
 export function ProfilePane({ bridge = window.anycode.profile, now }: ProfilePaneProps) {
-  const [result, setResult] = useState<ProfileStatsResult | null>(null);
+  const [state, setState] = useState<ProfileLoadState>(initialProfileLoadState);
+  const loaderRef = useRef<ReturnType<typeof createProfileLoader> | null>(null);
 
+  // All load orchestration (five request kinds, generations, phases) lives in
+  // profile-loader.ts — see its module doc for why it is not in here. This
+  // effect is the whole React side of it: create, mount, dispose.
   useEffect(() => {
-    let cancelled = false;
-    void bridge.getStats().then((r) => {
-      if (!cancelled) {
-        setResult(r);
-      }
-    });
+    const loader = createProfileLoader(toProfileLoaderBridge(bridge), setState);
+    loaderRef.current = loader;
+    loader.mount();
     return () => {
-      cancelled = true;
+      loader.dispose();
+      loaderRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge]);
-
-  async function refresh(): Promise<void> {
-    setResult(await bridge.getStats());
-  }
-
-  async function toggleTelemetry(view: ProfileStatsView): Promise<void> {
-    setResult(await bridge.setTelemetry(nextTelemetryToggleValue(view)));
-  }
 
   async function reveal(): Promise<void> {
     await bridge.revealDir();
   }
 
+  const phase = computeProfilePhase(state);
+  const busy = state.inFlight !== null;
+  const busyNote = profileBusyNoteText(state);
+  const collapseProgress = computeCollapseProgress(state);
+  const collapseNote = collapseProgress === null ? null : coverageCollapseNoteText(collapseProgress);
+  const errorText = state.error === null ? null : profileUpdateErrorText(state.error, state.view !== null);
+  // The branch matrix below (hero / banner / normal / io-error) still reads a
+  // `ProfileStatsResult`, so the split state is folded back into one: a live
+  // view always wins, and only a refusal with nothing to show at all falls
+  // through to the io-error branch. A refusal ON TOP of a view is NOT that
+  // branch — it renders as the banner above the numbers it failed to replace
+  // (plan D-4: an error never wipes the view).
+  const result: ProfileStatsResult =
+    state.view !== null
+      ? { ok: true, view: state.view }
+      : { ok: false, reason: state.error?.reason ?? "io_error" };
+
   return (
-    <section className="settings-section profile-pane">
+    <section
+      className="settings-section profile-pane"
+      {...profilePaneDataAttributes(state)}
+      aria-busy={busy || undefined}
+    >
       <div className="profile-pane-toolbar">
-        <button type="button" className="settings-button profile-refresh-button" onClick={() => void refresh()}>
+        <button
+          type="button"
+          className="settings-button profile-refresh-button"
+          disabled={busy}
+          onClick={() => loaderRef.current?.refresh()}
+        >
           Refresh
         </button>
+        {busyNote !== null && (
+          <span className="profile-updating-note" role="status">
+            <span className="profile-section-spinner" aria-hidden="true" />
+            {busyNote}
+          </span>
+        )}
       </div>
 
-      {!result ? (
-        <div className="settings-mcp-empty">Loading profile…</div>
-      ) : (
-        <ProfileBody result={result} now={now} onToggle={toggleTelemetry} onReveal={reveal} />
+      {errorText !== null && (
+        <p className="profile-update-error" role="alert">
+          {errorText}
+        </p>
       )}
+
+      {collapseNote !== null && (
+        <p className="profile-stale-note" role="status">
+          {collapseNote}
+        </p>
+      )}
+
+      {phase === "skeleton" ? (
+        <ProfileSkeleton />
+      ) : (
+        <ProfileBody
+          result={result}
+          now={now}
+          onToggle={(view) => loaderRef.current?.setTelemetry(nextTelemetryToggleValue(view))}
+          onReveal={reveal}
+          telemetryBusy={state.inFlight === "set-telemetry"}
+          backlogProgress={state.autoStalled ? "stalled" : "advancing"}
+        />
+      )}
+
+      <ProfileRebuildRow busy={busy} onRebuild={() => loaderRef.current?.rebuild()} />
     </section>
+  );
+}
+
+/**
+ * The cold-start frame (TASK.187 defect 2 / plan D-4): the pane's real
+ * skeleton — a five-tile strip, a heatmap block and the two section
+ * headings, each with its own spinner — instead of the single "Loading
+ * profile…" line that used to replace the entire pane for the length of a
+ * full directory scan.
+ *
+ * EVERY class here is new. The automation probe addresses live content by
+ * `.profile-tile` / `.profile-heatmap-cell` / `.profile-insight-row` /
+ * `.settings-section-title`, and a skeleton that reused any of them would
+ * report itself to S5 as rendered data (plan §2 wire contract).
+ */
+function ProfileSkeleton() {
+  return (
+    <div className="profile-skeleton" role="status" aria-label="Collecting telemetry">
+      <div className="profile-skeleton-tiles">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div className="profile-tile-skeleton" key={i}>
+            <span className="profile-section-spinner" aria-hidden="true" />
+          </div>
+        ))}
+      </div>
+      <div className="profile-skeleton-block">
+        <span className="profile-skeleton-title">Token activity</span>
+        <div className="profile-heatmap-skeleton">
+          <span className="profile-section-spinner" aria-hidden="true" />
+        </div>
+      </div>
+      <div className="profile-skeleton-columns">
+        {["Activity insights", "Tools"].map((title) => (
+          <div className="profile-skeleton-block" key={title}>
+            <span className="profile-skeleton-title">{title}</span>
+            <div className="profile-skeleton-lines">
+              <span className="profile-section-spinner" aria-hidden="true" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The cache-rebuild action (TASK.187 S4, plan D-5 / review-v3 finding 4).
+ * Deliberately a footer text row rather than a button in the pane chrome:
+ * Refresh is the everyday affordance and stays incremental, while this is the
+ * recovery path for the one cache-corruption class the fingerprint cannot
+ * detect (plan risk 9) and should not compete for the eye.
+ *
+ * The confirmation is a two-step gesture inside the pane, NOT a dialog:
+ * `window.prompt` THROWS under this Electron configuration (measured on
+ * Electron 43), so a prompt-guarded action would be silently dead in
+ * production while every unit test stayed green. `confirm` and `alert` do
+ * run, but a modal blocks the automation facade for the whole session, so
+ * neither is used here either.
+ */
+function ProfileRebuildRow({ busy, onRebuild }: { busy: boolean; onRebuild: () => void }) {
+  const [armed, setArmed] = useState(false);
+  return (
+    <div className="profile-rebuild-row" data-profile-rebuild-armed={armed || undefined}>
+      {armed ? (
+        <>
+          <span className="profile-rebuild-hint">
+            Rebuild re-reads every telemetry file from scratch — on a large folder this takes a while.
+          </span>
+          <button
+            type="button"
+            className="profile-rebuild-action profile-rebuild-confirm"
+            disabled={busy}
+            onClick={() => {
+              setArmed(false);
+              onRebuild();
+            }}
+          >
+            Rebuild now
+          </button>
+          <button type="button" className="profile-rebuild-action" onClick={() => setArmed(false)}>
+            Cancel
+          </button>
+        </>
+      ) : (
+        <>
+          <span className="profile-rebuild-hint">Numbers look wrong?</span>
+          <button
+            type="button"
+            className="profile-rebuild-action"
+            disabled={busy}
+            onClick={() => setArmed(true)}
+          >
+            Rebuild the stats cache
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -521,9 +873,13 @@ interface ProfileBodyProps {
   now?: Date;
   onToggle: (view: ProfileStatsView) => void;
   onReveal: () => void;
+  /** A telemetry WRITE is in flight: the switch is held until it answers. Reads never hold it — see `isProfileRequestAllowed`. */
+  telemetryBusy: boolean;
+  /** Whether the remaining backlog is still being eaten automatically — decides what the two honesty notes are allowed to promise. */
+  backlogProgress: ProfileBacklogProgress;
 }
 
-function ProfileBody({ result, now, onToggle, onReveal }: ProfileBodyProps) {
+function ProfileBody({ result, now, onToggle, onReveal, telemetryBusy, backlogProgress }: ProfileBodyProps) {
   // Hooks must run unconditionally on every render (Rules of Hooks) — the
   // hero/io-error early return below never reads either, but both still have
   // to be called ahead of it.
@@ -557,7 +913,14 @@ function ProfileBody({ result, now, onToggle, onReveal }: ProfileBodyProps) {
         {branch === "io-error" && (
           <p className="profile-io-note">Couldn't read the telemetry folder — showing an empty view.</p>
         )}
-        {view && <TelemetryToggleBlock view={view} onToggle={() => onToggle(view)} onReveal={onReveal} />}
+        {view && (
+          <TelemetryToggleBlock
+            view={view}
+            onToggle={() => onToggle(view)}
+            onReveal={onReveal}
+            telemetryBusy={telemetryBusy}
+          />
+        )}
       </div>
     );
   }
@@ -572,7 +935,7 @@ function ProfileBody({ result, now, onToggle, onReveal }: ProfileBodyProps) {
   const windowSummary = sumWindow(v.days, startKey);
   // `coverageStartTs` is a required `number | null` on the wire type (S10) —
   // no absent case left to normalize here.
-  const notice = coverageNotice(v.coverageStartTs, startKey, effectiveNow);
+  const notice = coverageNotice(v.coverageStartTs, startKey, effectiveNow, v.backlogRemaining, backlogProgress);
 
   return (
     <>
@@ -581,8 +944,14 @@ function ProfileBody({ result, now, onToggle, onReveal }: ProfileBodyProps) {
           Telemetry is off — stats are frozen
         </div>
       )}
-      {v.truncated && <p className="profile-truncated-note">Stats truncated (very large telemetry dir).</p>}
+      {/* A backlog always means a cut view, but the two are separate wire
+          fields — render the note for either, so a producer that reports one
+          without the other still tells the truth on screen. */}
+      {(v.truncated || v.backlogRemaining > 0) && (
+        <p className="profile-truncated-note">{truncatedNoteText(v.backlogRemaining, backlogProgress)}</p>
+      )}
       <TilesRow view={v} />
+      {isActivityRefining(v) && <p className="profile-refining-note">{PROFILE_REFINING_NOTE}</p>}
       <TokenActivitySection view={v} today={effectiveNow} />
       <PeriodControl period={period} onChange={setPeriod} />
       {notice && <p className="profile-coverage-notice">{notice}</p>}
@@ -594,7 +963,7 @@ function ProfileBody({ result, now, onToggle, onReveal }: ProfileBodyProps) {
           onToggleModelsExpanded={() => setModelsExpanded((e) => !e)}
         />
       </div>
-      <TelemetryToggleBlock view={v} onToggle={() => onToggle(v)} onReveal={onReveal} />
+      <TelemetryToggleBlock view={v} onToggle={() => onToggle(v)} onReveal={onReveal} telemetryBusy={telemetryBusy} />
     </>
   );
 }
@@ -775,12 +1144,14 @@ function TelemetryToggleBlock({
   view,
   onToggle,
   onReveal,
+  telemetryBusy,
 }: {
   view: ProfileStatsView;
   onToggle: () => void;
   onReveal: () => void;
+  telemetryBusy: boolean;
 }) {
-  const disabled = isTelemetryToggleDisabled(view);
+  const disabled = isTelemetryToggleHeld(view, telemetryBusy);
   return (
     <div className="profile-telemetry-block settings-field-row">
       <button

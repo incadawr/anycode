@@ -11,24 +11,32 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ProfileDayStatsView, ProfileStatsResult, ProfileStatsView } from "../../../shared/profile-config.js";
+import { initialProfileLoadState } from "./profile-loader.js";
 import {
   buildHeatmapCells,
   buildProfileTiles,
   computeIntensityBuckets,
   computeProfileBranch,
+  coverageCollapseNoteText,
   coverageNotice,
   formatCompactTokens,
   formatDuration,
   HEATMAP_WEEKS,
   hasProfileData,
   heatmapMonthLabels,
+  isActivityRefining,
   isTelemetryToggleDisabled,
+  isTelemetryToggleHeld,
   nextTelemetryToggleValue,
+  PROFILE_REFINING_NOTE,
   periodStartKey,
+  profileBusyNoteText,
+  profilePaneDataAttributes,
   PROFILE_MODELS_COLLAPSED_ROWS,
   PROFILE_PERIODS,
   sumWindow,
   tokensByDay,
+  truncatedNoteText,
   visibleModelRows,
 } from "./ProfilePane.js";
 
@@ -49,6 +57,8 @@ function view(overrides: Partial<ProfileStatsView> = {}): ProfileStatsView {
     subagentRuns: 0,
     truncated: false,
     coverageStartTs: null,
+    backlogRemaining: 0,
+    pendingExactSessions: 0,
     days: {},
     models: [],
     engineTokens: {},
@@ -391,32 +401,244 @@ describe("coverageNotice", () => {
   const now = new Date(2026, 7, 27, 12, 0);
 
   it("null coverage (never truncated) -> no notice, for any period", () => {
-    expect(coverageNotice(null, "2026-08-01", now)).toBeNull();
-    expect(coverageNotice(null, null, now)).toBeNull();
+    expect(coverageNotice(null, "2026-08-01", now, 0, "advancing")).toBeNull();
+    expect(coverageNotice(null, null, now, 12, "advancing")).toBeNull();
   });
 
   it("a window starting exactly AT the coverage boundary day -> no notice (fully covered)", () => {
     const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime(); // covers from 2026-08-20
-    expect(coverageNotice(coverageStartTs, "2026-08-20", now)).toBeNull();
+    expect(coverageNotice(coverageStartTs, "2026-08-20", now, 0, "advancing")).toBeNull();
   });
 
   it("a window starting AFTER the coverage boundary -> no notice", () => {
     const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime();
-    expect(coverageNotice(coverageStartTs, "2026-08-25", now)).toBeNull();
+    expect(coverageNotice(coverageStartTs, "2026-08-25", now, 0, "advancing")).toBeNull();
   });
 
   it("a window reaching BEFORE the coverage boundary -> names the boundary date", () => {
     const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime();
-    expect(coverageNotice(coverageStartTs, "2026-08-01", now)).toBe(
-      "History before 2026-08-20 not included — telemetry folder exceeds the scan budget.",
+    expect(coverageNotice(coverageStartTs, "2026-08-01", now, 0, "advancing")).toBe(
+      "History before 2026-08-20 not included — a telemetry file exceeds the per-file limit.",
     );
   });
 
   it("'all' (startKey null) while truncated -> always notices, regardless of coverage recency", () => {
     const coverageStartTs = new Date(2026, 7, 26, 9, 0).getTime(); // covers from yesterday
-    expect(coverageNotice(coverageStartTs, null, now)).toBe(
-      "History before 2026-08-26 not included — telemetry folder exceeds the scan budget.",
+    expect(coverageNotice(coverageStartTs, null, now, 0, "advancing")).toBe(
+      "History before 2026-08-26 not included — a telemetry file exceeds the per-file limit.",
     );
+  });
+
+  // TASK.187 S4 (plan D-2 + catch-up): a backlog is a TEMPORARY cut the pane
+  // eats into by itself, a zero backlog with a truncated view is a PERMANENT
+  // one behind an oversized file. The copy must never ask for a gesture that
+  // is already happening automatically, nor promise self-advance once the
+  // progress guard has stopped it.
+  it("a backlog that is still being eaten says so itself, and counts the files", () => {
+    const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime();
+    expect(coverageNotice(coverageStartTs, "2026-08-01", now, 3, "advancing")).toBe(
+      "History before 2026-08-20 not aggregated yet — still collecting (3 files left).",
+    );
+    expect(coverageNotice(coverageStartTs, "2026-08-01", now, 1, "advancing")).toBe(
+      "History before 2026-08-20 not aggregated yet — still collecting (1 file left).",
+    );
+  });
+
+  it("an advancing backlog never asks the user to press anything", () => {
+    const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime();
+    expect(coverageNotice(coverageStartTs, "2026-08-01", now, 3, "advancing")).not.toContain("Refresh");
+  });
+
+  it("a STOPPED backlog stops promising self-advance and names the gesture instead", () => {
+    const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime();
+    expect(coverageNotice(coverageStartTs, "2026-08-01", now, 3, "stalled")).toBe(
+      "History before 2026-08-20 not aggregated yet — collection stopped with 3 files left; Refresh to retry.",
+    );
+  });
+
+  it("the permanent per-file cut reads the same either way — nothing is pending there", () => {
+    const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime();
+    const permanent = "History before 2026-08-20 not included — a telemetry file exceeds the per-file limit.";
+    expect(coverageNotice(coverageStartTs, "2026-08-01", now, 0, "advancing")).toBe(permanent);
+    expect(coverageNotice(coverageStartTs, "2026-08-01", now, 0, "stalled")).toBe(permanent);
+  });
+
+  it("the backlog never resurrects a notice for a window that is already fully covered", () => {
+    const coverageStartTs = new Date(2026, 7, 20, 9, 0).getTime();
+    expect(coverageNotice(coverageStartTs, "2026-08-25", now, 9, "advancing")).toBeNull();
+  });
+});
+
+// ── truncated note (TASK.187 S4 — first pin in this string's life: pre-187
+//    it was a bare JSX literal, `ProfilePane.tsx:584`) ──
+
+describe("truncatedNoteText", () => {
+  it("a backlog being eaten automatically reads as work in progress, with no gesture asked for", () => {
+    expect(truncatedNoteText(24_000, "advancing")).toBe(
+      "Still aggregating — 24000 files left, filling in automatically.",
+    );
+    expect(truncatedNoteText(1, "advancing")).toBe("Still aggregating — 1 file left, filling in automatically.");
+    expect(truncatedNoteText(24_000, "advancing")).not.toContain("Refresh");
+  });
+
+  it("a stopped backlog admits it stopped and names the gesture", () => {
+    expect(truncatedNoteText(3, "stalled")).toBe("Aggregation stopped with 3 files left — Refresh to retry.");
+    expect(truncatedNoteText(1, "stalled")).toBe("Aggregation stopped with 1 file left — Refresh to retry.");
+  });
+
+  it("no backlog left means the missing history is NOT coming — no Refresh promise, either way", () => {
+    const permanent = "Stats truncated — a telemetry file is over the per-file scan limit and is never read.";
+    expect(truncatedNoteText(0, "advancing")).toBe(permanent);
+    expect(truncatedNoteText(0, "stalled")).toBe(permanent);
+    expect(permanent).not.toContain("Refresh");
+  });
+});
+
+// ── collapsed-coverage banner (TASK.187 S4, live-smoke blank) ──
+
+describe("coverageCollapseNoteText", () => {
+  it("every reading says the numbers are stale AND why the scan brought nothing", () => {
+    for (const progress of ["permanent", "stopped", "retrying"] as const) {
+      const text = coverageCollapseNoteText(progress);
+      expect(text).toContain("came back empty");
+      expect(text).toContain("last successful pass");
+    }
+  });
+
+  it("the permanent cause names the only thing that fixes it and promises no retry", () => {
+    const text = coverageCollapseNoteText("permanent");
+    expect(text).toBe(
+      "The last scan came back empty — the newest telemetry file is over the per-file scan limit and hides every older file behind it. The numbers below are from the last successful pass and will not change until that file is removed or truncated.",
+    );
+    expect(text).not.toContain("retries");
+    expect(text).not.toContain("Refresh");
+  });
+
+  it("only the armed reading promises a pass, and it asks for nothing", () => {
+    const text = coverageCollapseNoteText("retrying");
+    expect(text).toBe(
+      "The last scan came back empty — the newest telemetry file could not be read this pass. The numbers below are from the last successful pass; the next pass retries by itself.",
+    );
+    expect(text).not.toContain("Refresh");
+  });
+
+  it("once the guard has stopped the chain the text stops promising and asks instead", () => {
+    const text = coverageCollapseNoteText("stopped");
+    expect(text).toBe(
+      "The last scan came back empty — the newest telemetry file could not be read, and repeated passes made no progress. The numbers below are from the last successful pass; Refresh to try again.",
+    );
+    expect(text).not.toContain("retries by itself");
+    expect(text).toContain("Refresh");
+  });
+});
+
+// ── the pane root's data attributes (TASK.187 S4 review round) ──
+//
+// Phase and catch-up already travel as attributes; the backlog counter did
+// not, so the automation probe had to parse "N files left" out of HUMAN
+// copy that changed twice in one session. An attribute cannot drift with a
+// rewording.
+
+describe("profilePaneDataAttributes", () => {
+  const idle = initialProfileLoadState();
+
+  it("carries the phase, and nothing numeric before any view exists", () => {
+    expect(profilePaneDataAttributes(idle)).toEqual({ "data-profile-phase": "skeleton" });
+  });
+
+  it("publishes the counters the notes quote, as strings, including the zeroes", () => {
+    const state = {
+      ...idle,
+      view: view({ backlogRemaining: 24_000, pendingExactSessions: 2 }),
+      source: "fresh" as const,
+    };
+    expect(profilePaneDataAttributes(state)).toEqual({
+      "data-profile-phase": "ready",
+      "data-profile-backlog": "24000",
+      "data-profile-pending-exact": "2",
+    });
+    expect(
+      profilePaneDataAttributes({ ...state, view: view({ backlogRemaining: 0, pendingExactSessions: 0 }) }),
+    ).toMatchObject({ "data-profile-backlog": "0", "data-profile-pending-exact": "0" });
+  });
+
+  it("the backlog attribute equals what the rendered notes quote, collapse included", () => {
+    // Under the coverage-collapse guard the DISPLAYED view and the last
+    // answer disagree; the attribute follows the view, so the probe and the
+    // screen can never report different numbers.
+    const state = {
+      ...idle,
+      view: view({ backlogRemaining: 3, pendingExactSessions: 0 }),
+      source: "fresh" as const,
+      coverageCollapse: { backlogRemaining: 9 },
+      lastFreshBacklog: 9,
+    };
+    expect(profilePaneDataAttributes(state)["data-profile-backlog"]).toBe("3");
+    expect(truncatedNoteText(3, "advancing")).toContain("3 files left");
+  });
+
+  it("marks a catch-up pass, and only a catch-up pass", () => {
+    const catching = {
+      ...idle,
+      view: view({ backlogRemaining: 5 }),
+      source: "fresh" as const,
+      inFlight: "refresh" as const,
+      autoPass: true,
+    };
+    expect(profilePaneDataAttributes(catching)["data-profile-catchup"]).toBe("true");
+    expect(profilePaneDataAttributes({ ...catching, autoPass: false })["data-profile-catchup"]).toBeUndefined();
+    expect(profilePaneDataAttributes({ ...catching, autoPass: false })["data-profile-phase"]).toBe("refreshing");
+  });
+});
+
+// ── toolbar in-flight line (TASK.187 S4 catch-up) ──
+
+describe("profileBusyNoteText", () => {
+  const idle = initialProfileLoadState();
+
+  it("nothing outstanding -> no line at all", () => {
+    expect(profileBusyNoteText(idle)).toBeNull();
+  });
+
+  it("a cold first collection names itself", () => {
+    expect(profileBusyNoteText({ ...idle, inFlight: "mount-fresh" })).toBe("Collecting telemetry…");
+  });
+
+  it("a user-driven replacement of existing numbers reads as an update", () => {
+    expect(profileBusyNoteText({ ...idle, inFlight: "refresh", view: view(), source: "fresh" })).toBe("Updating…");
+  });
+
+  it("an automatic catch-up pass says what is left, so the spinner is not mute", () => {
+    expect(
+      profileBusyNoteText({
+        ...idle,
+        inFlight: "refresh",
+        autoPass: true,
+        source: "fresh",
+        view: view({ backlogRemaining: 12_000 }),
+      }),
+    ).toBe("Catching up — 12000 files left…");
+  });
+});
+
+// ── provisional activity signal (TASK.187 S4, plan blocker 2в v3) ──
+
+describe("isActivityRefining / PROFILE_REFINING_NOTE", () => {
+  it("flags exactly the views whose exact activity pass has not converged", () => {
+    expect(isActivityRefining(view({ pendingExactSessions: 0 }))).toBe(false);
+    expect(isActivityRefining(view({ pendingExactSessions: 1 }))).toBe(true);
+  });
+
+  it("is independent of the file backlog — they are different kinds of incompleteness", () => {
+    expect(isActivityRefining(view({ backlogRemaining: 99, pendingExactSessions: 0 }))).toBe(false);
+    expect(isActivityRefining(view({ backlogRemaining: 0, pendingExactSessions: 2 }))).toBe(true);
+  });
+
+  it("the note calls the figure an estimate and never claims a direction of error", () => {
+    expect(PROFILE_REFINING_NOTE).toContain("estimate");
+    for (const forbidden of ["overest", "too high", "upper bound", "at most"]) {
+      expect(PROFILE_REFINING_NOTE.toLowerCase()).not.toContain(forbidden);
+    }
   });
 });
 
@@ -462,5 +684,17 @@ describe("isTelemetryToggleDisabled", () => {
 
   it("enabled otherwise", () => {
     expect(isTelemetryToggleDisabled(view({ killSwitchActive: false }))).toBe(false);
+  });
+});
+
+describe("isTelemetryToggleHeld", () => {
+  it("holds the switch while the user's own write is in flight", () => {
+    expect(isTelemetryToggleHeld(view({ killSwitchActive: false }), true)).toBe(true);
+    expect(isTelemetryToggleHeld(view({ killSwitchActive: false }), false)).toBe(false);
+  });
+
+  it("keeps every pre-existing disabled condition", () => {
+    expect(isTelemetryToggleHeld(null, false)).toBe(true);
+    expect(isTelemetryToggleHeld(view({ killSwitchActive: true }), false)).toBe(true);
   });
 });

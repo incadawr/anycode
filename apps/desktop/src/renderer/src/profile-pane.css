@@ -97,3 +97,240 @@
   font-size: var(--fs-2xs);
   color: var(--text-dim);
 }
+
+/* ── TASK.187 S4: load phases ──────────────────────────────────────────────
+   Everything below is NEW markup only. The pre-187 pane replaced its whole
+   body with a "Loading profile…" line for the length of a full telemetry
+   scan (16 s on the owner's directory); it now paints a skeleton immediately,
+   then cache numbers, then scanned numbers, and says out loud which of those
+   it is showing. The classes here are deliberately disjoint from the ones the
+   automation probe addresses (`.profile-tile`, `.profile-heatmap-cell`,
+   `.profile-insight-row`, …) so a skeleton can never be mistaken for data. */
+
+.profile-skeleton {
+  display: flex;
+  flex-direction: column;
+  /* Same rhythm as `.profile-pane`'s own gap, so the frame does not jump when
+     real content replaces the skeleton. */
+  gap: 1.25rem;
+}
+
+.profile-skeleton-tiles {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.profile-tile-skeleton {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Matches the rendered tile's own box (padding + value + caption line) so
+     the strip keeps its height across the swap. */
+  min-height: 4.75rem;
+  border-right: 1px solid var(--border);
+}
+
+.profile-tile-skeleton:last-child {
+  border-right: none;
+}
+
+.profile-skeleton-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.profile-skeleton-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-6);
+}
+
+@media (max-width: 640px) {
+  .profile-skeleton-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Not `.settings-section-title`: the automation probe reads that class as
+   rendered section content. */
+.profile-skeleton-title {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+  color: var(--text-3);
+}
+
+.profile-heatmap-skeleton,
+.profile-skeleton-lines {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+
+.profile-heatmap-skeleton {
+  /* 7 rows of 10px cells + 3px gaps, as `.profile-heatmap-grid` renders. */
+  min-height: 5.5rem;
+}
+
+.profile-skeleton-lines {
+  min-height: 7rem;
+}
+
+/* The "circles" of the owner's own wording: one spinner per section that has
+   nothing to show yet, in place, instead of one line replacing the pane. */
+.profile-section-spinner {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  flex-shrink: 0;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: profile-spin 0.8s linear infinite;
+}
+
+@keyframes profile-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-section-spinner {
+    animation-duration: 3s;
+  }
+}
+
+/* Refresh honesty (defect 2): the toolbar states the flight next to the held
+   button, so a click is never indistinguishable from nothing happening. */
+.profile-updating-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+/* The numbers stay on screen while they are being replaced, but must not
+   read as current — dimming is the only signal that survives a user who
+   never looks at the toolbar. */
+.profile-pane[data-profile-phase="cached-updating"] .profile-tiles-row,
+.profile-pane[data-profile-phase="cached-updating"] .profile-heatmap-section,
+.profile-pane[data-profile-phase="cached-updating"] .profile-columns,
+.profile-pane[data-profile-phase="refreshing"] .profile-tiles-row,
+.profile-pane[data-profile-phase="refreshing"] .profile-heatmap-section,
+.profile-pane[data-profile-phase="refreshing"] .profile-columns {
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+
+/* A failed update is a strip OVER the view it failed to replace, never a
+   replacement for it (plan D-4). */
+.profile-update-error {
+  margin: 0;
+  padding: 0.4rem var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+
+/* "Longest task" is provisional while main is still doing its exact pass. */
+.profile-refining-note {
+  margin: 0;
+  font-size: var(--fs-2xs);
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+/* ── cache rebuild (plan D-5, risk 9) ──
+   A footer text row, not a button in the chrome: Refresh is the everyday
+   action, this is the rare recovery one. The confirm step is inline because
+   `window.confirm`/`prompt` throw in this Electron configuration. */
+
+.profile-rebuild-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-2xs);
+}
+
+.profile-rebuild-hint {
+  color: var(--text-dim);
+}
+
+.profile-rebuild-action {
+  padding: 0;
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.profile-rebuild-action:hover:not(:disabled) {
+  color: var(--text-1);
+}
+
+.profile-rebuild-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.profile-rebuild-confirm {
+  color: var(--danger);
+  font-weight: var(--w-semibold);
+  text-decoration: none;
+}
+
+/* ── automatic backlog catch-up (TASK.187 S4) ──
+   The pane finishes the aggregation by itself, one pass per applied answer,
+   so the phase stays `ready`: the numbers on screen are real as of the last
+   pass and must not dim. The work is reported instead — the toolbar note
+   above, and this in-place circle beside the line that names what is still
+   missing. */
+
+.profile-pane[data-profile-catchup="true"] .profile-truncated-note::after {
+  content: "";
+  display: inline-block;
+  vertical-align: -0.1em;
+  margin-left: var(--sp-2);
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: profile-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-pane[data-profile-catchup="true"] .profile-truncated-note::after {
+    animation-duration: 3s;
+  }
+}
+
+/* A scan that came back empty over real numbers (coverage-collapse guard):
+   the view is kept, and this strip says so. Warning-toned rather than
+   danger-toned — nothing failed, the coverage did collapse. */
+.profile-stale-note {
+  margin: 0;
+  padding: 0.4rem var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--fs-xs);
+}

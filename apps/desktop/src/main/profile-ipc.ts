@@ -1,8 +1,9 @@
 /**
  * Profile stats control-plane IPC (design slice-P7.22-cut.md §2-D5/D6/D2 W2).
- * Registers `ipcMain.handle` for the three channels in shared/profile-config.ts:
- * a read-only aggregated usage-stats view, a user-scope `telemetry.enabled`
- * toggle, and a reveal of the resolved sink directory. Mirrors main/skills-
+ * Registers `ipcMain.handle` for the five channels in shared/profile-config.ts:
+ * a read-only aggregated usage-stats view, the instant cache-only view and the
+ * cache rebuild (both TASK.187 S3), a user-scope `telemetry.enabled` toggle,
+ * and a reveal of the resolved sink directory. Mirrors main/skills-
  * ipc.ts exactly: the handler logic is exported pure functions over a deps
  * bag (unit-testable without ipcMain), zod validates the one payload-carrying
 
@@ -18,6 +19,14 @@
  * scan/reveal directory itself from `deps.home()` + a config read; there is no
  * caller-supplied path to defend against here (unlike skills/subagents, which
  * accept a `name`/`ids` identity to re-resolve).
+ *
+ * INCREMENTAL SCAN (TASK.187 S3): the directory walk that used to live here —
+ * readdir, lstat everything, sort newest-first, read every file under a byte
+ * budget — moved to main/profile-stats-cache.ts and became incremental. A file
+ * whose (size, mtime, inode, ctime) fingerprint has not moved is replayed from
+ * a cached per-file partial and never opened; only the newest CONTIGUOUS
+ * prefix of files that actually have a partial is shown, so a hole in the
+ * scan can never be papered over with stale numbers.
  *
  * DIR RESOLUTION (design §2-D2): user-scope telemetry config only —
  * `loadTelemetryConfig(fs, home, home, env)` collapses `workspace===home` so a
@@ -41,25 +50,29 @@ import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
-import {
-  aggregateProfileStats,
-  loadTelemetryConfig,
-  setUserTelemetryEnabled,
-  PROFILE_STATS_MAX_SCAN_BYTES,
-  type ProfileStats,
-  type ProfileStatsFile,
-} from "@anycode/core/telemetry-admin";
+import { loadTelemetryConfig, setUserTelemetryEnabled, type ProfileStats } from "@anycode/core/telemetry-admin";
 import {
   PROFILE_REVEAL_DIR_CHANNEL,
+  PROFILE_STATS_CACHED_CHANNEL,
   PROFILE_STATS_GET_CHANNEL,
+  PROFILE_STATS_REBUILD_CHANNEL,
   PROFILE_TELEMETRY_SET_CHANNEL,
 } from "../shared/profile-config.js";
 import type {
   ProfileRevealDirResult,
+  ProfileStatsCachedResult,
   ProfileStatsResult,
   ProfileStatsView,
   ProfileTelemetrySetResult,
 } from "../shared/profile-config.js";
+import {
+  profileStatsCachePath,
+  resolveScanBudgets,
+  sharedProfileStatsCacheStore,
+  type ProfileFileSnapshot,
+  type ProfileScanBudgets,
+  type ProfileStatsCacheStore,
+} from "./profile-stats-cache.js";
 
 // ── fs port (structural — matches core's FileSystemPort by shape, no core-barrel import) ──
 
@@ -79,6 +92,15 @@ export interface ProfileFileStat {
   isDirectory: boolean;
   mode?: number;
   isSymbolicLink?: boolean;
+  /** TASK.187 S3 (D-6): inode + ctime complete the cache fingerprint. Without
+   *  the inode a rotation that reuses a name is invisible; without ctime a
+   *  same-size rewrite with a restored mtime is. REQUIRED, not optional: the
+   *  cache compares an `lstat` fingerprint against one taken from an open
+   *  handle, where both fields always exist, so a port that omitted them here
+   *  would mismatch on every single file forever — the cache would never warm
+   *  up and the whole feature would be dead while every test stayed green. */
+  ino: number;
+  ctimeMs: number;
 }
 
 export interface ProfileFs {
@@ -88,13 +110,28 @@ export interface ProfileFs {
   stat(path: string): Promise<ProfileFileStat>;
   mkdir(path: string): Promise<void>;
   readdir(path: string): Promise<string[]>;
-  rename?(from: string, to: string): Promise<void>;
+  /** REQUIRED since TASK.187 S3 (D-6): the stats cache publishes itself by
+   *  tmp+rename only — there is no direct-write fallback, so a port without
+   *  rename could never persist a cache atomically. */
+  rename(from: string, to: string): Promise<void>;
+  /** REQUIRED since TASK.187 S3: sweeping tmp files orphaned by a crash
+   *  between the write and the rename. */
+  rm(path: string): Promise<void>;
   chmod?(path: string, mode: number): Promise<void>;
   lstat(path: string): Promise<ProfileFileStat>;
   /** O_NOFOLLOW read — reading a scanned telemetry file must never follow a
    *  symlink swapped in after the lstat pre-check (closes the lstat->read
    *  TOCTOU on the read path, mirror of subagents-ipc.ts's SubagentsFs). */
   readFileNoFollow(path: string): Promise<string>;
+  /**
+   * TASK.187 S3 (D-6) coherent snapshot read: open O_NOFOLLOW, `fstat` the
+   * HANDLE, read exactly that many bytes, `fstat` the same handle again. The
+   * caller compares the two stats to tell a legitimate append (grew) from a
+   * rewrite that may have straddled the read (shrank, or same size with a
+   * moved ctime, or a new inode). Statting the path instead of the handle
+   * would leave the lstat->read TOCTOU wide open.
+   */
+  readFileSnapshot(path: string): Promise<ProfileFileSnapshot>;
 }
 
 /** Thin node:fs/promises implementation of ProfileFs (main-process-local, no core import). */
@@ -110,6 +147,10 @@ export class NodeProfileFs implements ProfileFs {
     }
     await fsp.writeFile(path, content, "utf-8");
   }
+  /** NOTE: an `access` failure is indistinguishable from absence in a boolean.
+   *  Anything that must tell "not there" from "there but unreadable" (the
+   *  telemetry scan does) has to call the real operation and read its error
+   *  code instead of probing with this. */
   async exists(path: string): Promise<boolean> {
     try {
       await fsp.access(path);
@@ -120,7 +161,15 @@ export class NodeProfileFs implements ProfileFs {
   }
   async stat(path: string): Promise<ProfileFileStat> {
     const s = await fsp.stat(path);
-    return { size: s.size, mtimeMs: s.mtimeMs, isFile: s.isFile(), isDirectory: s.isDirectory(), mode: s.mode };
+    return {
+      size: s.size,
+      mtimeMs: s.mtimeMs,
+      isFile: s.isFile(),
+      isDirectory: s.isDirectory(),
+      mode: s.mode,
+      ino: s.ino,
+      ctimeMs: s.ctimeMs,
+    };
   }
   async mkdir(path: string): Promise<void> {
     await fsp.mkdir(path, { recursive: true });
@@ -131,6 +180,9 @@ export class NodeProfileFs implements ProfileFs {
   async rename(from: string, to: string): Promise<void> {
     await fsp.mkdir(dirname(to), { recursive: true });
     await fsp.rename(from, to);
+  }
+  async rm(path: string): Promise<void> {
+    await fsp.rm(path, { force: true });
   }
   async chmod(path: string, mode: number): Promise<void> {
     await fsp.chmod(path, mode);
@@ -144,6 +196,8 @@ export class NodeProfileFs implements ProfileFs {
       isDirectory: s.isDirectory(),
       mode: s.mode,
       isSymbolicLink: s.isSymbolicLink(),
+      ino: s.ino,
+      ctimeMs: s.ctimeMs,
     };
   }
   async readFileNoFollow(path: string): Promise<string> {
@@ -151,6 +205,31 @@ export class NodeProfileFs implements ProfileFs {
     const handle = await fsp.open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     try {
       return await handle.readFile("utf-8");
+    } finally {
+      await handle.close();
+    }
+  }
+  async readFileSnapshot(path: string): Promise<ProfileFileSnapshot> {
+    const handle = await fsp.open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      const before = await handle.stat();
+      const size = before.size;
+      const buffer = Buffer.allocUnsafe(size);
+      let bytesRead = 0;
+      while (bytesRead < size) {
+        const chunk = await handle.read(buffer, bytesRead, size - bytesRead, bytesRead);
+        // A zero-length read before `size` bytes means the file shrank under
+        // us; reporting the short count lets the caller treat it as such.
+        if (chunk.bytesRead === 0) break;
+        bytesRead += chunk.bytesRead;
+      }
+      const after = await handle.stat();
+      return {
+        content: buffer.subarray(0, bytesRead).toString("utf-8"),
+        bytesRead,
+        before: { size: before.size, mtimeMs: before.mtimeMs, ctimeMs: before.ctimeMs, ino: before.ino },
+        after: { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, ino: after.ino },
+      };
     } finally {
       await handle.close();
     }
@@ -165,6 +244,13 @@ export interface ProfileIpcDeps {
   reveal(path: string): void | Promise<void>;
   /** Boot env — carries the `ANYCODE_TELEMETRY` kill-switch (also read internally by `loadTelemetryConfig`). */
   env: NodeJS.ProcessEnv;
+  /** TASK.187 S3: per-pass scan budgets (D-2). Omitted fields fall back to the
+   *  production constants; tests inject tiny ones to exercise the backlog. */
+  budgets?: Partial<ProfileScanBudgets>;
+  /** TASK.187 S3: the cache store. Omitted, the process-wide store for this
+   *  home's cache path is used — two IPC calls MUST share one store or nothing
+   *  is cached between them. */
+  cache?: ProfileStatsCacheStore;
 }
 
 // ── dir / config resolution helpers (§2-D2) ──
@@ -246,185 +332,47 @@ async function resolveProfileDir(deps: ProfileIpcDeps): Promise<ResolvedProfileD
   return { dir: override ?? defaultTelemetryDir(home), telemetryEnabled: false, killSwitchActive };
 }
 
-// ── directory scan (§2-D1: flat *.jsonl regular files only, lstat-skip symlinks, no recursion) ──
+// ── cache-backed scan (TASK.187 S3; the old read-everything-every-time scan
+//     lived here and is now main/profile-stats-cache.ts) ──
 
-interface ScanResult {
-  ok: true;
-  files: ProfileStatsFile[];
-  /** True when the byte-accurate budget (real `lstat` sizes, PROFILE_STATS_MAX_SCAN_BYTES)
-   *  stopped the scan before every *.jsonl entry was read (W5-FIX finding 1). */
-  truncated: boolean;
-  /**
-   * Lower bound of the data actually covered by `files`, when the scan was
-   * truncated (TASK.158 slice 0). Sourced from the EARLIEST EVENT in the
-   * OLDEST included file — that file's own first parseable JSONL record's
-   * `ts` (ms epoch) — NOT the file's `mtimeMs` (TASK.169). `mtime` is when a
-   * session's LAST record was written, i.e. when it ENDED; a file starting
-   * well before its own mtime was previously reported as covering only from
-   * that end-of-session instant, understating coverage by the whole length
-   * of the oldest included session. Falls back to that file's `mtimeMs`
-   * (the old behaviour) when its first line is unparseable or carries no
-   * usable `ts` — fail-soft, same ethic as the rest of this scan, never
-   * throws and never reports `null` on its own account.
-   * `null` when the scan was NOT truncated (full coverage — no honest lower
-   * bound to report) or when truncation hit before a single file could be
-   * included (the newest entry alone already exceeded the budget — no
-   * "oldest included file" exists).
-   */
-  coverageStartTs: number | null;
+/** The store this deps bag scans with: injected, else the process-wide one
+ *  for `<home>/.anycode/profile-stats-cache.json`. */
+function storeFor(deps: ProfileIpcDeps): ProfileStatsCacheStore {
+  return deps.cache ?? sharedProfileStatsCacheStore(deps.fs, profileStatsCachePath(deps.home()));
 }
-
-interface StatedJsonlFile {
-  name: string;
-  fullPath: string;
-  size: number;
-  mtimeMs: number;
-}
-
-/**
- * The `ts` (ms epoch) of a sink file's EARLIEST event, read off its first
- * JSONL line only (TASK.169). Telemetry JSONL is append-ordered (records.ts's
- * tap always appends), so the first line is always the earliest record in
- * the file — no need to scan further. Fail-soft: `null` on anything that
- * isn't a JSON object with a finite numeric `ts` (empty file, torn write,
- * garbage first line, or a record missing `ts` entirely) — the caller falls
- * back to the file's `mtimeMs` in that case.
- */
-function earliestEventTs(firstLine: string | undefined): number | null {
-  if (firstLine === undefined || firstLine.length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(firstLine);
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const ts = (parsed as Record<string, unknown>).ts;
-  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
-}
-
-/**
- * Lists `dir`'s `*.jsonl` entries, lstat-skipping symlinks and anything not a
- * regular file (no recursion — design §2-D1). A MISSING dir is treated as
- * empty (`{ok:true, files:[]}`, not a failure — §2-D2 empty-state matrix); a
- * genuine `readdir` failure on an existing-but-unreadable dir is `{ok:false}`.
- * A single entry's `lstat`/`readFile` failure (vanished mid-scan, permission
- * on one file) is skipped rather than failing the whole scan.
- *
- * BYTE-ACCURATE CAP (W5-FIX finding 1): each REAL file size (`lstat().size`,
- * bytes, not UTF-16 code units) is checked against the running budget BEFORE
- * that file is read — so a single oversized file is never loaded into memory
- * at all, unlike the aggregator's own post-read char-based cap (which stays
- * as a secondary in-memory guard, not the primary defense).
- *
- * TRUNCATION ORDER (TASK.158 slice 0): filenames are UUIDs, so the OLD
- * name-lexicographic scan order was random relative to time — a byte-budget
- * cut in that order silently dropped an arbitrary slice of history. That is
- * not merely a smaller total; for a period filter it is a LIE ("Today" could
- * show zero on a day the owner demonstrably worked, purely because today's
- * file happened to sort late alphabetically). Entries are lstat'd up front,
- * then sorted NEWEST-mtime-first, so the budget cut always removes the
- * OLDEST entries first and the surviving set is a single contiguous, recent
- * segment — never a random scatter.
- */
-async function listJsonlFiles(fs: ProfileFs, dir: string): Promise<ScanResult | { ok: false }> {
-  let names: string[];
-  try {
-    if (!(await fs.exists(dir))) {
-      return { ok: true, files: [], truncated: false, coverageStartTs: null };
-    }
-    names = await fs.readdir(dir);
-  } catch (error) {
-    console.warn(`[profile-ipc] readdir failed for ${dir}`, error);
-    return { ok: false };
-  }
-
-  const jsonlNames = names.filter((name) => name.endsWith(".jsonl"));
-
-  // Phase 1: lstat every candidate up front (same symlink/non-file skip rules
-  // as before), collecting real size + mtime so phase 2 can order by TIME.
-  const stated: StatedJsonlFile[] = [];
-  for (const name of jsonlNames) {
-    const fullPath = `${stripTrailingSep(dir)}/${name}`;
-    let st: ProfileFileStat;
-    try {
-      st = await fs.lstat(fullPath);
-    } catch {
-      continue;
-    }
-    if (st.isSymbolicLink === true) continue;
-    if (!st.isFile) continue;
-    stated.push({ name, fullPath, size: st.size, mtimeMs: st.mtimeMs });
-  }
-
-  // Phase 2: NEWEST-mtime-first. Equal mtimes tie-break by name only for
-  // determinism (never expected as a real collision, but the result must not
-  // depend on readdir's unspecified order).
-  stated.sort((a, b) =>
-    b.mtimeMs !== a.mtimeMs ? b.mtimeMs - a.mtimeMs : a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-  );
-
-  // Phase 3: byte budget + read loop, walking the newest-first order from
-  // phase 2. BREAK (not continue) on the first file that doesn't fit: every
-  // remaining entry is OLDER than this one by construction, so stopping here
-  // is exactly what keeps the kept set a CONTIGUOUS newest segment with no
-  // temporal holes — `continue`-ing past an oversized file would let an
-  // even-older file sneak back in under budget and reintroduce the same
-  // randomness this fixes.
-  //
-  // NOTE: the aggregator (stats.ts ~:137) re-sorts `files` by NAME before
-  // walking their lines. That resort only decides PROCESSING order within
-  // the set already selected here — SELECTION (which files make the cut) is
-  // fully decided in this loop, so the resort cannot undo the newest-first
-  // guarantee. It also cannot re-trip the byte cap on this path: the
-  // aggregator's own cap is a UTF-16 character count, and UTF-16 length is
-  // always <= the UTF-8 byte size already checked below.
-  const files: ProfileStatsFile[] = [];
-  let accumulatedBytes = 0;
-  let truncated = false;
-  let coverageStartTs: number | null = null;
-  for (const entry of stated) {
-    if (accumulatedBytes + entry.size > PROFILE_STATS_MAX_SCAN_BYTES) {
-      truncated = true;
-      break;
-    }
-
-    let raw: string;
-    try {
-      raw = await fs.readFileNoFollow(entry.fullPath);
-    } catch {
-      // A symlink swapped in after the lstat pre-check (TOCTOU) fails ELOOP
-      // here and is skipped, same fail-soft ethic as any other read error.
-      continue;
-    }
-    accumulatedBytes += entry.size;
-    const lines = raw.split("\n");
-    files.push({ name: entry.name, lines });
-    coverageStartTs = earliestEventTs(lines[0]) ?? entry.mtimeMs;
-  }
-  return { ok: true, files, truncated, coverageStartTs: truncated ? coverageStartTs : null };
-}
-
-
 
 const telemetrySetSchema = z.object({ enabled: z.boolean() });
 
 // ── handlers (exported for unit tests) ──
 
-function toView(stats: ProfileStats, status: ResolvedProfileDir, coverageStartTs: number | null): ProfileStatsView {
+interface ProfileCoverage {
+  truncated: boolean;
+  coverageStartTs: number | null;
+  backlogRemaining: number;
+  pendingExactSessions: number;
+}
+
+function toView(stats: ProfileStats, status: ResolvedProfileDir, coverage: ProfileCoverage): ProfileStatsView {
   return {
     ...stats,
+    // Truncation is a property of the SCAN, never of the merged partials
+    // (which carry no byte cap at all) — the scanning layer is the only
+    // honest source for it.
+    truncated: coverage.truncated,
     telemetryEnabled: status.telemetryEnabled,
     killSwitchActive: status.killSwitchActive,
     dir: status.dir,
-    coverageStartTs,
+    coverageStartTs: coverage.coverageStartTs,
+    backlogRemaining: coverage.backlogRemaining,
+    pendingExactSessions: coverage.pendingExactSessions,
   };
 }
 
 /**
- * profile-stats-get: resolves the user-scope dir (§2-D2), scans it (§2-D1),
- * and aggregates. A missing dir yields a zeroed stats view (ok:true) — only a
- * genuine readdir/aggregation failure is `io_error`.
+ * profile-stats-get: resolves the user-scope dir (§2-D2) and runs ONE
+ * incremental pass over it (TASK.187 S3) — unchanged files are replayed from
+ * the cache and never opened. A missing dir yields a zeroed stats view
+ * (ok:true); only a genuine readdir/aggregation failure is `io_error`.
  */
 export async function handleProfileStatsGet(deps: ProfileIpcDeps): Promise<ProfileStatsResult> {
   let status: ResolvedProfileDir;
@@ -435,24 +383,65 @@ export async function handleProfileStatsGet(deps: ProfileIpcDeps): Promise<Profi
     return { ok: false, reason: "io_error" };
   }
 
-  const scanned = await listJsonlFiles(deps.fs, status.dir);
-  if (!scanned.ok) {
-    return { ok: false, reason: "io_error" };
-  }
-
-  let stats: ProfileStats;
+  let scanned: Awaited<ReturnType<ProfileStatsCacheStore["scan"]>>;
   try {
-    stats = aggregateProfileStats(scanned.files, { now: Date.now() });
+    scanned = await storeFor(deps).scan(status.dir, resolveScanBudgets(deps.budgets), Date.now());
   } catch (error) {
     console.warn("[profile-ipc] aggregation failed", error);
     return { ok: false, reason: "io_error" };
   }
+  if (!scanned.ok) {
+    return { ok: false, reason: "io_error" };
+  }
+  return { ok: true, view: toView(scanned.stats, status, scanned) };
+}
 
-  const view = toView(stats, status, scanned.coverageStartTs);
-  // Byte-accurate scan-level truncation (real file sizes) OR the aggregator's
-  // own char-based in-memory cap — either signal means the view is partial.
-  view.truncated = stats.truncated || scanned.truncated;
-  return { ok: true, view };
+/**
+ * profile-stats-cached: the instant answer. Merges what the cache already
+ * holds — exactly the files the last completed pass stamped as active — and
+ * NEVER lists the telemetry directory, so a warm start renders before the
+ * verifying `profile-stats-get` has even finished its lstat sweep. The
+ * coverage numbers come from the cache header (the last pass's own verdict);
+ * only the toggle/dir status is resolved fresh.
+ */
+export async function handleProfileStatsCached(deps: ProfileIpcDeps): Promise<ProfileStatsCachedResult> {
+  let status: ResolvedProfileDir;
+  try {
+    status = await resolveProfileDir(deps);
+  } catch (error) {
+    console.warn("[profile-ipc] telemetry config resolution failed", error);
+    return { ok: false, reason: "io_error" };
+  }
+
+  let cached: Awaited<ReturnType<ProfileStatsCacheStore["cachedStats"]>>;
+  try {
+    cached = await storeFor(deps).cachedStats(status.dir, Date.now());
+  } catch (error) {
+    console.warn("[profile-ipc] cached view failed", error);
+    return { ok: false, reason: "io_error" };
+  }
+  if (!cached.ok) {
+    return { ok: false, reason: cached.reason };
+  }
+  return { ok: true, view: toView(cached.stats, status, cached) };
+}
+
+/**
+ * profile-stats-rebuild: throws the cache away (file AND the in-memory copy)
+ * and runs ONE ordinary incremental pass from empty. Deliberately NOT a
+ * whole-directory rebuild: it is cut by the same per-pass budgets as every
+ * other pass, so the answer comes back promptly with an honest
+ * `backlogRemaining` and the remaining history arrives over the next few
+ * refreshes.
+ */
+export async function handleProfileStatsRebuild(deps: ProfileIpcDeps): Promise<ProfileStatsResult> {
+  try {
+    await storeFor(deps).reset();
+  } catch (error) {
+    console.warn("[profile-ipc] cache reset failed", error);
+    return { ok: false, reason: "io_error" };
+  }
+  return handleProfileStatsGet(deps);
 }
 
 /**
@@ -493,9 +482,11 @@ export async function handleProfileRevealDir(deps: ProfileIpcDeps): Promise<Prof
   return { ok: true };
 }
 
-/** Wires the three channels onto ipcMain. A payload the handler cannot validate is answered with a safe negative. */
+/** Wires the five channels onto ipcMain. A payload the handler cannot validate is answered with a safe negative. */
 export function registerProfileIpc(deps: ProfileIpcDeps): void {
   ipcMain.handle(PROFILE_STATS_GET_CHANNEL, () => handleProfileStatsGet(deps));
+  ipcMain.handle(PROFILE_STATS_CACHED_CHANNEL, () => handleProfileStatsCached(deps));
+  ipcMain.handle(PROFILE_STATS_REBUILD_CHANNEL, () => handleProfileStatsRebuild(deps));
   ipcMain.handle(PROFILE_TELEMETRY_SET_CHANNEL, (_event, raw: unknown) => handleProfileTelemetrySet(deps, raw));
   ipcMain.handle(PROFILE_REVEAL_DIR_CHANNEL, () => handleProfileRevealDir(deps));
 }

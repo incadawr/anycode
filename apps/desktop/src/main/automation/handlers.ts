@@ -1157,6 +1157,19 @@ export function profileRefresh(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("profileRefresh", []);
 }
 
+// TASK.187 S5: the footer's two-step cache-rebuild gesture, and the settings
+// geometry probe defect 1 needed but no route ever had. Same thin-wrapper
+// discipline (the facade owns every guard: pane_not_mounted /
+// rebuild_not_present / busy / did_not_arm / did_not_start / did_not_settle).
+
+export function profileRebuild(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("profileRebuild", []);
+}
+
+export function settingsLayoutState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("settingsLayoutState", []);
+}
+
 // --- Slash-command menu probe/driver (design/slice-P7.23-cut.md §7 W4): thin
 // wrappers over the frozen facade contract, same discipline as the probes
 // above — the facade owns every guard (tab_not_active / unknown_tab /

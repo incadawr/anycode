@@ -13,11 +13,35 @@
  */
 
 export { aggregateProfileStats } from "./stats.js";
-export type { ProfileStats, ProfileStatsFile, AggregateProfileStatsOptions } from "./stats.js";
+export type { ProfileStats, ProfileDayStats, ProfileStatsFile, AggregateProfileStatsOptions } from "./stats.js";
+/** TASK.187 S2: the per-file partial + merge path the incremental cache in main
+ *  is built on (semantics: working-docs/build/task187-aggregator-semantics.md).
+ *  `collectSessionTimestamps` + `sessionActiveMs` are the exact second pass for
+ *  a session whose per-file segments overlap. */
+export { aggregateFilePartial, mergeProfilePartials, collectSessionTimestamps, sessionActiveMs } from "./stats.js";
+/** TASK.187 S3: the cumulative form of the exact second pass. Cluster state is
+ *  what the incremental cache carries between passes, so a session with more
+ *  participant files than one pass can open still converges. */
+export { mergeActivityClusters, clustersActiveMs } from "./stats.js";
+export type { ActivityCluster } from "./stats.js";
+export type {
+  ProfileFilePartial,
+  ProfileFilePartialSession,
+  ProfileFilePartialDay,
+  AggregateFilePartialOptions,
+  NamedProfileFilePartial,
+  CrossFileSession,
+  MergeProfilePartialsOptions,
+  MergeProfilePartialsResult,
+} from "./stats.js";
 export { setUserTelemetryEnabled, userTelemetryConfigPath } from "./settings.js";
 export { loadTelemetryConfig } from "./config.js";
 export type { LoadedTelemetryConfig, ResolvedTelemetryConfig, TelemetryConfigEntry } from "./config.js";
 /** Byte-accurate scan cap (W5-FIX finding 1): main resolves REAL file sizes via
  *  lstat, so the byte-accurate gate belongs in the IPC scan, not just the
  *  aggregator's post-read char-based secondary guard. */
-export { PROFILE_STATS_MAX_SCAN_BYTES } from "../types/config.js";
+export {
+  PROFILE_STATS_MAX_SCAN_BYTES,
+  PROFILE_STATS_MAX_NEW_READS_PER_PASS,
+  PROFILE_STATS_CACHE_MAX_BYTES,
+} from "../types/config.js";

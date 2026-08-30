@@ -615,8 +615,25 @@ export const TELEMETRY_DISPOSE_DEADLINE_MS = 2_000;
 /** Total-scan byte cap for aggregateProfileStats (§2-D1): files are processed in
  *  sorted-name order; once cumulative processed-line bytes exceed this, the scan
  *  stops early and `truncated: true` is reported rather than blocking on an
- *  unbounded telemetry dir. */
+ *  unbounded telemetry dir.
+ *
+ *  TASK.187 gives the same number a second role in the incremental scan layer:
+ *  there it bounds the NEW bytes read per pass (files already covered by the
+ *  partial cache are not opened at all, so a warm pass reads far less), and it
+ *  doubles as the per-file ceiling. Inside `aggregateProfileStats` the meaning
+ *  is unchanged — it is the default of the additive `byteBudget` option. */
 export const PROFILE_STATS_MAX_SCAN_BYTES = 64 * 1024 * 1024;
+
+/** TASK.187: cap on how many not-yet-cached sink files one incremental pass may
+ *  open. The owner's directory holds ~60 000 files at ~1.1 KiB each and the cost
+ *  is dominated by the open() count, not by bytes; this bounds a cold first pass
+ *  and lets the rest be finished by later passes (the backlog). */
+export const PROFILE_STATS_MAX_NEW_READS_PER_PASS = 24_000;
+
+/** TASK.187: refuse to load a profile-stats cache file larger than this. The
+ *  cache is idempotently rebuildable, so an oversized/garbage file is discarded
+ *  rather than trusted. */
+export const PROFILE_STATS_CACHE_MAX_BYTES = 256 * 1024 * 1024;
 
 /** Per-gap cap applied when summing a session's inter-record active duration
  *  (§2-D3.3): an idle-open tab must not inflate "longest session" — any gap

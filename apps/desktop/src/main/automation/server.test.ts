@@ -3017,6 +3017,7 @@ describe("Profile pane routes (design/slice-P7.22-cut.md §4 W4, period/models/r
     { path: "/settings/profile/period", body: { period: "7d" } },
     { path: "/settings/profile/models/toggle", body: {} },
     { path: "/settings/profile/refresh", body: {} },
+    { path: "/settings/profile/rebuild", body: {} },
   ];
 
   it("401s GET /settings/profile without a token", async () => {
@@ -3151,6 +3152,46 @@ describe("Profile pane routes (design/slice-P7.22-cut.md §4 W4, period/models/r
       expect(calls[0]).toContain('"profileRefresh"');
       expect(calls[0]).toContain("[]");
     });
+
+    it("POST /settings/profile/rebuild -> profileRebuild() (TASK.187 S5)", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/profile/rebuild"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"profileRebuild"');
+      expect(calls[0]).toContain("[]");
+    });
+  });
+});
+
+describe("Settings geometry probe route (TASK.187 S5, defect 1)", () => {
+  it("401s GET /settings/layout without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/settings/layout"));
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /settings/layout -> settingsLayoutState()", async () => {
+    const facadeResult = {
+      mounted: true,
+      activePane: "profile",
+      windowInnerWidth: 1440,
+      windowInnerHeight: 900,
+      container: { left: 220, right: 1432, width: 1212 },
+      pane: { left: 220, right: 1432, width: 1212, scrollHeight: 2400, clientHeight: 820, scrollable: true },
+      content: { left: 220, right: 956, width: 736 },
+      header: { left: 220, right: 956, width: 736 },
+      scrollbarGap: 0,
+    };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/settings/layout"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"settingsLayoutState"');
+    expect(calls[0]).toContain("[]");
   });
 });
 
