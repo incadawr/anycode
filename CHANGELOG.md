@@ -5,6 +5,107 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.23] — 2026-08-30
+
+### Added
+
+- A model that cannot see images can now look at one anyway. Point AnyCode at
+  a second model that can see — Settings → Vision — and when the model you are
+  talking to needs to know what is in a screenshot or an attached picture, it
+  asks that one and gets the answer back in words. The recognizer runs on its
+  own connection, so the model you work with and the model that looks at your
+  images need not come from the same provider.
+
+  The panel has a Probe button that sends a test image down the exact path a
+  real run uses and shows you what came back, so "is my recognizer still
+  working?" is one click rather than a guess. Probe stays available even when
+  settings.json is read-only, because it writes nothing. It is a real request
+  and is billed like any other — and it does not yet appear in the Profile
+  panel's usage figures, so trying ten models with it costs ten calls you
+  cannot see there.
+
+  What not to expect: the recognizer answers one question about one image and
+  remembers nothing between questions — it is a lookup, not a second
+  conversation. It needs a connection that authenticates with an API key;
+  OAuth connections cannot be used for it. And turning it on does not make a
+  blind model see: the model is shown a numbered placeholder and has to ask.
+
+- A workflow run is no longer a black box. The card for a Workflow call now
+  holds every step of the run — all of them, from the moment the run starts,
+  not just the ones that have already begun — ordered by what depends on what
+  rather than by the order they happen to be declared in. Each step reports
+  its own phase, and the two phases that used to look identical no longer do:
+  a step waiting for a free slot reads as queued, a step that has not started
+  reads as not started, and a step that will never start because the run
+  already failed reads as skipped.
+
+  Under the steps runs one activity lane for the whole run, carrying the tool
+  calls of every step in the order they actually happened — one lane rather
+  than one per step, because in a run with several steps going at once the
+  thing worth seeing is the chronology between them. Click a step to filter
+  the lane to that step alone; click it again to get everything back. When the
+  lane has dropped older rows to stay bounded, it says how many rather than
+  pretending it holds the whole history.
+
+  Below the list the run's shape is drawn, open by default: a box per step, a
+  line per dependency, laid out in columns by dependency depth. Colour and
+  outline come from the same vocabulary as the list, so a failed step and
+  everything it blocked read together at a glance; fold it away if you would
+  rather just have the list. Collapsed, the card carries a strip of
+  ticks instead — one per step, same order, same colours — and does not grow
+  by a single pixel to do it.
+
+  Token spend is reported per step and for the whole run, cache reads
+  included, because a cache hit is the difference between a run that cost
+  something and one that barely did. The whole card survives a restart: close
+  the session, open it again, and the steps, their spend, their outcomes and
+  the activity lane come back as they were.
+
+  What not to expect. A step whose profile names an engine (`claude` or
+  `codex`) cannot start at all — the workflow engine still calls subagents
+  directly and is not wired to the tier that runs engine children — so such a
+  step fails instantly, and the card will show that failure without being able
+  to explain it. That is not new in this release, but the card now makes it
+  visible. Relatedly, when a step fails, the reason is dropped before it ever
+  reaches the card, so the failure shows as an outcome and a duration and
+  nothing more; the step panel is honest about having no rows rather than
+  inventing any.
+
+### Changed
+
+- Images in a conversation are numbered. An attachment is `#1`, `#2`, and so
+  on, and the number is stable for the life of the session — it comes from a
+  counter, not from recounting what is still in the history, so compaction
+  dropping an old image can never make a later one reuse its number.
+
+- A screenshot now records the size of the page in CSS pixels alongside its
+  size in real pixels. The recognizer is told both and can work out the
+  display scale instead of guessing at it — a Retina screenshot is no longer
+  read as a page twice as wide as it really is.
+
+- Codex builds up to and including 0.151.x are accepted without a risk
+  prompt; the supported ceiling moves from below 0.151.0 to below 0.152.0.
+  A real 0.151.0 binary was unpacked and its app-server schema compared
+  against the pinned contract: the methods AnyCode calls and the decision
+  vocabularies it answers with came back byte-identical, nothing was removed,
+  and the three shapes that did change are not read anywhere in AnyCode. The
+  version AnyCode installs on your behalf is unchanged — the ceiling says
+  which Codex you may bring, not which one is recommended.
+
+### Fixed
+
+- Closing the window with a preview open no longer crashes the app with "A
+  JavaScript error occurred in the main process — TypeError: Object has been
+  destroyed". Teardown ran inside the window's own close handler and then sent
+  a message to that window; the guard in front of the send only covered a
+  window that was gone, not one that was already destroyed, which is a
+  different thing and the one that actually happens.
+
+- Switching mid-conversation to a model that cannot see images no longer fails
+  with an unexplained error from the provider. The images are left out of the
+  request and replaced with a note naming which one was omitted, so the model
+  can still reason about what it is missing and ask about it.
+
 ## [0.0.22] — 2026-08-30
 
 ### Added
