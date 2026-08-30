@@ -74,11 +74,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     // missing. Corrected below. docs.z.ai/guides/vlm/glm-5.3-flash adds the
     // flash row: "Text parameters are consistent with GLM-5.3" (1M context,
     // same low/high/max family), "`thinking.type` only supports `enabled`;
-    // thinking cannot be disabled". Its multimodality is demonstrated only via
-    // the native API's Chat Completions `image_url` examples, never confirmed
-    // through the Anthropic-messages endpoint this entry speaks, so
-    // `imageInput` stays OMITTED (fail-closed; ANYCODE_IMAGE_INPUT=on remains
-    // the escape hatch). The GLM wire mapping (`reasoningRequestOptions` in
+    // thinking cannot be disabled". The GLM wire mapping (`reasoningRequestOptions` in
     // model-port.ts) was fixed in the same slice so a selected `low` reaches
     // the wire as `low` instead of silently upgrading to `high` — otherwise
     // advertising `low` here would have been a fresh lie.
@@ -92,14 +88,24 @@ const ENTRIES: CatalogProviderEntry[] = [
     // flagged "API coming soon" for 5.3 the day before). `maxOutputTokens` is
     // filled in below from that spec card. Without it, a subagent spawned on
     // glm-5.3-flash silently got DEFAULT_MAX_OUTPUT_TOKENS (32_768, a ~4x drop
-    // from the parent glm-5.3's 131_072) — the TASK.170 defect. `imageInput`
-    // stays OMITTED regardless: the spec card's input modality is not itself
-    // confirmation the Anthropic-messages endpoint accepts image_url on this
-    // model, and that verification is a separate concern from output tokens.
+    // from the parent glm-5.3's 131_072) — the TASK.170 defect.
+    //
+    // TASK.197 (2026-08-30, owner's ruling): `imageInput: true` on the FLASH
+    // row. Two prior passes read the same spec card ("Input Modality: Video /
+    // Image / Text / File") and still withheld the flag, on the argument that
+    // a spec card is not proof the Anthropic-messages endpoint accepts image
+    // blocks. That caution was never a rule — the four kimi.com rows below and
+    // the moonshot line declare `imageInput: true` over this SAME transport
+    // with no such proof either — so it was inconsistency, not conservatism,
+    // and it cost the owner the feature twice (asked 2026-08-29, asked again
+    // 2026-08-30). The owner runs this model daily and states its images work;
+    // that is the measurement this row now records. NON-flash `glm-5.3` stays
+    // unmarked on purpose: it is documented under `guides/llm/`, not
+    // `guides/vlm/`, and nobody has claimed images for it.
     models: [
       // GLM-5.3/5.3-flash/5.2: 1M context, 128K max output (docs.z.ai spec boxes).
       { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"] },
-      { id: "glm-5.3-flash", name: "GLM-5.3 Flash", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "glm-5.3-flash", name: "GLM-5.3 Flash", contextWindow: 1_000_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
       { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
       // GLM-5.1/5/5-turbo/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
       { id: "glm-5.1", name: "GLM-5.1", contextWindow: 200_000, maxOutputTokens: 131_072 },
