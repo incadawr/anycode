@@ -2385,3 +2385,135 @@ describe("host media-projection decorator composition (TASK.198 срез C, plan
     expect((capturedRequests[0]!.messages[0] as { images?: unknown }).images).toBeUndefined();
   });
 });
+
+// ── TASK.207: degraded-host port bind sends `fatal` immediately ───────────
+//
+// index.ts is not importable in a test (module-scope process.parentPort, see
+// the file-header comment) — same constraint as every describe block above.
+// This goes one step further than the "read the real source and pin it"
+// idiom used by the "host subagent model-override wiring" suite above (which
+// only greps for a substring): it extracts the REAL degraded-mode `else`
+// block's source text — the exact code index.ts's port-bind handler executes
+// when boot() failed — and runs it for real via `new Function` against fake
+// outbound/wire doubles. A revert of the TASK.207 fix (back to "surface the
+// init failure on the first inbound message") changes what gets extracted and
+// executed, so these tests exercise the actual fix, not a hand-written
+// stand-in that would stay green regardless of what index.ts says.
+describe("host degraded-mode port bind — immediate fatal (TASK.207, GitHub #4)", () => {
+  async function readHostSource(): Promise<string> {
+    return readFile(new URL("./index.ts", import.meta.url), "utf8");
+  }
+
+  /**
+   * Extracts the balanced `{ ... }` body of the degraded-mode `else` branch
+   * (the sibling of `if (session) { ... }` in the UI-port bind handler),
+   * anchored on the last line of the healthy branch right above it so this
+   * can't accidentally match some unrelated `} else {` in the file.
+   *
+   * The anchor is the mcp_status SEND rather than the `if (mcpManager) {`
+   * that guards it: the guard appears twice in this file (the boot-time MCP
+   * wiring has one too), and `indexOf` would take the earlier one, leaving
+   * the extraction to depend on no `} else {` happening to sit in between.
+   * `servers: mcpManager.status()` occurs exactly once. It also lives in the
+   * HEALTHY branch, so reverting the fix under test cannot disturb it — a
+   * revert then fails these tests on behaviour, which is the point, instead
+   * of throwing here for a missing anchor.
+   */
+  function extractDegradedElseBlock(source: string): string {
+    const mcpAnchor = "servers: mcpManager.status()";
+    const mcpIdx = source.indexOf(mcpAnchor);
+    if (mcpIdx === -1) {
+      throw new Error("mcp_status anchor not found — index.ts's port-bind handler moved");
+    }
+    if (source.indexOf(mcpAnchor, mcpIdx + 1) !== -1) {
+      throw new Error("mcp_status anchor is no longer unique — pick a new anchor for the degraded block");
+    }
+    const elseAnchor = "} else {";
+    const elseIdx = source.indexOf(elseAnchor, mcpIdx);
+    if (elseIdx === -1) {
+      throw new Error("degraded else branch not found after the mcp_status anchor");
+    }
+    const openBraceIdx = elseIdx + elseAnchor.length - 1;
+    let depth = 0;
+    let i = openBraceIdx;
+    for (; i < source.length; i += 1) {
+      if (source[i] === "{") depth += 1;
+      else if (source[i] === "}") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    if (depth !== 0) {
+      throw new Error("unbalanced braces while extracting the degraded else block");
+    }
+    return source.slice(openBraceIdx + 1, i);
+  }
+
+  type FakeOutbound = { attach: (wire: unknown) => void; sendDirect: (message: unknown) => void };
+  type FakeWire = { onMessage: (cb: () => void) => void };
+
+  /** Compiles the extracted block into a callable `(outbound, wire, initFailure) => void`. */
+  function compileDegradedBlock(blockSource: string): (outbound: FakeOutbound, wire: FakeWire, initFailure: string | null) => void {
+    // eslint-disable-next-line no-new-func -- executing the REAL extracted index.ts source is the point of this test.
+    return new Function("outbound", "wire", "initFailure", blockSource) as (
+      outbound: FakeOutbound,
+      wire: FakeWire,
+      initFailure: string | null,
+    ) => void;
+  }
+
+  it("sends fatal immediately on port bind, with ZERO inbound messages", async () => {
+    const source = await readHostSource();
+    const run = compileDegradedBlock(extractDegradedElseBlock(source));
+
+    const sent: unknown[] = [];
+    const attached: unknown[] = [];
+    const onMessageCallbacks: Array<() => void> = [];
+    const outbound: FakeOutbound = {
+      attach: (wire) => attached.push(wire),
+      sendDirect: (message) => sent.push(message),
+    };
+    const wire: FakeWire = { onMessage: (cb) => onMessageCallbacks.push(cb) };
+
+    run(outbound, wire, "host failed to initialize: Unsupported Codex version: 9.9.9");
+
+    expect(attached).toEqual([wire]);
+    expect(sent).toEqual([
+      { type: "fatal", message: "host failed to initialize: Unsupported Codex version: 9.9.9" },
+    ]);
+    // The port is attached BEFORE the immediate send — same order as the
+    // healthy branch's bindPort()-then-sendDirect(mcp_status) above.
+    expect(attached.length).toBe(1);
+  });
+
+  it("the onMessage listener stays wired and still resends fatal for a LATER inbound message (old behavior preserved)", async () => {
+    const source = await readHostSource();
+    const run = compileDegradedBlock(extractDegradedElseBlock(source));
+
+    const sent: unknown[] = [];
+    const onMessageCallbacks: Array<() => void> = [];
+    const outbound: FakeOutbound = { attach: () => {}, sendDirect: (message) => sent.push(message) };
+    const wire: FakeWire = { onMessage: (cb) => onMessageCallbacks.push(cb) };
+
+    run(outbound, wire, "boom");
+    expect(sent).toHaveLength(1); // the immediate bind-time send
+
+    expect(onMessageCallbacks).toHaveLength(1);
+    onMessageCallbacks[0]!(); // renderer sends something, e.g. a user message
+    onMessageCallbacks[0]!(); // and again — still keeps resending, un-deduplicated
+    expect(sent).toEqual([{ type: "fatal", message: "boom" }, { type: "fatal", message: "boom" }, { type: "fatal", message: "boom" }]);
+  });
+
+  it("a null initFailure (defense-in-depth only — never actually reachable, boot()'s catch always sets it) sends nothing", async () => {
+    const source = await readHostSource();
+    const run = compileDegradedBlock(extractDegradedElseBlock(source));
+
+    const sent: unknown[] = [];
+    const outbound: FakeOutbound = { attach: () => {}, sendDirect: (message) => sent.push(message) };
+    const wire: FakeWire = { onMessage: () => {} };
+
+    run(outbound, wire, null);
+
+    expect(sent).toEqual([]);
+  });
+});

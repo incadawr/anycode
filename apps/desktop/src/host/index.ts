@@ -3233,13 +3233,28 @@ process.parentPort.on("message", (event) => {
           outbound.sendDirect({ type: "mcp_status", servers: mcpManager.status() });
         }
       } else {
-        // Degraded mode: surface the init failure on the first inbound message.
-        outbound.attach(wire);
-        wire.onMessage(() => {
+        // Degraded mode (boot() failed; initFailure is always set by the
+        // catch block above once session stays null): send the fatal the
+        // instant this port is attached, not just on the first inbound
+        // message — a stalled "Connecting to host…" screen must never
+        // depend on the renderer speaking first (GitHub #4). wire.onMessage
+        // is registered BEFORE the immediate send (mirrors bindPort's own
+        // attach-then-onMessage order above) and stays wired afterward, not
+        // replaced, so a late-attaching second port — or any message this
+        // renderer sends later — still gets the same reason; every inbound
+        // message keeps re-sending it exactly as before this fix (harmless,
+        // idempotent on the renderer). A rebind re-runs this whole block, so
+        // a NEW port gets its own fresh immediate fatal too —
+        // un-deduplicated on purpose, the same posture the healthy branch
+        // already has for mcp_status/host_ready on every bind.
+        const sendFatal = () => {
           if (initFailure) {
             outbound.sendDirect({ type: "fatal", message: initFailure });
           }
-        });
+        };
+        outbound.attach(wire);
+        wire.onMessage(sendFatal);
+        sendFatal();
       }
     });
     return;
