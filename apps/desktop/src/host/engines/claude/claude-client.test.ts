@@ -230,6 +230,30 @@ describe("ClaudeClient", () => {
     }
   });
 
+  // Regression pin for the Linux-CI failure that blocked v0.0.23. `teardown`
+  // waited on `child.once("close")` without first asking whether the child had
+  // ALREADY exited — and `close` fires once, so a listener added afterwards
+  // never hears it. Every stage then burned its full timeout: measured at
+  // 8007ms (6000 stdin-EOF + 1000 SIGTERM + 1000 SIGKILL) against a child that
+  // had been gone for half a second. On macOS the `close` event happened to
+  // still be pending when teardown registered, so the whole suite stayed green
+  // for months; on Linux it had already fired, and the neighbouring test above
+  // died on the 5s default timeout during its very first close().
+  //
+  // The 500ms settle is not a timing assumption about the FIX — it is how the
+  // precondition (child already dead) is established: the --malformed fixture
+  // writes one line and exits, nothing keeps its event loop alive. Without the
+  // guard this test takes >8s; with it, milliseconds. The 2s bound sits in the
+  // wide gap between the two rather than near either.
+  it("close() returns promptly when the child is already gone, instead of waiting out the escalation ladder", async () => {
+    const client = makeClient(["--malformed"]);
+    await client.start();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const startedAt = Date.now();
+    await client.close();
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  }, 30_000);
+
   it("reaps a stubborn detached process group on close (orphan real-PoC)", async () => {
     const pidFile = join(fixturesDir, `..`, `..`, `stubborn-${Date.now()}.pid`);
     pidFiles.push(pidFile);
