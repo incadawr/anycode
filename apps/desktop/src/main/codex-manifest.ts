@@ -17,6 +17,15 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { BUNDLED_CODEX_MANIFEST, CODEX_MIN_FLOOR, type CodexSupportManifest } from "../shared/codex-support.js";
+import {
+  compareCodexVersions,
+  judgeCodexVersion,
+  parseCodexRange,
+  parseCodexSemver,
+  supportedRangeText,
+  type CodexSupportPolicy,
+  type CodexVersionVerdict,
+} from "../shared/codex-version-policy.js";
 
 /**
  * Raw-URL of the policy manifest in the public AnyCode repository (OG-3
@@ -34,67 +43,17 @@ export const CODEX_MANIFEST_MAX_BYTES = 256 * 1024;
 /** Bounded fetch: a hung raw-URL must never hold a refresh open indefinitely. */
 export const CODEX_MANIFEST_FETCH_TIMEOUT_MS = 10_000;
 
-// ── semver + range evaluation (deliberately minimal: exactly the comparator
-// grammar the manifest uses — `>= <= > < =` conjunctions like
-// ">=0.144.0 <0.145.0" — no caret/tilde/prerelease, unknown syntax fails
-// closed as "invalid manifest", never "matches") ──
+// ── semver + range evaluation ──
+//
+// TASK.206: the comparator grammar, the range evaluator and the verdict itself
+// moved to shared/codex-version-policy.ts so the HOST — which is the process
+// that actually decides whether a Codex child starts, and may never import
+// from main/** — judges by the SAME code as this file's Settings/Doctor/
+// installer callers. Everything below is the manifest-shaped facade over that
+// core; `parseCodexSemver` is re-exported because codex-install.ts imports it
+// from here.
 
-interface ParsedVersion {
-  major: number;
-  minor: number;
-  patch: number;
-}
-
-/** Strict `X.Y.Z` only — the shape `codex-cli --version` reports and npm versions use for stable releases. */
-export function parseCodexSemver(version: string): ParsedVersion | null {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
-  if (!match) return null;
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
-}
-
-function compareVersions(a: ParsedVersion, b: ParsedVersion): number {
-  if (a.major !== b.major) return a.major - b.major;
-  if (a.minor !== b.minor) return a.minor - b.minor;
-  return a.patch - b.patch;
-}
-
-interface RangeComparator {
-  op: ">=" | "<=" | ">" | "<" | "=";
-  version: ParsedVersion;
-}
-
-/** One space-separated conjunction of comparators, or null when any token is unrecognized (fail-closed). */
-function parseRange(range: string): RangeComparator[] | null {
-  const tokens = range.trim().split(/\s+/);
-  if (tokens.length === 0 || tokens[0] === "") return null;
-  const comparators: RangeComparator[] = [];
-  for (const token of tokens) {
-    const match = /^(>=|<=|>|<|=)?(\d+\.\d+\.\d+)$/.exec(token);
-    if (!match) return null;
-    const version = parseCodexSemver(match[2]!);
-    if (version === null) return null;
-    comparators.push({ op: (match[1] as RangeComparator["op"] | undefined) ?? "=", version });
-  }
-  return comparators;
-}
-
-function satisfies(version: ParsedVersion, comparators: RangeComparator[]): boolean {
-  return comparators.every(({ op, version: bound }) => {
-    const cmp = compareVersions(version, bound);
-    switch (op) {
-      case ">=":
-        return cmp >= 0;
-      case "<=":
-        return cmp <= 0;
-      case ">":
-        return cmp > 0;
-      case "<":
-        return cmp < 0;
-      case "=":
-        return cmp === 0;
-    }
-  });
-}
+export { parseCodexSemver };
 
 // ── manifest validation (layer 1 of the fail-closed pair) ──
 
@@ -113,7 +72,7 @@ export function validateCodexManifest(raw: unknown): CodexSupportManifest | null
   for (const entry of source.supported) {
     if (typeof entry !== "object" || entry === null) return null;
     const { range, status, note } = entry as { range?: unknown; status?: unknown; note?: unknown };
-    if (typeof range !== "string" || parseRange(range) === null) return null;
+    if (typeof range !== "string" || parseCodexRange(range) === null) return null;
     if (typeof status !== "string") return null;
     supported.push({ range, status, ...(typeof note === "string" ? { note } : {}) });
   }
@@ -124,7 +83,7 @@ export function validateCodexManifest(raw: unknown): CodexSupportManifest | null
   if (minimum === null || floor === null) return null;
   // Downgrade attack: a manifest may NARROW the range, never declare support
   // below the compiled floor (cut §7.1).
-  if (compareVersions(minimum, floor) < 0) return null;
+  if (compareCodexVersions(minimum, floor) < 0) return null;
   return {
     schemaVersion: "anycode.codex-support.v1",
     updatedAt: source.updatedAt,
@@ -141,7 +100,12 @@ export function effectiveCodexManifest(raw: unknown): CodexSupportManifest {
 
 /** Display form of the manifest's supported set — what `CodexDoctorReport.supportedRange` carries so the renderer never hardcodes a range string. */
 export function manifestSupportedRange(manifest: CodexSupportManifest): string {
-  return manifest.supported.map((entry) => entry.range).join(" || ");
+  return supportedRangeText(manifestRanges(manifest));
+}
+
+/** The manifest reduced to the ranges a verdict consults, in manifest order. */
+function manifestRanges(manifest: CodexSupportManifest): string[] {
+  return manifest.supported.map((entry) => entry.range);
 }
 
 // ── verdict (layer 2: the floor holds here on its own) ──
@@ -152,40 +116,26 @@ export interface CodexVersionPolicy {
   riskAcceptedVersions: readonly string[];
 }
 
-export interface CodexVersionVerdict {
-  allowed: boolean;
-  /** True when allowed ONLY via a §7.4 risk acceptance — the "Untested Codex version" plaque case. */
-  risk: boolean;
-  /** The range the verdict was judged against, for the report/UI. */
-  supportedRange: string;
+export type { CodexVersionVerdict };
+
+/**
+ * The manifest-shaped policy flattened to the shape a verdict — and the host
+ * carrier — actually consume (TASK.206). One projection, used by
+ * `codexVersionVerdict` below and by main/index.ts's `engineEnv` overlay, so
+ * the screen and the host can never be judging different range sets.
+ */
+export function codexSupportPolicyFor(policy: CodexVersionPolicy): CodexSupportPolicy {
+  return { ranges: manifestRanges(policy.manifest), riskAcceptedVersions: policy.riskAcceptedVersions };
 }
 
 /**
- * Judges one version string against the policy. Order matters:
- *  1. unparsable or below `CODEX_MIN_FLOOR` -> rejected ALWAYS (risk
- *     acceptance cannot override the compiled floor);
- *  2. inside any manifest range -> allowed;
- *  3. explicitly risk-accepted (exact version match) -> allowed, flagged risk;
- *  4. otherwise rejected.
+ * Judges one version string against the policy — see `judgeCodexVersion`
+ * (shared/codex-version-policy.ts) for the ordering rules, including the
+ * compiled `CODEX_MIN_FLOOR` that no manifest and no risk acceptance can
+ * override.
  */
 export function codexVersionVerdict(version: string, policy: CodexVersionPolicy): CodexVersionVerdict {
-  const supportedRange = manifestSupportedRange(policy.manifest);
-  const parsed = parseCodexSemver(version);
-  if (parsed === null) return { allowed: false, risk: false, supportedRange };
-  const floor = parseCodexSemver(CODEX_MIN_FLOOR);
-  if (floor !== null && compareVersions(parsed, floor) < 0) {
-    return { allowed: false, risk: false, supportedRange };
-  }
-  for (const entry of policy.manifest.supported) {
-    const comparators = parseRange(entry.range);
-    if (comparators !== null && satisfies(parsed, comparators)) {
-      return { allowed: true, risk: false, supportedRange };
-    }
-  }
-  if (policy.riskAcceptedVersions.includes(version)) {
-    return { allowed: true, risk: true, supportedRange };
-  }
-  return { allowed: false, risk: false, supportedRange };
+  return judgeCodexVersion(version, codexSupportPolicyFor(policy));
 }
 
 // ── active policy (module seam) ──

@@ -14,6 +14,7 @@ import {
 } from "./app-server-client.js";
 import { EngineVersionError, SUPPORTED_CODEX_VERSION } from "./protocol.js";
 import { ENV_CODEX_PROXY_URL, LOOPBACK_NO_PROXY, encodeEngineProxyCarrier } from "../../../shared/engines.js";
+import { ENV_CODEX_SUPPORT_POLICY, encodeCodexSupportPolicy } from "../../../shared/codex-version-policy.js";
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
 // Data files only (JSONL fixtures, pid files): nothing here is ever EXECUTED as
@@ -91,6 +92,19 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+/**
+ * `makeClient`'s default `sourceEnv` with a TASK.206 support-policy carrier
+ * added — the shape main's `engineEnv` overlay stamps into every host fork.
+ */
+function policyEnv(ranges: string[], riskAcceptedVersions: string[] = []): NodeJS.ProcessEnv {
+  return {
+    HOME: "/home/test",
+    PATH: process.env.PATH,
+    CODEX_HOME: "/codex-home",
+    [ENV_CODEX_SUPPORT_POLICY]: encodeCodexSupportPolicy({ ranges, riskAcceptedVersions }),
+  };
+}
+
 function makeClient(args: string[] = [], overrides: Partial<ConstructorParameters<typeof AppServerClient>[0]> = {}) {
   return new AppServerClient({
     binaryPath: process.execPath,
@@ -138,6 +152,51 @@ describe("AppServerClient", () => {
     const failure = await makeClient(["--bad-version"]).start().then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(EngineVersionError);
     expect((failure as Error).message).toContain(SUPPORTED_CODEX_VERSION);
+  });
+
+  // ── TASK.206: the preflight judges by the ACTIVE support policy main
+  // delivers, not by the compiled wire pin. The three properties are unit-
+  // pinned in version-policy.test.ts; these run them through the REAL
+  // spawn+preflight path, which is the only place that actually refuses a
+  // Codex child. (The two tests above carry no carrier in `sourceEnv`, so they
+  // are simultaneously the fail-safe pin: with no policy the compiled pin
+  // still decides.)
+
+  it("refuses a version the delivered policy excludes even though the compiled pin allows it", async () => {
+    // The child reports 0.144.1 — inside `SUPPORTED_CODEX_VERSION` (<0.152.0).
+    // A host still judging by the constant would start; this one must not.
+    const failure = await makeClient([], { sourceEnv: policyEnv([">=0.144.0 <0.144.1"]) })
+      .start()
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(EngineVersionError);
+    expect((failure as Error).message).toContain(">=0.144.0 <0.144.1");
+    // The refusal names the range that was applied, never the constant that was not.
+    expect((failure as Error).message).not.toContain(SUPPORTED_CODEX_VERSION);
+  });
+
+  it("starts on a version the delivered policy includes", async () => {
+    const client = makeClient([], { sourceEnv: policyEnv([">=0.144.0 <0.152.0"]) });
+    try {
+      await client.start();
+      await expect(client.request("echo", { value: 1 })).resolves.toEqual({ value: 1 });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("starts on an ABOVE-CEILING version once it is risk-accepted — the 'use it anyway' button reaching the engine path", async () => {
+    // `--bad-version` reports 1.0.0, which every range refuses; the acceptance
+    // is the only thing that can let this spawn happen. Pre-TASK.206 the host
+    // never saw `riskAcceptedVersions` at all and this could not pass.
+    const client = makeClient(["--bad-version"], {
+      sourceEnv: policyEnv([">=0.144.0 <0.152.0"], ["1.0.0"]),
+    });
+    try {
+      await client.start();
+      await expect(client.request("echo", { value: 2 })).resolves.toEqual({ value: 2 });
+    } finally {
+      await client.close();
+    }
   });
 
   // W5.5-review Medium: pre-fix, trust was checked ONCE before `preflightVersion()`

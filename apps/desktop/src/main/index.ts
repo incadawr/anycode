@@ -167,7 +167,15 @@ import {
 import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
 import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
 import { registerCodexInstallIpc } from "./codex-install.js";
-import { refreshCodexManifest, setActiveCodexVersionPolicy } from "./codex-manifest.js";
+import {
+  activeCodexVersionPolicy,
+  codexSupportPolicyFor,
+  refreshCodexManifest,
+  setActiveCodexVersionPolicy,
+} from "./codex-manifest.js";
+// TASK.206: the main->host carrier for the version-support policy; shared/ so
+// the host side can read it without importing main/**.
+import { ENV_CODEX_SUPPORT_POLICY, encodeCodexSupportPolicy } from "../shared/codex-version-policy.js";
 import { closeAllCodexChildren, installCodexChildExitGuard, liveCodexChildCount } from "./codex-children.js";
 import { createEngineProcessReaper } from "./engine-reaper.js";
 import { registerUpdater, type UpdaterController } from "./updater.js";
@@ -1732,6 +1740,17 @@ void app.whenReady().then(async () => {
       [ENV_HOST_GENERATION]: String(generation),
       ...(codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
       ...(claudeBinaryPath !== null ? { [ENV_CLAUDE_BIN]: claudeBinaryPath } : {}),
+      // TASK.206: the ACTIVE codex version-support policy — the same manifest
+      // ranges Settings displays and the same `riskAcceptedVersions` the "use
+      // it anyway" button writes. Without it the host preflight judged by a
+      // compile-time constant and refused versions this app itself installed
+      // (issue #4), while a risk acceptance reached nothing that spawns an
+      // engine. Rides EVERY fork for the same reason the two binary paths
+      // above do (a codex subagent can be spawned from any tab), and is
+      // stamped UNCONDITIONALLY — an env name main sometimes omits is a name
+      // an ambient shell export could occupy, since a fork env starts as a
+      // spread of the boot snapshot.
+      [ENV_CODEX_SUPPORT_POLICY]: encodeCodexSupportPolicy(codexSupportPolicyFor(activeCodexVersionPolicy())),
       // `settings` is null until boot finishes loading it; an early fork must
       // spread `{}` rather than dereference it.
       ...(settings === null
