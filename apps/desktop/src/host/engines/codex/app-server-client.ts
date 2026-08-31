@@ -24,11 +24,10 @@ import {
   type JsonRpcNotification,
   type JsonRpcResponse,
   type JsonRpcServerRequest,
-  SUPPORTED_CODEX_VERSION,
   UNHANDLED_SERVER_REQUEST_ERROR,
-  isSupportedCodexVersion,
   parseCodexVersion,
 } from "./protocol.js";
+import { resolveHostCodexVersionPolicy } from "./version-policy.js";
 
 export const CODEX_MAX_LINE_BYTES = 10 * 1024 * 1024;
 export const CODEX_MAX_PENDING_REQUESTS = 64;
@@ -604,9 +603,17 @@ export class AppServerClient {
         settle(() => resolve(stdout));
       });
     });
+    // TASK.206: judged against the ACTIVE support policy (the manifest range
+    // Settings shows, plus the versions the user explicitly risk-accepted),
+    // delivered per-fork by main via ENV_CODEX_SUPPORT_POLICY. Absent/garbage
+    // policy falls back to the compiled wire pin — see
+    // `resolveHostCodexVersionPolicy`, which is where that fail-safe lives.
+    // The refusal names the range that was ACTUALLY applied, never a constant
+    // restating a different one.
+    const policy = resolveHostCodexVersionPolicy(this.options.sourceEnv);
     const version = parseCodexVersion(output);
-    if (version === null || !isSupportedCodexVersion(version)) {
-      throw new EngineVersionError(`Unsupported Codex version: ${output.trim() || "unparseable"} (supported ${SUPPORTED_CODEX_VERSION})`);
+    if (version === null || !policy.allows(version)) {
+      throw new EngineVersionError(`Unsupported Codex version: ${output.trim() || "unparseable"} (supported ${policy.supportedRange})`);
     }
   }
 
