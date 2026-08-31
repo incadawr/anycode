@@ -475,6 +475,20 @@ describe("desktop store — agent_event transcript accumulation", () => {
     expect(findBlock(store.getState().transcript, "output_truncated")).toBeDefined();
   });
 
+  it("surfaces a degeneration AgentEvent as a degeneration block (TASK.210)", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      event: { type: "degeneration", channel: "text", period: 296, repeats: 341, turn: 1 },
+    });
+    const block = findBlock(store.getState().transcript, "degeneration");
+    expect(block).toBeDefined();
+    expect(block).toMatchObject({ channel: "text", period: 296, repeats: 341 });
+  });
+
   it("applies a full fixture sequence (text stream + tool call + loop_end) to the expected transcript, batching deltas via the injected scheduler", () => {
     const { scheduler, runPending, scheduleCallCount } = createManualScheduler();
     const store = createDesktopStore(scheduler);

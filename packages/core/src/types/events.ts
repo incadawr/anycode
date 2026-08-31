@@ -23,7 +23,15 @@ export type FinishReason =
   | "content_filter"
   | "error"
   | "other"
-  | "unknown";
+  | "unknown"
+  /**
+   * The turn was cut by the degenerate-generation guard (TASK.210), not by
+   * the provider: DegenerationDetector caught a tandem-repeat loop mid-stream
+   * and the loop aborted the request itself. Never comes from a provider —
+   * synthesized locally in agent-loop.ts alongside the `degeneration` event
+   * that carries the measured period/repeats.
+   */
+  | "degenerate";
 
 /** A tool invocation proposed by the model. Input is raw and unvalidated; the dispatcher validates it. */
 export interface ProposedToolCall {
@@ -157,6 +165,20 @@ export type AgentEvent =
       budgetTokens: number;
       source: "provider" | "estimate";
     }
+  /**
+   * The degenerate-generation guard (TASK.210) caught a tandem-repeat loop
+   * mid-stream and cut the turn. Additive: rides the existing agent_event
+   * envelope on the desktop wire with no protocol change (protocol.ts
+   * projects new AgentEvent variants automatically), same precedent as
+   * `ceiling_grant` above. `channel` names which of the two per-turn
+   * DegenerationDetector instances fired (loop/degeneration-detector.ts);
+   * `period`/`repeats` are its verdict verbatim. Emitted ONLY on an
+   * unsupervised turn where the guard actually acted — a supervised root
+   * (ceiling.supervisedRoot() === true) ignores the same verdict entirely, so
+   * no event and no abort. The turn's own `turn_end.finishReason` carries the
+   * matching `"degenerate"` FinishReason for consumers that only look there.
+   */
+  | { type: "degeneration"; channel: "text" | "reasoning"; period: number; repeats: number; turn: number }
   // Subagent coarse-progress events (Phase 3, design §3.3). Additive: they ride
   // the existing agent_event envelope on the desktop wire with no protocol
   // change. The full child result arrives in the Agent tool's tool_result;

@@ -34,6 +34,8 @@ import type {
 import type { HookRunner, SubagentStopHookInput } from "../types/hooks.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
+  DEGENERATION_CHECK_STRIDE_CHARS,
+  DEGENERATION_MIN_RUN_CHARS,
   MAX_CONCURRENT_SUBAGENTS,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SUBAGENT_MAX_TURNS_CEILING,
@@ -631,6 +633,35 @@ describe("output cap + status mapping", () => {
     expect(outcome.status).toBe("completed");
     expect(outcome.truncated).toBe(true);
     expect(outcome.finalText.length).toBe(100_000);
+  });
+
+  it("outcome carries the final turn's finishReason (TASK.210, provider-side length cutoff)", async () => {
+    const model = new ScriptedModelPort(() => [
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "cut short by the provider's own output ceiling" },
+      { type: "finish", finishReason: "length", usage: {} },
+    ]);
+    const runner = createSubagentRunner(makeParent({ modelPort: model }));
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalTurnFinishReason).toBe("length");
+  });
+
+  it('outcome carries "degenerate" end-to-end when the child\'s own turn is cut by its degeneration guard (TASK.210)', async () => {
+    // Same margin degeneration-detector.test.ts and agent-loop.test.ts use: the
+    // periodicity check only re-runs every STRIDE fed chars, so the loop text
+    // must clear MIN_RUN with slack or the last checkpoint can land short.
+    const LOOP_PHRASE = "Запускаю тест. Прогон. ФИНАЛЬНО. Погнали. ";
+    const target = DEGENERATION_MIN_RUN_CHARS + DEGENERATION_CHECK_STRIDE_CHARS + 256;
+    const times = Math.ceil(target / LOOP_PHRASE.length) + 3;
+    const loopText = LOOP_PHRASE.repeat(times);
+    const model = new ScriptedModelPort(() => [{ type: "start" }, { type: "text_delta", id: "t", text: loopText }]);
+    const runner = createSubagentRunner(makeParent({ modelPort: model }));
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalTurnFinishReason).toBe("degenerate");
   });
 
   it("maps a max_turns cutoff to status max_turns and rescues the text with a wrap-up report", async () => {

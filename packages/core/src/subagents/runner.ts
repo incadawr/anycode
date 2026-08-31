@@ -742,6 +742,9 @@ export function createSubagentRunner(
 
         let currentTurnText = "";
         let finalText = "";
+        // TASK.210: captured at the same turn_end as finalText above, so the
+        // pair always describes the same turn (see SubagentOutcome's doc).
+        let finalTurnFinishReason: SubagentOutcome["finalTurnFinishReason"];
         let toolCalls = 0;
         let lastTool: string | undefined;
         // TASK.191 slice S2: the run's own token spend, summed from the
@@ -875,6 +878,10 @@ export function createSubagentRunner(
                 // Capture the just-completed turn's text; a later cutoff turn_start
                 // (max_turns) or an error before turn_end cannot overwrite it.
                 finalText = currentTurnText;
+                // TASK.210: same turn, same event — always updated together with
+                // finalText above so a cutoff turn that never reaches turn_end
+                // leaves BOTH pinned to the prior turn's pair, never just one.
+                finalTurnFinishReason = event.finishReason;
                 turnEndCount += 1;
                 // Sign of life (TASK.148 slice 1): a turn boundary is progress
                 // even on a turn that made no tool calls at all.
@@ -975,6 +982,7 @@ export function createSubagentRunner(
           toolCalls,
           durationMs: Date.now() - startedAt,
           ...(usage !== undefined ? { usage } : {}),
+          ...(finalTurnFinishReason !== undefined ? { finalTurnFinishReason } : {}),
         };
 
         onProgress?.({

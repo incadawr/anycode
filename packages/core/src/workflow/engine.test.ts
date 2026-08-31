@@ -425,6 +425,36 @@ describe("fail-fast", () => {
     expect(port.calls).not.toContain("D");
   });
 
+  it("a degenerate step (finalTurnFinishReason==='degenerate') is NOT a satisfied dependency, even though SubagentOutcome.status stays 'completed' (TASK.210 codex review finding)", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      if (id === "B") {
+        // The loop's own sentinel/loop_end reports "completed" — this
+        // outcome shape is exactly what a real degenerate-cutoff subagent
+        // run returns (outcomeToResult's own comment on the accepted
+        // internal/external status mismatch, TASK.210 plan §8).
+        return completedOutcome("...ends inside a degenerate loop", { finalTurnFinishReason: "degenerate" });
+      }
+      return completedOutcome(`out:${id}`);
+    });
+    const wf = def("degenerate-dep", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "general-purpose", promptTemplate: "${steps.A}", dependsOn: ["A"] },
+      { id: "C", agentType: "general-purpose", promptTemplate: "${steps.B}", dependsOn: ["B"] },
+    ]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run({ name: "degenerate-dep", input: "go" }, {});
+
+    expect(outcome.status).toBe("failed");
+    // The internal SubagentOutcome.status legitimately stays "completed" (the
+    // loop reached its sentinel cleanly) — the fix lives entirely in the
+    // WORKFLOW step outcome, which must NOT read "completed": that would let
+    // a dependent step treat the looping partial as satisfied input.
+    expect(outcomeOf(outcome.steps, "B").status).not.toBe("completed");
+    expect(outcomeOf(outcome.steps, "C").status).toBe("skipped");
+    expect(port.calls).not.toContain("C");
+  });
+
   // TASK.191 slice S3: before this, a never-launched step's "skipped" fact
   // lived ONLY in the returned WorkflowRunOutcome.steps array — a client fed
   // exclusively by onProgress (the desktop card) got no wire event for it at

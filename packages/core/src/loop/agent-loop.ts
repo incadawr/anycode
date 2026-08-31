@@ -67,6 +67,7 @@ import {
   MAX_CEILING_ROUNDS,
   type ReasoningEffort,
 } from "../types/config.js";
+import { DegenerationDetector } from "./degeneration-detector.js";
 import {
   acceptCeilingVerdict,
   ceilingGrant,
@@ -247,6 +248,17 @@ export interface AgentLoopConfig {
    * (maxTurnsCeiling, outcomeDeadlineAt).
    */
   ceiling?: CeilingConfig;
+  /**
+   * Degenerate-generation guard (TASK.210): a per-turn DegenerationDetector
+   * on each of the text/reasoning stream channels aborts the model request
+   * and cuts the turn when it catches a tandem-repeat loop. Omitted => ON,
+   * matching the ladder's own default-on posture. `{ enabled: false }`
+   * disables both channels and restores pre-TASK.210 behaviour byte-for-byte.
+   * Exempt on a supervised root exactly like the ceiling
+   * (`ceiling.supervisedRoot() === true`, checked live at the moment a
+   * verdict fires) — a human watching the screen can just press Stop.
+   */
+  degenerationGuard?: { enabled?: boolean };
   /** Passed out-of-band as ModelRequest.system on every step; never enters history. */
   systemPrompt?: string;
   maxOutputTokens?: number;
@@ -1045,90 +1057,164 @@ export class AgentLoop {
         let maxAttempts: number | undefined;
         let hadModelOutput = false;
 
+        // Degenerate-generation guard (TASK.210): a per-turn AbortController
+        // separate from the caller's own `signal` — linked FROM it, never
+        // reused directly — so cutting a degenerate loop never gets
+        // misclassified as a user cancellation by the `signal?.aborted`
+        // checks below (loop_end must read "completed", not "cancelled").
+        // Linking preserves the existing Stop-button path: a real caller
+        // abort still propagates down into turnAbort and, from there, into
+        // the provider's own attemptController (model-port.ts). Disposed in
+        // the `finally` below on every exit from this turn's model step.
+        const turnAbort = new AbortController();
+        const disposeTurnAbortLink = signal ? linkAbortSignal(signal, turnAbort) : () => {};
+        const degenerationGuardEnabled = this.config.degenerationGuard?.enabled !== false;
+        const textDegenerationDetector = new DegenerationDetector();
+        const reasoningDegenerationDetector = new DegenerationDetector();
+        let degenerationVerdict: { channel: "text" | "reasoning"; period: number; repeats: number } | null = null;
+
         try {
-          const stream = this.config.modelPort.streamText({
-            system: appendSystemContext(this.config.systemPrompt, options?.systemContext),
-            messages: this.history.toMessages(),
-            tools: toToolDeclarations(this.config.registry),
-            maxOutputTokens: this.config.maxOutputTokens,
-            reasoningEffort: this.config.reasoningEffort,
-            abortSignal: signal,
-          });
-          for await (const event of stream) {
-            if (event.type === "error") {
-              const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput);
-              yield { ...event, retry, safe };
-            } else {
-              yield event;
+          try {
+            const stream = this.config.modelPort.streamText({
+              system: appendSystemContext(this.config.systemPrompt, options?.systemContext),
+              messages: this.history.toMessages(),
+              tools: toToolDeclarations(this.config.registry),
+              maxOutputTokens: this.config.maxOutputTokens,
+              reasoningEffort: this.config.reasoningEffort,
+              abortSignal: turnAbort.signal,
+            });
+            for await (const event of stream) {
+              if (event.type === "error") {
+                const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput);
+                yield { ...event, retry, safe };
+              } else {
+                yield event;
+              }
+              if (isModelOutputEvent(event)) {
+                hadModelOutput = true;
+              }
+              switch (event.type) {
+                case "text_delta": {
+                  textParts.push(event.text);
+                  if (degenerationGuardEnabled) {
+                    const verdict = textDegenerationDetector.feed(event.text);
+                    // Supervised-root exemption checked LIVE at the moment of
+                    // the verdict, not cached — same predicate and the same
+                    // reasoning as the turn-ceiling ladder (agent-loop.ts
+                    // `effectiveMaxTurns` check above): a human watching the
+                    // screen can press Stop, so the guard stays fully inert
+                    // (no abort, no event) rather than acting for them.
+                    if (verdict && this.config.ceiling?.supervisedRoot?.() !== true) {
+                      degenerationVerdict = { channel: "text", period: verdict.period, repeats: verdict.repeats };
+                    }
+                  }
+                  break;
+                }
+                case "reasoning_delta": {
+                  if (degenerationGuardEnabled) {
+                    const verdict = reasoningDegenerationDetector.feed(event.text);
+                    if (verdict && this.config.ceiling?.supervisedRoot?.() !== true) {
+                      degenerationVerdict = {
+                        channel: "reasoning",
+                        period: verdict.period,
+                        repeats: verdict.repeats,
+                      };
+                    }
+                  }
+                  break;
+                }
+                case "tool_call":
+                  toolCalls.push(event.toolCall);
+                  break;
+                case "finish":
+                  finishReason = event.finishReason;
+                  usage = event.usage;
+                  sawFinish = event.finishReason !== "error";
+                  break;
+                case "error":
+                  streamErrored = true;
+                  break;
+                case "stream_retry":
+                  attemptsMade += 1;
+                  maxAttempts = event.maxAttempts;
+                  // hadModelOutput is deliberately NOT reset here: the STALL retry path
+                  // (model-port.ts) permits a stream_retry AFTER model output has
+                  // already reached the consumer, so once output was delivered this
+                  // turn the flag must stay true across the retry. Resetting it would
+                  // make the terminal metadata claim no output was delivered, and W8
+                  // would offer Try-again on a step whose re-send risks double-dispatch/
+                  // double-bill (TASK.33 invariant #1).
+                  //
+                  // The CONTENT accumulators below still reset: the whole step is
+                  // replayed from scratch, so every accumulator built up from the
+                  // aborted attempt's partial events must be discarded — the eventual
+                  // assistant message must reflect only the winning attempt. For a
+                  // pre-first-event retry every one of these is already a no-op. Known
+                  // cosmetic gap (out of scope for 2.3): any partial text already
+                  // rendered by the UI before the stall stays on screen; only the
+                  // written history is guaranteed clean.
+                  textParts.length = 0;
+                  toolCalls.length = 0;
+                  finishReason = "unknown";
+                  usage = {};
+                  streamErrored = false;
+                  sawFinish = false;
+                  // The replayed attempt repeats the same content from scratch, so
+                  // without this a genuinely healthy retry would look to the
+                  // detector like a 2x (soon 3x) tandem repeat of itself and
+                  // false-positive (TASK.210 plan §8).
+                  textDegenerationDetector.reset();
+                  reasoningDegenerationDetector.reset();
+                  break;
+                default:
+                  break;
+              }
+              if (degenerationVerdict) {
+                // Abort BEFORE break: breaking alone does not stop the paid
+                // HTTP request (the port's generator finally only disposes the
+                // abort-signal LINK, model-port.ts) — the signal itself must
+                // fire so the provider stream actually stops being consumed.
+                turnAbort.abort("degenerate-generation-loop");
+                break;
+              }
             }
-            if (isModelOutputEvent(event)) {
-              hadModelOutput = true;
+            if (degenerationVerdict) {
+              // The step proposed while mid-loop is not trustworthy — discard
+              // it rather than dispatch a tool call the model never finished
+              // reasoning its way to (TASK.210 plan §3).
+              toolCalls.length = 0;
+              finishReason = "degenerate";
+              yield {
+                type: "degeneration",
+                channel: degenerationVerdict.channel,
+                period: degenerationVerdict.period,
+                repeats: degenerationVerdict.repeats,
+                turn,
+              };
             }
-            switch (event.type) {
-              case "text_delta":
-                textParts.push(event.text);
-                break;
-              case "tool_call":
-                toolCalls.push(event.toolCall);
-                break;
-              case "finish":
-                finishReason = event.finishReason;
-                usage = event.usage;
-                sawFinish = event.finishReason !== "error";
-                break;
-              case "error":
-                streamErrored = true;
-                break;
-              case "stream_retry":
-                attemptsMade += 1;
-                maxAttempts = event.maxAttempts;
-                // hadModelOutput is deliberately NOT reset here: the STALL retry path
-                // (model-port.ts) permits a stream_retry AFTER model output has
-                // already reached the consumer, so once output was delivered this
-                // turn the flag must stay true across the retry. Resetting it would
-                // make the terminal metadata claim no output was delivered, and W8
-                // would offer Try-again on a step whose re-send risks double-dispatch/
-                // double-bill (TASK.33 invariant #1).
-                //
-                // The CONTENT accumulators below still reset: the whole step is
-                // replayed from scratch, so every accumulator built up from the
-                // aborted attempt's partial events must be discarded — the eventual
-                // assistant message must reflect only the winning attempt. For a
-                // pre-first-event retry every one of these is already a no-op. Known
-                // cosmetic gap (out of scope for 2.3): any partial text already
-                // rendered by the UI before the stall stays on screen; only the
-                // written history is guaranteed clean.
-                textParts.length = 0;
-                toolCalls.length = 0;
-                finishReason = "unknown";
-                usage = {};
-                streamErrored = false;
-                sawFinish = false;
-                break;
-              default:
-                break;
-            }
-          }
-        } catch (error) {
-          // The stream iterator threw. An abort is a clean cancellation; anything
-          // else is an unrecoverable stream error — surfaced as an {type:"error"}
-          // event (transcript block / CLI line / host log) before loop_end so the
-          // real provider failure is diagnosable (TASK.2 DoD-c), never swallowed.
-          if (signal?.aborted) {
-            yield* this.emitLoopEnd("cancelled", turn, signal);
-          } else {
-            const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput);
-            yield { type: "error", error, retry, safe };
-            // The consumer may abort while paused on the yielded error event
-            // (before this generator resumes) — re-check so a synchronous
-            // abort there still ends the loop as "cancelled", not "error".
+          } catch (error) {
+            // The stream iterator threw. An abort is a clean cancellation; anything
+            // else is an unrecoverable stream error — surfaced as an {type:"error"}
+            // event (transcript block / CLI line / host log) before loop_end so the
+            // real provider failure is diagnosable (TASK.2 DoD-c), never swallowed.
             if (signal?.aborted) {
               yield* this.emitLoopEnd("cancelled", turn, signal);
             } else {
-              yield* this.emitLoopEnd("error", turn, signal);
+              const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput);
+              yield { type: "error", error, retry, safe };
+              // The consumer may abort while paused on the yielded error event
+              // (before this generator resumes) — re-check so a synchronous
+              // abort there still ends the loop as "cancelled", not "error".
+              if (signal?.aborted) {
+                yield* this.emitLoopEnd("cancelled", turn, signal);
+              } else {
+                yield* this.emitLoopEnd("error", turn, signal);
+              }
             }
+            return;
           }
-          return;
+        } finally {
+          disposeTurnAbortLink();
         }
 
         if (signal?.aborted) {
@@ -1142,7 +1228,17 @@ export class AgentLoop {
         // the frame is complete; the error (already re-yielded above as a visible
         // event) is a provider artifact — the turn continues instead of dying.
         // A synthetic SDK finish with finishReason "error" does not count as a real finish.
-        if (streamErrored && !sawFinish) {
+        //
+        // TASK.210 (codex review finding): `!degenerationVerdict` is REQUIRED
+        // here, not cosmetic. The guard's own cutoff never produces a real
+        // `finish` either (the stream is aborted mid-attempt), so an attempt
+        // that saw a forgiven `error` event BEFORE the loop started would
+        // otherwise satisfy `streamErrored && !sawFinish` and get misreported
+        // as loop_end "error" — losing the more precise diagnosis. Degeneration
+        // wins: it is the guard's OWN classification of why the stream ended,
+        // and the error (still visible upstream, never swallowed) was already
+        // being forgiven by construction before the loop was even noticed.
+        if (streamErrored && !sawFinish && !degenerationVerdict) {
           yield* this.emitLoopEnd("error", turn, signal);
           return;
         }

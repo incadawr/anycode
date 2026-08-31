@@ -94,6 +94,14 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         maxAttempts: event.maxAttempts,
         delayMs: event.delayMs,
       };
+    case "degeneration":
+      return {
+        t: "degeneration",
+        channel: event.channel,
+        period: event.period,
+        repeats: event.repeats,
+        turn: event.turn,
+      };
     case "error":
       return { t: "error" };
     case "checkpoint_created":

@@ -369,6 +369,17 @@ describe("aggregateProfileStats — malformed record hardening (W5-FIX finding 2
     const stats = aggregateProfileStats([f], { now, dayKey: utcDayKey });
     expect(stats.lifetimeTokens).toBe(0);
   });
+
+  it("TASK.210: a degeneration record is a VALID discriminant, not a phantom variant — a file carrying only one still counts as a session", () => {
+    const f = file("s.jsonl", [
+      { v: 1, ts: 0, session: "s", t: "degeneration", channel: "text", period: 296, repeats: 341, turn: 4 },
+    ]);
+    const stats = aggregateProfileStats([f], { now, dayKey: utcDayKey });
+    // If "degeneration" were still missing from VALID_RECORD_TYPES this file
+    // would be indistinguishable from PoC-1's "unknown" case above — 0
+    // sessions, no day bucket — silently discarding a real guard-cutoff line.
+    expect(stats.totalSessions).toBe(1);
+  });
 });
 
 describe("aggregateProfileStats — default dayKey (LOCAL calendar date)", () => {

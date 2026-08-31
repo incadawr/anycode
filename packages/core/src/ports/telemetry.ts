@@ -62,6 +62,14 @@ export type TelemetryEventRecord =
     }
   | { t: "workflow_end"; status: "completed" | "failed" | "cancelled"; completedSteps: number; totalSteps: number; durationMs: number }
   | { t: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number }
+  /**
+   * TASK.210: the degenerate-generation guard cut a turn. `channel` names
+   * which of the per-turn DegenerationDetector instances fired
+   * (loop/degeneration-detector.ts); `period`/`repeats` are its verdict
+   * verbatim and `turn` is the cut turn's number — plain numbers/enums, same
+   * footing as `stream_retry`'s counters above, never the repeated text itself.
+   */
+  | { t: "degeneration"; channel: "text" | "reasoning"; period: number; repeats: number; turn: number }
   | { t: "error" }
   | { t: "checkpoint_created" }
   | { t: "checkpoint_failed" };
