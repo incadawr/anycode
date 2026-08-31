@@ -76,6 +76,16 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
     );
   });
 
+  it("prints a degeneration line naming the channel, period and repeat count (TASK.210)", () => {
+    const out = collect([
+      { type: "degeneration", channel: "text", period: 296, repeats: 341, turn: 4 },
+    ]);
+    expect(out).toContain("degeneration");
+    expect(out).toContain("text");
+    expect(out).toContain("296");
+    expect(out).toContain("341");
+  });
+
   const events: AgentEvent[] = [
     { type: "tool_execution_start", toolCallId: "call-1", toolName: "Write", input: { file_path: "/a.ts" } },
     {

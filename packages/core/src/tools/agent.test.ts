@@ -11,6 +11,7 @@ import type { ToolContext, ToolEmittedEvent } from "../types/tools.js";
 import type { CorePorts } from "../ports/index.js";
 import {
   SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS,
+  SUBAGENT_OUTPUT_MAX_BYTES,
   SUBAGENT_TIME_BUDGET_MS,
 } from "../types/config.js";
 import { SUBAGENT_ACTIVITY_SUMMARY_MAX_CHARS } from "../subagents/summarize-tool.js";
@@ -333,6 +334,169 @@ describe("agentTool — honest outcome mapping (TASK.44)", () => {
     expect(result.ok).toBe(true);
     expect(result.errorKind).toBeUndefined();
     expect(agentTool.formatResultForModel?.(result)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.210 — degeneration/length/byte-cap markers. (а) a guard-cut turn is
+// never ok:true; (б)/(в) are prefixes applied only in formatResultForModel,
+// never in output.finalText (cards/persistence keep the raw text).
+
+describe("agentTool — degeneration/truncation markers (TASK.210)", () => {
+  function portReturning(outcome: SubagentOutcome): SubagentPort {
+    return { run: async () => outcome };
+  }
+
+  it("degenerate outcome maps to ok:false with the INCOMPLETE marker and forwards the partial", async () => {
+    const looped = "Запускаю тест. Прогон. ФИНАЛЬНО. Погнали. ".repeat(50);
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "completed",
+          finalText: looped,
+          truncated: false,
+          turns: 1,
+          toolCalls: 0,
+          durationMs: 1_472_000,
+          finalTurnFinishReason: "degenerate",
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    // A guard cutoff is not a budget exhaustion — errorKind stays unset, same
+    // as the plain "error" outcome above, so the dispatcher's own fallback
+    // (types/tools.ts: `errorKind ?? "error"`) names the external status.
+    expect(result.errorKind).toBeUndefined();
+    expect(result.error).toContain("degenerated into a repetition loop");
+    expect(result.error).toContain("INCOMPLETE SUBAGENT RESULT");
+    expect(result.error).toContain("ends inside a degenerate loop");
+    expect(result.error).toContain(looped.trim());
+    expect(result.error!.indexOf("INCOMPLETE SUBAGENT RESULT")).toBeLessThan(result.error!.indexOf(looped.trim()));
+    expect(agentTool.formatResultForModel?.(result)).toBe(result.error);
+  });
+
+  it("degenerate + truncated: the (а) marker does not FALSELY claim the delivered partial ends inside the loop (codex review finding)", async () => {
+    // Real scenario: >100KB of ordinary text, THEN the loop starts — the
+    // runner's capUtf8Bytes (runner.ts) runs BEFORE this outcome exists and
+    // keeps the HEAD, trimming from the end. So by the time outcomeToResult
+    // sees it, finalText may be nothing but ordinary head text with the loop
+    // itself entirely in the discarded tail. formatResultForModel's own (в)
+    // prefix NEVER reaches an ok:false result (it early-returns result.error
+    // verbatim), so the byte-cap fact has to be folded into (а)'s own message.
+    const headText = "a".repeat(SUBAGENT_OUTPUT_MAX_BYTES);
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "completed",
+          finalText: headText,
+          truncated: true,
+          turns: 10,
+          toolCalls: 5,
+          durationMs: 1_472_000,
+          finalTurnFinishReason: "degenerate",
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("INCOMPLETE SUBAGENT RESULT");
+    // The unconditional claim from the plain (non-truncated) case above must
+    // NOT appear here — it would be a lie about what the delivered head text
+    // actually shows.
+    expect(result.error).not.toContain("The text below ends inside a degenerate loop.");
+    // The byte cap fact is named explicitly, same number as marker (в).
+    expect(result.error).toContain(`${SUBAGENT_OUTPUT_MAX_BYTES}`);
+    expect(result.error).toContain(headText.slice(0, 100));
+  });
+
+  it("length-cut completed outcome gets the TRUNCATED-ceiling prefix in model text, output.finalText stays raw", async () => {
+    const rawText = "a full report, cut off by the provider mid-sentence";
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "completed",
+          finalText: rawText,
+          truncated: false,
+          turns: 3,
+          toolCalls: 2,
+          durationMs: 5_000,
+          finalTurnFinishReason: "length",
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    // The card/persistence path reads output.finalText — the marker must
+    // never land there, only in the model-visible text (plan §4).
+    expect(result.output?.finalText).toBe(rawText);
+    const modelText = agentTool.formatResultForModel?.(result) ?? "";
+    expect(modelText).toContain("TRUNCATED SUBAGENT RESULT");
+    expect(modelText).toContain("output-token ceiling");
+    expect(modelText.endsWith(rawText)).toBe(true);
+  });
+
+  it("byte-capped outcome gets the result-cap prefix naming SUBAGENT_OUTPUT_MAX_BYTES", async () => {
+    const cappedText = "a".repeat(SUBAGENT_OUTPUT_MAX_BYTES);
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "completed",
+          finalText: cappedText,
+          truncated: true,
+          turns: 1,
+          toolCalls: 0,
+          durationMs: 5_000,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    const modelText = agentTool.formatResultForModel?.(result) ?? "";
+    expect(modelText).toContain("TRUNCATED SUBAGENT RESULT");
+    expect(modelText).toContain(`${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap`);
+    expect(modelText.endsWith(cappedText)).toBe(true);
+  });
+
+  it("length + truncated stack in fixed order (б) then (в) when the incident hits both at once", async () => {
+    const cappedText = "z".repeat(SUBAGENT_OUTPUT_MAX_BYTES);
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "completed",
+          finalText: cappedText,
+          truncated: true,
+          turns: 5,
+          toolCalls: 3,
+          durationMs: 1_472_000,
+          finalTurnFinishReason: "length",
+        }),
+      }),
+    );
+    const modelText = agentTool.formatResultForModel?.(result) ?? "";
+    const lengthIdx = modelText.indexOf("output-token ceiling");
+    const capIdx = modelText.indexOf("result cap");
+    expect(lengthIdx).toBeGreaterThanOrEqual(0);
+    expect(capIdx).toBeGreaterThan(lengthIdx);
+    expect(modelText.endsWith(cappedText)).toBe(true);
+  });
+
+  it("byte-lock: no flags set produces no prefix at all (mirrors the invariant at line ~120 above)", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "completed",
+          finalText: "plain report, nothing unusual",
+          truncated: false,
+          turns: 1,
+          toolCalls: 1,
+          durationMs: 100,
+        }),
+      }),
+    );
+    expect(agentTool.formatResultForModel?.(result)).toBe("plain report, nothing unusual");
   });
 });
 

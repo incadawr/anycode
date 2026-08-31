@@ -239,6 +239,23 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
+  it("degeneration (channel/period/repeats/turn copied field-by-field, TASK.210)", () => {
+    const event: AgentEvent = {
+      type: "degeneration",
+      channel: "text",
+      period: 296,
+      repeats: 341,
+      turn: 7,
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "degeneration",
+      channel: "text",
+      period: 296,
+      repeats: 341,
+      turn: 7,
+    });
+  });
+
   it("error (value dropped, presence-only)", () => {
     const event: AgentEvent = { type: "error", error: SENTINEL };
     expect(telemetryRecordFor(event)).toEqual({ t: "error" });

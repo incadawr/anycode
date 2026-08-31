@@ -9,7 +9,7 @@
  * receives no port).
  */
 
-import type { TokenUsage } from "../types/events.js";
+import type { FinishReason, TokenUsage } from "../types/events.js";
 
 export interface SubagentRequest {
   /** 3.1 personas: "general-purpose" | "explore"; 3.3 widens with md-profiles. */
@@ -66,6 +66,18 @@ export interface SubagentOutcome {
    * run's spend, never a ledger.
    */
   usage?: TokenUsage;
+  /**
+   * TASK.210: the FinishReason of the last turn_end this run actually saw —
+   * captured alongside `finalText` at the SAME turn_end, so the two always
+   * describe the same turn (including a max_turns cutoff whose final attempt
+   * never reached turn_end: both stay pinned to the last completed turn's
+   * pair rather than one advancing without the other). Feeds the tools/agent.ts
+   * markers: "degenerate" fails the outcome outright, "length" prefixes the
+   * modelText as a provider-side truncation. Absent only for a run that
+   * completed zero turns (agentType/model resolution errors, cancellation
+   * before any turn_end) — there is no turn to attribute a reason to.
+   */
+  finalTurnFinishReason?: FinishReason;
 }
 
 /**

@@ -3347,6 +3347,41 @@ describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)
   });
 });
 
+describe("Session — child mode: an unfamiliar turn_end.finishReason breaks nothing (TASK.210)", () => {
+  it('the child\'s own degeneration-guard cutoff ("degenerate") reaches a normal "completed" terminal, not a crash', async () => {
+    // observeChildEvent's `turn_end` case (session.ts) never reads
+    // event.finishReason at all — it only fixates finalText and counts turn
+    // ends — so this proves end-to-end, through the REAL AgentLoop (which now
+    // can legitimately emit finishReason:"degenerate", TASK.210 S2), that a
+    // finishReason this code predates does not throw or corrupt the terminal
+    // report. Propagating the reason itself through the child-session wire
+    // protocol is a separate, out-of-scope slice (plan §10) — this test is
+    // only the "does not fall over" floor.
+    const LOOP_PHRASE = "Запускаю тест. Прогон. ФИНАЛЬНО. Погнали. ";
+    const degenerateStep: ModelStreamEvent[] = [
+      { type: "start" },
+      // One large chunk comfortably clears the detector's window/threshold
+      // (loop/degeneration-detector.ts) regardless of chunking — no `finish`
+      // ever arrives because the guard aborts the request mid-stream.
+      { type: "text_delta", id: "t1", text: LOOP_PHRASE.repeat(200) },
+    ];
+    const h = createChildHarness({ steps: [degenerateStep] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.status).toBe("completed");
+    } finally {
+      h.close();
+    }
+  });
+});
+
 describe("Session — child mode: busy spans the WHOLE turn teardown, not just runTurn() (F7)", () => {
   it("a steer message sent while flushTelemetry() is still pending is queued, not started as a live second turn", async () => {
     // Mirrors the root-session "shutdown() during teardown waits for

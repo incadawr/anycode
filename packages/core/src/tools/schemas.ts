@@ -14,6 +14,7 @@ import { BASH_MAX_TIMEOUT_MS, WEBSEARCH_MAX_RESULTS } from "../types/config.js";
 import type { ExecStatus } from "../ports/execution.js";
 import type { BackgroundTaskStatus } from "../ports/tasks.js";
 import type { TodoItem } from "./todo-store.js";
+import type { FinishReason } from "../types/events.js";
 
 // ---------------------------------------------------------------------------
 // Read
@@ -384,6 +385,14 @@ export interface AgentOutput {
   turns: number;
   toolCalls: number;
   durationMs: number;
+  /**
+   * TASK.210: the FinishReason of the child's last turn_end, carried onto the
+   * model-visible payload so formatResultForModel can prefix a "length" cutoff
+   * (the provider's own output ceiling, not this cap) — see agent.ts markers
+   * (а)/(б). Absent has the same meaning as on SubagentOutcome: no turn ever
+   * reached turn_end.
+   */
+  finalTurnFinishReason?: FinishReason;
 }
 
 // ---------------------------------------------------------------------------

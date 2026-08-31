@@ -312,7 +312,24 @@ function createRunner(
         // A per-step timeout aborts the child, which returns "cancelled"; the
         // engine reports that as "error" (the step failed, §3.4), distinct from
         // a run-level cancellation.
-        const status: WorkflowStepOutcome["status"] = timedOut ? "error" : sub.status;
+        //
+        // TASK.210 (codex review finding): a degenerate-loop cutoff keeps
+        // SubagentOutcome.status "completed" by design (the child's loop
+        // reached its sentinel cleanly — see outcomeToResult's own comment on
+        // the accepted internal/external mismatch). Left unchecked here, a
+        // workflow step would read "completed" and its looping partial would
+        // satisfy a dependent step's input — exactly the failure TASK.210 was
+        // filed to close, one layer up. Remapped to "error" (no new status
+        // value — WorkflowStepOutcome's union already has one) using the
+        // SAME existing WorkflowStepOutcome union, mirroring the timedOut
+        // remap immediately above: neither timeout nor degeneration invents a
+        // new member, both fold into "error" and both still deposit their
+        // partial finalText below for a human/log to read.
+        const status: WorkflowStepOutcome["status"] = timedOut
+          ? "error"
+          : sub.finalTurnFinishReason === "degenerate"
+            ? "error"
+            : sub.status;
         const outcome: WorkflowStepOutcome = {
           stepId: step.id,
           agentType: step.agentType,

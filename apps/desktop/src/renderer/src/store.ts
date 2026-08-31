@@ -367,6 +367,15 @@ export type TranscriptBlock =
   /** Renderer-only quota diagnostic; never reconstructed into prompt history. */
   | { kind: "usage_limit"; id: string; notice: UsageLimitNotice }
   | { kind: "output_truncated"; id: string }
+  /**
+   * One row per `degeneration` AgentEvent (TASK.210): the degenerate-
+   * generation guard caught a tandem-repeat loop in this turn's own output
+   * and cut it. `channel` names which stream (text/reasoning) looped;
+   * `period`/`repeats` are the detector's verdict verbatim — same minimal,
+   * always-visible posture as `ceiling_grant` above (a guard acted; the feed
+   * must say so, never silently).
+   */
+  | { kind: "degeneration"; id: string; channel: "text" | "reasoning"; period: number; repeats: number }
   | { kind: "loop_end"; id: string; reason: string; turns: number }
   /**
    * One persisted line per `stream_retry` AgentEvent (TASK.33 W8), ADDITIVE to
@@ -2491,6 +2500,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             level: event.level,
             message: event.message,
             ...(event.suppressed !== undefined ? { suppressed: event.suppressed } : {}),
+          });
+          return;
+
+        // Degenerate-generation guard (TASK.210): the same "a guard acted,
+        // the feed must say so" posture as ceiling_grant below — the model's
+        // own output looped and this turn's stream was cut.
+        case "degeneration":
+          appendBlock({
+            kind: "degeneration",
+            id: `degeneration:${turnId}:${event.turn}`,
+            channel: event.channel,
+            period: event.period,
+            repeats: event.repeats,
           });
           return;
 

@@ -389,6 +389,107 @@ export const WORKFLOW_CARD_ACTIVITY_RING = 200;
 /** Combined UTF-8 byte cap across all retained activity entries' toolName+summary (2x SUBAGENT_CARD_ACTIVITY_MAX_BYTES). */
 export const WORKFLOW_CARD_ACTIVITY_MAX_BYTES = 65_536;
 
+// ---------------------------------------------------------------------------
+// TASK.210 constants (degenerate-generation guard, loop/degeneration-detector.ts)
+//
+// Live incident: a subagent's final turn repeated a ~296-char phrase 341
+// times (46,148 of 58,088 chars), ran 24m32s against a ~20s median, and was
+// cut only by the provider's 131,072-output-token ceiling. Numbers below are
+// sized against that measurement, not guessed.
+
+/**
+ * Minimum length, in UTF-16 code units, of a solid tandem-repeat run before
+ * the detector will even look. The incident's period (296 chars) fits ~6.9
+ * times below this floor — almost twice DEGENERATION_MIN_REPEATS — so
+ * detection fires around 2,050 chars into the loop (~930 of the eventual
+ * 131,072 tokens: >=99% of the waste avoided). A legitimate repeat (three
+ * identical 60-80 char diff lines = 180-240 chars) sits 8-10x below this
+ * floor and cannot trip it even in principle.
+ */
+export const DEGENERATION_MIN_RUN_CHARS = 2_048;
+
+/**
+ * How many consecutive repeats of the same period must appear before the run
+ * counts as degenerate. The number off the TASK.210 board ("the same
+ * fragment three times"). Two repeats is a legal rhetorical figure and, more
+ * importantly, exactly what a replayed stream_retry produces without a reset
+ * (see the reset() call on the stream_retry branch in agent-loop.ts) — three
+ * running the length of MIN_RUN_CHARS of prose is not.
+ */
+export const DEGENERATION_MIN_REPEATS = 3;
+
+/**
+ * Minimum period length, in UTF-16 code units, worth flagging. Below this a
+ * run is a data-shaped micro-period, not a phrase: "="-rules (period 1),
+ * ".\n" (period 2), an inline array's "0, " (period 3). Cost of the floor: a
+ * one-short-word loop (e.g. "no ", period 3) will not be caught live — but it
+ * will still run the provider's output ceiling and land a finishReason
+ * "length", which the subagent/tools marker (b) names after the fact. The
+ * measured incident (period 296) is 9x above this boundary.
+ *
+ * Raised from the original 8 to 32 (codex review finding, TASK.210 second
+ * pass): 8 was chosen typologically ("phrase, not separator") but a
+ * period-8 run is also exactly what legitimate base64/structured-data blocks
+ * can look like — e.g. `"AAECAwQF".repeat(n)` is valid base64 for a
+ * repeating 6-byte sequence, and at period 8 the OLD floor let it through as
+ * a false positive. 32 keeps every data-separator example above excluded, no
+ * longer misclassifies a period-8 data block as a phrase, and still leaves a
+ * wide margin (9x) below the measured incident. Not a corpus-calibrated
+ * number — a data blob with an internal period between 33 and the incident's
+ * 296 remains an unaddressed false-positive risk (plan §9's own caveat on
+ * this constant, only worse for the specific base64 shape now fixed).
+ */
+export const DEGENERATION_MIN_PERIOD_CHARS = 32;
+
+/**
+ * Tail window kept per channel, in UTF-16 code units (2x MIN_RUN_CHARS).
+ * Bounds both memory (two bounded strings per turn) and per-check cost.
+ *
+ * HARD STRUCTURAL BLIND SPOT (codex review finding, TASK.210 second pass):
+ * the check needs MIN_REPEATS whole periods to fit in the window, so a
+ * period above WINDOW_CHARS/MIN_REPEATS ≈ 1,365 chars can NEVER be detected —
+ * not "detected late", never detected, no matter how long the loop runs,
+ * because three periods that size literally do not fit in a 4,096-char tail.
+ * This is a real gap, not a soft cap; see degeneration-detector.test.ts's
+ * dedicated regression test for a period past this line staying silent
+ * forever. 1,365 is still 4.6x the measured incident period (296), so the
+ * incident itself sits comfortably inside the detectable range. Left as a
+ * documented, tested gap rather than widened (accepted per plan §9/§10):
+ * widening WINDOW doubles the per-check cost documented on
+ * DEGENERATION_CHECK_STRIDE_CHARS below for a return that only matters to
+ * loops nobody has measured yet.
+ */
+export const DEGENERATION_WINDOW_CHARS = 4_096;
+
+/**
+ * The O(WINDOW) period check (reverse the buffer, run the KMP prefix
+ * function over the reversal, scan candidate periods — three passes each
+ * touching up to WINDOW chars) runs at most once per this many newly-fed
+ * characters.
+ *
+ * Amortized cost per fed character is O(WINDOW/STRIDE) = O(8) PASSES over the
+ * buffer — NOT <=8 primitive operations (codex review correction, TASK.210
+ * second pass: the original docstring conflated "number of linear passes"
+ * with "number of primitive operations per character"). Each pass is itself
+ * O(WINDOW), so the true amortized cost is on the order of a few tens of
+ * character comparisons, not <=8. Still bounded and independent of total
+ * stream length — the property that actually matters for a hot streaming
+ * path — just not O(1) in the strict single-operation sense the original
+ * wording implied.
+ *
+ * Detection lag is bounded by max(MIN_RUN_CHARS, MIN_REPEATS * period) +
+ * STRIDE_CHARS + one chunk — NOT the flat "MIN_RUN + STRIDE + chunk" this
+ * docstring previously claimed (codex review correction). That flat bound
+ * only holds when MIN_REPEATS whole periods already fit inside MIN_RUN_CHARS
+ * (period <= MIN_RUN_CHARS/MIN_REPEATS ≈ 682); a larger period needs that
+ * many periods to accumulate in the buffer first, however many characters
+ * that takes, up to the ~1,365-char structural ceiling documented on
+ * DEGENERATION_WINDOW_CHARS above. The measured incident (period 296) is
+ * well inside the flat-bound region, so its own detection-lag estimate
+ * elsewhere (loop/degeneration-detector.ts's docstring) is unaffected.
+ */
+export const DEGENERATION_CHECK_STRIDE_CHARS = 512;
+
 /**
  * TASK.145 срез 1 (cli/child-notification.ts): cap on a detached child's
  * report `summary` field inside the `<task-notification>` block delivered to

@@ -773,6 +773,17 @@ export function MessageList({
                   {block.remaining.join("; ")}
                 </div>
               );
+            // Degenerate-generation guard (TASK.210): same "must be visible,
+            // never silent" posture as ceiling_grant above — the model's own
+            // output looped and this turn's stream was cut before it could
+            // run the provider's output ceiling.
+            case "degeneration":
+              return (
+                <div key={block.id} className="message message-error" role="alert">
+                  Output loop detected ({block.channel} — a ~{block.period}-char phrase repeated {block.repeats}
+                  {"×"}) — the turn was cut short.
+                </div>
+              );
             default: {
               const _exhaustive: never = block;
               return _exhaustive;

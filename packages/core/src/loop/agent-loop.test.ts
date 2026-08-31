@@ -47,7 +47,7 @@ import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { WorkspaceTransition } from "../ports/worktrees.js";
 import { CEILING_VERDICT_DECLARATION } from "./ceiling.js";
-import { MAX_CEILING_ROUNDS } from "../types/config.js";
+import { DEGENERATION_CHECK_STRIDE_CHARS, DEGENERATION_MIN_RUN_CHARS, MAX_CEILING_ROUNDS } from "../types/config.js";
 import { createMediaProjectionPort } from "../provider/media-projection.js";
 import type { RecognizerEndpoint } from "../vision/index.js";
 
@@ -3683,5 +3683,173 @@ describe("AgentLoop.setMode — prologue hook-await window (TASK.37 W1, H-series
     // first check gates under yolo.
     await collect(loop.runTurn("confirm config half persisted"));
     expect(modes.at(-1)).toBe("yolo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.210 — degenerate-generation guard
+
+describe("AgentLoop.runTurn — degenerate-generation guard (TASK.210)", () => {
+  const registry = makeRegistry({ Mock: makeTool() });
+  const LOOP_PHRASE = "Запускаю тест. Прогон. ФИНАЛЬНО. Погнали. ";
+
+  /**
+   * Enough repeats of LOOP_PHRASE to clear DEGENERATION_MIN_RUN_CHARS with
+   * the same STRIDE-driven detection-lag margin degeneration-detector.test.ts
+   * uses (the periodicity check only runs every STRIDE fed chars, so a
+   * stream that merely clears MIN_RUN with no slack can end before the last
+   * checkpoint sees the full buffer), split into chunkSize-char pieces the
+   * way a real provider streams text.
+   */
+  function loopingChunks(chunkSize: number): string[] {
+    const target = DEGENERATION_MIN_RUN_CHARS + DEGENERATION_CHECK_STRIDE_CHARS + 256;
+    const times = Math.ceil(target / LOOP_PHRASE.length) + 3;
+    const text = LOOP_PHRASE.repeat(times);
+    const chunks: string[] = [];
+    for (let i = 0; i < text.length; i += chunkSize) {
+      chunks.push(text.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+
+  function findDegeneration(events: AgentEvent[]) {
+    return events.find((e): e is Extract<AgentEvent, { type: "degeneration" }> => e.type === "degeneration");
+  }
+
+  it("cuts the stream, discards tool calls, ends the turn with finishReason degenerate", async () => {
+    const steps: ModelStreamEvent[] = [
+      { type: "start" },
+      // A real proposal that must never reach dispatch once the loop below is caught.
+      { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+      ...loopingChunks(100).map((text): ModelStreamEvent => ({ type: "text_delta", id: "t1", text })),
+    ];
+    const modelPort = new MockModelPort([steps]);
+    const loop = makeLoop({ modelPort, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    const degeneration = findDegeneration(events);
+    expect(degeneration).toBeDefined();
+    expect(degeneration).toMatchObject({ channel: "text", turn: 1 });
+    expect(degeneration!.repeats).toBeGreaterThanOrEqual(3);
+    expect(degeneration!.period).toBeGreaterThan(0);
+
+    expect(events.some((e) => e.type === "tool_execution_start")).toBe(false);
+    expect(events.find((e) => e.type === "turn_end")).toMatchObject({ finishReason: "degenerate" });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+
+    // Proof the money stopped: the request's OWN abort signal was fired, not
+    // just the loop moving on internally (agent-loop.ts:766 in the plan).
+    expect(modelPort.requests[0]!.abortSignal?.aborted).toBe(true);
+  });
+
+  it("supervised root is exempt: the loop is inert and the real tool call runs to completion", async () => {
+    const steps: ModelStreamEvent[] = [
+      { type: "start" },
+      ...loopingChunks(100).map((text): ModelStreamEvent => ({ type: "text_delta", id: "t1", text })),
+      { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+    const modelPort = new MockModelPort([
+      steps,
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const loop = makeLoop({ modelPort, registry, ceiling: { supervisedRoot: () => true } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(findDegeneration(events)).toBeUndefined();
+    expect(events.some((e) => e.type === "tool_execution_start")).toBe(true);
+    expect(events.some((e) => e.type === "tool_result")).toBe(true);
+    expect(modelPort.requests[0]!.abortSignal?.aborted).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
+  it("degenerationGuard {enabled:false} disables the guard", async () => {
+    const steps: ModelStreamEvent[] = [
+      { type: "start" },
+      ...loopingChunks(100).map((text): ModelStreamEvent => ({ type: "text_delta", id: "t1", text })),
+      { type: "finish", finishReason: "stop", usage: {} },
+    ];
+    const modelPort = new MockModelPort([steps]);
+    const loop = makeLoop({ modelPort, registry, degenerationGuard: { enabled: false } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(findDegeneration(events)).toBeUndefined();
+    expect(modelPort.requests[0]!.abortSignal?.aborted).toBe(false);
+    expect(events.find((e) => e.type === "turn_end")).toMatchObject({ finishReason: "stop" });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
+  it("a reasoning-channel loop is cut too", async () => {
+    const steps: ModelStreamEvent[] = [
+      { type: "start" },
+      ...loopingChunks(100).map((text): ModelStreamEvent => ({ type: "reasoning_delta", id: "r1", text })),
+    ];
+    const modelPort = new MockModelPort([steps]);
+    const loop = makeLoop({ modelPort, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    const degeneration = findDegeneration(events);
+    expect(degeneration).toBeDefined();
+    expect(degeneration).toMatchObject({ channel: "reasoning" });
+    expect(events.find((e) => e.type === "turn_end")).toMatchObject({ finishReason: "degenerate" });
+    expect(modelPort.requests[0]!.abortSignal?.aborted).toBe(true);
+  });
+
+  it("a forgiven in-stream error earlier in the SAME attempt does not steal the classification from a later degeneration cutoff (codex review finding)", async () => {
+    // Mirrors the W7b "forgives an in-stream error and continues" fixture
+    // shape, but the attempt never reaches a real `finish` — the guard cuts
+    // it first. Without `degenerationVerdict` in the fail-closed gate's
+    // condition, `streamErrored && !sawFinish` would be true here (the error
+    // set streamErrored, and no finish ever arrives because the stream was
+    // aborted) and the turn would be wrongly reported as loop_end "error"
+    // instead of the more precise "the guard caught a loop" diagnosis.
+    const steps: ModelStreamEvent[] = [
+      { type: "start" },
+      { type: "error", error: new Error("transient artifact before the loop") },
+      ...loopingChunks(100).map((text): ModelStreamEvent => ({ type: "text_delta", id: "t1", text })),
+    ];
+    const modelPort = new MockModelPort([steps]);
+    const loop = makeLoop({ modelPort, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    // The error is still visible (never swallowed)...
+    expect(types(events)).toContain("error");
+    // ...but degeneration wins the terminal classification.
+    expect(findDegeneration(events)).toBeDefined();
+    expect(events.find((e) => e.type === "turn_end")).toMatchObject({ finishReason: "degenerate" });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    expect(events.some((e) => e.type === "loop_end" && e.reason === "error")).toBe(false);
+  });
+
+  it("stream_retry resets detector state: three replayed attempts of the same payload never trip the guard", async () => {
+    // Each attempt alone stays under DEGENERATION_MIN_RUN_CHARS, so this
+    // proves nothing about the check itself firing on real content — its
+    // only job is to prove reset() actually runs. Without it, the three
+    // identical attempts would concatenate into one honest tandem repeat
+    // (period = payload.length, repeats = 3) and false-positive.
+    const payload = LOOP_PHRASE.repeat(25); // ~1,050 chars, well under MIN_RUN_CHARS (2,048) alone
+    expect(payload.length).toBeLessThan(DEGENERATION_MIN_RUN_CHARS);
+    const steps: ModelStreamEvent[] = [
+      { type: "start" },
+      { type: "text_delta", id: "t1", text: payload },
+      { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 0, reason: "stream stalled" },
+      { type: "text_delta", id: "t2", text: payload },
+      { type: "stream_retry", attempt: 2, maxAttempts: 3, delayMs: 0, reason: "stream stalled" },
+      { type: "text_delta", id: "t3", text: payload },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ];
+    const modelPort = new MockModelPort([steps]);
+    const loop = makeLoop({ modelPort, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(findDegeneration(events)).toBeUndefined();
+    expect(events.find((e) => e.type === "turn_end")).toMatchObject({ finishReason: "stop" });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
   });
 });

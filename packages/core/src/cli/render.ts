@@ -484,6 +484,16 @@ export function renderEvent(
         `\n[ceiling: round ${event.round}, +${event.granted} turn(s) (total ${event.totalGranted}) — remaining: ${event.remaining.join("; ")}]\n`,
       );
       break;
+    // The degenerate-generation guard (TASK.210) cut a turn: the model's own
+    // output was found looping. A dedicated line, not folded into the
+    // turn_end "length" handling below, because it carries data turn_end
+    // doesn't have — which channel looped, the measured period and how many
+    // times it repeated before the cut.
+    case "degeneration":
+      write(
+        `\n[degeneration: ${event.channel} looped — period ${event.period} chars, x${event.repeats}, turn cut]\n`,
+      );
+      break;
     case "loop_end":
       // Since TASK.124 the turn cap is a decision point, not a setting to raise:
       // the ladder already asked and either granted (a ceiling_grant line above)

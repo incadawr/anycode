@@ -165,6 +165,46 @@ function outcomeToResult(
       ...presentation,
     };
   }
+  // TASK.210 marker (а): the child's own degeneration guard (agent-loop.ts)
+  // cut its FINAL turn — never the provider, never a budget exhaustion.
+  // Repeats the ladder's own precedent (a guard stopped the run => the
+  // parent gets a non-success, never a silently-accepted partial): ok:false
+  // WITHOUT an errorKind, same shape as the plain "error" branch above —
+  // "max_turns" would misname the cause, and widening the errorKind union
+  // for one guard is not worth it when the dispatcher's own fallback
+  // (`errorKind ?? "error"`, types/tools.ts) already gives the right external
+  // status. This is checked AFTER max_turns/cancelled and BEFORE the ok:true
+  // return below, and returns immediately — formatResultForModel's (б)/(в)
+  // prefixing never runs on an ok:false result (it returns `result.error`
+  // verbatim), so marker (в)'s fact is folded in HERE when it also applies
+  // (codex review finding — see the truncated branch below).
+  //
+  // Internally SubagentOutcome.status stays "completed" (loop_end said so —
+  // the loop reached its sentinel cleanly); the mismatch between an internal
+  // "completed" and this external non-success is the accepted cost of not
+  // widening the status union (plan §8) — the exact period/repeat count that
+  // caused this lives in the loop's own `degeneration` telemetry record, not
+  // this message: a model reading this text needs "do not trust this
+  // partial", not the diagnostic numbers.
+  if (outcome.finalTurnFinishReason === "degenerate") {
+    const partial = outcome.finalText.trim();
+    // runner.ts's capUtf8Bytes runs BEFORE this outcome exists and trims
+    // from the END, keeping the head — a real incident can be >100KB of
+    // ordinary text followed by the loop, in which case the loop itself
+    // lands entirely in the DISCARDED tail and `partial` is nothing but
+    // ordinary head text. An unconditional "ends inside a degenerate loop"
+    // claim would then be false for what is actually delivered, so the
+    // claim is hedged (and the byte cap named, same number as marker (в))
+    // whenever `truncated` is also set.
+    const tailClaim = outcome.truncated
+      ? `The subagent's own ${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap ALSO trimmed this text before it reached ` +
+        `here — the loop itself may or may not still be visible below.`
+      : "The text below ends inside a degenerate loop.";
+    const error =
+      `Agent: the subagent's output degenerated into a repetition loop and the turn was cut.\n` +
+      `INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. ${tailClaim}\n\n${partial}`;
+    return { ok: false, error, output: toAgentOutput(outcome), ...presentation };
+  }
   // The runner already capped finalText and set truncated; forward the outcome
   // verbatim (finalText/truncated/status/counters) as the tool payload.
   return { ok: true, output: toAgentOutput(outcome), ...presentation };
@@ -186,14 +226,41 @@ function toAgentOutput(outcome: SubagentOutcome): AgentOutput {
     turns: outcome.turns,
     toolCalls: outcome.toolCalls,
     durationMs: outcome.durationMs,
+    ...(outcome.finalTurnFinishReason !== undefined
+      ? { finalTurnFinishReason: outcome.finalTurnFinishReason }
+      : {}),
   };
 }
 
+/**
+ * TASK.210 markers (б)/(в) — applied here, never in output.finalText, so the
+ * presentation card and history persistence (which read finalText/output
+ * directly) keep the raw text; only what the model itself reads is prefixed.
+ * Both can be true on the same outcome at once (the TASK.210 incident was:
+ * 131,072 tokens generated, 99,999 bytes delivered) — order is fixed (б)→(в)
+ * so the model reads "the provider cut it" before "and then we cut it more".
+ */
 function formatResultForModel(result: ToolResult<AgentOutput>): string {
   if (!result.ok) {
     return result.error ?? "Agent: the subagent failed.";
   }
-  return result.output?.finalText ?? "";
+  let prefix = "";
+  // (б): the PROVIDER's own output-token ceiling ended the turn, not this
+  // tool's byte cap — ok:true because the loop itself completed honestly
+  // (unlike the guard cutoff in outcomeToResult above, which never reaches
+  // here). Owner's measured false-positive rate for this marker: 1 in 902
+  // turns of a sample session, and that one turn WAS the TASK.210 incident.
+  if (result.output?.finalTurnFinishReason === "length") {
+    prefix +=
+      "[TRUNCATED SUBAGENT RESULT — the final turn hit the model's output-token ceiling; " +
+      "the report below is cut mid-stream and its tail is missing.]\n\n";
+  }
+  // (в): this tool's OWN result-byte cap (util/bytes.ts's capUtf8Bytes, spent
+  // in runner.ts) — a distinct truncation from (б) and can follow it.
+  if (result.output?.truncated === true) {
+    prefix += `[TRUNCATED SUBAGENT RESULT — the report exceeded the ${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap; its tail was dropped.]\n\n`;
+  }
+  return prefix + (result.output?.finalText ?? "");
 }
 
 /**
