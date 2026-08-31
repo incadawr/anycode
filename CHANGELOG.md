@@ -5,7 +5,7 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
-## [0.0.23] — 2026-08-30
+## [0.0.24] — 2026-08-31
 
 ### Added
 
@@ -105,6 +105,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   with an unexplained error from the provider. The images are left out of the
   request and replaced with a note naming which one was omitted, so the model
   can still reason about what it is missing and ask about it.
+
+- Closing a session that runs on the Claude CLI no longer hangs for eight
+  seconds when that CLI is already gone — after it crashed on startup, say.
+  Shutdown waited for the child process's `close` event, which is emitted
+  exactly once; if it had already fired, the listener registered afterwards
+  could never receive it, and each stage of the shutdown sequence waited out
+  its full timeout for news that would not come. Shutdown now asks the process
+  handle whether the child has already exited instead of waiting to be told.
 
 ## [0.0.22] — 2026-08-30
 
