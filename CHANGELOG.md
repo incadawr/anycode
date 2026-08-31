@@ -5,6 +5,47 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.25] — 2026-08-31
+
+### Added
+
+- A subagent that gets stuck repeating itself is now stopped instead of being
+  paid for to the end. Models occasionally fall into a loop mid-answer and keep
+  emitting the same phrase; until now the run continued until the provider's
+  own output ceiling cut it off, and what came back looked like an ordinary
+  finished report. In one measured case that was a phrase repeated 341 times
+  over twenty-four minutes.
+
+  AnyCode now watches the answer as it streams — the visible text and the
+  model's reasoning both — and when it sees the same passage repeating solidly,
+  it stops the request itself rather than waiting it out. The delegating side
+  is told plainly that the result is incomplete, and a workflow step that ended
+  this way no longer counts as done for the steps that depend on it.
+
+  Your own session is left alone: when you are sitting in front of the run, the
+  guard reports but never cuts, on the same principle as the turn-budget
+  ceiling. What not to expect: it recognises a passage repeating verbatim, so a
+  loop that drifts — a counter or a timestamp changing inside each repetition —
+  still runs to the end, and very long repeating passages (more than about
+  1,400 characters) are outside what it can see.
+
+### Fixed
+
+- AnyCode could install a Codex it then refused to launch. The supported-version
+  range shown in Settings, the range the installer gated on, and the check that
+  actually decides whether the engine starts were three separate answers, and
+  only the last one mattered. "Use it anyway" for a version you had accepted the
+  risk on never reached that check at all, so the button did nothing on the
+  engine path. All of it now comes from one place — the range Settings shows is
+  the range that is applied, and the refusal message names it. Previously this
+  had to be patched by hand for each new Codex release; it no longer does.
+
+- A tab stuck on "Connecting to host…" now tells you why. When AnyCode's host
+  process fails to start, the reason was already written down — but it was only
+  sent once you typed something, so finding out why the connection failed
+  required pretending it had succeeded. The failure is now reported the moment
+  the tab attaches.
+
 ## [0.0.24] — 2026-08-31
 
 ### Added
