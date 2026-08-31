@@ -583,7 +583,20 @@ export class ClaudeClient {
 
   private async teardown(child: ChildProcess): Promise<void> {
     this.closing = true;
-    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    // `close` is emitted exactly ONCE, and a listener registered after it has
+    // already fired never receives it. A child that died before close() was
+    // called — the CLI crashing on startup, or a fixture that writes one line
+    // and exits — would therefore leave every stage below waiting out its full
+    // timeout for an event that cannot arrive: 6s + 1s + 1s of nothing.
+    // Measured at 8007ms before this guard. Node exposes the already-exited
+    // state on the handle itself, so ask it instead of waiting for news.
+    const closed = new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        resolve();
+        return;
+      }
+      child.once("close", () => resolve());
+    });
     try {
       try {
         child.stdin?.end();
