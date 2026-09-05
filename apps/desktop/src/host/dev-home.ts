@@ -30,3 +30,28 @@ export function resolveExtensionsHomeOverride(env: NodeJS.ProcessEnv): string | 
   }
   return trimmed;
 }
+
+/**
+ * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (session.ts):
+ * a replay recording needs a long session hydrated in full so the start of a
+ * "build a feature" transcript is in frame, but the packaged-build cap (500)
+ * must never move. Same fail-closed gate as `resolveExtensionsHomeOverride`
+ * above — a packaged host never has `ANYCODE_AUTOMATION === "1"` in its env
+ * (main/host-env.ts's fork-env scrub), so this predicate is defense-in-depth,
+ * not the only gate.
+ */
+export function resolveSessionHistoryMaxItems(env: NodeJS.ProcessEnv): number | null {
+  if (env.ANYCODE_AUTOMATION !== "1") {
+    return null;
+  }
+  const raw = env.ANYCODE_SESSION_HISTORY_MAX_ITEMS;
+  if (raw === undefined) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const value = Number(trimmed);
+  return value > 0 ? value : null;
+}
