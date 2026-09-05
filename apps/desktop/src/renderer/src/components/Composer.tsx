@@ -17,7 +17,7 @@ import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react"
 import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
-import type { ContextUsage, DesktopState, SessionTokens, TurnState } from "../store.js";
+import { isSessionBusy, type ContextUsage, type DesktopState, type SessionTokens, type TurnState } from "../store.js";
 import type { WireContextBreakdown } from "../../../shared/protocol.js";
 import {
   makePasteMarker,
@@ -1009,7 +1009,12 @@ export function Composer() {
   // shown as a dead insert-and-hope-it-does-something row).
   const skillsSupported = engine === null;
 
-  const running = turn.status === "running";
+  // TASK.146: "the composer is in busy mode", not "a model turn is streaming".
+  // A manual compaction is a busy phase of the session too — the Stop button
+  // (its `cancel_turn` aborts the compaction host-side), the "Queue a
+  // message…" placeholder and the queue-on-Enter hint all apply verbatim,
+  // because a prompt sent now would be busy-rejected by the host.
+  const running = isSessionBusy(turn.status);
   const ready = connection === "ready";
   // Running no longer blocks send (F15 prompt queue): a send while running
   // enqueues instead of dispatching directly (handleSend below).
@@ -1119,6 +1124,13 @@ export function Composer() {
         break;
       case "store_git_panel":
         tabStore.getState().gitSetPanelOpen(true);
+        break;
+      case "compact_now":
+        // TASK.146: one payload-less send. Every gate that matters is
+        // elsewhere — the row is hidden without supportsCorePermissions and
+        // gray unless truly idle (slash-menu.ts), and the host silently drops
+        // the request while busy or on an engine without compactNow.
+        sendToHost({ type: "compact_request" });
         break;
       case "settings_pane":
         window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));

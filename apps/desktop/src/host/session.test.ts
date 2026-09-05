@@ -81,6 +81,7 @@ import type {
   HostToUiMessage,
   ShellCapabilitiesProjection,
   UiToHostMessage,
+  WireAgentEvent,
   WireBackgroundChild,
   WireEnvStatus,
   WirePort,
@@ -90,6 +91,7 @@ import type { GitUiBridge } from "./git-bridge.js";
 import { CoreEngine } from "./engines/core-engine.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import {
+  MANUAL_COMPACTION_TURN_ID,
   Outbound,
   Session,
   tapChildPermissions,
@@ -2995,6 +2997,8 @@ const isTitleChanged = (m: HostToUiMessage): m is Of<"title_changed"> => m.type 
 
 interface ChildHarness {
   session: Session;
+  /** The CoreEngine this harness built — mirrors `test-harness.ts`'s `Harness.engine`, so a child-mode test can seed/read the loop history (`replaceHistory`/`historyItems`) exactly like a root-mode one. */
+  engine: SessionEngine;
   received: HostToUiMessage[];
   send(message: UiToHostMessage): void;
   waitFor<T extends HostToUiMessage>(predicate: (message: HostToUiMessage) => message is T, timeoutMs?: number): Promise<T>;
@@ -3139,6 +3143,7 @@ function createChildHarness(opts: {
 
   return {
     session,
+    engine,
     received,
     touches,
     onReady,
@@ -5306,4 +5311,264 @@ describe("Session -> CoreEngine -> child-settings seam (TASK.162 §0b: live SELE
       w.harness.close();
     }
   });
+});
+
+describe("Session — manual compaction wire (TASK.146)", () => {
+  /**
+   * 12 items: `compactionBoundary` sits at `len - COMPACT_KEEP_RECENT_MESSAGES`
+   * (10, packages/core/src/types/config.ts) shifted back to the nearest user
+   * item — index 2 here is already a user item, so the prefix is items[0..2)
+   * and the verbatim tail is the remaining 10 items. A successful compaction
+   * therefore swaps this down to 11 items: [compact_summary, ...tail].
+   *
+   * The two PREFIX items carry a deliberately heavy `tokenEstimate` and the
+   * tail a light one — the shape of a real session (one big opening turn, then
+   * short exchanges). `ContextManager.estimate()` sums the stored estimates
+   * verbatim (context/history.ts's `totalTokenEstimate`), so this weighting is
+   * what makes `postTokens` strictly smaller than `preTokens`: over a
+   * uniformly light history the summary item's own `COMPACT_SUMMARY_PREFIX`
+   * text alone outweighs the two items it replaces, and "the meter falls"
+   * would be unprovable rather than false.
+   */
+  function seedManualCompactionHistory(): HistoryItem[] {
+    const items: HistoryItem[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      items.push({
+        id: `seed-${i}`,
+        createdAt: i,
+        message:
+          i % 2 === 0
+            ? { role: "user", content: `user turn ${i}` }
+            : { role: "assistant", content: [{ type: "text", text: `assistant turn ${i}` }] },
+        tokenEstimate: i < 2 ? 5_000 : 10,
+        kind: "normal",
+      });
+    }
+    return items;
+  }
+
+  it("accepted between turns: compact_request reaches AgentLoop.compactNow, swaps history, and releases busy", async () => {
+    // Step 0 is consumed by ContextManager.runCompaction's own summarization
+    // call (the SAME ScriptedModelPort AgentLoop's turns use); step 1 is left
+    // for the ordinary user_message sent after compaction to prove busy was
+    // released.
+    const h = createHarness({ steps: [textStep("Summary of the earlier conversation."), textStep("after")] });
+    try {
+      h.engine.replaceHistory!(seedManualCompactionHistory());
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "compact_request" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+      expect(end.turnId).toBe(MANUAL_COMPACTION_TURN_ID);
+      expect(end.event).toMatchObject({ type: "compaction_end", ok: true });
+
+      const start = h.received.find(agentEventOf("compaction_start"));
+      expect(start).toBeDefined();
+      expect(start!.turnId).toBe(MANUAL_COMPACTION_TURN_ID);
+      expect(start!.event).toMatchObject({ type: "compaction_start", trigger: "manual" });
+      expect(h.received.indexOf(start!)).toBeLessThan(h.received.indexOf(end));
+
+      // No real turn was ever opened for the compaction — this.turnId stays
+      // untouched, so no turn_started/loop_end rides alongside the sentinel.
+      expect(h.received.some(isTurnStarted)).toBe(false);
+      expect(h.received.some(agentEventOf("loop_end"))).toBe(false);
+
+      const historyAfter = h.engine.historyItems();
+      expect(historyAfter).toHaveLength(11);
+      expect(historyAfter[0]!.kind).toBe("compact_summary");
+
+      // Busy was released in onCompact's finally: an ordinary user_message
+      // now starts a real turn instead of being rejected/dropped.
+      h.send({ type: "user_message", requestId: "r1", text: "hello" });
+      await h.waitFor(isTurnStarted);
+    } finally {
+      h.close();
+    }
+  });
+
+
+  it("the ctx meter falls ON THE WIRE: a successful manual compaction is followed by context_usage carrying the post-swap reading", async () => {
+    // One step only: ContextManager.runCompaction's own summarization call.
+    // No real turn is opened here, so nothing else consumes the script.
+    const h = createHarness({ steps: [textStep("Summary of the earlier conversation.")] });
+    try {
+      h.engine.replaceHistory!(seedManualCompactionHistory());
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "compact_request" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+      const usage = await h.waitFor(agentEventOf("context_usage"));
+
+      const endEvent = end.event as Extract<WireAgentEvent, { type: "compaction_end" }>;
+      const usageEvent = usage.event as Extract<WireAgentEvent, { type: "context_usage" }>;
+      expect(endEvent.ok).toBe(true);
+      expect(endEvent.postTokens).toBeDefined();
+
+      // THE claim: the number the renderer's ctx meter reads is
+      // `context_usage.estimatedTokens` (store.ts) and nothing else, and a
+      // manual compaction has no following model step to refresh it (the auto
+      // path is refreshed by the next step inside the same turn). Core yields
+      // this reading itself, post-swap, at the end of `compactNowInner`
+      // (agent-loop.ts) — remove that yield and the desktop meter keeps
+      // showing the pre-compaction number until the user speaks again, which
+      // is precisely the "nothing visibly happened" defect this task exists
+      // to fix. Pinned here, on the wire, and not only at the core layer:
+      // the event has to survive `sanitizeAgentEvent` and the `agent_event`
+      // envelope to reach the renderer at all.
+      expect(usageEvent.estimatedTokens).toBe(endEvent.postTokens);
+      expect(usageEvent.estimatedTokens).toBeLessThan(endEvent.preTokens);
+      // "estimate", not "provider": runCompaction dropped the stale provider
+      // baseline before returning (context/manager.ts), so the post-swap
+      // reading is an honest recount rather than a pre-swap provider number
+      // adjusted by a delta.
+      expect(usageEvent.source).toBe("estimate");
+      expect(usageEvent.budgetTokens).toBeGreaterThan(0);
+
+      // Same sentinel envelope as the pair before it — the renderer exempts
+      // context_usage from its turn guard by type anyway, but a manual
+      // compaction must not invent a turnId that could match a real turn.
+      expect(usage.turnId).toBe(MANUAL_COMPACTION_TURN_ID);
+
+      // Order on the wire: start -> end -> usage.
+      const start = h.received.find(agentEventOf("compaction_start"));
+      expect(start).toBeDefined();
+      expect(h.received.indexOf(start!)).toBeLessThan(h.received.indexOf(end));
+      expect(h.received.indexOf(end)).toBeLessThan(h.received.indexOf(usage));
+    } finally {
+      h.close();
+    }
+  });
+
+  it("silently dropped while a turn is busy; accepted again the instant the turn ends", async () => {
+    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // Park the turn at the Write permission ask -> the session is busy.
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      const req = await h.waitFor(isPermissionRequest);
+
+      h.send({ type: "compact_request" });
+      await h.flush();
+      await h.flush();
+      await h.flush();
+      expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
+
+      // Release the parked ask so the turn drains cleanly.
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      // The gate re-opens the instant busy clears — even though this
+      // history is far too short for a real prefix (ok:false is still the
+      // proof: compaction_start fired at all, which is exactly the gate this
+      // test is about, not the compaction's own success).
+      h.send({ type: "compact_request" });
+      await h.waitFor(agentEventOf("compaction_start"));
+    } finally {
+      h.close();
+    }
+  });
+
+  it("dropped by construction on an engine without compactNow (movement-profile gate, no `if (engine === \"claude\")` needed)", async () => {
+    const engine: SessionEngine = {
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: true,
+        costAccounting: false,
+        supportsModelSelection: false,
+        supportsReasoningEffort: false,
+        supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+      mode: () => "build",
+      setMode: () => {},
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(): AsyncIterable<AgentEvent> {},
+      historyItems: () => [],
+      dispose: async () => {},
+      // No `compactNow` — this absence IS the engine gate (session-engine.ts).
+    };
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "compact_request" });
+      await h.flush();
+      await h.flush();
+      await h.flush();
+
+      expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
+      expect(h.received.some((m) => m.type === "fatal")).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+
+  it("silently dropped for a CHILD session even though its engine does implement compactNow", async () => {
+    // The child branch runs a REAL CoreEngine (compactNow present) over a real
+    // AgentLoop, and the history below is the same compactable seed the
+    // accepted-between-turns case uses — so route()'s `child !== undefined`
+    // clause is the ONLY thing standing between this request and a swapped
+    // history. A child's context belongs to the parent's Agent-tool chain
+    // (TASK.102/145); compacting it from the child's own Compact row would
+    // rewrite a transcript the parent is still reading.
+    //
+    // Two steps are scripted, not one: if the gate were gone, step 0 would be
+    // eaten by runCompaction's summarization call and the follow-up turn would
+    // still find step 1 — so the failure this test reports is the missing gate
+    // itself, not a starved ScriptedModelPort downstream of it.
+    const h = createChildHarness({
+      steps: [textStep("Summary of the earlier conversation."), textStep("child reply")],
+    });
+    const flush = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    try {
+      h.engine.replaceHistory!(seedManualCompactionHistory());
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "compact_request" });
+      await flush();
+      await flush();
+      await flush();
+
+      expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
+      expect(h.received.some((m) => m.type === "fatal")).toBe(false);
+      expect(h.engine.historyItems()).toHaveLength(12);
+
+      // Positive control: a silent DROP, not a dead harness and not a
+      // swallowed session — `busy` was never taken by onCompact, so the very
+      // next ordinary message still opens a real turn.
+      h.send({ type: "user_message", requestId: "r1", text: "hello" });
+      await h.waitFor(isTurnStarted);
+    } finally {
+      h.close();
+    }
+  });
+
+  // Cancellation reaching AgentLoop.compactNow's AbortSignal is NOT pinned
+  // here: ScriptedModelPort's streamText resolves synchronously per scripted
+  // step, so no test in this harness can observe a compaction "in flight"
+  // long enough to send cancel_turn mid-stream. The signal plumbing itself
+  // (onCompact's `this.abort = controller`, mirroring runTurn's own) is a
+  // single line identical in shape to the already-covered turn path, and
+  // ContextManager's abort handling is covered directly at the core layer
+  // (packages/core/src/loop/agent-loop.test.ts:2295-2307, the "compaction
+  // aborted" scenario). Reported as a known gap in the S2 report rather than
+  // faked with a test that couldn't actually exercise the race.
 });

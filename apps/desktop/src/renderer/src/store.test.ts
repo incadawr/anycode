@@ -13,6 +13,7 @@ import {
   accumulateSessionTokens,
   buildConfirmedGitCommand,
   createDesktopStore,
+  isSessionBusy,
   projectHistoryToBlocks,
   SUBAGENT_ACTIVITY_RING,
   WORKFLOW_ACTIVITY_RING,
@@ -933,6 +934,14 @@ describe("desktop store — takeQueueHead pause-bypass for a system report (TASK
   });
 });
 
+describe("isSessionBusy (TASK.146 — the shared \"the session is occupied\" predicate)", () => {
+  it("is false only at rest; both non-idle statuses are busy windows a cancel_turn can abort", () => {
+    expect(isSessionBusy("idle")).toBe(false);
+    expect(isSessionBusy("running")).toBe(true);
+    expect(isSessionBusy("compacting")).toBe(true);
+  });
+});
+
 describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.12)", () => {
   function beginTurn(store: ReturnType<typeof createDesktopStore>, turnId: string): void {
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
@@ -967,6 +976,10 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
       event: { type: "compaction_start", trigger: "auto" },
     });
     expect(store.getState().notice?.kind).toBe("compaction_start");
+    // TASK.146: an AUTO compaction runs inside the turn that triggered it —
+    // the turn still owns the status, and `loop_end` is what clears it.
+    expect(store.getState().turn.status).toBe("running");
+    expect(store.getState().turn.turnId).toBe(turnId);
 
     store.getState().applyHostMessage({
       type: "agent_event",
@@ -984,6 +997,113 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     });
     expect(store.getState().notice?.kind).toBe("compaction_end");
     expect(store.getState().notice?.text).toContain("model unreachable");
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // TASK.146 — manual compaction between turns
+  // ─────────────────────────────────────────────────────────────────────
+
+  /** The host's sentinel envelope id for manual compaction (host/session.ts's MANUAL_COMPACTION_TURN_ID); never a real turn. */
+  const MANUAL_COMPACTION_TURN_ID = "manual-compaction";
+
+  function readyStore(): ReturnType<typeof createDesktopStore> {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    return store;
+  }
+
+  it("TASK.146: a manual compaction between turns survives the turn-scoped drop guard and claims the session", () => {
+    const store = readyStore();
+    // Between turns there IS no active turn — the guard's `turnId` is null,
+    // so without the exemption every event below would be dropped silently.
+    expect(store.getState().turn.turnId).toBeNull();
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+
+    expect(store.getState().notice?.kind).toBe("compaction_start");
+    expect(store.getState().notice?.text).toBe("Compacting conversation…");
+    expect(store.getState().turn.status).toBe("compacting");
+    // No turn was opened: the sentinel is an envelope, never an id to match.
+    expect(store.getState().turn.turnId).toBeNull();
+    expect(store.getState().turn.requestId).toBeNull();
+  });
+
+  it("TASK.146: compaction_end releases the session and the following context_usage drops the meter", () => {
+    const store = readyStore();
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    expect(store.getState().turn.status).toBe("compacting");
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_end", ok: true, preTokens: 100_000, postTokens: 20_000, durationMs: 500 },
+    });
+    expect(store.getState().notice?.kind).toBe("compaction_end");
+    expect(store.getState().notice?.text).toContain("20000");
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().turn.turnId).toBeNull();
+
+    // The meter reading the core emits right after the swap (TASK.146 S1).
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "context_usage", estimatedTokens: 20_000, budgetTokens: 200_000, source: "estimate" },
+    });
+    expect(store.getState().contextUsage).toEqual({
+      estimatedTokens: 20_000,
+      budgetTokens: 200_000,
+      source: "estimate",
+    });
+  });
+
+  it("TASK.146: a FAILED manual compaction releases the session too — a refusal leaves it just as free", () => {
+    const store = readyStore();
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: {
+        type: "compaction_end",
+        ok: false,
+        preTokens: 1_000,
+        durationMs: 3,
+        error: "compaction skipped: no prefix before the keep-recent window",
+      },
+    });
+    expect(store.getState().notice?.text).toContain("no prefix");
+    expect(store.getState().turn.status).toBe("idle");
+  });
+
+  it("TASK.146: a compaction event whose id mismatches an ACTIVE turn raises its notice but never touches turn state", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "turn-1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID, // deliberately NOT "turn-1"
+      event: { type: "compaction_end", ok: true, preTokens: 10, postTokens: 5, durationMs: 1 },
+    });
+
+    expect(store.getState().notice?.kind).toBe("compaction_end");
+    // The running turn is untouched: only a session the compaction itself
+    // claimed ("compacting") is ever released back to idle.
+    expect(store.getState().turn.status).toBe("running");
+    expect(store.getState().turn.turnId).toBe("turn-1");
   });
 
   it("microcompact raises a notice with the cleared-results/saved-tokens counts", () => {

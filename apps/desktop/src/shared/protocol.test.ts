@@ -7,6 +7,7 @@ import type {
   TelemetryStatus,
 } from "@anycode/core";
 import {
+  compactRequestSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   taskKillRequestSchema,
@@ -186,6 +187,14 @@ describe("HostToUiMessage mcp_status", () => {
     expect(cloned.type).toBe("mcp_status");
     expect(cloned.servers.map((s) => s.name)).toEqual(["srv1", "srv2"]);
     expect(cloned.servers[1]?.error).toBe("connect timeout");
+  });
+});
+
+describe("compact_request protocol (TASK.146)", () => {
+  it("accepts the exact compact_request shape and rejects extras", () => {
+    expect(compactRequestSchema.safeParse({ type: "compact_request" }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "compact_request" }).success).toBe(true);
+    expect(compactRequestSchema.safeParse({ type: "compact_request", extra: true }).success).toBe(false);
   });
 });
 
