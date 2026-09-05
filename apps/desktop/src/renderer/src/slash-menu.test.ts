@@ -218,6 +218,22 @@ describe("filterSlashItems", () => {
     expect(enabledItems.find((item) => item.name === "Model")!.disabled).toBe(false);
   });
 
+  it("TASK.146: /co resolves to Compact alone, rank 0, highlighted over the prefix", () => {
+    const items = filterSlashItems(SLASH_COMMANDS, [], "co", ctx());
+    expect(items.map((item) => item.name)).toEqual(["Compact"]);
+    expect(items[0]!.ranges).toEqual([[0, 2]]);
+  });
+
+  it("TASK.146: /c ranks Compact (prefix) above Git changes (word boundary) above MCP (substring)", () => {
+    const items = filterSlashItems(SLASH_COMMANDS, [], "c", ctx());
+    expect(items.map((item) => item.name).slice(0, 3)).toEqual(["Compact", "Git changes", "MCP"]);
+  });
+
+  it("TASK.146: the new row does not disturb the /mod pins — Compact does not match 'mod' at all", () => {
+    const items = filterSlashItems(SLASH_COMMANDS, [], "mod", ctx());
+    expect(items.map((item) => item.name)).toEqual(["Mode", "Model", "Plan mode"]);
+  });
+
   it("MR4 (TASK.37): the plan-mode command is enabled while running; not-ready still gates it", () => {
     const planModeCommand = SLASH_COMMANDS.find((command) => command.id === "plan-mode")!;
     expect(planModeCommand.enabled(ctx({ running: true, ready: true }))).toBe(true);
@@ -356,6 +372,7 @@ describe("SLASH_COMMANDS registry invariants", () => {
       "Plan mode",
       "Mode",
       "Model",
+      "Compact",
       "New task",
       "Tasks",
       "Git changes",
@@ -364,6 +381,31 @@ describe("SLASH_COMMANDS registry invariants", () => {
       "Skills",
       "Settings",
     ]);
+  });
+
+  it("TASK.146: the Compact row sits at index 3 — last in the core cluster, before the common one", () => {
+    // The module doc declares this array's order LAW ("rank ties among
+    // commands break by this array's order"), so the index is the pin.
+    expect(SLASH_COMMANDS[3]!.id).toBe("compact");
+    expect(SLASH_COMMANDS[3]!.name).toBe("Compact");
+    expect(SLASH_COMMANDS[3]!.source).toBe("core");
+    expect(SLASH_COMMANDS[3]!.run).toEqual({ kind: "compact_now" });
+    expect(SLASH_COMMANDS[3]!.icon).toBe("compact");
+    expect(SLASH_COMMANDS[3]!.description(ctx())).toBe("Summarize the conversation to free context");
+    // Its neighbours are what make it "last in the core cluster".
+    expect(SLASH_COMMANDS[2]!.id).toBe("model");
+    expect(SLASH_COMMANDS[4]!.id).toBe("new-task");
+  });
+
+  it("TASK.146: the Compact row is gray for exactly the Model row's not-truly-idle window", () => {
+    const compact = SLASH_COMMANDS.find((command) => command.id === "compact")!;
+    expect(compact.enabled(ctx({ modelDisabled: true }))).toBe(false);
+    expect(compact.enabled(ctx({ modelDisabled: false }))).toBe(true);
+
+    const disabled = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ modelDisabled: true }));
+    expect(disabled.find((item) => item.name === "Compact")!.disabled).toBe(true);
+    const enabled = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ modelDisabled: false }));
+    expect(enabled.find((item) => item.name === "Compact")!.disabled).toBe(false);
   });
 
   it("has unique ids", () => {
@@ -387,6 +429,8 @@ describe("SLASH_COMMANDS registry invariants", () => {
           return `run_action:${intent.action}`;
         case "store_git_panel":
           return "store_git_panel";
+        case "compact_now":
+          return "compact_now";
         case "settings_pane":
           return `settings_pane:${intent.pane}`;
         case "insert":
@@ -401,10 +445,18 @@ describe("SLASH_COMMANDS registry invariants", () => {
       { kind: "insert", text: "$example " },
     ];
     const seenKinds = new Set(sampleIntents.map((intent) => intent.kind));
-    // all 6 SlashRunIntent kinds are represented across the registry + the
+    // all 7 SlashRunIntent kinds are represented across the registry + the
     // manually-constructed "insert" sample (skills produce it dynamically).
     expect(seenKinds).toEqual(
-      new Set(["set_mode_toggle", "window_event", "run_action", "store_git_panel", "settings_pane", "insert"])
+      new Set([
+        "set_mode_toggle",
+        "window_event",
+        "run_action",
+        "store_git_panel",
+        "settings_pane",
+        "insert",
+        "compact_now",
+      ])
     );
     for (const intent of sampleIntents) {
       expect(() => intentKindLabel(intent)).not.toThrow();
@@ -441,6 +493,28 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
   it("keeps engine-independent common commands visible regardless of engine/shell capabilities", () => {
     const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
     expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Settings"]);
+  });
+
+  it("TASK.146: hides Compact on an engine profile — the list an engine boot sees stays byte-identical to the pre-146 one", () => {
+    const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
+    expect(names).not.toContain("Compact");
+    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Settings"]);
+    // Not even by query: an engine boot cannot reach the row at all.
+    expect(filterSlashItems(SLASH_COMMANDS, [], "co", codexShapedCtx)).toEqual([]);
+  });
+
+  it("TASK.146: supportsCorePermissions is the ONLY gate on Compact — supportsModelSelection off still shows it", () => {
+    const corePermissionsOff = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ supportsCorePermissions: false })).map(
+      (item) => item.name,
+    );
+    expect(corePermissionsOff).not.toContain("Compact");
+    expect(corePermissionsOff).toContain("Model");
+
+    const modelSelectionOff = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ supportsModelSelection: false })).map(
+      (item) => item.name,
+    );
+    expect(modelSelectionOff).toContain("Compact");
+    expect(modelSelectionOff).not.toContain("Model");
   });
 
   it("shows the full registry once every named capability is available (core-shaped ctx, the pre-TASK.40 default)", () => {

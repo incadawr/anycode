@@ -139,9 +139,35 @@ import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
 
 export interface TurnState {
-  status: "idle" | "running";
+  /**
+   * `"compacting"` (TASK.146) is a MANUAL conversation compaction running
+   * BETWEEN turns: the host holds its own `busy` flag for the duration, so
+   * every renderer idle predicate (`shouldEnqueue` and therefore
+   * `modelPickDisabled`/`engineControlDisabled`, the prompt-queue drainer)
+   * must read the session as not-idle — a prompt typed now has to queue, not
+   * race the swap. It is set and cleared ONLY by `compaction_start`/
+   * `compaction_end` observed while the turn is otherwise idle; an AUTO
+   * compaction inside a running turn never touches it (the turn already
+   * owns the status, and stealing it would flip the turn to idle early).
+   * `turnId`/`requestId` stay null throughout: no turn is open.
+   */
+  status: "idle" | "running" | "compacting";
   turnId: string | null;
   requestId: string | null;
+}
+
+/**
+ * "The session is occupied" — the one predicate behind the Stop button,
+ * Esc-to-interrupt and the `turn.interrupt` action (TASK.146). Both non-idle
+ * statuses qualify: a running turn AND a manual compaction are host-side
+ * `busy` phases that a `cancel_turn` aborts (Session.onCancel aborts whatever
+ * controller is parked in `this.abort`, host/session.ts). Distinct from
+ * `shouldEnqueue`, which additionally covers the drained-but-unacked
+ * `queueInFlight` window; a send has to be conservative there, an interrupt
+ * has nothing to interrupt.
+ */
+export function isSessionBusy(status: TurnState["status"]): boolean {
+  return status !== "idle";
 }
 
 /** Tool-call transcript card status: proposed (awaiting dispatch/permission) -> running -> terminal outcome. */
@@ -2076,7 +2102,24 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // (index.ts's PREVIEW_CONSOLE_TURN_ID) precisely because there is no
       // real turn to attribute it to, so it could never pass this guard on
       // its own merits.
-      if (get().turn.turnId !== turnId && event.type !== "context_usage" && event.type !== "preview_console") {
+      //
+      // `compaction_start`/`compaction_end` (TASK.146) are exempt for the
+      // same structural reason as preview_console, not context_usage's timing
+      // race: a MANUAL compaction runs BETWEEN turns, so `turn.turnId` is
+      // null while it runs and the host tags its events with a fixed sentinel
+      // (host/session.ts's MANUAL_COMPACTION_TURN_ID) — it can never match an
+      // active turn, and without the exemption every manual compaction would
+      // be silently dropped, notice and status flip alike. They are
+      // session-scoped bookkeeping (a notice + the turn-status flip below),
+      // never transcript content, so admitting a late/foreign one costs at
+      // most a stale toast.
+      if (
+        get().turn.turnId !== turnId &&
+        event.type !== "context_usage" &&
+        event.type !== "preview_console" &&
+        event.type !== "compaction_start" &&
+        event.type !== "compaction_end"
+      ) {
         return;
       }
       switch (event.type) {
@@ -2271,25 +2314,46 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           });
           return;
         case "compaction_start":
-          set({
+          // TASK.146: a compaction observed while the turn is IDLE is the
+          // manual one — it owns the session for its duration, so the status
+          // goes to "compacting" and every idle predicate follows for free.
+          // An AUTO compaction fires mid-turn, where the status is already
+          // "running": leave it alone (overwriting it would report the turn
+          // as finished the moment the compaction ended).
+          set((state) => ({
             notice: {
-              kind: "compaction_start",
+              kind: "compaction_start" as const,
               text:
                 event.trigger === "manual"
                   ? "Compacting conversation…"
                   : "Context window full — compacting conversation…",
             },
-          });
+            ...(state.turn.status === "idle"
+              ? { turn: { status: "compacting" as const, turnId: null, requestId: null } }
+              : {}),
+          }));
           return;
         case "compaction_end":
-          set({
+          // TASK.146: release the session in the SAME set() that raises the
+          // notice — the prompt-queue drainer (tab-registry's `maybeDrain`)
+          // fires synchronously on every set(), so a separate idle flip would
+          // let it observe an intermediate state. Same atomicity rule as
+          // `loop_end` above. Only a compaction that actually claimed the
+          // session releases it: an auto compaction inside a running turn
+          // leaves "running" for `loop_end` to clear. Failure releases it too
+          // — a refused compaction leaves the session just as free as a
+          // successful one, and the notice carries the reason.
+          set((state) => ({
             notice: {
-              kind: "compaction_end",
+              kind: "compaction_end" as const,
               text: event.ok
                 ? `Conversation compacted (${event.preTokens} → ${event.postTokens ?? "?"} tokens).`
                 : `Compaction failed: ${event.error ?? "unknown error"}`,
             },
-          });
+            ...(state.turn.status === "compacting"
+              ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
+              : {}),
+          }));
           return;
         case "microcompact":
           set({

@@ -1164,6 +1164,34 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(store.getState().promptQueue).toHaveLength(0);
   });
 
+  it("TASK.146: a manual compaction holds the queue exactly like a turn — the drain waits for compaction_end", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    const store = registry.getStore("tab-a")!;
+
+    // No turn is open — this is the between-turns window a manual compaction
+    // runs in; the host tags it with its MANUAL_COMPACTION_TURN_ID sentinel.
+    port.emit({
+      type: "agent_event",
+      turnId: "manual-compaction",
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    expect(store.getState().turn.status).toBe("compacting");
+
+    store.getState().enqueuePrompt({ text: "a", images: [] });
+    expect(userMessages(port)).toHaveLength(0);
+
+    port.emit({
+      type: "agent_event",
+      turnId: "manual-compaction",
+      event: { type: "compaction_end", ok: true, preTokens: 100, postTokens: 20, durationMs: 5 },
+    });
+    expect(userMessages(port).map((m) => m.text)).toEqual(["a"]);
+  });
+
   it("TASK.33 W8: records the drained item's text+images as lastSentMessage on dispatch", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);

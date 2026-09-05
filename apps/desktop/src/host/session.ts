@@ -101,6 +101,18 @@ export const REPLAY_BUFFER_CAP = 5_000;
 /** Cap on hydrated `session_history` items; only the last N are shipped (design §3.3). */
 export const SESSION_HISTORY_MAX_ITEMS = 500;
 
+/**
+ * A manual compaction (TASK.146, `onCompact`) runs BETWEEN turns — no real
+ * turn is ever opened for it (`this.turnId` is left untouched), but the
+ * wire's `agent_event` envelope still requires a `turnId` string. This
+ * sentinel fills it; the renderer's turn-scoped drop guard is taught to
+ * exempt `compaction_start`/`compaction_end` by event type (store.ts, the
+ * same exemption shape as `context_usage`/`preview_console`), so the literal
+ * value here is never matched against the active turn — it only needs to
+ * satisfy the wire schema. Mirror of `index.ts`'s `PREVIEW_CONSOLE_TURN_ID`.
+ */
+export const MANUAL_COMPACTION_TURN_ID = "manual-compaction";
+
 /** Defensive reply for an engine that does not expose core context accounting. */
 const ZERO_CONTEXT_BREAKDOWN = {
   messagesTokens: 0,
@@ -1440,6 +1452,22 @@ export class Session {
       case "context_breakdown_request":
         if (this.engine.capabilities.supportsContextBreakdown) this.pushContextBreakdown();
         break;
+      case "compact_request":
+        // TASK.146: same authoritative host-side silent-drop contract as
+        // set_model (:1347-1356 above) — no reply escape, the renderer's row
+        // disables itself too via the same truly-idle predicate. `relocating`
+        // mirrors onRewind's BLOCKER-2(a) window; `child !== undefined` is
+        // dropped because a child's context belongs to the parent Agent-tool
+        // chain (TASK.102/145) — it is either busy (the whole chain is) or
+        // terminal (read-only), so an accepted request here is impossible by
+        // construction. `engine.compactNow === undefined` IS the engine gate:
+        // only CoreEngine implements it (session-engine.ts), so a claude/codex
+        // boot drops this unconditionally — no `if (engine === "claude")`
+        // needed. void: onCompact holds `busy` across an await; route() itself
+        // never awaits.
+        if (this.busy || this.relocating || this.child !== undefined || this.engine.compactNow === undefined) break;
+        void this.onCompact();
+        break;
       case "task_list_request":
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         break;
@@ -1741,6 +1769,58 @@ export class Session {
       });
     } finally {
       this.busy = false;
+      if (this.currentTurn === op) this.currentTurn = null;
+      release();
+    }
+  }
+
+  /**
+   * Manual compaction (TASK.146): mirrors `onRewind`'s busy-holding deferred
+   * (a compaction is an inter-turn maintenance op, not a real turn) plus
+   * `runTurn`'s AbortController (so `cancel_turn` -> `onCancel` ->
+   * `this.abort.abort()` reaches `AgentLoop.compactNow` exactly like it
+   * reaches a real turn). Deliberately does NOT touch `this.turnId` — no turn
+   * is opened, so every `agent_event` this emits rides the
+   * `MANUAL_COMPACTION_TURN_ID` sentinel instead of a real turn id.
+   *
+   * Re-checks the same gates `route()`'s `case "compact_request"` already
+   * checked before calling here: messages route synchronously and
+   * sequentially, so this is a defensive net (mirrors the CUT-S2 comment
+   * pattern elsewhere in this file), not a race — `route()` never awaits
+   * between the gate and this call.
+   */
+  private async onCompact(): Promise<void> {
+    if (this.busy || this.relocating || this.child !== undefined || this.engine.compactNow === undefined) {
+      return;
+    }
+    // Bound to `this.engine` (NOT extracted into a local const): CoreEngine's
+    // compactNow reads `this.options.loop` internally — detaching the method
+    // from its receiver would call it with `this` undefined.
+    const engine = this.engine;
+    this.busy = true;
+    let release!: () => void;
+    const op = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.currentTurn = op;
+    const controller = new AbortController();
+    this.abort = controller;
+    try {
+      for await (const event of engine.compactNow!({ signal: controller.signal })) {
+        // `emit` (not `sendDirect`): a reconnect mid-compaction must replay
+        // the start/end pair from the ring buffer exactly like a real turn's
+        // events do — a fresh renderer attach should never see a half-open
+        // "Compacting…" toast with no matching end.
+        this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: sanitizeAgentEvent(event) });
+      }
+    } catch (error) {
+      // compactNow (AgentLoop.compactNow) is designed never to throw — a
+      // failed compaction is reported as compaction_end{ok:false} — so this
+      // is a defensive net mirroring runTurn's own catch above.
+      this.outbound.emit({ type: "fatal", message: `compaction failed: ${describeError(error)}` });
+    } finally {
+      this.busy = false;
+      this.abort = null;
       if (this.currentTurn === op) this.currentTurn = null;
       release();
     }

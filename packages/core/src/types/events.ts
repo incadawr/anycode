@@ -127,7 +127,13 @@ export type AgentEvent =
   | { type: "tool_result"; outcome: ToolCallOutcome }
   | { type: "workspace_transition"; transition: WorkspaceTransition }
   | { type: "loop_end"; reason: LoopEndReason; turns: number }
-  /** trigger "manual" is reserved for the Phase 2 /compact command. */
+  /**
+   * `trigger: "auto"` is the threshold-driven compaction the loop runs
+   * inside a turn; `"manual"` is a user-initiated one, reaching the same
+   * cycle through `AgentLoop.compactNow` — from the CLI's `/compact`
+   * (cli/commands.ts) and from the desktop's Compact slash-menu row
+   * (TASK.146, host/session.ts's `compact_request`).
+   */
   | { type: "compaction_start"; trigger: "auto" | "manual" }
   | {
       type: "compaction_end";

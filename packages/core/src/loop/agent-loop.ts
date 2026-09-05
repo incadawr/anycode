@@ -1424,7 +1424,7 @@ export class AgentLoop {
   }
 
   /**
-
+   * Manual compaction (the CLI's `/compact`, the desktop's Compact row): runs
    * the SAME compaction machinery as the auto path (context.runCompaction; the
    * ContextManager itself is unchanged) but bypasses shouldAutoCompact
    * entirely — it does not consult the threshold or the auto-compact circuit
@@ -1432,6 +1432,9 @@ export class AgentLoop {
    * the breaker has tripped. A successful manual compaction resets the
    * breaker's failure counter (runCompaction's own success path), so it also
    * "heals" auto-compaction for the rest of the session.
+   *
+   * Event sequence: compaction_start, compaction_end, and — only when the
+   * compaction succeeded — the post-swap context_usage (see compactNowInner).
    */
   async *compactNow(opts?: { signal?: AbortSignal }): AsyncGenerator<AgentEvent, void, unknown> {
     const tap = this.config.eventTap;
@@ -1450,7 +1453,26 @@ export class AgentLoop {
   }
 
   private async *compactNowInner(opts?: { signal?: AbortSignal }): AsyncGenerator<AgentEvent, void, unknown> {
-    yield* this.runCompactionCycle("manual", opts?.signal);
+    const ok = yield* this.runCompactionCycle("manual", opts?.signal);
+    if (!ok) {
+      // A failed/skipped cycle left the history untouched, so the last reported
+      // reading still holds — reporting it again would be noise.
+      return;
+    }
+    // The auto path reports the post-compaction context on the model step that
+    // follows it inside the same turn; a manual compaction has no following
+    // step, so the reading is reported here or not at all (TASK.146: a consumer
+    // whose ctx meter is driven by context_usage — the desktop renderer — would
+    // otherwise keep showing the pre-compaction number until the next turn).
+    // runCompaction cleared the stale provider baseline before returning, so
+    // this estimate is already the post-swap one (context/manager.ts).
+    const estimate = this.context.estimate();
+    yield {
+      type: "context_usage",
+      estimatedTokens: estimate.tokens,
+      budgetTokens: this.budgetTokens,
+      source: estimate.source,
+    };
   }
 
   contextInfo(): ContextInfo {
@@ -1601,11 +1623,15 @@ export class AgentLoop {
    * bookkeeping for BOTH the auto (runTurn) and manual (compactNow) triggers —
    * the only difference between them is this `trigger` label and whether
    * shouldAutoCompact gated the call before it got here.
+   *
+   * Returns whether the cycle actually swapped the history (compaction_end's
+   * `ok`): the manual path reports the post-swap context_usage only on success,
+   * while the auto path discards the value.
    */
   private async *runCompactionCycle(
     trigger: "auto" | "manual",
     signal: AbortSignal | undefined,
-  ): AsyncGenerator<AgentEvent, void, unknown> {
+  ): AsyncGenerator<AgentEvent, boolean, unknown> {
     yield { type: "compaction_start", trigger };
     const startedAt = Date.now();
     const result = await this.context.runCompaction({ signal });
@@ -1626,6 +1652,7 @@ export class AgentLoop {
         error: result.error,
       };
     }
+    return result.ok;
   }
 
   /**
