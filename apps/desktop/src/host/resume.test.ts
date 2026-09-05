@@ -183,6 +183,43 @@ describe("Session — session_history hydration", () => {
     }
   });
 
+  it("TASK.188 S4: historyMaxItems above the boot length keeps everything, untruncated", async () => {
+    const bootHistory: HistoryItem[] = [];
+    for (let i = 0; i < 600; i++) {
+      bootHistory.push(userItem(`u${i}`, `msg ${i}`, i));
+    }
+    const h = createHarness({ steps: [], bootHistory, historyMaxItems: 1000 });
+    try {
+      h.send({ type: "ui_ready" });
+      const history = await h.waitFor(isSessionHistory);
+
+      expect(history.truncated).toBe(false);
+      expect(history.items).toHaveLength(600);
+      expect(history.items[0]?.id).toBe("u0");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("TASK.188 S4: historyMaxItems below the default cap truncates to that override", async () => {
+    const bootHistory: HistoryItem[] = [];
+    for (let i = 0; i < 600; i++) {
+      bootHistory.push(userItem(`u${i}`, `msg ${i}`, i));
+    }
+    const h = createHarness({ steps: [], bootHistory, historyMaxItems: 100 });
+    try {
+      h.send({ type: "ui_ready" });
+      const history = await h.waitFor(isSessionHistory);
+
+      expect(history.truncated).toBe(true);
+      expect(history.items).toHaveLength(100);
+      expect(history.items[0]?.id).toBe("u500");
+      expect(history.items.at(-1)?.id).toBe("u599");
+    } finally {
+      h.close();
+    }
+  });
+
   it("emits NO session_history for a fresh session (empty boot history)", async () => {
     const h = createHarness({ steps: [] });
     try {
