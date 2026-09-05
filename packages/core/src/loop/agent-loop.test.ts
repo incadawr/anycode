@@ -898,7 +898,12 @@ describe("AgentLoop.runTurn — vision fallback (TASK.198 plan §1/§2/§3, slic
     expect(reserve.calls).toEqual([7]);
 
     const compactionEvents = await collect(loop.compactNow());
-    expect(compactionEvents.at(-1)).toMatchObject({ type: "compaction_end", ok: true });
+    // compactNow's last event is the post-swap context_usage (TASK.146), so the
+    // compaction outcome is located by type rather than by position.
+    expect(compactionEvents.find((e) => e.type === "compaction_end")).toMatchObject({
+      type: "compaction_end",
+      ok: true,
+    });
     expect(loop.history.toMessages().some((m) => m.role === "user" && m.images !== undefined)).toBe(false);
 
     await collect(loop.runTurn("second image", { attachments: [img] }));
@@ -1062,7 +1067,12 @@ describe("AgentLoop.runTurn — vision fallback (TASK.198 plan §1/§2/§3, slic
     // putting the ref-1 item in the compacted-away prefix.
     await collect(loop.runTurn("another turn"));
     const compactionEvents = await collect(loop.compactNow());
-    expect(compactionEvents.at(-1)).toMatchObject({ type: "compaction_end", ok: true });
+    // compactNow's last event is the post-swap context_usage (TASK.146), so the
+    // compaction outcome is located by type rather than by position.
+    expect(compactionEvents.find((e) => e.type === "compaction_end")).toMatchObject({
+      type: "compaction_end",
+      ok: true,
+    });
 
     await collect(loop.runTurn("probe again"));
     expect(seenAfter).toBeUndefined();
@@ -2237,7 +2247,7 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     seedFourItemHistory(loop);
 
     const events = await collect(loop.compactNow());
-    expect(events).toHaveLength(2);
+    expect(types(events)).toEqual(["compaction_start", "compaction_end", "context_usage"]);
     expect(events[0]).toEqual({ type: "compaction_start", trigger: "manual" });
     expect(events[1]).toMatchObject({ type: "compaction_end", ok: true });
 
@@ -2249,6 +2259,43 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     });
     expect(messages[1]).toEqual({ role: "user", content: "u2" });
     expect(messages[2]).toEqual({ role: "assistant", content: [{ type: "text", text: "a2" }] });
+  });
+
+  it("reports the post-swap context_usage on success — no following model step would refresh the meter", async () => {
+    const modelPort = new MockModelPort([], [
+      { type: "text_delta", id: "s", text: "Summary of the earlier conversation." },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]);
+    const loop = makeLoop({ modelPort, context: { keepRecentMessages: 0 } });
+    // A prefix far heavier than the summary that replaces it, so the reported
+    // drop is a real one and not an artifact of a two-character seed.
+    loop.history.append({ role: "user", content: "filler ".repeat(2000) });
+    loop.history.append({
+      role: "assistant",
+      content: [{ type: "text", text: "filler ".repeat(2000) }],
+    });
+    loop.history.append({ role: "user", content: "u2" });
+    loop.history.append({ role: "assistant", content: [{ type: "text", text: "a2" }] });
+
+    const events = await collect(loop.compactNow());
+    expect(types(events)).toEqual(["compaction_start", "compaction_end", "context_usage"]);
+
+    // Both are present by the assertion above; `!` keeps the reads below plain.
+    const end = events.find(
+      (e): e is Extract<AgentEvent, { type: "compaction_end" }> => e.type === "compaction_end",
+    )!;
+    const usage = events.find(
+      (e): e is Extract<AgentEvent, { type: "context_usage" }> => e.type === "context_usage",
+    )!;
+    expect(end.ok).toBe(true);
+    // The reading is the POST-swap one: identical to compaction_end's own
+    // postTokens and strictly below the number the meter had been showing.
+    expect(usage.estimatedTokens).toBe(end.postTokens);
+    expect(usage.estimatedTokens).toBeLessThan(end.preTokens);
+    // runCompaction dropped the now-stale provider baseline before returning,
+    // so the reading is the local estimate, not a provider count.
+    expect(usage.source).toBe("estimate");
+    expect(usage.budgetTokens).toBeGreaterThan(0);
   });
 
   it("still reaches the model on a second call even after the auto-compact circuit breaker has tripped", async () => {
@@ -2273,7 +2320,10 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     // tripped; a manual call must still reach the model (it never calls
     // shouldAutoCompact/consults the breaker).
     const secondRun = await collect(loop.compactNow());
-    expect(secondRun.at(-1)).toMatchObject({ type: "compaction_end", ok: true });
+    expect(secondRun.find((e) => e.type === "compaction_end")).toMatchObject({
+      type: "compaction_end",
+      ok: true,
+    });
     expect(modelPort.step).toBe(2);
   });
 
@@ -2283,6 +2333,9 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     loop.history.append({ role: "user", content: "just one message" });
 
     const events = await collect(loop.compactNow());
+    // No swap happened, so the last reported reading still holds: a failed
+    // cycle reports no context_usage (TASK.146).
+    expect(types(events)).toEqual(["compaction_start", "compaction_end"]);
     expect(events[0]).toEqual({ type: "compaction_start", trigger: "manual" });
     expect(events[1]).toMatchObject({ type: "compaction_end", ok: false });
     expect(modelPort.step).toBe(0);
@@ -2300,6 +2353,9 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     const controller = new AbortController();
     controller.abort();
     const events = await collect(loop.compactNow({ signal: controller.signal }));
+    // An aborted cycle left the history untouched, so it reports no
+    // context_usage either (TASK.146).
+    expect(types(events)).toEqual(["compaction_start", "compaction_end"]);
     expect(events.at(-1)).toMatchObject({ type: "compaction_end", ok: false });
     expect(loop.history.toMessages()).toEqual(before);
   });
@@ -3234,7 +3290,7 @@ describe("AgentLoop eventTap seam (slice 6.6)", () => {
     const consumed = await collect(loop.compactNow());
 
     expect(tapped).toEqual(consumed);
-    expect(types(tapped)).toEqual(["compaction_start", "compaction_end"]);
+    expect(types(tapped)).toEqual(["compaction_start", "compaction_end", "context_usage"]);
   });
 
   it("stops tapping once the consumer breaks out of the for-await (generator return)", async () => {

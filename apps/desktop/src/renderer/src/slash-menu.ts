@@ -25,6 +25,7 @@ export type SlashIconId =
   | "plan"
   | "mode"
   | "model"
+  | "compact"
   | "new-task"
   | "sessions"
   | "git"
@@ -41,6 +42,8 @@ export type SlashIconId =
  */
 export type SlashRunIntent =
   | { kind: "set_mode_toggle" }
+  /** TASK.146: a single payload-less wire-send (`compact_request`); Composer's exhaustive `dispatchSlashIntent` owns it, exactly like `set_mode_toggle`. */
+  | { kind: "compact_now" }
   | { kind: "window_event"; event: string }
   | { kind: "run_action"; action: string }
   | { kind: "store_git_panel" }
@@ -74,7 +77,12 @@ export interface SlashMenuCtx extends SlashCapabilityCtx {
   model: string;
   running: boolean;
   ready: boolean;
-  /** Mirrors `ModelPill.tsx`'s `modelPickDisabled` — the Model row is enabled iff the pill itself is clickable (codex R1 P2 fix). */
+  /**
+   * Mirrors `ModelPill.tsx`'s `modelPickDisabled` — the Model row is enabled
+   * iff the pill itself is clickable (codex R1 P2 fix). ALSO read by the
+   * Compact row (TASK.146), which needs the very same "truly idle" window:
+   * `shouldEnqueue(turn.status, queueInFlight) || !ready`.
+   */
   modelDisabled: boolean;
 }
 
@@ -240,6 +248,29 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     source: "core",
     // Focuses ModelPill, which Composer only renders when supportsModelSelection is true.
     visible: (ctx) => ctx.supportsModelSelection,
+  },
+  {
+    id: "compact",
+    name: "Compact",
+    description: () => "Summarize the conversation to free context",
+    icon: "compact",
+    run: { kind: "compact_now" },
+    // Same truly-idle predicate the Model row reads (Composer's
+    // modelPickDisabled = shouldEnqueue(turn.status, queueInFlight) || !ready).
+    // The host refuses compact_request while busy (Session's silent-drop gate,
+    // TASK.146), so the row is gray for exactly that window: a running turn, a
+    // compaction already in flight ("compacting"), a drained-but-unacked
+    // prompt, or a not-yet-ready connection.
+    enabled: (ctx) => !ctx.modelDisabled,
+    source: "core",
+    // Handled host-side ONLY by CoreEngine.compactNow (Session drops the
+    // request for any engine that lacks the method). supportsCorePermissions
+    // is the flag the host itself uses to tell a core boot from an engine boot
+    // (index.ts, permission-broker.ts) and is documented to stay false for
+    // Claude/Codex (their presets.ts) — unlike supportsContextBreakdown, which
+    // claude-engine.ts plans to flip, and gating on that would surface a dead
+    // row there (that trade-off is TASK.92, not this task).
+    visible: (ctx) => ctx.supportsCorePermissions,
   },
   {
     id: "new-task",
