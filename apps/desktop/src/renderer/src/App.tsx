@@ -70,7 +70,7 @@ import { buildChildBreadcrumb, childBadgeKind, childLayoutStore } from "./child-
 import { childRelationStore, type ChildRelation } from "./child-sessions.js";
 import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
-import type { SubagentSubStatus } from "./store.js";
+import { isSessionBusy, type SubagentSubStatus } from "./store.js";
 import "./settings.css";
 
 /** localStorage key for the renderer-only sidebar collapse flag (design §2.1). */
@@ -1171,7 +1171,11 @@ export function App() {
         if (!currentTabId) {
           return;
         }
-        if (tabRegistry.getStore(currentTabId)?.getState().turn.status !== "running") {
+        // TASK.146: Esc mirrors the composer's Stop button, which is shown
+        // for the whole busy window — a running turn OR a manual compaction
+        // (isSessionBusy). Its title literally reads "Stop (Esc)", so the two
+        // must agree; `cancel_turn` aborts either one host-side.
+        if (!isSessionBusy(tabRegistry.getStore(currentTabId)?.getState().turn.status ?? "idle")) {
           return;
         }
         tabRegistry.sendToTab(currentTabId, { type: "cancel_turn" });
@@ -1405,7 +1409,9 @@ export function App() {
     if (!currentTabId) {
       return;
     }
-    if (tabRegistry.getStore(currentTabId)?.getState().turn.status !== "running") {
+    // TASK.146: same busy window as the Esc branch above — this runner IS the
+    // bound-key/palette path to the identical gesture.
+    if (!isSessionBusy(tabRegistry.getStore(currentTabId)?.getState().turn.status ?? "idle")) {
       return;
     }
     tabRegistry.sendToTab(currentTabId, { type: "cancel_turn" });
@@ -1491,7 +1497,9 @@ export function App() {
       id: "turn.interrupt",
       label: "Interrupt turn",
       hint: hintFor("turn.interrupt"),
-      enabled: activeStore?.getState().turn.status === "running",
+      // TASK.146: mirrors `runInterrupt`'s own gate (this row calls it); a
+      // narrower predicate here would gray out a row whose action still works.
+      enabled: isSessionBusy(activeStore?.getState().turn.status ?? "idle"),
       run: () => runInterrupt(),
     },
     {

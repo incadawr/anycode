@@ -108,6 +108,11 @@ describe("shouldEnqueue (F15 — enqueue-vs-direct decision uses the truly-idle 
     expect(shouldEnqueue("idle", IN_FLIGHT)).toBe(true);
   });
 
+  it("TASK.146: enqueues while a manual compaction holds the session (the host would busy-reject a direct send)", () => {
+    expect(shouldEnqueue("compacting", null)).toBe(true);
+    expect(shouldEnqueue("compacting", IN_FLIGHT)).toBe(true);
+  });
+
   it("TASK.102 CUT-S2 §10.15.1: a child surface ALWAYS direct-sends (false), even while running or in-flight — its renderer queue has no drainer, so parking there would strand the message forever", () => {
     expect(shouldEnqueue("running", null, true)).toBe(false);
     expect(shouldEnqueue("idle", IN_FLIGHT, true)).toBe(false);

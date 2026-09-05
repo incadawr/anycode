@@ -77,6 +77,13 @@ export interface SessionEngine {
   historyItems(): readonly HistoryItem[];
   replaceHistory?(items: HistoryItem[]): void;
   contextBreakdown?(): ContextBreakdown;
+  /**
+   * Manual conversation compaction (TASK.146). Implemented ONLY by CoreEngine
+   * (delegates to AgentLoop.compactNow) — an engine without this method makes
+   * Session drop `compact_request` by construction; that absence IS the
+   * engine gate, not a runtime capability check.
+   */
+  compactNow?(options: { signal: AbortSignal }): AsyncIterable<AgentEvent>;
   dispose(reason: "session-close" | "host-shutdown"): Promise<void>;
 }
 

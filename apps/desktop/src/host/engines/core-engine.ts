@@ -101,6 +101,10 @@ export class CoreEngine implements SessionEngine {
     return this.options.loop.continueTurn(options);
   }
 
+  compactNow(options: { signal: AbortSignal }) {
+    return this.options.loop.compactNow(options);
+  }
+
   historyItems() {
     return this.options.loop.history.items;
   }

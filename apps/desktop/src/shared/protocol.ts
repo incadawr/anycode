@@ -406,6 +406,11 @@ export type UiToHostMessage =
   // mid-turn (contextBreakdown() is a pure read). Sent only when the ctx-meter
   // popover opens.
   | { type: "context_breakdown_request" }
+  // TASK.146: manual conversation compaction. Payload-less, mirror of
+  // context_breakdown_request. Served ONLY between turns — Session drops it
+  // when busy or on an engine without `compactNow` (a chat/codex engine gates
+  // this by construction: SessionEngine.compactNow? is undefined there).
+  | { type: "compact_request" }
   // Renderer Panels sub-slice D: background-task list/output/kill controls.
   | { type: "task_list_request" }
   | { type: "task_output_request"; taskId: string }
@@ -862,6 +867,14 @@ export const contextBreakdownRequestSchema = z
   })
   .strict();
 
+// TASK.146: payload-less manual-compaction request (mirror of
+// contextBreakdownRequestSchema). Fail-closed on any extra key under .strict().
+export const compactRequestSchema = z
+  .object({
+    type: z.literal("compact_request"),
+  })
+  .strict();
+
 export const taskListRequestSchema = z
   .object({
     type: z.literal("task_list_request"),
@@ -949,6 +962,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   contextBreakdownRequestSchema,
+  compactRequestSchema,
   taskListRequestSchema,
   taskOutputRequestSchema,
   taskKillRequestSchema,
