@@ -586,6 +586,126 @@ export function childLayoutState(deps: HandlerDeps, tabId: string): Promise<unkn
 }
 
 /**
+ * `POST /tabs/:tabId/child/close` (TASK.188 S8.3): thin forward to the
+ * facade's `childCloseClick`, same shape as `childOpen` above minus the body.
+ * The facade closes the pane with a REAL click on the control the operator
+ * uses (CUT-S3 §6.1: every layout TRANSITION is a real click), so this is the
+ * write-side counterpart of the read-only `childLayoutState` probe — the step
+ * a scenario smoke previously had no machine-driveable way to take.
+ */
+export function childCloseClick(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("childCloseClick", [tabId]);
+}
+
+/**
+ * `POST /tabs/:tabId/child/split` (TASK.188 S9.4): thin forward to the
+ * facade's `childSplitClick`, the entry-side twin of `child/close` above and
+ * the same real-click posture. It is what makes the split branch of the
+ * replay's end-of-child rule machine-reachable: only in split is the root
+ * transcript on screen, and only there does an exhausted child hand playback
+ * back to the root without anyone clicking.
+ */
+export function childSplitClick(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("childSplitClick", [tabId]);
+}
+
+/**
+ * Wire shape of the facade's `target` parameter (TASK.188 §3.2): the current
+ * root, or a named child by its `spawnToolCallId`. Declared locally rather
+ * than imported from `replay.ts` — this HTTP layer calls the facade by
+ * string name only (`FacadeCaller`, §F8), so it stays decoupled from that
+ * module's own types and compiles before `replay.ts` or the facade methods
+ * it backs exist.
+ */
+export type ReplayTargetWire = "root" | { child: string };
+
+/**
+ * `POST /tabs/:tabId/replay/arm` (TASK.188 §3.2/§5 S5): thin forward to the
+ * facade's `replayArm(tabId?)` — arming names which root tab's history to
+ * replay.
+ *
+ * TASK.188 S8.1: every `/replay/*` forward below now passes the URL's
+ * `tabId` as the facade call's FIRST argument. Until S8 they dropped it and
+ * the facade acted on "whatever is armed", so a stale id in the URL was
+ * silently honoured — `POST /tabs/<dead-uuid>/replay/disarm` answered `ok`
+ * and tore down the replay running on a live tab (§11 finding B, found in a
+ * live smoke). The id now either matches the armed tab or the call is
+ * refused (`unknown_tab` / `not_armed` / `not_armed_for_tab`).
+ */
+export function replayArm(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("replayArm", [tabId]);
+}
+
+/** `POST /tabs/:tabId/replay/disarm` (TASK.188 §3.2/§5 S5, S8.1): forwards `[tabId]` to the facade's `replayDisarm(tabId)`. */
+export function replayDisarm(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("replayDisarm", [tabId]);
+}
+
+/**
+ * `POST /tabs/:tabId/replay/play` (TASK.188 §3.2/§5 S5, S8.1): thin forward
+ * to the facade's `replayPlay(tabId, target?)`. `target` is omitted entirely
+ * (not forwarded) when absent, so the facade falls back to its own
+ * current-focus default rather than receiving an explicit `null` (same
+ * discipline as `respondPermission`'s omitted `requestId` above).
+ */
+export function replayPlay(deps: HandlerDeps, tabId: string, target?: ReplayTargetWire): Promise<unknown> {
+  return deps.callFacade("replayPlay", target !== undefined ? [tabId, target] : [tabId]);
+}
+
+/** `POST /tabs/:tabId/replay/pause` (TASK.188 §3.2/§5 S5, S8.1): same shape as `replayPlay` above. */
+export function replayPause(deps: HandlerDeps, tabId: string, target?: ReplayTargetWire): Promise<unknown> {
+  return deps.callFacade("replayPause", target !== undefined ? [tabId, target] : [tabId]);
+}
+
+/** `POST /tabs/:tabId/replay/toggle` (TASK.188 §3.2/§5 S5, S8.1): same shape as `replayPlay` above. */
+export function replayToggle(deps: HandlerDeps, tabId: string, target?: ReplayTargetWire): Promise<unknown> {
+  return deps.callFacade("replayToggle", target !== undefined ? [tabId, target] : [tabId]);
+}
+
+/**
+ * `POST /tabs/:tabId/replay/step` (TASK.188 §3.2/§5 S5, S8.1): thin forward
+ * to the facade's `replayStep(tabId, n?, target?)`. Trailing omitted args are
+ * dropped (not sent as `null`) so the facade's own defaults apply; a present
+ * `target` with an absent `n` still forwards `n` as `undefined` in that slot
+ * — positional args have no other way to reach the middle parameter.
+ */
+export function replayStep(deps: HandlerDeps, tabId: string, n?: number, target?: ReplayTargetWire): Promise<unknown> {
+  const args: unknown[] = target !== undefined ? [tabId, n, target] : n !== undefined ? [tabId, n] : [tabId];
+  return deps.callFacade("replayStep", args);
+}
+
+/**
+ * `POST /tabs/:tabId/replay/seek` (TASK.188 §3.2/§5 S5, S8.1): thin forward
+ * to the facade's `replaySeek(tabId, index, target?)`. `index` is always
+ * forwarded (server.ts's zod requires it), `target` only when given.
+ */
+export function replaySeek(deps: HandlerDeps, tabId: string, index: number, target?: ReplayTargetWire): Promise<unknown> {
+  return deps.callFacade("replaySeek", target !== undefined ? [tabId, index, target] : [tabId, index]);
+}
+
+/**
+ * `POST /tabs/:tabId/replay/params` (TASK.188 §3.2/§5 S5, S8.1): thin forward
+ * to the facade's `replaySetParams(tabId, partial)`. The body is passed
+ * through as-is (server.ts validates only its shape, `mergeReplayParams` on
+ * the facade side validates values).
+ */
+export function replaySetParams(deps: HandlerDeps, tabId: string, patch: Record<string, unknown>): Promise<unknown> {
+  return deps.callFacade("replaySetParams", [tabId, patch]);
+}
+
+/**
+ * `GET /tabs/:tabId/replay` (TASK.188 §3.2/§5 S5): read-only forward to the
+ * facade's zero-arg `replayState()`. The probe is deliberately GLOBAL — there
+ * is one pult, and its own answer names the armed tab (`armed.rootTabId`), so
+ * a caller compares rather than addresses. `tabId` therefore stays in the URL
+ * for route-family symmetry and is not forwarded (the one `/replay/*` route
+ * where that is still true after S8.1, and the only one that writes nothing).
+ */
+export function replayState(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("replayState", []);
+}
+
+/**
  * `POST /tabs {kind:"new"}` (design §4.2): the sanctioned dialog bypass (§1) —
  * the same `manager.createTab` + `deliverTabPort` the tab-ipc "new" handler
  * runs AFTER `dialog.showOpenDialog`, with the workspace supplied directly.

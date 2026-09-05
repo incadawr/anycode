@@ -29,6 +29,8 @@ import { gitCommandMessageSchema } from "../../shared/protocol.js";
 import {
   createTabNew,
   childOpen,
+  childCloseClick,
+  childSplitClick,
   childLayoutState,
   getSessions,
   getState,
@@ -172,6 +174,15 @@ import {
   previewOpen,
   previewSetContainer,
   previewNavigateMdDoc,
+  replayArm,
+  replayDisarm,
+  replayPlay,
+  replayPause,
+  replayToggle,
+  replayStep,
+  replaySeek,
+  replaySetParams,
+  replayState,
   FacadeThrewError,
   FacadeUnavailableError,
   type AppLike,
@@ -359,6 +370,22 @@ const ctxPopoverOpenBody = z.object({ open: z.boolean() }).strict();
 // path (`/tabs/:tabId/child/open`), same posture as the ctx-popover body
 // above — a single required field naming which child.
 const childOpenBody = z.object({ spawnToolCallId: z.string().min(1) }).strict();
+
+// ── replay bodies (TASK.188 §3.2/§5 S5): `tabId` rides in the path
+// (`/tabs/:tabId/replay/*`) for every one of these, same posture as the
+// child-open body above — none of them repeats it in the body. `target`
+// names which timeline (the root tab, or a named child by
+// `spawnToolCallId`) a play/pause/step/seek/toggle act on; absent means
+// "whatever currently has replay focus" (§4/§3.2), resolved facade-side, not
+// here. `replayParamsBody` stays a loose passthrough — `mergeReplayParams`
+// on the facade side owns validating the values of a partial `ReplayParams`,
+// this boundary only rejects a non-object body.
+const replayTargetBody = z.object({
+  target: z.union([z.literal("root"), z.object({ child: z.string().min(1) })]).optional(),
+});
+const replayStepBody = replayTargetBody.extend({ n: z.number().int().optional() });
+const replaySeekBody = replayTargetBody.extend({ index: z.number().int().min(0) });
+const replayParamsBody = z.object({}).passthrough();
 
 // ── settings bodies (slice-P7.16-cut.md §5 W4): GLOBAL (app-level) routes, no
 // `:tabId` segment — Settings is not per-tab (same posture as the
@@ -1498,6 +1525,21 @@ async function route(
     const body = parseBody(rawBody, childOpenBody);
     return childOpen(deps, tabId, body.spawnToolCallId);
   }
+  // TASK.188 S8.3: `/tabs/:tabId/child/close` — the write-side counterpart of
+  // `child/open` above, one route family, same shape; no body (which child is
+  // open is the tab's own state, not the caller's to name).
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "child" && parts[3] === "close") {
+    parseBody(rawBody, emptyBody);
+    return childCloseClick(deps, decodeURIComponent(parts[1]!));
+  }
+  // TASK.188 S9.4: `/tabs/:tabId/child/split` — same route family and same
+  // no-body shape as `child/close` above, entering the split layout instead
+  // of leaving the child pane. It exists so a smoke can reach the layout in
+  // which an exhausted child releases the root by itself.
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "child" && parts[3] === "split") {
+    parseBody(rawBody, emptyBody);
+    return childSplitClick(deps, decodeURIComponent(parts[1]!));
+  }
   // Dev-only host-kill lever (TASK.33 FIX-A): `/tabs/:tabId/host/kill` — same
   // `parts.length === 4` shape as the model-pill pick / ctx-popover open /
   // slash-menu routes above, forces the tab's real host child to exit so the
@@ -1563,6 +1605,60 @@ async function route(
       decodeURIComponent(parts[3]!),
       decodeURIComponent(parts[5]!),
     );
+  }
+
+  // Replay driver + probe (TASK.188 §3.2/§5 S5, for scenario smoke): the
+  // read-only probe sits at `/tabs/:tabId/replay` itself (`parts.length ===
+  // 3`, same depth as `/tabs/:tabId/checkpoints`/`/rewind` above); every
+  // action is one segment deeper (`parts.length === 4`, `parts[2] ===
+  // "replay"`), same shape as the child/host-kill routes above with
+  // `parts[3]` naming the action. `tabId` is decoded and FORWARDED for every
+  // action route below (TASK.188 S8.1): until S8 only `replayArm` used it and
+  // the rest acted on "whatever is armed", which made a stale id in the URL a
+  // hijack — a `disarm` for a dead tab tore down a live tab's replay (§11
+  // finding B). The GET probe alone still ignores it: one pult, one global
+  // state, whose own answer names the armed tab.
+  if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "replay") {
+    return replayState(deps, decodeURIComponent(parts[1]!));
+  }
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "replay") {
+    const tabId = decodeURIComponent(parts[1]!);
+    switch (parts[3]) {
+      case "arm": {
+        parseBody(rawBody, emptyBody);
+        return replayArm(deps, tabId);
+      }
+      case "disarm": {
+        parseBody(rawBody, emptyBody);
+        return replayDisarm(deps, tabId);
+      }
+      case "play": {
+        const body = parseBody(rawBody, replayTargetBody);
+        return replayPlay(deps, tabId, body.target);
+      }
+      case "pause": {
+        const body = parseBody(rawBody, replayTargetBody);
+        return replayPause(deps, tabId, body.target);
+      }
+      case "toggle": {
+        const body = parseBody(rawBody, replayTargetBody);
+        return replayToggle(deps, tabId, body.target);
+      }
+      case "step": {
+        const body = parseBody(rawBody, replayStepBody);
+        return replayStep(deps, tabId, body.n, body.target);
+      }
+      case "seek": {
+        const body = parseBody(rawBody, replaySeekBody);
+        return replaySeek(deps, tabId, body.index, body.target);
+      }
+      case "params": {
+        const body = parseBody(rawBody, replayParamsBody);
+        return replaySetParams(deps, tabId, body);
+      }
+      default:
+        break;
+    }
   }
 
   throw new HttpError(404, { error: "not_found" });

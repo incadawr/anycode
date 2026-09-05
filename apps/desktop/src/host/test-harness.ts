@@ -178,6 +178,12 @@ export interface HarnessOptions {
   brokerTimeoutMs?: number;
   /** Boot history snapshot for transcript hydration (design §3.3); empty by default. */
   bootHistory?: readonly HistoryItem[];
+  /**
+   * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (TASK.188
+   * S4), forwarded straight to `Session` — the harness never resolves it from
+   * the environment itself. Defaults to `SESSION_HISTORY_MAX_ITEMS` when absent.
+   */
+  historyMaxItems?: number;
   /** Whether the boot session already had a title (skips title derivation). */
   hasTitle?: boolean;
   /**
@@ -468,6 +474,7 @@ export function createHarness(options: HarnessOptions): Harness {
     model: "scripted-model",
     sessionId: "test-session",
     bootHistory: options.bootHistory,
+    ...(options.historyMaxItems !== undefined ? { historyMaxItems: options.historyMaxItems } : {}),
     hasTitle: options.hasTitle,
     rules,
     persistence,

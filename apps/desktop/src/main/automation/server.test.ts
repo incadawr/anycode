@@ -494,6 +494,102 @@ describe("POST /tabs/:tabId/child/open (TASK.102 S2d D1, CUT-S2 §4.2 п.5 'Open
   });
 });
 
+describe("POST /tabs/:tabId/child/close (TASK.188 S8.3)", () => {
+  it("401s without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/child/close"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("forwards [tabId] to the facade's childCloseClick", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/child/close"), { method: "POST", headers: auth(), body: "{}" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(calls[0]).toContain('"childCloseClick"');
+    expect(calls[0]).toContain('["tab-a"]');
+  });
+
+  it("carries no payload: a body field is not forwarded (shared lenient `emptyBody`, as on every no-body route)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/child/close"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ spawnToolCallId: "call-1" }),
+    });
+    expect(res.status).toBe(200);
+    // Which child is open is the tab's own state, never the caller's to name.
+    expect(calls[0]).toContain('["tab-a"]');
+    expect(calls[0]).not.toContain("call-1");
+  });
+
+  it("decodes a URL-encoded tabId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, `/tabs/${encodeURIComponent("tab a")}/child/close`), {
+      method: "POST",
+      headers: auth(),
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a"]');
+  });
+});
+
+describe("POST /tabs/:tabId/child/split (TASK.188 S9.4)", () => {
+  it("401s without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/child/split"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("forwards [tabId] to the facade's childSplitClick", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/child/split"), { method: "POST", headers: auth(), body: "{}" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(calls[0]).toContain('"childSplitClick"');
+    expect(calls[0]).toContain('["tab-a"]');
+  });
+
+  it("carries no payload: a body field is not forwarded (shared lenient `emptyBody`)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/child/split"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ spawnToolCallId: "call-1" }),
+    });
+    expect(res.status).toBe(200);
+    // Which child is open is the tab's own state, never the caller's to name.
+    expect(calls[0]).toContain('["tab-a"]');
+    expect(calls[0]).not.toContain("call-1");
+  });
+
+  it("decodes a URL-encoded tabId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, `/tabs/${encodeURIComponent("tab a")}/child/split`), {
+      method: "POST",
+      headers: auth(),
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a"]');
+  });
+});
+
 describe("GET /tabs/:tabId/child/layout (TASK.102 S3c, CUT-S3 §6.2 read-only probe)", () => {
   it("401s without a token", async () => {
     const h = await boot();
@@ -4170,5 +4266,183 @@ describe("sidebar row-cut routes (TASK.125)", () => {
       expect(res.status).toBe(400);
       expect(calls).toHaveLength(0);
     });
+  });
+});
+
+describe("replay routes (TASK.188 §3.2/§5 S5, for scenario smoke)", () => {
+  it("401s GET /tabs/:tabId/replay without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/replay"));
+    expect(res.status).toBe(401);
+  });
+
+  it("401s POST /tabs/:tabId/replay/arm without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/replay/arm"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /tabs/:tabId/replay -> replayState, no args", async () => {
+    const facadeResult = { armed: false };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"replayState"');
+    expect(calls[0]).toContain("[]");
+  });
+
+  it("POST /tabs/:tabId/replay/arm -> replayArm, forwards [tabId]", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/arm"), { method: "POST", headers: auth(), body: "{}" });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"replayArm"');
+    expect(calls[0]).toContain('["tab-a"]');
+  });
+
+  it("POST /tabs/:tabId/replay/disarm -> replayDisarm, forwards [tabId] (S8.1)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/disarm"), { method: "POST", headers: auth(), body: "{}" });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"replayDisarm"');
+    // Until S8.1 this asserted `[]` — the URL's tabId was dropped and the
+    // facade disarmed whatever happened to be armed, so a stale id tore down
+    // a LIVE tab's replay (§11 finding B, found in a live smoke). The pin
+    // froze exactly that; forwarding the id is the fix.
+    expect(calls[0]).toContain('["tab-a"]');
+  });
+
+  it("POST /tabs/:tabId/replay/play with no body -> replayPlay, forwards [tabId] (target defaults facade-side)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/play"), { method: "POST", headers: auth(), body: "{}" });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"replayPlay"');
+    expect(calls[0]).toContain('["tab-a"]');
+  });
+
+  it("POST /tabs/:tabId/replay/pause with a child target -> replayPause, forwards [tabId, target]", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/pause"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ target: { child: "call-1" } }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"replayPause"');
+    expect(calls[0]).toContain('["tab-a",{"child":"call-1"}]');
+  });
+
+  it("POST /tabs/:tabId/replay/toggle with target:\"root\" -> replayToggle, forwards [tabId, \"root\"]", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/toggle"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ target: "root" }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"replayToggle"');
+    expect(calls[0]).toContain('["tab-a","root"]');
+  });
+
+  it("POST /tabs/:tabId/replay/step with {} -> replayStep, forwards [tabId] only", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/step"), { method: "POST", headers: auth(), body: "{}" });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"replayStep"');
+    expect(calls[0]).toContain('["tab-a"]');
+  });
+
+  it("POST /tabs/:tabId/replay/step with {n:2} -> replayStep, forwards [tabId, 2]", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/step"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ n: 2 }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"replayStep"');
+    expect(calls[0]).toContain('["tab-a",2]');
+  });
+
+  it('POST /tabs/:tabId/replay/seek with {index:3} -> replaySeek, forwards [tabId, 3]', async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/seek"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ index: 3 }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"replaySeek"');
+    expect(calls[0]).toContain('["tab-a",3]');
+  });
+
+  it("POST /tabs/:tabId/replay/seek with {index:-1} -> 400, facade never invoked", async () => {
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/seek"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ index: -1 }),
+    });
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("POST /tabs/:tabId/replay/seek without an index -> 400, facade never invoked", async () => {
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/seek"), {
+      method: "POST",
+      headers: auth(),
+      body: "{}",
+    });
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("POST /tabs/:tabId/replay/params -> replaySetParams, forwards [tabId, patch] unvalidated (facade owns value checks)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/params"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ speed: 2 }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('"replaySetParams"');
+    expect(calls[0]).toContain('["tab-a",{"speed":2}]');
+  });
+
+  it("decodes a URL-encoded tabId on the arm route", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, `/tabs/${encodeURIComponent("tab a")}/replay/arm`), {
+      method: "POST",
+      headers: auth(),
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a"]');
+  });
+
+  it("POST /tabs/:tabId/replay/zzz (unknown action) -> 404", async () => {
+    const { window, calls } = fakeWindowCapture();
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/replay/zzz"), { method: "POST", headers: auth(), body: "{}" });
+    expect(res.status).toBe(404);
+    expect(calls).toHaveLength(0);
   });
 });
