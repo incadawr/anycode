@@ -112,6 +112,9 @@ missing/bad token → `401`.
 | `POST /tabs/:tabId/retry` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"no_retry_offer"\|"not_ready"\|"images_unsupported"}` — clicks the one-shot Try-again offer (TASK.33 W8) by calling `dispatchTryAgain` directly (a facade shortcut, NOT a DOM click — see the try-again-button probe/driver below for that); `GET /state`'s per-tab `retryOffer` (null when nothing is offered) mirrors the store's `retry` field. `images_unsupported` (TASK.56 W3-FIX) is the entry gate refusing an image-bearing offer against the live model's `imageInput:false` verdict; the offer stays armed (still visible in `retryOffer`) and the store raises a `retry_blocked` notice |
 | `POST /tabs/:tabId/select` | `{}` | `{ok:true}` |
 | `POST /tabs/:tabId/close` | `{}` | `{ok:true}` |
+| `POST /tabs/:tabId/child/open` | `{spawnToolCallId}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"}` — switches the root tab's pane onto that child (the same call ToolCallCard's Open button makes) |
+| `POST /tabs/:tabId/child/close` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"not_active"\|"not_open"}` (TASK.188 S8.3) — returns the tab from its child pane to the master by a REAL `.click()` on the control an operator uses (layout B's master breadcrumb, or the split pane's close button), never by poking the layout store: CUT-S3 §6.1 keeps every layout TRANSITION a real click. `not_active` because only the active tab is mounted; `not_open` when the tab already shows the master view, or no such control is rendered |
+| `POST /tabs/:tabId/child/split` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"not_active"\|"not_open"}` (TASK.188 S9.4) — puts an open child pane into the SPLIT layout by a REAL `.click()` on layout B's own "Split" breadcrumb button, same posture and same refusals as `child/close` above. Split is the only layout in which the root transcript is on screen, and so the only one in which a finished child hands playback back to the root by itself (see the replay probe below) |
 | `POST /tabs` | `{kind:"new", workspace}` | `{ok:true, tabId, sessionId, workspace}` (bypasses the native open dialog) |
 | `POST /tabs` | `{kind:"resume", sessionId}` | `{ok:true, tabId, workspace}` |
 | `POST /wait` | `{tabId, until:{connection?, turnStatus?, permissionPending?, transcriptIncludes?, gitStatusKnown?, gitPendingEmpty?}, timeoutMs?}` | `{matched, elapsedMs, state}` — polls every 150 ms; default 60 s, cap 300 s |
@@ -1613,6 +1616,144 @@ See `apps/desktop/scripts/preview-live-smoke.mjs` for the reference wiring
 (turn-driven auto-open + BrowserOpen/BrowserScreenshot alongside these
 mechanical probes; also the sole live exercise of the `preview.autoOpen`
 setting and the darwin `/tmp` artifact root, 77-B).
+
+### Replay probe/driver (TASK.188 §3.2/§5 S5)
+
+Drives the renderer's "cinematic" transcript replay (a recorded session
+played back block-by-block, for a scenario smoke or for capturing a demo
+video) over HTTP, so an agent-driven smoke can arm/play/step/seek it without
+touching the window. `tabId` rides in the URL for every route below, same as
+the child-open/checkpoint routes above, and every ACTION route forwards it to
+the facade, which refuses (`unknown_tab` / `not_armed` / `not_armed_for_tab`)
+unless it names the tab actually armed, `unknown_child` when a `target` names a
+child that replay has not accepted, and — for the commands that move the
+film — `off_screen` unless that tab is the surface on screen (see below). TASK.188 S8.1 — before it, seven of
+the eight routes dropped the id and acted on "whatever is armed", so a stale
+id was silently honoured: `POST /tabs/<dead-uuid>/replay/disarm` answered `ok`
+and tore down the replay running on a LIVE tab. The read-only
+`GET /tabs/:tabId/replay` still ignores it: there is one pult, and its own
+answer names the armed tab (`armed.rootTabId`), so a caller compares rather
+than addresses. `target` (on `play`/`pause`/`toggle`/
+`step`/`seek`) names which timeline to act on — the root tab's own replay,
+or a named child's by its `spawnToolCallId` (`{"child": "<spawnToolCallId>"}`)
+— and is omitted, not sent as `null`, when the caller wants "whatever
+currently has replay focus"; `POST .../replay/params` forwards its body
+verbatim as a partial `ReplayParams` patch, unvalidated at this boundary
+(the facade's own `mergeReplayParams` owns checking the values).
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /tabs/:tabId/replay` | — | `ReplayState` (facade `replayState()`) |
+| `POST /tabs/:tabId/replay/arm` | `{}` | facade `replayArm(tabId)` result |
+| `POST /tabs/:tabId/replay/disarm` | `{}` | facade `replayDisarm(tabId)` result |
+| `POST /tabs/:tabId/replay/play` | `{target?}` | facade `replayPlay(tabId, target?)` result |
+| `POST /tabs/:tabId/replay/pause` | `{target?}` | facade `replayPause(tabId, target?)` result |
+| `POST /tabs/:tabId/replay/toggle` | `{target?}` | facade `replayToggle(tabId, target?)` result |
+| `POST /tabs/:tabId/replay/step` | `{n?, target?}` | facade `replayStep(tabId, n?, target?)` result |
+| `POST /tabs/:tabId/replay/seek` | `{index, target?}` | facade `replaySeek(tabId, index, target?)` result |
+| `POST /tabs/:tabId/replay/params` | partial `ReplayParams` | facade `replaySetParams(tabId, partial)` result |
+
+`target` is `"root"` or `{"child": "<spawnToolCallId>"}`; `index` in
+`.../seek` is a non-negative integer (a negative or absent one is `400`
+before the facade is ever called). A `{"child": …}` must name a child the
+replay has ACCEPTED — one whose pane is mounted — or the answer is
+`unknown_child` (TASK.188 S13); the check runs on every command, `pause`
+included, and before the frame gate, because an address is wrong whatever the
+command is. Until S13 an unknown `spawnToolCallId` came back `ok` with nothing
+moved, which is exactly the shape of the stale-tabId defect S8.1 cured one
+level up.
+
+Two refinements from the second live pass (TASK.188 S9). `.../replay/disarm`
+answers from the PULT's state alone — is anything armed, does the caller name
+it — and never from whether the tab still exists, so closing the armed tab can
+never strand the pult with an `armed` pointer nothing is able to clear (before
+S9.1 that took an app restart: `arm` said `already_armed`, `disarm` of the dead
+id `unknown_tab`, `disarm` of a live one `not_armed_for_tab`). Closing the
+armed tab also disarms on its own, through the tabs-store record `disposeTab`
+removes. And `.../replay/params` is armed-tab-only WHILE something is armed
+(`not_armed_for_tab` otherwise, S9.2) — the params are one shared set, so a
+call from another live tab used to retune the film running on the armed one;
+with nothing armed any live tab may still set the film up in advance.
+
+`GET .../replay` also reports `rootOnScreen` (TASK.188 S8.2, widened in S10,
+made derived and fail-closed in S12): whether the root transcript is the
+surface currently drawn. It is DERIVED from what React has mounted — true iff
+a `SessionSurface` carrying the armed tab's id is up — so it is false in
+every case that takes that surface down: another tab active, the start screen
+over the pane, layout B with a child pane INSTEAD of the master, and any
+future replacement of the main pane. Up to S11 this was a hand-written list of
+those cases defaulting to `true`, and two live passes each found one more door
+it did not name; a driver should expect `false`, not `true`, from a fresh arm
+— arming reports nothing on screen until the surface is mounted, and until
+then `play` answers `off_screen`.
+
+The film never runs while it is false: a child that runs out of frames off
+screen leaves the root parked, switching away from a playing root parks it
+where it stands, and a frame tick aimed at an off-screen root is dropped even
+if a timer was already armed for it. Releasing or running an off-screen root
+would spend the timeline behind the pane and jump the film forward on the way
+back (measured live: eight blocks in four seconds). Coming back into frame is
+what starts it again, on the very block it was parked on; a root the operator
+stopped by hand is never restarted this way. Note the one thing that does NOT
+take it off screen: the settings dialog is an overlay, not a replacement, so
+the root keeps playing behind it.
+
+A timeline sitting at its END is never `playing`, however it got there — its
+own clock, `End`, `step` or `seek` (TASK.188 S13). `Home` after `End` therefore
+rewinds a STOPPED film and leaves it stopped; `Space` is what starts it. Before
+S13 only the clock switched playback off, so `End` left the root reading
+`382/382 playing:true` — a state nothing could leave, because past the last
+frame no timer is ever armed — and `Home` then ran the film again on its own.
+
+Short of the end, `seek` and `step` PRESERVE `playing`: seeking a running
+film does not stop it, and seeking a stopped one does not start it. A driver
+that expects a seek to pause reads the following `Space` as "the key did
+nothing" — it toggled, off the value the seek carried over (measured live,
+seventh smoke).
+
+The opening frame is BLANK (TASK.188 S14): with a replay armed, an empty
+transcript on the armed tab — the root right after `arm` or `Home`, a child
+pane parked at 0 — is the film rewound, not an empty session, so the "What are
+we building?" onboarding and its composer-writing chips are not drawn there.
+The list derives "am I a replay surface" from its own tab context
+(`isReplaySurface`), which is why layout B's child pane counts even though the
+root surface is unmounted. Off replay the product's empty state is unchanged.
+
+An explicit ORDER is held to the same rule (TASK.188 S11): `play`, `toggle`,
+`step` and `seek` aimed at the root answer `off_screen` while `rootOnScreen`
+is false, and the `Space`/arrow/`Home`/`End` hotkeys — which address the armed
+tab, not the tab you are looking at — go with them, leaving the keystroke to
+the page instead of swallowing it. Before the cure a Space pressed on another
+tab ran the hidden film 103 → 120 and `End` destroyed its position, all with
+`ok` in the answer. Three commands are deliberately exempt: `pause`, `disarm`
+and `params`. An off-screen `pause` is how an operator OVERRULES the automatic
+park — it clears the park flag, so the return into frame no longer resumes the
+film (before S11 the pause was a silent no-op and the return replayed on:
+149 → 159). Targets naming a child are never gated: a child's timeline exists
+only while its pane is mounted. `GET .../replay` reports
+`rootPausedByChild` beside `rootOnScreen` so a driver can tell the two stops
+apart — a parked root starts itself again, a hand-stopped one never does, and
+both read `root.playing: false`. In split both surfaces are visible and the root resumes by itself — whether the child ran out under its own clock or was
+brought to the end by `End`, `step` or `seek` (TASK.188 S13: the hand-back is
+judged after every write to the replay store, not at the three events that
+used to be listed for it). For layout B, the `childDoneCloseMs` param (ms, default `1500`, `0` = off)
+closes a finished child's pane by the same real click `POST .../child/close`
+makes, after which the root resumes down its normal withdrawal path — and it
+counts a child finished by any of those routes, not only by its own clock. It is on
+by default (TASK.188 S9.3) because the effect is reachable only with a replay
+armed, only in layout B and only past the end of a child's timeline — while
+shipping it off meant the film froze on every finished child until someone
+clicked. `POST .../child/split` drives the other branch: there the root is
+visible and releases itself, with no timer and no close.
+
+```bash
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/replay/arm -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/replay/play -d '{}'
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/replay/step -d '{"n":5}'
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/replay/seek -d '{"index":0}'
+curl "${A[@]}" "$B/tabs/$TAB/replay"
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/replay/disarm -d '{}'
+```
 
 ## Layout
 

@@ -339,7 +339,7 @@ const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
  * `"pnpm test,pnpm typecheck"`.
  */
 const ENV_RUN_ALLOW_BASH = "ANYCODE_RUN_ALLOW_BASH";
-import { resolveExtensionsHomeOverride } from "./dev-home.js";
+import { resolveExtensionsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { CoreEngine } from "./engines/core-engine.js";
@@ -1047,6 +1047,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     telemetry = { port, session: connected.sessionMeta.id };
   }
 
+  const codexHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
   session = new Session({
     outbound,
     engine: booted.engine,
@@ -1067,6 +1068,9 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     // `connected.engine` already is (registry.ts's codex plugin is a
     // pass-through), so this is exactly what `historyItems()` returns.
     bootHistory: booted.engine.historyItems(),
+    // TASK.188 S4: dev/automation-ONLY replay-recording override, resolved
+    // here (the composition root) and never inside Session itself.
+    ...(codexHistoryMaxItems !== null ? { historyMaxItems: codexHistoryMaxItems } : {}),
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
     // TASK.144: the SAME store the broker above matches against, so an
     // in-session "Always allow" starts working from the very next ask instead
@@ -1379,6 +1383,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     telemetry = { port, session: rowId };
   }
 
+  const claudeHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
   session = new Session({
     outbound,
     engine: booted.engine,
@@ -1393,6 +1398,9 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // The resume projection built above — `[]` for a fresh session, the
     // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
     bootHistory,
+    // TASK.188 S4: dev/automation-ONLY replay-recording override, resolved
+    // here (the composition root) and never inside Session itself.
+    ...(claudeHistoryMaxItems !== null ? { historyMaxItems: claudeHistoryMaxItems } : {}),
     hasTitle: connected.sessionMeta?.title !== undefined && connected.sessionMeta.title.length > 0,
     // TASK.144: the SAME store the broker above matches against, so an
     // in-session "Always allow" starts working from the very next ask instead
@@ -2839,6 +2847,7 @@ async function boot(): Promise<void> {
       },
     });
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
+    const coreHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
     session = new Session({
       outbound,
       engine,
@@ -3007,6 +3016,9 @@ async function boot(): Promise<void> {
       selectedEffort,
       sessionId,
       bootHistory,
+      // TASK.188 S4: dev/automation-ONLY replay-recording override, resolved
+      // here (the composition root) and never inside Session itself.
+      ...(coreHistoryMaxItems !== null ? { historyMaxItems: coreHistoryMaxItems } : {}),
       hasTitle: sessionMeta.title !== undefined && sessionMeta.title.length > 0,
       // Same instance as config.permissionEngine's RuleAwarePermissionEngine
       // (design §5): Session.maybeRemember appends to it on a remembered allow.

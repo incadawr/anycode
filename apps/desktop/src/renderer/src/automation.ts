@@ -63,9 +63,23 @@ import {
 import { PROFILE_PERIODS, type ProfilePeriod } from "./components/ProfilePane.js";
 import type { ProfilePhase } from "./components/profile-loader.js";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
-import { tabRegistry, type TabRegistry } from "./tab-registry.js";
+import { tabRegistry, type DesktopStoreApi, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabInfo, type TabsStoreApi } from "./tabs-store.js";
 import { childLayoutStore as defaultChildLayoutStore, type ChildLayoutStoreApi, type ChildLayoutView } from "./child-layout.js";
+import {
+  createReplayClock,
+  defaultReplayTimer,
+  isEditableTarget,
+  replayKeyAction,
+  replayStateJson,
+  replayStore as defaultReplayStore,
+  rootVisible,
+  type ReplayFocus,
+  type ReplayKeyAction,
+  type ReplayStateJson,
+  type ReplayStoreApi,
+  type ReplayTimer,
+} from "./replay.js";
 import { useSettingsStore, type SettingsStoreApi } from "./settings-store.js";
 import { groupAlwaysAllowRules } from "./permission-rules.js";
 import { ruleDisplayPattern, ruleHasPattern, ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
@@ -655,6 +669,44 @@ export interface TryAgainButtonDom {
   state(tabId: string, blockId: string): TryAgainButtonDomState | null;
   /** A real `.click()` on the block's own `.retry-try-again-button` — the exact node the rendered button's `onClick` fires from (App.tsx's `dispatchTryAgain`), unlike the `tryAgain` facade method above which calls `dispatchTryAgain` directly. Returns `false` (no-op) if the block isn't rendered, or doesn't carry exactly one such button. */
   click(tabId: string, blockId: string): boolean;
+}
+
+/**
+ * DOM accessor DI for `childCloseClick` (TASK.188 S8.3), same
+ * injectable-for-tests discipline as `TryAgainButtonDom`/`WorkflowStepsDom`
+ * above. Click-only: the layout itself is already readable through
+ * `childLayoutState`, so this seam exists purely to press the button.
+ */
+export interface ChildCloseDom {
+  /**
+   * A real `.click()` on the ONE control that returns a root tab from a child
+   * pane to its master: layout B's `.child-breadcrumb-master`
+   * (`childLayoutStore.close`, App.tsx) or the split pane's
+   * `.child-split-head-close` (ChildSplitPane.tsx). The two layouts are
+   * mutually exclusive branches of the same render, so exactly one such node
+   * exists whenever a child is open; anything else (master view, nothing
+   * mounted, an ambiguous pair) returns `false` without clicking.
+   */
+  click(): boolean;
+}
+
+/**
+ * DOM accessor DI for `childSplitClick` (TASK.188 S9.4), the entry-side twin
+ * of `ChildCloseDom` above. A SEPARATE parameter rather than a second method
+ * on `ChildCloseDom` on purpose: adding a required method there would make
+ * every existing `ChildCloseDom` fake in the tests structurally invalid, and
+ * a red test that only says "this object grew a field" hides whatever else
+ * the change did.
+ */
+export interface ChildSplitDom {
+  /**
+   * A real `.click()` on layout B's `.child-breadcrumb-split` — the button
+   * whose `onClick` calls `childLayoutStore.enterSplit` (App.tsx). Only
+   * layout B renders it (in the split layout the stack head carries the
+   * inverse control instead), so `false` — no click — is the honest answer
+   * anywhere else, exactly as for `ChildCloseDom`.
+   */
+  click(): boolean;
 }
 
 /** One row of `WorkflowStepsBody`'s checklist (TASK.191 slice S4): the button's own `.workflow-step-id` text plus whether it currently carries the click-driven selection (`aria-pressed`, `ToolCallCard.tsx`'s own `selected` prop). Rendered order rides through as-is (`orderStepsByDependency`'s topological order, read straight off the DOM — never re-derived), so a live smoke can assert on it directly. */
@@ -2742,6 +2794,84 @@ export interface AutomationFacade {
   codexImportSelectRollout(index: number): Promise<FacadeResult>;
   codexImportSetModel(model: string): Promise<FacadeResult>;
   codexImportApply(): Promise<FacadeResult>;
+  // ── Replay pult (TASK.188 S2, plan §3.2) — the debug-only playback of an
+  // ALREADY RECORDED session. Flat `replay*` methods, never a nested
+  // `facade.replay.*` object: main's HTTP side addresses the facade by METHOD
+  // NAME (`main/automation/handlers.ts`'s `FacadeCaller`), so a nested object
+  // would be unreachable over the wire.
+  //
+  // The state machine itself is `replay.ts` (slice S1); these methods add
+  // exactly what needs the app: which tab is being replayed, the refusals
+  // (`unknown_tab`/`already_armed`/`busy`/`empty_transcript`) the store
+  // deliberately does not make, and the ROOT SINK that swaps the armed tab's
+  // `transcript` for the replay's visible prefix and restores it on disarm.
+  //
+  // `target` addresses one surface: `"root"`, or `{ child: spawnToolCallId }`
+  // for an expanded child. Omitted, it means "whatever is focused" — and an
+  // accepted child TAKES focus (replay.ts's `offerChild`), so a command meant
+  // for the root while a child is on screen must say `"root"` explicitly.
+  //
+  // S8.1: every command below takes the armed tab's id as its FIRST argument
+  // and refuses (`not_armed_for_tab`) when it names a tab other than the one
+  // currently armed. The pre-S8 shape took no tabId at all and acted on
+  // "whatever is armed", which turned a stale id in the URL into a hijack: a
+  // `disarm` addressed to a long-gone tab tore down the replay running on a
+  // live one (§11 finding B, found live). `replayArm` — which CHOOSES the tab
+  // — and the read-only, deliberately global `replayState` keep their shapes.
+  //
+  // S11: the four commands that MOVE the film add `off_screen` — the armed
+  // tab can be the right tab and still not be the surface on screen (another
+  // tab active, the start screen over the pane, layout B showing a child).
+  // `replayPause`, `replayDisarm` and `replaySetParams` are exempt; a pause
+  // given from off screen is how an operator overrules the automatic park.
+  //
+  // S13: a `{ child }` target that names no accepted child is `unknown_child`
+  // — checked before `off_screen`, and on `replayPause` too, because an
+  // address is wrong whatever the command. It is the child-level twin of
+  // `unknown_tab`: the store answers an unknown key with silence, so without
+  // this refusal a typo'd `spawnToolCallId` came back `ok` with nothing moved.
+  replayArm(tabId?: string): FacadeResult;
+  replayDisarm(tabId: string): FacadeResult;
+  replayPlay(tabId: string, target?: ReplayFocus): FacadeResult;
+  replayPause(tabId: string, target?: ReplayFocus): FacadeResult;
+  replayToggle(tabId: string, target?: ReplayFocus): FacadeResult;
+  /** `n` defaults to one frame forward; negative steps backward. */
+  replayStep(tabId: string, n?: number, target?: ReplayFocus): FacadeResult;
+  replaySeek(tabId: string, index: number, target?: ReplayFocus): FacadeResult;
+  /** Folds an untrusted patch onto the playback params; unusable fields are dropped, never fatal. */
+  replaySetParams(tabId: string, patch: unknown): FacadeResult;
+  replayState(): ReplayStateJson;
+  /**
+   * Closes the child pane the root tab currently shows (TASK.188 S8.3), by a
+   * REAL `.click()` on the control an operator would use — layout B's master
+   * breadcrumb, or the split pane's own close button — never by poking
+   * `childLayoutStore` directly. That is the CUT-S3 §6.1/§9 п.8 ruling quoted
+   * on `childOpen`'s neighbours above: a second path into the store would
+   * bypass the very button→store wiring a smoke exists to pin, so every
+   * layout TRANSITION stays a real click.
+   *
+   * Refusals: `unknown_tab` (not a known root tab), `not_active` (only the
+   * active tab is mounted, so none of this tab's controls are clickable),
+   * `not_open` (the tab shows the master view, or no single close control is
+   * rendered).
+   */
+  childCloseClick(rootTabId: string): FacadeResult;
+  /**
+   * Puts the root tab's open child pane into the SPLIT layout (TASK.188
+   * S9.4) — the same real `.click()` posture as `childCloseClick` above, on
+   * layout B's own "Split" breadcrumb button.
+   *
+   * It exists so the split branch of the replay's end-of-child rule is
+   * machine-reachable: only in split is the root transcript on screen, and
+   * only there does an exhausted child hand playback back to the root by
+   * itself (`replay.ts`'s `tick`). Without a driver, that branch could be
+   * entered by a human click alone.
+   *
+   * Refusals: `unknown_tab`, `not_active` (as above), `not_open` — the tab
+   * shows the master view, or the button is not rendered (it is layout B's
+   * only; the split layout has no "enter split").
+   */
+  childSplitClick(rootTabId: string): FacadeResult;
 }
 
 /** The real `window.anycode` bridge, resolved lazily (only read when a caller omits the `bridge` DI parameter — never at module load, so this file stays importable from a plain Node test context with no `window`). */
@@ -3106,6 +3236,47 @@ function realTryAgainButtonDom(): TryAgainButtonDom {
     click(tabId, blockId) {
       const el = block(tabId, blockId);
       const buttons = el?.querySelectorAll<HTMLButtonElement>(".retry-try-again-button") ?? [];
+      if (buttons.length !== 1) {
+        return false;
+      }
+      buttons[0]!.click();
+      return true;
+    },
+  };
+}
+
+/**
+ * The real child-close DOM accessor (TASK.188 S8.3): same lazy-query
+ * discipline as every `real*Dom` above — nothing global is touched until
+ * `click` runs. Unscoped by tabId on purpose: only the ACTIVE tab is mounted
+ * (tab-context.tsx), and `childCloseClick` checks that the caller's tab IS
+ * the active one before ever reaching here, so a document-wide query cannot
+ * land on another tab's pane.
+ */
+function realChildCloseDom(): ChildCloseDom {
+  return {
+    click() {
+      const buttons = document.querySelectorAll<HTMLButtonElement>(
+        ".child-breadcrumb-master, .child-split-head-close",
+      );
+      if (buttons.length !== 1) {
+        return false;
+      }
+      buttons[0]!.click();
+      return true;
+    },
+  };
+}
+
+/**
+ * The real Split-entry DOM accessor (TASK.188 S9.4): same lazy-query,
+ * document-wide-because-only-the-active-tab-is-mounted discipline as
+ * `realChildCloseDom` above.
+ */
+function realChildSplitDom(): ChildSplitDom {
+  return {
+    click() {
+      const buttons = document.querySelectorAll<HTMLButtonElement>(".child-breadcrumb-split");
       if (buttons.length !== 1) {
         return false;
       }
@@ -5663,6 +5834,18 @@ export function createAutomationFacade(
   // param above it — every existing positional call site would shift
   // otherwise.
   visionPaneDom: VisionPaneDom = realVisionPaneDom(),
+  // TASK.188 S2: appended at the END for the same reason as every DI param
+  // above it — every existing positional call site would shift otherwise.
+  // `replayTimer` stays optional rather than defaulted here so that passing
+  // `undefined` lands on `createReplayClock`'s own real-`setTimeout` default.
+  replayStore: ReplayStoreApi = defaultReplayStore,
+  replayTimer?: ReplayTimer,
+  // TASK.188 S8.3: appended at the END for the same reason as every DI param
+  // above it — every existing positional call site would shift otherwise.
+  childCloseDom: ChildCloseDom = realChildCloseDom(),
+  // TASK.188 S9.4: appended at the END for the same reason as every DI param
+  // above it — every existing positional call site would shift otherwise.
+  childSplitDom: ChildSplitDom = realChildSplitDom(),
 ): AutomationFacade {
   /**
    * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
@@ -5683,6 +5866,314 @@ export function createAutomationFacade(
     const { providerId } = resolvePillTarget(pinnedConnection, activeProviderId, settingsSnapshot?.settings.provider.activeConnectionId);
     return providerModelsFor(providerId, settingsSnapshot?.catalog, settingsSnapshot?.settings.provider.custom);
   }
+
+  // ── Replay (TASK.188 S2) ────────────────────────────────────────────────
+  //
+  // The frame clock drives every target the store reports playing — the root,
+  // and any child `ChildHistoryContent` offers (slice S3). It is created once
+  // with the facade and never disposed: the facade itself lives as long as
+  // the DEV renderer window does (`installAutomation` runs once), and the
+  // subscription is inert whenever nothing is armed.
+  createReplayClock(replayStore, replayTimer);
+
+  /** The live root sink's disposer plus the tab it is bound to; null while nothing is armed. */
+  let replayRootSink: { rootTabId: string; dispose(): void } | null = null;
+
+  /**
+   * The root sink (plan §4): while armed, the armed tab's `transcript` is
+   * driven by the replay store's visible prefix instead of by the host.
+   *
+   * Written with a raw `setState` deliberately — replay is a DEV-only overlay
+   * ON TOP of the real store, not a second product path: no store action
+   * exists (or should) for "show fewer blocks than the session actually has",
+   * and everything else about the tab — turn state, permissions, git — keeps
+   * running off the untouched real store.
+   *
+   * `rootVisible` hands back a reference the replay store keeps STABLE while
+   * the content is unchanged (replay.ts's `preserveRef`), so this writes
+   * exactly once per frame and a no-op command re-renders nothing.
+   */
+  function attachReplayRootSink(rootTabId: string, store: DesktopStoreApi): void {
+    let lastVisible: TranscriptBlock[] | null = null;
+    const unsubscribe = replayStore.subscribe((state) => {
+      const visible = rootVisible(state);
+      if (visible === null || visible === lastVisible) {
+        return;
+      }
+      lastVisible = visible;
+      store.setState({ transcript: visible });
+    });
+    replayRootSink = { rootTabId, dispose: unsubscribe };
+  }
+
+  function detachReplayRootSink(): void {
+    replayRootSink?.dispose();
+    replayRootSink = null;
+  }
+
+  // S12: "is the armed root in frame" is NOT computed here any more. It used
+  // to be a hand-written predicate over three routing facts (the active tab,
+  // the start screen's draft, and the child layout), and each live pass found
+  // one more door that list did not name (§11 findings D3, D4) — it could only
+  // ever enumerate the ways the root could vanish, never derive them. The
+  // answer now comes from the one fact all of those doors share: whether the
+  // root's own `SessionSurface` is mounted, reported by that component into
+  // `replayStore.surfaceMounted`/`surfaceUnmounted` (App.tsx).
+
+  /** The live layout watch's disposer; null while nothing is armed. */
+  let replayLayoutWatch: (() => void) | null = null;
+
+  /**
+   * The layout watch (S8.2, §11 finding C). ONE job since S12 — the frame
+   * question it used to answer alongside it is now derived from the mounted
+   * surface, not from the layout — and that job needs the app, so it cannot
+   * live in `replay.ts`:
+   *
+   *  in layout B it arms `ReplayParams.childDoneCloseMs`: N ms after the
+   *  open child has run out of frames, CLOSE its pane by a real click
+   *  (`childCloseDom`, the same node `childCloseClick` presses). The close
+   *  unmounts the child, `withdrawChild` fires exactly as it does for a
+   *  human click, and the root resumes down its normal path — no second
+   *  "resume" rule, and no store poke behind the button's back. `0`
+   *  disables it: the operator closes the pane by hand.
+   *
+   * At most ONE close timer exists, and it is re-armed only when the child it
+   * was armed for changes — a params change or an unrelated store write while
+   * the same child sits exhausted leaves the running countdown alone.
+   */
+  function attachReplayLayoutWatch(rootTabId: string): void {
+    const timer: ReplayTimer = replayTimer ?? defaultReplayTimer;
+    let closeHandle: unknown = null;
+    let closeArmedFor: string | null = null;
+
+    function cancelClose(): void {
+      if (closeHandle !== null) {
+        timer.clear(closeHandle);
+        closeHandle = null;
+      }
+      closeArmedFor = null;
+    }
+
+    function syncAutoClose(): void {
+      const state = replayStore.getState();
+      const view = childLayoutStore.getState().view(rootTabId);
+      if (state.params.childDoneCloseMs <= 0 || view.kind !== "child") {
+        cancelClose();
+        return;
+      }
+      const child = state.children.get(view.spawnToolCallId);
+      // "Exhausted" is a fact of the CURSOR alone: every frame consumed. The
+      // store derives `playing` from that same cursor (S13), so an exhausted
+      // child always reads `playing: false` and asking would add nothing.
+      // Until S13 it did not: `End`/`step`/`seek` carried `playing: true` onto
+      // the end of the tape, and this watch — which did ask — read that as
+      // "still running" and never armed the close (§11 finding D5, layout B).
+      if (child === undefined || child.cursor < child.frames.length) {
+        cancelClose();
+        return;
+      }
+      if (closeArmedFor === view.spawnToolCallId) {
+        return;
+      }
+      cancelClose();
+      closeArmedFor = view.spawnToolCallId;
+      closeHandle = timer.set(() => {
+        closeHandle = null;
+        closeArmedFor = null;
+        childCloseDom.click();
+      }, state.params.childDoneCloseMs);
+    }
+
+    syncAutoClose();
+    const unsubscribeLayout = childLayoutStore.subscribe(() => {
+      syncAutoClose();
+    });
+    // The layout listener above covers "the view changed"; this one covers
+    // "the film moved" — a child reaching its last frame is a replay-store
+    // write, with no layout change to notice it by.
+    const unsubscribeReplay = replayStore.subscribe(() => {
+      syncAutoClose();
+    });
+    replayLayoutWatch = (): void => {
+      unsubscribeLayout();
+      unsubscribeReplay();
+      cancelClose();
+    };
+  }
+
+  function detachReplayLayoutWatch(): void {
+    replayLayoutWatch?.();
+    replayLayoutWatch = null;
+  }
+
+  /** The live tabs watch's disposer; null while nothing is armed. */
+  let replayTabsWatch: (() => void) | null = null;
+
+  /**
+   * The tabs watch (S9.1, §11 finding D1). Closing the armed tab used to
+   * strand the pult: `armed` pointed at a tab that no longer existed, and
+   * after S8.1 made `tabId` mandatory there was no call left that could clear
+   * it — `arm` on any other tab answered `already_armed`, `disarm` on the dead
+   * id `unknown_tab`, `disarm` on a live one `not_armed_for_tab`, and the
+   * hotkeys addressed the dead id too. Only restarting the app got the replay
+   * back.
+   *
+   * Both close paths — the facade's `closeTab` and App.tsx's `handleCloseTab`
+   * — end in `registry.disposeTab`, which removes the tab's tabs-store record
+   * (tab-registry.ts). So the armed root LEAVING `tabsStore.tabs` is the one
+   * signal both paths share, and it is what this watches.
+   *
+   * The listener compares against the previous state (the tab-registry's own
+   * `subscribe((state, prevState) =>` idiom) so that only a real removal tears
+   * down: an unrelated tabs mutation, or an arm on a surface that was never in
+   * the tabs store to begin with, must not look like a close.
+   *
+   * There is nothing to restore on this path — the tab, its store and its
+   * transcript are already gone — so this is `teardownReplay` without the
+   * write-back that `replayDisarm` does.
+   */
+  function attachReplayTabsWatch(rootTabId: string): void {
+    replayTabsWatch = tabsStore.subscribe((state, prevState) => {
+      const present = state.tabs.some((tab) => tab.tabId === rootTabId);
+      const wasPresent = prevState.tabs.some((tab) => tab.tabId === rootTabId);
+      if (!present && wasPresent) {
+        teardownReplay();
+      }
+      // S10 asked this watch a second question — is the armed root still the
+      // surface in frame — because a tab switch changes no layout and the
+      // layout watch could not see it. S12 removed it: switching tabs
+      // unmounts the root's `SessionSurface`, and that unmount is what the
+      // store now hears, so no watch has to guess at the routing at all.
+    });
+  }
+
+  function detachReplayTabsWatch(): void {
+    replayTabsWatch?.();
+    replayTabsWatch = null;
+  }
+
+  /**
+   * Drops every subscription the arm put up and disarms the store. Every
+   * listener is detached BEFORE `disarm` writes, so the disarm's own store
+   * write reaches neither the root sink (which would push the empty state onto
+   * the tab) nor the layout watch (which would re-evaluate a replay that no
+   * longer exists).
+   */
+  function teardownReplay(): void {
+    detachReplayRootSink();
+    detachReplayLayoutWatch();
+    detachReplayTabsWatch();
+    replayStore.getState().disarm();
+  }
+
+  /**
+   * Validates an untrusted `target` (it reaches the facade from DevTools or,
+   * once slice S5 lands the routes, straight off an HTTP body). `undefined`
+   * is not an error — it means "the focused target", which is what the store
+   * itself defaults to.
+   */
+  function resolveReplayFocus(
+    target: ReplayFocus | undefined,
+  ): { ok: true; focus: ReplayFocus | undefined } | FacadeErr {
+    if (target === undefined || target === "root") {
+      return { ok: true, focus: target };
+    }
+    if (typeof target === "object" && target !== null) {
+      const child = (target as { child?: unknown }).child;
+      if (typeof child === "string") {
+        return { ok: true, focus: { child } };
+      }
+    }
+    return { ok: false, reason: "bad_target" };
+  }
+
+  /**
+   * The armed-tab guard every playback command shares (S8.1, §11 finding B).
+   * Four refusals in a fixed order, each answering a different question:
+   *
+   *  - `unknown_tab`      — this id names no tab at all (a typo, or an id
+   *                         from a session that is long gone);
+   *  - `not_armed`        — the tab exists but nothing anywhere is armed;
+   *  - `not_armed_for_tab`— something IS armed, on a DIFFERENT tab. This is
+   *                         the refusal the defect needed: without it the
+   *                         command silently acted on that other tab's replay.
+   *  - `unknown_child`    — the target names a child this replay has not
+   *                         accepted (S13, §11 finding D7). The store is
+   *                         silent on an unknown key, exactly as it is on an
+   *                         unknown withdrawal, so without this the answer to
+   *                         a typo'd `spawnToolCallId` was `ok` and nothing
+   *                         moved. It is the same question `unknown_tab` asks,
+   *                         one level down — an ADDRESS, checked before the
+   *                         frame, and the two sets never overlap (`off_screen`
+   *                         is only ever the root's, `unknown_child` only ever
+   *                         a child's).
+   *
+   * Fail-closed by construction: the command runs only after the caller's
+   * tabId has been matched against `armed.rootTabId`.
+   *
+   * `frameGated` adds a fifth refusal, `off_screen`, for the commands that
+   * MOVE the film (S11, §11 finding D4): the armed tab may be the right tab
+   * and still not be the surface a human can see — another tab is active, the
+   * start screen has the pane, or layout B put a child in its place, all of
+   * which take the root's own `SessionSurface` down, which since S12 is what
+   * the flag is read from. The store refuses the same order on its own — and
+   * since S12 drops the frame tick too; the flag is what turns that
+   * silent no-op into an answer a driver can read. `pause`, `disarm` and
+   * `params` are NOT gated: stopping and configuring are safe from anywhere,
+   * and an off-screen `pause` is precisely how an operator overrides the
+   * machine's park. Children are never FRAME-gated — an accepted child's pane
+   * is mounted, so it is on screen by construction — but they are ADDRESS
+   * checked, on every command including `pause`: a name the store does not
+   * hold is a caller error whatever the command. An omitted target is not
+   * checked: it means "whatever has focus", and the focus never rests on a
+   * withdrawn child (`withdrawChild` returns it to the root).
+   */
+  function driveReplay(
+    tabId: string,
+    target: ReplayFocus | undefined,
+    frameGated: boolean,
+    run: (focus: ReplayFocus | undefined) => void,
+  ): FacadeResult {
+    const guard = requireArmedFor(tabId);
+    if (guard !== null) {
+      return guard;
+    }
+    const resolved = resolveReplayFocus(target);
+    if (!resolved.ok) {
+      return resolved;
+    }
+    if (resolved.focus !== undefined && resolved.focus !== "root") {
+      if (!replayStore.getState().children.has(resolved.focus.child)) {
+        return { ok: false, reason: "unknown_child" };
+      }
+    }
+    if (frameGated) {
+      const replay = replayStore.getState();
+      // `undefined` means "whatever has focus", which is what the store falls
+      // back to — so the gate must resolve it the same way before judging.
+      if ((resolved.focus ?? replay.focus) === "root" && !replay.rootOnScreen) {
+        return { ok: false, reason: "off_screen" };
+      }
+    }
+    run(resolved.focus);
+    return { ok: true };
+  }
+
+  /** The guard above as a predicate: `null` when `tabId` is the armed tab, else the refusal to return. */
+  function requireArmedFor(tabId: string): FacadeErr | null {
+    if (!registry.getStore(tabId)) {
+      return { ok: false, reason: "unknown_tab" };
+    }
+    const armed = replayStore.getState().armed;
+    if (armed === null) {
+      return { ok: false, reason: "not_armed" };
+    }
+    if (armed.rootTabId !== tabId) {
+      return { ok: false, reason: "not_armed_for_tab" };
+    }
+    return null;
+  }
+
   return {
     snapshot(transcriptTail?: number): SnapshotJson {
       const { tabs, activeTabId, hiddenWorkspaces } = tabsStore.getState();
@@ -8726,6 +9217,188 @@ export function createAutomationFacade(
       }
       return !codexImportDom.open() ? { ok: true } : { ok: false, reason: "import_refused" };
     },
+
+    // ── Replay pult (TASK.188 S2) ─────────────────────────────────────────
+
+    replayArm(tabId?: string): FacadeResult {
+      const rootTabId = tabId ?? tabsStore.getState().activeTabId;
+      if (rootTabId === null) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const store = registry.getStore(rootTabId);
+      if (!store) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      if (replayStore.getState().armed !== null) {
+        return { ok: false, reason: "already_armed" };
+      }
+      const state = store.getState();
+      // A running turn would keep appending blocks to a transcript the sink is
+      // about to overwrite frame by frame — the two writers would fight.
+      if (state.turn.status !== "idle") {
+        return { ok: false, reason: "busy" };
+      }
+      // The store arms an empty list happily (it has no notion of "worth
+      // replaying"); refusing is the facade's job — arming an empty tab would
+      // blank nothing and leave the operator with no way to tell it worked.
+      if (state.transcript.length === 0) {
+        return { ok: false, reason: "empty_transcript" };
+      }
+      // The sink is attached BEFORE arming so that `arm`'s own write — the
+      // opening empty frame — is the first thing it delivers.
+      attachReplayRootSink(rootTabId, store);
+      if (!replayStore.getState().arm(rootTabId, state.transcript)) {
+        detachReplayRootSink();
+        return { ok: false, reason: "already_armed" };
+      }
+      // Attached only once the store really is armed: the watch's countdown
+      // is armed off the armed replay's own params, so there is nothing for it
+      // to do before.
+      attachReplayLayoutWatch(rootTabId);
+      // S9.1: the armed state must not be able to outlive the tab it names.
+      attachReplayTabsWatch(rootTabId);
+      return { ok: true };
+    },
+
+    replayDisarm(tabId: string): FacadeResult {
+      // S9.1 (§11 finding D1): deliberately NOT `requireArmedFor` — its first
+      // question is "does this tab still exist", which is exactly the question
+      // that must not be able to block a teardown. Disarming is the way OUT of
+      // a replay, so it is answerable from the replay's own state alone: what
+      // is armed, and does the caller name it. Whether the tab is still around
+      // decides only whether there is anything to restore, below.
+      const armed = replayStore.getState().armed;
+      if (armed === null) {
+        return { ok: false, reason: "not_armed" };
+      }
+      if (armed.rootTabId !== tabId) {
+        return { ok: false, reason: "not_armed_for_tab" };
+      }
+      // `source` is the array handed in at arm time, with the ORIGINAL block
+      // ids — restoring `shown` instead would leave the tab holding the
+      // replay's re-id'd copies (`freshIds`), which every id-addressed probe
+      // and every React key would then disagree about. Read before `disarm`
+      // drops it, and with the sink already detached so the disarm write
+      // cannot reach the tab store first.
+      const source = replayStore.getState().root?.source ?? null;
+      teardownReplay();
+      // The guard above proved `armed.rootTabId === tabId`, so the tab whose
+      // transcript is restored is the caller's own — never another tab's. A
+      // missing store means the tab is gone (a close the watch above has not
+      // been told about, or never could be): the teardown still happened and
+      // the answer is still `ok` — there is simply nothing left to write to.
+      const store = registry.getStore(tabId);
+      if (store && source !== null) {
+        store.setState({ transcript: source });
+      }
+      return { ok: true };
+    },
+
+    replayPlay(tabId: string, target?: ReplayFocus): FacadeResult {
+      return driveReplay(tabId, target, true, (focus) => {
+        replayStore.getState().play(focus);
+      });
+    },
+
+    // The one un-gated driver: a stop is honoured from off screen, and it
+    // overrides the machine's park (S11, §11 finding D4).
+    replayPause(tabId: string, target?: ReplayFocus): FacadeResult {
+      return driveReplay(tabId, target, false, (focus) => {
+        replayStore.getState().pause(focus);
+      });
+    },
+
+    replayToggle(tabId: string, target?: ReplayFocus): FacadeResult {
+      return driveReplay(tabId, target, true, (focus) => {
+        replayStore.getState().toggle(focus);
+      });
+    },
+
+    replayStep(tabId: string, n = 1, target?: ReplayFocus): FacadeResult {
+      return driveReplay(tabId, target, true, (focus) => {
+        replayStore.getState().step(n, focus);
+      });
+    },
+
+    replaySeek(tabId: string, index: number, target?: ReplayFocus): FacadeResult {
+      return driveReplay(tabId, target, true, (focus) => {
+        replayStore.getState().seek(index, focus);
+      });
+    },
+
+    replaySetParams(tabId: string, patch: unknown): FacadeResult {
+      // Params are settings, not session state: a patch whose every field is
+      // unusable is a silent no-op rather than a refusal (replay.ts's
+      // `mergeReplayParams`), and there is deliberately no per-tab params
+      // state — one pult, one set of settings, reported by `replayState`.
+      //
+      // But one set of settings shared between tabs is what made S9.2's
+      // finding (D2) possible: with a replay armed, a call from a DIFFERENT
+      // live tab retuned the film running on the armed one. So the guard is
+      // conditional on what is armed, not uniform:
+      //
+      //  - armed → the same `requireArmedFor` every playback command uses, so
+      //    only the tab being replayed can change its own timings;
+      //  - nothing armed → any live tab, because setting the film up BEFORE
+      //    arming it is a real workflow and there is no film to hijack yet.
+      if (replayStore.getState().armed !== null) {
+        const guard = requireArmedFor(tabId);
+        if (guard !== null) {
+          return guard;
+        }
+      } else if (!registry.getStore(tabId)) {
+        // The tabId still has to name something (§11 finding B: a URL
+        // contract that lies is worse than an absent one).
+        return { ok: false, reason: "unknown_tab" };
+      }
+      replayStore.getState().setParams(patch);
+      return { ok: true };
+    },
+
+    replayState(): ReplayStateJson {
+      return replayStateJson(replayStore.getState());
+    },
+
+    childCloseClick(rootTabId: string): FacadeResult {
+      // Same structural refusal as childOpen/childLayoutState above.
+      if (!tabsStore.getState().tabs.some((tab) => tab.tabId === rootTabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      // Only the active tab is mounted (tab-context.tsx), so a click aimed at
+      // a background tab could only land on the ACTIVE tab's pane — refuse
+      // rather than close the wrong tab's child.
+      if (tabsStore.getState().activeTabId !== rootTabId) {
+        return { ok: false, reason: "not_active" };
+      }
+      // Nothing to close: the tab already shows its master view. Read from
+      // the store rather than the DOM so the refusal is the same whether or
+      // not React has finished a render.
+      if (childLayoutStore.getState().view(rootTabId).kind === "master") {
+        return { ok: false, reason: "not_open" };
+      }
+      // A real click, per the CUT-S3 ruling; a missing (or ambiguous) control
+      // is the same honest "there is nothing open to close".
+      return childCloseDom.click() ? { ok: true } : { ok: false, reason: "not_open" };
+    },
+
+    childSplitClick(rootTabId: string): FacadeResult {
+      // Guard for guard the same as childCloseClick above — same route family,
+      // same reasons, and the same CUT-S3 posture of pressing the operator's
+      // own button rather than calling `childLayoutStore.enterSplit`.
+      if (!tabsStore.getState().tabs.some((tab) => tab.tabId === rootTabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      if (tabsStore.getState().activeTabId !== rootTabId) {
+        return { ok: false, reason: "not_active" };
+      }
+      if (childLayoutStore.getState().view(rootTabId).kind === "master") {
+        return { ok: false, reason: "not_open" };
+      }
+      // Already in split is not an error state, but the button that enters it
+      // is not rendered there — the DOM's `false` is the honest answer, and it
+      // is not overridden here (childCloseClick's posture).
+      return childSplitDom.click() ? { ok: true } : { ok: false, reason: "not_open" };
+    },
   };
 }
 
@@ -8735,7 +9408,115 @@ declare global {
   }
 }
 
+/**
+ * The single keystroke `installReplayHotkeys` needs, stated structurally so
+ * the installer is testable with a fake target: this renderer's vitest setup
+ * builds no DOM at all (node environment, `*.test.ts` only), so a hotkey
+ * proven against a real `KeyboardEvent` could not be proven at all.
+ * `installAutomation` below adapts the real `window` onto this shape.
+ */
+export interface ReplayKeyEvent {
+  key: string;
+  target: { tagName?: string; isContentEditable?: boolean } | null;
+  preventDefault(): void;
+}
+
+/** The listener registrar `installReplayHotkeys` needs — `window`, or a fake in tests. */
+export interface ReplayHotkeyTarget {
+  addEventListener(type: "keydown", listener: (event: ReplayKeyEvent) => void): void;
+}
+
+/**
+ * Wires the replay hotkey table (plan §3.2) onto `target`, driving the facade
+ * — never the store directly, so a key does exactly what the matching
+ * `replay*` call does, refusals included.
+ *
+ * The table is live only while something is armed and only when the keystroke
+ * did not land in a text field, both decided by `replay.ts`'s pure
+ * `replayKeyAction`/`isEditableTarget`; when it yields no action the event is
+ * left completely alone, so typing in the composer is untouched. `]`/`[`
+ * scale the CURRENT speed rather than setting a fixed one, which is what
+ * makes repeated presses compound.
+ *
+ * A REFUSED command leaves the event alone too (S11, §11 finding D4): the key
+ * is claimed only once the facade has accepted it, so a Space pressed while
+ * the armed tab is off screen keeps its ordinary meaning for the page instead
+ * of being swallowed by a pult that did nothing.
+ */
+export function installReplayHotkeys(
+  target: ReplayHotkeyTarget,
+  facade: AutomationFacade,
+  store: ReplayStoreApi = defaultReplayStore,
+): void {
+  const SPEED_STEP = 1.5;
+  target.addEventListener("keydown", (event) => {
+    const armed = store.getState().armed;
+    const action = replayKeyAction(event.key, isEditableTarget(event.target), armed !== null);
+    if (action === null || armed === null) {
+      return;
+    }
+    // S8.1: every command below is addressed to the tab that is actually
+    // armed. The listener has no other id to offer — it is global, one per
+    // window, and the pult holds exactly one arming.
+    //
+    // S11 (§11 finding D4) retired what this comment used to claim next: that
+    // the armed tab is therefore "the one on screen being replayed". Since
+    // S10 an armed tab can sit behind another tab, behind the start screen or
+    // behind a child pane, and a Space pressed there ran the film out of sight
+    // (measured live: 103 → 107 → 120). Which tab is IN FRAME is the facade's
+    // judgement, not this listener's; the listener's job is only to name the
+    // armed tab and to claim the key when the facade accepts the command.
+    const tabId = armed.rootTabId;
+    if (dispatch(action, tabId).ok) {
+      event.preventDefault();
+    }
+  });
+
+  /** Runs one key's command against the facade and hands back its verdict. */
+  function dispatch(action: ReplayKeyAction, tabId: string): FacadeResult {
+    switch (action) {
+      case "toggle":
+        return facade.replayToggle(tabId);
+      case "step_forward":
+        return facade.replayStep(tabId, 1);
+      case "step_back":
+        return facade.replayStep(tabId, -1);
+      case "seek_start":
+        return facade.replaySeek(tabId, 0);
+      case "seek_end":
+        // The store clamps to the timeline's length, so "past the end" is the end.
+        return facade.replaySeek(tabId, Number.MAX_SAFE_INTEGER);
+      case "faster":
+        return facade.replaySetParams(tabId, { speed: store.getState().params.speed * SPEED_STEP });
+      case "slower":
+        return facade.replaySetParams(tabId, { speed: store.getState().params.speed / SPEED_STEP });
+      case "disarm":
+        return facade.replayDisarm(tabId);
+    }
+  }
+}
+
 /** Installs the facade onto `window.__anycodeAutomation`. Called only from main.tsx's `import.meta.env.DEV`-gated dynamic import (design §2.2/§5). */
-export function installAutomation(facade: AutomationFacade = createAutomationFacade()): void {
+export function installAutomation(
+  facade: AutomationFacade = createAutomationFacade(),
+  replayStore: ReplayStoreApi = defaultReplayStore,
+): void {
   window.__anycodeAutomation = facade;
+  installReplayHotkeys(
+    {
+      addEventListener(type, listener): void {
+        window.addEventListener(type, (event) => {
+          listener({
+            key: event.key,
+            target: event.target as { tagName?: string; isContentEditable?: boolean } | null,
+            preventDefault: () => {
+              event.preventDefault();
+            },
+          });
+        });
+      },
+    },
+    facade,
+    replayStore,
+  );
 }

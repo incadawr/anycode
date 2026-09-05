@@ -15,6 +15,7 @@
  * region outside the aria-live column announces turn start/end exactly once.
  */
 import { useContext, useLayoutEffect, useRef, useState } from "react";
+import { useStore } from "zustand";
 import type {
   ConnectionPhase,
   ErrorRetryMeta,
@@ -25,6 +26,7 @@ import type {
   TurnState,
 } from "../store.js";
 import { TabContext } from "../tab-context.js";
+import { isReplaySurface, replayStore } from "../replay.js";
 import { ChildReportBlock } from "./ChildReportBlock.js";
 import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { Markdown } from "./Markdown.js";
@@ -225,9 +227,19 @@ export const STARTER_CHIPS: readonly { label: string; insert: string }[] = [
   },
 ];
 
-/** Empty-state gate: zero blocks and no running turn (a running zero-block turn shows the WorkingRow instead). Exported for unit testing. */
-export function shouldShowTranscriptEmpty(blockCount: number, running: boolean): boolean {
-  return blockCount === 0 && !running;
+/**
+ * Empty-state gate: zero blocks, no running turn (a running zero-block turn
+ * shows the WorkingRow instead) and NOT a replay surface (TASK.188 S14). On a
+ * rewound film an empty list is the opening frame, not an empty session: the
+ * "What are we building?" onboarding is an invitation addressed to the author
+ * of a blank session, and its chips write into the composer of the session
+ * being filmed — neither belongs on a transcript that is about to play itself
+ * back. `replaying` is REQUIRED rather than defaulted: a default would be
+ * fail-open, letting a future caller draw the onboarding over a replay by
+ * forgetting the argument. Exported for unit testing.
+ */
+export function shouldShowTranscriptEmpty(blockCount: number, running: boolean, replaying: boolean): boolean {
+  return blockCount === 0 && !running && !replaying;
 }
 
 /** Sticky-follow (F17) distance-from-bottom threshold, px — within this band a scroll position still counts as "at bottom" (a streaming tail block growing by a few px per flush must not read as a manual scroll-up). */
@@ -366,6 +378,13 @@ export function MessageList({
   // `<TabContext.Provider>` (App.tsx's ActiveTabBody). Optional-chained since
   // no render test wraps this component in a provider.
   const tabId = useContext(TabContext)?.tabId ?? null;
+  // TASK.188 S14: "is this list a replay surface" is DERIVED here, from the
+  // same tab context, rather than passed down by each owner — the root's list
+  // and a replayed child's pane are both rendered under the armed tab's
+  // provider (the recorded child has no tab of its own), so one question
+  // covers both and any list mounted later. Off replay nothing is ever armed,
+  // so the selector is a constant `false` and adds no re-renders.
+  const replaying = useStore(replayStore, (state) => isReplaySurface(state, tabId));
   // Stream-in bookkeeping (design §1.3): blocks present at first render (tab
   // switch — App keys this component by tabId — or initial mount) and bulk
   // arrivals (session hydration lands many blocks in one render) never get
@@ -585,7 +604,7 @@ export function MessageList({
       <div className="visually-hidden" role="status">
         {running ? "Assistant is working" : hasRunRef.current ? "Assistant finished" : ""}
       </div>
-      {shouldShowTranscriptEmpty(blocks.length, running) && (
+      {shouldShowTranscriptEmpty(blocks.length, running, replaying) && (
         <div className="transcript-empty">
           {workspace && (
             <div className="transcript-empty-workspace" title={workspace}>
