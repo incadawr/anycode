@@ -66,16 +66,29 @@ import {
   type TrustedBinariesSectionDom,
   type SidebarDom,
   type SidebarGroupDomFacts,
+  installReplayHotkeys,
+  type ReplayHotkeyTarget,
+  type ReplayKeyEvent,
+  type ChildCloseDom,
+  type ChildSplitDom,
 } from "./automation.js";
+import {
+  createReplayStore,
+  DEFAULT_REPLAY_PARAMS,
+  isReplaySurface,
+  type ReplayFocus,
+  type ReplayStoreApi,
+  type ReplayTimer,
+} from "./replay.js";
 import { dispatchTryAgain } from "./App.js";
 import type { SkillScope } from "../../shared/skills-config.js";
 import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
 import type { GitDestructiveIntent, RetryOffer } from "./store.js";
 import { createTabRegistry, type TabRegistry } from "./tab-registry.js";
 import { createTabsStore, type TabsStoreApi } from "./tabs-store.js";
-import { childLayoutStore } from "./child-layout.js";
+import { childLayoutStore, createChildLayoutStore, type ChildLayoutStoreApi } from "./child-layout.js";
 import { createSettingsStore, type SettingsStoreApi } from "./settings-store.js";
-import type { GitCommand, HostToUiMessage, WireCheckpointMeta, WireEnvStatus, WireGitStatus } from "../../shared/protocol.js";
+import type { GitCommand, HostToUiMessage, WireCheckpointMeta, WireEnvStatus, WireGitStatus, WireHistoryItem } from "../../shared/protocol.js";
 import { uiToHostMessageSchema } from "../../shared/protocol.js";
 import type { CreateTabResult, CloseTabResult, SessionSummary } from "../../shared/tabs.js";
 import type { AlwaysAllowRule, SettingsSnapshot } from "../../shared/settings.js";
@@ -685,6 +698,223 @@ describe("automation facade — childOpen (TASK.102 S2d D1, CUT-S2 §4.2 п.5 'O
 
     expect(result).toEqual({ ok: false, reason: "unknown_tab" });
     expect(childLayoutStore.getState().view("ghost")).toEqual({ kind: "master" });
+  });
+});
+
+describe("automation facade — childCloseClick (TASK.188 S8.3, CUT-S3 §6.1 'every layout transition is a real click')", () => {
+  /**
+   * Two tabs (so `not_active` is reachable), an ISOLATED child-layout store
+   * and a fake click seam at the very end of the positional DI list.
+   */
+  function buildCloseFacade(layout: ChildLayoutStoreApi, childCloseDom: ChildCloseDom, tabIds = ["tab-a"]) {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    for (const tabId of tabIds) {
+      registry.registerPort(tabId, `/ws/${tabId}`, asPort(new FakeMessagePort()));
+    }
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined, // 4  dom
+      undefined, // 5  todoPanelDom
+      undefined, // 6  startScreenDom
+      undefined, // 7  modelPillDom
+      undefined, // 8  settingsStore
+      undefined, // 9  settingsDom
+      undefined, // 10 ctxPopoverDom
+      undefined, // 11 agentCardDom
+      undefined, // 12 mcpPaneDom
+      undefined, // 13 skillsPaneDom
+      undefined, // 14 subagentsPaneDom
+      undefined, // 15 profilePaneDom
+      undefined, // 16 composerSlashDom
+      undefined, // 17 shortcutsPaneDom
+      undefined, // 18 lspPanelDom
+      undefined, // 19 hooksPanelDom
+      undefined, // 20 checkpointPanelDom
+      undefined, // 21 transcriptBlockDom
+      undefined, // 22 tryAgainButtonDom
+      undefined, // 23 providerPaneDom
+      undefined, // 24 codexPaneDom
+      undefined, // 25 codexProfileChipDom
+      undefined, // 26 codexImportDom
+      undefined, // 27 binaryTrustDialogDom
+      undefined, // 28 trustedBinariesSectionDom
+      layout, // 29 childLayoutStore
+      undefined, // 30 sidebarDom
+      undefined, // 31 settingsLayoutDom
+      undefined, // 32 workflowStepsDom
+      undefined, // 33 visionPaneDom
+      undefined, // 34 replayStore
+      undefined, // 35 replayTimer
+      childCloseDom, // 36
+    );
+    return { facade, tabsStore, registry };
+  }
+
+  function fakeCloseDom(result = true): ChildCloseDom {
+    return { click: vi.fn<() => boolean>(() => result) };
+  }
+
+  it("refuses an unknown root tab without clicking anything", () => {
+    const dom = fakeCloseDom();
+    const { facade } = buildCloseFacade(createChildLayoutStore(), dom);
+
+    expect(facade.childCloseClick("ghost")).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(dom.click).not.toHaveBeenCalled();
+  });
+
+  it("refuses a BACKGROUND tab (not_active) — only the active tab is mounted, so the click could only land elsewhere", () => {
+    const layout = createChildLayoutStore();
+    const dom = fakeCloseDom();
+    const { facade } = buildCloseFacade(layout, dom, ["tab-a", "tab-b"]);
+    layout.getState().open("tab-b", "call-1");
+
+    expect(facade.childCloseClick("tab-b")).toEqual({ ok: false, reason: "not_active" });
+    expect(dom.click).not.toHaveBeenCalled();
+  });
+
+  it("refuses the master view (not_open) — there is no child pane to close", () => {
+    const dom = fakeCloseDom();
+    const { facade } = buildCloseFacade(createChildLayoutStore(), dom);
+
+    expect(facade.childCloseClick("tab-a")).toEqual({ ok: false, reason: "not_open" });
+    expect(dom.click).not.toHaveBeenCalled();
+  });
+
+  it("clicks the real control exactly once with a child open, in layout B and in split alike", () => {
+    const layout = createChildLayoutStore();
+    const dom = fakeCloseDom();
+    const { facade } = buildCloseFacade(layout, dom);
+
+    layout.getState().open("tab-a", "call-1");
+    expect(facade.childCloseClick("tab-a")).toEqual({ ok: true });
+    expect(dom.click).toHaveBeenCalledTimes(1);
+
+    layout.getState().enterSplit("tab-a");
+    expect(facade.childCloseClick("tab-a")).toEqual({ ok: true });
+    expect(dom.click).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports not_open when the control is not on screen — the DOM's answer is never overridden", () => {
+    const layout = createChildLayoutStore();
+    const dom = fakeCloseDom(false);
+    const { facade } = buildCloseFacade(layout, dom);
+    layout.getState().open("tab-a", "call-1");
+
+    expect(facade.childCloseClick("tab-a")).toEqual({ ok: false, reason: "not_open" });
+    expect(dom.click).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("automation facade — childSplitClick (TASK.188 S9.4, the entry-side twin of childCloseClick)", () => {
+  /**
+   * Same shape as `buildCloseFacade` above, one slot further along the
+   * positional DI list. `ChildSplitDom` is its OWN parameter rather than a
+   * second method on `ChildCloseDom`: a required method added there would
+   * make every existing close fake structurally invalid, and a wave of red
+   * "this object grew a field" hides whatever else the change did.
+   */
+  function buildSplitFacade(layout: ChildLayoutStoreApi, childSplitDom: ChildSplitDom, tabIds = ["tab-a"]) {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    for (const tabId of tabIds) {
+      registry.registerPort(tabId, `/ws/${tabId}`, asPort(new FakeMessagePort()));
+    }
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined, // 4  dom
+      undefined, // 5  todoPanelDom
+      undefined, // 6  startScreenDom
+      undefined, // 7  modelPillDom
+      undefined, // 8  settingsStore
+      undefined, // 9  settingsDom
+      undefined, // 10 ctxPopoverDom
+      undefined, // 11 agentCardDom
+      undefined, // 12 mcpPaneDom
+      undefined, // 13 skillsPaneDom
+      undefined, // 14 subagentsPaneDom
+      undefined, // 15 profilePaneDom
+      undefined, // 16 composerSlashDom
+      undefined, // 17 shortcutsPaneDom
+      undefined, // 18 lspPanelDom
+      undefined, // 19 hooksPanelDom
+      undefined, // 20 checkpointPanelDom
+      undefined, // 21 transcriptBlockDom
+      undefined, // 22 tryAgainButtonDom
+      undefined, // 23 providerPaneDom
+      undefined, // 24 codexPaneDom
+      undefined, // 25 codexProfileChipDom
+      undefined, // 26 codexImportDom
+      undefined, // 27 binaryTrustDialogDom
+      undefined, // 28 trustedBinariesSectionDom
+      layout, // 29 childLayoutStore
+      undefined, // 30 sidebarDom
+      undefined, // 31 settingsLayoutDom
+      undefined, // 32 workflowStepsDom
+      undefined, // 33 visionPaneDom
+      undefined, // 34 replayStore
+      undefined, // 35 replayTimer
+      undefined, // 36 childCloseDom
+      childSplitDom, // 37
+    );
+    return { facade, tabsStore, registry };
+  }
+
+  function fakeSplitDom(result = true): ChildSplitDom {
+    return { click: vi.fn<() => boolean>(() => result) };
+  }
+
+  it("refuses an unknown root tab without clicking anything", () => {
+    const dom = fakeSplitDom();
+    const { facade } = buildSplitFacade(createChildLayoutStore(), dom);
+
+    expect(facade.childSplitClick("ghost")).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(dom.click).not.toHaveBeenCalled();
+  });
+
+  it("refuses a BACKGROUND tab (not_active) — only the active tab is mounted", () => {
+    const layout = createChildLayoutStore();
+    const dom = fakeSplitDom();
+    const { facade } = buildSplitFacade(layout, dom, ["tab-a", "tab-b"]);
+    layout.getState().open("tab-b", "call-1");
+
+    expect(facade.childSplitClick("tab-b")).toEqual({ ok: false, reason: "not_active" });
+    expect(dom.click).not.toHaveBeenCalled();
+  });
+
+  it("refuses the master view (not_open) — there is no child pane to split", () => {
+    const dom = fakeSplitDom();
+    const { facade } = buildSplitFacade(createChildLayoutStore(), dom);
+
+    expect(facade.childSplitClick("tab-a")).toEqual({ ok: false, reason: "not_open" });
+    expect(dom.click).not.toHaveBeenCalled();
+  });
+
+  it("clicks the real Split breadcrumb exactly once with a child open in layout B", () => {
+    const layout = createChildLayoutStore();
+    const dom = fakeSplitDom();
+    const { facade } = buildSplitFacade(layout, dom);
+    layout.getState().open("tab-a", "call-1");
+
+    expect(facade.childSplitClick("tab-a")).toEqual({ ok: true });
+    expect(dom.click).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports not_open once already split — the button that enters split is layout B's only", () => {
+    const layout = createChildLayoutStore();
+    // The DOM's own answer for "that button is not rendered here", not a
+    // guard standing in for it: the facade never overrides the DOM.
+    const dom = fakeSplitDom(false);
+    const { facade } = buildSplitFacade(layout, dom);
+    layout.getState().open("tab-a", "call-1");
+    layout.getState().enterSplit("tab-a");
+
+    expect(facade.childSplitClick("tab-a")).toEqual({ ok: false, reason: "not_open" });
+    expect(dom.click).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -8701,5 +8931,1210 @@ describe("automation facade — sidebar row-cut probe/driver (TASK.125)", () => 
     const dom = fakeSidebarDom([]);
     dom.setFilter = vi.fn<(query: string) => boolean>(() => false);
     await expect(buildFacade(dom).sidebarFilter("x")).resolves.toEqual({ ok: false, reason: "no_search_input" });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// TASK.188 S2 — the replay pult on the facade
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("automation facade — replay* (TASK.188 S2)", () => {
+  /** A recorded session as the host replays it back on attach: user text, assistant text, a tool call + its result, a closing line. */
+  function recordedHistory(): WireHistoryItem[] {
+    return [
+      { id: "h1", createdAt: 1, message: { role: "user", content: "build me a thing" } },
+      { id: "h2", createdAt: 2, message: { role: "assistant", content: [{ type: "text", text: "on it" }] } },
+      {
+        id: "h3",
+        createdAt: 3,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "tc1", toolName: "Bash", input: { command: "ls" } }],
+        },
+      },
+      {
+        id: "h4",
+        createdAt: 4,
+        message: {
+          role: "tool",
+          content: [{ type: "tool_result", toolCallId: "tc1", toolName: "Bash", text: "a.txt", status: "success" }],
+        },
+      },
+      { id: "h5", createdAt: 5, message: { role: "assistant", content: [{ type: "text", text: "done" }] } },
+    ];
+  }
+
+  /**
+   * Deterministic stand-in for `setTimeout` (the `ReplayTimer` DI seam): a
+   * frame fires only when the test says so, so nothing here depends on real
+   * elapsed time and no stray callback outlives the test.
+   */
+  function fakeReplayTimer() {
+    const pending = new Map<number, { fn: () => void; ms: number }>();
+    let nextHandle = 0;
+    const timer: ReplayTimer = {
+      set(fn, ms) {
+        nextHandle += 1;
+        pending.set(nextHandle, { fn, ms });
+        return nextHandle;
+      },
+      clear(handle) {
+        pending.delete(handle as number);
+      },
+    };
+    return {
+      timer,
+      armed: () => pending.size,
+      delays: () => [...pending.values()].map((entry) => entry.ms),
+      /** Fires every timer armed AT CALL TIME; a frame re-armed by the tick waits for the next call. */
+      fire(): void {
+        for (const [handle, entry] of [...pending]) {
+          pending.delete(handle);
+          entry.fn();
+        }
+      },
+    };
+  }
+
+  /** `keydown` registrar with no DOM: this renderer's vitest runs in `node`, so a real KeyboardEvent is unavailable by construction. */
+  function fakeKeyTarget() {
+    const listeners: ((event: ReplayKeyEvent) => void)[] = [];
+    let prevented = 0;
+    const target: ReplayHotkeyTarget = {
+      addEventListener(_type: "keydown", listener: (event: ReplayKeyEvent) => void): void {
+        listeners.push(listener);
+      },
+    };
+    return {
+      target,
+      prevented: () => prevented,
+      press(key: string, on: { tagName?: string; isContentEditable?: boolean } | null = null): void {
+        for (const listener of listeners) {
+          listener({
+            key,
+            target: on,
+            preventDefault: () => {
+              prevented += 1;
+            },
+          });
+        }
+      },
+    };
+  }
+
+  /** Builds a facade wired ONLY for the replay methods — every other DOM/store slot keeps its own real default (never exercised by these tests). */
+  function buildFacade(
+    registry: TabRegistry,
+    tabsStore: TabsStoreApi,
+    replayStore: ReplayStoreApi,
+    replayTimer?: ReplayTimer,
+    // S8.2/S8.3: an ISOLATED child-layout store (the singleton is shared with
+    // the childOpen suites) and the click seam the auto-close presses.
+    layoutStore?: ChildLayoutStoreApi,
+    childCloseDom?: ChildCloseDom,
+  ) {
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined, // 4  dom
+      undefined, // 5  todoPanelDom
+      undefined, // 6  startScreenDom
+      undefined, // 7  modelPillDom
+      undefined, // 8  settingsStore
+      undefined, // 9  settingsDom
+      undefined, // 10 ctxPopoverDom
+      undefined, // 11 agentCardDom
+      undefined, // 12 mcpPaneDom
+      undefined, // 13 skillsPaneDom
+      undefined, // 14 subagentsPaneDom
+      undefined, // 15 profilePaneDom
+      undefined, // 16 composerSlashDom
+      undefined, // 17 shortcutsPaneDom
+      undefined, // 18 lspPanelDom
+      undefined, // 19 hooksPanelDom
+      undefined, // 20 checkpointPanelDom
+      undefined, // 21 transcriptBlockDom
+      undefined, // 22 tryAgainButtonDom
+      undefined, // 23 providerPaneDom
+      undefined, // 24 codexPaneDom
+      undefined, // 25 codexProfileChipDom
+      undefined, // 26 codexImportDom
+      undefined, // 27 binaryTrustDialogDom
+      undefined, // 28 trustedBinariesSectionDom
+      layoutStore, // 29 childLayoutStore
+      undefined, // 30 sidebarDom
+      undefined, // 31 settingsLayoutDom
+      undefined, // 32 workflowStepsDom
+      undefined, // 33 visionPaneDom
+      replayStore, // 34
+      replayTimer, // 35
+      childCloseDom, // 36
+    );
+  }
+
+  /**
+   * A ready tab hydrated from `recordedHistory()` (4 transcript blocks — the
+   * tool-role item pairs into the tool_call card), plus an ISOLATED replay
+   * store.
+   *
+   * The tab's `SessionSurface` is reported MOUNTED (S12) unless
+   * `surfaceOnScreen` says otherwise: that mount is what the replay store
+   * derives `rootOnScreen` from, and it is a fact of React's tree, not of the
+   * replay — the tab being looked at has its surface up whether or not
+   * anything is armed. Without it the store is fail-closed and every root
+   * command answers `off_screen`.
+   */
+  function setupRecordedTab(tabId = "tab-a", workspace = "/ws/a", sessionId = "sess-a", surfaceOnScreen = true) {
+    const ready = setupReadyTab(tabId, workspace, sessionId);
+    ready.port.emit({ type: "session_history", sessionId, items: recordedHistory(), truncated: false });
+    const replayStore = createReplayStore();
+    if (surfaceOnScreen) {
+      replayStore.getState().surfaceMounted(tabId);
+    }
+    return { ...ready, store: ready.registry.getStore(tabId)!, replayStore };
+  }
+
+  it("(a) refuses to arm an unknown tab, an empty transcript, or a tab mid-turn", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    expect(facade.replayArm("no-such-tab")).toEqual({ ok: false, reason: "unknown_tab" });
+
+    // `empty_transcript` is the FACADE's refusal: replay.ts's own `arm` accepts
+    // an empty list happily (it has no notion of "worth replaying").
+    const blank = setupReadyTab("tab-blank", "/ws/b", "sess-b");
+    const blankReplay = createReplayStore();
+    const blankFacade = buildFacade(blank.registry, blank.tabsStore, blankReplay);
+    expect(blankFacade.replayArm("tab-blank")).toEqual({ ok: false, reason: "empty_transcript" });
+    expect(blankReplay.getState().armed).toBeNull();
+
+    store.setState({ turn: { status: "running", turnId: "t1", requestId: "r1" } });
+    expect(facade.replayArm(tabId)).toEqual({ ok: false, reason: "busy" });
+    expect(replayStore.getState().armed).toBeNull();
+    expect(store.getState().transcript).toHaveLength(4);
+  });
+
+  it("(b) arming blanks the tab's transcript, reports the timeline length, and refuses a second arm", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+    const total = store.getState().transcript.length;
+    expect(total).toBe(4);
+
+    // No tabId ⇒ the active tab.
+    expect(tabsStore.getState().activeTabId).toBe(tabId);
+    expect(facade.replayArm()).toEqual({ ok: true });
+
+    expect(store.getState().transcript).toEqual([]);
+    expect(facade.replayState().armed).toEqual({ rootTabId: tabId });
+    expect(facade.replayState().root).toEqual({ cursor: 0, total, playing: false });
+
+    expect(facade.replayArm()).toEqual({ ok: false, reason: "already_armed" });
+    expect(facade.replayArm(tabId)).toEqual({ ok: false, reason: "already_armed" });
+  });
+
+  it("(c) step reveals one block at a time — fresh id, byte-identical payload; seek jumps the cursor", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+    const original = store.getState().transcript;
+    expect(facade.replayArm(tabId)).toEqual({ ok: true });
+
+    expect(facade.replayStep(tabId)).toEqual({ ok: true });
+    const shown = store.getState().transcript;
+    expect(shown).toHaveLength(1);
+    // The id is rewritten (MessageList only animates ids it has never seen)…
+    expect(shown[0]!.id).not.toBe(original[0]!.id);
+    expect(shown[0]!.id.startsWith(`${original[0]!.id}~r`)).toBe(true);
+    // …and NOTHING else is.
+    expect({ ...shown[0]!, id: original[0]!.id }).toEqual(original[0]);
+
+    expect(facade.replaySeek(tabId, 3)).toEqual({ ok: true });
+    expect(store.getState().transcript).toHaveLength(3);
+    expect(facade.replayState().root?.cursor).toBe(3);
+    // The tool card keeps the toolCallId the Open button and every probe address it by.
+    const toolCard = store.getState().transcript[2]!;
+    expect(toolCard.kind).toBe("tool_call");
+    expect(toolCard).toMatchObject({ toolCallId: "tc1" });
+
+    expect(facade.replayStep(tabId, -2)).toEqual({ ok: true });
+    expect(facade.replayState().root?.cursor).toBe(1);
+  });
+
+  it("(d) play arms exactly one frame timer; firing it grows the transcript by one and re-arms", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer);
+    facade.replayArm(tabId);
+
+    expect(clock.armed()).toBe(0);
+    expect(facade.replayPlay(tabId)).toEqual({ ok: true });
+    expect(clock.armed()).toBe(1);
+
+    clock.fire();
+    expect(store.getState().transcript).toHaveLength(1);
+    expect(facade.replayState().root).toMatchObject({ cursor: 1, playing: true });
+    expect(clock.armed()).toBe(1);
+
+    expect(facade.replayPause(tabId)).toEqual({ ok: true });
+    expect(clock.armed()).toBe(0);
+    expect(store.getState().transcript).toHaveLength(1);
+
+    // Toggle resumes from where the pause left it, never from the start.
+    expect(facade.replayToggle(tabId)).toEqual({ ok: true });
+    clock.fire();
+    expect(store.getState().transcript).toHaveLength(2);
+  });
+
+  it("(e) disarm restores the ORIGINAL transcript, ids included, and every driver then refuses", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+    const original = store.getState().transcript;
+    const originalIds = original.map((block) => block.id);
+
+    facade.replayArm(tabId);
+    facade.replayStep(tabId, 2);
+    expect(store.getState().transcript).toHaveLength(2);
+
+    expect(facade.replayDisarm(tabId)).toEqual({ ok: true });
+    expect(store.getState().transcript).toEqual(original);
+    expect(store.getState().transcript.map((block) => block.id)).toEqual(originalIds);
+    expect(facade.replayState().armed).toBeNull();
+    expect(facade.replayState().root).toBeNull();
+
+    expect(facade.replayDisarm(tabId)).toEqual({ ok: false, reason: "not_armed" });
+    expect(facade.replayStep(tabId)).toEqual({ ok: false, reason: "not_armed" });
+    expect(facade.replayPlay(tabId)).toEqual({ ok: false, reason: "not_armed" });
+    expect(facade.replaySeek(tabId, 0)).toEqual({ ok: false, reason: "not_armed" });
+
+    // Re-arming after a disarm works, and starts from the restored originals.
+    expect(facade.replayArm(tabId)).toEqual({ ok: true });
+    expect(facade.replayState().root?.total).toBe(original.length);
+  });
+
+  it("(f) setParams folds usable fields, drops garbage without failing, and reframes without losing the cursor", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer);
+
+    // Params are settings, not session state: tunable before anything is armed.
+    expect(facade.replaySetParams(tabId, { speed: 2 })).toEqual({ ok: true });
+    expect(facade.replayState().params.speed).toBe(2);
+
+    expect(facade.replaySetParams(tabId, { speed: "fast", stepMs: -5, nonsense: true })).toEqual({ ok: true });
+    expect(facade.replayState().params.speed).toBe(2);
+    expect(facade.replayState().params.stepMs).toBe(DEFAULT_REPLAY_PARAMS.stepMs);
+    expect(facade.replaySetParams(tabId, null)).toEqual({ ok: true });
+    expect(facade.replayState().params.speed).toBe(2);
+
+    facade.replayArm(tabId);
+    facade.replayStep(tabId, 2);
+    facade.replayPlay(tabId);
+    const before = clock.delays();
+    expect(before).toHaveLength(1);
+
+    expect(facade.replaySetParams(tabId, { speed: 4 })).toEqual({ ok: true });
+    // Same place in the film, half the wait for the next frame.
+    expect(facade.replayState().root?.cursor).toBe(2);
+    expect(clock.delays()).toEqual([before[0]! / 2]);
+  });
+
+  it("(g) hotkeys drive the facade, but only while armed and never from a text field", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer);
+    const keys = fakeKeyTarget();
+    installReplayHotkeys(keys.target, facade, replayStore);
+
+    // Nothing armed: the key isn't even claimed, so the app keeps it.
+    keys.press(" ");
+    expect(keys.prevented()).toBe(0);
+    expect(facade.replayState().root).toBeNull();
+
+    facade.replayArm(tabId);
+    keys.press(" ");
+    expect(keys.prevented()).toBe(1);
+    expect(facade.replayState().root?.playing).toBe(true);
+
+    // A space typed into the composer stays a space.
+    keys.press(" ", { tagName: "TEXTAREA" });
+    keys.press(" ", { isContentEditable: true });
+    expect(keys.prevented()).toBe(1);
+    expect(facade.replayState().root?.playing).toBe(true);
+
+    keys.press("ArrowRight");
+    expect(facade.replayState().root?.cursor).toBe(1);
+    keys.press("ArrowLeft");
+    expect(facade.replayState().root?.cursor).toBe(0);
+    keys.press("End");
+    expect(facade.replayState().root?.cursor).toBe(4);
+    keys.press("Home");
+    expect(facade.replayState().root?.cursor).toBe(0);
+
+    keys.press("]");
+    expect(facade.replayState().params.speed).toBe(1.5);
+    keys.press("[");
+    expect(facade.replayState().params.speed).toBe(1);
+
+    keys.press("Backspace");
+    expect(facade.replayState().armed).toBeNull();
+    expect(store.getState().transcript).toHaveLength(4);
+    // An unbound key is never claimed.
+    const prevented = keys.prevented();
+    facade.replayArm(tabId);
+    keys.press("q");
+    expect(keys.prevented()).toBe(prevented);
+  });
+
+  it("(h) snapshot() reports the replayed prefix — the machine-readable probe a live smoke reads", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    facade.replayArm(tabId);
+    expect(facade.snapshot().states[tabId]?.transcript).toEqual([]);
+
+    facade.replayStep(tabId, 2);
+    expect(facade.snapshot().states[tabId]?.transcript).toHaveLength(2);
+
+    facade.replayDisarm(tabId);
+    expect(facade.snapshot().states[tabId]?.transcript).toHaveLength(4);
+  });
+
+  it("(i) target addressing: \"root\" is explicit (an accepted child takes focus), a malformed target and an unknown child are refused", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const original = store.getState().transcript;
+    const facade = buildFacade(registry, tabsStore, replayStore);
+    facade.replayArm(tabId);
+
+    expect(facade.replaySeek(tabId, 2, "root")).toEqual({ ok: true });
+    expect(facade.replayState().root?.cursor).toBe(2);
+
+    // S13 (§11 finding D7): a `{child}` naming a child the store never
+    // accepted is `unknown_child` — the child-level twin of `unknown_tab`.
+    // The store answers an unknown key with silence, so the pin that stood
+    // here recorded `ok` for a typo that moved nothing, on the grounds that
+    // "the facade cannot know which children a mounted view has offered". It
+    // can: it holds the replay store and reads `children` on every command.
+    expect(facade.replaySeek(tabId, 1, { child: "tc-nope" })).toEqual({ ok: false, reason: "unknown_child" });
+    expect(facade.replayPlay(tabId, { child: "tc-nope" })).toEqual({ ok: false, reason: "unknown_child" });
+    // `pause` is exempt from the FRAME gate, never from the address check.
+    expect(facade.replayPause(tabId, { child: "tc-nope" })).toEqual({ ok: false, reason: "unknown_child" });
+    expect(facade.replayState().root?.cursor).toBe(2);
+
+    // The same call naming a child the view HAS offered is honoured.
+    replayStore.getState().offerChild(tabId, "tc-1", original.slice(0, 2));
+    expect(facade.replaySeek(tabId, 1, { child: "tc-1" })).toEqual({ ok: true });
+    expect(facade.replayState().children).toEqual([
+      { spawnToolCallId: "tc-1", cursor: 1, total: 2, playing: true },
+    ]);
+
+    expect(facade.replayStep(tabId, 1, 42 as unknown as ReplayFocus)).toEqual({ ok: false, reason: "bad_target" });
+    expect(facade.replayPlay(tabId, null as unknown as ReplayFocus)).toEqual({ ok: false, reason: "bad_target" });
+    expect(facade.replayState().root?.cursor).toBe(2);
+  });
+
+  // ── S8.1 (§11 finding B) ────────────────────────────────────────────────
+  //
+  // Found live: `arm` on a tab that no longer existed refused honestly, while
+  // `disarm` on the SAME dead uuid answered `ok` and tore down the replay
+  // running on a real tab. Seven of the eight routes carried a tabId they
+  // never looked at.
+
+  it("(j) a command addressed to ANOTHER ready tab is refused — the armed tab's film does not move", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const other = new FakeMessagePort();
+    registry.registerPort("tab-b", "/ws/b", asPort(other));
+    other.emit(HOST_READY("/ws/b", "sess-b"));
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    expect(facade.replayArm(tabId)).toEqual({ ok: true });
+    expect(facade.replayPlay(tabId)).toEqual({ ok: true });
+    expect(facade.replayState().root?.playing).toBe(true);
+
+    expect(facade.replayPause("tab-b")).toEqual({ ok: false, reason: "not_armed_for_tab" });
+    expect(facade.replayState().root?.playing).toBe(true);
+    expect(facade.replayDisarm("tab-b")).toEqual({ ok: false, reason: "not_armed_for_tab" });
+    expect(facade.replayState().armed).toEqual({ rootTabId: tabId });
+
+    // The armed tab's own commands still work.
+    expect(facade.replaySeek(tabId, 5)).toEqual({ ok: true });
+  });
+
+  it("(k) a stale tabId cannot hijack a live replay: disarm on a dead uuid refuses and leaves the film untouched", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+    const dead = "00000000-0000-0000-0000-000000000000";
+
+    facade.replayArm(tabId);
+    facade.replaySeek(tabId, 2);
+    const shown = store.getState().transcript;
+    expect(shown).toHaveLength(2);
+
+    // S9.1 moved `disarm`'s guard order: it answers from the pult's own state
+    // first (something IS armed, and it is not this id), so the refusal names
+    // the real reason rather than the tab's absence. The property this pin
+    // exists for is untouched — the film does not move and stays armed.
+    expect(facade.replayDisarm(dead)).toEqual({ ok: false, reason: "not_armed_for_tab" });
+    expect(facade.replayPause(dead)).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(facade.replaySetParams(dead, { speed: 9 })).toEqual({ ok: false, reason: "unknown_tab" });
+
+    expect(facade.replayState().armed).toEqual({ rootTabId: tabId });
+    expect(facade.replayState().params.speed).toBe(DEFAULT_REPLAY_PARAMS.speed);
+    // The visible prefix is byte-identical to what it was before the refusals.
+    expect(store.getState().transcript).toEqual(shown);
+  });
+
+  it("(l) a known tab with nothing armed is `not_armed`, never `not_armed_for_tab`", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    expect(facade.replayPause(tabId)).toEqual({ ok: false, reason: "not_armed" });
+    expect(facade.replayToggle(tabId)).toEqual({ ok: false, reason: "not_armed" });
+    // Params are settings, not session state — still tunable with nothing armed.
+    expect(facade.replaySetParams(tabId, { speed: 2 })).toEqual({ ok: true });
+    expect(facade.replayState().params.speed).toBe(2);
+  });
+
+  // ── S8.2 (§11 finding C) ────────────────────────────────────────────────
+
+  it("(m) the frame flag follows the MOUNTED surface, not the layout — and dies with the arming", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const layout = createChildLayoutStore();
+    const facade = buildFacade(registry, tabsStore, replayStore, undefined, layout);
+
+    facade.replayArm(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(true);
+
+    // S12: the layout write itself no longer answers this question. Layout B
+    // renders `ChildHistoryPane` INSTEAD of the master `SessionSurface`
+    // (App.tsx's `childView.kind === "child"` branch), and it is React
+    // unmounting that surface that the store hears.
+    layout.getState().open(tabId, "tc-1");
+    replayStore.getState().surfaceUnmounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(false);
+
+    layout.getState().enterSplit(tabId); // split renders both — the master is mounted again
+    replayStore.getState().surfaceMounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(true);
+
+    // `open` on a split ADDS a row and stays split (child-layout.ts's own
+    // reducer) — nothing unmounts, so nothing changes here.
+    layout.getState().open(tabId, "tc-2");
+    expect(facade.replayState().rootOnScreen).toBe(true);
+    layout.getState().exitSplit(tabId);
+    replayStore.getState().surfaceUnmounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(false);
+
+    layout.getState().close(tabId);
+    replayStore.getState().surfaceMounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(true);
+
+    // Disarming ends the frame question along with the film: with nothing
+    // armed there is no root to be in frame, and the surface — still mounted,
+    // because the tab is still on screen — does not make one.
+    facade.replayDisarm(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(false);
+    layout.getState().open(tabId, "tc-3");
+    expect(facade.replayState().rootOnScreen).toBe(false);
+
+    // …and the mount that outlived the disarm is what makes the next arming
+    // live at once — no second seam, no re-mount (S12 pin (д)).
+    expect(facade.replayArm(tabId)).toEqual({ ok: true });
+    expect(facade.replayState().rootOnScreen).toBe(true);
+  });
+
+  it("(n) childDoneCloseMs closes a finished child's pane by a REAL click, once, and only in layout B", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const original = store.getState().transcript;
+    const layout = createChildLayoutStore();
+    const clock = fakeReplayTimer();
+    const closeDom: ChildCloseDom = { click: vi.fn<() => boolean>(() => true) };
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer, layout, closeDom);
+
+    facade.replayArm(tabId);
+    expect(facade.replaySetParams(tabId, { childDoneCloseMs: 500 })).toEqual({ ok: true });
+    layout.getState().open(tabId, "tc-1");
+    replayStore.getState().offerChild(tabId, "tc-1", original.slice(0, 2));
+
+    // Two frames of the child, then it is exhausted — and only THEN is the
+    // close armed, with the operator's own delay.
+    clock.fire();
+    expect(clock.delays()).not.toContain(500);
+    clock.fire();
+    expect(replayStore.getState().children.get("tc-1")).toMatchObject({ cursor: 2, playing: false });
+    expect(clock.delays()).toEqual([500]);
+    expect(closeDom.click).not.toHaveBeenCalled();
+
+    clock.fire();
+    expect(closeDom.click).toHaveBeenCalledTimes(1);
+    // Nothing re-arms behind it: the click's own withdrawal is what moves on.
+    expect(clock.armed()).toBe(0);
+  });
+
+  it("(o) no auto-close at an explicit 0, and none in split — there the store releases the root itself", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const original = store.getState().transcript;
+
+    const off = (() => {
+      const layout = createChildLayoutStore();
+      const clock = fakeReplayTimer();
+      const closeDom: ChildCloseDom = { click: vi.fn<() => boolean>(() => true) };
+      const facade = buildFacade(registry, tabsStore, replayStore, clock.timer, layout, closeDom);
+      facade.replayArm(tabId);
+      // S9.3: the "off" case now says so out loud — 1500 is the default.
+      facade.replaySetParams(tabId, { childDoneCloseMs: 0 });
+      layout.getState().open(tabId, "tc-1");
+      replayStore.getState().offerChild(tabId, "tc-1", original.slice(0, 2));
+      clock.fire();
+      clock.fire();
+      return { clock, closeDom, facade };
+    })();
+    expect(replayStore.getState().children.get("tc-1")).toMatchObject({ cursor: 2, playing: false });
+    expect(off.clock.armed()).toBe(0); // childDoneCloseMs set to 0 — nothing armed
+    expect(off.closeDom.click).not.toHaveBeenCalled();
+    off.facade.replayDisarm(tabId);
+
+    const split = setupRecordedTab("tab-s", "/ws/s", "sess-s");
+    const splitOriginal = split.store.getState().transcript;
+    const layout = createChildLayoutStore();
+    const clock = fakeReplayTimer();
+    const closeDom: ChildCloseDom = { click: vi.fn<() => boolean>(() => true) };
+    const facade = buildFacade(split.registry, split.tabsStore, split.replayStore, clock.timer, layout, closeDom);
+    facade.replayArm(split.tabId);
+    facade.replaySetParams(split.tabId, { childDoneCloseMs: 500 });
+    layout.getState().open(split.tabId, "tc-1");
+    layout.getState().enterSplit(split.tabId);
+    split.replayStore.getState().offerChild(split.tabId, "tc-1", splitOriginal.slice(0, 2));
+
+    clock.fire();
+    clock.fire();
+    expect(split.replayStore.getState().children.get("tc-1")).toMatchObject({ cursor: 2, playing: false });
+    expect(clock.armed()).toBe(0);
+    expect(closeDom.click).not.toHaveBeenCalled();
+  });
+
+  // ── S10 (§11 third live pass, finding D3) ───────────────────────────────
+  //
+  // Found live: with a replay armed and a child playing, switching tabs
+  // unmounted the child pane; its cleanup called `withdrawChild`, which
+  // carried no visibility gate, and the root ran 20 → 28 in four seconds
+  // behind a tab nobody was looking at — eight blocks off camera, which is
+  // the exact jump `rootOnScreen` was introduced to prevent. The predicate
+  // was half-blind too: it asked only what the LAYOUT was, so leaving the tab
+  // in the plain master view was invisible to it.
+
+  it("(p) switching away from the armed tab parks the root; switching back starts it on the same block", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const other = new FakeMessagePort();
+    registry.registerPort("tab-b", "/ws/b", asPort(other));
+    other.emit(HOST_READY("/ws/b", "sess-b"));
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer);
+
+    facade.replayArm(tabId);
+    facade.replayPlay(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(true);
+    const cursor = facade.replayState().root?.cursor;
+
+    // The switch, and React's own consequence of it: only the active tab's
+    // body is mounted (tab-context.tsx), so the armed tab's `SessionSurface`
+    // goes with it. Since S12 that unmount IS the signal — the facade no
+    // longer reads `activeTabId` at all.
+    tabsStore.getState().setActiveTab("tab-b");
+    replayStore.getState().surfaceUnmounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(false);
+    expect(facade.replayState().root?.playing).toBe(false);
+    // The parked film owns no clock: firing every timer there is moves nothing.
+    clock.fire();
+    expect(facade.replayState().root?.cursor).toBe(cursor);
+
+    tabsStore.getState().setActiveTab(tabId);
+    replayStore.getState().surfaceMounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(true);
+    expect(facade.replayState().root?.playing).toBe(true);
+    expect(facade.replayState().root?.cursor).toBe(cursor);
+  });
+
+  it("(q) the start screen takes the root off screen as surely as another tab does", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer);
+
+    facade.replayArm(tabId);
+    facade.replayPlay(tabId);
+
+    // `draftActive` swaps the whole main pane for the start screen
+    // (App.tsx's `selectMainPaneView`) — the armed tab is still "active", but
+    // its `SessionSurface` is unmounted with the pane, and that unmount is
+    // what the store hears (S12).
+    tabsStore.getState().openDraft("/ws/a");
+    replayStore.getState().surfaceUnmounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(false);
+    expect(facade.replayState().root?.playing).toBe(false);
+
+    tabsStore.getState().setActiveTab(tabId); // leaving the draft mounts the pane again
+    replayStore.getState().surfaceMounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(true);
+    expect(facade.replayState().root?.playing).toBe(true);
+  });
+
+  it("(r) the D3 scenario: a tab switch mid-child leaves the root parked until it is REALLY back in frame", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const original = store.getState().transcript;
+    const other = new FakeMessagePort();
+    registry.registerPort("tab-b", "/ws/b", asPort(other));
+    other.emit(HOST_READY("/ws/b", "sess-b"));
+    const layout = createChildLayoutStore();
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer, layout);
+
+    facade.replayArm(tabId);
+    facade.replayPlay(tabId);
+    layout.getState().open(tabId, "tc-1"); // layout B: the pane stands instead of the master
+    replayStore.getState().surfaceUnmounted(tabId); // …so React unmounts the master surface
+    replayStore.getState().offerChild(tabId, "tc-1", original.slice(0, 2)); // the pane mounts
+    expect(facade.replayState().rootOnScreen).toBe(false);
+    const cursor = facade.replayState().root?.cursor;
+
+    // The switch, then React's unmount of the child pane. The master surface
+    // was already down (layout B), so the switch adds no unmount of its own.
+    tabsStore.getState().setActiveTab("tab-b");
+    replayStore.getState().withdrawChild("tc-1");
+    expect(facade.replayState().root?.playing).toBe(false);
+    clock.fire();
+    expect(facade.replayState().root?.cursor).toBe(cursor);
+
+    // Back on the tab — but the layout still shows the child, so the master
+    // surface does not come back with it and the root is still out of frame.
+    tabsStore.getState().setActiveTab(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(false);
+    expect(facade.replayState().root?.playing).toBe(false);
+
+    layout.getState().close(tabId);
+    replayStore.getState().surfaceMounted(tabId); // the master pane is rendered again
+    expect(facade.replayState().rootOnScreen).toBe(true);
+    expect(facade.replayState().root?.playing).toBe(true);
+    expect(facade.replayState().root?.cursor).toBe(cursor); // not one block was spent off camera
+  });
+
+  it("(s) the close button still resumes the root: the same commit unmounts the pane and mounts the master", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const original = store.getState().transcript;
+    const layout = createChildLayoutStore();
+    const clock = fakeReplayTimer();
+    // The real breadcrumb/split button closes the layout; React commits the
+    // swap afterwards. The fake keeps the commit's real order — every cleanup
+    // (the child pane's `withdrawChild`) before any mount effect (the master
+    // `SessionSurface`'s `surfaceMounted`) — because that order is what the
+    // release rule has to survive.
+    const closeDom: ChildCloseDom = {
+      click: vi.fn<() => boolean>(() => {
+        layout.getState().close(tabId);
+        replayStore.getState().withdrawChild("tc-1");
+        replayStore.getState().surfaceMounted(tabId);
+        return true;
+      }),
+    };
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer, layout, closeDom);
+
+    facade.replayArm(tabId);
+    facade.replayPlay(tabId);
+    layout.getState().open(tabId, "tc-1");
+    replayStore.getState().surfaceUnmounted(tabId); // layout B renders the pane instead
+    replayStore.getState().offerChild(tabId, "tc-1", original.slice(0, 2));
+    expect(facade.replayState().rootOnScreen).toBe(false);
+    expect(facade.replayState().root?.playing).toBe(false);
+    expect(replayStore.getState().rootPausedByChild).toBe(true);
+
+    expect(facade.childCloseClick(tabId)).toEqual({ ok: true });
+    expect(facade.replayState().rootOnScreen).toBe(true);
+    expect(facade.replayState().root?.playing).toBe(true);
+    expect(replayStore.getState().rootPausedByChild).toBe(false);
+  });
+
+  // ── S9.1/S9.2/S9.3 (§11 second live pass, findings D1/D2 and the default) ─
+  //
+  // D1 was a REGRESSION of S8.1: once every command required a tabId, closing
+  // the armed tab left `armed` pointing at a tab that no longer existed and no
+  // call could clear it — `arm` on any other tab said `already_armed`, `disarm`
+  // on the dead id `unknown_tab`, `disarm` on a live one `not_armed_for_tab`,
+  // and the hotkeys addressed the dead id too. The pult stayed dead until the
+  // app was restarted. Two independent cures, pinned separately below: the tab
+  // going away disarms on its own, and disarm itself no longer asks whether the
+  // tab exists before answering.
+
+  it("(p) closing the ARMED tab disarms the pult — the armed state cannot outlive the tab it names", async () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const other = new FakeMessagePort();
+    registry.registerPort("tab-b", "/ws/b", asPort(other));
+    other.emit(HOST_READY("/ws/b", "sess-b"));
+    other.emit({ type: "session_history", sessionId: "sess-b", items: recordedHistory(), truncated: false });
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    expect(facade.replayArm(tabId)).toEqual({ ok: true });
+    // The facade's own close path — the same `registry.disposeTab` App.tsx's
+    // handleCloseTab reaches, and so the same tabs-store removal.
+    expect(await facade.closeTab(tabId)).toEqual({ ok: true });
+
+    expect(facade.replayState().armed).toBeNull();
+    expect(facade.replayState().root).toBeNull();
+    // And the pult is usable again on a tab that is still open — the symptom
+    // the owner actually hit was that this answered `already_armed` forever.
+    expect(facade.replayArm("tab-b")).toEqual({ ok: true });
+  });
+
+  it("(q) disarm answers from the PULT's state, never from whether the tab still exists", () => {
+    const { tabsStore, registry, store, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    // The stuck state reproduced exactly: `armed` names a tab the registry does
+    // not have. Armed through the store directly because the facade (rightly)
+    // refuses to arm a tab that does not exist — this is the state a CLOSE
+    // leaves behind, not one a caller can ask for.
+    replayStore.getState().arm("ghost", store.getState().transcript);
+    expect(facade.replayState().armed).toEqual({ rootTabId: "ghost" });
+
+    // The way out works. This pin is what keeps the regression from coming
+    // back: putting a `registry.getStore(tabId)` existence check ahead of the
+    // armed guard again — which is what `requireArmedFor` does, and what
+    // `replayDisarm` used to call — turns this `ok` into `unknown_tab`.
+    expect(facade.replayDisarm("ghost")).toEqual({ ok: true });
+    expect(facade.replayState().armed).toBeNull();
+    expect(facade.replayState().root).toBeNull();
+  });
+
+  it("(r) the disarm HOTKEY escapes the same state — it addresses the armed id, dead or not", () => {
+    const { tabsStore, registry, store, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+    const keys = fakeKeyTarget();
+    installReplayHotkeys(keys.target, facade, replayStore);
+
+    replayStore.getState().arm("ghost", store.getState().transcript);
+    keys.press("Backspace");
+
+    expect(keys.prevented()).toBe(1);
+    expect(facade.replayState().armed).toBeNull();
+  });
+
+  it("(s) disarm from a DIFFERENT live tab is still refused — the escape hatch is not a wildcard", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    replayStore.getState().arm("ghost", store.getState().transcript);
+
+    expect(facade.replayDisarm(tabId)).toEqual({ ok: false, reason: "not_armed_for_tab" });
+    expect(facade.replayState().armed).toEqual({ rootTabId: "ghost" });
+  });
+
+  it("(t) params are the ARMED tab's while a replay runs, anyone's before one is armed (S9.2, finding D2)", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const other = new FakeMessagePort();
+    registry.registerPort("tab-b", "/ws/b", asPort(other));
+    other.emit(HOST_READY("/ws/b", "sess-b"));
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    // Nothing armed: setting the film up in advance is a real workflow, and
+    // there is no film to hijack.
+    expect(facade.replaySetParams("tab-b", { speed: 2 })).toEqual({ ok: true });
+    expect(facade.replayState().params.speed).toBe(2);
+
+    facade.replayArm(tabId);
+    // Found live: one shared params set meant a call from ANOTHER live tab
+    // retuned the film running on the armed one.
+    expect(facade.replaySetParams("tab-b", { speed: 3 })).toEqual({ ok: false, reason: "not_armed_for_tab" });
+    expect(facade.replayState().params.speed).toBe(2);
+    // A dead id keeps answering `unknown_tab` — the tab check still runs first
+    // for the tabs that never existed.
+    expect(facade.replaySetParams("no-such-tab", { speed: 3 })).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(facade.replayState().params.speed).toBe(2);
+
+    // The armed tab tunes its own film, as the `]` / `[` hotkeys do.
+    expect(facade.replaySetParams(tabId, { speed: 4 })).toEqual({ ok: true });
+    expect(facade.replayState().params.speed).toBe(4);
+  });
+
+  it("(u) at the DEFAULT params a finished child's pane closes itself after 1500 ms (S9.3)", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const original = store.getState().transcript;
+    const layout = createChildLayoutStore();
+    const clock = fakeReplayTimer();
+    const closeDom: ChildCloseDom = { click: vi.fn<() => boolean>(() => true) };
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer, layout, closeDom);
+
+    // No `replaySetParams` anywhere: this is what the owner gets out of the box.
+    facade.replayArm(tabId);
+    layout.getState().open(tabId, "tc-1");
+    replayStore.getState().offerChild(tabId, "tc-1", original.slice(0, 2));
+
+    clock.fire();
+    clock.fire();
+    expect(replayStore.getState().children.get("tc-1")).toMatchObject({ cursor: 2, playing: false });
+    expect(clock.delays()).toEqual([1500]);
+
+    clock.fire();
+    expect(closeDom.click).toHaveBeenCalledTimes(1);
+  });
+
+  it("(v) the tabs watch dies with the arming it belongs to — a closed OLD tab cannot tear down a NEW replay", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const other = new FakeMessagePort();
+    registry.registerPort("tab-b", "/ws/b", asPort(other));
+    other.emit(HOST_READY("/ws/b", "sess-b"));
+    other.emit({ type: "session_history", sessionId: "sess-b", items: recordedHistory(), truncated: false });
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    facade.replayArm(tabId);
+    facade.replayDisarm(tabId);
+    expect(facade.replayArm("tab-b")).toEqual({ ok: true });
+
+    // Closing the tab the FIRST arming watched. A watch left behind by that
+    // arming would fire here and disarm tab-b's replay — the mirror image of
+    // the D1 bug, and the leak the S9.1 cure could introduce.
+    registry.disposeTab(tabId);
+    expect(facade.replayState().armed).toEqual({ rootTabId: "tab-b" });
+  });
+
+  // ── S11 (§11 finding D4) ────────────────────────────────────────────────
+  //
+  // Found live: S10 parked the film that ran by itself, but an EXPLICIT order
+  // still ran it out of frame. Space pressed on another tab drove the hidden
+  // root 103 → 107 → 120, Space on the start screen drove it 200 → 207, and
+  // `POST .../replay/play` on the armed-but-hidden tab did the same. The
+  // driver got `ok` every time. The reverse half of the same hole: an
+  // explicit pause off screen changed nothing, so the machine's park flag
+  // survived and coming back resumed the film against the order (149 → 159).
+
+  it("(w) off screen, play and seek are refused `off_screen`; pause is honoured and survives the return", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const other = new FakeMessagePort();
+    registry.registerPort("tab-b", "/ws/b", asPort(other));
+    other.emit(HOST_READY("/ws/b", "sess-b"));
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer);
+
+    facade.replayArm(tabId);
+    facade.replayPlay(tabId);
+    const cursor = facade.replayState().root?.cursor;
+
+    tabsStore.getState().setActiveTab("tab-b");
+    replayStore.getState().surfaceUnmounted(tabId); // React takes the armed tab's body down
+    expect(facade.replayState().rootOnScreen).toBe(false);
+
+    // The armed tab is still the right tab — this is a fourth refusal, not
+    // `not_armed_for_tab`.
+    expect(facade.replayPlay(tabId)).toEqual({ ok: false, reason: "off_screen" });
+    expect(facade.replaySeek(tabId, 0)).toEqual({ ok: false, reason: "off_screen" });
+    expect(facade.replayStep(tabId, 3)).toEqual({ ok: false, reason: "off_screen" });
+    expect(facade.replayToggle(tabId)).toEqual({ ok: false, reason: "off_screen" });
+    clock.fire(); // nothing was started, so nothing is waiting on a frame
+    expect(facade.replayState().root?.playing).toBe(false);
+    expect(facade.replayState().root?.cursor).toBe(cursor);
+
+    // A stop, however, is honoured from anywhere — and it takes the film out
+    // of the machine's hands.
+    expect(facade.replayState().rootPausedByChild).toBe(true);
+    expect(facade.replayPause(tabId)).toEqual({ ok: true });
+    expect(facade.replayState().rootPausedByChild).toBe(false);
+
+    tabsStore.getState().setActiveTab(tabId);
+    replayStore.getState().surfaceMounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(true);
+    expect(facade.replayState().root?.playing).toBe(false); // the order outlived the return
+    expect(facade.replayState().root?.cursor).toBe(cursor);
+
+    // And back in frame the pult works exactly as before.
+    expect(facade.replayPlay(tabId)).toEqual({ ok: true });
+    expect(facade.replayState().root?.playing).toBe(true);
+    expect(facade.replaySeek(tabId, 2)).toEqual({ ok: true });
+    expect(facade.replayState().root?.cursor).toBe(2);
+  });
+
+  it("(x) a hotkey pressed while the armed tab is off screen moves nothing and does not claim the key", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const other = new FakeMessagePort();
+    registry.registerPort("tab-b", "/ws/b", asPort(other));
+    other.emit(HOST_READY("/ws/b", "sess-b"));
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer);
+    const keys = fakeKeyTarget();
+    installReplayHotkeys(keys.target, facade, replayStore);
+
+    facade.replayArm(tabId);
+    keys.press(" ");
+    expect(keys.prevented()).toBe(1);
+    expect(facade.replayState().root?.playing).toBe(true);
+
+    tabsStore.getState().setActiveTab("tab-b");
+    replayStore.getState().surfaceUnmounted(tabId);
+    const parked = facade.replayState();
+    keys.press(" ");
+    keys.press("End");
+    keys.press("Home");
+    keys.press("ArrowRight");
+    // A refused command leaves the event alone: the key keeps its ordinary
+    // meaning for whatever the operator is actually looking at.
+    expect(keys.prevented()).toBe(1);
+    expect(facade.replayState().root).toEqual(parked.root);
+
+    // `]`/`[` and the escape hatch are NOT frame-gated — settings and teardown
+    // are safe from anywhere — so they still claim their keys.
+    keys.press("]");
+    expect(keys.prevented()).toBe(2);
+    expect(facade.replayState().params.speed).toBe(1.5);
+    keys.press("Backspace");
+    expect(keys.prevented()).toBe(3);
+    expect(facade.replayState().armed).toBeNull();
+  });
+
+  it("(y) the start screen refuses the same commands — the armed tab is active but its transcript is not drawn", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    facade.replayArm(tabId);
+    tabsStore.getState().openDraft("/ws/a");
+    replayStore.getState().surfaceUnmounted(tabId); // the start screen replaces the pane
+
+    expect(facade.replayPlay(tabId)).toEqual({ ok: false, reason: "off_screen" });
+    expect(facade.replayState().root?.playing).toBe(false);
+
+    tabsStore.getState().setActiveTab(tabId);
+    replayStore.getState().surfaceMounted(tabId);
+    expect(facade.replayPlay(tabId)).toEqual({ ok: true });
+  });
+
+  it("(z) arming a tab that is not the active one leaves it un-runnable until it is looked at", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const other = new FakeMessagePort();
+    registry.registerPort("tab-b", "/ws/b", asPort(other));
+    other.emit(HOST_READY("/ws/b", "sess-b"));
+    other.emit({ type: "session_history", sessionId: "sess-b", items: recordedHistory(), truncated: false });
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    expect(tabsStore.getState().activeTabId).toBe(tabId);
+    // Only tab-a's surface is mounted, so arming tab-b arms a root nobody is
+    // looking at — fail-closed, and visible from outside as `off_screen`.
+    expect(facade.replayArm("tab-b")).toEqual({ ok: true });
+    expect(facade.replayState().rootOnScreen).toBe(false);
+    expect(facade.replayPlay("tab-b")).toEqual({ ok: false, reason: "off_screen" });
+
+    tabsStore.getState().setActiveTab("tab-b");
+    replayStore.getState().surfaceUnmounted(tabId);
+    replayStore.getState().surfaceMounted("tab-b");
+    expect(facade.replayPlay("tab-b")).toEqual({ ok: true });
+    expect(facade.replayState().root?.playing).toBe(true);
+  });
+
+  it("(aa) in layout B the ROOT is refused and the CHILD on screen is not", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const original = store.getState().transcript;
+    const layout = createChildLayoutStore();
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer, layout);
+
+    facade.replayArm(tabId);
+    layout.getState().open(tabId, "tc-1"); // the child pane stands INSTEAD of the master
+    replayStore.getState().surfaceUnmounted(tabId); // …so React unmounts the master surface
+    replayStore.getState().offerChild(tabId, "tc-1", original.slice(0, 3)); // the pane mounts
+    expect(facade.replayState().rootOnScreen).toBe(false);
+
+    expect(facade.replayPlay(tabId, "root")).toEqual({ ok: false, reason: "off_screen" });
+    expect(facade.replayState().root?.playing).toBe(false);
+
+    // The child IS the surface on screen, so its own timeline is drivable.
+    expect(facade.replayPause(tabId, { child: "tc-1" })).toEqual({ ok: true });
+    expect(facade.replayPlay(tabId, { child: "tc-1" })).toEqual({ ok: true });
+    expect(facade.replaySeek(tabId, 2, { child: "tc-1" })).toEqual({ ok: true });
+    expect(facade.replayState().children).toEqual([
+      { spawnToolCallId: "tc-1", cursor: 2, total: 3, playing: true },
+    ]);
+
+    // An omitted target follows the focus, which the accepted child holds.
+    expect(facade.replaySeek(tabId, 0)).toEqual({ ok: true });
+    expect(facade.replayState().children[0]?.cursor).toBe(0);
+    expect(facade.replayState().root?.cursor).toBe(0);
+  });
+
+  // ── S12 ─────────────────────────────────────────────────────────────────
+
+  it("(ab) fail-closed from outside: an armed tab whose surface never mounted refuses to play", () => {
+    // Every other pin here leans on the fixture's mount; this one deliberately
+    // does without it. Nothing about the ROUTING is off — the armed tab is the
+    // active one, no draft, no child layout — so under the hand-written
+    // predicate this root counted as on screen. The frame flag now comes from
+    // the surface itself, and until one reports in the answer is "no".
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab("tab-a", "/ws/a", "sess-a", false);
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    expect(tabsStore.getState().activeTabId).toBe(tabId);
+    expect(facade.replayArm(tabId)).toEqual({ ok: true });
+    expect(facade.replayState().rootOnScreen).toBe(false);
+
+    expect(facade.replayPlay(tabId)).toEqual({ ok: false, reason: "off_screen" });
+    expect(facade.replayStep(tabId)).toEqual({ ok: false, reason: "off_screen" });
+    expect(facade.replaySeek(tabId, 3)).toEqual({ ok: false, reason: "off_screen" });
+    expect(facade.replayState().root).toEqual({ cursor: 0, total: 4, playing: false });
+
+    // The mount — and only the mount — opens it.
+    replayStore.getState().surfaceMounted(tabId);
+    expect(facade.replayState().rootOnScreen).toBe(true);
+    expect(facade.replayPlay(tabId)).toEqual({ ok: true });
+    expect(facade.replayState().root?.playing).toBe(true);
+  });
+
+  // ── S13 (§11 fifth live pass, findings D5/D6) ───────────────────────────
+  //
+  // Found live: `End` on a child in layout B left the recording frozen for
+  // good. The child read `44/44 playing:true` — a state the clock cannot
+  // leave, because past the last frame it arms no timer and only a tick
+  // switches playback off — and this facade's auto-close watch read that
+  // `playing` as "still running", so the pane was never closed and the root
+  // was never let go. The same `End` on the ROOT left it `382/382
+  // playing:true`, and `Home` afterwards restarted the film by itself.
+
+  /** Layout B with a two-frame child accepted and the master surface down — the shape all three routes below share. */
+  function setupLayoutBChild(tabId: string, workspace: string, sessionId: string, closeMs = 500) {
+    const fixture = setupRecordedTab(tabId, workspace, sessionId);
+    const original = fixture.store.getState().transcript;
+    const layout = createChildLayoutStore();
+    const clock = fakeReplayTimer();
+    const closeDom: ChildCloseDom = { click: vi.fn<() => boolean>(() => true) };
+    const facade = buildFacade(
+      fixture.registry,
+      fixture.tabsStore,
+      fixture.replayStore,
+      clock.timer,
+      layout,
+      closeDom,
+    );
+    facade.replayArm(tabId);
+    facade.replaySetParams(tabId, { childDoneCloseMs: closeMs });
+    layout.getState().open(tabId, "tc-1");
+    fixture.replayStore.getState().offerChild(tabId, "tc-1", original.slice(0, 2));
+    return { ...fixture, layout, clock, closeDom, facade };
+  }
+
+  it("(ag) S14: the blanking write lands with the replay flag ALREADY up — the opening frame is never an empty session", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const facade = buildFacade(registry, tabsStore, replayStore);
+
+    // What `MessageList` will ask at the instant the tab store hands it the
+    // empty list: "am I a replay surface?". Subscribed BEFORE arming, so the
+    // sink's own opening write is observed rather than missed.
+    const flagAtBlank: boolean[] = [];
+    const unsubscribe = store.subscribe((state, prev) => {
+      if (state.transcript !== prev.transcript && state.transcript.length === 0) {
+        flagAtBlank.push(isReplaySurface(replayStore.getState(), tabId));
+      }
+    });
+
+    expect(facade.replayArm(tabId)).toEqual({ ok: true });
+    unsubscribe();
+
+    // Exactly one emptying write, and the flag was already up when it landed:
+    // the sink is attached before `arm`, and `arm` publishes `armed` in the
+    // same commit as the empty frame. Attach the sink AFTER `arm` instead and
+    // this list is empty — the blanking write is never delivered at all.
+    expect(flagAtBlank).toEqual([true]);
+    expect(store.getState().transcript).toEqual([]);
+
+    // The flag is answered per tab: no other tab's list is a replay surface.
+    expect(isReplaySurface(replayStore.getState(), "tab-other")).toBe(false);
+
+    // And it drops on the way out, alongside the restored transcript.
+    expect(facade.replayDisarm(tabId)).toEqual({ ok: true });
+    expect(isReplaySurface(replayStore.getState(), tabId)).toBe(false);
+    expect(store.getState().transcript).toHaveLength(4);
+  });
+
+  it("(ac) D5: a child brought to its end by seek, by step or by the End key arms the auto-close its own clock would", () => {
+    const bySeek = setupLayoutBChild("tab-a", "/ws/a", "sess-a");
+    expect(bySeek.facade.replaySeek("tab-a", 99, { child: "tc-1" })).toEqual({ ok: true });
+    expect(bySeek.replayStore.getState().children.get("tc-1")).toMatchObject({ cursor: 2, playing: false });
+    // The child's frame timer is gone and the close is armed in its place.
+    expect(bySeek.clock.delays()).toEqual([500]);
+    bySeek.clock.fire();
+    expect(bySeek.closeDom.click).toHaveBeenCalledTimes(1);
+
+    const byStep = setupLayoutBChild("tab-b", "/ws/b", "sess-b");
+    expect(byStep.facade.replayStep("tab-b", 2, { child: "tc-1" })).toEqual({ ok: true });
+    expect(byStep.replayStore.getState().children.get("tc-1")).toMatchObject({ cursor: 2, playing: false });
+    expect(byStep.clock.delays()).toEqual([500]);
+
+    // The `End` key addresses whatever holds the focus, and an accepted child
+    // takes it — so this is the operator's own route to the same place.
+    const byKey = setupLayoutBChild("tab-c", "/ws/c", "sess-c");
+    const keys = fakeKeyTarget();
+    installReplayHotkeys(keys.target, byKey.facade, byKey.replayStore);
+    expect(byKey.replayStore.getState().focus).toEqual({ child: "tc-1" });
+    keys.press("End");
+    expect(byKey.replayStore.getState().children.get("tc-1")).toMatchObject({ cursor: 2, playing: false });
+    expect(byKey.clock.delays()).toEqual([500]);
+  });
+
+  it("(ad) D5 in split: the same seek gives the film back to the root itself — no timer, no click", () => {
+    const { tabsStore, registry, tabId, store, replayStore } = setupRecordedTab();
+    const original = store.getState().transcript;
+    const layout = createChildLayoutStore();
+    const clock = fakeReplayTimer();
+    const closeDom: ChildCloseDom = { click: vi.fn<() => boolean>(() => true) };
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer, layout, closeDom);
+
+    facade.replayArm(tabId);
+    facade.replaySetParams(tabId, { childDoneCloseMs: 500 });
+    layout.getState().open(tabId, "tc-1");
+    layout.getState().enterSplit(tabId);
+    // Playing BEFORE the child arrives is what parks the root — without that
+    // there is nothing for the child's end to release.
+    expect(facade.replayPlay(tabId)).toEqual({ ok: true });
+    replayStore.getState().offerChild(tabId, "tc-1", original.slice(0, 2));
+    expect(facade.replayState().rootPausedByChild).toBe(true);
+
+    expect(facade.replaySeek(tabId, 99, { child: "tc-1" })).toEqual({ ok: true });
+
+    expect(facade.replayState().root?.playing).toBe(true);
+    expect(facade.replayState().rootPausedByChild).toBe(false);
+    expect(facade.replayState().focus).toBe("root");
+    expect(closeDom.click).not.toHaveBeenCalled();
+    expect(clock.armed()).toBe(1); // the root's own frame timer, and nothing else
+  });
+
+  it("(ae) D6 on the root: End stops the film, Home rewinds a STOPPED one, and only Space starts it again", () => {
+    const { tabsStore, registry, tabId, replayStore } = setupRecordedTab();
+    const clock = fakeReplayTimer();
+    const facade = buildFacade(registry, tabsStore, replayStore, clock.timer);
+    const keys = fakeKeyTarget();
+    installReplayHotkeys(keys.target, facade, replayStore);
+
+    facade.replayArm(tabId);
+    keys.press(" ");
+    expect(facade.replayState().root?.playing).toBe(true);
+
+    keys.press("End");
+    expect(facade.replayState().root).toEqual({ cursor: 4, total: 4, playing: false });
+    expect(clock.armed()).toBe(0); // nothing left to schedule — and nothing to switch it off
+
+    keys.press("Home");
+    expect(facade.replayState().root).toEqual({ cursor: 0, total: 4, playing: false });
+    expect(clock.armed()).toBe(0); // the rewind does NOT restart the film
+
+    keys.press(" ");
+    expect(facade.replayState().root?.playing).toBe(true);
+    expect(clock.armed()).toBe(1);
+  });
+
+  it("(af) the auto-close is undone by rewinding the child and armed again by finishing it a second time", () => {
+    const { replayStore, facade, clock, closeDom } = setupLayoutBChild("tab-a", "/ws/a", "sess-a");
+
+    expect(facade.replaySeek("tab-a", 99, { child: "tc-1" })).toEqual({ ok: true });
+    expect(clock.delays()).toEqual([500]);
+
+    // Rewinding before the countdown expires cancels it — the child has frames
+    // to play again, so there is nothing finished to close.
+    expect(facade.replaySeek("tab-a", 0, { child: "tc-1" })).toEqual({ ok: true });
+    expect(replayStore.getState().children.get("tc-1")).toMatchObject({ cursor: 0, playing: false });
+    expect(clock.armed()).toBe(0);
+    expect(closeDom.click).not.toHaveBeenCalled();
+
+    expect(facade.replaySeek("tab-a", 99, { child: "tc-1" })).toEqual({ ok: true });
+    expect(clock.delays()).toEqual([500]);
   });
 });

@@ -24,13 +24,14 @@
  * the app shows the shell with zero tabs until the user opens or resumes a
  * session.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useStore } from "zustand";
 import { startConnectionManager } from "./port.js";
 import { useTabsStore } from "./tabs-store.js";
 import { tabRegistry, type DesktopStoreApi } from "./tab-registry.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "./tab-context.js";
+import { replayStore, childVisible } from "./replay.js";
 import { useSettingsStore } from "./settings-store.js";
 import { applyThemePreference } from "./theme.js";
 import type { SettingsSnapshot } from "../../shared/settings.js";
@@ -359,6 +360,22 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
   const tabStoreApi = useTabStoreApi();
   const sendToHost = useTabSend();
   const handleTryAgain = useCallback(() => dispatchTryAgain(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
+
+  // TASK.188 S12: this mount IS the replay's definition of "the root is in
+  // frame". Every way the root transcript can leave the screen — another tab
+  // active, the start screen over the pane, layout B rendering the child pane
+  // instead of the master, and any future replacement of the main pane —
+  // unmounts this component, so the store derives the fact instead of the
+  // facade enumerating the routes to it (§11 findings D3, D4).
+  //
+  // StrictMode double-invokes this in dev (main.tsx): mount → unmount → mount,
+  // all in one commit. The store keeps a SET of mounted ids, so the pair
+  // cancels out — a parked-then-released root inside a single tick, ending
+  // "mounted", with the cursor where it was.
+  useEffect(() => {
+    replayStore.getState().surfaceMounted(tabId);
+    return () => replayStore.getState().surfaceUnmounted(tabId);
+  }, [tabId]);
 
   return (
     <>
@@ -923,6 +940,14 @@ interface ChildHistoryContentProps {
  */
 function ChildHistoryContent({ parentSessionId, spawnToolCallId }: ChildHistoryContentProps) {
   const [state, setState] = useState<ChildHistoryViewState | typeof CHILD_HISTORY_LOADING>(CHILD_HISTORY_LOADING);
+  const rootTabId = useContext(TabContext)?.tabId ?? null;
+  const replayBlocks = useStore(replayStore, (s) => childVisible(s, rootTabId, spawnToolCallId));
+
+  useEffect(() => {
+    if (state.kind !== "blocks" || rootTabId === null) return;
+    if (!replayStore.getState().offerChild(rootTabId, spawnToolCallId, state.blocks)) return;
+    return () => replayStore.getState().withdrawChild(spawnToolCallId);
+  }, [state, rootTabId, spawnToolCallId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -957,7 +982,7 @@ function ChildHistoryContent({ parentSessionId, spawnToolCallId }: ChildHistoryC
       {state.kind === "blocks" && (
         <div className="session-conversation">
           <MessageList
-            blocks={state.blocks}
+            blocks={replayBlocks ?? state.blocks}
             turn={{ status: "idle", turnId: null, requestId: null }}
             workspace={null}
             connection="host_exited"

@@ -22,16 +22,33 @@ import type { ErrorRetryMeta, RetryOffer, ToolCallBlock, TranscriptBlock } from 
 
 describe("shouldShowTranscriptEmpty (R11)", () => {
   it("shows only for a zero-block idle transcript", () => {
-    expect(shouldShowTranscriptEmpty(0, false)).toBe(true);
+    expect(shouldShowTranscriptEmpty(0, false, false)).toBe(true);
   });
 
   it("hides while a turn runs (WorkingRow owns the zero-block running state)", () => {
-    expect(shouldShowTranscriptEmpty(0, true)).toBe(false);
+    expect(shouldShowTranscriptEmpty(0, true, false)).toBe(false);
   });
 
   it("hides once any block exists", () => {
-    expect(shouldShowTranscriptEmpty(1, false)).toBe(false);
-    expect(shouldShowTranscriptEmpty(3, true)).toBe(false);
+    expect(shouldShowTranscriptEmpty(1, false, false)).toBe(false);
+    expect(shouldShowTranscriptEmpty(3, true, false)).toBe(false);
+  });
+});
+
+describe("shouldShowTranscriptEmpty on a replay surface (TASK.188 S14, §11 N1)", () => {
+  it("(a) the opening frame of a film is BLANK — zero blocks under a replay draw nothing", () => {
+    expect(shouldShowTranscriptEmpty(0, false, true)).toBe(false);
+  });
+
+  it("(b) GUARD: off replay the product's empty state is exactly what R11 fixed", () => {
+    expect(shouldShowTranscriptEmpty(0, false, false)).toBe(true);
+    expect(shouldShowTranscriptEmpty(0, true, false)).toBe(false);
+    expect(shouldShowTranscriptEmpty(1, false, false)).toBe(false);
+  });
+
+  it("(c) GUARD: the replay term neither needs nor overrides the other two — it only ever hides", () => {
+    expect(shouldShowTranscriptEmpty(0, true, true)).toBe(false);
+    expect(shouldShowTranscriptEmpty(2, false, true)).toBe(false);
   });
 });
 

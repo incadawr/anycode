@@ -512,6 +512,14 @@ export interface SessionOptions {
    * ui_ready (design §3.3). Empty for a fresh session -> no emission.
    */
   bootHistory?: ReturnType<SessionEngine["historyItems"]>;
+  /**
+   * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (TASK.188
+   * S4): a replay recording needs a long session hydrated in full. Resolved
+   * ONCE in the composition root (`host/index.ts`, `resolveSessionHistoryMaxItems`)
+   * from `ANYCODE_SESSION_HISTORY_MAX_ITEMS` — `Session` inspects no runtime
+   * environment variables itself. Defaults to `SESSION_HISTORY_MAX_ITEMS` when absent.
+   */
+  historyMaxItems?: number;
   /** Whether the boot session already had a title -> skip title derivation (design §4.2). */
   hasTitle?: boolean;
   /** Narrow persistence callback for title/mode patches (design §4.2). */
@@ -827,6 +835,14 @@ export class Session {
    */
   private sessionHistory: { items: WireHistoryItem[]; truncated: boolean } | null;
 
+  /**
+   * Resolved cap for `sessionHistory` (TASK.188 S4): `options.historyMaxItems`
+   * when the composition root supplied a dev/automation override, else
+   * `SESSION_HISTORY_MAX_ITEMS`. Read by every `buildSessionHistory` call
+   * (boot and post-rewind rebuild) so the two stay in lockstep.
+   */
+  private readonly historyMaxItems: number;
+
   /** Set once the session has a title (from boot meta or the first user message) — title is derived exactly once. */
   private titleSet: boolean;
 
@@ -973,7 +989,8 @@ export class Session {
     this.eventTap = options.eventTap;
     this.now = options.child?.now ?? Date.now;
     this.titleSet = options.hasTitle ?? false;
-    this.sessionHistory = buildSessionHistory(options.bootHistory ?? []);
+    this.historyMaxItems = options.historyMaxItems ?? SESSION_HISTORY_MAX_ITEMS;
+    this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
 
     // ready; unsubscribe on shutdown prevents a leaked listener / push-after-
@@ -1733,7 +1750,7 @@ export class Session {
         // drift-flag-1: rebuild the re-handshake snapshot from the TRUNCATED
         // history and drop the pre-rewind replay ring BEFORE re-sending, so a
         // renderer reload never resurrects the rewound-away conversation.
-        this.sessionHistory = buildSessionHistory([...this.engine.historyItems()]);
+        this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
         this.outbound.clear();
       }
       this.outbound.sendDirect({
@@ -2787,17 +2804,19 @@ export class Session {
 /**
  * Projects the boot history snapshot into the `session_history` payload (design
  * §3.3): HistoryItem -> WireHistoryItem (drop tokenEstimate), keeping only the
- * last SESSION_HISTORY_MAX_ITEMS (+truncated). Returns null for an empty
- * snapshot (nothing to hydrate).
+ * last `maxItems` (+truncated). Returns null for an empty snapshot (nothing to
+ * hydrate). `maxItems` is `SESSION_HISTORY_MAX_ITEMS` unless the composition
+ * root resolved a dev/automation override (TASK.188 S4, Session.historyMaxItems).
  */
 function buildSessionHistory(
   bootHistory: readonly HistoryItem[],
+  maxItems: number,
 ): { items: WireHistoryItem[]; truncated: boolean } | null {
   if (bootHistory.length === 0) {
     return null;
   }
-  const truncated = bootHistory.length > SESSION_HISTORY_MAX_ITEMS;
-  const kept = truncated ? bootHistory.slice(-SESSION_HISTORY_MAX_ITEMS) : bootHistory;
+  const truncated = bootHistory.length > maxItems;
+  const kept = truncated ? bootHistory.slice(-maxItems) : bootHistory;
   const items: WireHistoryItem[] = kept.map((item) => ({
     id: item.id,
     createdAt: item.createdAt,
