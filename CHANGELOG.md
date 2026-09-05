@@ -5,6 +5,34 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.26] — 2026-09-05
+
+### Added
+
+- A conversation can now be compacted on demand. AnyCode has always done this
+  by itself once the context filled up, but there was no way to ask for it
+  first — even when you could see the conversation had wandered away from what
+  you are actually doing, or you were about to start something unrelated in the
+  same session. `/compact` in the slash menu summarises the history and swaps
+  it in, and the context meter drops the moment it finishes rather than waiting
+  for your next message to reveal the new number.
+
+  It behaves like a turn of its own: the session shows as busy while it runs,
+  so a message you send meanwhile is queued and delivered afterwards instead of
+  racing it, and it can be stopped like any other turn.
+
+  The command appears only where it can work. The Codex and Claude engines keep
+  their own history and offer nothing to call, and a child session's history
+  belongs to the parent that spawned it — in both cases the entry is simply
+  absent from the menu, rather than present and doing nothing when pressed.
+
+- Development only: a recorded session can be played back inside AnyCode —
+  play, pause, step, seek and speed — over the real transcript rendering rather
+  than a stand-in for it. This exists so the product can be filmed without
+  driving it by hand. It is reachable only through the development automation
+  facade, which a packaged AnyCode never loads, so an installed build has no
+  replay surface and behaves exactly as before.
+
 ## [0.0.25] — 2026-08-31
 
 ### Added
