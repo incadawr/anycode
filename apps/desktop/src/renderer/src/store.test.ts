@@ -9,6 +9,7 @@
  * buffered-delta state and flushScheduled flag never leak between cases.
  */
 import { describe, expect, it, vi } from "vitest";
+import { compactionRowText } from "./components/MessageList.js";
 import {
   accumulateSessionTokens,
   buildConfirmedGitCommand,
@@ -1164,6 +1165,16 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
 
     expect(compactionCards(store)).toHaveLength(1);
     expect(compactionCards(store)[0]).toMatchObject({ status: "failed", error: "model unreachable" });
+
+    // Both surfaces report the SAME event, so they must not disagree about it:
+    // the packaged 0.0.27 bundle shipped a toast reading "Compaction failed"
+    // beside a row reading "Compaction not applied". `compaction_end` has one
+    // `error` channel for a refusal and for a real failure, and the commonest
+    // one is core's deliberate no-op — so neither surface claims a failure.
+    expect(store.getState().notice?.text).toBe("Compaction not applied: model unreachable");
+    expect(store.getState().notice?.text).toBe(
+      compactionRowText(compactionCards(store)[0] as Parameters<typeof compactionRowText>[0]),
+    );
 
     // The toast is one slot: the next compaction overwrites it and the reason
     // this one failed is gone from the screen. The card is not overwritten —

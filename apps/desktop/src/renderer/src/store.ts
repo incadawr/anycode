@@ -2439,7 +2439,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 kind: "compaction_end" as const,
                 text: event.ok
                   ? `Conversation compacted (${event.preTokens} → ${event.postTokens ?? "?"} tokens).`
-                  : `Compaction failed: ${event.error ?? "unknown error"}`,
+                  // Same verdict the transcript row gives (MessageList's
+                  // `compactionRowText`): `compaction_end` carries one `error`
+                  // channel for a refusal and a real failure alike, and the
+                  // commonest one is core's deliberate no-op. The two surfaces
+                  // report the same event and must not disagree about it.
+                  : `Compaction not applied: ${event.error ?? "unknown error"}`,
               },
               ...(state.turn.status === "compacting"
                 ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
