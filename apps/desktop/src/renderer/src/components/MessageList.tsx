@@ -238,6 +238,15 @@ export const STARTER_CHIPS: readonly { label: string; insert: string }[] = [
  * a REASON, so the reason carries the numbers. A missing `postTokens` prints
  * "?" rather than a zero: the host declined to say, and inventing a number here
  * would be a worse answer than admitting it.
+ *
+ * The not-ok branch never says "failed": `compaction_end` carries one `error`
+ * string for both outcomes, and the commonest one is a deliberate no-op
+ * (context/manager.ts's empty-prefix return, whose own comment reads "nothing
+ * to compact. Not a failure."). Calling that a failure would be a claim the
+ * wire does not support — the CLI hedges the same ambiguity as "compaction
+ * skipped/failed" (cli/render.ts). "Not applied" states the one thing that IS
+ * certain of both, and leaves the verb to the host's own reason instead of
+ * stuttering over it ("skipped/failed: compaction skipped: …", live 07.09).
  */
 export function compactionRowText(block: Extract<TranscriptBlock, { kind: "compaction" }>): string {
   if (block.status === "running") {
@@ -246,7 +255,7 @@ export function compactionRowText(block: Extract<TranscriptBlock, { kind: "compa
       : "Compacting conversation…";
   }
   if (block.status === "failed") {
-    return `Compaction failed: ${block.error ?? "unknown error"}`;
+    return `Compaction not applied: ${block.error ?? "unknown error"}`;
   }
   const pre = block.preTokens ?? "?";
   const post = block.postTokens ?? "?";
