@@ -5,6 +5,29 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.27] — 2026-09-07
+
+### Changed
+
+- A compaction now leaves a permanent row in the conversation instead of only
+  a status toast. Until now the only sign that AnyCode had summarised the
+  history and swapped it in was a notice that the next message overwrote — so
+  if you looked away for a moment the whole thing had happened invisibly, and
+  the conversation simply looked shorter than you remembered it.
+
+  The row appears where the compaction actually happened and behaves like a
+  tool call. It reads `Compacting conversation…` while it runs — or names the
+  full context window as the reason, when AnyCode started the compaction by
+  itself rather than being asked — and then turns into the result in place:
+  `Conversation compacted: 10703 → 509 tokens`. A compaction that is refused or
+  fails leaves the reason on screen instead of disappearing with the toast —
+  and says "not applied" rather than "failed", because the commonest refusal is
+  a deliberate one: there was nothing before the recent messages worth
+  summarising. The toast still reports the live state; the row is the record.
+
+  The row is a rendering of what this window saw, so reopening the session does
+  not bring it back — a compaction still leaves no mark in the stored history.
+
 ## [0.0.26] — 2026-09-05
 
 ### Added
