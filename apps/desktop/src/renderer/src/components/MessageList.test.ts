@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateStackStatus,
+  compactionRowText,
   FOLLOW_THRESHOLD_PX,
   formatErrorRetrySuffix,
   formatStreamRetryLine,
@@ -471,5 +472,38 @@ describe("showStandaloneRetry (TASK.33 FIX-A — fallback row visibility when th
       expect(showTryAgainButton(offer, block.id, "ready")).toBe(false);
     }
     expect(showStandaloneRetry(offer, hydratedBlocks, "ready")).toBe(true);
+  });
+});
+
+describe("compactionRowText (TASK.227)", () => {
+  const card = (patch: Partial<Extract<TranscriptBlock, { kind: "compaction" }>>) =>
+    ({ kind: "compaction", id: "compaction:0", status: "running", ...patch }) as Extract<
+      TranscriptBlock,
+      { kind: "compaction" }
+    >;
+
+  it("says WHICH compaction is running: the one you asked for reads differently from the one the window forced", () => {
+    expect(compactionRowText(card({ trigger: "manual" }))).toBe("Compacting conversation…");
+    expect(compactionRowText(card({ trigger: "auto" }))).toBe("Context window full — compacting conversation…");
+    // A card whose start this tab never saw claims neither cause.
+    expect(compactionRowText(card({}))).toBe("Compacting conversation…");
+  });
+
+  it("a finished compaction carries BOTH readings — the row exists to explain the meter's fall", () => {
+    const text = compactionRowText(card({ status: "done", preTokens: 10_703, postTokens: 509 }));
+    expect(text).toContain("10703");
+    expect(text).toContain("509");
+  });
+
+  it("a post-swap reading the host declined to give prints \"?\", never an invented zero", () => {
+    expect(compactionRowText(card({ status: "done", preTokens: 10_703 }))).toContain("?");
+    expect(compactionRowText(card({ status: "done", preTokens: 10_703 }))).not.toContain("0 tokens");
+  });
+
+  it("a failure names its reason, and says so plainly when the host gave none", () => {
+    expect(compactionRowText(card({ status: "failed", error: "model unreachable" }))).toBe(
+      "Compaction failed: model unreachable",
+    );
+    expect(compactionRowText(card({ status: "failed" }))).toBe("Compaction failed: unknown error");
   });
 });
