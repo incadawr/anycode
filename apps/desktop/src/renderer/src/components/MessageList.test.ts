@@ -500,10 +500,26 @@ describe("compactionRowText (TASK.227)", () => {
     expect(compactionRowText(card({ status: "done", preTokens: 10_703 }))).not.toContain("0 tokens");
   });
 
-  it("a failure names its reason, and says so plainly when the host gave none", () => {
+  it("a not-ok compaction names its reason, and says so plainly when the host gave none", () => {
     expect(compactionRowText(card({ status: "failed", error: "model unreachable" }))).toBe(
-      "Compaction failed: model unreachable",
+      "Compaction not applied: model unreachable",
     );
-    expect(compactionRowText(card({ status: "failed" }))).toBe("Compaction failed: unknown error");
+    expect(compactionRowText(card({ status: "failed" }))).toBe("Compaction not applied: unknown error");
+  });
+
+  // Live smoke, 07.09: two turns of history and `/compact` returns THIS string
+  // — core's empty-prefix no-op, whose own comment (context/manager.ts) reads
+  // "nothing to compact. Not a failure." The row must not call it a failure;
+  // `compaction_end` has one `error` channel for both, so it claims neither.
+  it("the commonest not-ok outcome is a deliberate no-op, so the row never asserts a failure", () => {
+    const skipped = compactionRowText(
+      card({ status: "failed", error: "compaction skipped: no prefix before the keep-recent window" }),
+    );
+    expect(skipped).toBe(
+      "Compaction not applied: compaction skipped: no prefix before the keep-recent window",
+    );
+    expect(skipped).not.toMatch(/^Compaction failed/);
+    // …and the label does not stutter over the verb the host already used.
+    expect(skipped).not.toMatch(/skipped\/failed: compaction skipped/);
   });
 });
