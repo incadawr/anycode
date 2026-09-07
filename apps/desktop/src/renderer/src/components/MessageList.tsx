@@ -228,6 +228,32 @@ export const STARTER_CHIPS: readonly { label: string; insert: string }[] = [
 ];
 
 /**
+ * The one line a compaction card shows (TASK.227). Kept a pure function of the
+ * block so the wording is pinnable without mounting the list, and so the three
+ * states read as one decision rather than three nested ternaries in JSX.
+ *
+ * Running says which compaction it is, because the two have different causes a
+ * user needs to tell apart: one they asked for, one the context window forced.
+ * Done reports both readings — the point of the row is that the meter fell for
+ * a REASON, so the reason carries the numbers. A missing `postTokens` prints
+ * "?" rather than a zero: the host declined to say, and inventing a number here
+ * would be a worse answer than admitting it.
+ */
+export function compactionRowText(block: Extract<TranscriptBlock, { kind: "compaction" }>): string {
+  if (block.status === "running") {
+    return block.trigger === "auto"
+      ? "Context window full — compacting conversation…"
+      : "Compacting conversation…";
+  }
+  if (block.status === "failed") {
+    return `Compaction failed: ${block.error ?? "unknown error"}`;
+  }
+  const pre = block.preTokens ?? "?";
+  const post = block.postTokens ?? "?";
+  return `Conversation compacted: ${pre} → ${post} tokens`;
+}
+
+/**
  * Empty-state gate: zero blocks, no running turn (a running zero-block turn
  * shows the WorkingRow instead) and NOT a replay surface (TASK.188 S14). On a
  * rewound film an empty list is the opening frame, not an empty session: the
@@ -770,6 +796,23 @@ export function MessageList({
                 >
                   {`Provider switched: ${block.fromLabel} → ${block.toLabel} · ${block.model}`}
                   {block.effortResetTo !== undefined ? ` · effort reset to ${block.effortResetTo}` : ""}
+                </div>
+              );
+            // TASK.227: a compaction is a thing that HAPPENED to this
+            // conversation, so it leaves a row where it happened instead of
+            // only a toast that the next notice overwrites. Appended running
+            // and patched in place when it ends — a tool_call's pending->result
+            // shape, in the register the other system rows already use.
+            case "compaction":
+              return (
+                <div
+                  key={block.id}
+                  data-block-id={block.id}
+                  data-compaction-status={block.status}
+                  className={`message ${block.status === "failed" ? "message-error" : "message-loop-end"}${enterClass(block.id)}`}
+                  {...(block.status === "failed" ? { role: "alert" as const } : {})}
+                >
+                  {compactionRowText(block)}
                 </div>
               );
             case "output_truncated":

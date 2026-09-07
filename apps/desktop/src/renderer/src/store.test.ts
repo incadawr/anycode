@@ -1106,6 +1106,159 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     expect(store.getState().turn.turnId).toBe("turn-1");
   });
 
+  // ─────────────────────────────────────────────────────────────────────
+  // TASK.227 — a compaction leaves a CARD, not only a vanishing toast
+  // ─────────────────────────────────────────────────────────────────────
+
+  /** Every compaction card currently in the transcript, in order. */
+  function compactionCards(store: ReturnType<typeof createDesktopStore>) {
+    return store.getState().transcript.filter((block) => block.kind === "compaction");
+  }
+
+  it("TASK.227: a compaction leaves ONE card — appended running, patched IN PLACE when it ends", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+
+    const opened = compactionCards(store);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({ status: "running", trigger: "manual" });
+    const cardId = opened[0]?.id;
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_end", ok: true, preTokens: 10_703, postTokens: 509, durationMs: 1_200 },
+    });
+
+    // THE claim: one row, not two. The card the user watched spin is the card
+    // that now carries the result — a second row would read as a second
+    // compaction, and the meter's fall would still be unexplained.
+    const closed = compactionCards(store);
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.id).toBe(cardId);
+    expect(closed[0]).toMatchObject({ status: "done", preTokens: 10_703, postTokens: 509 });
+  });
+
+  it("TASK.227: a failed compaction carries its reason on the card, which outlives the toast", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_end", ok: false, preTokens: 10_703, durationMs: 40, error: "model unreachable" },
+    });
+
+    expect(compactionCards(store)).toHaveLength(1);
+    expect(compactionCards(store)[0]).toMatchObject({ status: "failed", error: "model unreachable" });
+
+    // The toast is one slot: the next compaction overwrites it and the reason
+    // this one failed is gone from the screen. The card is not overwritten —
+    // which is the whole point of the row.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    expect(store.getState().notice?.kind).toBe("compaction_start");
+    expect(compactionCards(store)[0]).toMatchObject({ status: "failed", error: "model unreachable" });
+  });
+
+  it("TASK.227: a second compaction opens its own card and never rewrites the finished first one", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const compact = (pre: number, post: number): void => {
+      store.getState().applyHostMessage({
+        type: "agent_event",
+        turnId: MANUAL_COMPACTION_TURN_ID,
+        event: { type: "compaction_start", trigger: "manual" },
+      });
+      store.getState().applyHostMessage({
+        type: "agent_event",
+        turnId: MANUAL_COMPACTION_TURN_ID,
+        event: { type: "compaction_end", ok: true, preTokens: pre, postTokens: post, durationMs: 5 },
+      });
+    };
+    compact(10_000, 500);
+    compact(9_000, 400);
+
+    const cards = compactionCards(store);
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.id).not.toBe(cards[1]?.id);
+    // Each card keeps its own numbers: a closed card is never reopened by a
+    // later outcome. (This says nothing about which direction the scan runs —
+    // with the first card already closed both directions agree. The pin below
+    // is the one that fixes the direction.)
+    expect(cards[0]).toMatchObject({ preTokens: 10_000, postTokens: 500 });
+    expect(cards[1]).toMatchObject({ preTokens: 9_000, postTokens: 400 });
+  });
+
+  it("TASK.227: with TWO cards open, an end closes the NEWEST — the scan runs from the end", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    // Two starts and no end between them: whatever produced the second one
+    // (a duplicate event, a host that reported a start it then restarted),
+    // the outcome belongs to the compaction that started LAST.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "auto" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_end", ok: true, preTokens: 700, postTokens: 70, durationMs: 3 },
+    });
+
+    const cards = compactionCards(store);
+    expect(cards).toHaveLength(2);
+    // The OLDER card is the one left spinning; a forward scan would have
+    // closed it and left the newer one running forever.
+    expect(cards[0]).toMatchObject({ status: "running", trigger: "auto" });
+    expect(cards[1]).toMatchObject({ status: "done", trigger: "manual", preTokens: 700, postTokens: 70 });
+  });
+
+  it("TASK.227: an end whose START this tab never saw still leaves a record, with the trigger left UNKNOWN", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    // A tab that reattached mid-compaction sees the end alone.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_end", ok: true, preTokens: 800, postTokens: 90, durationMs: 7 },
+    });
+
+    const cards = compactionCards(store);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ status: "done", preTokens: 800, postTokens: 90 });
+    // Not guessed: this tab genuinely does not know who asked for it.
+    expect(cards[0] && "trigger" in cards[0] ? cards[0].trigger : undefined).toBeUndefined();
+  });
+
   it("microcompact raises a notice with the cleared-results/saved-tokens counts", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

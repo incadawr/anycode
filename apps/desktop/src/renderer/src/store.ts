@@ -411,6 +411,37 @@ export type TranscriptBlock =
    */
   | { kind: "stream_retry"; id: string; attempt: number; maxAttempts: number; delayMs: number; reason: string }
   /**
+   * One row per compaction, manual or automatic (TASK.227): the
+   * `compaction_start`/`compaction_end` pair rendered as ONE card, appended
+   * when the compaction starts and patched IN PLACE when it ends — the same
+   * pending->result shape a `tool_call` has. ADDITIVE to the one-slot `notice`
+   * toast, on the `stream_retry` precedent above: the toast is transient and
+   * overwritten by the next notice, so without this row a user who looked away
+   * learns nothing about a compaction that already happened, and the only
+   * remaining trace is a context meter that fell for no visible reason.
+   *
+   * `preTokens`/`postTokens` are the readings either side of the swap, both
+   * absent while the compaction is still running; `error` is present exactly
+   * when `status` is "failed" and the host named a reason.
+   *
+   * Renderer-only and NOT reconstructed by `projectHistoryToBlocks` — same
+   * posture as `usage_limit`/`connection_changed` above, and the same
+   * consequence: a reload loses the card. Carrying it across a reload needs
+   * the compaction to leave a mark in the persisted history, which is a wire
+   * change and deliberately not part of this cut.
+   */
+  | {
+      kind: "compaction";
+      id: string;
+      /** Absent when this tab never saw the START (a reload mid-compaction): unknown, never guessed. */
+      trigger?: "auto" | "manual";
+      status: "running" | "done" | "failed";
+      preTokens?: number;
+      postTokens?: number;
+      durationMs?: number;
+      error?: string;
+    }
+  /**
    * One row per `preview_console` AgentEvent (slice 96-D, night-track
    * wave-1 cut §2.4): a preview window's forwarded console/pageerror line,
    * or a throttle-window summary (`suppressed` present, no single real
@@ -466,6 +497,22 @@ export type TranscriptBlock =
 
 /** Convenience alias for the tool_call variant of TranscriptBlock (used by ToolCallCard). */
 export type ToolCallBlock = Extract<TranscriptBlock, { kind: "tool_call" }>;
+
+/**
+ * Index of the newest compaction card still running, or -1 when none is open
+ * (TASK.227). Scanned from the END so a session that compacted more than once
+ * closes the card THIS `compaction_end` belongs to, and an earlier finished
+ * card is never rewritten by a later outcome.
+ */
+export function findOpenCompaction(transcript: readonly TranscriptBlock[]): number {
+  for (let index = transcript.length - 1; index >= 0; index -= 1) {
+    const block = transcript[index];
+    if (block !== undefined && block.kind === "compaction" && block.status === "running") {
+      return index;
+    }
+  }
+  return -1;
+}
 
 export interface PermissionUiRequest {
   requestId: string;
@@ -1376,6 +1423,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   // blocks) it is not even scoped to a turnId the renderer trusts — see
   // onAgentEvent's turn-gate exemption below. Never reset, same posture as errorSeq.
   let previewConsoleSeq = 0;
+  // Mints the id of a compaction card (TASK.227). Never reset: a session may
+  // compact many times, and a reused id would patch the wrong card.
+  let compactionSeq = 0;
   // Monotonic id source for streamed text/reasoning transcript blocks. The
   // agent loop makes one streamText call per step, so the AI-SDK stream part
   // id (event.id on text_start/reasoning_start) is only unique *within* a
@@ -2320,7 +2370,22 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // An AUTO compaction fires mid-turn, where the status is already
           // "running": leave it alone (overwriting it would report the turn
           // as finished the moment the compaction ended).
+          //
+          // TASK.227: the card is appended in the SAME set() as the notice and
+          // the status flip, for the atomicity the prompt-queue drainer needs
+          // (see compaction_end below). Deltas are flushed first so the card
+          // lands after the text that was still buffered when it started.
+          flushDeltas();
           set((state) => ({
+            transcript: [
+              ...state.transcript,
+              {
+                kind: "compaction" as const,
+                id: `compaction:${compactionSeq++}`,
+                trigger: event.trigger,
+                status: "running" as const,
+              },
+            ],
             notice: {
               kind: "compaction_start" as const,
               text:
@@ -2343,17 +2408,44 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // leaves "running" for `loop_end` to clear. Failure releases it too
           // — a refused compaction leaves the session just as free as a
           // successful one, and the notice carries the reason.
-          set((state) => ({
-            notice: {
-              kind: "compaction_end" as const,
-              text: event.ok
-                ? `Conversation compacted (${event.preTokens} → ${event.postTokens ?? "?"} tokens).`
-                : `Compaction failed: ${event.error ?? "unknown error"}`,
-            },
-            ...(state.turn.status === "compacting"
-              ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
-              : {}),
-          }));
+          //
+          // TASK.227: the same set() also closes the card this compaction
+          // opened — the NEWEST still-running one, found from the end so an
+          // earlier compaction's finished card is never rewritten. A tab that
+          // never saw the start (reattached mid-compaction) has no card to
+          // patch and gets a fresh one carrying the outcome alone: the trigger
+          // is genuinely unknown there, so it stays absent rather than guessed.
+          flushDeltas();
+          set((state) => {
+            const outcome = {
+              status: (event.ok ? "done" : "failed") as "done" | "failed",
+              preTokens: event.preTokens,
+              durationMs: event.durationMs,
+              ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
+              ...(event.error === undefined ? {} : { error: event.error }),
+            };
+            const openAt = findOpenCompaction(state.transcript);
+            return {
+              transcript:
+                openAt === -1
+                  ? [
+                      ...state.transcript,
+                      { kind: "compaction" as const, id: `compaction:${compactionSeq++}`, ...outcome },
+                    ]
+                  : state.transcript.map((block, index) =>
+                      index === openAt && block.kind === "compaction" ? { ...block, ...outcome } : block,
+                    ),
+              notice: {
+                kind: "compaction_end" as const,
+                text: event.ok
+                  ? `Conversation compacted (${event.preTokens} → ${event.postTokens ?? "?"} tokens).`
+                  : `Compaction failed: ${event.error ?? "unknown error"}`,
+              },
+              ...(state.turn.status === "compacting"
+                ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
+                : {}),
+            };
+          });
           return;
         case "microcompact":
           set({
