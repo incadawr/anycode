@@ -163,7 +163,7 @@ describe("AppServerClient", () => {
   // still decides.)
 
   it("refuses a version the delivered policy excludes even though the compiled pin allows it", async () => {
-    // The child reports 0.144.1 — inside `SUPPORTED_CODEX_VERSION` (<0.152.0).
+    // The child reports 0.144.1 — inside `SUPPORTED_CODEX_VERSION`.
     // A host still judging by the constant would start; this one must not.
     const failure = await makeClient([], { sourceEnv: policyEnv([">=0.144.0 <0.144.1"]) })
       .start()
