@@ -5,6 +5,38 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.28] — 2026-09-12
+
+### Fixed
+
+- Codex models newer than the Codex AnyCode was willing to run are no longer
+  invisible. The list in the model picker is not AnyCode's own: Codex asks
+  OpenAI for it and identifies itself by its version number while asking, so a
+  newer Codex is offered models an older one is never told about. Measured on
+  one account on 2026-09-11: `GPT-6-Astra` is offered from Codex 0.153.4
+  onwards and absent in 0.152.1 and every version before it — and AnyCode
+  refused to start anything from 0.152.0 up, so that list was out of reach
+  unless you accepted the risk warning for each new version by hand.
+
+  The supported range now ends at 0.155.0. That is a measurement, not a guess:
+  the part of the Codex protocol AnyCode actually speaks was regenerated from
+  the real 0.152.1, 0.153.4 and 0.154.0 binaries and compared against the
+  pinned copy — the calls AnyCode makes and the decisions it reads back came
+  out identical, and nothing it consumes was removed.
+
+  What this does not change: AnyCode still installs Codex 0.144.3 for you, the
+  one version it has been smoke-tested against end to end. To use a newer
+  Codex, install it yourself and point AnyCode at it in Settings → Codex →
+  Choose binary… — it now starts without a risk warning, and its model list
+  arrives with it.
+
+- A compaction no longer gets two different verdicts on screen at once. The
+  toast still said "Compaction failed" while the row in the conversation said
+  "Compaction not applied" — about the same event, at the same moment. The
+  commonest reason a compaction does not happen is the deliberate one, there
+  being nothing worth summarising yet, so neither surface calls it a failure
+  now.
+
 ## [0.0.27] — 2026-09-07
 
 ### Changed
