@@ -24,8 +24,8 @@ function envWith(ranges: string[], riskAcceptedVersions: string[] = []): NodeJS.
 
 describe("resolveHostCodexVersionPolicy", () => {
   it("judges by the DELIVERED range, not by the compiled wire pin", () => {
-    // 0.151.0 is inside the compiled pin (<0.152.0) but outside this manifest
-    // range, so a host still judging by the constant would allow it. The
+    // 0.151.0 is inside the compiled pin but outside this manifest range, so
+    // a host still judging by the constant would allow it. The
     // reverse direction is covered by the risk case below.
     const policy = resolveHostCodexVersionPolicy(envWith([">=0.144.0 <0.146.0"]));
     expect(isSupportedCodexVersion(version("0.151.0"))).toBe(true);
@@ -55,8 +55,8 @@ describe("resolveHostCodexVersionPolicy", () => {
     const policy = resolveHostCodexVersionPolicy(env as NodeJS.ProcessEnv);
     expect(policy.supportedRange).toBe(SUPPORTED_CODEX_VERSION);
     // Byte-for-byte the pre-TASK.206 predicate: a bare ceiling, no floor.
-    expect(policy.allows(version("0.151.0"))).toBe(true);
-    expect(policy.allows(version("0.152.0"))).toBe(false);
+    expect(policy.allows(version("0.154.0"))).toBe(true);
+    expect(policy.allows(version("0.155.0"))).toBe(false);
     expect(policy.allows(version("1.0.0"))).toBe(false);
     expect(policy.allows(version("0.100.0"))).toBe(true);
   });
