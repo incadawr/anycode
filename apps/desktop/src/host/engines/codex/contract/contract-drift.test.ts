@@ -32,6 +32,7 @@ const PINNED_PATH = join(CONTRACT_DIR, "pinned-contract.json");
 const FIXTURES_DIR = join(CONTRACT_DIR, "fixtures");
 // Repo-root-relative: apps/desktop/src/host/engines/codex/contract -> apps/desktop/scripts.
 const EXTRACTOR_SCRIPT = join(CONTRACT_DIR, "..", "..", "..", "..", "..", "scripts", "codex-contract-extract.mjs");
+const LIVE_SMOKE_SCRIPT = join(CONTRACT_DIR, "..", "..", "..", "..", "..", "scripts", "codex-live-smoke.mjs");
 
 interface PinnedMethodShape {
   params: string | null;
@@ -75,7 +76,7 @@ describe("contract-drift layer 1 (always-on)", () => {
     // Deliberately a LITERAL, not a re-derivation: raising the ceiling must
     // trip this test, so that admitting a version is always a reviewed edit
     // here rather than a constant quietly drifting upward.
-    expect(SUPPORTED_CODEX_VERSION).toBe("<0.152.0");
+    expect(SUPPORTED_CODEX_VERSION).toBe("<0.155.0");
     expect(pinned.generatedFrom.startsWith("codex-cli 0.144")).toBe(true);
   });
 
@@ -101,6 +102,20 @@ describe("contract-drift layer 1 (always-on)", () => {
     expect(at(max), `${max} is the EXCLUSIVE ceiling and must not be supported`).toBe(false);
     expect(at("0.144.1")).toBe(true);
     expect(at("0.0.1"), "there is no floor: an arbitrarily old version is not rejected by version number").toBe(true);
+  });
+
+  it("the live smoke's own copy of the ceiling constant equals this one", () => {
+    // scripts/codex-live-smoke.mjs is dependency-free by design and cannot
+    // import protocol.ts, so it declares its own SUPPORTED_CODEX_VERSION. That
+    // copy drifted for three weeks: it stayed on the 0.144-only baseline while
+    // the ceiling here moved through <0.150.0, <0.151.0 and <0.152.0, and
+    // because an unsupported version makes the smoke SKIP — and a skip exits 0
+    // — every one of those raises looked live-smoked and was not. Held by an
+    // assertion rather than by the comment that used to ask for it.
+    const source = readFileSync(LIVE_SMOKE_SCRIPT, "utf8");
+    const declared = /^const SUPPORTED_CODEX_VERSION = "([^"]*)";$/m.exec(source);
+    expect(declared, "codex-live-smoke.mjs no longer declares SUPPORTED_CODEX_VERSION in the pinned one-line form").not.toBeNull();
+    expect(declared![1]).toBe(SUPPORTED_CODEX_VERSION);
   });
 
   it("protocol.ts's observed approval methods are pinned server-request methods", () => {

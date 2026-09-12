@@ -112,9 +112,10 @@ function skip(message) {
 // (mirrors host/engines/codex/protocol.ts's parseCodexVersion/
 // isSupportedCodexVersion/SUPPORTED_CODEX_VERSION exactly, duplicated here
 // deliberately — this .mjs is dependency-free and does not import
-// src/**/*.ts, same posture as codex-contract-extract.mjs.)
+// src/**/*.ts, same posture as codex-contract-extract.mjs. Raising the
+// ceiling in protocol.ts means raising it here in the same commit.)
 
-const SUPPORTED_CODEX_VERSION = ">=0.144.0 <0.145.0";
+const SUPPORTED_CODEX_VERSION = "<0.155.0";
 
 function parseCodexVersion(output) {
   const match = /^codex-cli (\d+)\.(\d+)\.(\d+)\s*$/.exec(output);
@@ -122,8 +123,23 @@ function parseCodexVersion(output) {
   return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
 }
 
+// A bare exclusive CEILING parsed from the constant above, never a second
+// hardcoded predicate. This copy kept `minor === 144` from the 2026-07-12
+// baseline while protocol.ts moved on at 7b4cd552 (2026-08-22 — the commit
+// whose subject is "stop letting the range and the code disagree", which
+// fixed exactly this duplication THERE and left this copy behind), so every
+// ceiling since — <0.150.0, <0.151.0, <0.152.0 and this one — had the smoke
+// SKIP any binary at 0.145 or above instead of running it. A skip exits 0, so
+// the skips read as green: each of those raises landed on live evidence that
+// had never been produced. contract-drift.test.ts now pins this constant to
+// protocol.ts's so the two cannot part again.
 function isSupportedCodexVersion(version) {
-  return version.major === 0 && version.minor === 144;
+  const ceiling = /^<(\d+)\.(\d+)\.(\d+)$/.exec(SUPPORTED_CODEX_VERSION);
+  if (!ceiling) throw new Error(`unsupported SUPPORTED_CODEX_VERSION form: ${SUPPORTED_CODEX_VERSION}`);
+  const [major, minor, patch] = [Number(ceiling[1]), Number(ceiling[2]), Number(ceiling[3])];
+  if (version.major !== major) return version.major < major;
+  if (version.minor !== minor) return version.minor < minor;
+  return version.patch < patch;
 }
 
 function resolveCodexBin() {
