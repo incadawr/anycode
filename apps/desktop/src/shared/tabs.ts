@@ -208,6 +208,7 @@ export type CreateTabResult =
       focusTabId?: string; // already_open -> renderer focuses this tab
       worktreePath?: string; // actionable recovery detail for worktree_unavailable
       connectionId?: string; // connection_missing -> the deleted pin
+      notReadyReason?: "credential_missing" | "model_missing" | "transport_unsupported" | "engine_not_ready";
     };
 
 /** Result of a close-tab request; main refuses to close the last remaining tab or an id it doesn't know about. */

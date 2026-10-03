@@ -76,7 +76,7 @@ describe("contract-drift layer 1 (always-on)", () => {
     // Deliberately a LITERAL, not a re-derivation: raising the ceiling must
     // trip this test, so that admitting a version is always a reviewed edit
     // here rather than a constant quietly drifting upward.
-    expect(SUPPORTED_CODEX_VERSION).toBe("<0.155.0");
+    expect(SUPPORTED_CODEX_VERSION).toBe("<0.161.0");
     expect(pinned.generatedFrom.startsWith("codex-cli 0.144")).toBe(true);
   });
 
@@ -367,6 +367,8 @@ describe("contract-drift hardening — the gate can actually go red (always-on, 
  * listed here fails the gate, which is the point.
  */
 const REVIEWED_REMOVALS: Readonly<Record<string, string>> = {
+  // 0.160: url moved into anyOf (url OR fileId); the existing URL variant is preserved.
+  "v2/UserInput/image/url": "0.160: URL is now one of two flattened source alternatives; checked by layer 2 below",
   // Bedrock credential plumbing; AnyCode never reads an Account's credential source.
   "v2/AmazonBedrockCredentialSource": "0.147: replaced by usesCodexManagedCredentials",
   "v2/Account/amazonBedrock/credentialSource": "0.147: replaced by usesCodexManagedCredentials",
@@ -495,6 +497,10 @@ describe.skipIf(!process.env.ANYCODE_CODEX_DRIFT_BIN)("contract-drift layer 2 (e
       // would make every ceiling wider than a single patch unverifiable by
       // this instrument.
       expect(shapeRegressions(pinned.definitions, fresh.definitions)).toEqual([]);
+      // Our outgoing data-URL input must still be accepted after the flattened union change.
+      const userInput = (fresh.definitions.v2 as Record<string, unknown>).UserInput as { oneOf: Array<{ properties: { type: { enum: string[] }; url?: unknown }; anyOf?: Array<{ properties: { url?: { type: string } }; required?: string[] }> }> };
+      const image = userInput.oneOf.find((variant) => variant.properties.type.enum.includes("image"))!;
+      expect(image.properties.url !== undefined || image.anyOf?.some((source) => source.properties.url?.type === "string" && source.required?.includes("url"))).toBe(true);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

@@ -185,6 +185,7 @@ const VALID_RECORD_TYPES: ReadonlySet<string> = new Set([
   "subagent_start",
   "subagent_end",
   "workflow_end",
+  "workflow_step_end",
   "stream_retry",
   "degeneration",
   "error",

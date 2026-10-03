@@ -58,6 +58,7 @@ import { TimelinePanel } from "./components/TimelinePanel.js";
 import { NoticeStack, TabNoticeCapture } from "./components/NoticeToast.js";
 import { beginToastExit, enqueueToast, removeToast, rewriteToastText, type Toast, type ToastKind } from "./toasts.js";
 import { notificationBody, useTurnCompletionNotification } from "./notifications.js";
+import { watchExternalEngines } from "./engine-availability.js";
 import { WelcomeScreen } from "./components/WelcomeScreen.js";
 import { StartScreen } from "./components/StartScreen.js";
 import { SettingsDialog } from "./components/SettingsScreen.js";
@@ -1024,6 +1025,19 @@ export function App() {
     [settingsSnapshot],
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const welcomeEngineRef = useRef<"core" | "codex" | "claude">("core");
+  const welcomeVisible = shouldShowWelcome(settingsSnapshot, tabs.length, hasExternalEngine);
+  const wasWelcomeVisible = useRef(false);
+  useEffect(() => {
+    if (wasWelcomeVisible.current && !welcomeVisible && tabs.length === 0 &&
+        (settingsSnapshot?.providerReady || hasExternalEngine === true)) {
+      const state = useTabsStore.getState();
+      state.openDraft();
+      state.setDraftEngine(settingsSnapshot?.providerReady ? "core" : welcomeEngineRef.current);
+      setSettingsOpen(false);
+    }
+    wasWelcomeVisible.current = welcomeVisible;
+  }, [welcomeVisible, settingsSnapshot?.providerReady, hasExternalEngine, tabs.length]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<PaletteMode>("actions");
   // D8: App's own overlay wiring — the command palette and Settings dialog
@@ -1080,29 +1094,13 @@ export function App() {
     });
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    window.anycode
-      .listAvailableEngines()
-      .then(({ engineIds }) => {
-        if (!cancelled) {
-          const available = engineIds.some((engine: "core" | "codex") => engine !== "core");
-          hasExternalEngineRef.current = available;
-          setHasExternalEngine(available);
-        }
-      })
-      .catch(() => {
-        // A bridge failure remains fail-closed: only the configured Core path
-        // can bypass Welcome in this case.
-        if (!cancelled) {
-          hasExternalEngineRef.current = false;
-          setHasExternalEngine(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  useEffect(() => watchExternalEngines(window.anycode, (available, engineIds) => {
+    if (available && !engineIds.includes(welcomeEngineRef.current)) {
+      welcomeEngineRef.current = engineIds.find((engine) => engine !== "core") ?? "core";
+    }
+    hasExternalEngineRef.current = available;
+    setHasExternalEngine(available);
+  }), []);
 
   useEffect(() => {
     // Guarded for the partial `window.anycode` stub used by tests (no `window`
@@ -1449,13 +1447,15 @@ export function App() {
     }
   }
 
-  if (shouldShowWelcome(settingsSnapshot, tabs.length, hasExternalEngine)) {
+  if (welcomeVisible) {
     // Welcome renders full-window with no sidebar (design §2.1) — the
     // `app-welcome` modifier drops the shell grid back to a plain column.
     return (
       <main key="welcome" className="app app-welcome">
         <div className="welcome-titlebar" aria-hidden="true" />
-        <WelcomeScreen />
+        <WelcomeScreen onOpenSettings={() => setSettingsOpen(true)} settingsOpen={settingsOpen}
+          onSelectEngine={(engine) => { welcomeEngineRef.current = engine; }} />
+        <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {window.anycode?.platform !== "darwin" && <WindowControls maximized={windowState.maximized} />}
       </main>
     );

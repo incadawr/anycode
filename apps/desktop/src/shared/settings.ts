@@ -634,7 +634,7 @@ export interface SecretStatus {
   /** true when an entry exists in the vault / secrets file. */
   set: boolean;
   source: SecretSource;
-  tier: SecretTier;
+  tier: SecretTier | "not_checked";
 }
 
 // ── provider catalog projection (slice 2.5 §4.1; renderer NEVER imports core) ──
@@ -715,6 +715,8 @@ export interface SettingsSnapshot {
   secrets: SecretStatus[];
   /** apiKey(env|vault) && model(env|settings) — the auto-tab gate (§6). */
   providerReady: boolean;
+  /** Status only; no credential values cross to the renderer. */
+  providerReadiness?: ProviderReadiness;
   /** Names of ANYCODE_* env vars overriding vault/settings (UI warning). */
   envOverrides: string[];
   /** true when settings.json is a newer version than this binary understands (§2). */
@@ -743,6 +745,12 @@ export interface SettingsSnapshot {
    * NEVER hardcoded in the renderer.
    */
   appVersion?: string;
+}
+
+export interface ProviderReadiness {
+  apiKeyReady: boolean;
+  modelReady: boolean;
+  transportReady: boolean;
 }
 
 // ── mutating-channel result shape (all mutators return a fresh snapshot) ──

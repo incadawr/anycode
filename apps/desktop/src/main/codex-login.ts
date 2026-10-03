@@ -46,6 +46,8 @@ export type CodexLoginOutcome =
   | { ok: false; reason: "cancelled" | "timeout" | "failed" };
 
 export interface RunCodexLoginOptions {
+  mode?: import("../shared/codex-login.js").CodexLoginMode;
+  onDeviceCode?: (code: { userCode: string; verificationUrl: string }) => void;
   /** Opens the browser (main injects `shell.openExternal`; tests inject a spy). */
   openExternal: (url: string) => Promise<void> | void;
   /** Resolves the in-flight wait early with `{ok:false, reason:"cancelled"}` and sends `account/login/cancel`. */
@@ -69,10 +71,6 @@ export interface RunCodexLoginOptions {
   profile?: ResolvedCodexProfile;
   /** DI seam for the pre-spawn home guard; production re-asserts the real filesystem (`assertCodexProfileHome`). */
   profileGuard?: (profile: ResolvedCodexProfile) => CodexProfileGuardResult;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -113,6 +111,8 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
   const completion = new Promise<CodexLoginOutcome>((resolve) => {
     resolveCompletion = resolve;
   });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
   let matchedLoginId: string | undefined;
   client.onNotification((notification) => {
     if (notification.method !== "account/login/completed") return;
@@ -152,17 +152,25 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
       { timeoutMs: rpcTimeoutMs },
     );
     client.notify("initialized");
-    const loginResponse = await client.request<{ type?: unknown; authUrl?: unknown; loginId?: unknown }>(
+    const loginResponse = await client.request<{ type?: unknown; authUrl?: unknown; loginId?: unknown; userCode?: unknown; verificationUrl?: unknown }>(
       "account/login/start",
-      { type: "chatgpt" },
+      { type: options.mode === "device" ? "chatgptDeviceCode" : "chatgpt" },
       { timeoutMs: rpcTimeoutMs },
     );
-    const authUrl = loginResponse.authUrl;
+    const authUrl = options.mode === "device" ? loginResponse.verificationUrl : loginResponse.authUrl;
     const loginId = loginResponse.loginId;
     if (typeof authUrl !== "string" || authUrl === "" || typeof loginId !== "string" || loginId === "") {
       return { ok: false, reason: "failed" };
     }
     matchedLoginId = loginId;
+    if (options.signal?.aborted) return { ok: false, reason: "cancelled" };
+    const url = new URL(authUrl);
+    if (url.protocol !== "https:" || url.username || url.password) return { ok: false, reason: "failed" };
+    if (options.mode === "device") {
+      const userCode = loginResponse.userCode;
+      if (loginResponse.type !== "chatgptDeviceCode" || typeof userCode !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(userCode)) return { ok: false, reason: "failed" };
+      options.onDeviceCode?.({ userCode, verificationUrl: authUrl });
+    }
     await options.openExternal(authUrl);
 
     const aborted = new Promise<CodexLoginOutcome>((resolve) => {
@@ -171,9 +179,12 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
         resolve({ ok: false, reason: "cancelled" });
         return;
       }
-      options.signal.addEventListener("abort", () => resolve({ ok: false, reason: "cancelled" }), { once: true });
+      onAbort = () => resolve({ ok: false, reason: "cancelled" });
+      options.signal.addEventListener("abort", onAbort, { once: true });
     });
-    const timedOut = delay(timeoutMs).then((): CodexLoginOutcome => ({ ok: false, reason: "timeout" }));
+    const timedOut = new Promise<CodexLoginOutcome>((resolve) => {
+      timeout = setTimeout(() => resolve({ ok: false, reason: "timeout" }), timeoutMs);
+    });
 
     const outcome = await Promise.race([completion, aborted, timedOut]);
     if (!outcome.ok && (outcome.reason === "cancelled" || outcome.reason === "timeout")) {
@@ -187,6 +198,8 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
   } catch {
     return { ok: false, reason: "failed" };
   } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    if (onAbort !== undefined) options.signal?.removeEventListener("abort", onAbort);
     await client.close();
   }
 }

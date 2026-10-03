@@ -5,6 +5,41 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- First launch now offers ChatGPT/Codex, Claude Code, and API/local-model
+  setup directly. Optional API connection settings are collapsed, and the
+  selected model is saved with the connection. Completed setup opens the
+  project draft automatically.
+
+### Added
+
+- Codex 0.160.0 is supported and is the default version installed by AnyCode.
+- ChatGPT sign-in now has a device-code fallback with a visible code, link and
+  cancellation, also available for individual Codex accounts.
+- Packaged apps support an isolated `--self-check` for first-run UI and IPC.
+- Claude Code tabs can delegate to AnyCode agent profiles through an in-process
+  MCP bridge; child sessions use the existing permission and cancellation flow.
+
+### Fixed
+
+- Restoring a session on newer Codex versions no longer duplicates command
+  entries or displaces them in the conversation.
+- Failed workflow steps preserve their cause in the transcript, saved cards
+  and telemetry; unfinished outputs are labelled as partial results.
+- Startup failures now distinguish missing credentials, missing models and
+  unsupported transports. Engine failures include a safe cause and next step.
+- Proxy authentication, a refused proxy socket and untrusted TLS certificates
+  stop automatic retries and show how to correct the connection.
+- Subagent model overrides unavailable on the selected connection are rejected
+  before launch instead of silently reaching the parent's provider.
+- Setup now advances when an external engine becomes ready after sign-in.
+- Settings and the API-key storage consent dialog are reachable during setup.
+- An empty first-run profile no longer initializes OS Keychain just to show
+  settings; the storage check occurs when a key is saved.
+
 ## [0.0.28] — 2026-09-12
 
 ### Fixed

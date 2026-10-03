@@ -52,6 +52,7 @@
  * `<os.tmpdir()>/rewind-smoke/*.png`.
  */
 
+import { smokeProviderProfile, activeSmokeConnection } from "./smoke-provider-profile.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -401,8 +402,8 @@ async function step1LaunchAndFirstWrite(ctx) {
     ctx.secretsPath = join(profile, "secrets.json");
 
     const seedSettings = {
-      version: 1,
-      provider: { id: PROVIDER_ID, model: MODEL_ID },
+      version: 2,
+      provider: smokeProviderProfile(PROVIDER_ID, MODEL_ID, { credentialFromEnv: true }),
       tools: {},
       permissions: { alwaysAllow: [{ toolName: "Write" }, { toolName: "Read" }] },
       ui: { theme: "system" },
