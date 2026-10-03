@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.29] — 2026-10-03
+
 ### Changed
 
 - First launch now offers ChatGPT/Codex, Claude Code, and API/local-model
