@@ -177,7 +177,9 @@ export class ContextManager {
    * tool_call is ever separated from its result. The prefix is summarized via
    * modelPort (text only; tool calls ignored) and the whole history is swapped
    * for [compact_summary user item, ...tail] in one replaceAll. On an empty
-   * prefix the call is a structural no-op (not a breaker failure). On
+   * prefix — or one consisting only of existing compact_summary items (TASK.228,
+   * a repeated compaction of an already-summarized prefix) — the call is a
+   * structural no-op (not a breaker failure). On
    * error/empty-summary/abort the history is untouched and the failure counter
    * increments; the configured number of consecutive failures trips the breaker.
    */
@@ -193,6 +195,16 @@ export class ContextManager {
         ok: false,
         preTokens,
         error: "compaction skipped: no prefix before the keep-recent window",
+      };
+    }
+    // A prefix made up entirely of existing compact_summary items (a repeated
+    // /compact right after a prior success) has nothing new to summarize.
+    // Pure structural check on `kind`; same skip semantics as an empty prefix.
+    if (items.slice(0, boundary).every((item) => item.kind === "compact_summary")) {
+      return {
+        ok: false,
+        preTokens,
+        error: "compaction skipped: prefix already fully summarized",
       };
     }
 
