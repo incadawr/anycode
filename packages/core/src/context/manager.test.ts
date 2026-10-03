@@ -580,6 +580,75 @@ describe("ContextManager.runCompaction — success", () => {
     expect(snapshot(history)).toBe(before);
     expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(0);
   });
+
+  it("repeated compaction of a summary-only prefix skips the model call entirely (TASK.228)", async () => {
+    const messages: ChatMessage[] = [
+      userMsg("turn 0"),
+      assistantToolCall("c0"),
+      toolResult("c0", "result 0"),
+      userMsg("turn 1"),
+      assistantToolCall("c1"),
+      toolResult("c1", "result 1"),
+      userMsg("turn 2"),
+      assistantToolCall("c2"),
+      toolResult("c2", "result 2"),
+      userMsg("turn 3"),
+    ];
+    const history = buildHistory(messages);
+    const port = new ScriptedModelPort(summaryScript("CONDENSED"));
+    const manager = makeManager(history, port, { keepRecentMessages: 4 });
+
+    // First compaction produces the real post-compaction state: the history
+    // starts with a genuine compact_summary item.
+    const first = await manager.runCompaction({});
+    expect(first.ok).toBe(true);
+    expect(history.items[0]!.kind).toBe("compact_summary");
+    const afterFirst = snapshot(history);
+
+    // len=5, boundary=1 => the prefix is exactly [compact_summary]: a repeated
+    // /compact must be a structural no-op, not a model call.
+    for (let i = 0; i < 2; i += 1) {
+      const result = await manager.runCompaction({});
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("already fully summarized");
+      }
+    }
+    expect(port.requests.length).toBe(1);
+    expect(snapshot(history)).toBe(afterFirst);
+    expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(0);
+  });
+
+  it("a fresh prefix containing non-summary items still compacts (TASK.228 regression guard)", async () => {
+    const messages: ChatMessage[] = [
+      userMsg("turn 0"),
+      assistantToolCall("c0"),
+      toolResult("c0", "result 0"),
+      userMsg("turn 1"),
+      assistantToolCall("c1"),
+      toolResult("c1", "result 1"),
+      userMsg("turn 2"),
+      assistantToolCall("c2"),
+      toolResult("c2", "result 2"),
+      userMsg("turn 3"),
+    ];
+    const history = buildHistory(messages);
+    const port = new ScriptedModelPort(summaryScript("CONDENSED"));
+    const manager = makeManager(history, port, { keepRecentMessages: 4 });
+
+    expect((await manager.runCompaction({})).ok).toBe(true);
+
+    history.append(userMsg("new turn"));
+    history.append({ role: "assistant", content: [{ type: "text", text: "new reply" }] });
+    // One more user message moves the boundary past the old compact_summary so
+    // the prefix is [summary, ...older tail items] — non-empty and mixed.
+    history.append(userMsg("one more turn"));
+
+    const result = await manager.runCompaction({});
+    expect(result.ok).toBe(true);
+    expect(port.requests.length).toBe(2);
+    expect(history.items[0]!.kind).toBe("compact_summary");
+  });
 });
 
 describe("ContextManager.runCompaction — atomic on failure/abort", () => {
