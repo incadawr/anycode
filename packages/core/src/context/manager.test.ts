@@ -619,6 +619,67 @@ describe("ContextManager.runCompaction — success", () => {
     expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(0);
   });
 
+  it("nonzero failure counter is preserved across repeated summary-only compaction no-ops (TASK.228)", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 8; t += 1) {
+      messages.push(userMsg(`q ${t} ${"x".repeat(120)}`));
+      messages.push(userMsg(`r ${t} ${"x".repeat(120)}`));
+    }
+    const history = buildHistory(messages);
+    const requests: ModelRequest[] = [];
+    let calls = 0;
+    const flakyPort: ModelPort = {
+      streamText: (request: ModelRequest) => {
+        requests.push(request);
+        const events = calls < 2 ? errorScript() : summaryScript("SHOULD NOT RUN");
+        calls += 1;
+        const signal = request.abortSignal;
+        return (async function* () {
+          for (const event of events) {
+            if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            yield event;
+          }
+        })();
+      },
+    };
+    const manager = makeManager(history, flakyPort, { keepRecentMessages: 4 });
+
+    // Seed a nonzero breaker counter with two real (failing) compactions; the
+    // failures are atomic, so the history is untouched by them.
+    expect((await manager.runCompaction({})).ok).toBe(false);
+    expect((await manager.runCompaction({})).ok).toBe(false);
+    expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(2);
+    const beforeInstall = snapshot(history);
+
+    // Install the summary-only prefix through the public history API: a third
+    // (successful) compaction would reset the counter, so use replaceAll here.
+    history.replaceAll([
+      {
+        id: globalThis.crypto.randomUUID(),
+        createdAt: Date.now(),
+        message: userMsg("Summary of earlier turns"),
+        tokenEstimate: 20,
+        kind: "compact_summary",
+      },
+      ...history.items.slice(-4),
+    ]);
+    const afterInstall = snapshot(history);
+    expect(afterInstall).not.toBe(beforeInstall);
+
+    // Repeated /compact no-ops must skip the model and NOT touch the failure
+    // counter — a summary-only prefix skip is a no-op, not a breaker heal.
+    for (let i = 0; i < 3; i += 1) {
+      const result = await manager.runCompaction({});
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("already fully summarized");
+      }
+    }
+    expect(requests.length).toBe(2);
+    expect(snapshot(history)).toBe(afterInstall);
+    expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(2);
+  });
+
   it("a fresh prefix containing non-summary items still compacts (TASK.228 regression guard)", async () => {
     const messages: ChatMessage[] = [
       userMsg("turn 0"),
