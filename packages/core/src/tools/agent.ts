@@ -53,26 +53,30 @@
  */
 
 import type { ToolContext, ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
-import type { EngineProfileInfo, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
+import type { EngineProfileInfo } from "../ports/subagent.js";
 import type { SessionSubagentRequest } from "../ports/session-subagent.js";
-import {
-  SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS,
-  SUBAGENT_OUTPUT_MAX_BYTES,
-  SUBAGENT_TIME_BUDGET_MS,
-} from "../types/config.js";
+import { SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS } from "../types/config.js";
 import { listPersonaNames } from "../subagents/personas.js";
 import {
-  sanitizeAndCap,
-  SUBAGENT_ACTIVITY_SUMMARY_MAX_CHARS,
-} from "../subagents/summarize-tool.js";
+  buildSessionSubagentRequest,
+  formatResultForModel,
+  mapProgressToEvent,
+  outcomeToResult,
+} from "../subagents/agent-bridge.js";
 import {
   createSubagentCardAccumulator,
   finalizeSubagentCard,
   reduceSubagentCardEvent,
-  type SubagentCardEvent,
 } from "../subagents/card-snapshot.js";
 import type { SubagentCardTarget, ToolResultPresentation } from "../types/subagent-card.js";
 import { agentInputSchema, restrictedAgentInputSchema, type AgentInput, type AgentOutput } from "./schemas.js";
+
+// TASK.226 срез S1 (F9): outcomeToResult/formatResultForModel/mapProgressToEvent
+// moved to subagents/agent-bridge.ts so the in-process MCP bridge (host-side,
+// срез S3+) runs a claude-CLI-initiated subagent call through the exact same
+// projection code — re-exported here so anything importing them off this
+// module (the natural place to look for them) keeps working.
+export { formatResultForModel, mapProgressToEvent, outcomeToResult };
 
 /** Persona used when the model omits agent_type. */
 const DEFAULT_AGENT_TYPE = "general-purpose";
@@ -118,149 +122,6 @@ function buildMetadata(sessionTier: boolean): ToolMetadata {
     maxTimeoutMs: SUBAGENT_TIME_BUDGET_MS,
     maxOutputBytes: SUBAGENT_OUTPUT_MAX_BYTES,
   };
-}
-
-/**
- * Projects the terminal SubagentOutcome (shared shape of the inline and
- * session tiers) onto the tool's ToolResult, honoring TASK.44's honest
- * outcome mapping. Pulled out of the per-tier run branches so the mapping
- * text/logic is provably the SAME for both (CUT-S2 §2.1: "маппинг
- * outcome→result ОБЩИЙ для обоих ярусов").
- */
-function outcomeToResult(
-  outcome: SubagentOutcome,
-  presentation: { presentation?: ToolResultPresentation },
-): ToolResult<AgentOutput> {
-  if (outcome.status === "error") {
-    return { ok: false, error: outcome.finalText || "Agent: the subagent failed.", ...presentation };
-  }
-  // max_turns (TASK.44 + TASK.74): the child exhausted its budget — the turn
-  // cap or the wall-clock deadline, which share this status because the
-  // remediation is identical. This is NOT a
-  // success. Return an explicit incomplete errorKind so the dispatcher maps
-  // the tool_call to status "max_turns" (not "success"), the parent model
-  // receives a clear message naming the limit and the turns spent, and any
-  // partial finalText the child did produce is forwarded (after the limit
-  // notice) so it is not lost. An EMPTY partial must not read as success:
-  // the error message is always non-empty here, so an empty-finalText
-  // max_turns outcome can never provoke a blind re-delegation.
-  if (outcome.status === "max_turns") {
-    const partial = outcome.finalText.trim();
-    const error = partial
-      ? `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing.\n` +
-        `INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. ` +
-        `Missing checks may invalidate the conclusions below.\n\n${partial}`
-      : `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing and produced no partial result. The task was not completed — split it into narrower delegations, or ask the user to raise the subagent turn budget (Settings → Tools → "Maximum turns (subagents)").`;
-    return { ok: false, errorKind: "max_turns", error, output: toAgentOutput(outcome), ...presentation };
-  }
-  // cancelled (TASK.44): preserve cancellation semantics — never success.
-  // The dispatcher maps errorKind "cancelled" to status "cancelled", so the
-  // card's external badge and the internal subagent_end status agree.
-  if (outcome.status === "cancelled") {
-    return {
-      ok: false,
-      errorKind: "cancelled",
-      error: "Agent: the subagent was cancelled.",
-      output: toAgentOutput(outcome),
-      ...presentation,
-    };
-  }
-  // TASK.210 marker (а): the child's own degeneration guard (agent-loop.ts)
-  // cut its FINAL turn — never the provider, never a budget exhaustion.
-  // Repeats the ladder's own precedent (a guard stopped the run => the
-  // parent gets a non-success, never a silently-accepted partial): ok:false
-  // WITHOUT an errorKind, same shape as the plain "error" branch above —
-  // "max_turns" would misname the cause, and widening the errorKind union
-  // for one guard is not worth it when the dispatcher's own fallback
-  // (`errorKind ?? "error"`, types/tools.ts) already gives the right external
-  // status. This is checked AFTER max_turns/cancelled and BEFORE the ok:true
-  // return below, and returns immediately — formatResultForModel's (б)/(в)
-  // prefixing never runs on an ok:false result (it returns `result.error`
-  // verbatim), so marker (в)'s fact is folded in HERE when it also applies
-  // (codex review finding — see the truncated branch below).
-  //
-  // Internally SubagentOutcome.status stays "completed" (loop_end said so —
-  // the loop reached its sentinel cleanly); the mismatch between an internal
-  // "completed" and this external non-success is the accepted cost of not
-  // widening the status union (plan §8) — the exact period/repeat count that
-  // caused this lives in the loop's own `degeneration` telemetry record, not
-  // this message: a model reading this text needs "do not trust this
-  // partial", not the diagnostic numbers.
-  if (outcome.finalTurnFinishReason === "degenerate") {
-    const partial = outcome.finalText.trim();
-    // runner.ts's capUtf8Bytes runs BEFORE this outcome exists and trims
-    // from the END, keeping the head — a real incident can be >100KB of
-    // ordinary text followed by the loop, in which case the loop itself
-    // lands entirely in the DISCARDED tail and `partial` is nothing but
-    // ordinary head text. An unconditional "ends inside a degenerate loop"
-    // claim would then be false for what is actually delivered, so the
-    // claim is hedged (and the byte cap named, same number as marker (в))
-    // whenever `truncated` is also set.
-    const tailClaim = outcome.truncated
-      ? `The subagent's own ${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap ALSO trimmed this text before it reached ` +
-        `here — the loop itself may or may not still be visible below.`
-      : "The text below ends inside a degenerate loop.";
-    const error =
-      `Agent: the subagent's output degenerated into a repetition loop and the turn was cut.\n` +
-      `INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. ${tailClaim}\n\n${partial}`;
-    return { ok: false, error, output: toAgentOutput(outcome), ...presentation };
-  }
-  // The runner already capped finalText and set truncated; forward the outcome
-  // verbatim (finalText/truncated/status/counters) as the tool payload.
-  return { ok: true, output: toAgentOutput(outcome), ...presentation };
-}
-
-/**
- * Narrows a (possibly wider) SubagentOutcome-shaped value down to exactly
- * AgentOutput's fields. Explicit rather than `{ ...outcome }`: a
- * SessionSubagentOutcome carries three extra id fields (childSessionId/
- * parentSessionId/spawnToolCallId) that belong on the presentation card's
- * `target` (CUT-S2 §2.1: "core их только копирует в target"), not on the
- * model-visible tool output.
- */
-function toAgentOutput(outcome: SubagentOutcome): AgentOutput {
-  return {
-    status: outcome.status,
-    finalText: outcome.finalText,
-    truncated: outcome.truncated,
-    turns: outcome.turns,
-    toolCalls: outcome.toolCalls,
-    durationMs: outcome.durationMs,
-    ...(outcome.finalTurnFinishReason !== undefined
-      ? { finalTurnFinishReason: outcome.finalTurnFinishReason }
-      : {}),
-  };
-}
-
-/**
- * TASK.210 markers (б)/(в) — applied here, never in output.finalText, so the
- * presentation card and history persistence (which read finalText/output
- * directly) keep the raw text; only what the model itself reads is prefixed.
- * Both can be true on the same outcome at once (the TASK.210 incident was:
- * 131,072 tokens generated, 99,999 bytes delivered) — order is fixed (б)→(в)
- * so the model reads "the provider cut it" before "and then we cut it more".
- */
-function formatResultForModel(result: ToolResult<AgentOutput>): string {
-  if (!result.ok) {
-    return result.error ?? "Agent: the subagent failed.";
-  }
-  let prefix = "";
-  // (б): the PROVIDER's own output-token ceiling ended the turn, not this
-  // tool's byte cap — ok:true because the loop itself completed honestly
-  // (unlike the guard cutoff in outcomeToResult above, which never reaches
-  // here). Owner's measured false-positive rate for this marker: 1 in 902
-  // turns of a sample session, and that one turn WAS the TASK.210 incident.
-  if (result.output?.finalTurnFinishReason === "length") {
-    prefix +=
-      "[TRUNCATED SUBAGENT RESULT — the final turn hit the model's output-token ceiling; " +
-      "the report below is cut mid-stream and its tail is missing.]\n\n";
-  }
-  // (в): this tool's OWN result-byte cap (util/bytes.ts's capUtf8Bytes, spent
-  // in runner.ts) — a distinct truncation from (б) and can follow it.
-  if (result.output?.truncated === true) {
-    prefix += `[TRUNCATED SUBAGENT RESULT — the report exceeded the ${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap; its tail was dropped.]\n\n`;
-  }
-  return prefix + (result.output?.finalText ?? "");
 }
 
 /**
@@ -466,16 +327,22 @@ async function runSessionTier(
   // a DEFAULT — same precedence the inline/one-shot path already established
   // (subagents/runner.ts — `req.model ?? persona.model`). Absent both, no
   // model key rides the request at all.
-  const resolvedModel = input.model ?? engineProfile?.model;
+  //
+  // TASK.226 срез S1: the request itself is built by the SHARED
+  // buildSessionSubagentRequest (subagents/agent-bridge.ts) so a
+  // claude-CLI-initiated subagent call goes through byte-identical
+  // composition — `provider`/`detach` stay this tool's own fields (agent-
+  // bridge.ts never sets either), spread on afterward.
   const request: SessionSubagentRequest = {
-    agentType,
-    description: input.description,
-    prompt:
-      engineProfile !== undefined ? `${engineProfile.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
-    spawnToolCallId: ctx.toolCallId,
+    ...buildSessionSubagentRequest({
+      agentType,
+      description: input.description,
+      prompt: input.prompt,
+      model: input.model,
+      spawnToolCallId: ctx.toolCallId,
+      profile: engineProfile,
+    }),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
-    ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
-    ...(engineProfile !== undefined ? { engine: engineProfile.engine } : {}),
     // TASK.145 срез 1: only ever `true` here — the validation check above
     // already refused `detach:true` on any tier but "session", and `false`/
     // absent is dropped rather than riding the wire as an explicit `false`
@@ -534,81 +401,3 @@ async function runSessionTier(
 
 /** Inline-only, byte-compatible with the pre-B1 constant export (CUT-S2 §2.1). */
 export const agentTool: ToolDefinition<AgentInput, AgentOutput> = createAgentTool();
-
-/**
- * Projects a coarse SubagentProgress onto the matching subagent_* AgentEvent,
- * stamping the Agent tool call's id (design §3.3). The three variants map 1:1;
- * the status/counter unions already align with the event shapes. Typed as
- * SubagentCardEvent (a strict subset of ToolEmittedEvent — the subagent_*
- * variants only) rather than the broader ToolEmittedEvent: this lets the
- * result feed directly into reduceSubagentCardEvent (card-snapshot.ts,
- * TASK.102 slice S1 W3) without a cast, while remaining assignable wherever
- * ToolEmittedEvent is expected (ctx.emit below).
- */
-function mapProgressToEvent(progress: SubagentProgress, toolCallId: string): SubagentCardEvent {
-  switch (progress.kind) {
-    case "start":
-      return {
-        type: "subagent_start",
-        toolCallId,
-        agentType: progress.agentType,
-        description: progress.description,
-        ...(progress.model !== undefined ? { model: progress.model } : {}),
-        ...(progress.engine !== undefined ? { engine: progress.engine } : {}),
-      };
-    case "progress":
-      return {
-        type: "subagent_progress",
-        toolCallId,
-        turns: progress.turns,
-        toolCalls: progress.toolCalls,
-        lastTool: progress.lastTool,
-      };
-    case "tool":
-      // Defense-in-depth cap at the trust boundary onto the wire (W1-FIX,
-      // FIX-2): the concrete runner already sanitizes/caps toolName+summary,
-      // but ANY SubagentPort could push an oversized value here — this bridge
-      // is the last chokepoint before WireAgentEvent/host replay, so it
-      // re-applies the SAME sanitize+cap helper the runner's summarizer uses
-      // (shared function => the two trust boundaries can never disagree).
-      return {
-        type: "subagent_activity",
-        toolCallId,
-        toolName: sanitizeAndCap(progress.toolName, SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS),
-        summary: sanitizeAndCap(progress.summary, SUBAGENT_ACTIVITY_SUMMARY_MAX_CHARS),
-      };
-    case "end":
-      return {
-        type: "subagent_end",
-        toolCallId,
-        status: progress.status,
-        turns: progress.turns,
-        durationMs: progress.durationMs,
-        ...(progress.activitySuppressed !== undefined ? { activitySuppressed: progress.activitySuppressed } : {}),
-        // TASK.171: the requested id (same field/semantics as subagent_start's
-        // `model`) and the provider's own claim (`responseModel`) are two
-        // distinct, independently-optional fields — never conflated.
-        ...(progress.model !== undefined ? { model: progress.model } : {}),
-        ...(progress.responseModel !== undefined ? { responseModel: progress.responseModel } : {}),
-      };
-    case "attention":
-      return {
-        type: "subagent_attention",
-        toolCallId,
-        waiting: progress.waiting,
-      };
-    case "stalled":
-      // TASK.148 slice 1: reports only — this bridge never alters the run,
-      // never cancels it, and the switch above (tool_result/turn_end) keeps
-      // firing normally afterward.
-      return {
-        type: "subagent_stalled",
-        toolCallId,
-        agentType: progress.agentType,
-        description: progress.description,
-        silentMs: progress.silentMs,
-        ...(progress.lastActivity !== undefined ? { lastActivity: progress.lastActivity } : {}),
-        waitingForApproval: progress.waitingForApproval,
-      };
-  }
-}

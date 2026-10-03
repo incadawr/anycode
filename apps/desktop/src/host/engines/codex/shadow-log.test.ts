@@ -3,7 +3,7 @@ import { SqlitePersistenceAdapter } from "@anycode/core";
 import { SqliteCodexShadowLog } from "./shadow-log.js";
 
 describe("SqliteCodexShadowLog", () => {
-  it("round-trips a recorded item through the persistence adapter, stripping itemId from the projection shape", async () => {
+  it("round-trips a recorded item through the persistence adapter, retaining itemId for native/shadow deduplication", async () => {
     const persistence = new SqlitePersistenceAdapter(":memory:");
     const log = new SqliteCodexShadowLog(persistence);
 
@@ -13,8 +13,8 @@ describe("SqliteCodexShadowLog", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const items = await log.list("thread-1");
-    expect(items).toEqual([{ turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo hi", cwd: "/repo", exitCode: 0, outputHead: "hi\n" }]);
-    expect(items[0]).not.toHaveProperty("itemId");
+    expect(items).toEqual([{ itemId: "exec-1", turnOrdinal: 0, positionInTurn: 0, seqInTurn: 0, command: "echo hi", cwd: "/repo", exitCode: 0, outputHead: "hi\n" }]);
+    expect(items[0]).toHaveProperty("itemId", "exec-1");
   });
 
   it("list() returns an empty array for a thread with no recorded items", async () => {

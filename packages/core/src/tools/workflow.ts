@@ -29,6 +29,7 @@ import {
   reduceWorkflowCardEvent,
   type WorkflowCardEvent,
 } from "../workflow/card-snapshot.js";
+import { buildFailureSummary, stepFailure } from "../workflow/step-failure.js";
 
 const metadata: ToolMetadata = {
   name: "Workflow",
@@ -101,26 +102,38 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
       },
     );
 
-    // Terminal snapshot, or null when the run never actually started (unknown
-    // name / pre-aborted / unknown agentType all fail before the engine's
-    // first onProgress call — the card is never fabricated from nothing).
+    // Terminal snapshot, or null when the run never actually started (an
+    // unknown name / a pre-aborted signal fail before the engine's first
+    // onProgress call — the card is never fabricated from nothing). A
+    // fail-fast unknown-agentType pre-check DOES stream start/step_end/end
+    // now (TASK.193, workflow/engine.ts), each error terminal carrying
+    // `unlaunched: true`, so its card is produced like any other run.
     const snapshot = finalizeWorkflowCard(acc, { status: outcome.status, durationMs: outcome.durationMs });
     const presentation: { presentation?: ToolResultPresentation } =
       snapshot !== null ? { presentation: { workflow: snapshot } } : {};
 
-    // Project the outcome onto the tool payload (drop per-step finalText/truncated).
+    // Project the outcome onto the tool payload. A SUCCESSFUL step's finalText
+    // stays dropped (what the model sees of a step that worked is the
+    // definition author's call — outputTemplate / the sink join). A FAILED
+    // step's reason is carried instead of discarded (TASK.193): nothing else
+    // delivers it, and without it the owner debugs every failure by guessing.
     const output: WorkflowOutput = {
       status: outcome.status,
       output: outcome.output,
       truncated: outcome.truncated,
-      steps: outcome.steps.map((step) => ({
-        stepId: step.stepId,
-        agentType: step.agentType,
-        status: step.status,
-        turns: step.turns,
-        toolCalls: step.toolCalls,
-        durationMs: step.durationMs,
-      })),
+      steps: outcome.steps.map((step) => {
+        const failure = stepFailure(step);
+        return {
+          stepId: step.stepId,
+          agentType: step.agentType,
+          status: step.status,
+          turns: step.turns,
+          toolCalls: step.toolCalls,
+          durationMs: step.durationMs,
+          ...(failure !== null ? { failure } : {}),
+          ...(step.unlaunched === true ? { unlaunched: true as const } : {}),
+        };
+      }),
       durationMs: outcome.durationMs,
     };
 
@@ -136,9 +149,12 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
         ...presentation,
       };
     }
-    // failed: one-line summary naming the failed + skipped steps (the rendered
-    // output — possibly partial — is added by formatResultForModel).
-    return { ok: false, error: summarizeFailure(input.name, output), output, ...presentation };
+    // failed: the one-line summary naming the failed + skipped steps, followed
+    // by one labelled reason block per failed step, the whole string within
+    // WORKFLOW_FAILURE_SUMMARY_MAX_BYTES (the rendered output — possibly
+    // partial — is appended by formatResultForModel and keeps the rest of the
+    // dispatcher's budget).
+    return { ok: false, error: buildFailureSummary(input.name, output.steps), output, ...presentation };
   },
   formatResultForModel: (result) => {
     const output = result.output;
@@ -156,22 +172,6 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
       : body;
   },
 };
-
-/** One-line failure summary: the workflow name + its failed and skipped step ids. */
-function summarizeFailure(name: string, output: WorkflowOutput): string {
-  const failed = output.steps
-    .filter((step) => step.status !== "completed" && step.status !== "skipped")
-    .map((step) => step.stepId);
-  const skipped = output.steps.filter((step) => step.status === "skipped").map((step) => step.stepId);
-  const parts = [`Workflow "${name}" failed.`];
-  if (failed.length > 0) {
-    parts.push(`Failed: ${failed.join(", ")}.`);
-  }
-  if (skipped.length > 0) {
-    parts.push(`Skipped: ${skipped.join(", ")}.`);
-  }
-  return parts.join(" ");
-}
 
 /**
  * Projects a coarse WorkflowProgress onto the matching workflow_* AgentEvent,
@@ -237,7 +237,12 @@ function mapProgressToEvent(progress: WorkflowProgress, toolCallId: string): Too
         status: progress.status,
         turns: progress.turns,
         durationMs: progress.durationMs,
+        // Copied EXPLICITLY (TASK.193): same discipline as the usage bridge
+        // above — a field added to WorkflowProgress's step_end and not named
+        // here type-checks green and arrives nowhere.
         ...(progress.usage !== undefined ? { usage: progress.usage } : {}),
+        ...(progress.failure !== undefined ? { failure: progress.failure } : {}),
+        ...(progress.unlaunched === true ? { unlaunched: true as const } : {}),
       };
     case "end":
       return {

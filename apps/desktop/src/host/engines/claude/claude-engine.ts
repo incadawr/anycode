@@ -26,7 +26,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { AgentEvent, HistoryItem, ImageAttachment, PermissionMode, ReasoningEffort } from "@anycode/core";
+import type { AgentEvent, HistoryItem, ImageAttachment, PermissionMode, ReasoningEffort, ToolResultPresentation } from "@anycode/core";
 import { CLAUDE_POST_INTERRUPT_SETTLE_MS } from "../../../shared/claude-timeouts.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { EngineBootstrap } from "../bootstrap.js";
@@ -35,6 +35,7 @@ import type { IpcPermissionBroker } from "../../permission-broker.js";
 import { ClaudeApprovalBridge } from "./approval-bridge.js";
 import { ClaudeClient, type ClaudeClientOptions } from "./claude-client.js";
 import { ClaudeTurnTranslator } from "./event-translator.js";
+import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
 import {
   permissionModeToFlag,
@@ -285,6 +286,27 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
   broker: IpcPermissionBroker;
   selection?: ClaudeSessionSelection;
   timeouts?: Partial<ClaudeEngineTimeouts>;
+  /**
+   * TASK.226 срез S4: the MCP agent-bridge door for this tab, built and
+   * routed BEFORE `initialize()` is ever sent (probes.md P0 — the CLI drives
+   * its OWN mcp handshake INSIDE our outbound `initialize`, before it answers
+   * ours). Absent for a claude CHILD boot and for a tab whose profile catalog
+   * came back empty (the door is never announced at all — plan §5 S4 p.7's
+   * switch); `connectClaudeEngine` below reproduces the pre-TASK.226
+   * `initialize()` body byte-for-byte in both cases.
+   */
+  mcpBridge?: ClaudeMcpBridge;
+  /**
+   * TASK.226 срез S4: looks up (and consumes) the durable subagent-card
+   * snapshot for one `mcp__anycode__agent` tool_use id — stamped by the
+   * bridge's `callTool` handler (host/index.ts) onto its own
+   * `AgentBridgeCallResult.presentation` once the child session settles. The
+   * MCP `tools/call` response itself carries only `{text, isError}` (no room
+   * for a card payload — §3.1), so this is the ONLY channel the durable
+   * snapshot can ride to the renderer; `event-translator.ts`'s `onUser`
+   * reads it when it builds the paired top-level `tool_result`'s outcome.
+   */
+  takePresentation?(toolUseId: string): ToolResultPresentation | undefined;
 }
 
 /**
@@ -308,9 +330,18 @@ async function connectClaudeEngine(
   const requestedEffort = resolveEffort(options.selection, notices);
   const sessionRef = "sessionId" in spawn ? spawn.sessionId : spawn.resume;
   let engine: ClaudeEngine | null = null;
+  // TASK.226 срез S4 (probes.md P0's ordering correction): the bridge is
+  // handed to `ClaudeApprovalBridge` HERE, before `ClaudeClient` is even
+  // constructed — the CLI's own MCP handshake (`initialize` ->
+  // `notifications/initialized` -> `tools/list`, each wrapped as a
+  // `mcp_message` control_request) arrives INSIDE the outbound `initialize`
+  // call below, before it answers ours, so a bridge attached any later would
+  // silently miss it (approval-bridge.ts's `route` would fail-close every
+  // `mcp_message` with "AnyCode does not handle" instead of routing it).
   const approvals = new ClaudeApprovalBridge({
     broker: options.broker,
     activePresetId: () => engine?.activePresetId ?? preset.id,
+    ...(options.mcpBridge !== undefined ? { bridge: options.mcpBridge } : {}),
   });
   // The catalog is not known until after the handshake, so a draft model cannot
   // ride the spawn argv. It is applied right after `initialize` via `set_model`
@@ -340,7 +371,13 @@ async function connectClaudeEngine(
   });
   try {
     await client.start();
-    const initialized = await client.initialize();
+    // `announceOn` (TASK.226 S4) is the ONLY source of `sdkMcpServers` on the
+    // wire; a tab with no bridge (child boot, or an empty profile catalog —
+    // see `mcpBridge`'s own doc above) calls `initialize(undefined)`, the
+    // exact pre-TASK.226 empty body (claude-client.ts's own `initialize`
+    // doc: "an omitted `extra` reproduces the pre-TASK.226 empty body
+    // byte-for-byte").
+    const initialized = await client.initialize(options.mcpBridge?.announceOn());
     if (!isClaudeSignedIn(initialized.account)) {
       throw new Error(CLAUDE_NOT_SIGNED_IN);
     }
@@ -377,7 +414,7 @@ async function connectClaudeEngine(
     const effortsByModel = new Map<string, string>();
     if (effort !== undefined) effortsByModel.set(model, effort);
     const settings: ClaudeEngineSettings = { catalog, model, preset, effortsByModel, notices, ...(effort !== undefined ? { effort } : {}) };
-    engine = new ClaudeEngine(client, sessionRef, approvals, settings, options.timeouts);
+    engine = new ClaudeEngine(client, sessionRef, approvals, settings, options.timeouts, options.takePresentation);
     // $0 quota snapshot, seeded before the first turn so a user already at
     // their limit learns it from the first reply rather than a failed turn.
     await engine.refreshQuota();
@@ -469,6 +506,8 @@ export class ClaudeEngine implements SessionEngine {
     private readonly approvals?: ClaudeApprovalBridge,
     private readonly settings?: ClaudeEngineSettings,
     overrides?: Partial<ClaudeEngineTimeouts>,
+    /** TASK.226 срез S4 — see `ClaudeEngineCreateOptions.takePresentation`'s own doc. */
+    private readonly takePresentation?: (toolUseId: string) => ToolResultPresentation | undefined,
   ) {
     // Interactive approval is advertised only once the real bridge is installed
     // (the codex CODEX_BRIDGED_CAPABILITIES precedent); a bare test engine keeps
@@ -659,6 +698,7 @@ export class ClaudeEngine implements SessionEngine {
       turn,
       onInit: (init) => this.onSystemInit(init),
       onResult: (result) => this.onResult(result),
+      ...(this.takePresentation !== undefined ? { takePresentation: this.takePresentation } : {}),
     });
     this.interruptSent = false;
     this.turnActive = true;

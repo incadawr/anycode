@@ -151,3 +151,10 @@ describe("handleCreateTabResult", () => {
     });
   });
 });
+
+it("distinguishes a missing model, credential and unsupported transport", () => {
+  expect(describeCreateTabFailure({ ok: false, reason: "not_ready", notReadyReason: "model_missing" }, "core")).toContain("API key is already configured");
+  expect(describeCreateTabFailure({ ok: false, reason: "not_ready", notReadyReason: "credential_missing" }, "core")).toContain("Add an API key");
+  expect(describeCreateTabFailure({ ok: false, reason: "not_ready", notReadyReason: "transport_unsupported" }, "core")).toContain("transport");
+  expect(describeCreateTabFailure({ ok: false, reason: "not_ready" }, "claude")).toContain("Settings → Claude");
+});

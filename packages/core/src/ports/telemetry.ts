@@ -61,6 +61,21 @@ export type TelemetryEventRecord =
       responseModel?: string;
     }
   | { t: "workflow_end"; status: "completed" | "failed" | "cancelled"; completedSteps: number; totalSteps: number; durationMs: number }
+  /**
+   * TASK.193 slice S4: a workflow step's terminal FACT — status/turns/
+   * duration, and whether the step's terminal was reached without the engine
+   * ever calling subagents.run (`unlaunched`). No `stepId` and no `failure`:
+   * this port carries no free-form text by construction (module doc above),
+   * and a step's failure reason is text (workflow/step-failure.ts's
+   * StepFailure) — its durability is `history_items` (F6), not telemetry.
+   */
+  | {
+      t: "workflow_step_end";
+      status: "completed" | "max_turns" | "cancelled" | "error" | "skipped";
+      turns: number;
+      durationMs: number;
+      unlaunched?: true;
+    }
   | { t: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number }
   /**
    * TASK.210: the degenerate-generation guard cut a turn. `channel` names

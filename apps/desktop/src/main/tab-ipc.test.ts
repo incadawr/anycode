@@ -2008,3 +2008,14 @@ describe("tabRebindRequestSchema — bounds only (§D6)", () => {
     ).toBe(false);
   });
 });
+
+it("reports a missing model without blaming the configured key or prompting for a folder", async () => {
+  const rig = makeManager({ canSpawn: false });
+  const { dialog, showOpenDialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+  const result = await handleCreate({ manager: rig.manager, persistence: persistenceStub, dialog,
+    providerReadiness: async () => ({ apiKeyReady: true, modelReady: false, transportReady: true }),
+  }, { kind: "new" });
+  expect(result).toEqual({ ok: false, reason: "not_ready", notReadyReason: "model_missing" });
+  expect(showOpenDialog).not.toHaveBeenCalled();
+  expect(rig.createTab).not.toHaveBeenCalled();
+});

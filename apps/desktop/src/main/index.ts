@@ -1,3 +1,5 @@
+import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs } from "./self-check.js";
+import { assertChildModel } from "../shared/child-model.js";
 /**
 
  * thin process: no agent logic. It owns the window, workspace/env resolution,
@@ -21,6 +23,7 @@
  *  - Tab control plane: registerTabIpc (main/tab-ipc.ts) wires create/close/list.
  */
 import { randomUUID } from "node:crypto";
+import { CODEX_LOGIN_PROGRESS_CHANNEL } from "../shared/codex-login.js";
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -69,6 +72,7 @@ import {
   applySubagentsHomeOverride,
   buildHostEnv,
   computeProviderReady,
+  computeProviderReadiness,
   connectionSecretKey,
   customKindDefaultTransport,
   customProviderIds,
@@ -370,7 +374,15 @@ function resolveCodexProfilesHome(env: NodeJS.ProcessEnv, isPackaged: boolean): 
  * can never disagree. `undefined` (production / gate-refused / var-absent)
  * leaves every consumer on its real `homedir()` default.
  */
-const codexProfilesHome: string | undefined = resolveCodexProfilesHome(process.env, app.isPackaged) ?? undefined;
+const selfCheckProfile = createSelfCheckProfile(process.argv);
+if (selfCheckProfile !== undefined) {
+  const isolatedEnv = selfCheckEnvironment(process.env, selfCheckProfile);
+  for (const key of Object.keys(process.env)) if (!(key in isolatedEnv)) delete process.env[key];
+  Object.assign(process.env, isolatedEnv);
+  app.setPath("userData", join(selfCheckProfile, "user-data"));
+}
+
+const codexProfilesHome: string | undefined = selfCheckProfile ?? resolveCodexProfilesHome(process.env, app.isPackaged) ?? undefined;
 
 // Dev-only automation profile isolation (design/slice-P7.H-cut.md §4.2): must
 // run at module top level, BEFORE `app.whenReady()` registration below —
@@ -1083,7 +1095,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
     // provider ladder above already resolves through — no second catalog dep.
     recognizerCatalogFor: resolveCatalog,
   });
-  applySubagentsHomeOverride(env, resolveSubagentsHome(bootEnv, app.isPackaged));
+  applySubagentsHomeOverride(env, (selfCheckProfile ?? resolveSubagentsHome(bootEnv, app.isPackaged)));
   // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
   // ambient var can never ride the bootEnv spread into a host fork ungated.
   // Consumes the module-scope `codexProfilesHome` const (W4-F0d single eager
@@ -1092,6 +1104,14 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   // against (refreshProviderState racing a whenReady-time assignment) no
   // longer exists by construction.
   applyCodexProfilesHomeOverride(env, codexProfilesHome ?? null);
+  env.ANYCODE_DIAGNOSTICS_DIR = join(app.getPath("userData"), "diagnostics");
+  const connection = activeConnection(current);
+  const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
+  const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
+  env.ANYCODE_CHILD_MODELS = JSON.stringify([
+    ...(connection?.models ?? []), ...(custom?.models ?? []), ...(catalog?.models.map(model => model.id) ?? []),
+    ...(env.ANYCODE_MODEL ? [env.ANYCODE_MODEL] : []),
+  ]);
   return env;
 }
 
@@ -1467,15 +1487,15 @@ void app.whenReady().then(async () => {
   // mirrors the userData override above — double-gated
   // (`ANYCODE_AUTOMATION==="1" && !isPackaged`), fail-closed, off by default,
   // so a normal launch resolves the exact same ~/.anycode paths as before.
-  const settingsPath = resolveSettingsPathOverride(process.env, app.isPackaged) ?? defaultSettingsPath();
-  const secretsPath = resolveSecretsPathOverride(process.env, app.isPackaged) ?? defaultSecretsPath();
+  const settingsPath = selfCheckProfile !== undefined ? join(selfCheckProfile, "settings.json") : resolveSettingsPathOverride(process.env, app.isPackaged) ?? defaultSettingsPath();
+  const secretsPath = selfCheckProfile !== undefined ? join(selfCheckProfile, "secrets.json") : resolveSecretsPathOverride(process.env, app.isPackaged) ?? defaultSecretsPath();
   // Propagate the already-vetted settings path into the boot-env snapshot so
   // every host fork below (buildHostEnv spreads `bootEnv`) sees the identical
   // path `seedAlwaysAllowRules` should read — never a raw, ungated env value.
   bootEnv[ENV_SETTINGS_PATH] = settingsPath;
   const loaded = await loadSettings(settingsPath, fileLogger);
   settings = loaded.settings;
-  vault = new Vault({ safeStorage, secretsPath, logger: fileLogger });
+  vault = new Vault({ safeStorage: selfCheckProfile === undefined ? safeStorage : selfCheckStorage, secretsPath, logger: fileLogger });
   // Boot-time scrub of stale v1 provider secrets (TASK.45 W9 §2): W9′ keys every
   // credential by connection, so a leftover legacy `provider.apiKey` /
   // `provider.<id>.{apiKey,oauth}` would lie to readiness/status projections.
@@ -1512,7 +1532,7 @@ void app.whenReady().then(async () => {
   // never on a host respawn.
   const artifactConsentStore = new ArtifactConsentStore();
   const artifactsIpcDeps: ArtifactsIpcDeps = {
-    home: () => resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
+    home: () => (selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged)) ?? homedir(),
     tmpdir: () => tmpdir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
     fs: new NodeArtifactsFs(),
@@ -1701,6 +1721,17 @@ void app.whenReady().then(async () => {
     // to the pure policy in shared/settings.ts. This dep was previously
     // ABSENT here, so every explicit cross-connection child spawn was
     // rejected with `not_ready` in the built app regardless of policy.
+    validateChildModel: (model, connectionId) => {
+      const current = currentSettings();
+      const connection = connectionId === undefined ? activeConnection(current) : connectionById(current, connectionId);
+      const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
+      const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
+      assertChildModel(model, [
+        ...(connection?.models ?? []), ...(custom?.models ?? []), ...(catalog?.models.map(model => model.id) ?? []),
+        ...(connection?.model ? [connection.model] : []),
+        ...(connection?.id === current.provider.activeConnectionId && bootEnv.ANYCODE_MODEL ? [bootEnv.ANYCODE_MODEL] : []),
+      ]);
+    },
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
     providerReady: () => providerReady,
@@ -1843,6 +1874,19 @@ void app.whenReady().then(async () => {
     manager,
     persistence,
     dialog,
+    providerReadiness: async (connectionId) => {
+      const current = currentSettings();
+      const target = connectionId && connectionById(current, connectionId)
+        ? settingsPinnedTo(current, connectionId) : current;
+      const transport = selectedTransportInfo(target);
+      return computeProviderReadiness({
+        bootEnv, settings: target, getSecret,
+        credentialKey: activeCredential(target).credentialKey,
+        authOptional: transport.authOptional,
+        resolvedTransport: transport.resolvedTransport,
+        supportedTransports: transport.supportedTransports,
+      });
+    },
     // TASK.45 W10: a NEW core session pins to the active connection; a RESUMED
     // one re-pins to its stored connection (or refuses `connection_missing`).
     activeConnectionId: () => settings?.provider.activeConnectionId,
@@ -2127,6 +2171,8 @@ void app.whenReady().then(async () => {
   // automation never reaches here (module-top boot refusal).
   codexOnboarding = registerCodexIpc({
     bootEnv,
+    ...(selfCheckProfile !== undefined ? { fs: selfCheckBinaryFs } : {}),
+    onDeviceCode: (progress) => sendToMainWindow(win, CODEX_LOGIN_PROGRESS_CHANNEL, progress),
     // TASK.139: the doctor and `codex login` are children main spawns itself, so
     // they get the engine proxy through the same carrier the tab children use.
     engineProxyUrl: codexEngineProxyUrl,
@@ -2194,6 +2240,7 @@ void app.whenReady().then(async () => {
   // scope for this track (profile CRUD, quotas, install/manifest — CC-E).
   claudeOnboarding = registerClaudeIpc({
     bootEnv,
+    ...(selfCheckProfile !== undefined ? { fs: selfCheckBinaryFs } : {}),
     // TASK.139: mirror of the codex dep above. The claude doctor makes no network
     // call of its own, so this buys parity rather than function — but the doctor
     // env builder declares itself a mirror of the session child's builder, and
@@ -2263,7 +2310,7 @@ void app.whenReady().then(async () => {
   // `codexProfilesHome` (W4-F0 lever, undefined in production) rides into the
   // root derivation — codexProfilesRoot's own homedir() default applies when
   // the lever is refused/absent.
-  void refreshCodexManifest({ cacheFile: join(codexProfilesRoot(codexProfilesHome), "manifest.json") })
+  if (selfCheckProfile === undefined) void refreshCodexManifest({ cacheFile: join(codexProfilesRoot(codexProfilesHome), "manifest.json") })
     .then((result) => {
       // BM4: only an ACTUAL policy change re-spawns the doctor — an
       // identical manifest (the common case: cache hit, no-op refresh)
@@ -2317,7 +2364,7 @@ void app.whenReady().then(async () => {
   // packaged production build), else the real homedir; `workspaceForTab` reads
 
   registerMcpConfigIpc({
-    home: () => resolveMcpImportHome(process.env, app.isPackaged) ?? homedir(),
+    home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
     fs: new NodeMcpConfigFs(),
   });
@@ -2332,7 +2379,7 @@ void app.whenReady().then(async () => {
   // handlers need, so `main/skills-ipc.ts` itself stays Electron-free and unit-
   // testable off a plain deps bag.
   registerSkillsIpc({
-    home: () => resolveSkillsImportHome(process.env, app.isPackaged) ?? homedir(),
+    home: () => (selfCheckProfile ?? resolveSkillsImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
     fs: new NodeSkillsFs(),
     reveal: (path) => shell.showItemInFolder(path),
@@ -2348,7 +2395,7 @@ void app.whenReady().then(async () => {
   // need, so `main/subagents-ipc.ts` itself stays Electron-free and unit-
   // testable off a plain deps bag.
   registerSubagentsIpc({
-    home: () => resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
+    home: () => (selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
     fs: new NodeSubagentsFs(),
     reveal: (path) => shell.showItemInFolder(path),
@@ -2377,13 +2424,28 @@ void app.whenReady().then(async () => {
   // `main/profile-ipc.ts` itself stays Electron-free and unit-testable off a
   // plain deps bag.
   registerProfileIpc({
-    home: () => resolveProfileHome(process.env, app.isPackaged) ?? homedir(),
+    home: () => (selfCheckProfile ?? resolveProfileHome(process.env, app.isPackaged)) ?? homedir(),
     fs: new NodeProfileFs(),
     reveal: (path) => shell.showItemInFolder(path),
     env: process.env,
   });
 
   createWindow();
+  if (selfCheckProfile !== undefined) {
+    win!.webContents.on("did-fail-load", (_event, code) => console.error(`[self-check] renderer load failed (${code})`));
+    win!.webContents.on("render-process-gone", (_event, details) => console.error(`[self-check] renderer exited (${details.reason})`));
+    try {
+      await runSelfCheck(win!, selfCheckProfile);
+      console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape"] })}`);
+      await shutdownEverything();
+      app.exit(0);
+    } catch (error) {
+      console.error(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: false, packaged: app.isPackaged, profile: selfCheckProfile, error: error instanceof Error ? error.message : "Self-check failed" })}`);
+      await shutdownEverything();
+      app.exit(1);
+    }
+    return;
+  }
 
   // Auto-updater (design/slice-2.6-cut.md §6; TASK.47 W15 adds the auto-check
   // schedule + darwin honest-manual-path): additive register — gated

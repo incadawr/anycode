@@ -33,6 +33,7 @@ import {
 } from "./codex-binary.js";
 import { runCodexDoctor, type RunCodexDoctorOptions } from "./codex-doctor.js";
 import { runCodexLogin, type CodexLoginOutcome, type RunCodexLoginOptions } from "./codex-login.js";
+import { type CodexLoginMode, type CodexDeviceCodeProgress } from "../shared/codex-login.js";
 import {
   SYSTEM_CODEX_PROFILE,
   SYSTEM_PROFILE_ID,
@@ -94,6 +95,7 @@ export interface DialogLike {
 }
 
 export interface CodexIpcDeps {
+  onDeviceCode?: (progress: CodexDeviceCodeProgress) => void;
   /** Immutable boot-env snapshot (main/index.ts's `bootEnv`) — read for `ANYCODE_CODEX_BIN`/`PATH`/`HOME`/`APPDATA`, and passed through as the doctor/login child's SOURCE env (buildDoctorChildEnv still allowlists it). */
   bootEnv: NodeJS.ProcessEnv;
   /**
@@ -179,7 +181,7 @@ export interface CodexOnboardingController {
   ensureChecked(profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
   /** Runs the native login INTO a profile's home (TASK.50 п.2); an authLink profile refuses `unsupported` (amended §A1). */
-  loginStart(profileId?: string): Promise<CodexLoginStartResult>;
+  loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
   loginCancel(): void;
   // ── profile control plane (TASK.50) ──
   listProfiles(): Promise<CodexProfilesSnapshot>;
@@ -701,7 +703,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       return { ok: true, snapshot };
     },
 
-    async loginStart(profileId?: string): Promise<CodexLoginStartResult> {
+    async loginStart(profileId?: string, mode: CodexLoginMode = "browser"): Promise<CodexLoginStartResult> {
       if (shuttingDown || inFlightByKey.size > 0 || activeLoginAbort !== null) {
         return { ok: false, reason: "busy" };
       }
@@ -763,6 +765,8 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         // `shutdown()` is awaiting can settle.
         const outcome = await track(
           runLogin(binaryPath, {
+            mode,
+            onDeviceCode: (code) => deps.onDeviceCode?.({ profileId: profile.id, ...code }),
             openExternal: deps.openExternal,
             signal: controller.signal,
             env: doctorSourceEnv(),
@@ -914,7 +918,11 @@ export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController 
   const controller = createCodexOnboardingController(deps);
   ipcMain.handle(CODEX_RECHECK_CHANNEL, (_event, args?: unknown) => controller.recheck(profileIdArg(args), { force: forceArg(args) }));
   ipcMain.handle(CODEX_PICK_BINARY_CHANNEL, () => controller.pickBinary());
-  ipcMain.handle(CODEX_LOGIN_START_CHANNEL, (_event, args?: unknown) => controller.loginStart(profileIdArg(args)));
+  ipcMain.handle(CODEX_LOGIN_START_CHANNEL, (_event, args?: unknown) => {
+    const mode = (args as { mode?: unknown } | undefined)?.mode;
+    if (mode !== undefined && mode !== "browser" && mode !== "device") return { ok: false, reason: "failed" };
+    return controller.loginStart(profileIdArg(args), mode);
+  });
   ipcMain.handle(CODEX_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());
   ipcMain.handle(CODEX_PROFILE_LIST_CHANNEL, () => controller.listProfiles());
   ipcMain.handle(CODEX_PROFILE_CREATE_CHANNEL, (_event, request: unknown) => {

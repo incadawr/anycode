@@ -1,3 +1,4 @@
+import { contextualizeNetworkFailure } from "./network-failure.js";
 /**
  * ModelPort adapter over the AI SDK. Per call:
  *  - builds the LanguageModel via createLanguageModel(config), which picks the
@@ -614,6 +615,9 @@ export class AiSdkModelPort implements ModelPort {
           stopWhen: stepCountIs(1),
           // Retries are this adapter's responsibility (Phase 1); none in Phase 0.
           maxRetries: 0,
+          // The SDK default prints raw response/body/headers to console. The
+          // fullStream error already reaches our safe classifier and journal.
+          onError: () => {},
           abortSignal: attemptController.signal,
           // Raw provider chunks are the only trustworthy source of the
           // response-side model claim, and only the anthropic-messages
@@ -656,10 +660,11 @@ export class AiSdkModelPort implements ModelPort {
             this.#lastResponseModel = rawResponseModel;
           }
 
-          const event = translateStreamPart(outcome.value);
+          let event = translateStreamPart(outcome.value);
           if (event === null) {
             continue;
           }
+          if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(event.error, this.config.baseUrl) };
           // Drop provider chunk-parse artifacts that are safe to ignore (a
           // server tool block from a foreign backend, e.g. z.ai `webReader`
           // result, that isn't in the SDK's closed chunk union): the stream
@@ -729,7 +734,8 @@ export class AiSdkModelPort implements ModelPort {
           }
           yield event;
         }
-      } catch (error) {
+      } catch (rawError) {
+        const error = contextualizeNetworkFailure(rawError, this.config.baseUrl);
         // TASK.168: mirror of the error-part branch above, for a failure that
         // surfaced as a THROWN exception (e.g. a synchronous validation
         // error, or a rejection from `fullStream` iteration before any part

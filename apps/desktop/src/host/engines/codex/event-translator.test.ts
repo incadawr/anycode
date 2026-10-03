@@ -669,3 +669,11 @@ describe("TurnTranslator — turn/plan/updated against a live capture", () => {
     expect(settled.map((event) => event.outcome.status)).toEqual(["success", "success"]);
   });
 });
+
+it.each(["failed", "unexpected-status"])("terminal %s without turn.error still emits one error", (status) => {
+  const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+  const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status, error: null } } });
+  expect(events.filter(event => event.type === "error")).toHaveLength(1);
+  expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+  expect(translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status } } })).toEqual([]);
+});

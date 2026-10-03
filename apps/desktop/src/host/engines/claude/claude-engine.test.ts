@@ -277,6 +277,59 @@ describe("ClaudeEngine.runTurn — projection of a real W0 turn", () => {
   });
 });
 
+describe("ClaudeEngine — TASK.226 срез S4: takePresentation reaches the turn's translator", () => {
+  it("a tool_result for the bridge's own tool_use id carries the stamped presentation snapshot", async () => {
+    const snapshot = { subagent: "opaque" } as never;
+    const transport = new FakeTransport({
+      frames: [
+        {
+          type: "assistant",
+          message: { id: "m-bridge", model: "x", content: [{ type: "tool_use", id: "toolu_bridge", name: "mcp__anycode__agent", input: {} }] },
+        } as unknown as ClaudeStreamMessage,
+        {
+          type: "user",
+          uuid: "u-bridge",
+          message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bridge", content: "done" }] },
+        } as unknown as ClaudeStreamMessage,
+        { type: "result", subtype: "success", terminal_reason: "completed" } as unknown as ClaudeStreamMessage,
+      ],
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    const engine = new ClaudeEngine(
+      transport,
+      "session-ref-1",
+      undefined,
+      { catalog: liveCatalog(), model: "default", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [] },
+      undefined,
+      (id) => (id === "toolu_bridge" ? snapshot : undefined),
+    );
+    const events = await collect(engine.runTurn("delegate", { signal: new AbortController().signal }));
+    const toolResult = events.find((event) => event.type === "tool_result") as Extract<AgentEvent, { type: "tool_result" }>;
+    expect(toolResult.outcome.result?.presentation).toBe(snapshot);
+  });
+
+  it("a turn with no takePresentation callback at all leaves result.presentation absent (byte-identical to pre-srez)", async () => {
+    const transport = new FakeTransport({
+      frames: [
+        {
+          type: "assistant",
+          message: { id: "m-bridge", model: "x", content: [{ type: "tool_use", id: "toolu_bridge", name: "mcp__anycode__agent", input: {} }] },
+        } as unknown as ClaudeStreamMessage,
+        {
+          type: "user",
+          uuid: "u-bridge",
+          message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bridge", content: "done" }] },
+        } as unknown as ClaudeStreamMessage,
+        { type: "result", subtype: "success", terminal_reason: "completed" } as unknown as ClaudeStreamMessage,
+      ],
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    const events = await collect(engineWith(transport).runTurn("delegate", { signal: new AbortController().signal }));
+    const toolResult = events.find((event) => event.type === "tool_result") as Extract<AgentEvent, { type: "tool_result" }>;
+    expect(toolResult.outcome.result?.presentation).toBeUndefined();
+  });
+});
+
 describe("ClaudeEngine — the context meter is get_context_usage, never a result.usage sum (codex C-bug-1)", () => {
   /**
    * The discriminator. The fixture's terminal `result` carries its OWN usage

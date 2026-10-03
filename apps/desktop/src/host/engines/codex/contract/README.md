@@ -36,10 +36,10 @@ protocol AnyCode's Codex adapter is built against (design
 
 ## Supported version ceiling
 
-`<0.155.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`<0.161.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). TASK.173 (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
-closed range, so any codex-cli build below 0.155.0 is accepted by version
+closed range, so any codex-cli build below 0.161.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
 wire shapes fails on its own later, at whichever call first needs a shape it
 lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
@@ -93,6 +93,23 @@ Codex app-server resolves its model list from
 picker's contents are gated by the binary's own version. Measured live on one
 account (2026-09-11): 0.144.3 and 0.152.1 offer sol/terra/luna/5.5; 0.153.4
 and 0.154.0 additionally offer `gpt-6-astra`.
+
+## 0.160.0 verification (2026-10-03)
+
+The real 0.160.0 binary passes layer 2 and the live GUI smoke **10/10**:
+requests, two Allow decisions, Deny verified by disk effects, Stop,
+quit/relaunch, exact transcript order on resume, and zero orphan processes.
+It is now the recommended installer version. Versions 0.155–0.159 were not
+individually live-smoked.
+
+Image input retains `{type:"image", url:"data:..."}`; `url` moved into a
+flattened `anyOf` alternative alongside `fileId`. The reviewed-removal entry
+is paired with an explicit assertion that the URL alternative still exists.
+New Codex persists successful `commandExecution` items in `thread/read`.
+Resume therefore retains shadow item IDs, prefers matching native commands,
+and anchors shadow-only denied commands in the original native-visible
+coordinate space. A live failure exposed this change before the fix; the
+subsequent smoke passed without weakening the transcript-order check.
 
 ## Raising the ceiling / updating the pin
 

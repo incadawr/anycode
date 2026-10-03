@@ -48,3 +48,24 @@ export { summarizeChildToolCall } from "./summarize-tool.js";
 // root barrel, same discipline as summarizeChildToolCall above.
 export { SubagentStallClock } from "./stall-clock.js";
 export type { SubagentStallReport, SubagentStallClockOptions } from "./stall-clock.js";
+// TASK.226 срез S1: the MCP agent-bridge's shared logic (request builder,
+// catalog->tool-declaration projection, outcome->text projection) — re-
+// exported so the desktop host's claude-engine glue (срез S3+) reaches it
+// through the root barrel like every other core surface, never a subpath.
+export {
+  buildAgentBridgeToolDecl,
+  buildSessionSubagentRequest,
+  decodeAgentBridgeCallInput,
+  formatResultForModel,
+  mapProgressToEvent,
+  outcomeToResult,
+  runAgentBridgeCall,
+} from "./agent-bridge.js";
+export type {
+  AgentBridgeCallDeps,
+  AgentBridgeCallInput,
+  AgentBridgeCallResult,
+  AgentBridgeCatalogEntry,
+  AgentBridgeToolDecl,
+  BuildSessionSubagentRequestParams,
+} from "./agent-bridge.js";

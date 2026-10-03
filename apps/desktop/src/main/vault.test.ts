@@ -10,7 +10,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSecrets, saveSecrets } from "../settings/files.js";
 import { Vault, type SafeStorageLike } from "./vault.js";
 
@@ -202,7 +202,7 @@ describe("Vault.statuses — SecretStatus projection (custody I1)", () => {
   it("set:false source:none when nothing is stored", async () => {
     const v = makeVault(new FakeSafeStorage({ available: true }), "darwin");
     const [status] = await v.statuses({});
-    expect(status).toEqual({ key: "provider.apiKey", set: false, source: "none", tier: "os_encrypted" });
+    expect(status).toEqual({ key: "provider.apiKey", set: false, source: "none", tier: "not_checked" });
   });
 
   it("set:true but source:none when an entry exists but cannot decrypt", async () => {
@@ -449,4 +449,16 @@ describe("Vault persistence format", () => {
     expect(file.version).toBe(1);
     expect(file.entries["provider.apiKey"]?.cipher).toBe("safeStorage");
   });
+});
+
+
+it("does not touch the OS keychain to display an empty first-run profile", async () => {
+  const storage = new FakeSafeStorage({ available: true });
+  const isEncryptionAvailable = vi.spyOn(storage, "isEncryptionAvailable");
+  const vault = makeVault(storage, "darwin");
+  expect((await vault.statuses({}))[0]?.tier).toBe("not_checked");
+  expect(isEncryptionAvailable).not.toHaveBeenCalled();
+  await vault.setSecret("provider.apiKey", "sk-test", { allowWeak: false });
+  expect(isEncryptionAvailable).toHaveBeenCalled();
+  expect((await vault.statuses({}))[0]?.tier).toBe("os_encrypted");
 });

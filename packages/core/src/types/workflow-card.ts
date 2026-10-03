@@ -45,6 +45,15 @@ export interface WorkflowCardStepResult {
   durationMs: number;
   /** The step's FINAL spend (workflow_step_end's own usage). Absent = the tier reported none, not zero. */
   usage?: WorkflowCardTokenUsage;
+  /**
+   * TASK.193: present only for a step that did not complete — the step's
+   * reason (an error message, or a partial output the child never finished).
+   * Duplicate of `workflow/step-failure.ts`'s `StepFailure` for the same
+   * import-cycle reason this file's header explains for `WorkflowCardTokenUsage`.
+   */
+  failure?: { kind: "error" | "degenerate" | "max_turns"; text: string; truncated: boolean };
+  /** The step's terminal was reached without the engine ever calling subagents.run (unknown agentType / prompt render throw). */
+  unlaunched?: true;
 }
 
 /**

@@ -25,9 +25,13 @@
 import type { PermissionRequest, ToolMetadata } from "@anycode/core";
 import type { IpcPermissionBroker, SettleOrigin } from "../../permission-broker.js";
 import type { ControlRequestResponder, InboundControlRequest } from "./claude-client.js";
+import { CLAUDE_ANYCODE_MCP_TOOL_PREFIX, type ClaudeMcpBridge } from "./mcp-bridge.js";
 
-/** Control subtypes the CLI can initiate (contract §2.2). Only `can_use_tool` is bridged in the MVP. */
+/** Control subtypes the CLI can initiate (contract §2.2). `can_use_tool` is bridged to the interactive broker; `mcp_message` is bridged to `ClaudeMcpBridge` (TASK.226 S3) when one is attached. */
 export const CLAUDE_CAN_USE_TOOL = "can_use_tool";
+
+/** TASK.226 S3: the CLI's own in-process MCP handshake and tool calls (probes.md P0/P1/P3), routed to `options.bridge` instead of the fail-closed default. */
+export const CLAUDE_MCP_MESSAGE = "mcp_message";
 
 /**
  * `ExitPlanMode` is a UNIVERSAL gate (probe #8): the CLI always routes it
@@ -119,6 +123,8 @@ export interface ClaudeApprovalBridgeOptions {
   broker: IpcPermissionBroker;
   /** The session's active permission preset id; `read-only` refuses ExitPlanMode escalation. */
   activePresetId(): string;
+  /** TASK.226 S3: when set, `mcp_message` is routed here instead of the fail-closed default, and the owned `mcp__anycode__agent` tool is auto-allowed (plan §2.6). Absent for engines/tests that never announce the door. */
+  bridge?: ClaudeMcpBridge;
 }
 
 export class ClaudeApprovalBridge {
@@ -144,17 +150,36 @@ export class ClaudeApprovalBridge {
   }
 
   private async route(request: InboundControlRequest, responder: ControlRequestResponder): Promise<void> {
+    if (request.subtype === CLAUDE_MCP_MESSAGE) {
+      if (this.options.bridge !== undefined) {
+        await this.options.bridge.handleControlRequest(request, responder);
+        return;
+      }
+      // No door announced for this session (bridge absent) — same fail-closed
+      // scoped error as any other unhandled subtype below.
+      responder.error(`AnyCode does not handle the "${request.subtype}" control request`);
+      return;
+    }
     if (request.subtype !== CLAUDE_CAN_USE_TOOL) {
-      // `hook_callback` and `mcp_message` are out of MVP scope, and an unknown
-      // future subtype is unanswerable. Fail-closed with a SCOPED error — never
-      // silence, which would block the CLI's turn forever (contract §2.2
-      // unhandled-subtype rule).
+      // `hook_callback` and an unknown future subtype are unanswerable.
+      // Fail-closed with a SCOPED error — never silence, which would block
+      // the CLI's turn forever (contract §2.2 unhandled-subtype rule).
       responder.error(`AnyCode does not handle the "${request.subtype}" control request`);
       return;
     }
     const approval = decodeCanUseTool(request.request);
     if (approval === null) {
       responder.error("Malformed can_use_tool request");
+      return;
+    }
+    if (this.options.bridge !== undefined && approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent`) {
+      // AnyCode's own MCP door (TASK.226 S3), not a third-party tool: the
+      // child session spawned behind it has its own broker for whatever it
+      // actually does (plan §2.6). Allowed before the pending latch below so
+      // it never contends with a concurrent human-facing approval — probes.md
+      // P1 confirmed live that `allow` is not silently downgraded to `deny`
+      // for this tool in headless mode.
+      responder.success(allowResponse(approval));
       return;
     }
     if (approval.toolName === EXIT_PLAN_MODE && this.options.activePresetId() === "read-only") {

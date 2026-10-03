@@ -40,8 +40,20 @@ export function describeCreateTabFailure(
     case "already_open":
       return "That task is already open in another tab.";
     case "not_ready":
+      if (engine === "claude") {
+        return "Set up and sign in to Claude Code in Settings → Claude before opening a task.";
+      }
       if (engine === "codex") {
         return "Sign in to a Codex account in Settings → Codex before opening a tab.";
+      }
+      if (result.notReadyReason === "model_missing") {
+        return "Choose a model for this connection in Settings → Providers. Your API key is already configured.";
+      }
+      if (result.notReadyReason === "credential_missing") {
+        return "Add an API key or sign in to this connection in Settings → Providers, then try again.";
+      }
+      if (result.notReadyReason === "transport_unsupported") {
+        return "This provider does not support the selected transport. Change it in Settings → Providers, then try again.";
       }
       // is configured. Renderer surfaces the configure-provider notice. 2.2.4
       // may refine the copy / route to the Settings screen.

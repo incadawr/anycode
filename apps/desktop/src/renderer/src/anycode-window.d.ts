@@ -372,7 +372,8 @@ declare global {
         // cache (explicit "Recheck all"); omitted reuses a fresh cached verdict.
         recheck(profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot>;
         pickBinary(): Promise<CodexPickBinaryResult>;
-        loginStart(profileId?: string): Promise<CodexLoginStartResult>;
+        loginStart(profileId?: string, mode?: import("../../shared/codex-login.js").CodexLoginMode): Promise<CodexLoginStartResult>;
+        onLoginProgress(callback: (progress: import("../../shared/codex-login.js").CodexDeviceCodeProgress) => void): () => void;
         loginCancel(): Promise<void>;
         // TASK.50 (cut §2/§4): the profile control-plane — settings/fs
         // mutations only, no spawns. No credential value ever crosses this

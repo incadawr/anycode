@@ -215,6 +215,36 @@ describe("reduceWorkflowCardEvent — workflow_step_end", () => {
     acc = reduceWorkflowCardEvent(acc, stepEnd({ stepId: "a", status: "error", turns: 99, durationMs: 999 }));
     expect(acc.results.get("a")).toEqual({ status: "completed", turns: 2, durationMs: 100 });
   });
+
+  it("copies failure and unlaunched through untouched when present (TASK.193 slice S2)", () => {
+    let acc = reduceWorkflowCardEvent(createWorkflowCardAccumulator(), start());
+    acc = reduceWorkflowCardEvent(
+      acc,
+      stepEnd({
+        stepId: "a",
+        status: "error",
+        turns: 0,
+        durationMs: 0,
+        failure: { kind: "error", text: "boom", truncated: false },
+        unlaunched: true,
+      }),
+    );
+    expect(acc.results.get("a")).toEqual({
+      status: "error",
+      turns: 0,
+      durationMs: 0,
+      failure: { kind: "error", text: "boom", truncated: false },
+      unlaunched: true,
+    });
+  });
+
+  it("failure and unlaunched absent on the event => absent on the result (no silent fabrication)", () => {
+    let acc = reduceWorkflowCardEvent(createWorkflowCardAccumulator(), start());
+    acc = reduceWorkflowCardEvent(acc, stepEnd({ stepId: "a", status: "completed" }));
+    const result = acc.results.get("a");
+    expect(result && "failure" in result).toBe(false);
+    expect(result && "unlaunched" in result).toBe(false);
+  });
 });
 
 describe("reduceWorkflowCardEvent — workflow_end", () => {

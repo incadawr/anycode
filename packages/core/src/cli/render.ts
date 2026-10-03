@@ -169,6 +169,12 @@ function stripOneTrailingNewline(text: string): string {
   return text.endsWith("\n") ? text.slice(0, -1) : text;
 }
 
+/** The first line of a (possibly multi-line) failure text, for a one-line CLI status row (TASK.193). */
+function firstLine(text: string): string {
+  const newline = text.indexOf("\n");
+  return newline === -1 ? text : text.slice(0, newline);
+}
+
 interface BashDuck {
   stdout: string;
   stderr: string;
@@ -591,14 +597,29 @@ export function renderEvent(
         paint("progress", `[workflow ${event.toolCallId}] step ${event.stepId} ${event.toolName}: ${event.summary}\n`),
       );
       break;
-    case "workflow_step_end":
+    case "workflow_step_end": {
       write(
         paint(
           "progress",
-          `[workflow ${event.toolCallId}] step ${event.stepId} end (${event.status}): turns=${event.turns} durationMs=${event.durationMs}\n`,
+          `[workflow ${event.toolCallId}] step ${event.stepId} end (${event.status}` +
+            `${event.unlaunched === true ? ", not launched" : ""}): turns=${event.turns} durationMs=${event.durationMs}\n`,
         ),
       );
+      // TASK.193: a step's failure reason, one terse line — the kind labels
+      // what the text IS (an error message vs. an unfinished partial), so a
+      // reader never mistakes a cut-off partial for a finished report.
+      if (event.failure !== undefined) {
+        const text = firstLine(event.failure.text) || "(no partial result)";
+        write(
+          paint(
+            "progress",
+            `[workflow ${event.toolCallId}] step ${event.stepId} ${event.failure.kind}: ${text}` +
+              `${event.failure.truncated ? " [truncated]" : ""}\n`,
+          ),
+        );
+      }
       break;
+    }
     case "workflow_end":
       write(
         paint(

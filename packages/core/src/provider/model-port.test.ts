@@ -1178,3 +1178,26 @@ describe("AiSdkModelPort — TASK.168 include_usage probe (openai-chat-completio
     expect(mockStreamText).toHaveBeenCalledTimes(3);
   });
 });
+
+it("TASK.134 makes only one attempt for a measured proxy-auth failure", async () => {
+  const error = new TypeError("fetch failed", { cause: new Error("Proxy response (407) !== 200 when HTTP Tunneling") });
+  mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(error)]));
+  const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+  await expect(collect(port.streamText(baseRequest))).rejects.toBe(error);
+  expect(mockStreamText).toHaveBeenCalledTimes(1);
+});
+
+it("does not retry a DNS proxy refusal whose cause carries only the resolved IP", async () => {
+  vi.stubEnv("NODE_USE_ENV_PROXY", "1");
+  vi.stubEnv("HTTPS_PROXY", "http://user:secret-poison@proxy.invalid:9911");
+  vi.stubEnv("https_proxy", "");
+  vi.stubEnv("NO_PROXY", "localhost");
+  vi.stubEnv("no_proxy", "localhost");
+  try {
+    const error = new TypeError("fetch failed", { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED", address: "192.0.2.5", port: 9911 }) });
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(error)]));
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    await expect(collect(port.streamText(baseRequest))).rejects.toMatchObject({ configurationCode: "proxy_unreachable" });
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  } finally { vi.unstubAllEnvs(); }
+});

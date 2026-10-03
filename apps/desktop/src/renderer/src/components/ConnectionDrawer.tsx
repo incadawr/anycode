@@ -408,6 +408,8 @@ export interface ConnectionDrawerFieldsProps {
   customProvider?: CustomProviderBridge;
   /** Rendered after the form (ConnectionDrawer supplies a "Done" button; WelcomeScreen's embed omits it — App's own readiness gate unmounts Welcome once the first connection is ready). */
   footer?: ReactNode;
+  /** First-run form: keep connection tuning behind a disclosure. */
+  simplified?: boolean;
 }
 
 /** The provider connection add/edit form body — no dialog chrome (see file docstring). Exported for both `ConnectionDrawer` and WelcomeScreen's first-run embed. */
@@ -422,6 +424,7 @@ export function ConnectionDrawerFields({
   store = useSettingsStore,
   customProvider,
   footer,
+  simplified = false,
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
   const maxOutputTokensInputRef = useRef<HTMLInputElement>(null);
@@ -481,6 +484,7 @@ export function ConnectionDrawerFields({
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const AdvancedFields = simplified ? "details" : "div";
 
   useEffect(() => {
     if (initialFocus === "credential") {
@@ -532,6 +536,10 @@ export function ConnectionDrawerFields({
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
   const showKeyInCreate = authKind === "api_key" && (isNewCustomEndpoint || !isCustomRecordConnection);
+  const setupMissingModel = simplified && selectedEntry !== undefined &&
+    modelAfterCatalogPrefill(model, selectedEntry.models).trim() === "";
+  const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
+    selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
   // TASK.159 hints for the Max-output-tokens field (pure logic above): whether
   // the env rung currently silences this field, and what number a blank field
@@ -582,6 +590,7 @@ export function ConnectionDrawerFields({
       }
       const connResult = await store.getState().connectionCreate({
         providerId: newId,
+        ...(simplified && model.trim() ? { model: model.trim() } : {}),
         ...(label.trim() ? { label: label.trim() } : {}),
         ...(transport ? { transport } : {}),
         // TASK.132/TASK.141: the proxy control is rendered in this pre-create
@@ -633,6 +642,7 @@ export function ConnectionDrawerFields({
     try {
       const result = await store.getState().connectionCreate({
         providerId,
+        ...(simplified ? { model: modelAfterCatalogPrefill(model, selectedEntry?.models ?? []).trim() } : {}),
         ...(label.trim() ? { label: label.trim() } : {}),
         ...(transport ? { transport } : {}),
         ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
@@ -801,7 +811,7 @@ export function ConnectionDrawerFields({
           className="settings-field-select"
           value={selectDisplayValue}
           disabled={readOnly || templateLocked}
-          onChange={(e) => setProviderId(e.target.value)}
+          onChange={(e) => { setProviderId(e.target.value); setModel(""); }}
         >
           <option value="" disabled>
             Choose a provider…
@@ -855,18 +865,17 @@ export function ConnectionDrawerFields({
         </div>
       )}
 
-      <label className="settings-field">
-        <span className="settings-field-label">Label (optional)</span>
-        <input
-          ref={labelInputRef}
-          className="settings-field-input"
-          type="text"
-          value={label}
-          disabled={readOnly}
-          placeholder="e.g. Work, Personal"
-          onChange={(e) => setLabel(e.target.value)}
-        />
-      </label>
+      {simplified && createdConnectionId === null && selectedEntry && (
+        <label className="settings-field">
+          <span className="settings-field-label">Model</span>
+          <input className="settings-field-input" type="text" list="welcome-model-suggestions"
+            value={modelAfterCatalogPrefill(model, selectedEntry.models)} disabled={readOnly}
+            placeholder="Enter a model ID" onChange={(e) => setModel(e.target.value)} />
+          <datalist id="welcome-model-suggestions">
+            {selectedEntry.models.map((m) => <option key={m.id} value={m.id}>{m.name ?? m.id}</option>)}
+          </datalist>
+        </label>
+      )}
 
       {showBaseUrl && (
         <label className="settings-field">
@@ -882,112 +891,129 @@ export function ConnectionDrawerFields({
         </label>
       )}
 
-      <label className="settings-field">
-        <span className="settings-field-label">Transport</span>
-        <select
-          className="settings-field-select"
-          value={transport}
-          disabled={readOnly}
-          onChange={(e) => setTransport(e.target.value as ProviderTransportId | "")}
-        >
-          <option value="">(provider default)</option>
-          {transportChoices.map((t) => (
-            <option key={t} value={t}>
-              {TRANSPORT_LABEL[t]}
-            </option>
-          ))}
-        </select>
-      </label>
+      <AdvancedFields className="connection-drawer-advanced">
+        {simplified && <summary>Advanced settings (optional)</summary>}
+        <label className="settings-field">
+          <span className="settings-field-label">Label (optional)</span>
+          <input
+            ref={labelInputRef}
+            className="settings-field-input"
+            type="text"
+            value={label}
+            disabled={readOnly}
+            placeholder="e.g. Work, Personal"
+            onChange={(e) => setLabel(e.target.value)}
+          />
+        </label>
 
-      <label className="settings-field">
-        <span className="settings-field-label">Max output tokens</span>
-        {/* `step={1}` on purpose: every whole number in [min, max] is accepted,
-            and a coarser step would make the browser paint the peers' own 32000
-            as `:invalid`. */}
-        <input
-          ref={maxOutputTokensInputRef}
-          className="settings-field-input"
-          type="number"
-          min={1024}
-          max={1000000}
-          step={1}
-          value={maxOutputTokens}
-          disabled={readOnly}
-          placeholder="(provider default)"
-          onChange={(e) => setMaxOutputTokens(e.target.value)}
-        />
-      </label>
-      {/* TASK.159: one line naming the number a blank field resolves to
-            (catalog ceiling vs the projected core default); claude-* and a
-            non-blank field show none — pure logic above, claude still gets no
-            number today. Outside the <label>, same reason the chips are. */}
-      {motDefaultHint !== null && <div className="settings-field-hint">{motDefaultHint}</div>}
-      {/* Click-to-fill presets (TASK.150 slice 3): the same chip affordance
-          the Model field above already offers, for the one field whose
-          sensible values cannot be looked up anywhere — a self-hosted
-          endpoint has no curated model list in the catalog, so a bare number
-          input asks the user to recall the round numbers unaided. Buttons sit
-          OUTSIDE the <label> above: nested in it, a click would also be a
-          click on the input it labels. */}
-      <div className="connection-drawer-preset-chips" role="group" aria-label="Max output token presets">
-        {MAX_OUTPUT_TOKEN_PRESETS.map((preset) => (
+
+        <label className="settings-field">
+          <span className="settings-field-label">Transport</span>
+          <select
+            className="settings-field-select"
+            value={transport}
+            disabled={readOnly}
+            onChange={(e) => setTransport(e.target.value as ProviderTransportId | "")}
+          >
+            <option value="">(provider default)</option>
+            {transportChoices.map((t) => (
+              <option key={t} value={t}>
+                {TRANSPORT_LABEL[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="settings-field">
+          <span className="settings-field-label">Max output tokens</span>
+          {/* `step={1}` on purpose: every whole number in [min, max] is accepted,
+              and a coarser step would make the browser paint the peers' own 32000
+              as `:invalid`. */}
+          <input
+            ref={maxOutputTokensInputRef}
+            className="settings-field-input"
+            type="number"
+            min={1024}
+            max={1000000}
+            step={1}
+            value={maxOutputTokens}
+            disabled={readOnly}
+            placeholder="(provider default)"
+            onChange={(e) => setMaxOutputTokens(e.target.value)}
+          />
+        </label>
+        {/* TASK.159: one line naming the number a blank field resolves to
+              (catalog ceiling vs the projected core default); claude-* and a
+              non-blank field show none — pure logic above, claude still gets no
+              number today. Outside the <label>, same reason the chips are. */}
+        {motDefaultHint !== null && <div className="settings-field-hint">{motDefaultHint}</div>}
+        {/* Click-to-fill presets (TASK.150 slice 3): the same chip affordance
+            the Model field above already offers, for the one field whose
+            sensible values cannot be looked up anywhere — a self-hosted
+            endpoint has no curated model list in the catalog, so a bare number
+            input asks the user to recall the round numbers unaided. Buttons sit
+            OUTSIDE the <label> above: nested in it, a click would also be a
+            click on the input it labels. */}
+        <div className="connection-drawer-preset-chips" role="group" aria-label="Max output token presets">
+          {MAX_OUTPUT_TOKEN_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className={`connection-drawer-preset-chip${
+                maxOutputPreset === preset.id ? " connection-drawer-preset-chip-selected" : ""
+              }`}
+              disabled={readOnly}
+              onClick={() => setMaxOutputTokens(preset.value)}
+            >
+              {preset.label}
+            </button>
+          ))}
+          {/* "Custom" reports as much as it acts: it lights up on its own
+              whenever the field holds something no preset spells, and clicking
+              it hands focus to that field rather than writing a value. */}
           <button
-            key={preset.id}
             type="button"
             className={`connection-drawer-preset-chip${
-              maxOutputPreset === preset.id ? " connection-drawer-preset-chip-selected" : ""
+              maxOutputPreset === "custom" ? " connection-drawer-preset-chip-selected" : ""
             }`}
             disabled={readOnly}
-            onClick={() => setMaxOutputTokens(preset.value)}
+            onClick={() => maxOutputTokensInputRef.current?.focus()}
           >
-            {preset.label}
+            Custom
           </button>
-        ))}
-        {/* "Custom" reports as much as it acts: it lights up on its own
-            whenever the field holds something no preset spells, and clicking
-            it hands focus to that field rather than writing a value. */}
-        <button
-          type="button"
-          className={`connection-drawer-preset-chip${
-            maxOutputPreset === "custom" ? " connection-drawer-preset-chip-selected" : ""
-          }`}
-          disabled={readOnly}
-          onClick={() => maxOutputTokensInputRef.current?.focus()}
-        >
-          Custom
-        </button>
-      </div>
-      {/* TASK.150: on-prem/custom endpoints (vllm/custom/openrouter) carry no
-          curated model list in the catalog, so every such connection falls
-          back to the same DEFAULT_MAX_OUTPUT_TOKENS — this field is the only
-          user-facing knob for it. Called out explicitly because a reasoning
-          model spends part of that budget on its own hidden thinking before
-          it writes anything, so the default that's plenty for a plain chat
-          model can cut a self-hosted reasoning model off mid-write. */}
-      <div className="settings-field-hint" role="note">
-        Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they
-        write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if
-        output keeps cutting off.
-      </div>
-
-
-      {/* TASK.159: shown only while ANYCODE_MAX_OUTPUT_TOKENS overrides the rung — editing this field then does nothing. */}
-      {motEnvHint !== null && (
-        <div className="settings-field-hint" role="note">
-          {motEnvHint}
         </div>
-      )}
-      {/* TASK.141: one instance of the same picker the engine panes and the
-          Network pane render — CONTROLLED here, because a connection's ref
-          rides this drawer's own create/update payload rather than a channel of
-          its own. That is what removes the two-phase "create the connection,
-          then bind its proxy" dance. */}
-      <ProxyRefPicker
-        scope={{ kind: "connection", connectionId: createdConnectionId ?? "" }}
-        store={store}
-        value={proxyRef}
-        onChange={setProxyRef}
-      />
+        {/* TASK.150: on-prem/custom endpoints (vllm/custom/openrouter) carry no
+            curated model list in the catalog, so every such connection falls
+            back to the same DEFAULT_MAX_OUTPUT_TOKENS — this field is the only
+            user-facing knob for it. Called out explicitly because a reasoning
+            model spends part of that budget on its own hidden thinking before
+            it writes anything, so the default that's plenty for a plain chat
+            model can cut a self-hosted reasoning model off mid-write. */}
+        <div className="settings-field-hint" role="note">
+          Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they
+          write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if
+          output keeps cutting off.
+        </div>
+
+
+        {/* TASK.159: shown only while ANYCODE_MAX_OUTPUT_TOKENS overrides the rung — editing this field then does nothing. */}
+        {motEnvHint !== null && (
+          <div className="settings-field-hint" role="note">
+            {motEnvHint}
+          </div>
+        )}
+        {/* TASK.141: one instance of the same picker the engine panes and the
+            Network pane render — CONTROLLED here, because a connection's ref
+            rides this drawer's own create/update payload rather than a channel of
+            its own. That is what removes the two-phase "create the connection,
+            then bind its proxy" dance. */}
+        <ProxyRefPicker
+          scope={{ kind: "connection", connectionId: createdConnectionId ?? "" }}
+          store={store}
+          value={proxyRef}
+          onChange={setProxyRef}
+        />
+      </AdvancedFields>
 
       {isNewCustomEndpoint && (
         <label className="settings-field-checkbox">
@@ -1042,12 +1068,14 @@ export function ConnectionDrawerFields({
             <button
               type="button"
               className="settings-button settings-button-primary"
-              disabled={readOnly || creating || (!isNewCustomEndpoint && providerId === "")}
+              disabled={readOnly || creating || setupMissingModel || setupMissingKey || (!isNewCustomEndpoint && providerId === "")}
               onClick={() => void createConnection()}
             >
-              {creating ? "Creating…" : mode === "add" ? "Create connection" : "Save"}
+              {creating ? "Connecting…" : simplified && mode === "add" ? "Connect" : mode === "add" ? "Create connection" : "Save"}
             </button>
           </div>
+          {setupMissingModel && <p className="settings-field-hint">Enter a model ID to continue.</p>}
+          {setupMissingKey && <p className="settings-field-hint">Enter your API key to continue.</p>}
         </>
       ) : (
         <>

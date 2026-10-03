@@ -13,6 +13,7 @@ import type { PermissionDecision, PermissionRequest } from "@anycode/core";
 import type { IpcPermissionBroker } from "../../permission-broker.js";
 import type { ControlRequestResponder, InboundControlRequest } from "./claude-client.js";
 import { ClaudeApprovalBridge, allowResponse, decodeCanUseTool, denyResponse } from "./approval-bridge.js";
+import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 
 const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
 
@@ -235,6 +236,92 @@ describe("ClaudeApprovalBridge — posture and scope rules", () => {
     await bridge.handle(inbound({ tool_name: "Bash" }), responder);
 
     expect(error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ClaudeApprovalBridge — TASK.226 S3: AnyCode's own MCP door", () => {
+  it("can_use_tool for mcp__anycode__* is auto-allowed, never asks the broker, and never engages the pending latch", async () => {
+    const { broker, requests } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", bridge: {} as ClaudeMcpBridge });
+    const { responder, success, error } = responderSpy();
+
+    await bridge.handle(inbound({ tool_name: "mcp__anycode__agent", tool_use_id: "toolu_mcp1", input: { agent_type: "probe" } }), responder);
+
+    expect(error).not.toHaveBeenCalled();
+    // Byte-identical to the allow shape any other tool gets (`allowResponse`) —
+    // this is not a bespoke payload, just an unconditional grant of it.
+    expect(success.mock.calls[0]![0]).toEqual({ behavior: "allow", updatedInput: { agent_type: "probe" }, toolUseID: "toolu_mcp1" });
+    // The human-facing broker is never consulted for AnyCode's own door
+    // (plan §2.6): the child session behind it has its own broker.
+    expect(requests).toEqual([]);
+  });
+
+  it("a parked human-facing approval does not block a concurrent mcp__anycode__* request, and vice versa (probes.md P1 order)", async () => {
+    let settle: (decision: PermissionDecision) => void = () => {};
+    const parked = new Promise<PermissionDecision>((resolve) => {
+      settle = resolve;
+    });
+    const broker = {
+      requestPermission: () => parked,
+      denyAll: vi.fn(),
+    } as unknown as IpcPermissionBroker;
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", bridge: {} as ClaudeMcpBridge });
+
+    const human = responderSpy();
+    const humanHandled = bridge.handle(inbound({ tool_name: "Bash", tool_use_id: "t-human", input: {} }), human.responder);
+
+    // The mcp door's own approval is served WHILE the human one is still parked.
+    const mcp = responderSpy();
+    await bridge.handle(inbound({ tool_name: "mcp__anycode__agent", tool_use_id: "t-mcp", input: {} }), mcp.responder);
+    expect(mcp.success).toHaveBeenCalledTimes(1);
+    expect(mcp.error).not.toHaveBeenCalled();
+
+    settle({ behavior: "allow" });
+    await humanHandled;
+    expect(human.success).toHaveBeenCalledTimes(1);
+  });
+
+  it("a same-name tool without the owned bridge still asks the broker", async () => {
+    const { broker, requests } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    await bridge.handle(inbound({ tool_name: "mcp__anycode__agent", tool_use_id: "foreign", input: {} }), responderSpy().responder);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("an unregistered tool under the prefix still asks the broker", async () => {
+    const { broker, requests } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", bridge: {} as ClaudeMcpBridge });
+    await bridge.handle(inbound({ tool_name: "mcp__anycode__other", tool_use_id: "foreign", input: {} }), responderSpy().responder);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("mcp_message is routed to an attached bridge instead of the fail-closed default", async () => {
+    const { broker } = brokerStub({ behavior: "allow" });
+    const handleControlRequest = vi.fn(async (_request: InboundControlRequest, responder: ControlRequestResponder) => {
+      responder.success({ mcp_response: { jsonrpc: "2.0", id: 1, result: { tools: [] } } });
+    });
+    const fakeBridge = { handleControlRequest } as unknown as ClaudeMcpBridge;
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", bridge: fakeBridge });
+    const { responder, success, error } = responderSpy();
+    const request = inbound({ server_name: "anycode", message: { method: "tools/list", jsonrpc: "2.0", id: 1 } }, "mcp_message");
+
+    await bridge.handle(request, responder);
+
+    expect(handleControlRequest).toHaveBeenCalledTimes(1);
+    expect(handleControlRequest.mock.calls[0]![0]).toBe(request);
+    expect(success).toHaveBeenCalledWith({ mcp_response: { jsonrpc: "2.0", id: 1, result: { tools: [] } } });
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("mcp_message with NO bridge attached still fails closed, exactly like hook_callback (regression: the door is opt-in)", async () => {
+    const { broker } = brokerStub({ behavior: "allow" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    const { responder, success, error } = responderSpy();
+
+    await bridge.handle(inbound({ server_name: "anycode", message: {} }, "mcp_message"), responder);
+
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(success).not.toHaveBeenCalled();
   });
 });
 
