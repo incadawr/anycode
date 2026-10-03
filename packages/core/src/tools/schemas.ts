@@ -15,6 +15,7 @@ import type { ExecStatus } from "../ports/execution.js";
 import type { BackgroundTaskStatus } from "../ports/tasks.js";
 import type { TodoItem } from "./todo-store.js";
 import type { FinishReason } from "../types/events.js";
+import type { StepFailure } from "../workflow/step-failure.js";
 
 // ---------------------------------------------------------------------------
 // Read
@@ -434,7 +435,13 @@ export const workflowInputSchema = z.object({
 
 export type WorkflowInput = z.output<typeof workflowInputSchema>;
 
-/** Tool payload: a WorkflowRunOutcome projection (step finalText/truncated dropped). */
+/**
+ * Tool payload: a WorkflowRunOutcome projection. A SUCCESSFUL step's finalText
+ * is still dropped — what the model sees of a step that worked is the
+ * definition author's call (outputTemplate / the sink join), never a payload
+ * duplicate. A FAILED step's reason is not output, it is diagnostics nobody
+ * else delivers, so it rides here as `failure` (TASK.193).
+ */
 export interface WorkflowOutput {
   status: "completed" | "failed" | "cancelled";
   output: string;
@@ -446,6 +453,10 @@ export interface WorkflowOutput {
     turns: number;
     toolCalls: number;
     durationMs: number;
+    /** Why this step did not complete; absent on completed/skipped/cancelled steps. */
+    failure?: StepFailure;
+    /** Present only when the step never reached a child (TASK.193): its zeros are structural. */
+    unlaunched?: true;
   }>;
   durationMs: number;
 }

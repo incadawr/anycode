@@ -115,7 +115,7 @@ function skip(message) {
 // src/**/*.ts, same posture as codex-contract-extract.mjs. Raising the
 // ceiling in protocol.ts means raising it here in the same commit.)
 
-const SUPPORTED_CODEX_VERSION = "<0.155.0";
+const SUPPORTED_CODEX_VERSION = "<0.161.0";
 
 function parseCodexVersion(output) {
   const match = /^codex-cli (\d+)\.(\d+)\.(\d+)\s*$/.exec(output);
@@ -482,7 +482,7 @@ async function submitCodexDraftWhenReady(ctx, step) {
     CODEX_READY_POLL_TIMEOUT_MS,
     CODEX_READY_POLL_INTERVAL_MS,
     () => apiOk(ctx, step, "POST", "/start-screen/submit", {}),
-    (r) => r?.message === CODEX_NOT_READY_MESSAGE,
+    (r) => r?.message === CODEX_NOT_READY_MESSAGE || r?.message === "Sign in to a Codex account in Settings → Codex before opening a tab.",
   );
   assert(
     step,
@@ -546,6 +546,9 @@ async function launchApp(ctx, step, markerTime) {
     ...process.env,
     ANYCODE_AUTOMATION: "1",
     ANYCODE_USER_DATA_DIR: ctx.profileUserDataDir,
+    ANYCODE_SETTINGS_PATH: join(ctx.profile, "settings.json"),
+    ANYCODE_SECRETS_PATH: join(ctx.profile, "secrets.json"),
+    ANYCODE_CODEX_PROFILES_HOME: ctx.profile,
     ANYCODE_DB_PATH: ctx.profileDbPath,
     ANYCODE_AUTOMATION_INFO: ctx.profileAutomationInfo,
     ANYCODE_CODEX_BIN: ctx.codexBin,
@@ -591,9 +594,10 @@ function step1BootstrapWorkspaces(ctx) {
   try {
     ctx.bootWs = mkdtempSync(join(tmpdir(), "anycode-codex-smoke-boot-"));
     ctx.codexWs = mkdtempSync(join(tmpdir(), "anycode-codex-smoke-ws-"));
-    ctx.sentinelAllow1 = join(ctx.codexWs, "smoke-allow-1.txt");
-    ctx.sentinelAllow2 = join(ctx.codexWs, "smoke-allow-2.txt");
-    ctx.sentinelDeny = join(ctx.codexWs, "smoke-deny.txt");
+    ctx.approvalWs = mkdtempSync(join(repoRoot, "node_modules", ".codex-smoke-approvals-"));
+    ctx.sentinelAllow1 = join(ctx.approvalWs, "smoke-allow-1.txt");
+    ctx.sentinelAllow2 = join(ctx.approvalWs, "smoke-allow-2.txt");
+    ctx.sentinelDeny = join(ctx.approvalWs, "smoke-deny.txt");
   } catch (err) {
     fail(1, `bootstrap error: ${err?.message ?? err}`);
   }
@@ -605,6 +609,11 @@ function step1BootstrapWorkspaces(ctx) {
 async function step2LaunchApp(ctx) {
   const profile = mkdtempSync(join(tmpdir(), "anycode-codex-smoke-profile-"));
   ctx.profile = profile;
+  writeFileSync(join(profile, "settings.json"), JSON.stringify({ version: 2, provider: { connections: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false }, codex: { activeProfileId: "system" } }));
+  // Test the candidate policy, rather than fetching the previous released manifest.
+  const manifestRoot = join(profile, ".anycode", "codex");
+  mkdirSync(manifestRoot, { recursive: true });
+  writeFileSync(join(manifestRoot, "manifest.json"), JSON.stringify({ fetchedAt: new Date().toISOString(), manifest: JSON.parse(readFileSync(join(repoRoot, "codex-support.json"), "utf8")) }));
   ctx.profileUserDataDir = join(profile, "user-data");
   ctx.profileDbPath = join(profile, "db.sqlite");
   ctx.profileAutomationInfo = join(profile, "automation.json");
@@ -637,7 +646,7 @@ async function step4CreateCodexSession(ctx) {
 
   const beforeEngine = await apiOk(ctx, 4, "GET", "/start-screen");
   assert(4, Array.isArray(beforeEngine?.availableEngines) && beforeEngine.availableEngines.includes("codex"), `availableEngines does not include "codex": ${JSON.stringify(beforeEngine?.availableEngines)}`);
-  assert(4, beforeEngine?.engine === "core", `expected the draft's default engine to be "core" before any pick, got ${JSON.stringify(beforeEngine?.engine)}`);
+  assert(4, beforeEngine.availableEngines.includes(beforeEngine.engine), `default engine must be available, got ${JSON.stringify(beforeEngine?.engine)}`);
 
   await apiAction(ctx, 4, "/start-screen/engine", { engineId: "codex" });
 
@@ -662,6 +671,7 @@ async function step4CreateCodexSession(ctx) {
   // step for both commands would collapse the very shape this scenario
   // exists to produce.
   const allowPrompt =
+    `For each command request escalated sandbox permissions (sandbox_permissions: require_escalated), so the user approves it; do not attempt an unapproved fallback. ` +
     `First write one short sentence saying you are about to run the first command. ` +
     `Then run exactly this shell command and nothing else: touch ${JSON.stringify(ctx.sentinelAllow1)}. ` +
     `After it finishes, write one short sentence between the two commands. ` +
@@ -719,6 +729,7 @@ async function step6DenyCommand(ctx) {
   // closing sentence is now required, not merely permitted, so its absence
   // after resume is evidence of something, not scenario noise.
   const denyPrompt =
+    `Request escalated sandbox permissions (sandbox_permissions: require_escalated) for this command so the user can approve or reject it. Never attempt an unapproved fallback. ` +
     `Run exactly this shell command and nothing else: touch ${JSON.stringify(ctx.sentinelDeny)}. ` +
     `Do not write anything before running it. ` +
     `After the command finishes, fails, or is rejected, write exactly one short sentence stating what happened. ` +
@@ -1413,7 +1424,7 @@ async function runStep10Teardown(ctx, failedStep) {
     }
   }
 
-  for (const tmp of [ctx.bootWs, ctx.codexWs]) {
+  for (const tmp of [ctx.bootWs, ctx.codexWs, ctx.approvalWs]) {
     if (tmp && existsSync(tmp)) {
       if (FLAGS.keep) {
         console.log(`[codex-live-smoke] --keep set, workspace preserved at: ${tmp}`);

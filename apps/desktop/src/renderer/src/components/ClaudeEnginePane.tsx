@@ -242,11 +242,12 @@ export interface ClaudeBridge {
 }
 
 export interface ClaudeEnginePaneProps {
+  onboarding?: boolean;
   /** Injectable for tests / isolation; defaults to the app's real `window.anycode.claude` bridge. */
   bridge?: ClaudeBridge;
 }
 
-export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEnginePaneProps) {
+export function ClaudeEnginePane({ bridge = window.anycode.claude, onboarding = false }: ClaudeEnginePaneProps) {
   const [snapshot, setSnapshot] = useState<ClaudeOnboardingSnapshot | null>(null);
   const [checking, setChecking] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
@@ -329,6 +330,23 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude }: ClaudeEngin
   const status = describeClaudeReportStatus(checking ? undefined : snapshot?.report);
   // TASK.103 (D-S4-6): the consent card source — the structured field only.
   const trustRefusal = binaryTrustRefusalOf(snapshot?.report);
+
+  if (onboarding) return <section className="settings-section" aria-label="Connect Claude Code">
+    <h2 className="settings-section-title">Connect Claude Code</h2>
+    <p role="status">{status.headline}</p>
+    <p className="settings-page-description">{snapshot?.report.status === "signed_out" ? "Sign in with your Claude account. A Terminal window will open and guide you through browser sign-in." : status.detail}</p>
+    {notice && <p className="settings-notice" role="alert">{notice}</p>}
+    {signingIn ? <div role="status"><p>{CLAUDE_LOGIN_IN_PROGRESS_COPY}</p><button type="button" className="settings-button" onClick={() => cancelClaudeSignIn(bridge)}>Cancel</button></div> :
+      <button type="button" className="settings-button settings-button-primary" disabled={checking || busy} onClick={() => canShowSignInButton(snapshot?.report) ? void signIn() : void refresh()}>{canShowSignInButton(snapshot?.report) ? "Sign in with Claude" : "Check again"}</button>}
+    {snapshot?.report.status === "not_installed" && <p>Install Claude Code on this computer, then check again. If you already installed it, choose its executable below.</p>}
+    <details className="connection-drawer-advanced"><summary>Advanced troubleshooting</summary>
+      <p>{snapshot?.binaryPath ?? "No Claude Code executable found"}</p>
+      <code>{CLAUDE_PROFILE_LOGIN_COMMAND}</code>
+      <button type="button" className="settings-button" disabled={busy || signingIn} onClick={() => void pick()}>Choose executable…</button>
+      {trustRefusal && <button type="button" className="settings-button" onClick={() => setTrustDialogOpen(true)}>Review executable trust…</button>}
+    </details>
+    <BinaryTrustDialog open={trustDialogOpen && trustRefusal !== null} binaryPath={trustRefusal?.binaryPath ?? ""} reason={trustRefusal?.reason ?? ""} staleConsent={trustRefusal?.staleConsent ?? false} onAccept={() => void acceptTrust()} onDecline={() => setTrustDialogOpen(false)} />
+  </section>;
 
   return (
     <section className="settings-section">

@@ -16,6 +16,7 @@
     "./skills-admin": "./src/skills/admin.ts",
     "./subagents-admin": "./src/subagents/admin.ts",
     "./telemetry-admin": "./src/telemetry/admin.ts",
+    "./network-failure": "./src/provider/network-failure.ts",
     "./catalog": "./src/provider/catalog-data.ts"
   },
   "scripts": {

@@ -51,6 +51,65 @@
   gap: var(--sp-2);
 }
 
+.welcome-paths {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.welcome-path {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  text-align: left;
+  color: var(--text-1);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+
+.welcome-path[aria-pressed="true"], .welcome-path:hover {
+  border-color: var(--accent);
+}
+
+.welcome-path span {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.welcome-paths-compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.welcome-paths-compact .welcome-path span {
+  display: none;
+}
+
+.welcome-screen-card-setup .welcome-mark {
+  width: 32px;
+  height: 32px;
+}
+
+.welcome-screen-card-setup .welcome-wordmark {
+  font-size: var(--fs-xl);
+}
+
+.welcome-screen-card-setup .welcome-ramp {
+  display: none;
+}
+
+.connection-drawer-advanced {
+  display: grid;
+  gap: var(--sp-3);
+}
+
+.connection-drawer-advanced > summary {
+  cursor: pointer;
+  color: var(--text-2);
+  margin-bottom: var(--sp-3);
+}
+
 /* R21 brand mark (slice-R21-cut §A): the app icon at splash scale. The svg
    bakes its own plate/inks — brand constants scoped inside BrandMark, not
    theme tokens; it renders identically in both themes like a dock icon.

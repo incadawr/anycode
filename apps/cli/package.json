@@ -3,11 +3,18 @@
   "version": "0.0.28",
   "private": true,
   "type": "module",
-  "description": "AnyCode — AI coding agent CLI",
+  "description": "AnyCode \u2014 AI coding agent CLI",
   "author": "incadawr <dubov.e.v@gmail.com>",
-  "engines": { "node": ">=22" },
-  "bin": { "anycode": "./bin/anycode.js" },
-  "files": ["bin", "dist"],
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "anycode": "./bin/anycode.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",

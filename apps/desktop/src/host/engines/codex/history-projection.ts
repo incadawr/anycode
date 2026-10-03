@@ -161,9 +161,12 @@ export const NATIVE_PERSISTED: ReadonlySet<string> = new Set(["userMessage", "ag
 /**
  * One `commandExecution` completion recorded by the host's live writer (cut
  * §2(e)/§3.6, codex-engine.ts) — the shadow log's sole content, by
- * construction disjoint from every native item type.
+ * construction limited to commands. Newer Codex also persists commands;
+ * matching native IDs win during reconstruction.
  */
 export interface ShadowCommandItem {
+  /** Stable live item id, retained for deduplication when newer Codex persists commands natively. */
+  itemId?: string;
   turnOrdinal: number;
   /** Insert BEFORE `native[positionInTurn]` — a count of NATIVE_PERSISTED completions, not of all live completions. */
   positionInTurn: number;
@@ -396,10 +399,13 @@ function mergeTurnItems(
   shadow: ShadowCommandItem[],
   cursorStart: number,
 ): { items: TaggedItem[]; nextCursor: number } {
-  const sortedShadow = [...shadow].sort((a, b) => a.positionInTurn - b.positionInTurn || a.seqInTurn - b.seqInTurn);
+  const nativeCommandIds = new Set(native.filter((item) => item.type === "commandExecution").map((item) => item.id));
+  const sortedShadow = shadow.filter((row) => row.itemId === undefined || !nativeCommandIds.has(row.itemId))
+    .sort((a, b) => a.positionInTurn - b.positionInTurn || a.seqInTurn - b.seqInTurn);
   const items: TaggedItem[] = [];
   let cursor = cursorStart;
   let shadowIndex = 0;
+  let nativeVisibleCount = 0;
 
   const emit = (projected: HistoryItem[], shadowOrigin: boolean): void => {
     for (const item of projected) items.push({ item, shadow: shadowOrigin });
@@ -407,11 +413,12 @@ function mergeTurnItems(
   };
 
   for (let nativeIndex = 0; nativeIndex < native.length; nativeIndex += 1) {
-    while (shadowIndex < sortedShadow.length && sortedShadow[shadowIndex]!.positionInTurn <= nativeIndex) {
+    while (shadowIndex < sortedShadow.length && sortedShadow[shadowIndex]!.positionInTurn <= nativeVisibleCount) {
       emit(projectShadowCommand(turnId, sortedShadow[shadowIndex]!, cursor), true);
       shadowIndex += 1;
     }
     emit(projectItem(turnId, native[nativeIndex]!, cursor), false);
+    if (NATIVE_PERSISTED.has(native[nativeIndex]!.type)) nativeVisibleCount += 1;
   }
   for (; shadowIndex < sortedShadow.length; shadowIndex += 1) {
     emit(projectShadowCommand(turnId, sortedShadow[shadowIndex]!, cursor), true);

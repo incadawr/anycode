@@ -51,6 +51,7 @@ import {
 } from "../types/config.js";
 import { capUtf8Bytes } from "../util/bytes.js";
 import { renderTemplate } from "./template.js";
+import { stepFailure } from "./step-failure.js";
 
 /** Internal knobs the frozen createWorkflowRunner does not expose (test seam only). */
 interface WorkflowRunnerOptions {
@@ -142,12 +143,45 @@ function createRunner(
         const summary = unknownSteps
           .map((step) => `step ${step.id}: unknown agentType "${step.agentType}"`)
           .join("\n");
+        // TASK.193: a fail-fast pre-check streams the same start/step_end/end
+        // trio a launched run would — with `unlaunched` on every error
+        // terminal — so the card, CLI and telemetry see the failed step and
+        // its reason and can tell it never launched. `workflow_start` is a
+        // graph-and-will-settle signal, not a launch claim (ports/workflow.ts).
+        // The only silent runs: an unknown workflow name (no graph to hold)
+        // and a pre-aborted signal (a cancellation, not a failure).
+        onProgress?.({
+          kind: "start",
+          workflow: definition.name,
+          totalSteps: steps.length,
+          steps: stepGraph(steps),
+        });
+        for (const outcome of outcomes) {
+          const failure = stepFailure(outcome);
+          onProgress?.({
+            kind: "step_end",
+            stepId: outcome.stepId,
+            status: outcome.status,
+            turns: outcome.turns,
+            durationMs: outcome.durationMs,
+            ...(failure !== null ? { failure } : {}),
+            ...(outcome.unlaunched === true ? { unlaunched: true } : {}),
+          });
+        }
+        const precheckDurationMs = Date.now() - startedAt;
+        onProgress?.({
+          kind: "end",
+          status: "failed",
+          completedSteps: 0,
+          totalSteps: steps.length,
+          durationMs: precheckDurationMs,
+        });
         return {
           status: "failed",
           output: summary,
           truncated: false,
           steps: outcomes,
-          durationMs: Date.now() - startedAt,
+          durationMs: precheckDurationMs,
         };
       }
 
@@ -155,15 +189,7 @@ function createRunner(
         kind: "start",
         workflow: definition.name,
         totalSteps: steps.length,
-        // TASK.191 slice S3: field-by-field, not `steps` verbatim — the
-        // engine's own WorkflowStepDefinition carries promptTemplate/maxTurns
-        // too, neither of which belongs on the wire (never rendered, and
-        // promptTemplate can hold arbitrary-length user content).
-        steps: steps.map((step) => ({
-          id: step.id,
-          agentType: step.agentType,
-          ...(step.dependsOn !== undefined ? { dependsOn: step.dependsOn } : {}),
-        })),
+        steps: stepGraph(steps),
       });
 
       // --- run state -------------------------------------------------------
@@ -208,12 +234,15 @@ function createRunner(
             error instanceof Error ? error.message : String(error),
             Date.now() - stepStartedAt,
           );
+          const renderFailure = stepFailure(outcome);
           onProgress?.({
             kind: "step_end",
             stepId: step.id,
             status: outcome.status,
             turns: 0,
             durationMs: outcome.durationMs,
+            ...(renderFailure !== null ? { failure: renderFailure } : {}),
+            ...(outcome.unlaunched === true ? { unlaunched: true } : {}),
           });
           return { id: step.id, outcome };
         }
@@ -330,6 +359,22 @@ function createRunner(
           : sub.finalTurnFinishReason === "degenerate"
             ? "error"
             : sub.status;
+        // TASK.193: `status` alone cannot say what finalText IS — the three
+        // "error" producers above deposit three different things (a timeout
+        // message, a degenerate loop's partial, the child's own error text).
+        // Stamped here, at the only place that still holds the distinction,
+        // so every consumer downstream labels the text instead of guessing.
+        // A cancelled step gets no stamp: its text is the last finished turn,
+        // and the reason is the run-level cancellation, not the step.
+        const failureKind: WorkflowStepOutcome["failureKind"] = timedOut
+          ? "error"
+          : sub.finalTurnFinishReason === "degenerate"
+            ? "degenerate"
+            : sub.status === "max_turns"
+              ? "max_turns"
+              : sub.status === "error"
+                ? "error"
+                : undefined;
         const outcome: WorkflowStepOutcome = {
           stepId: step.id,
           agentType: step.agentType,
@@ -338,16 +383,20 @@ function createRunner(
             ? `Step "${step.id}" timed out after ${stepTimeoutMs}ms.`
             : sub.finalText,
           truncated: sub.truncated,
+          ...(failureKind !== undefined ? { failureKind } : {}),
           turns: sub.turns,
           toolCalls: sub.toolCalls,
           durationMs: sub.durationMs,
         };
+        const failure = stepFailure(outcome);
         onProgress?.({
           kind: "step_end",
           stepId: step.id,
           status: outcome.status,
           turns: outcome.turns,
           durationMs: outcome.durationMs,
+          ...(failure !== null ? { failure } : {}),
+          ...(outcome.unlaunched === true ? { unlaunched: true } : {}),
           // TASK.191 slice S2: the step's FINAL spend, taken from the child's
           // own outcome rather than from the last progress event — a step whose
           // final turn made no tool call emits its last progress before that
@@ -489,6 +538,24 @@ function sinkJoin(
   return parts.join("\n\n");
 }
 
+/**
+ * The run's step graph as carried on `start` (TASK.191 slice S3): field-by-
+ * field, not `steps` verbatim — the engine's own WorkflowStepDefinition
+ * carries promptTemplate/maxTurns too, neither of which belongs on the wire
+ * (never rendered, and promptTemplate can hold arbitrary-length user content).
+ * Shared by the launched-run path and the fail-fast pre-check (TASK.193), so
+ * both stream the identical shape.
+ */
+function stepGraph(
+  steps: readonly WorkflowStepDefinition[],
+): readonly { id: string; agentType: string; dependsOn?: readonly string[] }[] {
+  return steps.map((step) => ({
+    id: step.id,
+    agentType: step.agentType,
+    ...(step.dependsOn !== undefined ? { dependsOn: step.dependsOn } : {}),
+  }));
+}
+
 /** A step that never launched (dependency failed / run aborted before launch). */
 function skippedOutcome(step: WorkflowStepDefinition): WorkflowStepOutcome {
   return {
@@ -503,7 +570,11 @@ function skippedOutcome(step: WorkflowStepDefinition): WorkflowStepOutcome {
   };
 }
 
-/** A step that failed before or during launch (unknown agentType / render throw). */
+/**
+ * A step that failed before or during launch (unknown agentType / render throw).
+ * Both paths never call subagents.run, hence `unlaunched`: the zeros below are
+ * structural, not a measurement of a child that ran (TASK.193).
+ */
 function errorOutcome(
   step: WorkflowStepDefinition,
   message: string,
@@ -515,6 +586,8 @@ function errorOutcome(
     status: "error",
     finalText: message,
     truncated: false,
+    failureKind: "error",
+    unlaunched: true,
     turns: 0,
     toolCalls: 0,
     durationMs,

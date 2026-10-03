@@ -58,6 +58,8 @@ import {
   previewablePathOf,
   workflowRunLabel,
   workflowStepAria,
+  workflowStepFailure,
+  workflowStepFailureLabel,
   workflowStepMeta,
   WorkflowStepsBody,
   workflowTickLabel,
@@ -719,6 +721,30 @@ describe("workflowStepMeta", () => {
     expect(meta).not.toMatch(/\d/);
     expect(meta).not.toContain("·");
   });
+
+  it("unlaunched: '<label> · not launched', NOT a fabricated '0.0s' for a step that never ran for any span of time (TASK.193)", () => {
+    expect(workflowStepMeta(mkStep({ final: { status: "error", durationMs: 0, unlaunched: true } }))).toBe(
+      "Error · not launched",
+    );
+  });
+
+  // TASK.193 §10 finding 1: `started` and `final.unlaunched` are both
+  // legally true at once (a synthetic pre-check throw fires `step_start`
+  // and then settles without ever calling `subagents.run`). This pins that
+  // `started` cannot flip the rendering either way once `final !== null` —
+  // both branches, `workflowStepKind` AND `workflowStepMeta`, read the
+  // exact same "error, not launched" regardless of `started`.
+  it("started is irrelevant once final.unlaunched is set: same kind + meta whether started is true or false", () => {
+    for (const started of [true, false]) {
+      const step = mkStep({ started, final: { status: "error", durationMs: 0, unlaunched: true } });
+      expect(workflowStepKind(step)).toBe("error");
+      expect(workflowStepMeta(step)).toBe("Error · not launched");
+    }
+  });
+
+  it("error WITHOUT unlaunched still reports the real duration ('Error · 0.0s' is honest when the child actually ran and finished instantly)", () => {
+    expect(workflowStepMeta(mkStep({ final: { status: "error", durationMs: 0 } }))).toBe("Error · 0.0s");
+  });
 });
 
 describe("workflowStepAria", () => {
@@ -738,6 +764,31 @@ describe("workflowStepAria", () => {
     expect(
       workflowStepAria(mkStep({ stepId: "deploy", agentType: "sonnet", final: { status: "skipped", durationMs: 0 } })),
     ).toBe("deploy · sonnet · Skipped");
+  });
+});
+
+describe("workflowStepFailure (TASK.193)", () => {
+  it("returns null for a step with no final at all", () => {
+    expect(workflowStepFailure(mkStep({ final: null }))).toBeNull();
+  });
+
+  it("returns null for a settled step whose final carries no failure (completed/skipped/cancelled)", () => {
+    expect(workflowStepFailure(mkStep({ final: { status: "completed", durationMs: 100 } }))).toBeNull();
+    expect(workflowStepFailure(mkStep({ final: { status: "skipped", durationMs: 0 } }))).toBeNull();
+    expect(workflowStepFailure(mkStep({ final: { status: "cancelled", durationMs: 50 } }))).toBeNull();
+  });
+
+  it("returns the failure record verbatim for a step whose final carries one", () => {
+    const failure = { kind: "error" as const, text: "boom", truncated: false };
+    expect(workflowStepFailure(mkStep({ final: { status: "error", durationMs: 50, failure } }))).toEqual(failure);
+  });
+});
+
+describe("workflowStepFailureLabel (TASK.193)", () => {
+  it("labels each of the three kinds, none of them the Agent tool's own verbatim wording", () => {
+    expect(workflowStepFailureLabel("error")).toBe("Error");
+    expect(workflowStepFailureLabel("max_turns")).toBe("Max turns reached — incomplete subagent result");
+    expect(workflowStepFailureLabel("degenerate")).toBe("Cut off: repetition loop — incomplete subagent result");
   });
 });
 
@@ -2070,6 +2121,104 @@ describe("workflow step buttons (render, TASK.191 slice S4)", () => {
     expect(parents).toHaveLength(2);
     expect(parents[0]).toContain("substatus-running"); // fetch: running
     expect(parents[1]).toContain("substatus-pending"); // build: not started
+  });
+});
+
+// TASK.193: the selected step's own failure record, revealed by the SAME
+// click that already drives the activity-feed filter above — no second
+// selection mechanism, just a second thing gated on `selectedStepId`.
+describe("workflow step failure block (render, TASK.193)", () => {
+  const failedStep = mkStep({
+    stepId: "probe",
+    final: { status: "error", durationMs: 0, failure: { kind: "error", text: "boom <b>", truncated: false } },
+  });
+  const completedStep = mkStep({ stepId: "after", final: { status: "completed", durationMs: 100 } });
+  const workflow: WorkflowSubStatus = {
+    workflow: "probe-a",
+    totalSteps: 2,
+    steps: [failedStep, completedStep],
+    activity: [],
+    activityDropped: 0,
+    final: null,
+  };
+
+  it("renders the failure block with its label and HTML-escaped text when the failed step is selected", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow, selectedStepId: "probe", onSelectStep: () => {} }),
+    );
+    expect(html).toContain("workflow-step-failure");
+    expect(html).toContain("Error");
+    expect(html).toContain("boom &lt;b&gt;");
+  });
+
+  it("renders nothing when no step is selected", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow, selectedStepId: null, onSelectStep: () => {} }),
+    );
+    expect(html).not.toContain("workflow-step-failure");
+  });
+
+  it("renders nothing when the selected step completed (no failure record on it)", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow, selectedStepId: "after", onSelectStep: () => {} }),
+    );
+    expect(html).not.toContain("workflow-step-failure");
+  });
+
+  it("max_turns carries the Agent tool's own verbatim wording via the label", () => {
+    const maxTurnsWorkflow: WorkflowSubStatus = {
+      ...workflow,
+      steps: [
+        mkStep({
+          stepId: "probe",
+          final: {
+            status: "max_turns",
+            durationMs: 0,
+            failure: { kind: "max_turns", text: "partial output", truncated: false },
+          },
+        }),
+      ],
+    };
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow: maxTurnsWorkflow, selectedStepId: "probe", onSelectStep: () => {} }),
+    );
+    expect(html).toContain("incomplete subagent result");
+  });
+
+  it("a truncated record appends the [text truncated] marker", () => {
+    const truncatedWorkflow: WorkflowSubStatus = {
+      ...workflow,
+      steps: [
+        mkStep({
+          stepId: "probe",
+          final: { status: "error", durationMs: 0, failure: { kind: "error", text: "partial", truncated: true } },
+        }),
+      ],
+    };
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow: truncatedWorkflow, selectedStepId: "probe", onSelectStep: () => {} }),
+    );
+    expect(html).toContain("[text truncated]");
+  });
+
+  it("an empty text renders the '(no partial result)' stand-in", () => {
+    const emptyTextWorkflow: WorkflowSubStatus = {
+      ...workflow,
+      steps: [
+        mkStep({
+          stepId: "probe",
+          final: {
+            status: "max_turns",
+            durationMs: 0,
+            failure: { kind: "max_turns", text: "", truncated: false },
+          },
+        }),
+      ],
+    };
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow: emptyTextWorkflow, selectedStepId: "probe", onSelectStep: () => {} }),
+    );
+    expect(html).toContain("(no partial result)");
   });
 });
 

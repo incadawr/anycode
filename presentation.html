@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AnyCode — Project Presentation</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-alt: #161b22;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --accent: #7ee787;
+    --accent-2: #79c0ff;
+    --border: #30363d;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  }
+  .slide {
+    display: none;
+    height: 100vh;
+    flex-direction: column;
+    justify-content: center;
+    padding: 6vh 8vw;
+    animation: fade .35s ease;
+  }
+  .slide.active { display: flex; }
+  @keyframes fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  h1 { font-size: 4.2rem; letter-spacing: -0.03em; margin-bottom: 1.2rem; }
+  h2 { font-size: 2.2rem; letter-spacing: -0.02em; margin-bottom: 1.6rem; }
+  h2 .num { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: .6rem; }
+  p.lead { font-size: 1.35rem; color: var(--muted); max-width: 60ch; line-height: 1.55; }
+  p.lead strong, .slide li strong { color: var(--fg); }
+
+  ul { list-style: none; }
+  .slide li {
+    font-size: 1.15rem;
+    line-height: 1.5;
+    margin-bottom: .9rem;
+    padding-left: 1.6rem;
+    position: relative;
+    max-width: 70ch;
+  }
+  .slide li::before {
+    content: "▸";
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+  }
+  .slide li .dim { color: var(--muted); }
+
+  table { border-collapse: collapse; width: 100%; max-width: 900px; font-size: 1.05rem; }
+  th, td { text-align: left; padding: .8rem 1.2rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--accent-2); font-weight: 600; }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  td { color: var(--muted); }
+  td b { color: var(--fg); font-weight: 600; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.2rem; max-width: 1000px; }
+  .card {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.4rem;
+  }
+  .card h3 { font-size: 1.15rem; margin-bottom: .5rem; color: var(--accent); }
+  .card p { color: var(--muted); font-size: .98rem; line-height: 1.5; }
+
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  pre {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.2rem 1.6rem;
+    font-size: 1.05rem;
+    line-height: 1.7;
+    color: var(--accent);
+    max-width: 720px;
+  }
+  pre .c { color: var(--muted); }
+
+  .badge {
+    display: inline-block;
+    background: rgba(126, 231, 135, .12);
+    color: var(--accent);
+    border: 1px solid rgba(126, 231, 135, .35);
+    border-radius: 999px;
+    padding: .3rem 1rem;
+    font-size: .95rem;
+    font-weight: 600;
+    margin-bottom: 1.4rem;
+  }
+  .tagline { font-size: 1.5rem; color: var(--muted); max-width: 55ch; line-height: 1.5; margin-bottom: 2rem; }
+
+  footer {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 2rem;
+    color: var(--muted);
+    font-size: .85rem;
+    pointer-events: none;
+  }
+  .dots { display: flex; gap: .5rem; }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--border);
+    cursor: pointer;
+    pointer-events: auto;
+  }
+  .dot.on { background: var(--accent); }
+  kbd {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 .4em;
+    font-size: .8em;
+    font-family: inherit;
+  }
+</style>
+</head>
+<body>
+
+<!-- 1. Title -->
+<section class="slide active">
+  <span class="badge">v0.0.8 · alpha · Apache-2.0</span>
+  <h1>AnyCode</h1>
+  <p class="tagline">One desktop workspace over several AI coding agents.<br>
+  Not another agent — <strong style="color:var(--fg)">the shell around the agents you already run.</strong></p>
+  <p class="lead">Transcript, tool calls, permission prompts, file actions, terminal, context usage, MCP servers, skills, subagents and Git review — the same workspace, whichever engine runs the session.</p>
+</section>
+
+<!-- 2. The idea -->
+<section class="slide">
+  <h2><span class="num">01</span>The idea</h2>
+  <ul>
+    <li><strong>Bring your own agent.</strong> <span class="dim">A profile launches an agent CLI you already installed — under your account, on your machine. AnyCode never stores or proxies credentials.</span></li>
+    <li><strong>One UI, interchangeable engine.</strong> <span class="dim">The shell consumes an event stream and doesn't care which engine produced it.</span></li>
+    <li><strong>Capabilities follow the engine.</strong> <span class="dim">Each profile exposes what its backend supports; impossible actions are disabled, not faked.</span></li>
+    <li><strong>Subagents pick their own engine.</strong> <span class="dim">A Native session can hand a task to the Codex or Claude Code CLI and get the result in the same transcript.</span></li>
+  </ul>
+</section>
+
+<!-- 3. Engine profiles -->
+<section class="slide">
+  <h2><span class="num">02</span>Engine profiles</h2>
+  <table>
+    <tr><th>Profile</th><th>What runs the session</th><th>What it adds</th></tr>
+    <tr><td>Claude Code</td><td>Official Claude Code CLI, headless stream</td><td>Image attachments, reasoning effort, context meter, permission modes</td></tr>
+    <tr><td>Codex</td><td>OpenAI Codex CLI over <b>app-server</b> protocol</td><td>Account profiles, quotas &amp; plan panel, session import, managed binary</td></tr>
+    <tr><td>Native</td><td>AnyCode's own agent loop</td><td>Anthropic, Z.AI (GLM), OpenAI, OpenRouter, DeepSeek, Moonshot, Kimi, and any OpenAI-/Anthropic-compatible endpoint — local included</td></tr>
+  </table>
+</section>
+
+<!-- 4. Trust -->
+<section class="slide">
+  <h2><span class="num">03</span>Built on verifiable ground</h2>
+  <ul>
+    <li><strong>Protocol fixtures pin both CLI profiles.</strong> <span class="dim">Adapters must stay in sync with recorded wire streams — a dropped or invented message fails the build, not your session.</span></li>
+    <li><strong>Live re-checks are opt-in.</strong> <span class="dim">Pinning against a freshly released CLI is a separate run against the real binary.</span></li>
+    <li><strong>Honest validation status.</strong> <span class="dim">Codex and Claude Code profiles: fixtures + live smoke. Native: end-to-end proven on Z.AI (GLM) and Kimi; other providers configured but less exercised.</span></li>
+  </ul>
+</section>
+
+<!-- 5. Roadmap -->
+<section class="slide">
+  <h2><span class="num">04</span>Where it's heading</h2>
+  <div class="cards">
+    <div class="card"><h3>anyPlugin</h3><p>Public plugin ecosystem: manifest spec, install from git/archive, management UI, more contribution types.</p></div>
+    <div class="card"><h3>MCP, first-class</h3><p>Management surface for MCP servers: status, tool lists, toggles, remote servers with OAuth, on-demand tool loading.</p></div>
+    <div class="card"><h3>Mid-session switching</h3><p>Change model, provider — or the whole engine — between turns, with explicit capability and cache-cost surfacing.</p></div>
+    <div class="card"><h3>Multi-agent orchestration</h3><p>A supervisor session that plans, spawns role-scoped agents, and reviews results — substrate for deep-research mode.</p></div>
+    <div class="card"><h3>Universal preview</h3><p>Markdown, diffs, images and live dev-server pages rendered next to the chat; agent-facing screenshot/console loop on top.</p></div>
+    <div class="card"><h3>Checkpoints &amp; plan mode</h3><p>Per-turn workspace snapshots with rollback, and a read-only planning phase producing an approvable plan.</p></div>
+  </div>
+</section>
+
+<!-- 6. Codebase -->
+<section class="slide">
+  <h2><span class="num">05</span>Inside the repo</h2>
+  <ul>
+    <li><strong>apps/desktop</strong> <span class="dim">— the Electron application</span></li>
+    <li><strong>apps/cli</strong> <span class="dim">— the command-line interface</span></li>
+    <li><strong>packages/core</strong> <span class="dim">— the agent loop and shared platform logic</span></li>
+    <li><strong>docs/development</strong> <span class="dim">— automation smoke, release policy, public dev guidance</span></li>
+  </ul>
+</section>
+
+<!-- 7. Get started -->
+<section class="slide">
+  <h2><span class="num">06</span>Try it</h2>
+  <p class="lead" style="margin-bottom:1.4rem">Installers for macOS, Windows and Linux are on the GitHub Releases page — or run from source (Node 22+, pnpm 10):</p>
+  <pre><span class="c"># from source</span>
+pnpm install --frozen-lockfile
+pnpm --filter @anycode/desktop dev
+
+<span class="c"># verify</span>
+pnpm -w typecheck &amp;&amp; pnpm test</pre>
+</section>
+
+<!-- 8. Closing -->
+<section class="slide">
+  <h1 style="font-size:3rem">One shell.<br>Every agent you run.</h1>
+  <p class="tagline">Open source under Apache-2.0.<br>Contributions welcome — see CONTRIBUTING.md.</p>
+  <p class="lead">github.com/incadawr/anycode</p>
+</section>
+
+<footer>
+  <span>AnyCode · <kbd>←</kbd> <kbd>→</kbd> to navigate</span>
+  <div class="dots" id="dots"></div>
+  <span id="counter"></span>
+</footer>
+
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  const dotsEl = document.getElementById('dots');
+  const counter = document.getElementById('counter');
+  let i = 0;
+
+  slides.forEach((_, n) => {
+    const d = document.createElement('div');
+    d.className = 'dot';
+    d.onclick = () => go(n);
+    dotsEl.appendChild(d);
+  });
+  const dots = [...dotsEl.children];
+
+  function go(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle('active', k === i));
+    dots.forEach((d, k) => d.classList.toggle('on', k === i));
+    counter.textContent = (i + 1) + ' / ' + slides.length;
+  }
+
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight', 'ArrowDown', ' ', 'PageDown'].includes(e.key)) { e.preventDefault(); go(i + 1); }
+    if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { e.preventDefault(); go(i - 1); }
+    if (e.key === 'Home') go(0);
+    if (e.key === 'End') go(slides.length - 1);
+  });
+  document.addEventListener('click', e => { if (!e.target.classList.contains('dot')) go(i + 1); });
+
+  go(0);
+</script>
+</body>
+</html>

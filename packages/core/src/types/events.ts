@@ -306,6 +306,11 @@ export type AgentEvent =
   // change (protocol.ts projects new AgentEvent variants automatically). Coarse
 
   // progress surfaces as workflow_step_progress, not subagent_*.
+  // TASK.193: this event says the run has a valid graph and WILL settle with
+  // one workflow_step_end per step — it does NOT say any child has launched.
+  // A step's actual launch is workflow_step_running (post-semaphore); a step
+  // whose terminal is reached without the engine ever calling subagents.run
+  // carries `unlaunched: true` on its own workflow_step_end instead.
   | {
       type: "workflow_start";
       toolCallId: string;
@@ -370,6 +375,18 @@ export type AgentEvent =
       durationMs: number;
       /** TASK.191 slice S2: the step's final spend, from its SubagentOutcome. */
       usage?: TokenUsage;
+      /**
+       * TASK.193: present only for a step that did not complete. Shape
+       * duplicated from `workflow/step-failure.ts`'s `StepFailure` rather than
+       * imported, for the same reason `workflow_start`'s `steps` field above
+       * duplicates `WorkflowStepGraphNode`: `workflow/step-failure.ts` imports
+       * `WorkflowStepOutcome` from `ports/workflow.ts`, which itself imports
+       * `TokenUsage` FROM this file, so importing `StepFailure` back here
+       * would close a three-hop type-only cycle through this file.
+       */
+      failure?: { kind: "error" | "degenerate" | "max_turns"; text: string; truncated: boolean };
+      /** Mirrors WorkflowStepOutcome.unlaunched: the step's terminal was reached without the engine ever calling subagents.run. */
+      unlaunched?: true;
     }
   | {
       type: "workflow_end";

@@ -134,6 +134,11 @@ export {
   WEBFETCH_MAX_BYTES,
   WEBFETCH_TIMEOUT_MS,
   WORKFLOW_OUTPUT_MAX_BYTES,
+  // TASK.193: same additive reason as the WORKFLOW_CARD_* entries above — the
+  // desktop renderer's workflow-card decode module re-declares this cap locally
+  // (a value import of core would pull the whole module graph into the browser
+  // bundle) and pins the local copy against this export in its own node test.
+  WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES,
   WORKFLOW_STEP_PROMPT_MAX_BYTES,
   WORKFLOW_STEP_TIMEOUT_MS,
   WORKFLOW_TEMPLATE_MAX_BYTES,

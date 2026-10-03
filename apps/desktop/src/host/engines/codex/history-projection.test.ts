@@ -550,3 +550,28 @@ describe("projectCodexHistory — shadow command log merge (cut §2(e))", () => 
     expect(projected[3]).toMatchObject({ message: { role: "tool", content: [{ status: "success" }] } });
   });
 });
+
+
+describe("projectCodexHistory — native command persistence in Codex 0.160", () => {
+  it("deduplicates by item id and anchors a shadow-only denied command in the writer's coordinate space", () => {
+    const native: CodexThreadRead = { thread: { id: "thread", turns: [{ id: "turn", items: [
+      { type: "userMessage", id: "u", content: [{ type: "text", text: "go" }] },
+      { type: "agentMessage", id: "a", text: "before" },
+      { type: "commandExecution", id: "c1", command: "echo same", status: "completed", aggregatedOutput: "one" },
+      { type: "agentMessage", id: "b", text: "between" },
+      { type: "commandExecution", id: "c2", command: "echo same", status: "completed", aggregatedOutput: "two" },
+      { type: "agentMessage", id: "d", text: "after" },
+    ] }] } };
+    const rows: ShadowCommandItem[] = [
+      { itemId: "c1", turnOrdinal: 0, positionInTurn: 2, seqInTurn: 2, command: "echo same", exitCode: 0 },
+      { itemId: "c2", turnOrdinal: 0, positionInTurn: 3, seqInTurn: 4, command: "echo same", exitCode: 0 },
+      { itemId: "denied", turnOrdinal: 0, positionInTurn: 4, seqInTurn: 6, command: "denied" },
+    ];
+    const result = projectCodexHistory(native, rows, { maxItems: 200 });
+    const commands = result.filter((item) => item.message.role === "assistant" && typeof item.message.content !== "string" && item.message.content.some((part) => part.type === "tool_call"));
+    expect(commands).toHaveLength(3);
+    const afterIndex = result.findIndex((item) => item.id === "turn:d");
+    expect(afterIndex).toBeGreaterThanOrEqual(0);
+    expect(result.findIndex((item) => item.id.includes("shadow:6:call"))).toBeGreaterThan(afterIndex);
+  });
+});

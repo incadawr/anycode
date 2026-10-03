@@ -103,6 +103,28 @@ export * from "./dispatch/index.js";
 export * from "./loop/index.js";
 export * from "./subagents/index.js";
 export * from "./mcp/index.js";
+// TASK.226 срез S2: the in-process MCP server + control-channel transport the
+// desktop host's claude-engine glue (срез S3+) serves `mcp__anycode__agent`
+// calls through. Exported HERE, directly, rather than by adding it to
+// `mcp/index.ts` (F14): `mcp/index.ts` backs the main-safe `@anycode/core/
+// mcp-admin` subpath's own barrel discipline (mcp/admin.ts's explicit "NO
+// ai-SDK imports" — it re-exports named modules individually, never `mcp/
+// index.js`'s wildcard, precisely so main never drags the SDK in). This
+// module DOES import the real `@modelcontextprotocol/sdk` `Server`/`Transport`
+// runtime (unlike transport-compat.ts's type-only assertion, also deliberately
+// not in mcp/index.ts) — keeping it off that barrel is one guard against a
+// future admin-subpath refactor ever wildcarding `mcp/index.ts` and pulling
+// the SDK into main by accident. Same precedent as subagents/index.ts's own
+// srez S1 additions two lines up: additive, direct, never a subpath.
+export {
+  ControlChannelTransport,
+  createInProcessMcpServer,
+} from "./mcp/in-process-server.js";
+export type {
+  CreateInProcessMcpServerOptions,
+  McpToolCallResult,
+  McpToolDecl,
+} from "./mcp/in-process-server.js";
 export * from "./skills/index.js";
 export * from "./workflow/index.js";
 export * from "./plugins/index.js";

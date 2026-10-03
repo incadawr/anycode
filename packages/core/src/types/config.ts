@@ -581,6 +581,29 @@ export const WORKFLOW_OUTPUT_MAX_BYTES = 100_000;
 /** Cap on a step's substituted prompt (2×SUBAGENT_OUTPUT_MAX_BYTES). */
 export const WORKFLOW_STEP_PROMPT_MAX_BYTES = 200_000;
 
+/**
+ * Cap on the failure text a single failed workflow step carries OUT of the
+ * engine on the channels that are not the model's context — the tool payload,
+ * the workflow_step_end event and the persisted card (TASK.193). Same class and
+ * size as MCP_STDERR_CAP_BYTES: enough diagnostics to act on, far below
+ * SUBAGENT_OUTPUT_MAX_BYTES so the reason channel never competes with the run's
+ * own rendered output. The card may therefore show MORE of a step's failure
+ * than the model was given: the model's copy is additionally squeezed by the
+ * aggregate cap below.
+ */
+export const WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES = 8_192;
+
+/**
+ * Cap on the WHOLE failure summary string (first line + block headers + markers
+ * + text) the model reads; a quarter of the receiving channel so `output` keeps
+ * three quarters by construction; per-step share is derived by subtracting the
+ * real framing (workflow/step-failure.ts). Deliberately NOT tied to
+ * MAX_CONCURRENT_SUBAGENTS — the number of failed steps has nothing to do with
+ * the semaphore width (every launched step can fail). TASK.193; TASK.211 is the
+ * generated>accepted trap this closes.
+ */
+export const WORKFLOW_FAILURE_SUMMARY_MAX_BYTES = Math.floor(DEFAULT_TOOL_RESULT_BUDGET.maxModelBytes / 4);
+
 /** Cap on a raw promptTemplate/outputTemplate in a definition. */
 export const WORKFLOW_TEMPLATE_MAX_BYTES = 16_384;
 

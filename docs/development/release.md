@@ -46,8 +46,15 @@ user by accident.
    merged and pushed.
 7. Push the tag. Pushing is what starts the release — the tag alone does
    nothing until it reaches the remote.
-8. Install the draft's own artifact and open it before pressing Publish. A green
-   run is not a working release; only the artifact is.
+8. Run `release-self-check.mjs` against the draft's packaged executable (see
+   [the artifact check](automation-smoke.md#checking-the-packaged-executable)).
+   Then install that artifact and open it before pressing Publish.
+9. Owner-only acceptance: complete ChatGPT browser/device-code login and Claude
+   Terminal/browser login, cancel and retry once, restart and confirm the ready
+   account is retained, then select a project and send one real request.
+   Record these separately from automated results; an unperformed check is
+   pending. On macOS also verify first-open Gatekeeper/signing behavior on the
+   downloaded artifact. Self-check does not prove any of these interactions.
 
 `CHANGELOG.md` records functional changes, not internal refactor-only noise.
 Detailed implementation notes and private research remain outside Git in

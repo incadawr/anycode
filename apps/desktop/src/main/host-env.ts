@@ -1358,19 +1358,21 @@ export interface ReadinessParams {
  * supports (TASK.43 W5 cut Risk #3) — never a silent anthropic fallback.
  */
 export async function computeProviderReady(params: ReadinessParams): Promise<boolean> {
+  const readiness = await computeProviderReadiness(params);
+  return readiness.apiKeyReady && readiness.modelReady && readiness.transportReady;
+}
+
+export async function computeProviderReadiness(params: ReadinessParams): Promise<import("../shared/settings.js").ProviderReadiness> {
   const { bootEnv, settings, getSecret } = params;
-  if (
+  const transportReady = !(
     params.resolvedTransport !== undefined &&
     params.supportedTransports !== undefined &&
     !params.supportedTransports.includes(params.resolvedTransport)
-  ) {
-    return false;
-  }
+  );
   const credentialKey = params.credentialKey ?? "provider.apiKey";
-  const credential = await getSecret(credentialKey);
-  const apiKeyReady = params.authOptional === true || envPresent(bootEnv, ENV_API_KEY) || hasValue(credential);
+  const apiKeyReady = params.authOptional === true || envPresent(bootEnv, ENV_API_KEY) || hasValue(await getSecret(credentialKey));
   const modelReady = envPresent(bootEnv, ENV_MODEL) || hasValue(activeProviderView(settings).model);
-  return apiKeyReady && modelReady;
+  return { apiKeyReady, modelReady, transportReady };
 }
 
 function hasValue(value: string | undefined): boolean {

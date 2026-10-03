@@ -1,3 +1,4 @@
+import { assertChildModel, readAllowedChildModels } from "../shared/child-model.js";
 /**
  * Host utilityProcess entry point (design §2/§6, MVP.3; persistence/hooks
  * wiring per §2.12, task 1.9).
@@ -208,6 +209,10 @@ import {
   createMediaProjectionPort,
   createSkillPort,
   createWebSearchTool,
+  buildAgentBridgeToolDecl,
+  decodeAgentBridgeCallInput,
+  discoverAgentProfiles,
+  runAgentBridgeCall,
   AskCache,
   browserOpenTool,
   browserReadTool,
@@ -244,6 +249,7 @@ import {
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type {
+  AgentBridgeCatalogEntry,
   AgentEvent,
   AgentLoopConfig,
   BuiltinSkillDefinition,
@@ -269,9 +275,11 @@ import type {
   SystemPromptEnv,
   TelemetryPort,
   TokenUsage,
+  ToolResultPresentation,
   WorktreeControlPort,
   WorkspaceTransition,
 } from "@anycode/core";
+import { buildAgentProfileRoots } from "@anycode/core/subagents-admin";
 import { hasDurableTransitionResult } from "./worktree-recovery.js";
 import { ChildReportQueue } from "./child-report-queue.js";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
@@ -365,6 +373,8 @@ import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
 import { resumeClaudeEngine, startClaudeEngine } from "./engines/claude/claude-engine.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
+import { catalogFromProfiles } from "./engines/claude/bridge-catalog.js";
+import { ClaudeMcpBridge } from "./engines/claude/mcp-bridge.js";
 import { projectClaudeHistory } from "./engines/claude/history-projection.js";
 import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./engines/claude/process-ownership.js";
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
@@ -1168,6 +1178,113 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // notice rather than reaching the wire.
   const draft = parseClaudeEngineArgs(process.argv.slice(2));
 
+  // TASK.226 срез S4: the MCP agent-bridge door for this tab. Built and
+  // wired into `options` BEFORE `startClaudeEngine`/`resumeClaudeEngine`
+  // ever call `client.initialize()` — probes.md P0's load-bearing finding is
+  // that the CLI drives its OWN mcp handshake (`initialize` ->
+  // `notifications/initialized` -> `tools/list`, each wrapped as a
+  // `mcp_message` control_request) INSIDE our outbound `initialize` call,
+  // before it even answers ours; a bridge wired any later would silently
+  // miss that handshake (claude-engine.ts's own `connectClaudeEngine` doc
+  // has the full mechanics, and claude-engine.connect.test.ts's "wired
+  // BEFORE initialize" suite pins the order against a scripted fake CLI).
+  //
+  // Non-recursion lock, this door's own equivalent of F12's registry/config
+  // pair: a claude CHILD (`args.child !== undefined`) never even scans the
+  // catalog, let alone gets a bridge — core's OWN two locks (spawn-tools.ts's
+  // SPAWN_TOOLS set dropped from a child's tool registry; runner.ts's child
+  // config carrying no `subagents`/`workflows` port) apply to core's OWN
+  // AgentLoop, which a claude session never has, so withholding the door
+  // itself is the equivalent lock for this engine. `args.child !== undefined`
+  // alone is the right (and only) discriminator here, unlike the core tail's
+  // `isChildSessionBoot(args, sessionMeta)`: a claude `--resume` can only
+  // ever target a ROOT row (`persistence!.getRootSession` above returns null
+  // for anything else; children never respawn — cut §0.6, echoed a few lines
+  // up at TASK.102 CUT-S4 §4.3's own comment), so `sessionMeta.parentSessionId`
+  // never carries information independent of `args.child` for this engine
+  // the way it does for the core tail's respawnable rows.
+  const fs = new NodeFileSystemAdapter();
+  // Preallocated so the port below can stamp `parentSessionId` before the
+  // engine connects — for a fresh boot this IS the value the later
+  // `rowWriter`/`sessionRow` block reuses verbatim; for a resume it equals
+  // `existing.id` (`getRootSession` looks up `WHERE id = ?`), so hoisting
+  // this above the connect call changes no persisted value, only its timing.
+  const rowId = args.sessionId ?? randomUUID();
+  let mcpBridge: ClaudeMcpBridge | undefined;
+  const bridgePresentations = new Map<string, ToolResultPresentation>();
+  if (args.child === undefined) {
+    const discovered = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []));
+    for (const problem of discovered.problems) {
+      console.warn(`[host] claude mcp bridge: agent profile: ${problem}`);
+    }
+    const catalog: AgentBridgeCatalogEntry[] = catalogFromProfiles(discovered.profiles);
+    // The switch (plan §5 S4 p.7): an empty `tools/list` is never worth
+    // announcing — the door itself is the extra attack/complexity surface,
+    // not just the tool inside it — so NOTHING below this `if` runs at all,
+    // and `mcpBridge` stays `undefined` all the way to `options`.
+    if (catalog.length > 0) {
+      const childPort = createChildSessionPort({
+        parentSessionId: rowId,
+        // A claude session's `mode()` is a fixed "build" display value — it
+        // never consults core's permission engine (claude-engine.ts's own
+        // doc on `ClaudeEngine.mode()`) — so, unlike the core tail's
+        // `() => config.mode` (a live, mutable value), this is a constant by
+        // construction, not a shortcut around one.
+        getPermissionMode: () => "build",
+        send: sendChildSessionMessage,
+        subscribe: subscribeChildRunEvents,
+        onDetachedTerminal: deliverDetachedChildReport,
+        onDetachedStall: deliverDetachedChildStall,
+      });
+      mcpBridge = new ClaudeMcpBridge({
+        serverName: "anycode",
+        // Decorative only (R4 precedent, `appVersion` doc a few hundred
+        // lines below): the desktop app version lives in `main`, not
+        // reachable from this utility process.
+        version: "1",
+        listTools: () => {
+          const decl = buildAgentBridgeToolDecl(catalog);
+          return decl === null ? [] : [decl];
+        },
+        callTool: async (name, callArgs, signal, meta) => {
+          if (name !== "agent") {
+            return { text: `AnyCode's MCP bridge has no tool named "${name}"`, isError: true };
+          }
+          if (meta.toolUseId === undefined) {
+            return { text: "AnyCode could not correlate this call to a tool_use id", isError: true };
+          }
+          const input = decodeAgentBridgeCallInput(callArgs);
+          if (input === null) {
+            return {
+              text: "Malformed agent call: description/prompt/agent_type must be non-empty strings",
+              isError: true,
+            };
+          }
+          // TASK.226 план §2.3/Ruling 1: no `wallMs` override — the sync v1
+          // wall is `runAgentBridgeCall`'s own default (SUBAGENT_TIME_BUDGET_MS,
+          // 6h), the SAME stance every other bridge caller takes.
+          const result = await runAgentBridgeCall(input, {
+            catalog,
+            port: childPort,
+            spawnToolCallId: meta.toolUseId,
+            signal,
+          });
+          // The MCP `tools/call` response itself has no room for a card
+          // payload (`{text, isError}` only — plan §3.1); the durable
+          // snapshot rides `takePresentation` below instead, consumed
+          // exactly once by the paired top-level `tool_result` for this
+          // SAME tool_use id (event-translator.ts's own doc).
+          if (result.presentation !== undefined) {
+            bridgePresentations.set(meta.toolUseId, result.presentation);
+          }
+          return { text: result.text, isError: result.isError };
+        },
+      });
+    }
+  } else {
+    console.log("[host] claude mcp bridge: child boot, no bridge");
+  }
+
   const options = {
     bootstrap,
     broker,
@@ -1182,6 +1299,16 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // rationale (D-S4-4).
     binaryTrust: (path: string) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
     ...(processOwnership !== undefined ? { processOwnership } : {}),
+    ...(mcpBridge !== undefined
+      ? {
+          mcpBridge,
+          takePresentation: (toolUseId: string) => {
+            const presentation = bridgePresentations.get(toolUseId);
+            bridgePresentations.delete(toolUseId);
+            return presentation;
+          },
+        }
+      : {}),
   };
 
   const connected = await (args.resume
@@ -1253,8 +1380,13 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // and every `touch` can use it immediately — but no row is written yet
   // (native-first, cut §1.5 hazard (а); the ordering rule itself, plus the
   // buffering of patches that arrive before the row exists, lives in
-  // session-row.ts where it is unit-tested).
-  const rowId = connected.sessionMeta?.id ?? args.sessionId ?? randomUUID();
+  // session-row.ts where it is unit-tested). Computed ABOVE (TASK.226 срез
+  // S4, before `connected` exists — the mcp bridge's session-tier port needs
+  // it too) rather than here: `connected.sessionMeta?.id` is never a THIRD
+  // value — a resume's `existing.id` is `args.sessionId` by construction
+  // (`getRootSession` looks up `WHERE id = ?`), and a fresh boot's
+  // `sessionMeta` is `null` — so `rowId` already equals this expression for
+  // both branches.
   const rowWriter = new ClaudeSessionRowWriter({
     rowId,
     identity: sessionRow,
@@ -1309,7 +1441,8 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   );
 
   const booted = await plugin.boot({ claudeEngine: shadowEngine });
-  const fs = new NodeFileSystemAdapter();
+  // `fs` built ABOVE (TASK.226 срез S4 — needed early for the agent-profile
+  // catalog scan, before `connected` exists) and reused here verbatim.
 
   // Shell wiring, identical to the codex branch: AnyCode's own repo context
   // (Git bridge, Review diff, Environment chip) is a property of the WORKSPACE,
@@ -2697,7 +2830,7 @@ async function boot(): Promise<void> {
     //
     // resolveChildModelPort is the SAME modelPortFactory the mid-session
     // `/model` switch uses, so an `Agent(model: …)` override builds a child port
-    // from this session's provider/transport/key rather than failing closed.
+    // from this session's provider/transport/key after validating the exact id.
     // Without it the runner returns "model override is not supported in this
     // host" — the CLI wired this from the start, the desktop host did not.
     //
@@ -2721,7 +2854,10 @@ async function boot(): Promise<void> {
           profiles: () => ext.profiles,
           env: systemPromptEnv,
           memorySection: ext.memorySection,
-          resolveChildModelPort: modelPortFactory,
+          resolveChildModelPort: (id: string) => {
+            assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model));
+            return modelPortFactory(id);
+          },
           // TASK.162 (F6) + §0b adjudication: unconditional, exactly like the
           // port factory above (the desktop always has both). The tier handed
           // to the resolver is the host-owned `selectedEffort` cell read AT

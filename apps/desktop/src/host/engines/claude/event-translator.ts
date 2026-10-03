@@ -11,7 +11,7 @@
  * C-bug-1 lesson: a self-made sum is a plausible-looking meter that is wrong).
  */
 
-import type { AgentEvent, FinishReason, LoopEndReason, ToolCallOutcome, ToolCallStatus } from "@anycode/core";
+import type { AgentEvent, FinishReason, LoopEndReason, ToolCallOutcome, ToolCallStatus, ToolResultPresentation } from "@anycode/core";
 import type {
   ClaudeAssistantMessage,
   ClaudeRateLimitEventMessage,
@@ -41,6 +41,18 @@ export interface ClaudeTurnTranslatorOptions {
    * written to a transcript (cut §0.2 invariant 2).
    */
   onResult?(result: ClaudeResultMessage): void;
+  /**
+   * TASK.226 срез S4: looks up (and consumes) the durable subagent-card
+   * snapshot for one `mcp__anycode__agent` tool_use id, stamped by the MCP
+   * bridge's `callTool` handler (host/index.ts) once that child session
+   * settled. The MCP `tools/call` response itself carries no room for a card
+   * payload (only `{text, isError}` — plan §3.1), so this is the ONLY
+   * channel the durable `presentation.subagent` snapshot reaches the top-
+   * level `tool_result` this translator builds for the SAME tool_use id
+   * (F8: the claude assistant frame's `tool_use.id` IS this id). Absent for
+   * every other tool_use id (returns `undefined`) — never guessed.
+   */
+  takePresentation?(toolUseId: string): ToolResultPresentation | undefined;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -360,6 +372,12 @@ export class ClaudeTurnTranslator {
       this.tools.delete(toolUseId);
       const status = toolStatus(block.is_error);
       const modelText = toolResultText(block.content);
+      // TASK.226 срез S4: a snapshot only ever exists for a
+      // `mcp__anycode__agent` call (the ONLY caller of `callTool` that ever
+      // stamps one) — `takePresentation` returns `undefined` for every other
+      // tool_use id, so this spread is a no-op for the other 99% of tool
+      // calls the same way `presentation` already was before this srez.
+      const presentation = this.options.takePresentation?.(toolUseId);
       const outcome: ToolCallOutcome = {
         toolCallId: toolUseId,
         toolName: projection?.toolName ?? "Tool",
@@ -367,8 +385,14 @@ export class ClaudeTurnTranslator {
         modelText,
         durationMs: 0,
         ...(status === "success"
-          ? { result: { ok: true, output: modelText } }
-          : { result: { ok: false, error: modelText === "" ? "Claude tool failed" : modelText } }),
+          ? { result: { ok: true, output: modelText, ...(presentation !== undefined ? { presentation } : {}) } }
+          : {
+              result: {
+                ok: false,
+                error: modelText === "" ? "Claude tool failed" : modelText,
+                ...(presentation !== undefined ? { presentation } : {}),
+              },
+            }),
       };
       events.push({ type: "tool_result", outcome });
     }

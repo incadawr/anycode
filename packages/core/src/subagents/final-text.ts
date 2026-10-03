@@ -18,6 +18,14 @@
  *    can never overwrite an already-fixated result, because `final` is only
  *    ever written by `fixate`, never by `reset`/`append`.
  *
+ * The four rules above stay verbatim, but the two tiers DIVERGE on one class
+ * since TASK.193 slice S5: runner.ts now prefixes an `error` outcome's
+ * `finalText` with the provider failure's `safe` descriptor, so a child that
+ * dies on the provider carries a reason instead of the previous turn's text.
+ * This accumulator deliberately does NOT mirror that — the session tier's own
+ * missing error branch is TASK.190 — so for an event sequence containing
+ * `error` the two tiers no longer produce the same final text.
+ *
  * A child-mode host chains further turns across its whole lifetime for
  * queued steer messages (CUT-S2 §1.1/§2.6.3): each `turn_end` re-fixates
  * over the prior committed text, so `final` always reflects the LAST

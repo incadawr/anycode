@@ -93,6 +93,7 @@ import type {
 } from "../shared/settings.js";
 import {
   computeProviderReady,
+  computeProviderReadiness,
   connectionSecretKey,
   customKindDefaultTransport,
   customProviderSecretKey,
@@ -717,9 +718,9 @@ async function snapshotFrom(
 ): Promise<SettingsSnapshot> {
   const transportInfo = selectedTransportInfo(deps, settings);
   const credentialKey = activeCredential(deps, settings);
-  const [rawSecrets, providerReady] = await Promise.all([
+  const [rawSecrets, providerReadiness] = await Promise.all([
     deps.vault.statuses(deps.bootEnv, deps.catalogIds ?? []),
-    computeProviderReady({
+    computeProviderReadiness({
       bootEnv: deps.bootEnv,
       settings,
       getSecret: (key) => deps.vault.getSecretValue(key),
@@ -739,7 +740,8 @@ async function snapshotFrom(
     // byte, so this costs nothing on the overwhelmingly common path.
     settings: maskLegacyProxyUrls(settings),
     secrets: rawSecrets,
-    providerReady,
+    providerReady: providerReadiness.apiKeyReady && providerReadiness.modelReady && providerReadiness.transportReady,
+    providerReadiness,
     envOverrides: envOverrides(deps.bootEnv),
     readOnly,
     ...(deps.catalog !== undefined ? { catalog: deps.catalog } : {}),
@@ -1303,6 +1305,9 @@ const FAILURE_CODE_TO_HEALTH: Record<string, ProviderHealthStatus> = Object.assi
   quota: "rate_limited",
   connect_timeout: "unreachable",
   network: "unreachable",
+  proxy_unreachable: "unreachable",
+  proxy_auth: "unreachable",
+  tls: "unreachable",
   server: "unreachable",
   unknown: "misconfigured",
 });

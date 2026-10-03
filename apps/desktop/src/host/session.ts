@@ -1,3 +1,4 @@
+import { safeFailureMessage } from "./safe-failure.js";
 /**
  * Host session: the protocol server tying the UI wire to the core agent loop
  * (design §2/§3/§4/§5). One workspace, one session, one turn at a time.
@@ -93,6 +94,7 @@ import type { IpcPermissionBroker } from "./permission-broker.js";
 import { extractSnapshotPath, isSnapshotTool, readSnapshot } from "./snapshot-hook.js";
 import { PreviewArtifactCollector } from "./preview-artifacts.js";
 import { describeError, sanitizeAgentEvent } from "./serialize.js";
+import { recordErrorDiagnostic } from "./error-diagnostics.js";
 import type { SessionEngine } from "./engines/session-engine.js";
 
 /** Cap on the replay ring buffer; older messages roll off (design §3). */
@@ -918,6 +920,7 @@ export class Session {
   private childToolCalls = 0;
   /** The last loop_end's status (workspace_transition mapped to "error" — a child never actually relocates); undefined until the first loop_end. */
   private childLoopStatus: ChildRunStatus | undefined;
+  private childSafeError: string | undefined;
   /** Once-latch (F7): true once `finalizeChildTerminal` has actually invoked `child.onTerminal` (or handed off an error terminal) — guards its docstring's "exactly once" contract against a second concurrent call. */
   private childTerminalFinalized = false;
   /** Wall-clock start of the child's turn chain, set once by startProgrammaticTurn — the terminal report's durationMs baseline. */
@@ -2227,7 +2230,10 @@ export class Session {
     if (this.child === undefined || this.childTerminalFinalized) {
       return "terminal";
     }
-    const { text: finalText, truncated } = finalizeFinalText(this.childFinalText);
+    const childResult = this.childLoopStatus === "error"
+      ? { ...this.childFinalText, final: `${this.childSafeError ?? safeFailureMessage("unknown")}\n\n${this.childFinalText.final}` }
+      : this.childFinalText;
+    const { text: finalText, truncated } = finalizeFinalText(childResult);
     const durationMs = Date.now() - this.childStartedAt;
     try {
       await this.child.flushHistory();
@@ -2299,7 +2305,13 @@ export class Session {
     switch (event.type) {
       case "turn_start":
         this.childFinalText = resetFinalText(this.childFinalText);
+        this.childSafeError = undefined;
         break;
+      case "error": {
+        const wire = sanitizeAgentEvent(event);
+        if (wire.type === "error") this.childSafeError = wire.error.message;
+        break;
+      }
       case "text_delta":
         this.childFinalText = appendFinalText(this.childFinalText, event.text);
         break;
@@ -2458,14 +2470,18 @@ export class Session {
         }
         this.captureSnapshotPath(event);
         this.previewArtifacts.observeStart(event);
-        this.outbound.emit({ type: "agent_event", turnId, event: sanitizeAgentEvent(event) });
+        const wireEvent = sanitizeAgentEvent(event);
+        this.outbound.emit({ type: "agent_event", turnId, event: wireEvent });
         if (this.child !== undefined) {
           this.observeChildEvent(event);
         }
         if (event.type === "error") {
           // TASK.2 DoD-c: the raw provider failure reaches the process log
           // (stdio:"inherit" -> app log), not only the transcript block.
-          console.error(`[host] provider stream error: ${describeError(event.error)}`);
+          if (wireEvent.type === "error") {
+            console.error(`[host] provider stream error: ${wireEvent.error.code ?? "unknown"}`);
+            recordErrorDiagnostic(process.env.ANYCODE_DIAGNOSTICS_DIR, this.sessionId, wireEvent.error.code ?? "unknown", event.safe?.statusCode);
+          }
           // TASK.45 W11: relay the core loop's OWN classification (event.safe.code)
           // verbatim — never reclassified here. Absent `safe` (a legacy/foreign
           // producer) defaults to "unknown" rather than dropping the signal.

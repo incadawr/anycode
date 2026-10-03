@@ -11,6 +11,7 @@
  */
 
 import type { TokenUsage } from "../types/events.js";
+import type { StepFailure } from "../workflow/step-failure.js";
 
 /** One step of a declarative workflow DAG (validated at discovery). */
 export interface WorkflowStepDefinition {
@@ -70,6 +71,22 @@ export interface WorkflowStepOutcome {
   /** Capped by the runner (SUBAGENT_OUTPUT_MAX_BYTES). */
   finalText: string;
   truncated: boolean;
+  /**
+   * What `finalText` IS on a step that did not complete (TASK.193). "error" =
+   * an error message; "max_turns"/"degenerate" = a PARTIAL output the child
+   * never finished, which must never be read as a finished report. Absent on
+   * completed/skipped/cancelled steps: a cancelled step's text is the last
+   * finished turn, not a reason, and the reason is the run-level cancellation.
+   */
+  failureKind?: "error" | "degenerate" | "max_turns";
+  /**
+   * Set only by errorOutcome(): the step reached a terminal state WITHOUT the
+   * engine ever calling subagents.run (unknown agentType pre-check / prompt
+   * render throw), so its turns, spend and durationMs are structurally zero
+   * rather than measured. Travels to every consumer so none of them has to
+   * infer "never launched" from a zero (TASK.193).
+   */
+  unlaunched?: true;
   turns: number;
   toolCalls: number;
   durationMs: number;
@@ -90,6 +107,11 @@ export type WorkflowProgress =
   // `steps` (TASK.191 slice S3) is the run's full step graph, so a client can
   // hold and order all N steps before the first `step_start` arrives instead
   // of discovering them one at a time in event-ARRIVAL order.
+  // TASK.193: this event says the run has a valid graph and WILL settle with
+  // one step_end per step — it does NOT say any child has launched. A step's
+  // actual launch is `step_running` (post-semaphore); a step whose terminal
+  // is reached without the engine ever calling subagents.run carries
+  // `unlaunched: true` on its own step_end instead.
   | { kind: "start"; workflow: string; totalSteps: number; steps: readonly WorkflowStepGraphNode[] }
   | { kind: "step_start"; stepId: string; agentType: string }
   // The step's REAL (post-semaphore) start (TASK.191 slice S3), distinct from
@@ -132,6 +154,10 @@ export type WorkflowProgress =
       durationMs: number;
       /** The step's FINAL spend, read off the child's own SubagentOutcome. */
       usage?: TokenUsage;
+      /** Present only for a step that did not complete (TASK.193); same shape/meaning as WorkflowStepOutcome.failureKind + finalText, capped. */
+      failure?: StepFailure;
+      /** Mirrors WorkflowStepOutcome.unlaunched: the step's terminal was reached without the engine ever calling subagents.run. */
+      unlaunched?: true;
     }
   | {
       kind: "end";

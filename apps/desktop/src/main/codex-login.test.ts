@@ -137,3 +137,34 @@ describe("runCodexLogin + profiles (TASK.50 п.2 — login INTO a profile home)"
     expect(spawnSpy).not.toHaveBeenCalled();
   });
 });
+
+
+describe("Codex device-code login", () => {
+  it("publishes the code and verification URL and waits for completion", async () => {
+    const onDeviceCode = vi.fn();
+    const openExternal = vi.fn();
+    expect(await runCodexLogin("/fake/codex", {
+      mode: "device", trust: TRUSTED, onDeviceCode, openExternal,
+      spawnImpl: fakeSpawn(["--auto-complete-login"]), timeoutMs: 1000,
+    })).toEqual({ ok: true });
+    expect(onDeviceCode).toHaveBeenCalledExactlyOnceWith({ userCode: "ABCD-1234", verificationUrl: "https://example.invalid/device" });
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith("https://example.invalid/device");
+  });
+  it.each(["--unsafe-login-url", "--invalid-device-code"])("rejects malformed device progress %s before exposing it", async (flag) => {
+    const onDeviceCode = vi.fn();
+    const openExternal = vi.fn();
+    expect(await runCodexLogin("/fake/codex", {
+      mode: "device", trust: TRUSTED, onDeviceCode, openExternal,
+      spawnImpl: fakeSpawn([flag]), timeoutMs: 1000,
+    })).toEqual({ ok: false, reason: "failed" });
+    expect(onDeviceCode).not.toHaveBeenCalled();
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+  it("cancels the device flow without leaving a five-minute timer", async () => {
+    const controller = new AbortController();
+    expect(await runCodexLogin("/fake/codex", {
+      mode: "device", trust: TRUSTED, signal: controller.signal,
+      openExternal: () => controller.abort(), spawnImpl: fakeSpawn(),
+    })).toEqual({ ok: false, reason: "cancelled" });
+  });
+});

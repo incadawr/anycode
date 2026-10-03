@@ -4474,3 +4474,28 @@ describe("TabHostManager — recognizer live-config broadcast (TASK.198 E1 §1.2
     ).not.toThrow();
   });
 });
+
+describe("TASK.194 model admission before fork", () => {
+  it("rejects an unavailable model before it can reach the child's HTTP request", () => {
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const validateChildModel = vi.fn(() => { throw new Error("not in connection"); });
+    const manager = childManager(fork, window, { validateChildModel });
+    manager.createTab({ workspace: "/ws", sessionId: "model-guard-root", resume: false, connectionId: "z-ai-connection" });
+    const root = hosts[0]!;
+    root.emit("message", spawnRequest({ model: "opus" }));
+    expect(validateChildModel).toHaveBeenCalledWith("opus", "z-ai-connection");
+    expect(hosts).toHaveLength(1);
+    expect(childRunEvents(root)).toMatchObject([{ kind: "rejected", reason: "not_ready", message: expect.stringContaining("matching provider/connection") }]);
+  });
+  it("validates against an explicitly selected provider rather than the parent", () => {
+    const { fork, hosts } = liveForkRig();
+    const { window } = windowRig();
+    const validateChildModel = vi.fn();
+    const manager = childManager(fork, window, { validateChildModel, resolveProviderConnection: () => "anthropic-connection" });
+    manager.createTab({ workspace: "/ws", sessionId: "model-provider-root", resume: false, connectionId: "z-ai-connection" });
+    hosts[0]!.emit("message", spawnRequest({ model: "claude-opus-4-20250514", provider: "anthropic" }));
+    expect(validateChildModel).toHaveBeenCalledWith("claude-opus-4-20250514", "anthropic-connection");
+    expect(hosts).toHaveLength(2);
+  });
+});
