@@ -445,11 +445,11 @@ export class TurnTranslator {
     // double-report when the live `error` notification already fired.
     if (loopReason === "error" && !this.errorEmitted) {
       const turnError = record(turn?.error);
-      if (turnError !== null) {
-        const message = typeof turnError.message === "string" && turnError.message.length > 0 ? turnError.message : "Codex turn failed.";
-        this.errorEmitted = true;
-        events.push({ type: "error", error: new Error(message) });
-      }
+      const message = typeof turnError?.message === "string" && turnError.message.length > 0
+        ? turnError.message
+        : status === "failed" ? "Codex turn failed." : "Codex protocol returned an unsupported turn status.";
+      this.errorEmitted = true;
+      events.push({ type: "error", error: new Error(message) });
     }
     for (const id of this.openText) events.push({ type: "text_end", id });
     this.openText.clear();

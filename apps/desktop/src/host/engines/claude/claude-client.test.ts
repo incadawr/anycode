@@ -294,9 +294,10 @@ describe("ClaudeClient", () => {
     return stream;
   }
 
-  function makeFramingClient(): { client: ClaudeClient; emit: (chunk: Buffer) => void } {
+  function makeFramingClient(): { client: ClaudeClient; emit: (chunk: Buffer) => void; stdinWrites: unknown[] } {
     let mainStdout: FakeStream | undefined;
     let callIndex = 0;
+    const stdinWrites: unknown[] = [];
     const client = new ClaudeClient({
       binaryPath: "/fake/claude",
       cwd: process.cwd(),
@@ -316,6 +317,16 @@ describe("ClaudeClient", () => {
         child.stdin = makeFakeStream();
         child.stdout = makeFakeStream();
         child.stderr = makeFakeStream();
+        // Every stdin write is captured, line by line — used by the
+        // TASK.226 S3 `initialize(extra)` test to assert on the exact
+        // outbound control_request body, not just on the inbound replay
+        // (the fixture-driven tests above never inspect what WE sent).
+        if (!args.includes("--version")) {
+          child.stdin.write = (chunk: unknown) => {
+            stdinWrites.push(JSON.parse(String(chunk)));
+            return true;
+          };
+        }
         // Simulates a clean, immediate exit on stdin EOF/kill — these framing
         // tests are not exercising teardown timing, so the fake child must
         // resolve `close()`'s `exitedWithin` race immediately rather than
@@ -341,6 +352,7 @@ describe("ClaudeClient", () => {
     return {
       client,
       emit: (chunk: Buffer) => mainStdout!.emit("data", chunk),
+      stdinWrites,
     };
   }
 
@@ -372,6 +384,88 @@ describe("ClaudeClient", () => {
       emit(bytes.subarray(splitAt));
       const [message] = await drain(client.notifications(), 1);
       expect((message as { result: string }).result).toBe(text);
+    } finally {
+      await client.close();
+    }
+  });
+
+  // TASK.226 blocker (probes.md, "Блокер, которого в плане нет"): the live
+  // CLI emits this exact top-level frame every ~30s during a long tool call.
+  // Before dispatch() recognized it, it fell through to the unrecognized-type
+  // branch and terminalized the whole session on the FIRST heartbeat.
+  it("survives a `tool_progress` heartbeat frame mid-turn instead of terminalizing the session (TASK.226)", async () => {
+    const { client, emit } = makeFramingClient();
+    try {
+      await client.start();
+      const heartbeat = `${JSON.stringify({
+        type: "tool_progress",
+        tool_use_id: "toolu_01ABCDEF-heartbeat-0",
+        tool_name: "mcp__anycode__agent",
+        parent_tool_use_id: "toolu_01PARENT",
+        elapsed_time_seconds: 30,
+        heartbeat: true,
+        session_id: "s-1",
+        uuid: "u-1",
+      })}\n`;
+      const result = `${JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 1, duration_ms: 0, duration_api_ms: 0, total_cost_usd: 0, result: "after-heartbeat" })}\n`;
+      emit(Buffer.from(heartbeat, "utf8"));
+      // The session is still alive: the very next frame is delivered normally,
+      // not lost behind a terminal close() of the notification queue.
+      emit(Buffer.from(result, "utf8"));
+      const [message] = await drain(client.notifications(), 1);
+      expect((message as { type: string; result: string }).type).toBe("result");
+      expect((message as { result: string }).result).toBe("after-heartbeat");
+    } finally {
+      await client.close();
+    }
+  });
+
+  // TASK.226 S3: `ClaudeMcpBridge.announceOn` merges `sdkMcpServers` onto this
+  // call's body (probes.md P0) without `initialize()` knowing anything about
+  // MCP. Argv is untouched by this slice — only the control_request BODY
+  // changes — so these are framing-level tests, not argv pins.
+  it("initialize(extra) merges caller-supplied fields into the outbound control_request body (TASK.226 S3)", async () => {
+    const { client, stdinWrites, emit } = makeFramingClient();
+    try {
+      await client.start();
+      const pending = client.initialize({ sdkMcpServers: ["anycode"] });
+      const sent = stdinWrites.at(-1) as { type: string; request_id: string; request: Record<string, unknown> };
+      expect(sent.type).toBe("control_request");
+      expect(sent.request).toEqual({ subtype: "initialize", sdkMcpServers: ["anycode"] });
+
+      emit(
+        Buffer.from(
+          `${JSON.stringify({
+            type: "control_response",
+            response: { subtype: "success", request_id: sent.request_id, response: { commands: [], models: [], account: {} } },
+          })}\n`,
+          "utf8",
+        ),
+      );
+      await pending;
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("initialize() with no argument still sends the pre-TASK.226 empty body byte-for-byte", async () => {
+    const { client, stdinWrites, emit } = makeFramingClient();
+    try {
+      await client.start();
+      const pending = client.initialize();
+      const sent = stdinWrites.at(-1) as { type: string; request_id: string; request: Record<string, unknown> };
+      expect(sent.request).toEqual({ subtype: "initialize" });
+
+      emit(
+        Buffer.from(
+          `${JSON.stringify({
+            type: "control_response",
+            response: { subtype: "success", request_id: sent.request_id, response: { commands: [], models: [], account: {} } },
+          })}\n`,
+          "utf8",
+        ),
+      );
+      await pending;
     } finally {
       await client.close();
     }

@@ -142,7 +142,11 @@ if (args[0] === "--version") {
           process.stdout.write(`${JSON.stringify({ id: request.id, result: { data: [{ id: "gpt-fake-2", model: "gpt-fake-2", displayName: "Fake Two" }], nextCursor: null } })}\n`);
         }
       } else if (request.method === "account/login/start") {
-        process.stdout.write(`${JSON.stringify({ id: request.id, result: { type: "chatgpt", authUrl: "https://example.invalid/auth", loginId: "login-1" } })}\n`);
+        const device = request.params?.type === "chatgptDeviceCode";
+        const result = device
+          ? { type: "chatgptDeviceCode", verificationUrl: flag("--unsafe-login-url") ? "file:///tmp/auth" : "https://example.invalid/device", userCode: flag("--invalid-device-code") ? "secret\npoison" : "ABCD-1234", loginId: "login-1" }
+          : { type: "chatgpt", authUrl: "https://example.invalid/auth", loginId: "login-1" };
+        process.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
         if (flag("--auto-complete-login")) {
           setTimeout(() => {
             process.stdout.write(`${JSON.stringify({ method: "account/login/completed", params: { success: true, loginId: "login-1", error: null } })}\n`);

@@ -643,11 +643,12 @@ export interface TryAgainButtonState {
   enabled: boolean;
 }
 
-/** `workflowStepsState`'s ok-shape (TASK.191 slice S4): same "ok:true folded into the DOM reading" shape as `AgentCardState`/`TryAgainButtonState`. */
+/** `workflowStepsState`'s ok-shape (TASK.191 slice S4): same "ok:true folded into the DOM reading" shape as `AgentCardState`/`TryAgainButtonState`. `failure` (TASK.193) is the rendered `.workflow-step-failure` block's own label/text, or `null` when no step is selected, the selected step has no failure record, or the card isn't rendered at all. */
 export interface WorkflowStepsState {
   ok: true;
   rows: WorkflowStepRowView[];
   activityRows: string[];
+  failure: { kind: string; text: string } | null;
 }
 
 /** Parsed read of one `loop_end` block's `.retry-try-again-button` children (TASK.33 W8-FIX #2) — `count` rides through uncollapsed (rather than the facade reducing it to a boolean) so the caller itself can assert "exactly one", since more than one would itself be the defect this probe exists to catch. */
@@ -709,16 +710,18 @@ export interface ChildSplitDom {
   click(): boolean;
 }
 
-/** One row of `WorkflowStepsBody`'s checklist (TASK.191 slice S4): the button's own `.workflow-step-id` text plus whether it currently carries the click-driven selection (`aria-pressed`, `ToolCallCard.tsx`'s own `selected` prop). Rendered order rides through as-is (`orderStepsByDependency`'s topological order, read straight off the DOM — never re-derived), so a live smoke can assert on it directly. */
+/** One row of `WorkflowStepsBody`'s checklist (TASK.191 slice S4): the button's own `.workflow-step-id` text plus whether it currently carries the click-driven selection (`aria-pressed`, `ToolCallCard.tsx`'s own `selected` prop). Rendered order rides through as-is (`orderStepsByDependency`'s topological order, read straight off the DOM — never re-derived), so a live smoke can assert on it directly. `meta` (TASK.193 §10 finding 2) is the same button's `.workflow-step-meta` text — `workflowStepMeta`'s rendered output (e.g. "Error · not launched") — read so a live smoke can prove that meta machine-readably instead of only by screenshot. */
 export interface WorkflowStepRowView {
   stepId: string;
   selected: boolean;
+  meta: string;
 }
 
-/** Parsed read of one workflow card's checklist + activity lane (TASK.191 slice S4). `activityRows` is whatever `WorkflowActivityFeed` currently renders — already filtered down to the selected step's rows when one is selected, since that filtering is `workflowActivityRows`' pure client-side slice of `WorkflowSubStatus.activity`, not a separate store fetch. */
+/** Parsed read of one workflow card's checklist + activity lane (TASK.191 slice S4). `activityRows` is whatever `WorkflowActivityFeed` currently renders — already filtered down to the selected step's rows when one is selected, since that filtering is `workflowActivityRows`' pure client-side slice of `WorkflowSubStatus.activity`, not a separate store fetch. `failure` (TASK.193) reads the rendered `.workflow-step-failure-label`/`-text` pair off the DOM (ToolCallCard.tsx's own markup) — `kind` here is the human LABEL text ("Error", not the wire's "error"), since a DOM probe can only see what actually painted. */
 export interface WorkflowStepsDomState {
   rows: WorkflowStepRowView[];
   activityRows: string[];
+  failure: { kind: string; text: string } | null;
 }
 
 /**
@@ -3294,7 +3297,10 @@ function realChildSplitDom(): ChildSplitDom {
  * `.workflow-step-id` text (the button carries no separate data attribute
  * for it — `ToolCallCard.tsx`'s own markup, byte-untouched here), the same
  * "read what the product already renders" posture as every other `real*Dom`
- * accessor in this file.
+ * accessor in this file. `failure` (TASK.193) reads the `.workflow-step-
+ * failure-label`/`-text` pair the same way — present only while a step
+ * carrying a failure record is the selected one (`ToolCallCard.tsx`'s own
+ * gate), absent otherwise.
  */
 function realWorkflowStepsDom(): WorkflowStepsDom {
   function card(tabId: string, toolCallId: string): HTMLElement | null {
@@ -3319,11 +3325,18 @@ function realWorkflowStepsDom(): WorkflowStepsDom {
       const rows = stepButtons(tabId, toolCallId).map((button) => ({
         stepId: button.querySelector(".workflow-step-id")?.textContent?.trim() ?? "",
         selected: button.getAttribute("aria-pressed") === "true",
+        meta: button.querySelector(".workflow-step-meta")?.textContent?.trim() ?? "",
       }));
       const activityRows = Array.from(
         el.querySelectorAll<HTMLLIElement>(".workflow-activity-feed .subagent-activity-row"),
       ).map((row) => row.textContent?.trim() ?? "");
-      return { rows, activityRows };
+      const failureLabel = el.querySelector<HTMLElement>(".workflow-step-failure-label");
+      const failureText = el.querySelector<HTMLElement>(".workflow-step-failure-text");
+      const failure =
+        failureLabel !== null && failureText !== null
+          ? { kind: failureLabel.textContent?.trim() ?? "", text: failureText.textContent?.trim() ?? "" }
+          : null;
+      return { rows, activityRows, failure };
     },
     click(tabId, toolCallId, stepId) {
       const matches = stepButtons(tabId, toolCallId).filter(
@@ -4394,7 +4407,7 @@ function realSettingsDom(): SettingsDom {
     },
     searchQuery: () => screen()?.querySelector<HTMLInputElement>(".settings-search-input")?.value ?? "",
     clickSidebarSettings: () => {
-      document.querySelector<HTMLButtonElement>(".sidebar-settings")?.click();
+      document.querySelector<HTMLButtonElement>(".sidebar-settings, .welcome-screen [data-open-settings]")?.click();
     },
     clickBackToApp: () => {
       screen()?.querySelector<HTMLButtonElement>(".settings-back")?.click();
@@ -4592,7 +4605,12 @@ function realProviderPaneDom(): ProviderPaneDom {
     return grid()?.querySelector<HTMLElement>(`[data-connection-id="${CSS.escape(connectionId)}"]`) ?? null;
   }
   function drawerBody(): HTMLElement | null {
-    return document.querySelector<HTMLElement>(".connection-drawer-body");
+    const modal = document.querySelector<HTMLElement>("dialog.connection-drawer[open] .connection-drawer-body");
+    if (modal) return modal;
+    // A resumed, incomplete setup may coexist behind Settings. Drive the
+    // visible management dialog instead of the hidden first-run form.
+    if (document.querySelector(".settings-dialog[open]")) return null;
+    return document.querySelector<HTMLElement>(".welcome-screen .connection-drawer-body");
   }
   function credentialSection(body: HTMLElement): HTMLElement | null {
     return body.querySelector<HTMLElement>(".connection-drawer-credential");
@@ -6397,7 +6415,7 @@ export function createAutomationFacade(
         // A valid reading, not an error (agentCardState/tryAgainButtonState
         // precedent): the transcript isn't mounted for this tab yet, or no
         // card with this exact toolCallId has landed there yet.
-        return { ok: true, rows: [], activityRows: [] };
+        return { ok: true, rows: [], activityRows: [], failure: null };
       }
       return { ok: true, ...state };
     },

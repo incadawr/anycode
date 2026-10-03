@@ -3238,6 +3238,72 @@ describe("desktop store — workflow sub-status (task 3.4.5, design/slice-3.4-cu
     });
   });
 
+  // ── TASK.193: a failed step's own reason, and its "never launched" flag ──
+  it("workflow_step_end carrying a failure/unlaunched record fills BOTH onto the matching step's final; a step_end with neither carries neither key", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_start",
+        toolCallId: "call-1",
+        workflow: "release-flow",
+        totalSteps: 2,
+        steps: [
+          { id: "probe", agentType: "no-such-type-193" },
+          { id: "after", agentType: "explore", dependsOn: ["probe"] },
+        ],
+      },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "workflow_step_end",
+        toolCallId: "call-1",
+        stepId: "probe",
+        status: "error",
+        turns: 0,
+        durationMs: 0,
+        failure: { kind: "error", text: 'Unknown agentType "no-such-type-193" (available: explore).', truncated: false },
+        unlaunched: true,
+      },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "workflow_step_end", toolCallId: "call-1", stepId: "after", status: "skipped", turns: 0, durationMs: 0 },
+    });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({
+      workflow: {
+        steps: [
+          {
+            stepId: "probe",
+            final: {
+              status: "error",
+              durationMs: 0,
+              failure: { kind: "error", text: 'Unknown agentType "no-such-type-193" (available: explore).', truncated: false },
+              unlaunched: true,
+            },
+          },
+          { stepId: "after", final: { status: "skipped", durationMs: 0 } },
+        ],
+      },
+    });
+    const steps = (block as { workflow: { steps: { stepId: string; final: Record<string, unknown> | null }[] } }).workflow
+      .steps;
+    // A step_end with neither field must carry neither key at all — not `failure: undefined`.
+    const after = steps.find((s) => s.stepId === "after");
+    expect(after?.final && "failure" in after.final).toBe(false);
+    expect(after?.final && "unlaunched" in after.final).toBe(false);
+  });
+
   // ── TASK.191 slice S1: the run-wide activity lane ──
   it("workflow_step_activity appends stamped rows to ONE run-wide lane, interleaving concurrent steps in arrival order", () => {
     const { scheduler } = createManualScheduler();
@@ -3846,6 +3912,69 @@ describe("desktop store — persisted workflow card (TASK.191 slice S5)", () => 
     expect(workflow.final).not.toBeNull();
   });
 
+  it("1b. hydrates a failed step's failure/unlaunched record from a valid v1 presentation (TASK.193 DoD #2: survives a restart)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    const presentation = workflowPresentation({
+      totalSteps: 1,
+      steps: [
+        {
+          id: "probe",
+          agentType: "no-such-type-193",
+          result: {
+            status: "error" as const,
+            turns: 0,
+            durationMs: 0,
+            failure: {
+              kind: "error" as const,
+              text: 'Unknown agentType "no-such-type-193" (available: explore).',
+              truncated: false,
+            },
+            unlaunched: true as const,
+          },
+        },
+      ],
+      final: { status: "failed" as const, durationMs: 5 },
+    });
+
+    const items: WireHistoryItem[] = [
+      {
+        id: "a1",
+        createdAt: 1,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-1", toolName: "Workflow", input: {} }] },
+      },
+      {
+        id: "a2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [
+            { type: "tool_result", toolCallId: "call-1", toolName: "Workflow", text: "failed", status: "success", presentation: { workflow: presentation } },
+          ],
+        },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
+
+    const block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({
+      workflow: {
+        steps: [
+          {
+            stepId: "probe",
+            final: {
+              status: "error",
+              failure: { kind: "error", text: 'Unknown agentType "no-such-type-193" (available: explore).', truncated: false },
+              unlaunched: true,
+            },
+          },
+        ],
+      },
+    });
+  });
+
   it("2. a legacy tool_result with no presentation field hydrates workflow:null, byte-identical to pre-S5 behavior", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -3944,6 +4073,63 @@ describe("desktop store — persisted workflow card (TASK.191 slice S5)", () => 
       totalSteps: 2,
       final: { status: "completed", completedSteps: 2, durationMs: 1200 },
     });
+  });
+
+  it("4b. a live settle carrying a failed step's failure/unlaunched record fills them onto the matching step (TASK.193)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginWorkflowToolCall(store, turnId, "call-1");
+
+    const presentation = workflowPresentation({
+      totalSteps: 1,
+      steps: [
+        {
+          id: "probe",
+          agentType: "no-such-type-193",
+          result: {
+            status: "error" as const,
+            turns: 0,
+            durationMs: 0,
+            failure: {
+              kind: "error" as const,
+              text: 'Unknown agentType "no-such-type-193" (available: explore).',
+              truncated: false,
+            },
+            unlaunched: true as const,
+          },
+        },
+      ],
+      final: { status: "failed" as const, durationMs: 5 },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_result",
+        outcome: {
+          toolCallId: "call-1",
+          toolName: "Workflow",
+          status: "success",
+          modelText: "failed",
+          durationMs: 5,
+          result: { ok: true, presentation: { workflow: presentation } },
+        },
+      },
+    });
+
+    const workflow = requireWorkflow(findByToolCallId(store, "call-1"));
+    expect(workflow.steps).toMatchObject([
+      {
+        stepId: "probe",
+        final: {
+          status: "error",
+          failure: { kind: "error", text: 'Unknown agentType "no-such-type-193" (available: explore).', truncated: false },
+          unlaunched: true,
+        },
+      },
+    ]);
   });
 
   it("5. a live settle with a missing/malformed presentation.workflow does NOT wipe the already-accumulated live workflow sub-status (the case a wholesale-replace-on-null bug would silently break)", () => {

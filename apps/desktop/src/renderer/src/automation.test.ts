@@ -6913,7 +6913,7 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       tabsStore.getState().setActiveTab(tabId);
       const workflowStepsDom: WorkflowStepsDom = { state: () => null, click: vi.fn(() => false) };
       const facade = buildFacade(registry, tabsStore, workflowStepsDom);
-      expect(facade.workflowStepsState(tabId, "call-1")).toEqual({ ok: true, rows: [], activityRows: [] });
+      expect(facade.workflowStepsState(tabId, "call-1")).toEqual({ ok: true, rows: [], activityRows: [], failure: null });
     });
 
     it("queries workflowStepsDom.state with the EXACT tabId + toolCallId requested", () => {
@@ -6932,25 +6932,59 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       expect(seen).toEqual([[tabId, "call-42"]]);
     });
 
-    it("spreads a found card's rows/activityRows verbatim, in the rendered order", () => {
+    it("spreads a found card's rows/activityRows/failure verbatim, in the rendered order", () => {
       const { registry, tabsStore, tabId } = setupReadyTab();
       tabsStore.getState().setActiveTab(tabId);
       const domState: WorkflowStepsDomState = {
         rows: [
-          { stepId: "step-1", selected: false },
-          { stepId: "step-2", selected: true },
+          { stepId: "step-1", selected: false, meta: "Not started" },
+          { stepId: "step-2", selected: true, meta: "Error · not launched" },
         ],
         activityRows: ["step-2: wrote file.ts"],
+        // TASK.193: the selected step's rendered failure block, verbatim.
+        failure: { kind: "Error", text: "boom" },
       };
       const workflowStepsDom: WorkflowStepsDom = { state: () => domState, click: vi.fn(() => false) };
       const facade = buildFacade(registry, tabsStore, workflowStepsDom);
       expect(facade.workflowStepsState(tabId, "call-1")).toEqual({
         ok: true,
         rows: [
-          { stepId: "step-1", selected: false },
-          { stepId: "step-2", selected: true },
+          { stepId: "step-1", selected: false, meta: "Not started" },
+          { stepId: "step-2", selected: true, meta: "Error · not launched" },
         ],
         activityRows: ["step-2: wrote file.ts"],
+        failure: { kind: "Error", text: "boom" },
+      });
+    });
+
+    it("reports a null failure when the found card has no selected-step failure record", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const domState: WorkflowStepsDomState = { rows: [], activityRows: [], failure: null };
+      const workflowStepsDom: WorkflowStepsDom = { state: () => domState, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      expect(facade.workflowStepsState(tabId, "call-1")).toEqual({ ok: true, rows: [], activityRows: [], failure: null });
+    });
+
+    // TASK.193 §10 finding 2: without `meta` on the row, a live smoke could
+    // only tell "0.0s" apart from "not launched" by screenshot. This pins
+    // the rendered `.workflow-step-meta` text riding through the probe
+    // machine-readably instead.
+    it("carries the rendered .workflow-step-meta text on each row", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const domState: WorkflowStepsDomState = {
+        rows: [{ stepId: "step-1", selected: false, meta: "Error · not launched" }],
+        activityRows: [],
+        failure: null,
+      };
+      const workflowStepsDom: WorkflowStepsDom = { state: () => domState, click: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowStepsDom);
+      expect(facade.workflowStepsState(tabId, "call-1")).toEqual({
+        ok: true,
+        rows: [{ stepId: "step-1", selected: false, meta: "Error · not launched" }],
+        activityRows: [],
+        failure: null,
       });
     });
   });
@@ -7000,7 +7034,7 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       tabsStore.getState().setActiveTab(tabId);
       const click = vi.fn(() => true);
       const workflowStepsDom: WorkflowStepsDom = {
-        state: () => ({ rows: [{ stepId: "step-1", selected: false }], activityRows: [] }),
+        state: () => ({ rows: [{ stepId: "step-1", selected: false, meta: "Not started" }], activityRows: [], failure: null }),
         click,
       };
       const facade = buildFacade(registry, tabsStore, workflowStepsDom);
@@ -7015,7 +7049,7 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       const { registry, tabsStore, tabId } = setupReadyTab();
       tabsStore.getState().setActiveTab(tabId);
       const workflowStepsDom: WorkflowStepsDom = {
-        state: () => ({ rows: [{ stepId: "step-1", selected: false }], activityRows: [] }),
+        state: () => ({ rows: [{ stepId: "step-1", selected: false, meta: "Not started" }], activityRows: [], failure: null }),
         click: vi.fn(() => false),
       };
       const facade = buildFacade(registry, tabsStore, workflowStepsDom);
@@ -7034,12 +7068,12 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       const { registry, tabsStore, tabId } = setupReadyTab();
       tabsStore.getState().setActiveTab(tabId);
       const rows = [
-        { stepId: "step-1", selected: false },
-        { stepId: "step-2", selected: false },
+        { stepId: "step-1", selected: false, meta: "Not started" },
+        { stepId: "step-2", selected: false, meta: "Not started" },
       ];
       const seen: Array<[string, string, string]> = [];
       const workflowStepsDom: WorkflowStepsDom = {
-        state: () => ({ rows: rows.map((r) => ({ ...r })), activityRows: [] }),
+        state: () => ({ rows: rows.map((r) => ({ ...r })), activityRows: [], failure: null }),
         click: (t, id, stepId) => {
           seen.push([t, id, stepId]);
           const row = rows.find((r) => r.stepId === stepId);
@@ -7052,8 +7086,8 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       await expect(facade.workflowStepClick(tabId, "call-1", "step-2")).resolves.toEqual({ ok: true });
       expect(seen).toEqual([[tabId, "call-1", "step-2"]]);
       expect(rows).toEqual([
-        { stepId: "step-1", selected: false },
-        { stepId: "step-2", selected: true },
+        { stepId: "step-1", selected: false, meta: "Not started" },
+        { stepId: "step-2", selected: true, meta: "Not started" },
       ]);
     });
 
@@ -7068,7 +7102,7 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
         return true;
       });
       const workflowStepsDom: WorkflowStepsDom = {
-        state: () => ({ rows: [{ stepId: "step-1", selected }], activityRows: [] }),
+        state: () => ({ rows: [{ stepId: "step-1", selected, meta: "Not started" }], activityRows: [], failure: null }),
         click,
       };
       const facade = buildFacade(registry, tabsStore, workflowStepsDom);
@@ -7087,7 +7121,7 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
         return true;
       });
       const workflowStepsDom: WorkflowStepsDom = {
-        state: () => ({ rows: [{ stepId: "step-1", selected }], activityRows: [] }),
+        state: () => ({ rows: [{ stepId: "step-1", selected, meta: "Not started" }], activityRows: [], failure: null }),
         click,
       };
       const facade = buildFacade(registry, tabsStore, workflowStepsDom);
@@ -7099,7 +7133,7 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       tabsStore.getState().setActiveTab(tabId);
       const click = vi.fn(() => true);
       const workflowStepsDom: WorkflowStepsDom = {
-        state: () => ({ rows: [{ stepId: "step-1", selected: false }], activityRows: [] }),
+        state: () => ({ rows: [{ stepId: "step-1", selected: false, meta: "Not started" }], activityRows: [], failure: null }),
         click,
       };
       const facade = buildFacade(registry, tabsStore, workflowStepsDom);

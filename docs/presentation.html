@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Короткая презентация AnyCode — единого desktop-пространства для AI-агентов разработки.">
+  <meta name="theme-color" content="#0b0c0f">
+  <title>AnyCode — один интерфейс для AI coding agents</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0c0f;
+      --panel: #13151a;
+      --panel-strong: #1a1d24;
+      --line: rgba(255, 255, 255, 0.12);
+      --line-strong: rgba(255, 255, 255, 0.22);
+      --text: #f4f5f7;
+      --muted: #a2a8b3;
+      --quiet: #737a87;
+      --blue: #5aa9ff;
+      --blue-soft: rgba(90, 169, 255, 0.12);
+      --mint: #75e0b8;
+      --coral: #ff846f;
+      --yellow: #f2c66d;
+      --radius: 24px;
+      --pad-x: clamp(24px, 7vw, 120px);
+      --pad-y: clamp(72px, 9vh, 112px);
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-snap-type: y mandatory;
+      background: var(--bg);
+    }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 82% 8%, rgba(90, 169, 255, 0.09), transparent 28rem),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    button, a { font: inherit; }
+    a { color: inherit; }
+    button { color: inherit; }
+
+    .slide {
+      position: relative;
+      display: grid;
+      min-height: 100svh;
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
+      isolation: isolate;
+      overflow: hidden;
+    }
+
+    .slide::before {
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      background-image:
+        linear-gradient(rgba(255,255,255,.027) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.027) 1px, transparent 1px);
+      background-size: 56px 56px;
+      mask-image: linear-gradient(to bottom, rgba(0,0,0,.45), transparent 70%);
+      content: "";
+      pointer-events: none;
+    }
+
+    .slide:nth-child(even)::after {
+      position: absolute;
+      width: min(52vw, 760px);
+      aspect-ratio: 1;
+      right: -24vw;
+      bottom: -42%;
+      z-index: -1;
+      border: 1px solid rgba(90, 169, 255, .18);
+      border-radius: 50%;
+      box-shadow: 0 0 100px rgba(90, 169, 255, .08) inset;
+      content: "";
+    }
+
+    .frame {
+      width: min(100%, 1440px);
+      min-height: 100%;
+      margin: 0 auto;
+      padding: var(--pad-y) var(--pad-x);
+      display: grid;
+      align-content: center;
+      gap: clamp(28px, 5vh, 56px);
+    }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 16px;
+      color: var(--blue);
+      font-size: clamp(.72rem, 1vw, .84rem);
+      font-weight: 750;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      width: 24px;
+      height: 2px;
+      border-radius: 99px;
+      background: currentColor;
+      content: "";
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1, h2 {
+      max-width: 1020px;
+      margin-bottom: 0;
+      letter-spacing: -.055em;
+      line-height: .96;
+      text-wrap: balance;
+    }
+
+    h1 { font-size: clamp(4rem, 10.5vw, 10rem); }
+    h2 { font-size: clamp(3rem, 7.4vw, 7.2rem); }
+
+    h3 {
+      margin-bottom: 12px;
+      font-size: clamp(1.02rem, 1.4vw, 1.28rem);
+      letter-spacing: -.025em;
+    }
+
+    .lede {
+      max-width: 760px;
+      margin: 0;
+      color: var(--muted);
+      font-size: clamp(1.18rem, 2.1vw, 2rem);
+      line-height: 1.42;
+      text-wrap: balance;
+    }
+
+    .accent { color: var(--blue); }
+    .mint { color: var(--mint); }
+    .coral { color: var(--coral); }
+    .yellow { color: var(--yellow); }
+
+    .mono {
+      font-family: var(--mono);
+      letter-spacing: -.03em;
+    }
+
+    .brand {
+      position: absolute;
+      top: 28px;
+      left: var(--pad-x);
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      color: var(--muted);
+      font-size: .84rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      background: linear-gradient(145deg, var(--panel-strong), #0d0f13);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.25);
+    }
+
+    .slide-no {
+      position: absolute;
+      right: var(--pad-x);
+      top: 34px;
+      color: var(--quiet);
+      font: 700 .72rem/1 var(--mono);
+      letter-spacing: .12em;
+    }
+
+    .hero {
+      grid-template-columns: minmax(0, 1fr) minmax(280px, .44fr);
+      align-items: center;
+      gap: clamp(36px, 8vw, 120px);
+    }
+
+    .hero-copy { display: grid; gap: clamp(24px, 4vh, 44px); }
+
+    .hero h1 span {
+      display: block;
+      color: var(--blue);
+    }
+
+    .hero-aside {
+      align-self: stretch;
+      display: grid;
+      align-content: center;
+      gap: 12px;
+    }
+
+    .version-pill, .tag {
+      width: fit-content;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.035);
+      color: var(--muted);
+      font: 650 .78rem/1 var(--mono);
+    }
+
+    .version-pill { padding: 10px 13px; }
+
+    .hero-note {
+      max-width: 28ch;
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: clamp(1rem, 1.4vw, 1.22rem);
+      line-height: 1.52;
+    }
+
+    .orb {
+      position: relative;
+      width: min(30vw, 360px);
+      aspect-ratio: 1;
+      justify-self: end;
+    }
+
+    .orb::before, .orb::after {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      content: "";
+    }
+
+    .orb::before {
+      border: 1px solid rgba(90,169,255,.28);
+      box-shadow:
+        0 0 0 38px rgba(90,169,255,.035),
+        0 0 0 76px rgba(90,169,255,.018),
+        0 0 100px rgba(90,169,255,.14) inset;
+    }
+
+    .orb::after {
+      inset: 28%;
+      background: var(--blue);
+      box-shadow: 0 0 72px rgba(90,169,255,.65);
+    }
+
+    .orb-label {
+      position: absolute;
+      z-index: 1;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: #07111b;
+      font: 900 clamp(1.4rem, 3vw, 2.8rem)/1 var(--mono);
+      letter-spacing: -.08em;
+    }
+
+    .problem-grid,
+    .engine-grid,
+    .feature-grid,
+    .roadmap-grid {
+      display: grid;
+      gap: 16px;
+    }
+
+    .problem-grid { grid-template-columns: repeat(3, 1fr); }
+    .engine-grid { grid-template-columns: repeat(3, 1fr); }
+    .feature-grid { grid-template-columns: repeat(4, 1fr); }
+    .roadmap-grid { grid-template-columns: repeat(4, 1fr); }
+
+    .card {
+      min-width: 0;
+      padding: clamp(20px, 2.5vw, 32px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(155deg, rgba(255,255,255,.045), rgba(255,255,255,.018));
+      box-shadow: 0 22px 80px rgba(0,0,0,.12);
+    }
+
+    .card p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: clamp(.94rem, 1.16vw, 1.12rem);
+      line-height: 1.55;
+    }
+
+    .problem-card {
+      min-height: 240px;
+      display: grid;
+      align-content: space-between;
+    }
+
+    .problem-card .index,
+    .engine-card .index {
+      color: var(--quiet);
+      font: 700 .75rem/1 var(--mono);
+    }
+
+    .problem-card strong {
+      display: block;
+      margin-bottom: 10px;
+      font-size: clamp(1.35rem, 2.4vw, 2.2rem);
+      letter-spacing: -.04em;
+    }
+
+    .statement {
+      max-width: 1120px;
+      font-size: clamp(2.25rem, 5vw, 5rem);
+      font-weight: 720;
+      letter-spacing: -.05em;
+      line-height: 1.07;
+      text-wrap: balance;
+    }
+
+    .engine-card {
+      min-height: 300px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 26px;
+    }
+
+    .engine-card.featured {
+      border-color: rgba(90,169,255,.38);
+      background: linear-gradient(155deg, rgba(90,169,255,.13), rgba(255,255,255,.02));
+    }
+
+    .engine-title {
+      font-size: clamp(1.7rem, 3vw, 2.8rem);
+      letter-spacing: -.055em;
+    }
+
+    .tag {
+      padding: 7px 9px;
+      color: var(--text);
+      font-size: .7rem;
+      text-transform: uppercase;
+    }
+
+    .engine-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .product-frame {
+      position: relative;
+      padding: 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 22px;
+      background: #17191d;
+      box-shadow: 0 30px 110px rgba(0,0,0,.48);
+    }
+
+    .product-frame::before {
+      display: block;
+      width: 100%;
+      height: 24px;
+      border-bottom: 1px solid var(--line);
+      background:
+        radial-gradient(circle at 9px 10px, #ff5f57 0 4px, transparent 4.5px),
+        radial-gradient(circle at 25px 10px, #febc2e 0 4px, transparent 4.5px),
+        radial-gradient(circle at 41px 10px, #28c840 0 4px, transparent 4.5px);
+      content: "";
+    }
+
+    .product-frame img {
+      display: block;
+      width: 100%;
+      border-radius: 0 0 13px 13px;
+    }
+
+    .product-caption {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      color: var(--quiet);
+      font: 650 .72rem/1.4 var(--mono);
+    }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr auto 1.25fr auto 1fr;
+      align-items: stretch;
+      gap: 18px;
+    }
+
+    .arch-block {
+      min-height: 280px;
+      padding: clamp(22px, 3vw, 36px);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      display: grid;
+      align-content: space-between;
+      gap: 24px;
+    }
+
+    .arch-block.primary {
+      border-color: rgba(90,169,255,.38);
+      background: linear-gradient(145deg, rgba(90,169,255,.14), rgba(90,169,255,.03));
+    }
+
+    .arch-block h3 { font-size: clamp(1.4rem, 2.2vw, 2.1rem); }
+
+    .arch-block ul,
+    .clean-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .arch-block li {
+      padding: 8px 0;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: clamp(.86rem, 1.05vw, 1rem);
+    }
+
+    .arrow {
+      align-self: center;
+      color: var(--quiet);
+      font: 400 1.6rem/1 var(--mono);
+    }
+
+    .feature-card {
+      min-height: 190px;
+      display: grid;
+      align-content: space-between;
+      gap: 22px;
+    }
+
+    .feature-icon {
+      display: grid;
+      width: 42px;
+      height: 42px;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: rgba(255,255,255,.03);
+      color: var(--blue);
+      font: 750 .78rem/1 var(--mono);
+    }
+
+    .security-layout {
+      display: grid;
+      grid-template-columns: .84fr 1.16fr;
+      align-items: center;
+      gap: clamp(36px, 8vw, 120px);
+    }
+
+    .security-stack {
+      position: relative;
+      min-height: 440px;
+      display: grid;
+      place-content: center;
+    }
+
+    .security-ring {
+      position: absolute;
+      inset: 50% auto auto 50%;
+      border: 1px solid rgba(117,224,184,.2);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    .security-ring:nth-child(1) { width: 420px; height: 420px; }
+    .security-ring:nth-child(2) { width: 300px; height: 300px; }
+    .security-ring:nth-child(3) { width: 180px; height: 180px; background: rgba(117,224,184,.05); }
+
+    .security-core {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      font: 780 clamp(1rem, 1.7vw, 1.45rem)/1.3 var(--mono);
+    }
+
+    .security-core small {
+      display: block;
+      margin-top: 8px;
+      color: var(--mint);
+      font-size: .72rem;
+      font-weight: 650;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .security-points {
+      display: grid;
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--line);
+    }
+
+    .security-point {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 16px;
+      padding: 22px 24px;
+      background: var(--panel);
+    }
+
+    .security-point b {
+      color: var(--mint);
+      font: 700 .8rem/1.5 var(--mono);
+    }
+
+    .security-point p { margin: 0; color: var(--muted); line-height: 1.5; }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .metric {
+      padding: clamp(22px, 3vw, 36px);
+      border-top: 1px solid var(--line-strong);
+    }
+
+    .metric strong {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--blue);
+      font-size: clamp(2.4rem, 5vw, 5rem);
+      letter-spacing: -.07em;
+      line-height: 1;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: clamp(.9rem, 1.2vw, 1.08rem);
+      line-height: 1.45;
+    }
+
+    .roadmap-card {
+      min-height: 280px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 22px;
+    }
+
+    .roadmap-card .step {
+      color: var(--blue);
+      font: 700 .72rem/1 var(--mono);
+      letter-spacing: .1em;
+    }
+
+    .roadmap-card p { align-self: start; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--quiet);
+      font-size: .75rem;
+    }
+
+    .status::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      content: "";
+    }
+
+    .status.now { color: var(--mint); }
+
+    .closing {
+      place-content: center;
+      text-align: center;
+    }
+
+    .closing .frame {
+      justify-items: center;
+      align-content: center;
+    }
+
+    .closing h2 { max-width: 1120px; }
+
+    .closing .lede { max-width: 720px; }
+
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    .cta {
+      display: inline-flex;
+      min-height: 48px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 18px;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: var(--panel);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .cta.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #07111b;
+    }
+
+    .footer-note {
+      color: var(--quiet);
+      font: 600 .73rem/1.5 var(--mono);
+    }
+
+    .controls {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(13, 14, 18, .8);
+      box-shadow: 0 16px 50px rgba(0,0,0,.32);
+      backdrop-filter: blur(14px);
+    }
+
+    .controls button {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      place-items: center;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .controls button:hover { background: rgba(255,255,255,.08); }
+    .controls button:disabled { opacity: .3; cursor: default; }
+
+    .counter {
+      min-width: 52px;
+      color: var(--muted);
+      text-align: center;
+      font: 700 .72rem/1 var(--mono);
+    }
+
+    .progress {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 30;
+      height: 2px;
+      background: rgba(255,255,255,.06);
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 12.5%;
+      background: var(--blue);
+      transform-origin: left;
+      transition: width 180ms ease-out;
+    }
+
+    .hint {
+      position: absolute;
+      left: var(--pad-x);
+      bottom: 30px;
+      color: var(--quiet);
+      font: 600 .68rem/1 var(--mono);
+      letter-spacing: .04em;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 3px;
+    }
+
+    @media (max-width: 960px) {
+      :root { --pad-y: 78px; }
+      .hero, .security-layout { grid-template-columns: 1fr; }
+      .hero-aside { display: none; }
+      .problem-grid, .engine-grid { grid-template-columns: 1fr; }
+      .feature-grid, .roadmap-grid { grid-template-columns: repeat(2, 1fr); }
+      .problem-card, .engine-card, .roadmap-card { min-height: auto; }
+      .architecture { grid-template-columns: 1fr; }
+      .arrow { justify-self: center; transform: rotate(90deg); }
+      .arch-block { min-height: auto; }
+      .security-stack { display: none; }
+    }
+
+    @media (max-width: 640px) {
+      html { scroll-snap-type: none; }
+      .slide { min-height: auto; }
+      .frame { min-height: 100svh; }
+      .feature-grid, .roadmap-grid, .metric-row { grid-template-columns: 1fr; }
+      .feature-card { min-height: auto; }
+      .brand { left: 22px; }
+      .slide-no { right: 22px; }
+      .controls { right: 10px; bottom: 10px; }
+      .hint { display: none; }
+      .product-caption { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; }
+    }
+
+    @media print {
+      @page { size: 16in 9in; margin: 0; }
+      html, body { background: var(--bg); }
+      .slide { min-height: 9in; break-after: page; }
+      .frame { width: 16in; min-height: 9in; padding: .72in .9in; }
+      .controls, .progress, .hint { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="progress" aria-hidden="true"><div class="progress-bar" id="progress"></div></div>
+
+  <main>
+    <section class="slide" aria-labelledby="slide-1-title">
+      <div class="brand"><span class="brand-mark">A/</span>ANYCODE</div>
+      <span class="slide-no">01 / 08</span>
+      <div class="frame hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Desktop workspace for AI coding agents</p>
+          <h1 id="slide-1-title">Один интерфейс.<span>Любой агент.</span></h1>
+          <p class="lede">AnyCode объединяет Claude Code, Codex и собственный multi-provider runtime в одном рабочем пространстве.</p>
+        </div>
+        <aside class="hero-aside" aria-label="Статус проекта">
+          <div class="orb" aria-hidden="true"><span class="orb-label">A/</span></div>
+          <span class="version-pill">v0.0.8 · alpha</span>
+          <p class="hero-note">Не новый агент. Оболочка вокруг агентов, которыми вы уже пользуетесь.</p>
+        </aside>
+      </div>
+      <span class="hint">← → / SPACE · навигация</span>
+    </section>
+
+    <section class="slide" aria-labelledby="slide-2-title">
+      <div class="brand"><span class="brand-mark">A/</span>ANYCODE</div>
+      <span class="slide-no">02 / 08</span>
+      <div class="frame">
+        <div>
+          <p class="eyebrow">Проблема</p>
+          <h2 id="slide-2-title">Агентов стало много.<br><span class="accent">Рабочее место всё ещё одно.</span></h2>
+        </div>
+        <div class="problem-grid">
+          <article class="card problem-card">
+            <span class="index">01</span>
+            <div><strong>Разные окна</strong><p>У каждого агента — свой интерфейс, история и способ показывать работу.</p></div>
+          </article>
+          <article class="card problem-card">
+            <span class="index">02</span>
+            <div><strong>Разные правила</strong><p>Права, режимы, контекст и подтверждения приходится изучать заново.</p></div>
+          </article>
+          <article class="card problem-card">
+            <span class="index">03</span>
+            <div><strong>Разорванный поток</strong><p>Переключение движка означает потерю привычного workspace и контроля.</p></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" aria-labelledby="slide-3-title">
+      <div class="brand"><span class="brand-mark">A/</span>ANYCODE</div>
+      <span class="slide-no">03 / 08</span>
+      <div class="frame">
+        <div>
+          <p class="eyebrow">Решение</p>
+          <p class="statement" id="slide-3-title">Выбирайте <span class="accent">движок</span> под задачу. Интерфейс, проект и прозрачность работы остаются прежними.</p>
+        </div>
+        <div class="engine-grid">
+          <article class="card engine-card featured">
+            <span class="index">BUILT-IN</span>
+            <div><h3 class="engine-title">Native</h3><p>Собственный agent loop с Anthropic-, OpenAI-compatible и локальными провайдерами.</p></div>
+            <div class="engine-meta"><span class="tag">multi-provider</span><span class="tag">local models</span></div>
+          </article>
+          <article class="card engine-card">
+            <span class="index">CLI PROFILE</span>
+            <div><h3 class="engine-title">Codex</h3><p>Официальный Codex CLI через app-server: аккаунты, квоты, планы и импорт сессий.</p></div>
+            <div class="engine-meta"><span class="tag">bring your account</span></div>
+          </article>
+          <article class="card engine-card">
+            <span class="index">CLI PROFILE</span>
+            <div><h3 class="engine-title">Claude Code</h3><p>Официальный Claude Code CLI в headless-режиме: reasoning, tools, images и resume.</p></div>
+            <div class="engine-meta"><span class="tag">early</span><span class="tag">bring your account</span></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" aria-labelledby="slide-4-title">
+      <div class="brand"><span class="brand-mark">A/</span>ANYCODE</div>
+      <span class="slide-no">04 / 08</span>
+      <div class="frame">
+        <div>
+          <p class="eyebrow">Продукт</p>
+          <h2 id="slide-4-title">Вся работа агента — <span class="accent">в одном потоке.</span></h2>
+        </div>
+        <figure style="margin:0">
+          <div class="product-frame">
+            <img src="assets/anycode-demo.png" alt="Интерфейс AnyCode: список задач, поток ответа агента, вызовы инструментов и composer.">
+          </div>
+          <figcaption class="product-caption"><span>Transcript · tools · reasoning · files · terminal</span><span>AnyCode 0.0.8</span></figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="slide" aria-labelledby="slide-5-title">
+      <div class="brand"><span class="brand-mark">A/</span>ANYCODE</div>
+      <span class="slide-no">05 / 08</span>
+      <div class="frame">
+        <div>
+          <p class="eyebrow">Архитектура</p>
+          <h2 id="slide-5-title">Тонкая оболочка.<br><span class="accent">Сменные движки.</span></h2>
+        </div>
+        <div class="architecture" aria-label="Схема архитектуры AnyCode">
+          <article class="arch-block">
+            <div><p class="eyebrow">01 · Renderer</p><h3>Единый UX</h3></div>
+            <ul><li>Transcript и tool calls</li><li>Permissions и context</li><li>Terminal и Git review</li></ul>
+          </article>
+          <span class="arrow" aria-hidden="true">→</span>
+          <article class="arch-block primary">
+            <div><p class="eyebrow">02 · Host</p><h3>Изоляция на вкладку</h3></div>
+            <ul><li>Отдельный utility process</li><li>Поток через MessagePort</li><li>Crash boundary</li></ul>
+          </article>
+          <span class="arrow" aria-hidden="true">→</span>
+          <article class="arch-block">
+            <div><p class="eyebrow">03 · Engine</p><h3>Выбор исполнения</h3></div>
+            <ul><li>Native runtime</li><li>Codex CLI</li><li>Claude Code CLI</li></ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" aria-labelledby="slide-6-title">
+      <div class="brand"><span class="brand-mark">A/</span>ANYCODE</div>
+      <span class="slide-no">06 / 08</span>
+      <div class="frame">
+        <div>
+          <p class="eyebrow">Одинаково для каждого движка</p>
+          <h2 id="slide-6-title">Не теряйте <span class="accent">контроль.</span></h2>
+        </div>
+        <div class="feature-grid">
+          <article class="card feature-card"><span class="feature-icon">TX</span><div><h3>Живой transcript</h3><p>Ответ, reasoning и действия собираются в читаемую историю.</p></div></article>
+          <article class="card feature-card"><span class="feature-icon">OK</span><div><h3>Явные разрешения</h3><p>Рискованные действия не прячутся за абстрактным «авто».</p></div></article>
+          <article class="card feature-card"><span class="feature-icon">CLI</span><div><h3>Терминал рядом</h3><p>Команды, файлы и результат остаются в контексте проекта.</p></div></article>
+          <article class="card feature-card"><span class="feature-icon">CTX</span><div><h3>Контекст виден</h3><p>Использование окна и квоты показываются там, где это возможно.</p></div></article>
+          <article class="card feature-card"><span class="feature-icon">MCP</span><div><h3>MCP и skills</h3><p>Инструменты расширяют среду, а не привязывают её к одному вендору.</p></div></article>
+          <article class="card feature-card"><span class="feature-icon">SUB</span><div><h3>Субагенты</h3><p>Дочерний агент может работать на другом движке и модели.</p></div></article>
+          <article class="card feature-card"><span class="feature-icon">GIT</span><div><h3>Review изменений</h3><p>Файлы и diff доступны без ухода в отдельную IDE.</p></div></article>
+          <article class="card feature-card"><span class="feature-icon">IMG</span><div><h3>Артефакты</h3><p>Картинки и созданные файлы видны прямо в диалоге.</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" aria-labelledby="slide-7-title">
+      <div class="brand"><span class="brand-mark">A/</span>ANYCODE</div>
+      <span class="slide-no">07 / 08</span>
+      <div class="frame security-layout">
+        <div class="security-stack" aria-hidden="true">
+          <span class="security-ring"></span><span class="security-ring"></span><span class="security-ring"></span>
+          <div class="security-core">YOUR<br>WORKSPACE<small>local by design</small></div>
+        </div>
+        <div>
+          <p class="eyebrow mint">Безопасность — архитектура, не настройка</p>
+          <h2 id="slide-7-title">Агент рядом с кодом.<br><span class="mint">Секреты остаются у вас.</span></h2>
+          <div class="security-points" style="margin-top:clamp(30px,5vh,52px)">
+            <div class="security-point"><b>01</b><p>CLI-профили запускаются локально под вашим аккаунтом. AnyCode не проксирует их credentials.</p></div>
+            <div class="security-point"><b>02</b><p>Renderer отделён от Node и секретов; у каждой вкладки собственный host-процесс.</p></div>
+            <div class="security-point"><b>03</b><p>Возможности показываются честно: неподдерживаемое действие отключено, а не имитируется.</p></div>
+            <div class="security-point"><b>04</b><p>Адаптеры CLI проверяются на записанных protocol fixtures, чтобы не терять wire-события.</p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide closing" aria-labelledby="slide-8-title">
+      <div class="brand"><span class="brand-mark">A/</span>ANYCODE</div>
+      <span class="slide-no">08 / 08</span>
+      <div class="frame">
+        <p class="eyebrow">Сейчас</p>
+        <h2 id="slide-8-title">Alpha уже работает.<br><span class="accent">Следующий шаг — экосистема.</span></h2>
+        <p class="lede">Универсальное preview, first-class MCP, переключение движка внутри сессии и multi-agent orchestration.</p>
+        <div class="metric-row" style="width:min(100%,920px)">
+          <div class="metric"><strong>3</strong><span>движка в одном интерфейсе</span></div>
+          <div class="metric"><strong>0.0.8</strong><span>текущая alpha-версия</span></div>
+          <div class="metric"><strong>3 OS</strong><span>macOS · Windows · Linux</span></div>
+        </div>
+        <div class="cta-row">
+          <a class="cta primary" href="https://github.com/incadawr/anycode/releases">Скачать alpha</a>
+          <a class="cta" href="https://github.com/incadawr/anycode">Открыть GitHub</a>
+        </div>
+        <p class="footer-note">Apache-2.0 · Bring your own agent · Local-first</p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="controls" aria-label="Навигация по слайдам">
+    <button type="button" id="prev" aria-label="Предыдущий слайд">←</button>
+    <span class="counter" id="counter" aria-live="polite">01 / 08</span>
+    <button type="button" id="next" aria-label="Следующий слайд">→</button>
+  </nav>
+
+  <script>
+    (() => {
+      const slides = [...document.querySelectorAll('.slide')];
+      const counter = document.querySelector('#counter');
+      const progress = document.querySelector('#progress');
+      const previous = document.querySelector('#prev');
+      const next = document.querySelector('#next');
+      let current = 0;
+
+      const format = (value) => String(value).padStart(2, '0');
+
+      const update = (index) => {
+        current = Math.max(0, Math.min(index, slides.length - 1));
+        counter.textContent = `${format(current + 1)} / ${format(slides.length)}`;
+        progress.style.width = `${((current + 1) / slides.length) * 100}%`;
+        previous.disabled = current === 0;
+        next.disabled = current === slides.length - 1;
+      };
+
+      const go = (index) => {
+        update(index);
+        slides[current].scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+
+      const observer = new IntersectionObserver((entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible) update(slides.indexOf(visible.target));
+      }, { threshold: [0.5, 0.75] });
+
+      slides.forEach((slide) => observer.observe(slide));
+      previous.addEventListener('click', () => go(current - 1));
+      next.addEventListener('click', () => go(current + 1));
+
+      document.addEventListener('keydown', (event) => {
+        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+        const forward = ['ArrowRight', 'ArrowDown', 'PageDown', ' '];
+        const backward = ['ArrowLeft', 'ArrowUp', 'PageUp'];
+        if (forward.includes(event.key)) { event.preventDefault(); go(current + 1); }
+        if (backward.includes(event.key)) { event.preventDefault(); go(current - 1); }
+        if (event.key === 'Home') { event.preventDefault(); go(0); }
+        if (event.key === 'End') { event.preventDefault(); go(slides.length - 1); }
+      });
+
+      update(0);
+    })();
+  </script>
+</body>
+</html>

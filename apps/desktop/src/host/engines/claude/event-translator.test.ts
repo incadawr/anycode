@@ -288,6 +288,48 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
   });
 });
 
+describe("ClaudeTurnTranslator — TASK.226 срез S4: takePresentation attaches the MCP bridge's durable card snapshot", () => {
+  function toolResultFrame(toolUseId: string, content: string, isError = false) {
+    return {
+      type: "user",
+      uuid: `u-${toolUseId}`,
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content, is_error: isError }] },
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  it("a tool_result whose id resolves to a snapshot carries it on result.presentation (success branch)", () => {
+    const snapshot = { subagent: "opaque-snapshot" } as never;
+    const translator = new ClaudeTurnTranslator({ turn: 1, takePresentation: (id) => (id === "toolu_bridge" ? snapshot : undefined) });
+    const events = translator.onMessage(toolResultFrame("toolu_bridge", "done"));
+    const outcome = (events[0] as Extract<AgentEvent, { type: "tool_result" }>).outcome;
+    expect(outcome.result?.ok).toBe(true);
+    expect(outcome.result?.presentation).toBe(snapshot);
+  });
+
+  it("a tool_result whose id resolves to a snapshot carries it on result.presentation (error branch too — a failed subagent still has a card)", () => {
+    const snapshot = { subagent: "opaque-snapshot" } as never;
+    const translator = new ClaudeTurnTranslator({ turn: 1, takePresentation: () => snapshot });
+    const events = translator.onMessage(toolResultFrame("toolu_bridge", "it failed", true));
+    const outcome = (events[0] as Extract<AgentEvent, { type: "tool_result" }>).outcome;
+    expect(outcome.result?.ok).toBe(false);
+    expect(outcome.result?.presentation).toBe(snapshot);
+  });
+
+  it("a tool_result for an UNRELATED tool_use id is byte-identical to no takePresentation at all", () => {
+    const withTake = new ClaudeTurnTranslator({ turn: 1, takePresentation: (id) => (id === "toolu_bridge" ? ({} as never) : undefined) });
+    const withoutTake = new ClaudeTurnTranslator({ turn: 1 });
+    const frame = toolResultFrame("toolu_other", "done");
+    expect(withTake.onMessage(frame)).toEqual(withoutTake.onMessage(frame));
+  });
+
+  it("no takePresentation callback at all leaves result.presentation absent, exactly as before this srez", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    const events = translator.onMessage(toolResultFrame("toolu_bridge", "done"));
+    const outcome = (events[0] as Extract<AgentEvent, { type: "tool_result" }>).outcome;
+    expect(outcome.result).toEqual({ ok: true, output: "done" });
+  });
+});
+
 describe("ClaudeTurnTranslator — finish() guarantees (codex TurnTranslator parity)", () => {
   it("finishTerminal closes open text blocks and cancels dangling tools, then turn_end + loop_end", () => {
     const translator = new ClaudeTurnTranslator({ turn: 3 });

@@ -8,7 +8,14 @@
 
 import { describe, expect, it } from "vitest";
 import { workflowTool } from "./workflow.js";
-import { WORKFLOW_OUTPUT_MAX_BYTES, WORKFLOW_TOOL_TIMEOUT_MS } from "../types/config.js";
+import {
+  DEFAULT_TOOL_RESULT_BUDGET,
+  WORKFLOW_FAILURE_SUMMARY_MAX_BYTES,
+  WORKFLOW_OUTPUT_MAX_BYTES,
+  WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES,
+  WORKFLOW_TOOL_TIMEOUT_MS,
+} from "../types/config.js";
+import { applyResultBudget } from "../util/result-budget.js";
 import type { ToolContext, ToolEmittedEvent } from "../types/tools.js";
 import type { CorePorts } from "../ports/index.js";
 import type {
@@ -144,7 +151,9 @@ describe("workflowTool", () => {
       output: "the rendered output",
       durationMs: 42,
     });
-    // The step projection drops finalText/truncated.
+    // Completed steps carry NO failure record: what the model sees of a
+    // successful step is the definition author's call (outputTemplate/sink),
+    // never a payload duplicate (TASK.193 DoD #4).
     expect(result.output?.steps).toEqual([
       { stepId: "a", agentType: "general-purpose", status: "completed", turns: 1, toolCalls: 0, durationMs: 5 },
       { stepId: "b", agentType: "explore", status: "completed", turns: 1, toolCalls: 0, durationMs: 5 },
@@ -296,6 +305,42 @@ describe("workflowTool", () => {
     });
     expect(emitted[6]).toMatchObject({ type: "workflow_end", status: "completed", completedSteps: 2, totalSteps: 2 });
   });
+
+  it("bridges step_end's failure and unlaunched fields onto workflow_step_end (TASK.193 slice S2)", async () => {
+    const port: WorkflowPort = {
+      list: () => [meta("build")],
+      run: async (_req, opts) => {
+        opts.onProgress?.({
+          kind: "start",
+          workflow: "build",
+          totalSteps: 1,
+          steps: [{ id: "a", agentType: "general-purpose" }],
+        });
+        opts.onProgress?.({
+          kind: "step_end",
+          stepId: "a",
+          status: "error",
+          turns: 0,
+          durationMs: 0,
+          failure: { kind: "error", text: 'Unknown agentType "nope".', truncated: false },
+          unlaunched: true,
+        });
+        opts.onProgress?.({ kind: "end", status: "failed", completedSteps: 0, totalSteps: 1, durationMs: 1 });
+        return { status: "failed", output: "", truncated: false, steps: [], durationMs: 1 };
+      },
+    };
+
+    const emitted: ToolEmittedEvent[] = [];
+    await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port, emit: (e) => emitted.push(e) }));
+
+    const stepEnd = emitted.find((e) => e.type === "workflow_step_end");
+    expect(stepEnd).toMatchObject({
+      type: "workflow_step_end",
+      stepId: "a",
+      failure: { kind: "error", text: 'Unknown agentType "nope".', truncated: false },
+      unlaunched: true,
+    });
+  });
 });
 
 // Persisted workflow card snapshot (TASK.191 slice S5). This pins that the
@@ -380,6 +425,50 @@ describe("workflowTool — presentation attach (TASK.191 slice S5)", () => {
     expect(result.presentation?.workflow?.activity.entries).toEqual([{ stepId: "a", toolName: "Read", summary: "a.ts" }]);
   });
 
+  it("carries a failed step's failure and unlaunched into the persisted card result (TASK.193 slice S2)", async () => {
+    const reason = 'Unknown agentType "nope" (available: general-purpose).';
+    const port: WorkflowPort = {
+      list: () => [meta("build")],
+      run: async (_req, opts) => {
+        opts.onProgress?.({
+          kind: "start",
+          workflow: "build",
+          totalSteps: 1,
+          steps: [{ id: "a", agentType: "nope" }],
+        });
+        opts.onProgress?.({
+          kind: "step_end",
+          stepId: "a",
+          status: "error",
+          turns: 0,
+          durationMs: 0,
+          failure: { kind: "error", text: reason, truncated: false },
+          unlaunched: true,
+        });
+        opts.onProgress?.({ kind: "end", status: "failed", completedSteps: 0, totalSteps: 1, durationMs: 1 });
+        return {
+          status: "failed",
+          output: "",
+          truncated: false,
+          steps: [
+            step({ stepId: "a", status: "error", failureKind: "error", unlaunched: true, finalText: reason }),
+          ],
+          durationMs: 1,
+        };
+      },
+    };
+
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+
+    expect(result.presentation?.workflow?.steps[0]?.result).toEqual({
+      status: "error",
+      turns: 0,
+      durationMs: 0,
+      failure: { kind: "error", text: reason, truncated: false },
+      unlaunched: true,
+    });
+  });
+
   it("a completed run (ok branch) also carries presentation", async () => {
     const port: WorkflowPort = {
       list: () => [meta("build")],
@@ -438,5 +527,187 @@ describe("workflowTool — presentation attach (TASK.191 slice S5)", () => {
     // makeCtx() carries no `emit` override.
     const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
     expect(result.presentation?.workflow?.activity.entries).toEqual([{ stepId: "a", toolName: "Bash", summary: "cmd-0" }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.193 slice S1. Before this, the tool boundary built a truthful reason for
+// every failed step and then threw it away, leaving the owner with nothing but
+// `Workflow "x" failed. Failed: b.` — every failure debugged by guessing.
+
+describe("workflowTool — failure record (TASK.193)", () => {
+  const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
+
+  it("carries a failed step's reason into the payload, and only a failed step's", async () => {
+    const reason = 'Agent: agent type "reviewer" runs on the "codex" engine. Engine agents now run in their own tier.';
+    const port = fakePort(["build"], {
+      status: "failed",
+      output: "partial output",
+      truncated: false,
+      steps: [
+        step({ stepId: "a" }),
+        step({ stepId: "b", status: "error", failureKind: "error", finalText: reason }),
+        step({ stepId: "c", status: "skipped", finalText: "" }),
+      ],
+      durationMs: 9,
+    });
+
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+
+    const steps = result.output?.steps ?? [];
+    expect(steps[1]?.failure).toEqual({ kind: "error", text: reason, truncated: false });
+    expect(steps[0]).not.toHaveProperty("failure");
+    expect(steps[2]).not.toHaveProperty("failure");
+    // The port stamped no `unlaunched`, so nobody may invent one.
+    for (const projected of steps) {
+      expect(projected).not.toHaveProperty("unlaunched");
+    }
+  });
+
+  it("puts the reason in the model's text, ahead of the rendered (partial) output", async () => {
+    const reason = 'Agent: agent type "reviewer" runs on the "codex" engine.';
+    const port = fakePort(["build"], {
+      status: "failed",
+      output: "partial output",
+      truncated: false,
+      steps: [
+        step({ stepId: "a" }),
+        step({ stepId: "b", status: "error", failureKind: "error", finalText: reason }),
+      ],
+      durationMs: 9,
+    });
+
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+
+    expect(result.error).toContain('Step "b" failed: Agent: agent type');
+    const modelText = workflowTool.formatResultForModel?.(result) ?? "";
+    expect(modelText).toContain('Step "b" failed: Agent: agent type');
+    expect(modelText.indexOf('Step "b" failed:')).toBeLessThan(modelText.indexOf("partial output"));
+  });
+
+  it("labels an unfinished partial as unfinished, and records nothing for a cancelled step", async () => {
+    const port = fakePort(["build"], {
+      status: "failed",
+      output: "",
+      truncated: false,
+      steps: [
+        step({ stepId: "b", status: "max_turns", failureKind: "max_turns", finalText: "half a plan" }),
+        step({ stepId: "d", status: "cancelled", finalText: "the last finished turn" }),
+      ],
+      durationMs: 9,
+    });
+
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+
+    expect(result.output?.steps[0]?.failure?.kind).toBe("max_turns");
+    expect(result.output?.steps[1]).not.toHaveProperty("failure");
+    expect(result.error).toContain("INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT.");
+  });
+
+  it("leaves a cancelled RUN's message and steps untouched (the cause is the cancellation, not a step)", async () => {
+    const port = fakePort(["build"], {
+      status: "cancelled",
+      output: "",
+      truncated: false,
+      steps: [step({ stepId: "a", status: "cancelled", finalText: "half a report" })],
+      durationMs: 3,
+    });
+
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+
+    expect(result.error).toBe('Workflow "build" was cancelled.');
+    expect(result.output?.steps[0]).not.toHaveProperty("failure");
+  });
+
+  it("forwards `unlaunched` from the outcome and never fabricates it", async () => {
+    const port = fakePort(["build"], {
+      status: "failed",
+      output: "",
+      truncated: false,
+      steps: [
+        step({
+          stepId: "b",
+          status: "error",
+          failureKind: "error",
+          unlaunched: true,
+          finalText: 'Unknown agentType "nope" (available: general-purpose).',
+        }),
+        step({ stepId: "c", status: "error", failureKind: "error", finalText: "boom" }),
+      ],
+      durationMs: 9,
+    });
+
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+
+    expect(result.output?.steps[0]?.unlaunched).toBe(true);
+    expect(result.output?.steps[1]).not.toHaveProperty("unlaunched");
+  });
+
+  it("does NOT duplicate successful step text into the payload (DoD #4, by weight)", async () => {
+    const port = fakePort(["build"], {
+      status: "completed",
+      output: "",
+      truncated: false,
+      steps: Array.from({ length: 16 }, (_, i) =>
+        step({ stepId: `s${i}`, status: "completed", finalText: "t".repeat(100_000) }),
+      ),
+      durationMs: 9,
+    });
+
+    const result = await workflowTool.handler({ name: "build" }, makeCtx({ workflows: port }));
+
+    expect(JSON.stringify(result.output).length).toBeLessThan(20_000);
+  });
+
+  it("keeps the whole summary AND most of the output inside the dispatcher's real budget (worst case)", async () => {
+    // The boundary that matters is the string the dispatcher caps —
+    // `error + "\n\n" + output` — not `result.error` on its own.
+    const name = "w".repeat(64);
+    const ids = Array.from({ length: 16 }, (_, i) => `s${String(i).padStart(2, "0")}${"z".repeat(61)}`);
+    const port = fakePort([name], {
+      status: "failed",
+      output: "o".repeat(100_000),
+      truncated: false,
+      steps: ids.map((id) =>
+        step({
+          stepId: id,
+          status: "error",
+          failureKind: "degenerate",
+          finalText: "y".repeat(9_000),
+        }),
+      ),
+      durationMs: 9,
+    });
+
+    const result = await workflowTool.handler({ name }, makeCtx({ workflows: port }));
+
+    // The payload keeps the full per-step cap; only the model's copy is squeezed.
+    for (const projected of result.output?.steps ?? []) {
+      expect(bytes(projected.failure?.text ?? "")).toBe(WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES);
+    }
+    expect(bytes(result.error ?? "")).toBeLessThanOrEqual(WORKFLOW_FAILURE_SUMMARY_MAX_BYTES);
+
+    const modelText = workflowTool.formatResultForModel?.(result) ?? "";
+    expect(modelText.startsWith(`${result.error ?? ""}\n\n`)).toBe(true);
+
+    const capped = applyResultBudget(
+      modelText,
+      DEFAULT_TOOL_RESULT_BUDGET.maxModelBytes,
+      DEFAULT_TOOL_RESULT_BUDGET.previewDirection,
+    );
+    // Every one of the 16 reason blocks survived the cap whole...
+    expect(capped.startsWith(result.error ?? "")).toBe(true);
+    for (const id of ids) {
+      expect(capped).toContain(`Step "${id}" was cut off:`);
+    }
+    // ...and the rendered output still reached the model in bulk.
+    expect(capped).toContain("o".repeat(70_000));
+  });
+
+  it("pins the two caps against the channel they are derived from", () => {
+    expect(WORKFLOW_FAILURE_SUMMARY_MAX_BYTES * 4).toBeLessThanOrEqual(
+      DEFAULT_TOOL_RESULT_BUDGET.maxModelBytes,
+    );
+    expect(WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES).toBeLessThan(WORKFLOW_FAILURE_SUMMARY_MAX_BYTES);
   });
 });

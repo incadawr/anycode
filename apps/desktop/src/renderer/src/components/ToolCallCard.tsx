@@ -260,6 +260,33 @@ const WORKFLOW_STEP_FINAL_LABELS: Record<"error" | "max_turns" | "cancelled", st
   cancelled: "Cancelled",
 };
 
+/** A failed step's own reason (TASK.193), read off `step.final.failure` — `null`
+ *  for a step with no `final` yet, or one that completed/was skipped/was
+ *  cancelled (none of those carry a `failure` record, see store.ts's doc
+ *  comment on the field). */
+export function workflowStepFailure(
+  step: WorkflowStepStatus,
+): { kind: "error" | "degenerate" | "max_turns"; text: string; truncated: boolean } | null {
+  return step.final?.failure ?? null;
+}
+
+/**
+ * Human-readable labels for a step-failure record's `kind` (TASK.193). These
+ * are NOT the Agent tool's own verbatim wording (`INCOMPLETE_RESULT_LABEL`,
+ * which rides inside `text` itself for max_turns/degenerate) — this is the
+ * card's own short heading above that text, plainly saying what kind of
+ * partial/error result the reader is about to read.
+ */
+const WORKFLOW_STEP_FAILURE_LABELS: Record<"error" | "degenerate" | "max_turns", string> = {
+  error: "Error",
+  max_turns: "Max turns reached — incomplete subagent result",
+  degenerate: "Cut off: repetition loop — incomplete subagent result",
+};
+
+export function workflowStepFailureLabel(kind: "error" | "degenerate" | "max_turns"): string {
+  return WORKFLOW_STEP_FAILURE_LABELS[kind];
+}
+
 /** Step row right zone. Running: live ticker, same grammar as
  *  formatSubagentCounters' running branch (pluralized tool calls, lastTool
  *  suffix omitted when null — re-implemented inline, frozen body untouched).
@@ -286,6 +313,14 @@ export function workflowStepMeta(step: WorkflowStepStatus): string {
   const seconds = (step.final.durationMs / 1000).toFixed(1);
   if (step.final.status === "completed") {
     return `${seconds}s`;
+  }
+  // TASK.193: a step whose terminal was reached without the engine ever
+  // calling subagents.run (predeclared agentType / template-render throw)
+  // never ran for any span of time — "· 0.0s" would misreport a real
+  // duration it never had. "not launched" replaces the number rather than
+  // sitting alongside it.
+  if (step.final.unlaunched === true) {
+    return `${WORKFLOW_STEP_FINAL_LABELS[step.final.status]} · not launched`;
   }
   return `${WORKFLOW_STEP_FINAL_LABELS[step.final.status]} · ${seconds}s`;
 }
@@ -837,6 +872,13 @@ export function WorkflowStepsBody({
   // A map is only worth offering once there is a shape to see — a single step
   // has none, so the toggle stays absent rather than opening onto one box.
   const mapWorthOffering = workflow.steps.length > 1;
+  // TASK.193: the selected step's own failure record, revealed by the SAME
+  // click that already selects a step for the activity feed (F9) — no new
+  // selection state of its own, just a second thing gated on the existing
+  // `selectedStepId`. `null` for no selection, a completed/skipped/cancelled
+  // step, or a step whose `final` hasn't landed yet.
+  const selectedStep = selectedStepId !== null ? (workflow.steps.find((step) => step.stepId === selectedStepId) ?? null) : null;
+  const selectedFailure = selectedStep !== null ? workflowStepFailure(selectedStep) : null;
   return (
     <>
       {orderedSteps.length > 0 && (
@@ -863,6 +905,15 @@ export function WorkflowStepsBody({
             );
           })}
         </ul>
+      )}
+      {selectedFailure !== null && (
+        <div className="workflow-step-failure">
+          <div className="workflow-step-failure-label">{workflowStepFailureLabel(selectedFailure.kind)}</div>
+          <div className="workflow-step-failure-text">
+            {(selectedFailure.text.length > 0 ? selectedFailure.text : "(no partial result)") +
+              (selectedFailure.truncated ? "\n[text truncated]" : "")}
+          </div>
+        </div>
       )}
       {mapWorthOffering && mapOpen && (
         <WorkflowMap workflow={workflow} selectedStepId={selectedStepId} onSelectStep={onSelectStep} />

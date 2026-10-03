@@ -432,6 +432,96 @@ describe("CLI render of workflow coarse-progress events (design slice-3.4-cut.md
         "[workflow call-2] end (failed): completedSteps=0/2 durationMs=60\n",
     );
   });
+
+  it("renders a failed step's reason line, and marks an unlaunched terminal in the end line (TASK.193)", () => {
+    const events: AgentEvent[] = [
+      { type: "workflow_start", toolCallId: "call-2", workflow: "risky", totalSteps: 1, steps: [] },
+      {
+        type: "workflow_step_end",
+        toolCallId: "call-2",
+        stepId: "a",
+        status: "error",
+        turns: 3,
+        durationMs: 50,
+        unlaunched: true,
+        failure: { kind: "error", text: "boom", truncated: false },
+      },
+      { type: "workflow_end", toolCallId: "call-2", status: "failed", completedSteps: 0, totalSteps: 1, durationMs: 60 },
+    ];
+
+    let text = "";
+    const write = (chunk: string): void => {
+      text += chunk;
+    };
+    for (const event of events) {
+      renderEvent(event, write);
+    }
+
+    expect(text).toBe(
+      "\n[workflow call-2] start: risky (1 step(s))\n" +
+        "[workflow call-2] step a end (error, not launched): turns=3 durationMs=50\n" +
+        "[workflow call-2] step a error: boom\n" +
+        "[workflow call-2] end (failed): completedSteps=0/1 durationMs=60\n",
+    );
+  });
+
+  it("renders only the first line of a multi-line failure text, and marks truncation", () => {
+    const events: AgentEvent[] = [
+      {
+        type: "workflow_step_end",
+        toolCallId: "call-3",
+        stepId: "a",
+        status: "max_turns",
+        turns: 8,
+        durationMs: 999,
+        failure: {
+          kind: "max_turns",
+          text: "INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT.\nfirst line of the partial\nmore",
+          truncated: true,
+        },
+      },
+    ];
+
+    let text = "";
+    const write = (chunk: string): void => {
+      text += chunk;
+    };
+    for (const event of events) {
+      renderEvent(event, write);
+    }
+
+    expect(text).toBe(
+      "[workflow call-3] step a end (max_turns): turns=8 durationMs=999\n" +
+        "[workflow call-3] step a max_turns: INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. [truncated]\n",
+    );
+  });
+
+  it("renders '(no partial result)' for an empty failure text", () => {
+    const events: AgentEvent[] = [
+      {
+        type: "workflow_step_end",
+        toolCallId: "call-4",
+        stepId: "a",
+        status: "max_turns",
+        turns: 8,
+        durationMs: 999,
+        failure: { kind: "max_turns", text: "", truncated: false },
+      },
+    ];
+
+    let text = "";
+    const write = (chunk: string): void => {
+      text += chunk;
+    };
+    for (const event of events) {
+      renderEvent(event, write);
+    }
+
+    expect(text).toBe(
+      "[workflow call-4] step a end (max_turns): turns=8 durationMs=999\n" +
+        "[workflow call-4] step a max_turns: (no partial result)\n",
+    );
+  });
 });
 
 describe("renderMcpStatusTable (design slice-3.2-cut.md §6, task 3.2.3)", () => {

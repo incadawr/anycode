@@ -37,6 +37,7 @@ import {
   hasGatedCapability,
   isClaudeStreamMessageType,
   isClaudeSystemInitMessage,
+  isClaudeTransportOnlyType,
   isSupportedClaudeVersion,
   parseClaudeVersion,
   unhandledControlError,
@@ -516,9 +517,19 @@ export class ClaudeClient {
    * `system/init` is NEVER awaited here — it is turn-scoped, emitted only
    * after the first user message (probe #1) — handshake-only runs contain
    * zero `system` frames at all.
+   *
+   * `extra` (TASK.226 S3, probes.md P0) merges in caller-supplied fields —
+   * `{sdkMcpServers:["anycode"]}` from `ClaudeMcpBridge.announceOn`, in
+   * production — WITHOUT this method knowing anything about MCP itself; an
+   * omitted `extra` reproduces the pre-TASK.226 empty body byte-for-byte.
+   * The CLI drives its own MCP handshake as `mcp_message` control_requests
+   * INSIDE this call, before it answers ours (P0 correction #1) — nothing
+   * here waits for or depends on that; the door just has to already be
+   * routed (`ClaudeApprovalBridge`'s `bridge` option) by the time this is
+   * called.
    */
-  async initialize(): Promise<ClaudeInitializeResult> {
-    const raw = await this.controlRequest<Record<string, unknown>>("initialize", {}, { timeoutMs: this.initTimeoutMs });
+  async initialize(extra?: Record<string, unknown>): Promise<ClaudeInitializeResult> {
+    const raw = await this.controlRequest<Record<string, unknown>>("initialize", { ...extra }, { timeoutMs: this.initTimeoutMs });
     const account = (raw.account ?? {}) as Record<string, unknown>;
     return {
       commands: Array.isArray(raw.commands) ? raw.commands : [],
@@ -785,6 +796,17 @@ export class ClaudeClient {
       default:
         if (isClaudeStreamMessageType(message.type)) {
           this.pushNotification(value as ClaudeStreamMessage);
+          return;
+        }
+        if (isClaudeTransportOnlyType(message.type)) {
+          // `tool_progress` heartbeat during a long tool call (TASK.226
+          // probes, P2a) — accepted so the turn survives, but dropped here
+          // rather than queued: it carries no turn content the translator's
+          // ClaudeStreamMessage vocabulary is built to consume. Its
+          // `elapsed_time_seconds` is the intended source for a future
+          // "running Ns" progress ticker; slice S3 stayed transport-only and
+          // did NOT build it, so it is still owed — pick it up right here,
+          // on `value`, in whichever slice takes the card work.
           return;
         }
         this.failTerminal(new ClaudeClientError(`claude emitted an unrecognized frame type: ${message.type}`));

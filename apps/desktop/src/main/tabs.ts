@@ -599,6 +599,8 @@ export interface TabHostManagerDeps {
    * a cross-connection spawn, which is the safe default.
    */
   resolveProviderConnection?: (provider: string) => string | undefined;
+  /** Reject a core model override before creating a child or sending a request. */
+  validateChildModel?: (model: string, connectionId: string | undefined) => void;
   /**
    * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5, TASK.96
    * 96-A): main routes a host's `PREVIEW_REQUEST_TYPE`/`PREVIEW_ARTIFACTS_TYPE`
@@ -1387,6 +1389,14 @@ export class TabHostManager {
         return;
       }
       connectionId = resolved;
+    }
+
+    if (engine === "core" && req.model !== undefined) {
+      try { this.deps.validateChildModel?.(req.model, connectionId); }
+      catch {
+        reject("not_ready", "Agent: this model is not available on the selected connection. Use its exact model ID and select a matching provider/connection, or retry without a model override.");
+        return;
+      }
     }
 
     // Reservation: the child's tabId/sessionId are minted and the ledger

@@ -3190,3 +3190,134 @@ describe("subagent token spend (TASK.191 slice S2)", () => {
     expect(outcome.usage).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK.193 slice S5. A child that died on a provider failure used to report its
+// PREVIOUS turn's text as its final text: the loop's {type:"error"} event rode
+// this iterator past a switch that had no case for it, so the class "the child
+// failed on the provider" had no reason on ANY tier. The reason now leads
+// finalText — built EXCLUSIVELY from the whitelist-derived `safe` descriptor
+// (provider/failure.ts SAFE_MESSAGES), never from the raw provider error, which
+// can embed a response body or an auth header in its message.
+
+/** A provider failure carrying an HTTP status, the shape extractStatusCode reads. */
+class StatusError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: number,
+  ) {
+    super(message);
+  }
+}
+
+describe("provider-error reason in finalText (TASK.193 slice S5)", () => {
+  it("reports the safe descriptor as the final text when the child's stream throws", async () => {
+    const errorModel: ModelPort = {
+      streamText(): AsyncIterable<ModelStreamEvent> {
+        return (async function* () {
+          yield { type: "start" };
+          throw new Error("stream boom: sk-secret-token in the response body");
+        })();
+      },
+    };
+    const runner = createSubagentRunner(makeParent({ modelPort: errorModel }));
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe("unknown: request failed");
+    // The raw thrown text is in-process only and never crosses into the outcome.
+    expect(outcome.finalText).not.toContain("stream boom");
+    expect(outcome.finalText).not.toContain("sk-secret-token");
+  });
+
+  it("carries the classified code and HTTP status for an authentication failure", async () => {
+    const errorModel: ModelPort = {
+      streamText(): AsyncIterable<ModelStreamEvent> {
+        return (async function* () {
+          yield { type: "start" };
+          throw new StatusError("Unauthorized: invalid api key sk-live-123", 401);
+        })();
+      },
+    };
+    const runner = createSubagentRunner(makeParent({ modelPort: errorModel }));
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe("auth: authentication failed (HTTP 401)");
+    expect(outcome.finalText).not.toContain("sk-live-123");
+  });
+
+  it("leads with the reason and keeps the last completed turn's text behind it", async () => {
+    let step = 0;
+    const model: ModelPort = {
+      streamText(): AsyncIterable<ModelStreamEvent> {
+        step += 1;
+        const turn = step;
+        return (async function* () {
+          if (turn === 1) {
+            for (const event of toolStep("c1", "TodoRead", {}, "turn-1 text")) {
+              yield event;
+            }
+            return;
+          }
+          yield { type: "start" };
+          throw new Error("stream boom");
+        })();
+      },
+    };
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("error");
+    // Before this slice the whole finalText was "turn-1 text": a stale, honest-
+    // looking report of a run that actually died on the provider.
+    expect(outcome.finalText).toBe("unknown: request failed\n\nturn-1 text");
+  });
+
+  it("reports a fixed internal constant when the loop dies with no error event at all", async () => {
+    // A throw with no loop_end (here: the consumer's own onProgress rejects the
+    // first progress event) reaches the bare catch, where nothing about the
+    // caught value — not even error.name, which is provider-controlled text —
+    // may be quoted.
+    let thrownOnce = false;
+    const model = new ScriptedModelPort(() => toolStep("c1", "TodoRead", {}, "unreported preamble"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run(
+      { ...REQ, agentType: "explore" },
+      {
+        onProgress: (progress: SubagentProgress) => {
+          if (!thrownOnce && progress.kind === "progress") {
+            thrownOnce = true;
+            throw new Error("consumer boom");
+          }
+        },
+      },
+    );
+
+    expect(thrownOnce).toBe(true);
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe(
+      "child loop was interrupted before loop_end (no provider error event was reported)",
+    );
+    expect(outcome.finalText).not.toContain("consumer boom");
+  });
+
+  it("adds no prefix to a run that recovered from a retried stream and completed", async () => {
+    const model = new ScriptedModelPort(() => [
+      { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 0, reason: "network error" },
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "child report" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]);
+    const runner = createSubagentRunner(makeParent({ modelPort: model }));
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("child report");
+  });
+});

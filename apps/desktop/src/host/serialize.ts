@@ -12,6 +12,7 @@
 import type { AgentEvent } from "@anycode/core";
 import type { SerializedError, WireAgentEvent } from "../shared/protocol.js";
 import { parseUsageLimitNotice } from "../shared/usage-limit.js";
+import { classifyEngineFailure } from "./safe-failure.js";
 
 /** Short human-readable description of an arbitrary thrown value (for fatal/diagnostic text). */
 export function describeError(error: unknown): string {
@@ -50,12 +51,14 @@ export function serializeError(error: unknown): SerializedError {
  */
 function redactedWireError(
   safe: { code: string; message: string; statusCode?: number } | undefined,
+  name: "ProviderError" | "AgentError" = "ProviderError",
 ): SerializedError {
   if (safe === undefined) {
-    return { name: "ProviderError", message: "request failed" };
+    return { name, message: "request failed" };
   }
   return {
-    name: "ProviderError",
+    name,
+    code: safe.code,
     message: safe.statusCode !== undefined ? `${safe.message} (HTTP ${safe.statusCode})` : safe.message,
   };
 }
@@ -73,7 +76,7 @@ export function sanitizeAgentEvent(event: AgentEvent): WireAgentEvent {
     const notice = parseUsageLimitNotice(describeError(event.error));
     return {
       type: "error",
-      error: redactedWireError(event.safe),
+      error: redactedWireError(event.safe ?? classifyEngineFailure(event.error), event.safe === undefined ? "AgentError" : "ProviderError"),
       ...(event.retry !== undefined ? { retry: event.retry } : {}),
       ...(notice !== null ? { notice } : {}),
     };

@@ -380,6 +380,14 @@ describe("aggregateProfileStats — malformed record hardening (W5-FIX finding 2
     // sessions, no day bucket — silently discarding a real guard-cutoff line.
     expect(stats.totalSessions).toBe(1);
   });
+
+  it("TASK.193 S4: a workflow_step_end record is a VALID discriminant — a file carrying only one still counts as a session", () => {
+    const f = file("s.jsonl", [
+      { v: 1, ts: 0, session: "s", t: "workflow_step_end", status: "error", turns: 0, durationMs: 0, unlaunched: true },
+    ]);
+    const stats = aggregateProfileStats([f], { now, dayKey: utcDayKey });
+    expect(stats.totalSessions).toBe(1);
+  });
 });
 
 describe("aggregateProfileStats — default dayKey (LOCAL calendar date)", () => {
