@@ -239,6 +239,7 @@ import type { MdDocReadResult } from "../shared/md-preview.js";
 const CODEX_RECHECK_CHANNEL = "anycode:codex-recheck";
 const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
 const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
+import { CODEX_LOGIN_PROGRESS_CHANNEL, type CodexDeviceCodeProgress, type CodexLoginMode } from "../shared/codex-login.js";
 const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
 const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
 // TASK.50 (codex-profiles cut §2/§4, amended §A1): the profile control-plane
@@ -678,8 +679,13 @@ contextBridge.exposeInMainWorld("anycode", {
       ) as Promise<CodexOnboardingSnapshot>,
     pickBinary: (): Promise<CodexPickBinaryResult> =>
       ipcRenderer.invoke(CODEX_PICK_BINARY_CHANNEL) as Promise<CodexPickBinaryResult>,
-    loginStart: (profileId?: string): Promise<CodexLoginStartResult> =>
-      ipcRenderer.invoke(CODEX_LOGIN_START_CHANNEL, profileId ? { profileId } : undefined) as Promise<CodexLoginStartResult>,
+    loginStart: (profileId?: string, mode: CodexLoginMode = "browser"): Promise<CodexLoginStartResult> =>
+      ipcRenderer.invoke(CODEX_LOGIN_START_CHANNEL, { ...(profileId ? { profileId } : {}), mode }) as Promise<CodexLoginStartResult>,
+    onLoginProgress: (callback: (progress: CodexDeviceCodeProgress) => void): (() => void) => {
+      const listener = (_event: unknown, progress: CodexDeviceCodeProgress) => callback(progress);
+      ipcRenderer.on(CODEX_LOGIN_PROGRESS_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(CODEX_LOGIN_PROGRESS_CHANNEL, listener);
+    },
     loginCancel: (): Promise<void> =>
       ipcRenderer.invoke(CODEX_LOGIN_CANCEL_CHANNEL) as Promise<void>,
     // TASK.50 (cut §2/§4): the profile control-plane — settings/fs mutations

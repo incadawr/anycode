@@ -100,6 +100,7 @@ export class Vault {
   private readonly secretsPath: string;
   private readonly platform: NodeJS.Platform;
   private readonly logger: FileIoLogger | undefined;
+  private lastCheckedTier: SecretTier | undefined;
 
   constructor(deps: VaultDeps) {
     this.safeStorage = deps.safeStorage;
@@ -111,15 +112,15 @@ export class Vault {
   /** Backend storage tier of this machine (§4). */
   tier(): SecretTier {
     if (!this.safeStorage.isEncryptionAvailable()) {
-      return "unavailable";
+      return this.lastCheckedTier = "unavailable";
     }
     // getSelectedStorageBackend is Linux-only; never call it on macOS/Windows.
     if (this.platform === "linux" && this.safeStorage.getSelectedStorageBackend !== undefined) {
       if (this.safeStorage.getSelectedStorageBackend() === "basic_text") {
-        return "obfuscated";
+        return this.lastCheckedTier = "obfuscated";
       }
     }
-    return "os_encrypted";
+    return this.lastCheckedTier = "os_encrypted";
   }
 
   /** Load the vault file fail-soft (missing/corrupt -> empty). */
@@ -296,7 +297,9 @@ export class Vault {
    */
   async statuses(bootEnv: NodeJS.ProcessEnv, catalogIds: readonly string[] = []): Promise<SecretStatus[]> {
     const file = await this.load();
-    const tier = this.tier();
+    // Empty first-run status must not initialize the OS keychain. Actual
+    // writes still check the backend and enforce weak-storage consent.
+    const tier = Object.keys(file.entries).length === 0 ? this.lastCheckedTier ?? "not_checked" : this.tier();
     return this.statusKeys(file, catalogIds).map((key) => {
       const entry = file.entries[key];
       const effective = this.decrypt(entry);

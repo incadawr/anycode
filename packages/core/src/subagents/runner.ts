@@ -789,6 +789,10 @@ export function createSubagentRunner(
         let turnEndCount = 0;
         let loopReason: SubagentOutcome["status"] | undefined;
         let loopTurns: number | undefined;
+        // TASK.193 slice S5: the redacted reason the child died on, if it died on
+        // the provider. Set from the loop's {type:"error"} event (case below) or,
+        // failing that, from the bare catch — never from the raw thrown value.
+        let lastErrorText: string | undefined;
 
         try {
           // The signal is already linked by the parent dispatcher to the turn
@@ -908,6 +912,20 @@ export function createSubagentRunner(
                 loopReason = event.reason === "workspace_transition" ? "error" : event.reason;
                 loopTurns = event.turns;
                 break;
+              case "error":
+                // TASK.193 (inline-tier mirror of TASK.190's finding): this event was
+                // never read here, so a child that died on a provider failure reported
+                // its PREVIOUS turn's text as its final text. Only the whitelist-derived
+                // `safe` descriptor may cross a trust boundary (types/events.ts); the raw
+                // `error` is never touched. Format mirrors host/serialize.ts's
+                // redactedWireError.
+                lastErrorText =
+                  event.safe !== undefined
+                    ? `${event.safe.code}: ${event.safe.message}${event.safe.statusCode !== undefined ? ` (HTTP ${event.safe.statusCode})` : ""}`
+                    : event.retry !== undefined
+                      ? `provider error (${event.retry.code})`
+                      : "provider error (no safe descriptor)";
+                break;
               default:
                 break;
             }
@@ -915,6 +933,12 @@ export function createSubagentRunner(
         } catch {
           // A throw with no loop_end (e.g. the stream iterator rejected) is an error.
           loopReason = loopReason ?? "error";
+          // TASK.193 slice S5: a structural failure with no error event still owes the
+          // caller a reason, but nothing about the caught value may be quoted — not even
+          // `error.name`, which is provider-controlled text (host/serialize.ts's
+          // redactedWireError pins the same rule). Hence a fixed internal constant.
+          lastErrorText ??=
+            "child loop was interrupted before loop_end (no provider error event was reported)";
         }
 
         // status maps 1:1 from loop_end.reason (same union); no loop_end => error.
@@ -972,6 +996,15 @@ export function createSubagentRunner(
         // port) simply leaves this undefined — it never falls back to, blanks,
         // or otherwise touches `requestedModel`.
         const responseModel = childModelPort?.lastResponseModel;
+
+        // TASK.193 slice S5: an errored child leads with WHY it died. Applied after
+        // the wrap-up rescue (which only runs for max_turns) and before the cap, so
+        // the reason is inside the byte budget rather than appended past it. Any
+        // text the child had already produced is kept BEHIND the reason: it is the
+        // previous turn's output, not a report about this failure.
+        if (status === "error" && lastErrorText !== undefined) {
+          finalText = finalText.length > 0 ? `${lastErrorText}\n\n${finalText}` : lastErrorText;
+        }
 
         const capped = capUtf8Bytes(finalText, SUBAGENT_OUTPUT_MAX_BYTES);
         const outcome: SubagentOutcome = {

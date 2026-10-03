@@ -1,3 +1,4 @@
+import { TUNNEL_STATUS_RE, isTlsCode } from "@anycode/core/network-failure";
 /**
  * The proxy spawn-probe (TASK.141 §6): "does this profile actually carry traffic
  * to this target?", answered the only way it can be answered honestly — by
@@ -224,17 +225,6 @@ export type ProbeClassification =
   | { kind: "dns"; message: string }
   | { kind: "timeout" }
   | { kind: "unknown"; message: string };
-
-/** `Proxy response (407) !== 200 when HTTP Tunneling` — the only place the tunnel status survives (measured). */
-const TUNNEL_STATUS_RE = /Proxy response \((\d{3})\)\s*!==\s*200/;
-
-/** Codes that mean "the TLS handshake was not trusted", covering both measured MITM shapes and their siblings. */
-function isTlsCode(code: string | undefined, message: string): boolean {
-  if (code !== undefined && (code.includes("CERT") || code.startsWith("ERR_TLS") || code.startsWith("ERR_SSL"))) {
-    return true;
-  }
-  return /certificate|ssl|tls handshake/i.test(message) && !/proxy response/i.test(message);
-}
 
 interface ProbeChainEntry {
   name?: string;

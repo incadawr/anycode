@@ -142,7 +142,12 @@ export function reduceWorkflowCardEvent(
         status: ev.status,
         turns: ev.turns,
         durationMs: ev.durationMs,
+        // Copied EXPLICITLY (TASK.193): same discipline as `usage` above — a
+        // field added to workflow_step_end and not named here type-checks
+        // green and never reaches the persisted card.
         ...(ev.usage !== undefined ? { usage: ev.usage } : {}),
+        ...(ev.failure !== undefined ? { failure: ev.failure } : {}),
+        ...(ev.unlaunched === true ? { unlaunched: true as const } : {}),
       });
       return { ...acc, results };
     }
@@ -161,12 +166,15 @@ export function reduceWorkflowCardEvent(
 
 /**
  * Produces the persisted V1 snapshot, or null when the run never actually
- * started (an unknown workflow name / pre-aborted signal / unknown agentType
- * all fail BEFORE the engine's first onProgress call — workflow/engine.ts's
- * own early-return paths — so the card is never fabricated from nothing,
- * mirroring subagents/card-snapshot.ts's finalizeSubagentCard). `fallback`
- * supplies status/durationMs when no `workflow_end` was ever seen (the
- * caller settled from its own known outcome).
+ * started (an unknown workflow name / a pre-aborted signal fail BEFORE the
+ * engine's first onProgress call — workflow/engine.ts's own early-return
+ * paths — so the card is never fabricated from nothing, mirroring
+ * subagents/card-snapshot.ts's finalizeSubagentCard). A fail-fast
+ * unknown-agentType pre-check DOES stream a start/step_end/end trio
+ * (TASK.193), each error terminal's step_end carrying `unlaunched: true`, so
+ * that run's card is produced like any other. `fallback` supplies
+ * status/durationMs when no `workflow_end` was ever seen (the caller settled
+ * from its own known outcome).
  */
 export function finalizeWorkflowCard(
   acc: WorkflowCardAccumulator,

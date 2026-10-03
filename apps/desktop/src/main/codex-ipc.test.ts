@@ -1116,3 +1116,19 @@ describe("doctor/login source env — engine-proxy carrier custody (TASK.139)", 
     expect(env).toEqual({ PATH: "/usr/bin", [ENV_CODEX_PROXY_URL]: ENGINE_PROXY });
   });
 });
+
+
+it("device-code progress is routed to the profile that owns the login", async () => {
+  const onDeviceCode = vi.fn();
+  const runLogin = vi.fn(async (_path: string, opts: import("./codex-login.js").RunCodexLoginOptions) => {
+    expect(opts.mode).toBe("device");
+    expect(opts.profile?.id).toBe("device-account");
+    opts.onDeviceCode?.({ userCode: "ABCD-1234", verificationUrl: "https://example.invalid/device" });
+    return { ok: true as const };
+  });
+  const deps = makeDeps({ runLogin, onDeviceCode });
+  const controller = createCodexOnboardingController(deps);
+  expect((await controller.createProfile({ label: "device-account" })).ok).toBe(true);
+  expect((await controller.loginStart("device-account", "device")).ok).toBe(true);
+  expect(onDeviceCode).toHaveBeenCalledExactlyOnceWith({ profileId: "device-account", userCode: "ABCD-1234", verificationUrl: "https://example.invalid/device" });
+});

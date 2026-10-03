@@ -87,6 +87,19 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         totalSteps: event.totalSteps,
         durationMs: event.durationMs,
       };
+    case "workflow_step_end":
+      // TASK.193: the step's terminal FACT only — status/turns/duration and
+      // `unlaunched`. `failure` (text), `stepId` and `usage` are deliberately
+      // NOT copied: this stays a whitelist projection, and a step's failure
+      // reason is text (dropped per the module doc above; its durable home is
+      // history_items, F6 in the plan).
+      return {
+        t: "workflow_step_end",
+        status: event.status,
+        turns: event.turns,
+        durationMs: event.durationMs,
+        ...(event.unlaunched === true ? { unlaunched: true } : {}),
+      };
     case "stream_retry":
       return {
         t: "stream_retry",

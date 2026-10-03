@@ -43,6 +43,7 @@
  * green is not yet painted).
  */
 
+import { smokeProviderProfile, activeSmokeConnection } from "./smoke-provider-profile.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -668,8 +669,8 @@ async function step1LaunchApp(ctx) {
   ctx.secretsPath = join(profile, "secrets.json");
 
   const seedSettings = {
-    version: 1,
-    provider: { id: PROVIDER_ID, model: MODEL_A },
+    version: 2,
+    provider: smokeProviderProfile(PROVIDER_ID, MODEL_A, { credentialFromEnv: true }),
     tools: {},
     permissions: { alwaysAllow: [{ toolName: "Agent" }, { toolName: "Read" }, { toolName: "Glob" }, { toolName: "Grep" }, { toolName: "Bash" }] },
     ui: { theme: "system" },

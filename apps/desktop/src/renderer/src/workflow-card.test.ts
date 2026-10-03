@@ -22,6 +22,7 @@ import {
   SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS,
   WORKFLOW_CARD_ACTIVITY_MAX_BYTES as CORE_WORKFLOW_CARD_ACTIVITY_MAX_BYTES,
   WORKFLOW_CARD_ACTIVITY_RING as CORE_WORKFLOW_CARD_ACTIVITY_RING,
+  WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES as CORE_WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES,
 } from "@anycode/core";
 import {
   ACTIVITY_STEP_ID_MAX_CHARS,
@@ -29,6 +30,7 @@ import {
   ACTIVITY_TOOL_NAME_MAX_CHARS,
   WORKFLOW_CARD_ACTIVITY_MAX_BYTES,
   WORKFLOW_CARD_ACTIVITY_RING,
+  WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES,
   decodeWorkflowCardSnapshot,
   projectWorkflowCard,
 } from "./workflow-card.js";
@@ -195,6 +197,62 @@ describe("decodeWorkflowCardSnapshot — malformed payloads never throw and deco
     ["final.durationMs is negative", { ...VALID_SNAPSHOT, final: { status: "failed", durationMs: -1 } }],
     ["final.durationMs is a float", { ...VALID_SNAPSHOT, final: { status: "failed", durationMs: 1.5 } }],
     ["final.durationMs is NaN", { ...VALID_SNAPSHOT, final: { status: "failed", durationMs: Number.NaN } }],
+    // TASK.193: a malformed failure/unlaunched field fails the WHOLE decode
+    // (same fail-soft posture as every field above), never a silently
+    // dropped field.
+    [
+      "a step's result.failure is not an object",
+      {
+        ...VALID_SNAPSHOT,
+        steps: [{ id: "s", agentType: "explore", result: { status: "error", turns: 0, durationMs: 0, failure: "boom" } }],
+      },
+    ],
+    [
+      "a step's result.failure.kind is not one of the three",
+      {
+        ...VALID_SNAPSHOT,
+        steps: [
+          {
+            id: "s",
+            agentType: "explore",
+            result: { status: "error", turns: 0, durationMs: 0, failure: { kind: "oops", text: "x", truncated: false } },
+          },
+        ],
+      },
+    ],
+    [
+      "a step's result.failure.text is not a string",
+      {
+        ...VALID_SNAPSHOT,
+        steps: [
+          {
+            id: "s",
+            agentType: "explore",
+            result: { status: "error", turns: 0, durationMs: 0, failure: { kind: "error", text: 42, truncated: false } },
+          },
+        ],
+      },
+    ],
+    [
+      "a step's result.failure.truncated is not a boolean",
+      {
+        ...VALID_SNAPSHOT,
+        steps: [
+          {
+            id: "s",
+            agentType: "explore",
+            result: { status: "error", turns: 0, durationMs: 0, failure: { kind: "error", text: "x", truncated: "yes" } },
+          },
+        ],
+      },
+    ],
+    [
+      "a step's result.unlaunched is present but not literally true",
+      {
+        ...VALID_SNAPSHOT,
+        steps: [{ id: "s", agentType: "explore", result: { status: "error", turns: 0, durationMs: 0, unlaunched: false } }],
+      },
+    ],
   ];
 
   for (const [label, value] of cases) {
@@ -203,6 +261,112 @@ describe("decodeWorkflowCardSnapshot — malformed payloads never throw and deco
       expect(decodeWorkflowCardSnapshot(value, CTX)).toBeNull();
     });
   }
+});
+
+describe("decodeWorkflowCardSnapshot — failure/unlaunched (TASK.193)", () => {
+  it("accepts a step's failure record by field and its unlaunched:true marker, round-tripped unchanged when both fit under the byte cap", () => {
+    const withFailure: WorkflowCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      steps: [
+        {
+          id: "probe",
+          agentType: "no-such-type-193",
+          result: {
+            status: "error",
+            turns: 0,
+            durationMs: 0,
+            failure: { kind: "error", text: "boom", truncated: false },
+            unlaunched: true,
+          },
+        },
+      ],
+    };
+    expect(decodeWorkflowCardSnapshot(withFailure, CTX)).toEqual(withFailure);
+  });
+
+  it("a step with neither failure nor unlaunched decodes with neither key present (no fabricated false/undefined)", () => {
+    const decoded = decodeWorkflowCardSnapshot(VALID_SNAPSHOT, CTX);
+    const survey = decoded?.steps[0]?.result;
+    expect(survey && "failure" in survey).toBe(false);
+    expect(survey && "unlaunched" in survey).toBe(false);
+  });
+
+  it("BYTE cap, not a code-point cap: 8_192 emoji (32_768 bytes) with the wire's OWN truncated:false still decodes truncated:true and <= the byte cap (blocker: the renderer's other cap is code-points, a different unit)", () => {
+    const eightThousandEmoji = "😀".repeat(8_192);
+    expect(new TextEncoder().encode(eightThousandEmoji).length).toBe(32_768);
+    const withFailure: WorkflowCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      steps: [
+        {
+          id: "probe",
+          agentType: "explore",
+          result: {
+            status: "error",
+            turns: 0,
+            durationMs: 0,
+            failure: { kind: "error", text: eightThousandEmoji, truncated: false },
+          },
+        },
+      ],
+    };
+    const decoded = decodeWorkflowCardSnapshot(withFailure, CTX);
+    const failure = decoded?.steps[0]?.result?.failure;
+    expect(failure).toBeDefined();
+    expect(new TextEncoder().encode(failure!.text).length).toBeLessThanOrEqual(WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES);
+    // The DISJUNCTION, not the wire's own bit: a payload that lied about
+    // being whole must not survive as "truncated: false" just because the
+    // local re-cap happens to be the one that bit this time.
+    expect(failure!.truncated).toBe(true);
+  });
+
+  it("a subcap text with the wire's truncated:false decodes truncated:false (the local cap must not FALSELY flip an honest bit)", () => {
+    const withFailure: WorkflowCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      steps: [
+        {
+          id: "probe",
+          agentType: "explore",
+          result: { status: "error", turns: 0, durationMs: 0, failure: { kind: "error", text: "short", truncated: false } },
+        },
+      ],
+    };
+    expect(decodeWorkflowCardSnapshot(withFailure, CTX)?.steps[0]?.result?.failure?.truncated).toBe(false);
+  });
+
+  it("a subcap text with the wire's truncated:true decodes truncated:true (the incoming bit is never downgraded either)", () => {
+    const withFailure: WorkflowCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      steps: [
+        {
+          id: "probe",
+          agentType: "explore",
+          result: { status: "error", turns: 0, durationMs: 0, failure: { kind: "error", text: "short", truncated: true } },
+        },
+      ],
+    };
+    expect(decodeWorkflowCardSnapshot(withFailure, CTX)?.steps[0]?.result?.failure?.truncated).toBe(true);
+  });
+
+  it("normalizes a lone surrogate in failure.text to U+FFFD rather than propagating it (structured-clone/SQLite-hostile input)", () => {
+    const withFailure: WorkflowCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      steps: [
+        {
+          id: "probe",
+          agentType: "explore",
+          result: { status: "error", turns: 0, durationMs: 0, failure: { kind: "error", text: "ab\uD800cd", truncated: false } },
+        },
+      ],
+    };
+    const text = decodeWorkflowCardSnapshot(withFailure, CTX)?.steps[0]?.result?.failure?.text ?? "";
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text)).toBe(false);
+  });
+});
+
+describe("constant parity — WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES (TASK.193)", () => {
+  it("the local byte cap equals the real @anycode/core export", () => {
+    expect(WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES).toBe(CORE_WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES);
+  });
 });
 
 describe("decodeWorkflowCardSnapshot — oversized activity entries normalize bounded (slice, not reject)", () => {
@@ -351,6 +515,40 @@ describe("projectWorkflowCard", () => {
       activityDropped: 1,
       final: { status: "failed", completedSteps: 1, durationMs: 17_000 },
     });
+  });
+
+  it("copies a step's failure/unlaunched onto its projected final (TASK.193); a step with neither carries neither key on final", () => {
+    const withFailure: WorkflowCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      steps: [
+        {
+          id: "probe",
+          agentType: "no-such-type-193",
+          result: {
+            status: "error",
+            turns: 0,
+            durationMs: 0,
+            failure: { kind: "error", text: "boom", truncated: false },
+            unlaunched: true,
+          },
+        },
+      ],
+    };
+    const projected = projectWorkflowCard(withFailure);
+    expect(projected.steps[0]?.final).toEqual({
+      status: "error",
+      durationMs: 0,
+      failure: { kind: "error", text: "boom", truncated: false },
+      unlaunched: true,
+    });
+
+    // VALID_SNAPSHOT's own steps carry neither field: their projected
+    // `final` must not fabricate either key.
+    const plain = projectWorkflowCard(VALID_SNAPSHOT);
+    for (const step of plain.steps) {
+      expect(step.final && "failure" in step.final).toBe(false);
+      expect(step.final && "unlaunched" in step.final).toBe(false);
+    }
   });
 
   it("a skipped step projects started: false (never launched, same reading the live S3 card gives a step that never got step_start)", () => {

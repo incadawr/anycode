@@ -605,28 +605,90 @@ describe("fail-fast validation", () => {
     expect(outcomeOf(outcome.steps, "A").status).toBe("skipped");
   });
 
-  // TASK.191 slice S3 consequence, NOT a regression of this slice: this
-  // early return sits BEFORE `onProgress?.({kind:"start",...})` at the top
-  // of `run()`, so a caller fed exclusively by onProgress (the desktop card)
-  // never gets a `workflow_start` at all for this outcome — the card simply
-  // never seeds a workflow sub-status, and the failure is visible only
-  // through the returned WorkflowRunOutcome / the settling tool_result. This
-  // is intentional (nothing has streamed yet, so there is nothing for a
-  // client to hold a graph FOR), documented here rather than left implicit.
-  it("emits ZERO progress events for an unknown-agentType fail-fast (documented silence, not a regression)", async () => {
+  // TASK.193 (supersedes the TASK.191 slice S3 "documented silence" pin this
+  // replaces): a caller fed exclusively by onProgress (the desktop card) used
+  // to get NOTHING for this outcome — no workflow_start, no reason, the run
+  // simply vanished. The pre-check now streams the same start/step_end/end
+  // trio a launched run would, with `unlaunched: true` on every error
+  // terminal, so the card, CLI and telemetry all see the failed step and its
+  // reason and can tell it never launched.
+  it("streams start -> step_end(unlaunched) -> end for an unknown-agentType fail-fast (no silent run)", async () => {
     const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
       emitAndComplete(opts, req, "x"),
     );
-    const wf = def("badtype-silent", [{ id: "B", agentType: "nope", promptTemplate: "${input}" }]);
+    const wf = def("badtype-loud", [{ id: "B", agentType: "nope", promptTemplate: "${input}" }]);
 
     const events: WorkflowProgress[] = [];
     const outcome = await createWorkflowRunner(port, [wf]).run(
-      { name: "badtype-silent", input: "x" },
+      { name: "badtype-loud", input: "x" },
       { onProgress: (progress) => events.push(progress) },
     );
 
     expect(outcome.status).toBe("failed");
-    expect(events).toEqual([]);
+    expect(events.map((e) => e.kind)).toEqual(["start", "step_end", "end"]);
+    const stepEnd = events[1];
+    expect(stepEnd).toMatchObject({ kind: "step_end", stepId: "B", status: "error", unlaunched: true });
+    if (stepEnd?.kind === "step_end") {
+      expect(stepEnd.failure?.text).toContain("Unknown agentType");
+    }
+    expect(events.at(-1)).toMatchObject({ kind: "end", status: "failed", completedSteps: 0, totalSteps: 1 });
+  });
+
+  it("emits one step_end per step, in DEFINITION order, for a fail-fast with a mix of known/unknown agentTypes", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, "x"),
+    );
+    const wf = def("badtype-mixed", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "nope", promptTemplate: "${input}" },
+      { id: "C", agentType: "also-nope", promptTemplate: "${input}" },
+    ]);
+
+    const events: WorkflowProgress[] = [];
+    const outcome = await createWorkflowRunner(port, [wf]).run(
+      { name: "badtype-mixed", input: "x" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    expect(outcome.status).toBe("failed");
+    expect(events.map((e) => e.kind)).toEqual(["start", "step_end", "step_end", "step_end", "end"]);
+    const stepEnds = events.filter(
+      (e): e is Extract<WorkflowProgress, { kind: "step_end" }> => e.kind === "step_end",
+    );
+    expect(stepEnds.map((e) => e.stepId)).toEqual(["A", "B", "C"]);
+    expect(stepEnds[0]?.status).toBe("skipped"); // A: a known agentType, never launched
+    expect(stepEnds[0]?.unlaunched).toBeUndefined();
+    expect(stepEnds[1]?.status).toBe("error");
+    expect(stepEnds[1]?.unlaunched).toBe(true);
+    expect(stepEnds[2]?.status).toBe("error");
+    expect(stepEnds[2]?.unlaunched).toBe(true);
+    expect(events.at(-1)).toMatchObject({ kind: "end", status: "failed", completedSteps: 0, totalSteps: 3 });
+  });
+
+  it("the fail-fast pre-check's start carries the same step graph a launched run would (TASK.193)", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, "x"),
+    );
+    const wf = def("badtype-graph", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "nope", promptTemplate: "${steps.A}", dependsOn: ["A"] },
+    ]);
+
+    const events: WorkflowProgress[] = [];
+    await createWorkflowRunner(port, [wf]).run(
+      { name: "badtype-graph", input: "x" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    expect(events[0]).toEqual({
+      kind: "start",
+      workflow: "badtype-graph",
+      totalSteps: 2,
+      steps: [
+        { id: "A", agentType: "general-purpose" },
+        { id: "B", agentType: "nope", dependsOn: ["A"] },
+      ],
+    });
   });
 });
 
@@ -1128,4 +1190,255 @@ describe("orphan safety (real NodeExecutionAdapter)", () => {
     },
     20_000,
   );
+});
+
+// ===========================================================================
+// TASK.193 slice S1: what finalText IS, stamped where the distinction still
+// exists. `status` alone cannot say it — three different producers all land on
+// "error" (a timeout message, a degenerate loop's partial, the child's own
+// error text), and two of them never launched a child at all.
+
+describe("failure kind + unlaunched stamps (TASK.193)", () => {
+  it("stamps a child's own error as kind 'error', and stamps nothing on the steps around it", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      if (id === "B") return statusOutcome("error", "boom");
+      return completedOutcome(`out:${id}`);
+    });
+    const wf = def("kinds", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "general-purpose", promptTemplate: "${steps.A}", dependsOn: ["A"] },
+      { id: "C", agentType: "general-purpose", promptTemplate: "${steps.B}", dependsOn: ["B"] },
+    ]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run({ name: "kinds", input: "go" }, {});
+
+    const b = outcomeOf(outcome.steps, "B");
+    expect(b.failureKind).toBe("error");
+    // The child DID launch: a real duration and turn count were measured.
+    expect(b).not.toHaveProperty("unlaunched");
+    expect(outcomeOf(outcome.steps, "A")).not.toHaveProperty("failureKind");
+    expect(outcomeOf(outcome.steps, "C")).not.toHaveProperty("failureKind"); // skipped
+  });
+
+  it("stamps a per-step timeout as kind 'error' (its text is a message, not a partial)", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      await whenAborted(opts.signal);
+      return statusOutcome("cancelled");
+    });
+    const wf = def("timeout-kind", [{ id: "slow", agentType: "general-purpose", promptTemplate: "${input}" }]);
+
+    const outcome = await createWorkflowRunnerForTest(port, [wf], { stepTimeoutMs: 30 }).run(
+      { name: "timeout-kind", input: "go" },
+      {},
+    );
+
+    const slow = outcomeOf(outcome.steps, "slow");
+    expect(slow.status).toBe("error");
+    expect(slow.failureKind).toBe("error");
+    expect(slow.finalText).toContain("timed out");
+    expect(slow).not.toHaveProperty("unlaunched");
+  }, 5_000);
+
+  it("stamps a degenerate cutoff as kind 'degenerate' even though the step status is 'error'", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      return completedOutcome("...ends inside a degenerate loop", { finalTurnFinishReason: "degenerate" });
+    });
+    const wf = def("degen-kind", [{ id: "B", agentType: "general-purpose", promptTemplate: "${input}" }]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run({ name: "degen-kind", input: "go" }, {});
+
+    const b = outcomeOf(outcome.steps, "B");
+    expect(b.status).toBe("error");
+    // Folding it into "error" (TASK.210) would otherwise erase the fact that
+    // the text is a LOOPING PARTIAL rather than an error message.
+    expect(b.failureKind).toBe("degenerate");
+  });
+
+  it("stamps a budget exhaustion as kind 'max_turns'", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      return statusOutcome("max_turns", "partial");
+    });
+    const wf = def("mt-kind", [{ id: "B", agentType: "general-purpose", promptTemplate: "${input}" }]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run({ name: "mt-kind", input: "go" }, {});
+
+    expect(outcomeOf(outcome.steps, "B").failureKind).toBe("max_turns");
+  });
+
+  it("stamps NOTHING on a cancelled run: the cause is the cancellation, not the step", async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      markStarted();
+      await whenAborted(opts.signal);
+      return statusOutcome("cancelled", "the last finished turn");
+    });
+    const wf = def("cancel-kind", [
+      { id: "S1", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "S2", agentType: "general-purpose", promptTemplate: "${steps.S1}", dependsOn: ["S1"] },
+    ]);
+
+    const controller = new AbortController();
+    const runPromise = createWorkflowRunner(port, [wf]).run(
+      { name: "cancel-kind", input: "go" },
+      { signal: controller.signal },
+    );
+    await started;
+    controller.abort();
+    const outcome = await runPromise;
+
+    expect(outcome.status).toBe("cancelled");
+    expect(outcomeOf(outcome.steps, "S1")).not.toHaveProperty("failureKind");
+    expect(outcomeOf(outcome.steps, "S1")).not.toHaveProperty("unlaunched");
+    expect(outcomeOf(outcome.steps, "S2")).not.toHaveProperty("failureKind");
+  });
+
+  it("marks a prompt-render throw as unlaunched: its zeros are structural, not measured", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, `out:${id}`),
+    );
+    const wf = def("throw-unlaunched", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "general-purpose", promptTemplate: "needs ${steps.A}" },
+    ]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run({ name: "throw-unlaunched", input: "go" }, {});
+
+    const b = outcomeOf(outcome.steps, "B");
+    expect(b.failureKind).toBe("error");
+    expect(b.unlaunched).toBe(true);
+    expect(port.calls).not.toContain("B");
+    expect(outcomeOf(outcome.steps, "A")).not.toHaveProperty("unlaunched");
+  });
+
+  it("marks the unknown-agentType fail-fast as unlaunched, and leaves the skipped siblings unmarked", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, "x"),
+    );
+    const wf = def("badtype-unlaunched", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "nope", promptTemplate: "${input}" },
+    ]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run({ name: "badtype-unlaunched", input: "x" }, {});
+
+    const b = outcomeOf(outcome.steps, "B");
+    expect(b.unlaunched).toBe(true);
+    expect(b.failureKind).toBe("error");
+    const a = outcomeOf(outcome.steps, "A");
+    expect(a.status).toBe("skipped");
+    expect(a).not.toHaveProperty("unlaunched");
+    expect(a).not.toHaveProperty("failureKind");
+  });
+});
+
+// ===========================================================================
+// TASK.193 slice S2: the SAME failure/unlaunched stamps, but on the WIRE
+// event (step_end) rather than the returned WorkflowRunOutcome — this is what
+// tools/workflow.ts's mapProgressToEvent bridges onward, so a field the
+// outcome carries but the event drops would arrive nowhere downstream.
+
+describe("step_end progress event carries failure + unlaunched (TASK.193 slice S2)", () => {
+  it("carries failure on the step_end event for a child's own error, and nothing on the step around it", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      if (id === "B") return statusOutcome("error", "boom");
+      return completedOutcome(`out:${id}`);
+    });
+    const wf = def("wire-kinds", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "general-purpose", promptTemplate: "${steps.A}", dependsOn: ["A"] },
+    ]);
+
+    const events: WorkflowProgress[] = [];
+    await createWorkflowRunner(port, [wf]).run(
+      { name: "wire-kinds", input: "go" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    const bEnd = events.find((e) => e.kind === "step_end" && e.stepId === "B");
+    expect(bEnd).toEqual({
+      kind: "step_end",
+      stepId: "B",
+      status: "error",
+      turns: 1,
+      durationMs: 1,
+      failure: { kind: "error", text: "boom", truncated: false },
+    });
+    const aEnd = events.find((e) => e.kind === "step_end" && e.stepId === "A");
+    expect(aEnd).not.toHaveProperty("failure");
+    expect(aEnd).not.toHaveProperty("unlaunched");
+  });
+
+  it("carries a timeout's message as the step_end event's failure text, unlaunched absent", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      await whenAborted(opts.signal);
+      return statusOutcome("cancelled");
+    });
+    const wf = def("wire-timeout", [{ id: "slow", agentType: "general-purpose", promptTemplate: "${input}" }]);
+
+    const events: WorkflowProgress[] = [];
+    await createWorkflowRunnerForTest(port, [wf], { stepTimeoutMs: 30 }).run(
+      { name: "wire-timeout", input: "go" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    const end = events.find((e) => e.kind === "step_end" && e.stepId === "slow");
+    expect(end?.kind).toBe("step_end");
+    if (end?.kind === "step_end") {
+      expect(end.failure?.text).toContain("timed out");
+      expect(end.unlaunched).toBeUndefined();
+    }
+  }, 5_000);
+
+  it("carries a prompt-render throw's message as the step_end event's failure text, with unlaunched:true", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, `out:${id}`),
+    );
+    const wf = def("wire-throw", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "general-purpose", promptTemplate: "needs ${steps.A}" },
+    ]);
+
+    const events: WorkflowProgress[] = [];
+    await createWorkflowRunner(port, [wf]).run(
+      { name: "wire-throw", input: "go" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    const bEnd = events.find((e) => e.kind === "step_end" && e.stepId === "B");
+    expect(bEnd?.kind).toBe("step_end");
+    if (bEnd?.kind === "step_end") {
+      expect(bEnd.failure?.text).toContain("Unknown workflow step reference");
+      expect(bEnd.unlaunched).toBe(true);
+    }
+  });
+
+  it("carries a degenerate cutoff's kind as 'degenerate' on the step_end event", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], async (id, req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      return completedOutcome("...ends inside a degenerate loop", { finalTurnFinishReason: "degenerate" });
+    });
+    const wf = def("wire-degen", [{ id: "B", agentType: "general-purpose", promptTemplate: "${input}" }]);
+
+    const events: WorkflowProgress[] = [];
+    await createWorkflowRunner(port, [wf]).run(
+      { name: "wire-degen", input: "go" },
+      { onProgress: (progress) => events.push(progress) },
+    );
+
+    const bEnd = events.find((e) => e.kind === "step_end" && e.stepId === "B");
+    expect(bEnd?.kind).toBe("step_end");
+    if (bEnd?.kind === "step_end") {
+      expect(bEnd.failure?.kind).toBe("degenerate");
+    }
+  });
 });

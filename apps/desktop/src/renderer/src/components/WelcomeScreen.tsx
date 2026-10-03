@@ -1,47 +1,9 @@
 /**
- * Welcome screen (slice 2.2, ruling reviews/slice-2.2-forks-ruling.md §2 —
-
- * -> quit` boot path): rendered by App.tsx precisely when the app is
- * unconfigured (`!providerReady && tabs.length === 0 && connections.length <= 1`, `shouldShowWelcome`
- * in ../App.tsx). There is nothing else on screen in that state — main
- * opened the window with zero hosts.
- *
- * Deliberately owns no readiness logic itself: App.tsx decides WHETHER to
- * mount this component at all (off the settings-store's `snapshot` +
- * tabs-store's `tabs.length`, per the gating function it exports). Once the
- * provider is ready App.tsx shows the normal shell; the user opens the first
- * session explicitly.
- *
- * R11 restage (slice-R11-cut.md §2.2): full first-run redesign — brand beat
- * (wordmark + mode-ramp motif) + a first-connection form + an honest two-beat
- * progress footer. Auto-advance is still App's declarative unmount above —
- * this component adds no readiness state of its own.
- *
- * TASK.45 W12 (cut §"Отдельный first-run empty state в WelcomeScreen"): this no
- * longer embeds the full `ProviderSettings` grid (management screen) — it
- * embeds `ConnectionDrawerFields` (the SAME add/edit form the Settings grid's
- * drawer uses) directly, chrome-free, narrowed to ONE connection AT A TIME. A
- * fresh install has no connections yet ("add" mode); reopening mid-setup (a
- * connection exists but isn't ready yet — e.g. metadata saved, credential not
- * yet entered) resumes editing that SAME first connection rather than minting
- * a second one on every restart.
- *
- * TASK.68 (owner bug report): the form used to be hard-wired to
- * `mode={connections.length === 0 ? "add" : "edit"}` /
- * `editConnection={connections[0]}` with no local state at all — a failed
- * first provider (bad key, wrong endpoint) permanently locked the screen into
- * editing that ONE connection (its provider `<select>` disabled by
- * `templateLocked` once created, by design — provider identity is fixed at
- * creation). There was no way to try a different provider without resetting
- * settings/secrets outside the app. `WelcomeConnectionsView` below is now the
- * screen's own local state: which existing connection is being edited, or
- * whether a NEW one is being created (active provider select). A compact
- * switcher list (rendered whenever at least one connection exists) lets the
- * user jump between saved connections or start another one and back, exactly
- * like `ConnectionDrawer`'s own `key={fieldsProps.editConnection?.id ?? "add"}`
- * remount discipline (ConnectionDrawer.tsx) — `resolveWelcomeView`'s `key`
- * plays the same role here so a connection's local form state (label/model/
- * key field) never leaks into a DIFFERENT connection's form.
+ * First-run setup: choose ChatGPT/Codex, Claude Code, or API/local models.
+ * Subscription paths reuse the existing account panes; API setup uses the
+ * shared connection form with optional tuning collapsed. App owns readiness
+ * and advances to the project draft after setup. Saved incomplete connections
+ * resume in the API path and can still be switched or replaced.
  */
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
@@ -51,11 +13,17 @@ import { ConnectionDrawerFields } from "./ConnectionDrawer.js";
 import { customProviderCatalogEntries, selectProviderEntry, shouldShowAppVersion } from "./SettingsScreen.js";
 import { connectionCredentialKey, connectionDisplayName, connectionHealthStatus, describeConnectionHealth } from "./ConnectionTile.js";
 import { BrandMark, Plus } from "./icons.js";
+import { CodexEnginePane } from "./CodexEnginePane.js";
+import { ClaudeEnginePane } from "./ClaudeEnginePane.js";
+import { ConsentDialog } from "./ConsentDialog.js";
 import "../settings.css";
 
 export interface WelcomeScreenProps {
   /** Injectable for test isolation; defaults to the app's singleton settings-store. */
   store?: SettingsStoreApi;
+  onOpenSettings?: () => void;
+  settingsOpen?: boolean;
+  onSelectEngine?: (engine: "core" | "codex" | "claude") => void;
 }
 
 /**
@@ -101,7 +69,7 @@ export function resolveWelcomeView(
     : { mode: "add", editConnection: undefined, key: "add" };
 }
 
-export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) {
+export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settingsOpen = false, onSelectEngine }: WelcomeScreenProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const notice = useStore(store, (s) => s.notice);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -109,6 +77,9 @@ export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) 
   // App stops rendering Welcome and shows the normal shell.
   const ready = snapshot?.providerReady === true;
   const connections = snapshot?.settings.provider.connections ?? [];
+  const pendingConsent = useStore(store, (s) => s.pendingConsent);
+  const [path, setPath] = useState<"api" | "codex" | "claude" | null>(null);
+  const activePath = path ?? (connections.length > 0 ? "api" : null);
 
   // `null` until the user explicitly switches views — the live default
   // (`initialConnectionsView`) tracks the connections list until then, so a
@@ -132,13 +103,13 @@ export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) 
   // instance underneath is a different mount now, same "land on the one
   // actionable control" rationale as the original mount-only steal.
   useEffect(() => {
-    cardRef.current?.querySelector<HTMLElement>("select, input, textarea")?.focus();
+    cardRef.current?.querySelector<HTMLElement>(".welcome-setup select, .welcome-setup input, .welcome-setup button, .welcome-paths button")?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolved.key]);
+  }, [resolved.key, activePath]);
 
   return (
     <div className="welcome-screen">
-      <div className="welcome-screen-card" ref={cardRef}>
+      <div className={`welcome-screen-card${activePath ? " welcome-screen-card-setup" : ""}`} ref={cardRef}>
         <header className="welcome-brand">
           <BrandMark className="welcome-mark" />
           <h1 className="welcome-wordmark">
@@ -154,7 +125,7 @@ export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) 
             <span className="welcome-ramp-dot welcome-ramp-yolo" />
           </div>
           <p className="welcome-promise">
-            A coding agent for any provider — every step legible, every permission yours.
+            Connect your account, choose a project, and start coding.
           </p>
           {/* The running app's version, same source and same gate as the About
               pane (`snapshot.appVersion`, never hardcoded here). Setup is the
@@ -174,7 +145,22 @@ export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) 
           </div>
         )}
 
-        {snapshot && connections.length > 0 && (
+        <div className={`welcome-paths${activePath ? " welcome-paths-compact" : ""}`} role="group" aria-label="Choose how to connect">
+          {([
+            ["codex", "ChatGPT / Codex", "Use your ChatGPT account"],
+            ["claude", "Claude Code", "Use your Claude account"],
+            ["api", "API key or local model", "Connect any provider or your own server"],
+          ] as const).map(([id, title, description]) => (
+            <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id} onClick={() => {
+              setPath(id);
+              onSelectEngine?.(id === "api" ? "core" : id);
+            }}>
+              <strong>{title}</strong><span>{description}</span>
+            </button>
+          ))}
+        </div>
+
+        {activePath === "api" && snapshot && connections.length > 0 && (
           <div className="welcome-connections">
             <div className="welcome-connections-header">
               <span className="welcome-connections-title">Connections</span>
@@ -230,18 +216,31 @@ export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) 
           </div>
         )}
 
-        {snapshot && (
-          <ConnectionDrawerFields
-            key={resolved.key}
-            mode={resolved.mode}
-            editConnection={resolved.editConnection}
-            catalog={catalog}
-            connections={connections}
-            secrets={snapshot.secrets}
-            readOnly={snapshot.readOnly}
-            store={store}
-          />
-        )}
+        <div className="welcome-setup">
+          {activePath === "codex" && <CodexEnginePane onboarding />}
+          {activePath === "claude" && <ClaudeEnginePane onboarding />}
+          {activePath === "api" && snapshot && (
+            <ConnectionDrawerFields
+              key={resolved.key}
+              mode={resolved.mode}
+              editConnection={resolved.editConnection}
+              catalog={catalog}
+              connections={connections}
+              secrets={snapshot.secrets}
+              readOnly={snapshot.readOnly}
+              store={store}
+              simplified
+            />
+          )}
+        </div>
+
+        {onOpenSettings && <button type="button" className="settings-button" data-open-settings onClick={onOpenSettings}>Open settings</button>}
+
+        <ConsentDialog
+          open={pendingConsent !== null && !settingsOpen}
+          onAccept={() => void store.getState().acceptWeakStorageConsent()}
+          onDecline={() => store.getState().declineWeakStorageConsent()}
+        />
 
         {notice && (
           <div className="settings-notice" role="alert">
@@ -256,7 +255,7 @@ export function WelcomeScreen({ store = useSettingsStore }: WelcomeScreenProps) 
           />
           <span className={`welcome-step-dot${ready ? " welcome-step-dot-active" : ""}`} aria-hidden="true" />
           <span className="welcome-steps-caption">
-            {ready ? "Provider ready — open a task from the sidebar" : "Connect a provider to begin"}
+            {ready ? "Ready — choose a project to start" : activePath === null ? "Choose how you want to connect" : "Connect your account to continue"}
           </span>
         </footer>
       </div>

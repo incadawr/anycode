@@ -89,6 +89,23 @@ export const ACTIVITY_SUMMARY_MAX_CHARS = 160;
  */
 export const ACTIVITY_STEP_ID_MAX_CHARS = 64;
 
+/**
+ * Local mirror of packages/core/src/types/config.ts's
+ * WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES (8_192) — same not-importable-as-a-
+ * value posture as WORKFLOW_CARD_ACTIVITY_RING/_MAX_BYTES above, even though
+ * this particular constant IS re-exported from `@anycode/core` (unlike
+ * those two): production code here stays type-only per the module doc
+ * comment's discipline, so the numeric value is re-declared and pinned for
+ * real in workflow-card.test.ts's parity block, which value-imports it.
+ * This is a DEFENSIVE re-cap, not the source of truth: a persisted
+ * `failure.text` was already capped to this same limit by the write side
+ * (workflow/step-failure.ts) before it ever reached sqlite, so this only
+ * bites a corrupted/hostile payload claiming a longer one.
+ */
+export const WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES = 8_192;
+
+const FAILURE_KINDS: ReadonlySet<string> = new Set(["error", "degenerate", "max_turns"]);
+
 const RUN_STATUSES: ReadonlySet<WorkflowCardRunStatusT> = new Set(["completed", "failed", "cancelled"]);
 const STEP_STATUSES: ReadonlySet<WorkflowCardStepStatusT> = new Set([
   "completed",
@@ -99,10 +116,33 @@ const STEP_STATUSES: ReadonlySet<WorkflowCardStepStatusT> = new Set([
 ]);
 const USAGE_KEYS = ["inputTokens", "cachedInputTokens", "outputTokens", "totalTokens"] as const;
 
-/** Caps `text` to `maxChars` CODE POINTS (never mid-surrogate-pair), truncating without an ellipsis marker. Mirrors card-snapshot.ts's write-side helper (and subagent-card.ts's own copy). */
+/** Caps `text` to `maxChars` CODE POINTS (never mid-surrogate-pair), truncating without an ellipsis marker. Mirrors card-snapshot.ts's write-side helper (and subagent-card.ts's own copy). NOT used for `failure.text` — that field's cap is BYTES, a different unit (8_192 emoji code points is quadruple the byte budget of 8_192 emoji bytes), see `capUtf8BytesLocal` below. */
 function capCodePoints(text: string, maxChars: number): string {
   const codePoints = Array.from(text);
   return codePoints.length <= maxChars ? text : codePoints.slice(0, maxChars).join("");
+}
+
+/**
+ * Byte-for-byte mirror of `packages/core/src/util/bytes.ts`'s `capUtf8Bytes`
+ * (not importable as a value here — module doc comment's discipline), but
+ * with the encode→decode round-trip run UNCONDITIONALLY rather than only
+ * when the cap bites: a persisted `failure.text` reaches this decoder from
+ * an UNTRUSTED store (last line of defense, module doc comment above), so a
+ * lone surrogate must be normalized to U+FFFD (the round-trip's own side
+ * effect, same as `workflow/step-failure.ts`'s `normalizeSurrogates`) even
+ * on a payload that never needed truncating at all. A trailing U+FFFD is
+ * stripped ONLY when truncation actually happened — an untouched string's
+ * own genuine U+FFFD character must not be eaten. Used ONLY for
+ * `failure.text` (a BYTE cap, TASK.193) — never for the code-point caps
+ * above, which are a different unit entirely.
+ */
+function capUtf8BytesLocal(text: string, maxBytes: number): { text: string; truncated: boolean } {
+  const encoded = new TextEncoder().encode(text);
+  const truncated = encoded.length > maxBytes;
+  const bytes = truncated ? encoded.slice(0, maxBytes) : encoded;
+  const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const clean = truncated && decoded.endsWith("�") ? decoded.slice(0, -1) : decoded;
+  return { text: clean, truncated };
 }
 
 function utf8ByteLength(text: string): number {
@@ -121,7 +161,14 @@ function decodeStepResult(raw: unknown): WorkflowCardStepResultT | null {
   if (!isPlainObject(raw)) {
     return null;
   }
-  const { status, turns, durationMs, usage: rawUsage } = raw;
+  const {
+    status,
+    turns,
+    durationMs,
+    usage: rawUsage,
+    failure: rawFailure,
+    unlaunched: rawUnlaunched,
+  } = raw;
   if (typeof status !== "string" || !STEP_STATUSES.has(status as WorkflowCardStepStatusT)) return null;
   if (!isNonNegativeSafeInteger(turns)) return null;
   if (!isNonNegativeSafeInteger(durationMs)) return null;
@@ -139,11 +186,47 @@ function decodeStepResult(raw: unknown): WorkflowCardStepResultT | null {
     usage = decoded;
   }
 
+  // TASK.193: `failure` is present only for a step that did not complete.
+  // Any structural mismatch on this field fails the WHOLE decode (same
+  // fail-soft posture as `usage` above), never a silently dropped field.
+  let failure: { kind: "error" | "degenerate" | "max_turns"; text: string; truncated: boolean } | undefined;
+  if (rawFailure !== undefined) {
+    if (!isPlainObject(rawFailure)) return null;
+    const { kind, text, truncated } = rawFailure;
+    if (typeof kind !== "string" || !FAILURE_KINDS.has(kind)) return null;
+    if (typeof text !== "string") return null;
+    if (typeof truncated !== "boolean") return null;
+    // Byte cap (a defensive re-cap — the write side already enforces this
+    // same limit, see WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES's own comment).
+    // `truncated` is the DISJUNCTION of the incoming bit and this local
+    // re-cap's own bit: a record that already arrived marked truncated must
+    // never be reported whole just because it also fits under the local cap
+    // (TASK.193 review blocker — a hostile payload claiming `truncated:
+    // false` on an over-length text must not be believed).
+    const local = capUtf8BytesLocal(text, WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES);
+    failure = {
+      kind: kind as "error" | "degenerate" | "max_turns",
+      text: local.text,
+      truncated: truncated || local.truncated,
+    };
+  }
+
+  // `unlaunched` is a pure boolean-true marker (mirrors the wire/core shape
+  // exactly, ports/workflow.ts's `unlaunched?: true`): anything present but
+  // not literally `true` is a malformed payload, not a soft "false".
+  let unlaunched: true | undefined;
+  if (rawUnlaunched !== undefined) {
+    if (rawUnlaunched !== true) return null;
+    unlaunched = true;
+  }
+
   return {
     status: status as WorkflowCardStepStatusT,
     turns,
     durationMs,
     ...(usage !== undefined ? { usage } : {}),
+    ...(failure !== undefined ? { failure } : {}),
+    ...(unlaunched !== undefined ? { unlaunched } : {}),
   };
 }
 
@@ -318,6 +401,21 @@ export function decodeWorkflowCardSnapshot(
  *   froze it before its dependencies were ever satisfied), so it must read
  *   the same as "never started" — exactly what the live card already shows
  *   before `workflow_step_start` ever arrives (TASK.191 slice S3).
+ *   `started` and `final.unlaunched` (TASK.193) answer DIFFERENT questions
+ *   and are not a contradiction when both are `true`: `started` asks "did
+ *   the engine ever take this step off the graph and begin working it"
+ *   (live: a `step_start` was observed; hydrated: it settled to something
+ *   other than `skipped`), while `unlaunched` asks "did the child ever
+ *   actually run" (`subagents.run` was called). A synthetic pre-check throw
+ *   (`errorOutcome()`) fires `step_start` — engine.ts:196 — and THEN settles
+ *   without ever calling `subagents.run`, so a hydrated step can legally
+ *   read `started: true` with `final.unlaunched: true` at once. No reader
+ *   of `started` gets confused by this: every one of them checks
+ *   `step.final !== null` first and takes the terminal branch instead
+ *   (`ToolCallCard.tsx`'s `workflowStepKind`:234, `workflowStepMeta`:299 —
+ *   its "Not started" branch at :301 sits *inside* the `step.final === null`
+ *   guard, so the `unlaunched` step's "Error · not launched" meta at :323
+ *   never depends on `started` at all).
  * - `running` is always `false`: this snapshot is only ever written once
  *   the whole Workflow tool call has settled (see `final` below), so by
  *   construction nothing in it can still be executing.
@@ -340,9 +438,10 @@ export function decodeWorkflowCardSnapshot(
  *   on (`final !== null` whenever `result` was present) directly, so a
  *   future change that breaks it fails a test, not just this comment.
  * - Step `final` is `{ status, durationMs }` off `step.result` when present,
- *   else `null` — `WorkflowStepStatus["final"]` (store.ts) carries exactly
- *   those two fields, verified by reading the interface directly rather
- *   than assumed.
+ *   else `null`, plus `failure`/`unlaunched` copied through EXPLICITLY by
+ *   field (TASK.193) when the decoded result carries them — `decodeStepResult`
+ *   already validated and byte-re-capped `failure.text` on the way in, so
+ *   this hop is a straight pass-through, never a second decode.
  * - Run `final.completedSteps` has no snapshot field to copy: `final` (run)
  *   only carries `status`/`durationMs` (WorkflowCardSnapshotV1's own type),
  *   so it is a derived count of steps whose own `result.status ===
@@ -366,7 +465,15 @@ export function projectWorkflowCard(snapshot: WorkflowCardSnapshotV1): WorkflowS
       usage: step.result?.usage ?? null,
       started: step.result !== undefined && step.result.status !== "skipped",
       running: false,
-      final: step.result !== undefined ? { status: step.result.status, durationMs: step.result.durationMs } : null,
+      final:
+        step.result !== undefined
+          ? {
+              status: step.result.status,
+              durationMs: step.result.durationMs,
+              ...(step.result.failure !== undefined ? { failure: step.result.failure } : {}),
+              ...(step.result.unlaunched !== undefined ? { unlaunched: step.result.unlaunched } : {}),
+            }
+          : null,
     })),
     activity: snapshot.activity.entries.map((entry) => ({ ...entry })),
     activityDropped: snapshot.activity.dropped,

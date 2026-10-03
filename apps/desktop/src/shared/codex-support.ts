@@ -49,22 +49,28 @@ export interface CodexSupportManifest {
  * evidence behind it — deliberately NOT split into two entries, since nothing
  * reads `status` while `manifestSupportedRange` joins entries with `||` into
  * the string the Codex doctor shows a user, and ">=0.144.0 <0.145.0 ||
- * >=0.145.0 <0.155.0" is noise where ">=0.144.0 <0.155.0" is the same fact. Kept
+ * >=0.145.0 <0.161.0" is noise where ">=0.144.0 <0.161.0" is the same fact. Kept
  * apart in the note: 0.144.x carries the `codex-fixes` track's live 10/10 smoke,
  * while 0.145–0.154 is contract-verified only — the consumed app-server
  * subset was regenerated from the real 0.147.0, 0.149.0, 0.150.1, 0.151.0,
  * 0.152.1, 0.153.4 and 0.154.0 binaries and found byte-identical in methods and
  * decision enums (see host/engines/codex/contract/README.md). `recommended`
- * therefore stays on the live-smoked patch: the range says which Codex a user
+ * now selects 0.160.0, verified by the live GUI smoke on 2026-10-03: the range says which Codex a user
  * may bring, `recommended` says which one AnyCode installs on their behalf, and
  * only the second one needs the stronger evidence.
  */
 export const BUNDLED_CODEX_MANIFEST: CodexSupportManifest = {
-  schemaVersion: "anycode.codex-support.v1",
-  updatedAt: "2026-09-11T21:10:00Z",
-  supported: [{ range: ">=0.144.0 <0.155.0", status: "tested-and-contract-verified", note: "0.144.x: живой смоук 10/10, codex-fixes. 0.145–0.154: contract-verified against the real 0.147.0, 0.149.0, 0.150.1, 0.151.0, 0.152.1, 0.153.4 and 0.154.0 binaries — consumed methods and decision enums byte-identical, no union variant removed" }],
-  recommended: "0.144.3",
-  minimum: CODEX_MIN_FLOOR,
+  "schemaVersion": "anycode.codex-support.v1",
+  "updatedAt": "2026-10-03T20:10:06Z",
+  "supported": [
+    {
+      "range": ">=0.144.0 <0.161.0",
+      "status": "tested-and-contract-verified",
+      "note": "0.144.x: живой смоук 10/10, codex-fixes. 0.145–0.154: contract-verified against the real 0.147.0, 0.149.0, 0.150.1, 0.151.0, 0.152.1, 0.153.4 and 0.154.0 binaries — consumed methods and decision enums byte-identical, no union variant removed; 0.160.0: real contract verified and live GUI smoke 10/10 (Allow/Deny, Stop, restart/resume, zero orphans), 2026-10-03"
+    }
+  ],
+  "recommended": "0.160.0",
+  "minimum": "0.144.0"
 };
 
 /**

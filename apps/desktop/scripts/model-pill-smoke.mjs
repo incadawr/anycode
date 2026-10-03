@@ -52,6 +52,7 @@
 
  */
 
+import { smokeProviderProfile, activeSmokeConnection } from "./smoke-provider-profile.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -471,12 +472,12 @@ async function step1LaunchApp(ctx) {
 
   // Seed shape mirrors settings/schema.ts's DEFAULT_SETTINGS exactly, plus the
   // provider selection this scenario needs pre-set (design §5 setup): a
-  // catalog id ("z-ai") + its boot model (glm-5.2) — no `provider.defaults`
+  // catalog id ("z-ai") + its boot model (glm-5.2) — no connection reasoning effort
   // yet, so step 1's "No thinking" reading is a genuinely fresh boot, not a
   // stale leftover default.
   const seedSettings = {
-    version: 1,
-    provider: { id: PROVIDER_ID, model: MODEL_A },
+    version: 2,
+    provider: smokeProviderProfile(PROVIDER_ID, MODEL_A, { credentialFromEnv: true }),
     tools: {},
     permissions: { alwaysAllow: [] },
     ui: { theme: "system" },
@@ -604,14 +605,14 @@ async function step3PickEffortHigh(ctx) {
   }
   assert(3, state.label === "GLM-5.2 · High", `pill did not settle on High: ${JSON.stringify(state.label)}`);
 
-  const disk = await pollSettingsDiskUntil(ctx, 3, (s) => s?.provider?.defaults?.[PROVIDER_ID]?.reasoningEffort === "high");
+  const disk = await pollSettingsDiskUntil(ctx, 3, (s) => activeSmokeConnection(s)?.reasoningEffort === "high");
   if (disk !== null) {
-    assert(3, disk.provider.defaults[PROVIDER_ID].reasoningEffort === "high", "settings.json missing persisted high effort");
+    assert(3, activeSmokeConnection(disk).reasoningEffort === "high", "settings.json missing persisted high effort");
   }
 
   const filePath = await settledScreenshot(ctx, "step-3-pill-high");
   assert(3, typeof filePath === "string", "screenshot capture failed (see warning above)");
-  pass(3, `pill label="${state.label}"${disk ? `, disk defaults[${PROVIDER_ID}]=${JSON.stringify(disk.provider.defaults[PROVIDER_ID])}` : " (disk check skipped)"}`);
+  pass(3, `pill label="${state.label}"${disk ? `, disk active connection=${JSON.stringify(activeSmokeConnection(disk))}` : " (disk check skipped)"}`);
 }
 
 /** Polls settings.json on disk until `predicate` matches or a short deadline elapses — the persist write is fire-and-forget (design §2.4), so the first read can race it. Returns null (not a failure) when no settings path is known. */
@@ -708,7 +709,7 @@ async function step7SecondTabInherits(ctx) {
   const disk = await pollSettingsDiskUntil(
     ctx,
     7,
-    (s) => s?.provider?.defaults?.[PROVIDER_ID]?.model === MODEL_A && s?.provider?.defaults?.[PROVIDER_ID]?.reasoningEffort === "max",
+    (s) => activeSmokeConnection(s)?.model === MODEL_A && activeSmokeConnection(s)?.reasoningEffort === "max",
   );
 
 
@@ -736,7 +737,7 @@ async function step7SecondTabInherits(ctx) {
   pass(
     7,
     `new tab ${ctx.tabId2} booted with model=${tab2Model}, pill="${tab2State.label}"` +
-      (disk ? `, disk defaults[${PROVIDER_ID}]=${JSON.stringify(disk.provider.defaults[PROVIDER_ID])}` : " (disk check skipped)"),
+      (disk ? `, disk active connection=${JSON.stringify(activeSmokeConnection(disk))}` : " (disk check skipped)"),
   );
 }
 

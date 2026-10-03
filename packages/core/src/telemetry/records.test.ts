@@ -223,6 +223,45 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
+  it("workflow_step_end (toolCallId/stepId/failure/usage dropped, unlaunched copied when true, TASK.193 S4)", () => {
+    const event: AgentEvent = {
+      type: "workflow_step_end",
+      toolCallId: "call-4",
+      stepId: SENTINEL,
+      status: "error",
+      turns: 0,
+      durationMs: 0,
+      usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+      failure: { kind: "error", text: SENTINEL, truncated: true },
+      unlaunched: true,
+    };
+    const rec = telemetryRecordFor(event);
+    expect(rec).toEqual({
+      t: "workflow_step_end",
+      status: "error",
+      turns: 0,
+      durationMs: 0,
+      unlaunched: true,
+    });
+    expect(rec && "stepId" in rec).toBe(false);
+    expect(rec && "failure" in rec).toBe(false);
+    expect(rec && "usage" in rec).toBe(false);
+  });
+
+  it("workflow_step_end without unlaunched -> key absent", () => {
+    const event: AgentEvent = {
+      type: "workflow_step_end",
+      toolCallId: "call-5",
+      stepId: "s1",
+      status: "completed",
+      turns: 3,
+      durationMs: 500,
+    };
+    const rec = telemetryRecordFor(event);
+    expect(rec).toEqual({ t: "workflow_step_end", status: "completed", turns: 3, durationMs: 500 });
+    expect(rec && "unlaunched" in rec).toBe(false);
+  });
+
   it("stream_retry (reason dropped)", () => {
     const event: AgentEvent = {
       type: "stream_retry",
@@ -298,14 +337,6 @@ describe("telemetryRecordFor — unmapped variants -> null (fail-closed)", () =>
       toolCalls: 1,
       lastTool: SENTINEL,
     },
-    {
-      type: "workflow_step_end",
-      toolCallId: "1",
-      stepId: "s1",
-      status: "completed",
-      turns: 1,
-      durationMs: 10,
-    },
   ];
 
   it.each(unmapped.map((event) => [event.type, event] as const))("%s -> null", (_label, event) => {
@@ -367,6 +398,25 @@ describe("telemetryRecordFor — sentinel-leak invariant across every text carri
   it("error.error", () => assertNoLeak({ type: "error", error: SENTINEL }));
   it("workflow_start.workflow (name)", () =>
     assertNoLeak({ type: "workflow_start", toolCallId: "1", workflow: SENTINEL, totalSteps: 1, steps: [] }));
+  it("workflow_step_end.failure.text", () =>
+    assertNoLeak({
+      type: "workflow_step_end",
+      toolCallId: "1",
+      stepId: "s1",
+      status: "error",
+      turns: 1,
+      durationMs: 10,
+      failure: { kind: "error", text: SENTINEL, truncated: false },
+    }));
+  it("workflow_step_end.stepId", () =>
+    assertNoLeak({
+      type: "workflow_step_end",
+      toolCallId: "1",
+      stepId: SENTINEL,
+      status: "completed",
+      turns: 1,
+      durationMs: 10,
+    }));
 });
 
 describe("buildTelemetryTap", () => {

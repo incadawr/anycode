@@ -26,6 +26,7 @@
  * sentinel-leak PoC).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { CodexDeviceCodeProgress, CodexLoginMode } from "../../../shared/codex-login.js";
 import type { CodexDoctorReport } from "../../../shared/codex-doctor.js";
 import type { CodexQuotaCredits, CodexQuotaWindow, CodexRateLimits } from "../../../shared/codex-quota.js";
 import { CODEX_MIN_FLOOR } from "../../../shared/codex-support.js";
@@ -505,7 +506,8 @@ export interface CodexBridge {
   /** TASK.65: `force` bypasses main's doctor TTL cache (the explicit "Recheck all"); a mount-time refresh omits it so a re-check inside the TTL reuses the cached verdict. */
   recheck(profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
-  loginStart(profileId?: string): Promise<CodexLoginStartResult>;
+  loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
+  onLoginProgress?(callback: (progress: CodexDeviceCodeProgress) => void): () => void;
   loginCancel(): Promise<void>;
   listProfiles(): Promise<CodexProfilesSnapshot>;
   createProfile(request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult>;
@@ -520,6 +522,7 @@ export interface CodexBridge {
 }
 
 export interface CodexEnginePaneProps {
+  onboarding?: boolean;
   /** Injectable for tests / isolation; defaults to the app's real `window.anycode.codex` bridge. */
   bridge?: CodexBridge;
   /**
@@ -545,6 +548,8 @@ interface CodexProfileRowProps {
   confirmingDelete: boolean;
   busy: boolean;
   onSignIn: () => void;
+  onDeviceSignIn: () => void;
+  deviceCode?: CodexDeviceCodeProgress | null;
   onCancelSignIn: () => void;
   onRepairLink: () => void;
   onConfirmDelete: () => void;
@@ -573,15 +578,19 @@ function CodexProfileRow(props: CodexProfileRowProps) {
         {props.signingIn ? (
           <>
             <span className="settings-oauth-pending">Waiting for browser sign-in…</span>
+            {props.deviceCode && <div role="status">Open {props.deviceCode.verificationUrl} and enter <code>{props.deviceCode.userCode}</code> there.</div>}
             <button type="button" className="settings-button" onClick={props.onCancelSignIn}>
               Cancel
             </button>
           </>
         ) : (
           canSignIn(props.report, props.profile) && (
+            <>
             <button type="button" className="settings-button settings-button-primary" disabled={props.busy} onClick={props.onSignIn}>
               Sign in
             </button>
+            <button type="button" className="settings-button" disabled={props.busy} onClick={props.onDeviceSignIn}>Sign in with a code</button>
+            </>
           )
         )}
         {showRepair && (
@@ -610,7 +619,9 @@ function CodexProfileRow(props: CodexProfileRowProps) {
   );
 }
 
-export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseSettings }: CodexEnginePaneProps) {
+export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseSettings, onboarding = false }: CodexEnginePaneProps) {
+  const [activeProfileId, setActiveProfileId] = useState(SYSTEM_PROFILE_ID);
+  const [deviceCode, setDeviceCode] = useState<CodexDeviceCodeProgress | null>(null);
   const [profiles, setProfiles] = useState<CodexProfileRecord[]>([]);
   const [reportsById, setReportsById] = useState<Record<string, CodexDoctorReport | undefined>>({});
   const [checkingIds, setCheckingIds] = useState<ReadonlySet<string>>(new Set());
@@ -660,6 +671,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     const listed = await bridge.listProfiles();
     if (isStale()) return;
     setProfiles(listed.profiles.map((row) => row.profile));
+    setActiveProfileId(listed.activeProfileId);
     setReportsById((prev) => {
       const next = { ...prev };
       for (const row of listed.profiles) {
@@ -696,6 +708,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     void refreshAll(false);
     void bridge.supportStatus().then(setSupport);
   }, [refreshAll, bridge]);
+  useEffect(() => bridge.onLoginProgress?.(setDeviceCode), [bridge]);
 
   // Shell-wide re-check-without-restart (TASK.41 п.5): unrelated to this
   // pane's own row refresh above — only keeps the tabs-store's
@@ -836,11 +849,12 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     await createAndSignIn({ label: "main", authLink: MAIN_AUTH_LINK_TARGET });
   }
 
-  async function signInProfile(id: string): Promise<void> {
+  async function signInProfile(id: string, mode: CodexLoginMode = "browser"): Promise<void> {
     setNotice(null);
+    setDeviceCode(null);
     setSigningInId(id);
     try {
-      const result = await bridge.loginStart(id);
+      const result = await bridge.loginStart(id, mode);
       if (result.ok) {
         setReportsById((prev) => ({ ...prev, [id]: result.snapshot.report }));
       } else {
@@ -848,6 +862,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       }
     } finally {
       setSigningInId(null);
+      setDeviceCode(null);
     }
   }
 
@@ -893,6 +908,45 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   // TASK.103 (D-S4-6): the consent card source — the structured field only,
   // never a string-match on `binaryStatus.detail`.
   const trustRefusal = binaryTrustRefusalOf(binarySnapshot?.report);
+
+  if (onboarding) {
+    const report = reportsById[activeProfileId] ?? binaryReport;
+    const checking = binarySnapshot === null || checkingIds.size > 0;
+    const status = describeCodexReportStatus(checking ? undefined : report);
+    const profile = profiles.find((candidate) => candidate.id === activeProfileId);
+    return <section className="settings-section" aria-label="Connect ChatGPT / Codex">
+      <h2 className="settings-section-title">Connect ChatGPT / Codex</h2>
+      <p role="status">{status.headline}</p>
+      <p className="settings-page-description">{report?.status === "signed_out" ? "Sign in with your ChatGPT account. If the browser cannot return to this app, use a code instead." : status.detail}</p>
+      {notice && <p className="settings-notice" role="alert">{notice}</p>}
+      <div className="settings-field-row">
+        {signingInId ? <>
+          <span role="status">Waiting for sign-in…</span>
+          <button type="button" className="settings-button" onClick={() => void bridge.loginCancel()}>Cancel</button>
+        </> : <>
+          {(binaryActions.showInstall || binaryActions.showUpdate) ?
+            <button type="button" className="settings-button settings-button-primary" disabled={busy || checking} onClick={() => void installBinary()}>{busy ? "Installing…" : binaryActions.showUpdate ? "Update Codex" : "Install Codex"}</button> :
+            canSignIn(report, profile) ? <>
+              <button type="button" className="settings-button settings-button-primary" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId)}>Sign in with ChatGPT</button>
+              <button type="button" className="settings-button" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId, "device")}>Sign in with a code</button>
+            </> : <button type="button" className="settings-button settings-button-primary" disabled={busy || checking} onClick={() => void refreshAll()}>Check again</button>}
+        </>}
+      </div>
+      {signingInId && deviceCode?.profileId === signingInId && <div className="settings-section" role="status">
+        <p>Open <strong>{deviceCode.verificationUrl}</strong> and enter this code on that page:</p>
+        <code>{deviceCode.userCode}</code>
+        <button type="button" className="settings-button" onClick={() => void navigator.clipboard.writeText(deviceCode.userCode).catch(() => setNotice("Could not copy the code. Select and copy it manually."))}>Copy code</button>
+        <p className="settings-field-hint">Device-code login may need to be enabled in your ChatGPT security or workspace settings.</p>
+      </div>}
+      <details className="connection-drawer-advanced"><summary>Advanced troubleshooting</summary>
+        <p>{binarySnapshot?.binaryPath ?? "No Codex executable found"}</p>
+        <p>{support ? `Supported: ${support.supportedRange}. Recommended: ${support.recommended}.` : "Checking supported versions…"}</p>
+        <button type="button" className="settings-button" disabled={busy || !!signingInId} onClick={() => void pick()}>Choose executable…</button>
+        {trustRefusal && <button type="button" className="settings-button" onClick={() => setTrustDialogOpen(true)}>Review executable trust…</button>}
+      </details>
+      <BinaryTrustDialog open={trustDialogOpen && trustRefusal !== null} binaryPath={trustRefusal?.binaryPath ?? ""} reason={trustRefusal?.reason ?? ""} staleConsent={trustRefusal?.staleConsent ?? false} onAccept={() => void acceptTrust()} onDecline={() => setTrustDialogOpen(false)} />
+    </section>;
+  }
 
   return (
     <section className="settings-section">
@@ -977,6 +1031,8 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             confirmingDelete={false}
             busy={busy}
             onSignIn={() => void signInProfile(SYSTEM_PROFILE_ID)}
+            onDeviceSignIn={() => void signInProfile(SYSTEM_PROFILE_ID, "device")}
+            deviceCode={deviceCode?.profileId === SYSTEM_PROFILE_ID ? deviceCode : null}
             onCancelSignIn={() => void bridge.loginCancel()}
             onRepairLink={() => {}}
             onConfirmDelete={() => {}}
@@ -996,6 +1052,8 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             confirmingDelete={confirmDeleteId === profile.id}
             busy={busy}
             onSignIn={() => void signInProfile(profile.id)}
+            onDeviceSignIn={() => void signInProfile(profile.id, "device")}
+            deviceCode={deviceCode?.profileId === profile.id ? deviceCode : null}
             onCancelSignIn={() => void bridge.loginCancel()}
             onRepairLink={() => void repairLink(profile.id)}
             onConfirmDelete={() => setConfirmDeleteId(profile.id)}

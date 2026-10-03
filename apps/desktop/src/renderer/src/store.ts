@@ -289,8 +289,14 @@ export interface WorkflowStepStatus {
    */
   usage: TokenUsage | null;
   /** `workflow_step_start` observed (TASK.191 slice S3). False means the step
-   *  has never launched — its dependencies aren't all satisfied yet, or
-   *  launches are frozen (fail-fast/cancellation) and never will be. */
+   *  has never been scheduled (no `workflow_step_start`) — its dependencies
+   *  aren't all satisfied yet, or launches are frozen (fail-fast/
+   *  cancellation) and never will be. Whether the CHILD itself ever launched
+   *  is a separate question this field does not answer: a synthetic
+   *  pre-check throw (`errorOutcome()`, TASK.193) still emits `step_start`
+   *  before settling, so `started: true` and `final.unlaunched: true` are
+   *  both legally true on the same step. The fact of launch lives on the
+   *  terminal — absence of `final.unlaunched` once settled. */
   started: boolean;
   /** `workflow_step_running` observed (TASK.191 slice S3): the step cleared
    *  the shared subagent semaphore and its child is actually executing. A
@@ -298,7 +304,24 @@ export interface WorkflowStepStatus {
    *  `started` alone cannot tell the two apart (§B7: step_start fires before
    *  the engine ever touches the semaphore). */
   running: boolean;
-  final: { status: "completed" | "max_turns" | "cancelled" | "error" | "skipped"; durationMs: number } | null;
+  final: {
+    status: "completed" | "max_turns" | "cancelled" | "error" | "skipped";
+    durationMs: number;
+    /**
+     * TASK.193: the runtime's own reason the step did not complete, present
+     * only for `error`/`max_turns` (never `completed`/`skipped`/`cancelled`
+     * — `cancelled`'s last-finished-turn text is not a cause, see
+     * `workflow/step-failure.ts`). `kind` labels what `text` IS: an error
+     * message, or a partial output the child never finished. `truncated` is
+     * the DISJUNCTION of the wire's own bit and this card's local byte cap
+     * (`workflow-card.ts`'s decoder does the same for a hydrated card) — a
+     * record that arrives already marked truncated must never look whole
+     * again just because it also happens to fit under the local cap.
+     */
+    failure?: { kind: "error" | "degenerate" | "max_turns"; text: string; truncated: boolean };
+    /** Mirrors WorkflowStepOutcome.unlaunched (core): this terminal was reached without the engine ever calling subagents.run. */
+    unlaunched?: true;
+  } | null;
 }
 
 /**
@@ -313,7 +336,10 @@ export interface WorkflowStepStatus {
  * the seeded graph is a no-op); `workflow_end` fills `final`, flipping the
  * card to the terminal status. Like `SubagentSubStatus`, the full step/run
  * output text is NOT here — it arrives capped in the ordinary `tool_result`
- * that settles this same tool_call.
+ * that settles this same tool_call. The one exception is a failed step's
+ * `final.failure` (TASK.193): its own bounded reason rides the terminal
+ * `workflow_step_end` event itself, independently capped, so a click can
+ * reveal it without waiting on (or duplicating) the tool_result text.
  */
 export interface WorkflowSubStatus {
   workflow: string;
@@ -2000,6 +2026,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       turns: number,
       durationMs: number,
       usage: TokenUsage | undefined,
+      failure: { kind: "error" | "degenerate" | "max_turns"; text: string; truncated: boolean } | undefined,
+      unlaunched: true | undefined,
     ): void {
       flushDeltas();
       set((state) => ({
@@ -2011,7 +2039,17 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                   ...block.workflow,
                   steps: block.workflow.steps.map((step) =>
                     step.stepId === stepId
-                      ? { ...step, turns, usage: usage ?? step.usage, final: { status, durationMs } }
+                      ? {
+                          ...step,
+                          turns,
+                          usage: usage ?? step.usage,
+                          final: {
+                            status,
+                            durationMs,
+                            ...(failure !== undefined ? { failure } : {}),
+                            ...(unlaunched !== undefined ? { unlaunched } : {}),
+                          },
+                        }
                       : step,
                   ),
                 },
@@ -2590,6 +2628,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             event.turns,
             event.durationMs,
             event.usage,
+            event.failure,
+            event.unlaunched,
           );
           return;
         case "workflow_end":

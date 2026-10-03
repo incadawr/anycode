@@ -6,6 +6,7 @@
  */
 
 import { APICallError } from "ai";
+import { classifyNetworkConfigurationFailure } from "./network-failure.js";
 import { DEFAULT_RETRY_AFTER_CAP_MS, DEFAULT_STREAM_STALL_TIMEOUT_MS } from "../types/config.js";
 
 export interface RetryPolicy {
@@ -45,6 +46,7 @@ const RETRYABLE_NETWORK_CODES = new Set([
  * errors are NOT retryable.
  */
 export function isRetryableStreamError(error: unknown): boolean {
+  if (classifyNetworkConfigurationFailure(error) !== undefined) return false;
   if (APICallError.isInstance(error)) {
     return error.isRetryable || hasRetryableStatusCode(error.statusCode);
   }

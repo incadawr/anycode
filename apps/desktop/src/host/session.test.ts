@@ -709,7 +709,7 @@ describe("Session — stream bridge", () => {
           (call) =>
             typeof call[0] === "string" &&
             call[0].includes("[host] provider stream error:") &&
-            call[0].includes("boom"),
+            call[0].includes("unknown") && !call[0].includes("boom"),
         ),
       ).toBe(true);
     } finally {
@@ -5571,4 +5571,18 @@ describe("Session — manual compaction wire (TASK.146)", () => {
   // (packages/core/src/loop/agent-loop.test.ts:2295-2307, the "compaction
   // aborted" scenario). Reported as a known gap in the S2 report rather than
   // faked with a test that couldn't actually exercise the race.
+});
+
+it("preserves a safe provider failure in the child's terminal report", async () => {
+  const h = createChildHarness({ steps: [[{ type: "error", error: new Error("secret-poison") }]] });
+  try {
+    h.send({ type: "ui_ready" });
+    await h.waitFor(isHostReady);
+    h.session.startProgrammaticTurn("do it");
+    await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+    const report = h.onTerminal.mock.calls[0]![0];
+    expect(report.status).toBe("error");
+    expect(report.finalText).toContain("request failed");
+    expect(report.finalText).not.toContain("secret-poison");
+  } finally { h.close(); }
 });

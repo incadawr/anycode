@@ -28,6 +28,7 @@
  */
 
 import { APICallError } from "ai";
+import { classifyNetworkConfigurationFailure } from "./network-failure.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { isRetryableStreamError } from "./retry.js";
 
@@ -61,6 +62,9 @@ export function isModelOutputEvent(e: ModelStreamEvent): boolean {
 
 /** Stable failure bucket surfaced to the loop/CLI/desktop — never a raw provider error shape. */
 export type ProviderFailureCode =
+  | "proxy_unreachable"
+  | "proxy_auth"
+  | "tls"
   | "connect_timeout"
   | "network"
   | "rate_limited"
@@ -98,6 +102,9 @@ export interface ProviderFailureClassification {
  * (TASK.33 W7b-FIX #1). `safe.code`/`safe.statusCode` are already safe.
  */
 const SAFE_MESSAGES: Record<ProviderFailureCode, string> = {
+  proxy_unreachable: "Proxy unavailable. Check the connection proxy address and that the proxy is running, then try again.",
+  proxy_auth: "Proxy authentication failed (407). Check the username and password in the connection proxy settings.",
+  tls: "TLS certificate is not trusted. For a corporate proxy, configure NODE_EXTRA_CA_CERTS with your trusted CA certificate and restart AnyCode.",
   connect_timeout: "connect timeout",
   network: "network error",
   rate_limited: "rate limited",
@@ -218,6 +225,9 @@ export function classifyProviderFailure(error: unknown): ProviderFailureClassifi
     retryable,
     safe: { code, message: SAFE_MESSAGES[code], ...(statusCode !== undefined ? { statusCode } : {}) },
   });
+
+  const networkConfiguration = classifyNetworkConfigurationFailure(error);
+  if (networkConfiguration !== undefined) return build(networkConfiguration, false);
 
   // Quota-by-text is gated on status: a status code that already names a more
   // specific bucket (401/403/5xx) wins over quota-shaped text (M3, TASK.45

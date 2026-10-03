@@ -3544,6 +3544,32 @@ body {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+/* Selected step's failure record (TASK.193): a plain record block, same
+   no-border-no-hover ledger posture as .workflow-steps above — this reveals
+   a fact, it does not invite interaction. Long single-line output (a stack
+   trace, an unbroken URL) must wrap rather than force the card wider; a
+   very long partial result is scrollable rather than growing the card
+   without bound. */
+.workflow-step-failure {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+.workflow-step-failure-label {
+  font-size: var(--fs-2xs);
+  color: var(--text-2);
+  margin-bottom: var(--sp-2);
+}
+.workflow-step-failure-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 16rem;
+  overflow: auto;
+}
 /* Not-yet-started / queued step rows (TASK.191 slice S3): the prefilled
    graph renders these as real rows now, not a lump trailer line —
    .substatus-pending falls through to .substatus-glyph's own ghost default

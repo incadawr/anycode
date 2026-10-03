@@ -243,6 +243,27 @@ export function isClaudeStreamMessageType(type: string): boolean {
   return STREAM_MESSAGE_TYPES.has(type);
 }
 
+/**
+ * Top-level frame types that are recognized transport noise, never turn
+ * content: deliberately NOT part of CLAUDE_STREAM_MESSAGE_TYPES, so they
+ * never reach the translator/shadow-transcript pipeline built for that
+ * vocabulary, and never need a ClaudeStreamMessage variant of their own.
+ *
+ * `tool_progress` — a heartbeat the CLI emits every ~30s while a tool call
+ * (observed: an MCP call) is in flight, live evidence in
+ * `working-docs/tasks/TASK.226.probes.md` ("Блокер, которого в плане нет").
+ * Before this list existed, this exact frame fell through claude-client.ts's
+ * dispatch() to the unrecognized-type branch and terminalized the session
+ * thirty seconds into the first long MCP call.
+ */
+export const CLAUDE_TRANSPORT_ONLY_TYPES = ["tool_progress"] as const;
+
+const TRANSPORT_ONLY_TYPES: ReadonlySet<string> = new Set(CLAUDE_TRANSPORT_ONLY_TYPES);
+
+export function isClaudeTransportOnlyType(type: string): boolean {
+  return TRANSPORT_ONLY_TYPES.has(type);
+}
+
 // ── control protocol envelope (contract §2) ──
 
 export interface ClaudeControlRequestEnvelope {

@@ -3,7 +3,7 @@
   "version": "0.0.28",
   "private": true,
   "type": "module",
-  "description": "AnyCode — desktop AI coding agent",
+  "description": "AnyCode \u2014 desktop AI coding agent",
   "author": "incadawr <dubov.e.v@gmail.com>",
   "main": "./out/main/index.js",
   "engines": {

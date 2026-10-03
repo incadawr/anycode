@@ -3,8 +3,7 @@
  * UI: сетка плашек connection'ов + drawer + Welcome"): drives a REAL Electron
  * dev instance end-to-end over the automation HTTP channel (`main/automation/*`,
  * see `automation/README.md`'s "Provider connections pane probe/driver"
- * routes) through the full provider-connections UX: the WelcomeScreen
- * first-run empty state, the compact tile grid, the add/edit drawer, two
+ * routes) through the full provider-connections UX: an empty-profile Settings drawer, the compact tile grid, the add/edit drawer, two
  * connections of the SAME provider with independent credentials, a11y
  * focus-management, the env-override banner, and — the load-bearing
  * assertion — that a credential typed into the drawer is what a REAL host
@@ -68,8 +67,7 @@
  * `apps/desktop/src/renderer/src/automation.ts`) reading
  * `document.activeElement` was ADDED because no existing probe surfaced which
  * element is focused — the a11y focus-management assertions in this script
- * (WelcomeScreen's mount-time autofocus onto the Provider select, the
- * Settings-dialog drawer's mount-time autofocus onto the Label input) need a
+ * (the Settings-dialog drawer's mount-time autofocus onto the Label input) need a
  * live DOM read, not a re-derivation of local component state.
  *
  * Plain node >=22, ZERO npm deps (node:child_process/fs/net/os/path/url +
@@ -424,6 +422,9 @@ async function launchApp(step, label, extraEnv) {
     teardownPromise: null,
   };
 
+  // Only disposable fake keys are used by this harness. Explicit consent
+  // prevents an OS backend difference from turning it into a manual test.
+  writeFileSync(ctx.settingsPath, JSON.stringify({ version: 2, provider: { connections: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: true } }));
   const t0 = Date.now();
   const env = {
     ...process.env,
@@ -433,6 +434,8 @@ async function launchApp(step, label, extraEnv) {
     ANYCODE_AUTOMATION_INFO: ctx.profileAutomationInfo,
     ANYCODE_SETTINGS_PATH: ctx.settingsPath,
     ANYCODE_SECRETS_PATH: ctx.secretsPath,
+    ANYCODE_CODEX_BIN: join(profile, "absent-codex"),
+    ANYCODE_CLAUDE_BIN: join(profile, "absent-claude"),
     ...extraEnv,
   };
 
@@ -525,34 +528,26 @@ async function phase1Launch() {
 }
 
 async function step2WelcomeEmptyState(ctx) {
-  // The facade installs (and GET /state starts answering 200) BEFORE
-  // WelcomeScreen actually mounts: mounting depends on the settings
-  // snapshot loading over a SEPARATE async IPC round trip after the window
-  // opens. Poll for the drawer to appear rather than assuming it's already
-  // there the instant the facade responds.
-  const state = await pollProviderState(ctx, 2, (s) => s.drawer.open === true, 20_000);
-  assert(2, state.mounted === false, `expected the Settings-dialog grid NOT mounted on a Welcome boot, got mounted=${state.mounted}`);
-  assert(2, state.drawer.open === true, `expected the WelcomeScreen embed drawer open, got drawer=${JSON.stringify(state.drawer)}`);
-  assert(2, state.drawer.embedded === true, `expected drawer.embedded=true (WelcomeScreen, not the Settings dialog)`);
-  assert(2, state.drawer.stage === "template", `expected stage="template" before any connection exists, got ${state.drawer.stage}`);
-  assert(2, state.drawer.templateLocked === false, "expected the Provider select unlocked pre-creation");
-
-  const focus = await pollFocus(ctx, 2, (f) => f.present === true && f.tagName === "select");
-  assert(
-    2,
-    focus.present === true && focus.tagName === "select",
-    `expected WelcomeScreen's mount-time autofocus on the Provider <select> (a11y, WelcomeScreen.tsx's own useEffect), got ${JSON.stringify(focus)} — this is the pre-fix discriminator: a broken/removed focus-steal leaves focus on <body>`,
-  );
-
-  await saveScreenshot(ctx, 2, "01-welcome-empty-state");
-  pass(2, `WelcomeScreen empty state confirmed live (grid unmounted, embedded drawer open in "template" stage, initial focus on Provider select)`);
+  // First-run choices and one-click setup are covered by first-run-ui-smoke.
+  // This harness exercises the full connection-management drawer in Settings.
+  const empty = await apiOk(ctx, 2, "GET", "/settings/provider");
+  assert(2, empty.drawer.open === false, "fresh launch must not open an API drawer before choosing a path");
+  assert(2, (await apiOk(ctx, 2, "POST", "/settings/open", {})).ok, "Settings must be reachable before setup");
+  assert(2, (await apiOk(ctx, 2, "POST", "/settings/pane", { paneId: "provider" })).ok, "Provider pane failed to open");
+  assert(2, (await apiOk(ctx, 2, "POST", "/settings/provider/add", {})).ok, "Add connection failed");
+  const state = await pollProviderState(ctx, 2, s => s.drawer.open && s.drawer.stage === "template");
+  assert(2, state.mounted === true && state.drawer.embedded === false, "expected the full Settings drawer");
+  assert(2, state.drawer.templateLocked === false, "provider selection must be unlocked before creation");
+  const focus = await pollFocus(ctx, 2, f => f.present && f.tagName === "input");
+  assert(2, focus.tagName === "input", "new drawer must focus its Label input");
+  await saveScreenshot(ctx, 2, "01-empty-profile-settings-drawer");
+  pass(2, "empty first-run profile opens Settings and the full connection drawer");
 }
 
 async function step3CreateConnectionA(ctx) {
   const setResult = await apiOk(ctx, 3, "POST", "/settings/provider/drawer/set", {
     providerId: "anthropic",
     label: "Welcome Connection",
-    model: "claude-test-model-1",
   });
   assert(3, setResult.ok === true, `drawer/set (template fields) rejected: ${JSON.stringify(setResult)}`);
 
@@ -577,6 +572,8 @@ async function step3CreateConnectionA(ctx) {
 }
 
 async function step4SaveKeyA(ctx) {
+  assert(4, (await apiOk(ctx, 4, "POST", "/settings/provider/drawer/set", { model: "claude-test-model-1" })).ok, "model field unavailable after creation");
+  assert(4, (await apiOk(ctx, 4, "POST", "/settings/provider/drawer/submit", {})).ok, "model Save rejected");
   const setKey = await apiOk(ctx, 4, "POST", "/settings/provider/drawer/set", { apiKey: "sk-welcome-smoke-key-1" });
   assert(4, setKey.ok === true, `drawer/set (apiKey) rejected: ${JSON.stringify(setKey)}`);
 
@@ -595,6 +592,12 @@ async function step4SaveKeyA(ctx) {
   // (Welcome is already long gone by then).
   const saveKey = await apiOk(ctx, 4, "POST", "/settings/provider/drawer/save-key", {});
   assert(4, saveKey.ok === true, `drawer/save-key rejected: ${JSON.stringify(saveKey)}`);
+
+  const afterSave = await apiOk(ctx, 4, "GET", "/settings/provider");
+  if (afterSave.drawer.open) {
+    const closed = await apiOk(ctx, 4, "POST", "/settings/provider/drawer/close", {});
+    assert(4, closed.ok === true, "connection A drawer failed to close");
+  }
 
   pass(4, `key saved for connection A (drawer/save-key ok:true) — providerReady may flip synchronously with this save, verified in step 5`);
 }
@@ -664,7 +667,6 @@ async function step7AddConnectionB(ctx) {
   const setResult = await apiOk(ctx, 7, "POST", "/settings/provider/drawer/set", {
     providerId: "anthropic",
     label: "Second Connection",
-    model: "claude-test-model-2",
   });
   assert(7, setResult.ok === true, `drawer/set rejected: ${JSON.stringify(setResult)}`);
   const submitResult = await apiOk(ctx, 7, "POST", "/settings/provider/drawer/submit", {});
@@ -672,6 +674,8 @@ async function step7AddConnectionB(ctx) {
 
   const afterCreate = await pollProviderState(ctx, 7, (s) => s.drawer.stage === "credential");
   assert(7, afterCreate.drawer.stage === "credential", `expected stage="credential" after creating connection B, got ${afterCreate.drawer.stage}`);
+  assert(7, (await apiOk(ctx, 7, "POST", "/settings/provider/drawer/set", { model: "claude-test-model-2" })).ok, "model field unavailable after creation");
+  assert(7, (await apiOk(ctx, 7, "POST", "/settings/provider/drawer/submit", {})).ok, "model Save rejected");
   const setKey = await apiOk(ctx, 7, "POST", "/settings/provider/drawer/set", { apiKey: "sk-welcome-smoke-key-2" });
   assert(7, setKey.ok === true, `drawer/set (apiKey) rejected: ${JSON.stringify(setKey)}`);
   const beforeSaveKey = await apiOk(ctx, 7, "GET", "/settings/provider");
@@ -768,7 +772,6 @@ async function step10CreateAndDeleteThrowaway(ctx) {
   const setResult = await apiOk(ctx, 10, "POST", "/settings/provider/drawer/set", {
     providerId: "anthropic",
     label: "Throwaway",
-    model: "claude-test-model-throwaway",
   });
   assert(10, setResult.ok === true, `drawer/set rejected: ${JSON.stringify(setResult)}`);
   const submitResult = await apiOk(ctx, 10, "POST", "/settings/provider/drawer/submit", {});
@@ -838,9 +841,8 @@ async function step12CreateCustomConnection(ctx) {
   assert(12, addResult.ok === true, `provider/add rejected: ${JSON.stringify(addResult)}`);
 
   const setResult = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/set", {
-    providerId: "custom",
+    providerId: "vllm",
     label: "Local Refused Target",
-    model: "smoke-test-model",
     baseUrl: `http://127.0.0.1:${ctx.refusedPort}`,
   });
   assert(12, setResult.ok === true, `drawer/set (custom template) rejected: ${JSON.stringify(setResult)}`);
@@ -852,6 +854,8 @@ async function step12CreateCustomConnection(ctx) {
   const submitResult = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/submit", {});
   assert(12, submitResult.ok === true, `drawer/submit rejected: ${JSON.stringify(submitResult)}`);
 
+  assert(12, (await apiOk(ctx, 12, "POST", "/settings/provider/drawer/set", { model: "smoke-test-model" })).ok, "model field unavailable after creation");
+  assert(12, (await apiOk(ctx, 12, "POST", "/settings/provider/drawer/submit", {})).ok, "model Save rejected");
   const setKey = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/set", { apiKey: "sk-e2e-smoke-key-custom" });
   assert(12, setKey.ok === true, `drawer/set (apiKey) rejected: ${JSON.stringify(setKey)}`);
   const saveKey = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/save-key", {});
@@ -1000,7 +1004,6 @@ async function step19EnvBannerIndependentOfConnectionHealth(ctx) {
   const setResult = await apiOk(ctx, 19, "POST", "/settings/provider/drawer/set", {
     providerId: "anthropic",
     label: "Stored (overridden)",
-    model: "claude-test-model-env",
   });
   assert(19, setResult.ok === true, `drawer/set rejected: ${JSON.stringify(setResult)}`);
   const submitResult = await apiOk(ctx, 19, "POST", "/settings/provider/drawer/submit", {});
