@@ -198,7 +198,8 @@ export function claudeQuotaToWire(snapshot: ClaudeQuotaSnapshot | null): CodexRa
   const next = ranked.find((limit) => limit !== governing);
   const project = (limit: ClaudeQuotaLimit | null | undefined): CodexRateLimitsWire["primary"] => {
     if (limit === null || limit === undefined) return null;
-    const resetsAt = limit.resetsAt === undefined ? undefined : Date.parse(limit.resetsAt);
+    // The shared quota wire carries resetsAt in epoch SECONDS (codex seam convention), not ms.
+    const resetsAt = limit.resetsAt === undefined ? undefined : Math.round(Date.parse(limit.resetsAt) / 1000);
     return {
       usedPercent: limit.percent,
       ...(resetsAt !== undefined && Number.isFinite(resetsAt) ? { resetsAt } : {}),

@@ -186,4 +186,60 @@ describe("claudeQuotaToWire — the decoded snapshot on the shared quota wire", 
     expect(wire.secondary).toBeNull();
     expect(wire.planType).toBe("pro");
   });
+
+  it("projects resetsAt as epoch SECONDS for both primary and secondary (never milliseconds)", () => {
+    const snapshot = decodeClaudeUsage({
+      rate_limits: {
+        limits: [
+          { kind: "weekly_scoped", percent: 94, severity: "critical", is_active: true, resets_at: "2026-07-18T00:30:00.000Z" },
+          { kind: "session", percent: 40, severity: "normal", is_active: false, resets_at: "2026-07-18T01:15:00.000Z" },
+        ],
+      },
+    })!;
+    const wire = claudeQuotaToWire(snapshot)!;
+    // Math.round(Date.parse(...)/1000), computed with node:
+    expect(wire.primary!.resetsAt).toBe(1784334600);
+    expect(wire.secondary!.resetsAt).toBe(1784337300);
+    // Not the millisecond value Date.parse used to yield.
+    expect(wire.primary!.resetsAt).not.toBe(Date.parse("2026-07-18T00:30:00.000Z"));
+    expect(wire.secondary!.resetsAt).not.toBe(Date.parse("2026-07-18T01:15:00.000Z"));
+    expect("resetsAt" in wire.primary!).toBe(true);
+    expect("resetsAt" in wire.secondary!).toBe(true);
+  });
+
+  it("rounds sub-second resets_at to the nearest second", () => {
+    const snapshot = decodeClaudeUsage({
+      rate_limits: { limits: [{ kind: "session", percent: 10, severity: "normal", is_active: true, resets_at: "2026-07-18T00:30:00.500Z" }] },
+    })!;
+    const wire = claudeQuotaToWire(snapshot)!;
+    expect(wire.primary!.resetsAt).toBe(1784334601);
+  });
+
+  it("OMITS the resetsAt key for invalid resets_at strings and for limits with no resets_at", () => {
+    const snapshot = decodeClaudeUsage({
+      rate_limits: {
+        limits: [
+          { kind: "weekly_scoped", percent: 94, severity: "critical", is_active: true, resets_at: "not-a-date" },
+          { kind: "session", percent: 40, severity: "normal", is_active: false },
+        ],
+      },
+    })!;
+    const wire = claudeQuotaToWire(snapshot)!;
+    expect(wire.primary).toBeDefined();
+    expect(wire.secondary).toBeDefined();
+    expect("resetsAt" in wire.primary!).toBe(false);
+    expect("resetsAt" in wire.secondary!).toBe(false);
+    expect(wire.primary!.resetsAt).toBeUndefined();
+    expect(wire.secondary!.resetsAt).toBeUndefined();
+  });
+
+  it("the live-capture wire surfaces numeric epoch-second resetsAt for primary", () => {
+    const wire = claudeQuotaToWire(decodeClaudeUsage(liveUsageResponse()))!;
+    expect(wire.primary).not.toBeNull();
+    expect(typeof wire.primary!.resetsAt).toBe("number");
+    expect(Number.isFinite(wire.primary!.resetsAt)).toBe(true);
+    // Seconds, not milliseconds: an order of magnitude below any ms timestamp.
+    expect(wire.primary!.resetsAt!).toBeLessThan(10_000_000_000);
+    expect(wire.primary!.resetsAt).toBe(1784394000); // Math.round(Date.parse("2026-07-18T16:59:59.901099+00:00")/1000)
+  });
 });
