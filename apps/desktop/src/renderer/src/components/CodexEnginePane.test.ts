@@ -505,6 +505,15 @@ describe("isCodexVersionWithinSupportedRange", () => {
     expect(isCodexVersionWithinSupportedRange("not-a-version", ">=0.144.0 <0.145.0")).toBe(false);
     expect(isCodexVersionWithinSupportedRange("0.144.3", "garbage")).toBe(false);
   });
+
+  it("supports the explicit =, <=, and > comparators the shared grammar allows (TASK.213)", () => {
+    expect(isCodexVersionWithinSupportedRange("0.144.0", "=0.144.0")).toBe(true);
+    expect(isCodexVersionWithinSupportedRange("0.144.1", "=0.144.0")).toBe(false);
+    expect(isCodexVersionWithinSupportedRange("0.145.0", ">=0.144.0 <=0.145.0")).toBe(true);
+    expect(isCodexVersionWithinSupportedRange("0.145.1", ">=0.144.0 <=0.145.0")).toBe(false);
+    expect(isCodexVersionWithinSupportedRange("0.145.0", ">0.144.9 <0.145.1")).toBe(true);
+    expect(isCodexVersionWithinSupportedRange("0.144.9", ">0.144.9 <0.145.1")).toBe(false);
+  });
 });
 
 describe("deriveBinaryActions", () => {

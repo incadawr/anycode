@@ -30,6 +30,7 @@ import type { CodexDeviceCodeProgress, CodexLoginMode } from "../../../shared/co
 import type { CodexDoctorReport } from "../../../shared/codex-doctor.js";
 import type { CodexQuotaCredits, CodexQuotaWindow, CodexRateLimits } from "../../../shared/codex-quota.js";
 import { CODEX_MIN_FLOOR } from "../../../shared/codex-support.js";
+import { compareCodexVersions, parseCodexRange, parseCodexSemver, satisfiesCodexRange } from "../../../shared/codex-version-policy.js";
 import type { CodexProfileRecord, SettingsMutationResult } from "../../../shared/settings.js";
 import { describeMutationFailure } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -297,64 +298,23 @@ export function shouldAutoSignIn(request: CodexProfileCreateRequest): boolean {
   return request.authLink === undefined;
 }
 
-interface ParsedCodexSemver {
-  major: number;
-  minor: number;
-  patch: number;
-}
-
-function parseCodexSemverForRangeCheck(version: string): ParsedCodexSemver | null {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
-  if (!match) return null;
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
-}
-
-function compareCodexSemverForRangeCheck(a: ParsedCodexSemver, b: ParsedCodexSemver): number {
-  if (a.major !== b.major) return a.major - b.major;
-  if (a.minor !== b.minor) return a.minor - b.minor;
-  return a.patch - b.patch;
-}
-
-/** One space-separated `>= <= > < =` conjunction (main/codex-manifest.ts's grammar, mirrored minimally) — unparsable syntax fails closed (never matches). */
-function versionSatisfiesConjunction(version: ParsedCodexSemver, conjunction: string): boolean {
-  const tokens = conjunction.trim().split(/\s+/).filter((token) => token !== "");
-  if (tokens.length === 0) return false;
-  return tokens.every((token) => {
-    const match = /^(>=|<=|>|<|=)?(\d+\.\d+\.\d+)$/.exec(token);
-    if (!match) return false;
-    const bound = parseCodexSemverForRangeCheck(match[2]!);
-    if (bound === null) return false;
-    const cmp = compareCodexSemverForRangeCheck(version, bound);
-    switch (match[1] ?? "=") {
-      case ">=":
-        return cmp >= 0;
-      case "<=":
-        return cmp <= 0;
-      case ">":
-        return cmp > 0;
-      case "<":
-        return cmp < 0;
-      default:
-        return cmp === 0;
-    }
-  });
-}
-
 /**
- * A deliberately-minimal, renderer-local mirror of main/codex-manifest.ts's
- * range grammar (`>= <= > < =` conjunctions, `||`-joined disjunctions, the
- * exact join `manifestSupportedRange` produces) — main/** stays byte-frozen
- * (S2-2 mandate) so this is a read-only-reference reimplementation, not an
- * import, and it exists purely to gate the untested-version banner (R3-9)
- * against a manifest that has since widened. Fails closed (`false`, i.e.
+ * `supportedRange` is the same grammar the shared policy evaluates
+ * (`>= <= > < =` conjunctions, `||`-joined disjunctions — the exact join
+ * `manifestSupportedRange` produces; the parser now lives in
+ * `shared/codex-version-policy.ts`, TASK.213). Fails closed (`false`, i.e.
  * "still needs the banner") on anything unparsable — it only ever narrows
  * which risk-accepted versions are treated as no-longer-untested, never
  * silently drops a real warning.
  */
 export function isCodexVersionWithinSupportedRange(version: string, supportedRange: string): boolean {
-  const parsed = parseCodexSemverForRangeCheck(version);
+  const parsed = parseCodexSemver(version);
   if (parsed === null) return false;
-  return supportedRange.split("||").some((conjunction) => versionSatisfiesConjunction(parsed, conjunction));
+  return supportedRange.split("||").some((conjunction) => {
+    const comparators = parseCodexRange(conjunction);
+    // null conjunction (empty/unparsable syntax) never matches — fail closed.
+    return comparators !== null && satisfiesCodexRange(parsed, comparators);
+  });
 }
 
 /**
@@ -362,13 +322,14 @@ export function isCodexVersionWithinSupportedRange(version: string, supportedRan
  * acceptance cannot override the compiled floor") so the untested-banner gate
  * below never claims risk-acceptance saved a version main will refuse
  * unconditionally. Fails closed like `isCodexVersionWithinSupportedRange`:
- * unparsable input is never treated as below-floor.
+ * unparsable input is never treated as below-floor. Parsing/comparison come
+ * from the shared policy module (TASK.213) — the same code main runs.
  */
 function isCodexVersionBelowCompileTimeFloor(version: string): boolean {
-  const parsed = parseCodexSemverForRangeCheck(version);
-  const floor = parseCodexSemverForRangeCheck(CODEX_MIN_FLOOR);
+  const parsed = parseCodexSemver(version);
+  const floor = parseCodexSemver(CODEX_MIN_FLOOR);
   if (parsed === null || floor === null) return false;
-  return compareCodexSemverForRangeCheck(parsed, floor) < 0;
+  return compareCodexVersions(parsed, floor) < 0;
 }
 
 export interface CodexBinaryActions {
