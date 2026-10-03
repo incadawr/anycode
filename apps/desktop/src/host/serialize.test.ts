@@ -28,7 +28,7 @@ describe("sanitizeAgentEvent", () => {
     const wire = sanitizeAgentEvent(event);
     expect(wire).toEqual({
       type: "error",
-      error: { name: "ProviderError", message: "server error (HTTP 500)" },
+      error: { name: "ProviderError", code: "server", message: "server error (HTTP 500)" },
     });
     // No stack for provider errors (it crosses for nothing and can leak).
     expect(wire.type === "error" && wire.error.stack).toBeUndefined();
@@ -40,7 +40,7 @@ describe("sanitizeAgentEvent", () => {
     const event = { type: "error", error: poisonedError(), retry: { attemptsMade: 0, retryable: false, hadModelOutput: false, code: "server" } } as AgentEvent;
     const wire = sanitizeAgentEvent(event);
     // Fail-closed to a constant; the raw message/stack are gone.
-    expect(wire).toMatchObject({ type: "error", error: { name: "ProviderError", message: "request failed" } });
+    expect(wire).toMatchObject({ type: "error", error: { name: "AgentError", code: "unknown", message: "The agent request failed. Retry or recheck the selected connection in Settings." } });
     expect(JSON.stringify(wire)).not.toContain("sk-test");
     expect(wire.type === "error" && wire.error.stack).toBeUndefined();
   });
@@ -54,7 +54,7 @@ describe("sanitizeAgentEvent", () => {
     const wire = sanitizeAgentEvent(event);
     expect(wire).toEqual({
       type: "error",
-      error: { name: "ProviderError", message: "quota exhausted" },
+      error: { name: "ProviderError", code: "quota", message: "quota exhausted" },
       notice: { kind: "usage_limit", code: 1308, resetAt: Date.UTC(2026, 6, 12, 11, 7, 9) },
     });
   });
@@ -69,7 +69,7 @@ describe("sanitizeAgentEvent", () => {
     const wire = sanitizeAgentEvent(event);
     expect(wire).toEqual({
       type: "error",
-      error: { name: "ProviderError", message: "connect timeout" },
+      error: { name: "ProviderError", code: "connect_timeout", message: "connect timeout" },
       retry: { attemptsMade: 3, maxAttempts: 3, retryable: true, hadModelOutput: false, code: "connect_timeout" },
     });
   });

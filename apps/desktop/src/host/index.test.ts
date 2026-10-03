@@ -524,7 +524,8 @@ describe("host subagent model-override wiring", () => {
     // `switchableModelPort` (the INNER SwitchableModelPort), not on
     // `modelPort` (the OUTER media-projection decorator, which has no
     // `setPort` method at all) — same `modelPortFactory` closure either way.
-    expect(source).toContain("resolveChildModelPort: modelPortFactory");
+    expect(source).toContain("assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model))");
+    expect(source).toContain("return modelPortFactory(id)");
     expect(source).toContain("switchableModelPort.setPort(modelPortFactory(id))");
   });
 });

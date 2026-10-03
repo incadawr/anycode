@@ -23,6 +23,13 @@ AnyCode never displays a real address in code, logs, or committed docs.
 
 ## Account profiles
 
+On an unconfigured first launch, choose **ChatGPT / Codex** on the welcome
+screen to reach the existing install and account controls directly. **Claude
+Code** and **API key or local model** are available alongside it. Settings
+remain reachable during setup. Once a connection is configured or an external
+engine is ready, AnyCode opens the project draft without creating a session
+or sending a prompt. Existing configured installs keep their normal startup.
+
 ### Why profiles exist
 
 A user may have more than one Codex/ChatGPT account (this mirrors a common
@@ -426,3 +433,17 @@ whole group (including any grandchild `codex` may itself spawn) — see
 `apps/desktop/src/shared/codex-timeouts.ts` for the exact teardown timing.
 Windows uses direct-child teardown only (no process-group signaling), the
 same platform split as the host engine's own Codex transport.
+
+
+## Device-code fallback
+
+Both the setup pane and each account's settings row offer **Sign in with a code**.
+AnyCode requests `account/login/start` with `type: "chatgptDeviceCode"`, shows
+`userCode` and `verificationUrl`, and waits for `account/login/completed`.
+Enter the displayed code on the verification website. The app has no code-input
+field and never reads account tokens. Cancel and the five-minute timeout close
+the native CLI child; the selected profile keeps credential custody.
+
+Device-code access may need enabling in ChatGPT account security settings or
+workspace administration. See the official [app-server login contract](https://learn.chatgpt.com/docs/app-server)
+and [authentication guide](https://learn.chatgpt.com/docs/auth).

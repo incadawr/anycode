@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AnyCode — мини-презентация</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --text: #e6edf3;
+    --green: #7ee787;
+    --blue: #79c0ff;
+    --muted: #8b949e;
+    --card: #161b22;
+    --border: #30363d;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+  .slide {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 6vh 8vw;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .45s ease;
+  }
+  .slide.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .content {
+    max-width: 1050px;
+    width: 100%;
+  }
+  h1 {
+    font-size: clamp(3rem, 8vw, 6rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(90deg, var(--green), var(--blue));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-align: center;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: clamp(1.1rem, 2.5vw, 1.6rem);
+    color: var(--muted);
+    margin-top: 1.2rem;
+  }
+  .badge {
+    display: inline-block;
+    margin-top: 2rem;
+    padding: .45rem 1.1rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--card);
+    color: var(--green);
+    font-size: .95rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .badge-wrap { text-align: center; }
+  h2 {
+    font-size: clamp(1.8rem, 4vw, 2.8rem);
+    font-weight: 700;
+    margin-bottom: 1.6rem;
+  }
+  h2 .accent { color: var(--green); }
+  h2 .accent-blue { color: var(--blue); }
+  p.lead {
+    font-size: clamp(1rem, 2vw, 1.3rem);
+    line-height: 1.6;
+    color: var(--text);
+    margin-bottom: 1rem;
+  }
+  .hl { color: var(--green); font-weight: 600; }
+  .hl-blue { color: var(--blue); font-weight: 600; }
+  ul {
+    list-style: none;
+    margin-top: .8rem;
+  }
+  ul li {
+    position: relative;
+    padding-left: 1.6rem;
+    font-size: clamp(.95rem, 1.8vw, 1.15rem);
+    line-height: 1.55;
+    color: var(--text);
+    margin-bottom: .55rem;
+  }
+  ul li::before {
+    content: "▸";
+    position: absolute;
+    left: 0;
+    color: var(--green);
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+    margin-top: 1.2rem;
+  }
+  .chip {
+    padding: .35rem .85rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--card);
+    font-size: .9rem;
+    color: var(--blue);
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.2rem;
+    margin-top: .5rem;
+  }
+  @media (max-width: 800px) {
+    .cards { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.4rem;
+  }
+  .card h3 {
+    font-size: 1.25rem;
+    margin-bottom: .6rem;
+  }
+  .card.c-green h3 { color: var(--green); }
+  .card.c-blue h3 { color: var(--blue); }
+  .card.c-white h3 { color: var(--text); }
+  .card p {
+    font-size: .95rem;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+  .card p b { color: var(--text); font-weight: 600; }
+  .cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2.2rem;
+    margin-top: .4rem;
+  }
+  @media (max-width: 800px) {
+    .cols { grid-template-columns: 1fr; }
+  }
+  .col h3 {
+    font-size: 1.15rem;
+    color: var(--blue);
+    margin-bottom: .6rem;
+  }
+  .col p {
+    font-size: .98rem;
+    line-height: 1.55;
+    color: var(--muted);
+    margin-bottom: .7rem;
+  }
+  .col p b { color: var(--text); font-weight: 600; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: .1em .45em;
+    font-size: .88em;
+    color: var(--green);
+  }
+  .cmd {
+    display: block;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    margin-top: 1rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: clamp(.85rem, 1.7vw, 1rem);
+    line-height: 1.8;
+    color: var(--text);
+    text-align: left;
+  }
+  .cmd .c { color: var(--muted); }
+  .cmd .g { color: var(--green); }
+  #counter {
+    position: fixed;
+    bottom: 2.2vh;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: .9rem;
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: .1em;
+    z-index: 10;
+  }
+  .hint {
+    position: fixed;
+    bottom: 2.2vh;
+    right: 2.5vw;
+    font-size: .8rem;
+    color: var(--border);
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+
+<!-- Слайд 1: Титул -->
+<section class="slide active">
+  <div class="content">
+    <h1>AnyCode</h1>
+    <p class="subtitle">Одно рабочее пространство поверх нескольких AI-агентов</p>
+    <div class="badge-wrap"><span class="badge">0.0.8 · alpha</span></div>
+  </div>
+</section>
+
+<!-- Слайд 2: Что это -->
+<section class="slide">
+  <div class="content">
+    <h2>Оболочка, <span class="accent">а не агент</span></h2>
+    <p class="lead">AnyCode — единое десктопное рабочее пространство поверх уже установленных AI-кодовых агентов: Claude Code CLI, Codex CLI или собственного мульти-провайдерного агент-цикла. Воркспейс одинаковый для любого движка.</p>
+    <p class="lead"><span class="hl-blue">Bring your own agent:</span> профиль запускает ваш CLI под вашей учёткой и на условиях вашего провайдера. AnyCode не хранит и не проксирует креды — процесс работает на вашей машине.</p>
+    <div class="chips">
+      <span class="chip">транскрипт</span>
+      <span class="chip">вызовы инструментов</span>
+      <span class="chip">запросы разрешений</span>
+      <span class="chip">файловые действия</span>
+      <span class="chip">терминал</span>
+      <span class="chip">контекст</span>
+      <span class="chip">MCP-серверы</span>
+      <span class="chip">скиллы</span>
+      <span class="chip">саб-агенты</span>
+      <span class="chip">Git-ревью</span>
+    </div>
+  </div>
+</section>
+
+<!-- Слайд 3: Три профиля движков -->
+<section class="slide">
+  <div class="content">
+    <h2>Три профиля <span class="accent-blue">движков</span></h2>
+    <div class="cards">
+      <div class="card c-green">
+        <h3>Claude Code</h3>
+        <p>Официальный CLI в headless-стриме: <b>вложения-изображения</b>, reasoning effort, индикатор контекста, режимы разрешений.</p>
+      </div>
+      <div class="card c-blue">
+        <h3>Codex</h3>
+        <p>OpenAI Codex CLI по протоколу app-server: <b>профили аккаунтов</b>, квоты и панель плана, импорт сессий, управляемый бинарник.</p>
+      </div>
+      <div class="card c-white">
+        <h3>Native</h3>
+        <p>Собственный цикл: Anthropic, Z.AI/GLM, OpenAI, OpenRouter, DeepSeek, Moonshot, Kimi — и <b>любые OpenAI-/Anthropic-совместимые эндпоинты</b>, включая локальные.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Слайд 4: Саб-агенты и надёжность -->
+<section class="slide">
+  <div class="content">
+    <h2>Саб-агенты и <span class="accent">надёжность</span></h2>
+    <div class="cols">
+      <div class="col">
+        <h3>Кросс-движковые саб-агенты</h3>
+        <p>Саб-агенты <b>не привязаны к движку сессии</b>: профиль <code>.anycode/agents/*.md</code> может указать <code>engine: codex</code> или <code>engine: claude</code> — дочерний агент пойдёт как настоящий процесс соответствующего CLI.</p>
+        <p>Недоступный движок — <b>громкая ошибка</b>, а не тихий фолбэк.</p>
+      </div>
+      <div class="col">
+        <h3>Протокольные фикстуры</h3>
+        <p>Оба CLI-профиля закреплены фикстурами: адаптер, <b>теряющий или выдумывающий сообщение, роняет сборку</b>. Сверка пина со свежим CLI — отдельный opt-in прогон.</p>
+        <p>Возможности следуют движку: то, что бэкенд не умеет, <b>отключено, а не имитировано</b>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Слайд 5: Статус и старт -->
+<section class="slide">
+  <div class="content">
+    <h2>Статус и <span class="accent-blue">старт</span></h2>
+    <p class="lead"><span class="hl">0.0.8 · alpha.</span> Хранилище, API и UI могут меняться без обратной совместимости; сборки не подписаны (подпись — с бетой).</p>
+    <p class="lead">Установщики для <span class="hl-blue">macOS · Windows · Linux</span> — на GitHub Releases.</p>
+    <div class="cmd">
+      <span class="c"># из исходников: Node.js 22+, pnpm 10</span><br>
+      <span class="g">$</span> pnpm install --frozen-lockfile<br>
+      <span class="g">$</span> pnpm --filter @anycode/desktop dev
+    </div>
+  </div>
+</section>
+
+<div id="counter">1 / 5</div>
+<div class="hint">← → или клик по краям</div>
+
+<script>
+  (function () {
+    var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+    var counter = document.getElementById('counter');
+    var current = 0;
+
+    function show(i) {
+      if (i < 0 || i >= slides.length) return;
+      slides[current].classList.remove('active');
+      current = i;
+      slides[current].classList.add('active');
+      counter.textContent = (current + 1) + ' / ' + slides.length;
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ' || e.key === 'PageDown') {
+        e.preventDefault();
+        show(current + 1);
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
+        e.preventDefault();
+        show(current - 1);
+      } else if (e.key === 'Home') {
+        show(0);
+      } else if (e.key === 'End') {
+        show(slides.length - 1);
+      }
+    });
+
+    document.addEventListener('click', function (e) {
+      var x = e.clientX / window.innerWidth;
+      if (x < 0.3) {
+        show(current - 1);
+      } else if (x > 0.7) {
+        show(current + 1);
+      } else {
+        show(current + 1);
+      }
+    });
+  })();
+</script>
+
+</body>
+</html>

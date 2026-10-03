@@ -28,9 +28,8 @@ export class SqliteCodexShadowLog implements CodexShadowLogPort {
 
   async list(threadId: string): Promise<ShadowCommandItem[]> {
     const rows = await this.persistence.listCodexThreadItems(threadId);
-    // itemId is a DB-internal dedup key (primary key part); the pure
-    // projection's ShadowCommandItem type never needed it (cut §3.6 — a
-    // shadow item's HistoryItem id is derived from (turnOrdinal, positionInTurn)).
-    return rows.map(({ itemId: _itemId, ...rest }) => rest);
+    // New Codex persists commandExecution too: retain the stable id so resume
+    // can prefer the native item without duplicating our fallback copy.
+    return rows;
   }
 }

@@ -244,7 +244,8 @@ export function secretFieldReducer(state: string, action: SecretFieldAction): st
   }
 }
 
-const TIER_LABEL: Record<SecretTier, string> = {
+const TIER_LABEL: Record<SecretStatus["tier"], string> = {
+  not_checked: "Checked when saving a key",
   os_encrypted: "OS keychain",
   obfuscated: "obfuscated (weak)",
   plaintext: "plain text (weak)",
