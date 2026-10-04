@@ -3817,7 +3817,7 @@ body {
 
 .composer-footer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-2);
 }
@@ -3831,7 +3831,11 @@ body {
   overflow: hidden;
 }
 
+/* Same row as footer-left: the visually-hidden hint sits between them in the
+   DOM but is out of flow, so auto-placement would push footer-right to row 2. */
 .composer-footer-right {
+  grid-row: 1;
+  grid-column: 2;
   display: flex;
   align-items: center;
   gap: var(--sp-3);
@@ -3864,26 +3868,54 @@ body {
   cursor: not-allowed;
 }
 
-/* R7 footer hint (slice-R7-cut §4.2): always in flow — visibility toggle, so
-   showing/hiding never reflows the footer. The delayed visibility flip lets
-   the opacity fade complete in both directions. */
+/* Footer hint (TASK.224): default visually hidden AND out of flow — never
+   display:none (it is the textarea's aria-describedby target) and never a
+   footer grid row, so a narrow split-pane composer is a single footer row.
+   The same text rides the textarea/send hover titles; a wide composer
+   restores the inline hint below. */
 .composer-hint {
-  justify-self: center;
-  min-width: 0;
-  max-width: 100%;
-  text-align: center;
   font-size: var(--fs-2xs);
   color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transition: opacity var(--dur-1) var(--ease-out), visibility 0s;
 }
 
-.composer-hint-hidden {
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity var(--dur-1) var(--ease-out), visibility 0s var(--dur-1);
+.composer {
+  container-type: inline-size;
+  container-name: composer;
+}
+
+/* Wide composer only: restore the three-column footer (left / centered
+   inline hint / right) and un-hide the hint into its middle cell (overrides
+   `.visually-hidden` — same specificity, later in the sheet). */
+@container composer (min-width: 640px) {
+  .composer-footer {
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  }
+
+  .composer-footer-right {
+    grid-column: 3;
+  }
+
+  .composer-hint {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    clip-path: none;
+    justify-self: center;
+    min-width: 0;
+    max-width: 100%;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: opacity var(--dur-1) var(--ease-out), visibility 0s;
+  }
+
+  .composer-hint-hidden {
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--dur-1) var(--ease-out), visibility 0s var(--dur-1);
+  }
 }
 
 /* Context meter (design §2.4). Muted by default; escalates warning ≥80%,

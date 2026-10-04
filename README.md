@@ -44,7 +44,9 @@ as working.
 Subagents are not bound to the engine running the session. An agent profile
 can pin its children to the Codex or the Claude Code CLI, so a Native session
 can hand a task to a different agent and receive the result in the same
-transcript.
+transcript. A ready-made multi-model example — a GLM lead with an optional
+inline Flash executor, verified by a GPT/Codex supervisor — is documented in
+[Orchestration](docs/orchestration.md).
 
 What a session produces can be looked at without leaving the workspace. A local
 markdown or HTML file opens in a preview — a panel beside the transcript or a
@@ -61,7 +63,7 @@ opt-in run against the real binary, not part of the default suite.
 
 ## Status
 
-AnyCode is **0.0.22, alpha**. Storage, APIs, and UI may change without
+AnyCode is **0.0.30, alpha**. Storage, APIs, and UI may change without
 backward-compatibility guarantees, and alpha builds are unsigned — signing
 arrives with the beta.
 

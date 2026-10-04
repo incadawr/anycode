@@ -57,7 +57,7 @@ export interface AgentBridgeCatalogEntry {
   engine?: "claude" | "codex";
   /** Default model id for this profile's children (frontmatter `model:`); absent = inherit the parent's/host's default. */
   model?: string;
-  /** Child systemPrompt body — merged into the request's prompt ONLY for an `engine` profile (§3.2); a core profile's own host resolves its persona separately. */
+  /** Child profile body — included in the initial task for both core and engine session children. */
   systemPrompt: string;
 }
 
@@ -117,8 +117,8 @@ export function buildAgentBridgeToolDecl(catalog: readonly AgentBridgeCatalogEnt
  * (§3.2). `profile`, when present, is exactly what an `engine:` profile
  * resolves to today (ports/subagent.ts's EngineProfileInfo) — a core
  * (non-engine) catalog entry's own default model is folded into `model` by
- * the CALLER instead, and its systemPrompt is never merged into the prompt: a
- * core child's own host resolves its persona separately (§2.2).
+ * the CALLER instead. Session-child boot only receives the initial prompt, so
+ * the bridge also includes the selected core profile body in that prompt.
  */
 export interface BuildSessionSubagentRequestParams {
   agentType: string;
@@ -474,11 +474,12 @@ export async function runAgentBridgeCall(
   const request = buildSessionSubagentRequest({
     agentType: entry.name,
     description: input.description,
-    prompt: input.prompt,
+    prompt: profile === undefined && entry.systemPrompt.trim()
+      ? `${entry.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
     // A core (non-engine) entry has no `profile` for the builder to fall back
     // onto, so its own default model is resolved here instead (scenario E,
     // plan §9 p.4: a core profile's `model:` frontmatter must still reach the
-    // child even though it is never merged into the request's prompt).
+    // child; its body is explicitly included above).
     model: profile !== undefined ? input.model : (input.model ?? entry.model),
     spawnToolCallId: deps.spawnToolCallId,
     profile,
