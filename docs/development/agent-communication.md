@@ -1,6 +1,6 @@
 # Communicating with live AnyCode sessions
 
-The unreleased TASK.242/TASK.239 implementation can expose a production MCP endpoint while its desktop runtime is open.
+AnyCode 0.0.31 and later can expose a production MCP endpoint while its desktop runtime is open.
 It is separate from developer automation/CDP and disabled by default. This first
 slice is GUI-backed: it neither starts a headless daemon nor creates agents.
 
