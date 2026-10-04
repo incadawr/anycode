@@ -21,7 +21,15 @@ export function formatUsageLimitReset(resetAt: number): string {
 
 function storage(): Storage | null {
   try {
-    return window.localStorage;
+    // TASK.117 boundary fix: resolve through the `window` property OF
+    // globalThis with a structural cast, instead of the bare `window`
+    // identifier — this module is imported (type-only) by store.ts, which
+    // host-side integration tests (session-reconnect.test.ts) import under
+    // a node-lib tsconfig with no DOM globals. Runtime is byte-identical in
+    // the renderer (`window` is the self-reference of the same global
+    // object), tests that stub `globalThis.window` keep working, and the
+    // catch below still fails soft when localStorage is denied/unavailable.
+    return (globalThis as { window?: { localStorage?: Storage } }).window?.localStorage ?? null;
   } catch {
     return null;
   }

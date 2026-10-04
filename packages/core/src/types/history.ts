@@ -58,6 +58,22 @@ export interface HistoryItem {
   tokenEstimate?: number;
   kind?: "normal" | "compact_summary" | "microcompact_cleared";
   /**
+   * TASK.117 causal identity (presentation-only, sqlite JSON keeps the whole
+   * item as-is — no migration): `turnId` is the HOST-OWNED outer turn UUID
+   * (Session.runTurn's `turn_started` id), `step` is the loop's inner request
+   * ordinal within that outer turn (the `turn_start.turn` counter, 1-based).
+   * Stamps: a user item {step:0} (the frame precedes the first model request
+   * of its outer turn); an assistant item the ordinal of the model step that
+   * produced it; a tool-result item the ordinal of the step whose dispatch
+   * settled it (cancelled stragglers included). NEVER part of
+   * messageTokenText or any SDK mapping — the model never sees it. Absent on
+   * every pre-117 item and on any writer that did not thread the stamps
+   * (foreign engines, compaction swaps) — readers treat absent as "unknown"
+   * and never guess.
+   */
+  turnId?: string;
+  step?: number;
+  /**
    * TASK.145 срез 2: marks a `role:"user"` item the human never typed — the
    * host injected it on the model's behalf (a detached background child's
    * terminal report). `role` stays "user" (owner decision, spec §4bis п.1:

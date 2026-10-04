@@ -56,6 +56,15 @@ export interface RunTurnOptions {
    * so their `runTurn` simply never sees this field set.
    */
   origin?: "system";
+  /**
+   * TASK.117 causal stamp: the outer turn UUID `Session.runTurn` minted for
+   * this turn (`turn_started.turnId`). CoreEngine forwards it to
+   * AgentLoop.runTurn so every HistoryItem the turn appends carries
+   * `{turnId, step}` (see core's HistoryItem.turnId/step). Foreign engines
+   * never read it — their history projection owns its own stamps (absent
+   * fields, by design).
+   */
+  turnId?: string;
 }
 
 /**

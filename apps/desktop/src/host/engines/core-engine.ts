@@ -98,6 +98,9 @@ export class CoreEngine implements SessionEngine {
   }
 
   continueTurn(options: RunTurnOptions) {
+    // TASK.117: continueTurn's AgentLoop path appends no user frame, but the
+    // resumed steps' assistant/tool items still get {turnId, step} stamps —
+    // options pass through verbatim, exactly like runTurn above.
     return this.options.loop.continueTurn(options);
   }
 
