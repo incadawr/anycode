@@ -18,8 +18,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Reconnecting a session restores the current transcript, active child sessions
   and pending permission requests without duplicating events.
-- Permission decisions survive connection changes and are applied only to the
-  intended active request.
+- Pending permission requests survive brief reconnects within the five-second
+  grace period; decisions apply only to the intended active request.
 - Session recovery preserves tool-call history and reports interrupted work
   consistently after a host restart.
 
