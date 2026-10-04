@@ -307,6 +307,28 @@ export class IpcPermissionBroker implements PermissionBroker {
     return this.pending.get(requestId)?.request.toolName;
   }
 
+  /**
+   * TASK.117 checkpoint: SNAPSHOT of the currently-SHOWN ask (the one a
+   * renderer's `permission` slot points at), or null when the slot is free.
+   * Copy only — the caller can never settle or mutate the entry through it.
+   * Read by Session's ui_ready cascade to re-assert the parked ask onto a
+   * reconnected renderer whose replay ring may have evicted the original
+   * `permission_request` (REPLAY_BUFFER_CAP overflow). Only the SHOWN ask is
+   * checkpointed (the queue holds asks the renderer has never seen — a fresh
+   * store re-renders them when the broker presents them after the current
+   * one settles, exactly as it would live).
+   */
+  pendingShownRequest(): { requestId: string; request: PermissionRequest } | null {
+    if (this.current === null) {
+      return null;
+    }
+    const entry = this.pending.get(this.current);
+    if (!entry) {
+      return null;
+    }
+    return { requestId: this.current, request: { ...entry.request } };
+  }
+
   /** Sends `entry`'s request to the UI and arms its timeout; marks it as the shown request. */
   private present(requestId: string, entry: PendingAsk): void {
     this.current = requestId;

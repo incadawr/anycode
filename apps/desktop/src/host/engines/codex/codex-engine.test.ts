@@ -2668,3 +2668,46 @@ describe("Codex dynamic Agent metadata at graceful shutdown", () => {
     expect(response.result).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TASK.239 owned active-turn steering", () => {
+  it("uses expectedTurnId on the same app-server without interrupting pending work", async () => {
+    const server = new FakeAppServer();
+    const originalRequest = server.request.bind(server);
+    server.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> => {
+      if (method === "turn/steer") {
+        server.calls.push({ method, params });
+        return Promise.resolve({ turnId: engine.activeTurnDetails!.turnId } as T);
+      }
+      return originalRequest<T>(method, params, opts);
+    };
+    const engine = new CodexEngine(server, THREAD);
+    const controller = new AbortController(); const turn = drive(engine, "Keep child running", controller.signal);
+    await waitForParkedIterator(server, engine);
+    const active = engine.activeTurnDetails!;
+    expect(await engine.steer("Supervisor clarification")).toEqual({ turnId: active.turnId });
+    expect(server.calls.find((c) => c.method === "turn/steer")?.params).toEqual({ threadId: THREAD, expectedTurnId: active.turnId, input: [{ type: "text", text: "Supervisor clarification" }] });
+    expect(server.interrupts).toBe(0); expect(controller.signal.aborted).toBe(false);
+    server.completeTurn("completed"); await turn.done;
+    await expect(engine.steer("too late")).rejects.toThrow("No active Codex turn");
+    expect(server.calls.filter((c) => c.method === "turn/start")).toHaveLength(1);
+    await engine.dispose("session-close");
+  });
+  it("preserves explicit stale-turn refusal and never falls back to turn/start", async () => {
+    const server = new FakeAppServer(); const originalRequest = server.request.bind(server);
+    server.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> => method === "turn/steer" ? Promise.reject(Object.assign(new Error("expectedTurnId mismatch"), { code: -32600 })) : originalRequest<T>(method, params, opts);
+    const engine = new CodexEngine(server, THREAD); const turn = drive(engine, "run", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    await expect(engine.steer("clarification")).rejects.toMatchObject({ code: -32600 });
+    expect(server.interrupts).toBe(0); expect(server.calls.filter((c) => c.method === "turn/start")).toHaveLength(1);
+    server.completeTurn("completed"); await turn.done; await engine.dispose("session-close");
+  });
+  it("reports unknown delivery for timeout instead of claiming native rejection", async () => {
+    const server = new FakeAppServer(); const originalRequest = server.request.bind(server);
+    server.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> => method === "turn/steer" ? Promise.reject(new Error("timeout after input sent")) : originalRequest<T>(method, params, opts);
+    const engine = new CodexEngine(server, THREAD); const turn = drive(engine, "run", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    await expect(engine.steer("clarification")).rejects.toMatchObject({ deliveryState: "unknown" });
+    expect(server.interrupts).toBe(0);
+    server.completeTurn("completed"); await turn.done; await engine.dispose("session-close");
+  });
+});

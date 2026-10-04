@@ -43,8 +43,11 @@ export class ConversationHistory {
    * feeds the sink. `meta.origin` (TASK.145 срез 2) stamps a `role:"user"`
    * item as host-injected rather than human-typed — see HistoryItem.origin's
    * own doc for why this is presentation-only and never touches `message`.
+   * `meta.turnId`/`meta.step` (TASK.117) stamp the item's causal identity
+   * (outer turn UUID + inner step ordinal, see HistoryItem.turnId/step);
+   * absent meta leaves both fields absent, byte-identical to pre-117.
    */
-  append(message: ChatMessage, meta?: { origin?: "system" }): HistoryItem {
+  append(message: ChatMessage, meta?: { origin?: "system"; turnId?: string; step?: number }): HistoryItem {
     const item: HistoryItem = {
       id: globalThis.crypto.randomUUID(),
       createdAt: Date.now(),
@@ -52,6 +55,8 @@ export class ConversationHistory {
       tokenEstimate: estimateMessageTokens(this.tokenizer, message),
       kind: "normal",
       ...(meta?.origin !== undefined ? { origin: meta.origin } : {}),
+      ...(meta?.turnId !== undefined ? { turnId: meta.turnId } : {}),
+      ...(meta?.step !== undefined ? { step: meta.step } : {}),
     };
     this.list.push(item);
     this.sink?.append([item]);

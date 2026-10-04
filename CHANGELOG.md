@@ -7,6 +7,22 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.31] — 2026-10-04
+
+### Added
+
+- Local authenticated MCP tools let external agents inspect open GUI sessions,
+  read their progress, send messages and steer a running Codex turn.
+
+### Fixed
+
+- Reconnecting a session restores the current transcript, active child sessions
+  and pending permission requests without duplicating events.
+- Pending permission requests survive brief reconnects within the five-second
+  grace period; decisions apply only to the intended active request.
+- Session recovery preserves tool-call history and reports interrupted work
+  consistently after a host restart.
+
 ## [0.0.30] — 2026-10-04
 
 ### Added
