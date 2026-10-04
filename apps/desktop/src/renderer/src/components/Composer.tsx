@@ -1456,6 +1456,7 @@ export function Composer() {
         className="composer-textarea"
         aria-label="Message the agent"
         aria-describedby="composer-hint"
+        title={hintHidden ? undefined : hintText}
         aria-haspopup={slashOpen ? "listbox" : undefined}
         aria-controls={slashOpen ? "slash-menu-list" : undefined}
         aria-activedescendant={slashOpen ? `slash-menu-option-${slashSelIndex}` : undefined}
@@ -1571,10 +1572,16 @@ export function Composer() {
               <ModelPill />
             ))}
         </div>
-        {/* Always rendered; hides via visibility (not unmount) so the footer never reflows.
-            id wires the textarea's aria-describedby (R17 a11y) so SR users get the
-            send/newline hint; always in the DOM even while visually hidden. */}
-        <span id="composer-hint" className={`composer-hint${hintHidden ? " composer-hint-hidden" : ""}`}>{hintText}</span>
+        {/* Always in the DOM as the textarea's aria-describedby target
+            (R17 a11y) — visually hidden by default (TASK.224: never a footer
+            row); a wide composer shows it inline (app.css container query),
+            and the same text rides the textarea/send hover titles. */}
+        <span
+          id="composer-hint"
+          className={`composer-hint visually-hidden${hintHidden ? " composer-hint-hidden" : ""}`}
+        >
+          {hintText}
+        </span>
         <div className="composer-footer-right">
           {supportsContextUsage && ctxPercent !== null && (
             <CtxPopover
@@ -1616,7 +1623,7 @@ export function Composer() {
               type="button"
               className="composer-send"
               aria-label="Send"
-              title={sendDisabledReason}
+              title={sendDisabledReason ?? (hintHidden ? undefined : hintText)}
               disabled={!canSend}
               onClick={handleSend}
             >

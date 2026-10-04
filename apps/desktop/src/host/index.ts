@@ -1,3 +1,5 @@
+import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
+import { CodexDynamicToolBridge, codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
 import { assertChildModel, readAllowedChildModels } from "../shared/child-model.js";
 /**
  * Host utilityProcess entry point (design §2/§6, MVP.3; persistence/hooks
@@ -848,12 +850,35 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     const rejected = assertCodexProfileHome(codexProfile);
     if (rejected !== null) throw new Error(`Codex profile home rejected: ${rejected}`);
   }
+  const bridgeRowId = args.sessionId ?? randomUUID();
+  const agentCardLog = new SqliteCodexAgentCardLog(persistence, bridgeRowId);
+  let codexAgentBridge: CodexDynamicToolBridge | undefined;
+  let codexParentEngine: import("./engines/codex/codex-engine.js").CodexEngine | undefined;
+  if (args.child === undefined) {
+    const profileRoots = buildAgentProfileRoots(workspace, homedir(), []);
+    const resolveCatalog = async () => catalogFromProfiles(
+      (await discoverAgentProfiles(new NodeFileSystemAdapter(), profileRoots)).profiles,
+    );
+    const catalog = await resolveCatalog();
+    if (catalog.length) {
+      const port = createChildSessionPort({
+        parentSessionId: bridgeRowId,
+        getPermissionMode: () => codexAgentPermissionMode(codexParentEngine?.snapshot().activePresetId ?? "read-only"),
+        send: sendChildSessionMessage, subscribe: subscribeChildRunEvents,
+        onDetachedTerminal: deliverDetachedChildReport, onDetachedStall: deliverDetachedChildStall,
+      });
+      codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog);
+    }
+  }
+
   const options = {
     bootstrap,
     broker,
     binaryPath,
     cwd: workspace,
     workspace,
+    ...(codexAgentBridge ? { agentBridge: codexAgentBridge } : {}),
+    agentCardLog,
     sourceEnv: process.env,
     shadowLog,
     // TASK.103: per-call re-read so a consent granted or revoked mid-session
@@ -931,7 +956,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
             origin: "draft",
           },
         });
-        const id = args.sessionId ?? randomUUID();
+        const id = bridgeRowId;
         // Product-level transaction ordering: the native thread exists first;
         // no row is written if the app-server bootstrap failed.
         const sessionMeta = await persistence!.createSession({
@@ -967,6 +992,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         return { ...created, sessionMeta };
       })());
 
+  codexParentEngine = connected.engine;
   const booted = await plugin.boot({ codexEngine: connected.engine });
   const fs = new NodeFileSystemAdapter();
 

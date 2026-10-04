@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "@anycode/core";
+import type { AgentEvent, SessionSubagentPort } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge } from "./approval-bridge.js";
@@ -15,6 +15,8 @@ import {
   resumeNativeCodexSession,
   type CodexClient,
 } from "./codex-engine.js";
+
+import { CodexDynamicToolBridge, ANYCODE_AGENT_TOOL } from "./dynamic-tool-bridge.js";
 
 const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
 
@@ -2296,5 +2298,373 @@ describe("CodexEngine + resumeNativeCodexSession — resume-merge holds the W6 o
       "tool",
       "assistant:text",
     ]);
+  });
+});
+
+describe("CodexEngine — AnyCode dynamic tool integration", () => {
+  const catalog = [{ name: "glm-lead", model: "glm-5.3", description: "Plan and review", systemPrompt: "" }];
+  const completed = { status: "completed" as const, finalText: "done", turns: 1, toolCalls: 0, truncated: false, durationMs: 1,
+    childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call-1" };
+
+  it("advertises experimental tools only at creation and retains the native resume ref", async () => {
+    const bridge = new CodexDynamicToolBridge(catalog, { run: vi.fn().mockResolvedValue(completed) });
+    const server = new FakeAppServer();
+    await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, bridge);
+    expect(server.calls.find((c) => c.method === "initialize")?.params).toMatchObject({ capabilities: { experimentalApi: true } });
+    expect(server.threadStartParams).toMatchObject({ dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL })] });
+    server.calls.length = 0;
+    await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, undefined, bridge);
+    expect(server.calls.find((c) => c.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
+  });
+
+  it("streams child events during a parked native turn and isolates trailing events on reuse", async () => {
+    const server = new FakeAppServer();
+    const engine = new CodexEngine(server, THREAD);
+    const first = drive(engine, "first", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    const firstOwner = engine.activeTurnDetails;
+    engine.pushBridgeEvent({ type: "tool_execution_start", toolCallId: "call-1", toolName: "Agent", input: {} }, firstOwner);
+    await tick();
+    expect(first.events).toContainEqual(expect.objectContaining({ type: "tool_execution_start", toolCallId: "call-1" }));
+    server.completeTurn("completed");
+    await first.done;
+    const second = drive(engine, "second", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    engine.pushBridgeEvent({ type: "tool_result", outcome: { toolCallId: "call-1", toolName: "Agent", status: "success", modelText: "late", durationMs: 1, result: { ok: true } } }, firstOwner);
+    server.completeTurn("completed");
+    await second.done;
+    expect(second.events.some((e) => e.type === "tool_result")).toBe(false);
+  });
+
+  it("Stop cancels a pending dynamic call, closes its card and still permits a new turn", async () => {
+    const server = new FakeAppServer();
+    const run = vi.fn<SessionSubagentPort["run"]>();
+    let childSignal: AbortSignal | undefined;
+    let finish!: (value: typeof completed) => void;
+    run.mockImplementation((_request, options) => {
+      childSignal = options?.signal;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const bridge = new CodexDynamicToolBridge(catalog, { run });
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, undefined, 0, [], undefined, bridge);
+    const controller = new AbortController();
+    const turn = drive(engine, "delegate", controller.signal);
+    await waitForParkedIterator(server, engine);
+    const owner = engine.activeTurnDetails;
+    const response = { result: vi.fn(), error: vi.fn() };
+    const handled = bridge.handle({ id: 1, method: "item/tool/call", params: {
+      threadId: THREAD, turnId: server.turnId, callId: "call-1", tool: ANYCODE_AGENT_TOOL,
+      arguments: { agent_type: "glm-lead", description: "small task", prompt: "do it" },
+    } }, response, owner, (event) => engine.pushBridgeEvent(event, owner));
+    controller.abort();
+    await handled;
+    await turn.done;
+    expect(childSignal?.aborted).toBe(true);
+    expect(response.result).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    expect(turn.events).toContainEqual(expect.objectContaining({ type: "tool_result", outcome: expect.objectContaining({ status: "cancelled" }) }));
+    finish(completed);
+    const next = drive(engine, "continue", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    server.completeTurn("completed");
+    await next.done;
+    expect(next.events.some((e) => e.type === "tool_result")).toBe(false);
+  });
+
+  // TASK.226 release blocker (GUI evidence 226-cancel-failure.json): Stop
+  // cancels the native turn AND the bridged child, but the child's REAL
+  // terminal outcome (cancelled status + child-session target + subagent card
+  // metadata) settles asynchronously — the abort rejection wins the bridge's
+  // Promise.race, so the immediate cancelled tool_result carries NO
+  // presentation, and the real outcome only arrives AFTER the interrupt's
+  // `turn/completed` (the session-tier port never resolves on abort; only
+  // main's eventual terminal does). The pre-fix engine emitted turn_end/
+  // loop_end the moment the native turn/completed arrived and tore the owner
+  // down, so the real outcome was dropped by pushBridgeEvent's strict owner
+  // guard — the live parent card stayed "running"/final null until reload,
+  // while the durable AgentCardLog persisted the cancelled snapshot with its
+  // child-session target. Deterministic mock order: native turn/completed at
+  // ~0ms (the fake settles the interrupted turn on interrupt accept), child
+  // outcome at +30ms — strictly after the native terminal.
+  it("Stop settles a child that settles asynchronously BEFORE loop_end — card closes cancelled with its child target", async () => {
+    const server = new FakeAppServer();
+    const run = vi.fn<SessionSubagentPort["run"]>();
+    run.mockImplementation((request, options) => {
+      options?.onProgress?.({ kind: "start", agentType: request.agentType, description: request.description, model: request.model });
+      options?.onProgress?.({ kind: "progress", turns: 0, toolCalls: 0 });
+      return new Promise((resolve) => {
+        const onAbort = () => {
+          // Deterministic late settlement: 30ms AFTER the abort — by then the
+          // fake's own turn/completed (setTimeout 0, fired at interrupt
+          // accept) has already been delivered, so the pre-fix engine has
+          // already emitted loop_end and cleared the turn owner.
+          setTimeout(() => {
+            resolve({ status: "cancelled", finalText: "child unwound", truncated: false, turns: 1, toolCalls: 0, durationMs: 100,
+              childSessionId: "child-226", parentSessionId: "parent-226", spawnToolCallId: "call-226" });
+          }, 30);
+        };
+        if (options?.signal?.aborted) onAbort();
+        else options?.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+    const log = { record: vi.fn(), list: vi.fn(async () => new Map()), flush: vi.fn(async () => {}) };
+    const bridge = new CodexDynamicToolBridge(catalog, { run }, log);
+    const engine = new CodexEngine(server, THREAD, undefined, { postInterruptSettleMs: 500, bridgeSettleMs: 500 }, undefined, undefined, 0, [], undefined, bridge, log);
+    const controller = new AbortController();
+    const turn = drive(engine, "delegate", controller.signal);
+    await waitForParkedIterator(server, engine);
+    const owner = engine.activeTurnDetails;
+    const response = { result: vi.fn(), error: vi.fn() };
+    const handled = bridge.handle({ id: 1, method: "item/tool/call", params: {
+      threadId: THREAD, turnId: server.turnId, callId: "call-226", tool: ANYCODE_AGENT_TOOL,
+      arguments: { agent_type: "glm-lead", description: "226 task", prompt: "do it" },
+    } }, response, owner, (event) => engine.pushBridgeEvent(event, owner));
+    // Give the synchronous prefix (tool_call/tool_execution_start/subagent_start)
+    // time to queue before Stop lands.
+    await tick();
+    controller.abort();
+    await handled;
+    await turn.done;
+
+    expect(turn.events.at(-1)).toMatchObject({ type: "loop_end", reason: "cancelled", turns: 1 });
+    const loopEndAt = turn.events.findIndex((event) => event.type === "loop_end");
+    // THE ORDERING ASSERTION: the child's REAL cancelled outcome — the
+    // tool_result carrying the subagent presentation with the child-session
+    // target — is delivered BEFORE loop_end. Pre-fix it never arrived in the
+    // turn at all (dropped after owner teardown), leaving the live card
+    // running with final null while the durable log had the snapshot.
+    const resultsBeforeEnd = turn.events.slice(0, loopEndAt).filter((event) => event.type === "tool_result");
+    expect(resultsBeforeEnd.length).toBeGreaterThanOrEqual(1);
+    const terminal = resultsBeforeEnd.at(-1);
+    expect(terminal).toMatchObject({
+      type: "tool_result",
+      outcome: expect.objectContaining({
+        toolCallId: "call-226",
+        status: "cancelled",
+        result: { ok: false, error: expect.any(String),
+          presentation: { subagent: expect.objectContaining({
+            final: expect.objectContaining({ status: "cancelled" }),
+            target: { kind: "session", childSessionId: "child-226", parentSessionId: "parent-226", spawnToolCallId: "call-226" },
+          }) } },
+      }),
+    });
+    // Nothing terminal leaks AFTER loop_end — the card closes inside the turn.
+    expect(turn.events.slice(loopEndAt).some((event) => event.type === "tool_result")).toBe(false);
+    // The Stop stayed immediate: exactly one interrupt, no orphan children
+    // (the child controller aborted), the server settled the native turn.
+    expect(server.interrupts).toBe(1);
+    expect(server.closeCount).toBe(0);
+    expect(turn.events.some((event) => event.type === "error")).toBe(false);
+    // The durable card log persisted the cancelled snapshot with its target.
+    expect(log.record).toHaveBeenCalledWith("call-226", expect.objectContaining({ subagent: expect.objectContaining({
+      final: expect.objectContaining({ status: "cancelled" }),
+      target: { kind: "session", childSessionId: "child-226", parentSessionId: "parent-226", spawnToolCallId: "call-226" },
+    }) }));
+    // And a LATER turn is insulated from any late bridge chatter (strict
+    // old-owner guard preserved).
+    const next = drive(engine, "continue", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    server.completeTurn("completed");
+    await next.done;
+    expect(next.events.some((e) => e.type === "tool_result")).toBe(false);
+  });
+
+  // TASK.226 review defect 2: the transport-close-under-Stop path yielded
+  // translator.finishTerminal BEFORE the finally drained, so the child's late
+  // terminal card event still landed AFTER loop_end. Same deterministic mock
+  // order as the main regression (native side closes, child settles at
+  // +30ms); the turn must end cancelled with the real card event BEFORE
+  // loop_end and nothing after it.
+  it("transport close under Stop still delivers the child's cancelled card before loop_end", async () => {
+    const server = new FakeAppServer();
+    const run = vi.fn<SessionSubagentPort["run"]>();
+    run.mockImplementation((request, options) => {
+      options?.onProgress?.({ kind: "start", agentType: request.agentType, description: request.description, model: request.model });
+      return new Promise((resolve) => {
+        const onAbort = () => {
+          setTimeout(() => {
+            resolve({ status: "cancelled", finalText: "child unwound", truncated: false, turns: 1, toolCalls: 0, durationMs: 100,
+              childSessionId: "child-close", parentSessionId: "parent-close", spawnToolCallId: "call-close" });
+          }, 30);
+        };
+        if (options?.signal?.aborted) onAbort();
+        else options?.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+    const bridge = new CodexDynamicToolBridge(catalog, { run });
+    const engine = new CodexEngine(server, THREAD, undefined, { postInterruptSettleMs: 500, bridgeSettleMs: 500 }, undefined, undefined, 0, [], undefined, bridge);
+    const controller = new AbortController();
+    const turn = drive(engine, "delegate", controller.signal);
+    await waitForParkedIterator(server, engine);
+    const owner = engine.activeTurnDetails;
+    void bridge.handle({ id: 1, method: "item/tool/call", params: {
+      threadId: THREAD, turnId: server.turnId, callId: "call-close", tool: ANYCODE_AGENT_TOOL,
+      arguments: { agent_type: "glm-lead", description: "close task", prompt: "do it" },
+    } }, { result: vi.fn(), error: vi.fn() }, owner, (event) => engine.pushBridgeEvent(event, owner));
+    await tick();
+    controller.abort();
+    // The native transport dies while the Stop is pending — before the server
+    // ever settles the interrupted turn and before the child settles.
+    server.stream.close();
+    await turn.done;
+
+    expect(turn.events.at(-1)).toMatchObject({ type: "loop_end", reason: "cancelled", turns: 1 });
+    const loopEndAt = turn.events.findIndex((event) => event.type === "loop_end");
+    const before = turn.events.slice(0, loopEndAt).filter((event) => event.type === "tool_result");
+    // The immediate acknowledgement AND the real cancelled outcome (with the
+    // child target) are both inside the turn, before loop_end.
+    const terminal = before.at(-1);
+    expect(terminal).toBeDefined();
+    const outcome = (terminal as { outcome: { status: string; result?: { presentation?: { subagent?: { final?: { status?: string }; target?: unknown } } } } }).outcome;
+    expect(outcome.status).toBe("cancelled");
+    expect(outcome.result?.presentation?.subagent?.final?.status).toBe("cancelled");
+    expect(outcome.result?.presentation?.subagent?.target).toEqual({ kind: "session", childSessionId: "child-close", parentSessionId: "parent-close", spawnToolCallId: "call-close" });
+    // No bridge card event lands after loop_end on the transport-close path.
+    expect(turn.events.slice(loopEndAt).some((event) => event.type === "tool_result")).toBe(false);
+  });
+
+  // TASK.226 review defect 3: the error catch likewise yielded its terminal
+  // pair before the finally drained. A turn that errors under Stop (here: the
+  // post-interrupt settle deadline fires because the server never settles)
+  // must still drain the child's cancelled outcome BEFORE its terminal pair,
+  // with nothing after loop_end.
+  it("the error path still drains the child's cancelled card before its terminal pair", async () => {
+    const server = new FakeAppServer();
+    server.interruptSettles = "silent";
+    const run = vi.fn<SessionSubagentPort["run"]>();
+    run.mockImplementation((request, options) => {
+      options?.onProgress?.({ kind: "start", agentType: request.agentType, description: request.description, model: request.model });
+      return new Promise((resolve) => {
+        const onAbort = () => {
+          setTimeout(() => {
+            resolve({ status: "cancelled", finalText: "child unwound", truncated: false, turns: 1, toolCalls: 0, durationMs: 100,
+              childSessionId: "child-err", parentSessionId: "parent-err", spawnToolCallId: "call-err" });
+          }, 10);
+        };
+        if (options?.signal?.aborted) onAbort();
+        else options?.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+    const bridge = new CodexDynamicToolBridge(catalog, { run });
+    const engine = new CodexEngine(server, THREAD, undefined, { postInterruptSettleMs: 300, bridgeSettleMs: 300 }, undefined, undefined, 0, [], undefined, bridge);
+    const controller = new AbortController();
+    const turn = drive(engine, "delegate", controller.signal);
+    await waitForParkedIterator(server, engine);
+    const owner = engine.activeTurnDetails;
+    void bridge.handle({ id: 1, method: "item/tool/call", params: {
+      threadId: THREAD, turnId: server.turnId, callId: "call-err", tool: ANYCODE_AGENT_TOOL,
+      arguments: { agent_type: "glm-lead", description: "err task", prompt: "do it" },
+    } }, { result: vi.fn(), error: vi.fn() }, owner, (event) => engine.pushBridgeEvent(event, owner));
+    await tick();
+    controller.abort();
+    // The server never settles the interrupted turn: the settle deadline
+    // fires and the turn ends as an error — AFTER the bounded child drain.
+    await turn.done;
+
+    expect(turn.events.at(-1)).toMatchObject({ type: "loop_end", reason: "error", turns: 1 });
+    const loopEndAt = turn.events.findIndex((event) => event.type === "loop_end");
+    const before = turn.events.slice(0, loopEndAt).filter((event) => event.type === "tool_result");
+    const terminal = before.at(-1);
+    expect(terminal).toBeDefined();
+    const outcome = (terminal as { outcome: { status: string; result?: { presentation?: { subagent?: { final?: { status?: string }; target?: unknown } } } } }).outcome;
+    expect(outcome.status).toBe("cancelled");
+    expect(outcome.result?.presentation?.subagent?.final?.status).toBe("cancelled");
+    expect(outcome.result?.presentation?.subagent?.target).toEqual({ kind: "session", childSessionId: "child-err", parentSessionId: "parent-err", spawnToolCallId: "call-err" });
+    // No bridge card event lands after loop_end on the error path.
+    expect(turn.events.slice(loopEndAt).some((event) => event.type === "tool_result")).toBe(false);
+    // The wedged server still released the child (bounded backstop intact).
+    expect(server.closeCount).toBe(1);
+  });
+
+  // The bounded half of the same fix: the native turn settles but the child
+  // IGNORES cancellation — the pre-terminal join must give up within its
+  // bridgeSettleMs grace and still end the turn cancelled. Bounded teardown,
+  // no hang, no orphan.
+  it("a child that ignores cancellation never wedges the turn — the bounded settle still ends it cancelled", async () => {
+    const server = new FakeAppServer();
+    const run = vi.fn<SessionSubagentPort["run"]>().mockImplementation(() => new Promise(() => {}));
+    const bridge = new CodexDynamicToolBridge(catalog, { run });
+    const engine = new CodexEngine(server, THREAD, undefined, { postInterruptSettleMs: 500, bridgeSettleMs: 25 }, undefined, undefined, 0, [], undefined, bridge);
+    const controller = new AbortController();
+    const turn = drive(engine, "delegate", controller.signal);
+    await waitForParkedIterator(server, engine);
+    const owner = engine.activeTurnDetails;
+    void bridge.handle({ id: 1, method: "item/tool/call", params: {
+      threadId: THREAD, turnId: server.turnId, callId: "call-wedge", tool: ANYCODE_AGENT_TOOL,
+      arguments: { agent_type: "glm-lead", description: "wedge task", prompt: "do it" },
+    } }, { result: vi.fn(), error: vi.fn() }, owner, (event) => engine.pushBridgeEvent(event, owner));
+    await tick();
+    controller.abort();
+    await turn.done;
+    expect(turn.events.at(-1)).toMatchObject({ type: "loop_end", reason: "cancelled", turns: 1 });
+    // The immediate abort acknowledgment still closed the call inside the turn.
+    expect(turn.events.some((event) => event.type === "tool_result")).toBe(true);
+    expect(turn.events.some((event) => event.type === "error")).toBe(false);
+    expect(server.interrupts).toBe(1);
+    expect(server.closeCount).toBe(0);
+  });
+});
+
+describe("Codex dynamic Agent metadata at graceful shutdown", () => {
+  it("rejects a queued Agent request after disposal begins even while the previous turn still owns an identity", async () => {
+    const server = new FakeAppServer();
+    const engine = new CodexEngine(server, THREAD);
+    const turn = drive(engine, "work", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    const before = engine.activeTurnDetails;
+    expect(before).not.toBeNull();
+    const disposal = engine.dispose("host-shutdown");
+    expect(engine.activeTurnDetails).toBeNull();
+    const run = vi.fn<SessionSubagentPort["run"]>();
+    const bridge = new CodexDynamicToolBridge([{ name: "glm-lead", model: "glm-5.3", description: "Review", systemPrompt: "" }], { run });
+    const response = { result: vi.fn(), error: vi.fn() };
+    await bridge.handle({ id: 1, method: "item/tool/call", params: {
+      threadId: THREAD, turnId: before!.turnId, callId: "late-call", tool: ANYCODE_AGENT_TOOL,
+      arguments: { agent_type: "glm-lead", description: "tiny task", prompt: "do it" },
+    } }, response, engine.activeTurnDetails, () => {});
+    expect(run).not.toHaveBeenCalled();
+    expect(response.result).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    await disposal;
+    await turn.done;
+  });
+
+  it("keeps Stop immediate but joins a delayed real child terminal and flushes its card before dispose returns", async () => {
+    const server = new FakeAppServer();
+    let finish!: (value: Awaited<ReturnType<SessionSubagentPort["run"]>>) => void;
+    const run = vi.fn<SessionSubagentPort["run"]>((request, options) => {
+      options?.onProgress?.({ kind: "start", agentType: request.agentType, description: request.description, model: request.model });
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const log = { record: vi.fn(), list: vi.fn(async () => new Map()), flush: vi.fn(async () => {}) };
+    const bridge = new CodexDynamicToolBridge([{ name: "glm-lead", model: "glm-5.3", description: "Review", systemPrompt: "" }], { run }, log);
+    const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, undefined, 0, [], undefined, bridge, log);
+    const abort = new AbortController();
+    const turn = drive(engine, "delegate", abort.signal);
+    await waitForParkedIterator(server, engine);
+    const owner = engine.activeTurnDetails;
+    const response = { result: vi.fn(), error: vi.fn() };
+    const handled = bridge.handle({ id: 1, method: "item/tool/call", params: {
+      threadId: THREAD, turnId: server.turnId, callId: "delayed-call", tool: ANYCODE_AGENT_TOOL,
+      arguments: { agent_type: "glm-lead", description: "tiny task", prompt: "do it" },
+    } }, response, owner, (event) => engine.pushBridgeEvent(event, owner));
+    abort.abort();
+    await handled;
+    await turn.done;
+    expect(response.result).toHaveBeenCalledTimes(1);
+    expect(log.record).not.toHaveBeenCalled();
+    let disposed = false;
+    const disposal = engine.dispose("host-shutdown").then(() => { disposed = true; });
+    await tick();
+    expect(disposed).toBe(false);
+    expect(log.flush).not.toHaveBeenCalled();
+    finish({ status: "cancelled", finalText: "cancelled", truncated: false, turns: 1, toolCalls: 0, durationMs: 100,
+      childSessionId: "child-delayed", parentSessionId: "parent", spawnToolCallId: "delayed-call" });
+    await disposal;
+    expect(log.record).toHaveBeenCalledWith("delayed-call", expect.objectContaining({ subagent: expect.objectContaining({
+      target: { kind: "session", childSessionId: "child-delayed", parentSessionId: "parent", spawnToolCallId: "delayed-call" },
+      final: expect.objectContaining({ status: "cancelled" }),
+    }) }));
+    expect(log.flush).toHaveBeenCalledTimes(1);
+    expect(log.record.mock.invocationCallOrder[0]).toBeLessThan(log.flush.mock.invocationCallOrder[0]!);
+    expect(response.result).toHaveBeenCalledTimes(1);
   });
 });

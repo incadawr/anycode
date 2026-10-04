@@ -24,6 +24,7 @@
 import type { AgentEvent, CodexRateLimitsWire, HistoryItem, ImageAttachment, PermissionMode, ReasoningEffort } from "@anycode/core";
 import {
   CODEX_BOOT_RPC_TIMEOUT_MS,
+  CODEX_BRIDGE_SETTLE_MS,
   CODEX_POST_INTERRUPT_SETTLE_MS,
   CODEX_TURN_INTERRUPT_TIMEOUT_MS,
   CODEX_TURN_START_TIMEOUT_MS,
@@ -112,6 +113,17 @@ export interface CodexEngineTimeouts {
   interruptMs: number;
   postInterruptSettleMs: number;
   /**
+   * TASK.226: bound on the engine's PRE-TERMINAL join of cancelled bridged
+   * children (Stop path only). After the native turn/completed arrives, the
+   * engine waits up to this long for each cancelled `anycode_agent` call to
+   * emit its REAL terminal event (status + child-session target + subagent
+   * card) BEFORE emitting turn_end/loop_end — without it, the live parent
+   * card stayed "running"/final null until a reload while the durable
+   * AgentCardLog already had the cancelled snapshot. A child that never
+   * settles is given up on inside this bound; Stop never waits longer.
+   */
+  bridgeSettleMs: number;
+  /**
    * Back-off before each retry of a `turn/interrupt` the server refused with
    * `-32600` "no active turn to interrupt" (TASK.38). Engine-LOCAL on purpose:
    * shared/codex-timeouts.ts is frozen (block C0), and this is not a bound on a
@@ -126,6 +138,7 @@ export const DEFAULT_CODEX_ENGINE_TIMEOUTS: CodexEngineTimeouts = {
   turnStartMs: CODEX_TURN_START_TIMEOUT_MS,
   interruptMs: CODEX_TURN_INTERRUPT_TIMEOUT_MS,
   postInterruptSettleMs: CODEX_POST_INTERRUPT_SETTLE_MS,
+  bridgeSettleMs: CODEX_BRIDGE_SETTLE_MS,
   // Attempts land at t≈0, 25, 75, 175 and 375ms. The live reject window measured
   // on codex-cli 0.144.3 closes by ~25ms after `turn/start` answers, so the
   // schedule keeps a 4x margin over it while staying two orders of magnitude
@@ -328,7 +341,11 @@ export interface CodexClient {
   close(): Promise<void>;
 }
 
+import type { CodexAgentCardLogPort } from "./agent-card-log.js";
+
 export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "bootstrap" | "onServerRequest"> {
+  agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge;
+  agentCardLog?: CodexAgentCardLogPort;
   bootstrap: EngineBootstrap;
   workspace: string;
   broker: IpcPermissionBroker;
@@ -418,10 +435,10 @@ async function pullQuotaSnapshot(client: CodexClient, timeoutMs: number): Promis
   return tracker;
 }
 
-async function initializeAndVerifyAccount(client: CodexClient, timeoutMs: number): Promise<void> {
+async function initializeAndVerifyAccount(client: CodexClient, timeoutMs: number, experimentalApi = false): Promise<void> {
   await client.request("initialize", {
     clientInfo: { name: "anycode", title: "AnyCode", version: "0.0.0" },
-    capabilities: { experimentalApi: false },
+    capabilities: { experimentalApi },
   }, { timeoutMs });
   client.notify("initialized");
   const account = await client.request<AccountResult>("account/read", {}, { timeoutMs });
@@ -450,9 +467,11 @@ export async function createNativeCodexSession(
   overrides?: Partial<CodexEngineTimeouts>,
   selection?: CodexSessionSelection,
   shadowLog?: CodexShadowLogPort,
+  agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
+  agentCardLog?: CodexAgentCardLogPort,
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
-  await initializeAndVerifyAccount(client, bounds.bootRpcMs);
+  await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [];
   const preset = resolvePreset(selection, notices);
@@ -462,6 +481,7 @@ export async function createNativeCodexSession(
     approvalPolicy: preset.threadParams.approvalPolicy,
     approvalsReviewer: preset.threadParams.approvalsReviewer,
     sandbox: preset.threadParams.sandbox,
+    ...(agentBridge ? { dynamicTools: agentBridge.declarations() } : {}),
     ...(model !== undefined ? { model } : {}),
   }, { timeoutMs: bounds.bootRpcMs });
   const native = nativeThread(result, "thread/start");
@@ -470,7 +490,7 @@ export async function createNativeCodexSession(
   return {
     // A fresh thread has zero prior turns: no history to hydrate, and the
     // FIRST turn this launch runs is native turn ordinal 0 (cut §2(e)).
-    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, 0, [], quota),
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, 0, [], quota, agentBridge, agentCardLog),
     ...native,
     presetId: preset.id,
   };
@@ -492,9 +512,11 @@ export async function resumeNativeCodexSession(
   overrides?: Partial<CodexEngineTimeouts>,
   selection?: CodexSessionSelection,
   shadowLog?: CodexShadowLogPort,
+  agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
+  agentCardLog?: CodexAgentCardLogPort,
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
-  await initializeAndVerifyAccount(client, bounds.bootRpcMs);
+  await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [];
   const preset = resolvePreset(selection, notices);
@@ -519,6 +541,7 @@ export async function resumeNativeCodexSession(
   const shadow = shadowLog !== undefined ? await shadowLog.list(native.threadId) : [];
   const historyItems = projectCodexHistory(threadRead, shadow, {
     maxItems: CODEX_HISTORY_MAX_ITEMS,
+    ...(agentCardLog ? { agentPresentations: await agentCardLog.list() } : {}),
     // A thread with turns but zero shadow rows is either pre-slice or
     // resumed on another machine (cut §2(e) degradation (a)) — the fallback
     // marker documents the gap rather than silently showing an incomplete
@@ -535,7 +558,7 @@ export async function resumeNativeCodexSession(
   const model = stored ?? native.model;
   const settings = buildSettings(workspace, catalog, preset, resumed, model, notices);
   return {
-    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota),
+    engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota, agentBridge, agentCardLog),
     threadId: native.threadId,
     model,
     presetId: preset.id,
@@ -549,10 +572,15 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
   });
-  const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: approvals.handle });
+  const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
+    const owner = engine?.activeTurnDetails ?? null;
+    return request.method === "item/tool/call" && options.agentBridge
+      ? options.agentBridge.handle(request, respond, owner, (event) => engine?.pushBridgeEvent(event, owner))
+      : approvals.handle(request, respond);
+  } });
   try {
     await client.start();
-    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog);
+    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog);
     engine = connected.engine;
     return connected;
   } catch (error) {
@@ -569,7 +597,12 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
   });
-  const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: approvals.handle });
+  const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
+    const owner = engine?.activeTurnDetails ?? null;
+    return request.method === "item/tool/call" && options.agentBridge
+      ? options.agentBridge.handle(request, respond, owner, (event) => engine?.pushBridgeEvent(event, owner))
+      : approvals.handle(request, respond);
+  } });
   try {
     await client.start();
     const connected = await resumeNativeCodexSession(
@@ -580,6 +613,8 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       options.timeouts,
       options.selection,
       options.shadowLog,
+      options.agentBridge,
+      options.agentCardLog,
     );
     engine = connected.engine;
     return connected;
@@ -590,6 +625,14 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
 }
 
 export class CodexEngine implements SessionEngine {
+  private bridgeEvents: AgentEvent[] = [];
+  private bridgeWake: (() => void) | undefined;
+  pushBridgeEvent(event: AgentEvent, owner: ActiveCodexTurn | null = this.activeTurn): void {
+    if (!this.activeTurn || owner !== this.activeTurn || this.disposed) return;
+    this.bridgeEvents.push(event);
+    this.bridgeWake?.();
+    this.bridgeWake = undefined;
+  }
   readonly id = "codex" as const;
   readonly capabilities: EngineCapabilities;
   private readonly bounds: CodexEngineTimeouts;
@@ -658,6 +701,8 @@ export class CodexEngine implements SessionEngine {
      * Undefined only for bare test-constructed engines.
      */
     private readonly quota?: CodexQuotaTracker,
+    private readonly agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
+    private readonly agentCardLog?: CodexAgentCardLogPort,
   ) {
     // Interactive approval is advertised only after the exact W0 bridge is
     // installed; direct/test-only engines retain the fail-closed capability.
@@ -669,7 +714,7 @@ export class CodexEngine implements SessionEngine {
   }
 
   get activeTurnDetails(): ActiveCodexTurn | null {
-    return this.activeTurn;
+    return this.disposed ? null : this.activeTurn;
   }
 
   mode(): PermissionMode {
@@ -726,6 +771,7 @@ export class CodexEngine implements SessionEngine {
     const shadow = this.shadowLog !== undefined ? await this.shadowLog.list(this.threadId) : [];
     return projectCodexHistory(threadRead, shadow, {
       maxItems: CODEX_HISTORY_MAX_ITEMS,
+      ...(this.agentCardLog ? { agentPresentations: await this.agentCardLog.list() } : {}),
       // Same degradation rule the boot projection uses (cut §2(e)): a thread
       // with turns but zero shadow rows for THIS read is honestly marked,
       // rather than silently presented as command-output-complete.
@@ -940,12 +986,40 @@ export class CodexEngine implements SessionEngine {
     this.interruptSent = false;
     let abortObserved = false;
     let settle: SettleDeadline | null = null;
+    /** TASK.226: the ONE bounded bridge join this turn has spent (see finally). */
+    let bridgeJoinDone = false;
+    /**
+     * TASK.226: the native turn's terminal batch (…/turn_end/loop_end),
+     * intercepted by `deliver` and RELEASED FROM THE FINALLY — after the
+     * cancelled bridged children's real outcomes were joined and flushed.
+     * Scoped per-turn here (not inside the translator block) precisely so
+     * the finally can read it on every exit path.
+     */
+    let heldTerminal: AgentEvent[] | null = null;
 
     /** Latched Stop: settle any parked approval as `cancel`, then interrupt exactly once. */
     const beginInterrupt = (): void => {
       settle ??= deadline(this.bounds.postInterruptSettleMs);
+      this.agentBridge?.cancel();
       this.approvals?.denyAll("Codex turn was cancelled", "turn_cancelled");
       void this.sendInterruptOnce();
+    };
+    /**
+     * TASK.226 pre-terminal settle: after the native turn has reached its
+     * terminal state under Stop, bounded-join the cancelled bridged children
+     * and flush whatever they emitted through the still-live owner BEFORE the
+     * translator emits turn_end/loop_end. Immediate Stop is untouched — this
+     * runs only AFTER the native `turn/completed` (or the transport's close)
+     * already ended the turn — and it is bounded by bridgeSettleMs, so a
+     * child that never settles cannot wedge the turn. Without it the child's
+     * real cancelled outcome (child-session target + card) landed after
+     * owner teardown and was dropped by pushBridgeEvent's strict guard.
+     */
+    const settleCancelledBridge = async (): Promise<void> => {
+      if (!this.agentBridge) return;
+      const join = this.agentBridge.cancelAwaiting();
+      if (!join.cancelled) return;
+      await Promise.race([join.completion, delay(this.bounds.bridgeSettleMs)]);
     };
     /** Armed only after an interrupt: the bounded drain to `turn/completed`. */
     const settleRacers = (): Promise<{ kind: "settle-timeout" }>[] => (settle === null ? [] : [settle.promise]);
@@ -1115,10 +1189,13 @@ export class CodexEngine implements SessionEngine {
             }
           }
         }
-        for (const event of translator.onNotification(notification)) {
-          if (event.type === "loop_end") terminal = true;
-          yield event;
+        const translated: AgentEvent[] = translator.onNotification(notification);
+        if (translated.length > 0 && translated[translated.length - 1]!.type === "loop_end") {
+          terminal = true;
+          heldTerminal = translated as AgentEvent[] | null;
+          return;
         }
+        for (const event of translated) yield event;
       };
 
       // The native id now exists, so a Stop latched during phase A fires here.
@@ -1133,7 +1210,10 @@ export class CodexEngine implements SessionEngine {
       // fired) and the bounded settle deadline replaces it: we drain to the
       // server's terminal `turn/completed`, which carries status "interrupted".
       while (!terminal) {
+        while (this.bridgeEvents.length) yield this.bridgeEvents.shift()!;
+        const bridgeReady = new Promise<{ kind: "bridge" }>((resolve) => { this.bridgeWake = () => resolve({ kind: "bridge" }); });
         const raced = await Promise.race([
+          bridgeReady,
           next.then((value) => ({ kind: "notification" as const, value })),
           ...(abortObserved ? [] : [abort.promise.then(() => ({ kind: "abort" as const }))]),
           ...settleRacers(),
@@ -1143,6 +1223,7 @@ export class CodexEngine implements SessionEngine {
           beginInterrupt();
           continue;
         }
+        if (raced.kind === "bridge") continue;
         if (raced.kind === "settle-timeout") {
           throw new Error(`Codex did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms`);
         }
@@ -1150,8 +1231,10 @@ export class CodexEngine implements SessionEngine {
           // Transport closed under a pending Stop (teardown of an interrupted
           // turn): close the UI turn as cancelled, pairing every open card,
           // rather than reporting an engine error the user did not cause.
+          // The terminal batch is HELD and released from the finally, after
+          // the one bounded pre-terminal join/drain — never yielded here.
           if (abortObserved) {
-            for (const event of translator.finishTerminal("cancelled")) yield event;
+            heldTerminal = translator.finishTerminal("cancelled");
             return;
           }
           throw this.terminalError ?? new Error("Codex app-server closed during a turn");
@@ -1159,6 +1242,9 @@ export class CodexEngine implements SessionEngine {
         next = iterator.next();
         yield* deliver(raced.value.value);
       }
+      // TASK.226: under Stop the native terminal batch is HELD (deliver
+      // intercepted it) and released from the finally, after the cancelled
+      // children's real outcomes have been joined and flushed.
     } catch (error) {
       const terminalError = this.terminalError ?? (error instanceof Error ? error : new Error(String(error)));
       this.terminalError = terminalError;
@@ -1166,9 +1252,33 @@ export class CodexEngine implements SessionEngine {
       // A turn that timed out or lost its transport releases the child: a
       // bounded RPC must never leave a live app-server behind (TASK.38 §6).
       void this.client.close().catch(() => {});
-      yield { type: "error", error: terminalError };
-      yield* this.terminalEvents(turn, terminalError, false);
+      // TASK.226: the terminal batch is HELD and released from the finally —
+      // after the one bounded pre-terminal join/drain — so no bridge card
+      // event can land after loop_end on the error path either.
+      const errorBatch: AgentEvent[] = [{ type: "error", error: terminalError }];
+      errorBatch.push(...this.terminalEvents(turn, terminalError, false));
+      heldTerminal = errorBatch;
     } finally {
+      // TASK.226: the finally is the ONE bounded pre-terminal join/drain —
+      // the only place guaranteed to run for every exit path (native
+      // turn/completed, transport close under Stop, error). Under Stop,
+      // bounded-join the cancelled bridged children FIRST (idempotently —
+      // exactly one bridgeSettleMs budget per turn, however many terminal
+      // paths were traversed), flush every queued bridge event while the
+      // owner is still live, THEN release the held terminal batch
+      // (turn_end/loop_end stay the turn's last events), and only then clear
+      // the owner. A child that never settles is given up on inside
+      // bridgeSettleMs.
+      if (abortObserved && !bridgeJoinDone) {
+        bridgeJoinDone = true;
+        await settleCancelledBridge();
+      }
+      this.agentBridge?.cancel();
+      while (this.bridgeEvents.length) yield this.bridgeEvents.shift()!;
+      const terminalBatch: AgentEvent[] = heldTerminal ?? [];
+      heldTerminal = null;
+      for (const event of terminalBatch) yield event;
+      this.bridgeWake = undefined;
       this.activeTurn = null;
       this.activeItems = null;
       cancelSettle();
@@ -1177,12 +1287,16 @@ export class CodexEngine implements SessionEngine {
   }
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
+    this.agentBridge?.cancel();
     this.disposed = true;
     this.unobserve();
     this.appliedListeners.clear();
     this.approvals?.denyAll("Codex engine is shutting down", "shutdown");
     void this.sendInterruptOnce();
-    return this.client.close();
+    // Children receive cancellation before either bounded teardown starts. Their
+    // terminal/card metadata may arrive after the native client exits, so join it
+    // concurrently within main's graceful-host deadline before SQLite closes.
+    return Promise.all([this.client.close(), this.agentBridge?.drain()]).then(() => {});
   }
 
   /**

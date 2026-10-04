@@ -56,6 +56,20 @@ export const CODEX_MODEL_LIST_MAX_PAGES = 5;
 export const CODEX_POST_INTERRUPT_SETTLE_MS = 10_000;
 
 /**
+ * TASK.226: bound on the engine's PRE-TERMINAL join of cancelled bridged
+ * `anycode_agent` children (Stop path only). After the interrupted native
+ * turn reaches `turn/completed`, the engine waits up to this long for each
+ * cancelled call's REAL terminal event (status + child-session target +
+ * subagent card metadata) so it can be delivered BEFORE turn_end/loop_end —
+ * pre-fix the live parent card stayed "running"/final null until a reload
+ * while the durable AgentCardLog already had the cancelled snapshot. Sized
+ * like `drain()`: one second of child telemetry join, never added to Stop's
+ * critical path (the interrupt itself stays immediate), and a child that
+ * never settles is given up on inside this bound.
+ */
+export const CODEX_BRIDGE_SETTLE_MS = 1_000;
+
+/**
  * `codex-cli <semver>` version preflight (design §1 W0 gate / §2(g)). Mirrors
  * the pre-existing local `CODEX_VERSION_TIMEOUT_MS` in
  * host/engines/codex/app-server-client.ts — callers migrate to import this
