@@ -7,6 +7,29 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.30] — 2026-10-04
+
+### Added
+
+- Codex tabs can delegate work to AnyCode agent profiles through the native
+  Agent tool, including GLM leads and Flash workers.
+- Portable GLM/Flash profiles and a Codex supervisor prompt document how to
+  run the orchestration on another project or laptop.
+
+### Fixed
+
+- Stopping Codex waits briefly for late child cancellation metadata before
+  closing the turn, so the live Agent card receives its final result.
+- Delegated Agent cards retain their child-session target and cancellation
+  result after restarting and restoring a Codex session.
+- Existing agent profiles are read again for each delegated run, so updated
+  instructions and model settings apply to the next child.
+- Claude quota reset times show realistic intervals instead of millions of days.
+- Compacting an already compacted history prefix skips the redundant model
+  request and preserves previous compaction failures.
+- Narrow split-pane composers keep their controls on one row; keyboard hints
+  remain available through accessible text and hover tooltips.
+
 ## [0.0.29] — 2026-10-03
 
 ### Changed
