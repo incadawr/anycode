@@ -1750,7 +1750,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
               </>
             )}
           </div>
-          <span className="composer-hint composer-hint-hidden" />
+          <span className="composer-hint visually-hidden" aria-hidden="true" />
           <div className="composer-footer-right">
             <button
               type="button"

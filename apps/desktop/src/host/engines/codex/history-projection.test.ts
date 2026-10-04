@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { HistoryItem } from "@anycode/core";
+import type { HistoryItem, ToolResultPresentation } from "@anycode/core";
 import { projectCodexHistory, type CodexThreadRead, type ShadowCommandItem } from "./history-projection.js";
 
 const RESUME_READ_THREAD: CodexThreadRead = {
@@ -97,6 +97,189 @@ describe("projectCodexHistory — native-only projection", () => {
         },
       },
     ]);
+  });
+
+  it("projects persisted anycode_agent calls with native ids, exact arguments and retained text output", () => {
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 100, items: [
+      {
+        type: "dynamicToolCall", id: "exec-native-call-id", tool: "anycode_agent", status: "completed", success: true,
+        arguments: { agent_type: "glm-lead", prompt: "Inspect the bug", model: "glm-5.3" },
+        contentItems: [{ type: "inputText", text: "GLM completed the task." }],
+      },
+    ] }] } };
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    expect(items).toEqual([
+      {
+        id: "turn-1:exec-native-call-id:call", createdAt: 100000,
+        message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "exec-native-call-id", toolName: "Agent", input: {
+          agent_type: "glm-lead", prompt: "Inspect the bug", model: "glm-5.3",
+        } }] },
+      },
+      {
+        id: "turn-1:exec-native-call-id:result", createdAt: 100001,
+        message: { role: "tool", content: [{ type: "tool_result", toolCallId: "exec-native-call-id", toolName: "Agent", text: "GLM completed the task.", status: "success" }] },
+      },
+    ]);
+  });
+
+  it("restores the durable session child target on the Agent result after thread/read", () => {
+    const presentation = {
+      subagent: {
+        kind: "subagent",
+        version: 1,
+        target: {
+          kind: "session",
+          childSessionId: "glm-child-session",
+          parentSessionId: "codex-parent-session",
+          spawnToolCallId: "exec-native-call-id",
+        },
+        identity: { agentType: "glm-lead", description: "Implement task", model: "glm-5.3", engine: "codex" },
+        counters: { turns: 4, toolCalls: 2, lastTool: "Read" },
+        activity: { entries: [{ toolName: "Read", summary: "Inspected source" }], dropped: 0 },
+        final: { status: "completed", durationMs: 1200 },
+      },
+    } satisfies ToolResultPresentation;
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", items: [
+      {
+        type: "dynamicToolCall", id: "exec-native-call-id", tool: "anycode_agent", status: "completed", success: true,
+        arguments: { agent_type: "glm-lead", prompt: "Implement task" },
+        contentItems: [{ type: "inputText", text: "Finished" }],
+      },
+    ] }] } };
+
+    const items = projectCodexHistory(thread, [], { maxItems: 200, agentPresentations: new Map([["exec-native-call-id", presentation]]) });
+    expect(items).toHaveLength(2);
+    expect(items[0]?.message).toMatchObject({ role: "assistant", content: [{ type: "tool_call", toolCallId: "exec-native-call-id", toolName: "Agent" }] });
+    expect(items[1]?.message).toMatchObject({
+      role: "tool",
+      content: [{ type: "tool_result", toolCallId: "exec-native-call-id", toolName: "Agent", presentation }],
+    });
+    const result = items[1]?.message;
+    expect(result?.role === "tool" ? result.content[0]?.presentation?.subagent?.target : undefined).toEqual({
+      kind: "session",
+      childSessionId: "glm-child-session",
+      parentSessionId: "codex-parent-session",
+      spawnToolCallId: "exec-native-call-id",
+    });
+  });
+
+  it("restores a stopped child as cancelled when Codex only retained success:false", () => {
+    const presentation = {
+      subagent: {
+        kind: "subagent",
+        version: 1,
+        target: { kind: "session", childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "exec-cancelled" },
+        identity: { agentType: "glm-lead", description: "Stopped task", model: "glm-5.3", engine: "codex" },
+        counters: { turns: 2, toolCalls: 1, lastTool: "Read" },
+        activity: { entries: [], dropped: 0 },
+        final: { status: "cancelled", durationMs: 500 },
+      },
+    } satisfies ToolResultPresentation;
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", items: [
+      {
+        type: "dynamicToolCall", id: "exec-cancelled", tool: "anycode_agent", status: "completed", success: false,
+        arguments: { agent_type: "glm-lead", prompt: "Long task" },
+        contentItems: [{ type: "inputText", text: "AnyCode agent was cancelled" }],
+      },
+    ] }] } };
+
+    const withoutMetadata = projectCodexHistory(thread, [], { maxItems: 200 });
+    expect(withoutMetadata.find((item) => item.message.role === "tool")?.message).toMatchObject({
+      content: [{ status: "error" }],
+    });
+    const restored = projectCodexHistory(thread, [], { maxItems: 200, agentPresentations: new Map([["exec-cancelled", presentation]]) });
+    expect(restored.find((item) => item.message.role === "tool")?.message).toMatchObject({
+      content: [{ status: "cancelled", presentation }],
+    });
+  });
+
+  it("does not turn Codex success:false into success when the child card says completed", () => {
+    const presentation = {
+      subagent: {
+        kind: "subagent",
+        version: 1,
+        target: { kind: "session", childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "exec-degenerate" },
+        identity: { agentType: "glm-lead", description: "Reviewed task", model: "glm-5.3", engine: "codex" },
+        counters: { turns: 4, toolCalls: 3, lastTool: "Read" },
+        activity: { entries: [], dropped: 0 },
+        final: { status: "completed", durationMs: 900 },
+      },
+    } satisfies ToolResultPresentation;
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", items: [
+      {
+        type: "dynamicToolCall", id: "exec-degenerate", tool: "anycode_agent", status: "completed", success: false,
+        arguments: { agent_type: "glm-lead", prompt: "Review task" },
+        contentItems: [{ type: "inputText", text: "Incomplete repeated output" }],
+      },
+    ] }] } };
+    const items = projectCodexHistory(thread, [], { maxItems: 200, agentPresentations: new Map([["exec-degenerate", presentation]]) });
+    expect(items.find((item) => item.message.role === "tool")?.message).toMatchObject({
+      content: [{ status: "error", presentation }],
+    });
+  });
+
+  it("keeps an unfinished native call unknown when its durable child card says completed", () => {
+    const presentation = {
+      subagent: {
+        kind: "subagent",
+        version: 1,
+        target: { kind: "session", childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "exec-in-progress" },
+        identity: { agentType: "glm-lead", description: "Long task", model: "glm-5.3", engine: "codex" },
+        counters: { turns: 3, toolCalls: 2, lastTool: "Bash" },
+        activity: { entries: [], dropped: 0 },
+        final: { status: "completed", durationMs: 45_000 },
+      },
+    } satisfies ToolResultPresentation;
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", items: [
+      {
+        type: "dynamicToolCall", id: "exec-in-progress", tool: "anycode_agent", status: "inProgress",
+        arguments: { agent_type: "glm-lead", prompt: "Long task" },
+        contentItems: [{ type: "inputText", text: "Child final response" }],
+      },
+    ] }] } };
+    const items = projectCodexHistory(thread, [], { maxItems: 200, agentPresentations: new Map([["exec-in-progress", presentation]]) });
+    expect(items.find((item) => item.message.role === "tool")?.message).toMatchObject({
+      content: [{
+        status: "cancelled",
+        presentation,
+        text: expect.stringContaining("final tool result is unknown"),
+      }],
+    });
+  });
+
+  it("does not claim success when a persisted anycode_agent call failed or is unfinished", () => {
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", items: [
+      { type: "dynamicToolCall", id: "failed", tool: "anycode_agent", status: "failed", success: false, arguments: {}, contentItems: [{ type: "inputText", text: "partial" }] },
+      { type: "dynamicToolCall", id: "running", tool: "anycode_agent", status: "inProgress", arguments: { prompt: "work" }, contentItems: [] },
+      { type: "dynamicToolCall", id: "unknown-success", tool: "anycode_agent", status: "completed", arguments: {}, contentItems: [] },
+    ] }] } };
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    const results = items.filter((item) => item.message.role === "tool").map((item) => item.message);
+    expect(results).toHaveLength(3);
+    expect(results[0]).toMatchObject({ content: [{ toolCallId: "failed", status: "error", text: "partial" }] });
+    expect(results[1]).toMatchObject({ content: [{ toolCallId: "running", status: "cancelled", text: expect.stringContaining("final outcome is unknown") }] });
+    expect(results[2]).toMatchObject({ content: [{ toolCallId: "unknown-success", status: "error", text: expect.stringContaining("did not retain whether") }] });
+    for (const id of ["failed", "running", "unknown-success"]) expect(toolCallIdsOf(items)).toContain(id);
+  });
+
+  it("keeps unknown dynamic tools on the existing graceful fallback path", () => {
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", items: [
+      { type: "dynamicToolCall", id: "other", tool: "some_future_tool", status: "completed", success: true, arguments: {}, contentItems: [] },
+    ] }] } };
+    const items = projectCodexHistory(thread, [], { maxItems: 200 });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.message).toEqual({ role: "assistant", content: [{ type: "text", text: "[Codex dynamicToolCall item — not represented in AnyCode's transcript format]" }] });
+  });
+
+  it("never leaves a native anycode_agent tool_result stranded when maxItems truncates its call", () => {
+    const thread: CodexThreadRead = { thread: { id: "t1", turns: [{ id: "turn-1", items: [
+      { type: "dynamicToolCall", id: "agent-call", tool: "anycode_agent", status: "completed", success: true, arguments: {}, contentItems: [{ type: "inputText", text: "done" }] },
+      { type: "agentMessage", id: "last", text: "Finished" },
+    ] }] } };
+    const items = projectCodexHistory(thread, [], { maxItems: 2 });
+    expect(items.map((item) => item.id)).toEqual(["t1:truncation-marker", "turn-1:last"]);
+    expect(items.some((item) => item.message.role === "tool")).toBe(false);
+    expect(items.some((item) => item.message.role === "assistant" && item.message.content.some((part) => part.type === "tool_call"))).toBe(false);
   });
 
   it("projects a declined native commandExecution as denied, not error (C0 review Medium)", () => {

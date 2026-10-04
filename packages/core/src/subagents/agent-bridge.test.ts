@@ -305,7 +305,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
     expect(seen?.spawnToolCallId).toBe("toolu_2");
   });
 
-  it("core entry with a `model:` default (scenario E): the model still reaches the request even though the prompt is not merged", async () => {
+  it("core entry: profile body and model default reach the session child without an engine override", async () => {
     let seen: SessionSubagentRequest | undefined;
     const coreWithModel: AgentBridgeCatalogEntry = { ...CORE_ENTRY, model: "core-default-model" };
     const port: SessionSubagentPort = {
@@ -318,7 +318,7 @@ describe("runAgentBridgeCall (§3.4)", () => {
       { agent_type: "reviewer", description: "d", prompt: "review" },
       { catalog: [coreWithModel], port, spawnToolCallId: "toolu_3" },
     );
-    expect(seen?.prompt).toBe("review");
+    expect(seen?.prompt).toBe("P\n\n---\n\nreview");
     expect(seen?.engine).toBeUndefined();
     expect(seen?.model).toBe("core-default-model");
   });

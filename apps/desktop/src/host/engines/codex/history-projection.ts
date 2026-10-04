@@ -92,7 +92,7 @@
  *    output from before this slice is not retained.
  */
 
-import type { ChatMessage, HistoryItem, ImageAttachment, ToolCallStatus } from "@anycode/core";
+import type { ChatMessage, HistoryItem, ImageAttachment, ToolCallStatus, ToolResultPresentation } from "@anycode/core";
 
 /**
  * One native turn item, duck-typed and structurally flat (mirrors
@@ -126,6 +126,14 @@ export interface CodexThreadReadItem {
   changes?: Array<{ path?: string | null; diff?: string | null }> | null;
   /** `reasoning` only. */
   summary?: string[] | null;
+  /** `dynamicToolCall` only (Codex app-server v2 schema). */
+  arguments?: unknown;
+  /** `dynamicToolCall` only. */
+  tool?: string;
+  /** `dynamicToolCall` only. */
+  success?: boolean | null;
+  /** `dynamicToolCall` only. */
+  contentItems?: unknown;
 }
 
 export interface CodexThreadReadTurn {
@@ -144,19 +152,19 @@ export interface CodexThreadRead {
 }
 
 /**
- * The native `thread/read` item types a live probe (codex-cli 0.144.3, W6)
- * evidenced the app-server actually persists. `reasoning` and
- * `commandExecution` are deliberately absent — the live evidence is that
- * `thread/read` never returns them, not even a successful command. A future
- * codex-cli that starts persisting a new type must be evidenced by a new
- * probe before it is added here; until then it stays on the fallback
- * (`projectFallback`) path rather than being silently assumed native.
+ * Native `thread/read` item types established by earlier live probes and the
+ * Codex 0.160 v2 protocol schema. `reasoning` is deliberately absent; older
+ * commandExecution persistence was absent in 0.144.3, while newer releases
+ * may persist it. Dynamic tools are explicitly persisted by the schema and
+ * project the supported AnyCode Agent bridge call; unknown dynamic tool names
+ * still take the graceful fallback path. A future item type must be evidenced
+ * before being treated as native.
  * Single source of truth for BOTH the writer (codex-engine.ts, which counts
  * completions against this set) and the merge below (which anchors shadow
  * rows in the same set's index space) — the coordinate-space drift this
  * fixes was exactly two independent copies of this list disagreeing.
  */
-export const NATIVE_PERSISTED: ReadonlySet<string> = new Set(["userMessage", "agentMessage", "fileChange"]);
+export const NATIVE_PERSISTED: ReadonlySet<string> = new Set(["userMessage", "agentMessage", "fileChange", "dynamicToolCall"]);
 
 /**
  * One `commandExecution` completion recorded by the host's live writer (cut
@@ -180,6 +188,8 @@ export interface ShadowCommandItem {
 
 export interface ProjectCodexHistoryOptions {
   maxItems: number;
+  /** Durable AnyCode-only result metadata, keyed by the native dynamic tool call id. */
+  agentPresentations?: ReadonlyMap<string, ToolResultPresentation>;
   /**
    * True when the shadow log has NO rows for this thread at all — a
    * pre-slice or foreign-client thread, not "this thread never ran a
@@ -258,10 +268,11 @@ function toolPair(
   idPrefix: string,
   createdAt: number,
   toolCallId: string,
-  toolName: "Bash" | "Write",
+  toolName: string,
   input: unknown,
   status: ToolCallStatus,
   modelText: string,
+  presentation?: ToolResultPresentation,
 ): HistoryItem[] {
   const assistant: HistoryItem = {
     id: `${idPrefix}:call`,
@@ -271,7 +282,10 @@ function toolPair(
   const result: HistoryItem = {
     id: `${idPrefix}:result`,
     createdAt: createdAt + 1,
-    message: { role: "tool", content: [{ type: "tool_result", toolCallId, toolName, text: modelText, status }] },
+    message: {
+      role: "tool",
+      content: [{ type: "tool_result", toolCallId, toolName, text: modelText, status, ...(presentation ? { presentation } : {}) }],
+    },
   };
   return [assistant, result];
 }
@@ -317,6 +331,68 @@ function projectFileChange(turnId: string, item: CodexThreadReadItem, createdAt:
   });
 }
 
+/**
+ * Codex persists each app-server dynamic tool call as ONE `dynamicToolCall`
+ * thread item with its arguments and output. The v2 schema names the field
+ * `id`, not `callId`, but the 0.160.0 native thread/read capture
+ * `/private/tmp/anycode-226-native-read.json` proves it preserves the request
+ * callId verbatim. That id is therefore the stable correlation id for both
+ * halves of AnyCode's hydrated transcript pair.
+ */
+function projectDynamicToolCall(
+  turnId: string,
+  item: CodexThreadReadItem,
+  createdAt: number,
+  agentPresentations?: ReadonlyMap<string, ToolResultPresentation>,
+): HistoryItem[] {
+  if (item.tool !== "anycode_agent") return [projectFallback(turnId, item, createdAt)];
+
+  const inputRecord = record(item.arguments);
+  const input = inputRecord === null || Array.isArray(item.arguments) ? { arguments: item.arguments } : inputRecord;
+  const outputs = Array.isArray(item.contentItems) ? item.contentItems : [];
+  const textParts = outputs.map((output) => {
+    const value = record(output);
+    if (value === null) return "[Codex dynamic tool returned an unreadable output item]";
+    if (value.type === "inputText" && typeof value.text === "string") return value.text;
+    if (value.type === "inputImage") return "[Codex dynamic tool returned an image output, omitted from text history]";
+    if (value.type === "inputAudio") return "[Codex dynamic tool returned an audio output, omitted from text history]";
+    const type = typeof value.type === "string" ? value.type : "unknown";
+    return `[Codex dynamic tool output ${type} is not represented in AnyCode's transcript format]`;
+  });
+  let modelText = textParts.join("");
+  const presentation = agentPresentations?.get(item.id);
+  const subagentFinalStatus = presentation?.subagent?.final.status;
+  let status: ToolCallStatus;
+  if (item.status === "completed" && item.success === true) {
+    status = "success";
+  } else if (item.status === "inProgress") {
+    // Core has no pending state in persisted history. Close the pair and say
+    // plainly that this snapshot did not contain a final outcome.
+    status = "cancelled";
+    const detail = subagentFinalStatus === "completed"
+      ? "AnyCode child metadata says completed, but its Codex dynamic tool call was still in progress when history was read; the final tool result is unknown."
+      : "AnyCode agent call was still in progress when Codex history was read; its final outcome is unknown.";
+    modelText = [modelText, detail].filter(Boolean).join("\n\n");
+  } else {
+    status = "error";
+    if (item.status === "completed" && item.success !== false && subagentFinalStatus === undefined) {
+      modelText = [modelText, "Codex did not retain whether this AnyCode agent call succeeded."].filter(Boolean).join("\n\n");
+    } else if (item.status !== "failed" && item.status !== "completed") {
+      modelText = [modelText, `Codex retained an unrecognized AnyCode agent status: ${String(item.status)}.`].filter(Boolean).join("\n\n");
+    }
+  }
+  if (subagentFinalStatus !== undefined) {
+    // A matching durable AnyCode card can refine failures into more specific
+    // child outcomes such as requested Stop vs child error. Its `completed`
+    // marker proves the child loop ended, not that Codex's dynamic tool call
+    // succeeded; native success remains the only positive success evidence.
+    if (subagentFinalStatus !== "completed") status = subagentFinalStatus;
+  }
+  if (modelText.length === 0 && status !== "success") modelText = "AnyCode agent call returned no retained text output.";
+
+  return toolPair(`${turnId}:${item.id}`, createdAt, item.id, "Agent", input, status, modelText, presentation);
+}
+
 function textBlock(turnId: string, item: CodexThreadReadItem, createdAt: number, text: string): HistoryItem {
   const message: ChatMessage = { role: "assistant", content: [{ type: "text", text }] };
   return { id: `${turnId}:${item.id}`, createdAt, message };
@@ -342,7 +418,12 @@ function projectFallback(turnId: string, item: CodexThreadReadItem, createdAt: n
   return textBlock(turnId, item, createdAt, `[Codex ${item.type} item — not represented in AnyCode's transcript format]`);
 }
 
-function projectItem(turnId: string, item: CodexThreadReadItem, createdAt: number): HistoryItem[] {
+function projectItem(
+  turnId: string,
+  item: CodexThreadReadItem,
+  createdAt: number,
+  agentPresentations?: ReadonlyMap<string, ToolResultPresentation>,
+): HistoryItem[] {
   switch (item.type) {
     case "userMessage": {
       const { text, images } = userMessageContent(item);
@@ -368,6 +449,8 @@ function projectItem(turnId: string, item: CodexThreadReadItem, createdAt: numbe
       return projectCommandExecution(turnId, item, createdAt);
     case "fileChange":
       return projectFileChange(turnId, item, createdAt);
+    case "dynamicToolCall":
+      return projectDynamicToolCall(turnId, item, createdAt, agentPresentations);
     case "plan":
       return [projectPlan(turnId, item, createdAt)];
     case "reasoning":
@@ -398,6 +481,7 @@ function mergeTurnItems(
   native: CodexThreadReadItem[],
   shadow: ShadowCommandItem[],
   cursorStart: number,
+  agentPresentations?: ReadonlyMap<string, ToolResultPresentation>,
 ): { items: TaggedItem[]; nextCursor: number } {
   const nativeCommandIds = new Set(native.filter((item) => item.type === "commandExecution").map((item) => item.id));
   const sortedShadow = shadow.filter((row) => row.itemId === undefined || !nativeCommandIds.has(row.itemId))
@@ -417,7 +501,7 @@ function mergeTurnItems(
       emit(projectShadowCommand(turnId, sortedShadow[shadowIndex]!, cursor), true);
       shadowIndex += 1;
     }
-    emit(projectItem(turnId, native[nativeIndex]!, cursor), false);
+    emit(projectItem(turnId, native[nativeIndex]!, cursor, agentPresentations), false);
     if (NATIVE_PERSISTED.has(native[nativeIndex]!.type)) nativeVisibleCount += 1;
   }
   for (; shadowIndex < sortedShadow.length; shadowIndex += 1) {
@@ -425,6 +509,20 @@ function mergeTurnItems(
   }
 
   return { items, nextCursor: cursor };
+}
+
+/** When a cap cuts through a native tool pair, discard the remaining result half too. */
+function startsWithToolResultWhoseCallWasDropped(items: TaggedItem[], start: number): boolean {
+  const candidate = items[start]?.item.message;
+  if (candidate?.role !== "tool") return false;
+  return candidate.content.some((part) => {
+    if (part.type !== "tool_result") return false;
+    return items.slice(0, start).some(({ item }) => {
+      const message = item.message;
+      return message.role === "assistant" && message.content.some((candidatePart) =>
+        candidatePart.type === "tool_call" && candidatePart.toolCallId === part.toolCallId);
+    });
+  });
 }
 
 /**
@@ -483,7 +581,13 @@ export function projectCodexHistory(
   let cursor = 0;
   turns.forEach((turn, turnOrdinal) => {
     const turnStartedAtMs = typeof turn.startedAt === "number" ? turn.startedAt * 1000 : 0;
-    const merged = mergeTurnItems(turn.id, turn.items ?? [], shadowByTurn.get(turnOrdinal) ?? [], turnStartedAtMs);
+    const merged = mergeTurnItems(
+      turn.id,
+      turn.items ?? [],
+      shadowByTurn.get(turnOrdinal) ?? [],
+      turnStartedAtMs,
+      opts.agentPresentations,
+    );
     inBounds.push(...merged.items);
     cursor = merged.nextCursor;
     shadowByTurn.delete(turnOrdinal);
@@ -517,7 +621,8 @@ export function projectCodexHistory(
   let droppedInBoundsShadow = false;
   let orphanBudget = opts.maxItems - inBounds.length;
   if (orphanBudget < 0) {
-    const dropCount = -orphanBudget;
+    let dropCount = -orphanBudget;
+    while (startsWithToolResultWhoseCallWasDropped(inBounds, dropCount)) dropCount += 1;
     droppedInBoundsShadow = inBounds.slice(0, dropCount).some((tagged) => tagged.shadow);
     kept = inBounds.slice(dropCount);
     orphanBudget = 0;
