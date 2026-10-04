@@ -5772,3 +5772,23 @@ it("preserves a safe provider failure in the child's terminal report", async () 
     expect(report.finalText).not.toContain("secret-poison");
   } finally { h.close(); }
 });
+
+describe("TASK.242 child inbox terminal race", () => {
+  it("drains an agent message arriving during durable terminal flush before publishing child result", async () => {
+    let release!: () => void; let flushes = 0;
+    const h = createChildHarness({ steps: [textStep("first"), textStep("clarified result")], flushHistoryImpl: async () => {
+      if (++flushes === 1) await new Promise<void>((resolve) => { release = resolve; });
+    } });
+    try {
+      h.session.startProgrammaticTurn("run");
+      await h.waitUntil(() => flushes === 1);
+      const delivery = await h.session.receiveAgentMessage({ messageId: "agent-in-finalize", sender: "test-supervisor", recipientSessionId: "child-session", payload: "additional requirement", mode: "next_turn", kind: "agent_message", createdAt: new Date().toISOString() });
+      expect(delivery.state).toBe("queued"); expect(h.onTerminal).not.toHaveBeenCalled();
+      release();
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1);
+      expect(h.received.filter(isTurnStarted)).toHaveLength(2);
+      expect(h.session.agentMessageStatus("agent-in-finalize")?.state).toBe("acknowledged");
+      expect(h.onTerminal.mock.calls[0]![0].finalText).toContain("clarified result");
+    } finally { h.close(); }
+  });
+});

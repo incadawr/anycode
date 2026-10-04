@@ -2387,6 +2387,7 @@ export interface AutomationFacade {
    * existing `isSendBlockedByModelImages` gate — a blind model with no
    * configured recognizer fallback, same reason `tryAgain` already reports).
    */
+  steerPrompt(tabId: string, text: string): { ok: true; requestId: string } | FacadeErr;
   sendPrompt(
     tabId: string,
     text: string,
@@ -6240,6 +6241,15 @@ export function createAutomationFacade(
         };
       }
       return { tabs, activeTabId, states, hiddenWorkspaces };
+    },
+
+    steerPrompt(tabId: string, text: string): { ok: true; requestId: string } | FacadeErr {
+      const store = registry.getStore(tabId);
+      if (!store) return { ok: false, reason: "unknown_tab" };
+      if (store.getState().connection !== "ready") return { ok: false, reason: "not_ready" };
+      const requestId = crypto.randomUUID();
+      registry.sendToTab(tabId, { type: "steer_message", requestId, text });
+      return { ok: true, requestId }; // GUI transport submission; inspect agent_message delivery for app-server acknowledgement.
     },
 
     sendPrompt(

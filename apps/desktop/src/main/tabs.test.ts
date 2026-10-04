@@ -4499,3 +4499,26 @@ describe("TASK.194 model admission before fork", () => {
     expect(hosts).toHaveLength(2);
   });
 });
+
+describe("TASK.242 owned process communication routing", () => {
+  it("pins workspace/session and accepts a correlated response only from the recipient host", async () => {
+    const rig = liveForkRig(); const manager = makeManager(rig.fork, windowRig().window);
+    manager.createTab({ workspace: "/allowed", sessionId: "a", resume: false });
+    manager.createTab({ workspace: "/other", sessionId: "b", resume: false });
+    await expect(manager.communicationRequest("a", "get_session_status", undefined, "/moved")).rejects.toThrow("unavailable");
+    let settled = false;
+    const request = manager.communicationRequest("a", "get_session_status", undefined, "/allowed").then((value) => { settled = true; return value; });
+    const packet = rig.hosts[0]!.postMessage.mock.calls.map((call) => call[0] as { type?: string; requestId?: string }).find((m) => m.type === "communication_request")!;
+    rig.hosts[1]!.emit("message", { type: "communication_response", requestId: packet.requestId, result: { sessionId: "b" } });
+    await flush(); expect(settled).toBe(false);
+    rig.hosts[0]!.emit("message", { type: "communication_response", requestId: packet.requestId, result: { sessionId: "a" } });
+    expect(await request).toEqual({ sessionId: "a" });
+  });
+  it("does not accept a host delivery addressed to another session", () => {
+    const rig = liveForkRig(); const manager = makeManager(rig.fork, windowRig().window);
+    manager.createTab({ workspace: "/allowed", sessionId: "a", resume: false });
+    const listener = vi.fn(); const unsubscribe = manager.onCommunicationDelivery(listener);
+    rig.hosts[0]!.emit("message", { type: "communication_delivery", delivery: { envelope: { recipientSessionId: "b" }, state: "acknowledged" } });
+    expect(listener).not.toHaveBeenCalled(); unsubscribe();
+  });
+});

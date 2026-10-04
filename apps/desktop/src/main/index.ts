@@ -1,3 +1,4 @@
+import { startCommunicationServer } from "./communication-server.js";
 import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs } from "./self-check.js";
 import { assertChildModel } from "../shared/child-model.js";
 /**
@@ -2469,6 +2470,15 @@ void app.whenReady().then(async () => {
     await startInitialTab({ onNoWorkspace: "stay", deliverNow: false, promptForWorkspace: false });
   } else {
     console.log("[main] opening window with zero tabs");
+  }
+
+  // Production communication is opt-in and independent of developer automation.
+  if (process.env.ANYCODE_COMMUNICATION_CONFIG && manager) {
+    try {
+      const communication = await startCommunicationServer({ manager, configFile: process.env.ANYCODE_COMMUNICATION_CONFIG, userData: app.getPath("userData") });
+      app.once("before-quit", () => { void communication.close(); });
+      console.log(`[main] communication MCP listening at ${communication.url}`);
+    } catch { console.error("[main] communication MCP startup failed; check configuration and file permissions"); }
   }
 
   // Dev-only automation channel: the compile-time gate is false in a release

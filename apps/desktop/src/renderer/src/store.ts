@@ -1,3 +1,4 @@
+import { agentMessageText } from "../../shared/communication.js";
 /**
  * Renderer zustand store. FROZEN shape (design/phase-mvp.md §5) — MVP.1
  * fixed the state contract and a skeletal reducer over HostToUiMessage so
@@ -3638,6 +3639,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               },
               ...(restore ?? {}),
             });
+            return;
+          }
+          case "agent_message": {
+            const d = message.delivery;
+            const id = `agent-message:${d.envelope.messageId}`;
+            const block: TranscriptBlock = { kind: "user_text", id, origin: "system", text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
+            set((state) => ({ transcript: [...state.transcript.filter((b) => b.id !== id && !(b.kind === "user_text" && b.text === agentMessageText(d.envelope))), block] }));
             return;
           }
           case "agent_event":
