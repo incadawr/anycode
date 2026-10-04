@@ -8,6 +8,7 @@
  */
 
 import { MessageChannel, type MessagePort as NodeMessagePort } from "node:worker_threads";
+import { randomUUID } from "node:crypto";
 import {
   AgentLoop,
   InMemoryHookRunner,
@@ -74,6 +75,70 @@ export class ScriptedModelPort implements ModelPort {
           throw new DOMException("Aborted", "AbortError");
         }
         yield event;
+      }
+    })();
+  }
+}
+
+/**
+ * TASK.117 acceptance defect 1 fixture port: a ScriptedModelPort whose FIRST
+ * step parks after a chosen event index until the test releases a deferred —
+ * the model is mid-response (start + text_start + N deltas emitted,
+ * text_end/finish NOT yet) for exactly as long as the test holds the gate.
+ * That is the unfinished-stream window a renderer reload lands inside: core
+ * appends the assistant item only per COMPLETED step, so the reconnect
+ * snapshot holds no assistant text and the partial must come from the
+ * live-stream checkpoint. The AbortSignal aborts a parked stream exactly
+ * like the scripted one. `gate` is one plain deferred the test releases.
+ */
+export class GatedModelPort implements ModelPort {
+  private step = 0;
+  readonly requests: ModelRequest[] = [];
+  /** Resolved by the test to unpark the parked stream. */
+  readonly release: () => void;
+  private readonly parked: Promise<void>;
+
+  constructor(private readonly steps: ModelStreamEvent[][], private readonly parkAfterIndex: number) {
+    let resolvePark: () => void = () => {};
+    this.parked = new Promise<void>((resolve) => {
+      resolvePark = resolve;
+    });
+    this.release = () => resolvePark();
+  }
+
+  streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+    this.requests.push(request);
+    const events = this.steps[this.step] ?? [];
+    const parkAfterIndex = this.parkAfterIndex;
+    const parked = this.parked;
+    this.step += 1;
+    const signal = request.abortSignal;
+    return (async function* () {
+      for (const [index, event] of events.entries()) {
+        if (signal?.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        yield event;
+        if (index === parkAfterIndex && signal !== undefined) {
+          await new Promise<void>((resolve, reject) => {
+            const onAbort = (): void => reject(signal.reason ?? new Error("Aborted"));
+            if (signal.aborted) {
+              onAbort();
+              return;
+            }
+            signal.addEventListener("abort", onAbort, { once: true });
+            parked.then(
+              () => {
+                signal.removeEventListener("abort", onAbort);
+                resolve();
+              },
+              (error) => {
+                signal.removeEventListener("abort", onAbort);
+                reject(error);
+              },
+            );
+          });
+        }
       }
     })();
   }
@@ -170,12 +235,28 @@ export function nodeWirePort(port: NodeMessagePort): WirePort {
 
 export interface HarnessOptions {
   steps: ModelStreamEvent[][];
+  /**
+   * TASK.117 acceptance defect 1 fixture: replaces the built-in
+   * ScriptedModelPort with a GatedModelPort that parks the FIRST step after
+   * `gatedParkAfterIndex` events until `gated.release()` — the unfinished
+   * mid-response window a reconnect must survive. Returns the port so the
+   * test can release it. Omitted -> the ordinary ScriptedModelPort
+   * (byte-identical for every existing test).
+   */
+  gated?: { parkAfterIndex: number };
   mode?: PermissionMode;
   /** Backing store for the tool handlers AND the session "after" snapshot. */
   toolFs?: FileSystemPort;
   /** fs the "before" snapshot hook reads (defaults to toolFs). */
   snapshotFs?: FileSystemPort;
   brokerTimeoutMs?: number;
+  /**
+   * TASK.117 product-defect fix: forwarded to SessionOptions.reconnectGraceMs
+   * (the close→denyAll grace window's test seam). Omitted -> Session's
+   * production default; ONLY tests inject a value to pin the grace-expiry
+   * path without real-time waits.
+   */
+  reconnectGraceMs?: number;
   /** Boot history snapshot for transcript hydration (design §3.3); empty by default. */
   bootHistory?: readonly HistoryItem[];
   /**
@@ -299,6 +380,17 @@ export interface HarnessOptions {
     id: string,
     selectedEffort: ReasoningEffort,
   ) => { model: string; reasoningEffort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] };
+  /**
+   * TASK.117 phase-1 (test-only, causal fault injection): a FileSystemPort
+   * wrapper whose Read is hooked. The hook receives the tool's REAL
+   * AbortSignal (dispatcher handlerCtx.abortSignal, linked to the turn's
+   * controller) — a test can park one call on a gate and later release it,
+   * so the OLD turn's engine stream stays mid-dispatch across cancel and
+   * the newer turn's admission (the exact stale-finalizer interleave).
+   * Omitted -> the harness fs is forwarded untouched (byte-identical for
+   * every existing test).
+   */
+  fsHook?: (readFile: (path: string) => Promise<string>, path: string, signal: AbortSignal | undefined) => Promise<string>;
   /** Replaces the built-in CoreEngine for neutral Session seam tests. */
   engine?: SessionEngine;
   /**
@@ -352,6 +444,50 @@ export interface Harness {
   received: HostToUiMessage[];
   /** Every persistence `touch` patch the Session emitted, in order (title/mode). */
   touches: { title?: string; mode?: PermissionMode }[];
+  /**
+   * TASK.117 acceptance defect 1 fixture: the GatedModelPort constructed for
+   * this harness (undefined unless `options.gated` was set). `release()`
+   * un-parks the parked first step so the turn can finish.
+   */
+  gated: GatedModelPort | undefined;
+  /**
+   * TASK.117 continuation fixture seam (test-only): installs a REAL host-side
+   * pending-prompt record through the Session's own production helpers —
+   * `pendingPrompt` (the exact slot shape `acceptUserMessage` captures at
+   * admission: owner = minted outer turnId + requestId pair) and the REAL
+   * `pushPendingPrompt` wire push (core-gated, sendDirect) — WITHOUT running
+   * a turn. That is the genuine host state a crash-to-rehost window leaves
+   * behind when the pre-rehost terminal never ran its own clear and a fresh
+   * host picks the session up `continuationPending`. Called BEFORE a renderer
+   * handshake the seed push is lost with no recovery (sendDirect, no port) —
+   * exactly like a genuine admission accepted while no renderer is attached,
+   * and every later ui_ready re-pushes the occupied slot as a payload-bearing
+   * pending_prompt over the real wire. Called AFTER a handshake the seed's
+   * own REAL push is delivered on the wire immediately (the port is
+   * attached) — the TASK.117 continuation fixture uses this window so a real
+   * store can render the stale state BEFORE any continuation entry runs.
+   * No-op on foreign engines or when a turn is live (mirrors the production
+   * capture gates).
+   */
+  seedPendingPrompt(requestId: string, text: string): void;
+  /**
+   * TASK.117 continuation fixture seam (test-only): read-only SNAPSHOT of
+   * the REAL host pending slot (`Session.pendingPrompt`) — the exact record
+   * the production admission path captured. Copy only; cannot mutate.
+   */
+  pendingPromptSlot(): { turnId: string; requestId: string; text: string } | null;
+  /**
+   * TASK.117 deferred-continuation seam (test-only): arms the DURABLE
+   * continuation claim AFTER construction — the state a host boot derives
+   * from the persisted terminal marker and passes as `continuationPending`.
+   * Because the Session was built WITHOUT the claim, the FIRST ui_ready
+   * (physical attach / metadata delivery) cannot start a continuation;
+   * once armed, the NEXT ui_ready consumes the claim through the REAL
+   * production branch (route()'s continuationPending tail →
+   * startContinuation → stale-pending clear → REAL core loop). Honest
+   * nonpublic access confined to this seam; the entry is never simulated.
+   */
+  armContinuation(): void;
   /** Posts a UiToHostMessage from the UI side to the host. */
   send(message: UiToHostMessage): void;
   /** Resolves with the first received message matching the predicate (rejects on timeout). */
@@ -426,15 +562,18 @@ export function createHarness(options: HarnessOptions): Harness {
         : () => (typeof options.imageInputEnabled === "boolean" ? options.imageInputEnabled : true),
   };
 
+  const gatedPort = options.gated ? new GatedModelPort(options.steps, options.gated.parkAfterIndex) : undefined;
   const config: AgentLoopConfig = {
-    modelPort: new ScriptedModelPort(options.steps),
+    modelPort: gatedPort ?? new ScriptedModelPort(options.steps),
     registry,
     hooks,
     permissionEngine: new RuleAwarePermissionEngine(new ModePermissionEngine(), rules),
     permissionBroker: broker,
     mode: options.mode ?? "build",
     ports: {
-      fs: toolFs,
+      fs: options.fsHook
+        ? wrapFsWithHook(toolFs, options.fsHook)
+        : toolFs,
       exec: {} as AgentLoopConfig["ports"]["exec"],
       http: new NodeHttpAdapter(),
       todos: new InMemoryTodoStore(),
@@ -451,6 +590,18 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(planExit ?? {}),
   };
   const loop = new AgentLoop(config);
+  // TASK.117: mirror the REAL host boot seam (host/index.ts's
+  // `ConversationHistory({ initial })`) — a resumed session's persisted rows
+  // seed the loop's history, so `engine.historyItems()` and the Session's
+  // `bootHistory` option are THE SAME items by construction. The harness
+  // used to leave the loop empty and hand `bootHistory` to Session alone,
+  // which TASK.117's rebuild-on-ui_ready exposed as an impossible state (a
+  // fresh snapshot read from an engine whose history never grew). Seeding
+  // here keeps every existing boot-history test meaningful with ZERO
+  // per-test edits — the same invariant production maintains.
+  if (options.bootHistory !== undefined && options.engine === undefined) {
+    loop.history.replaceAll([...options.bootHistory]);
+  }
   const engine = options.engine ?? new CoreEngine({
     loop,
     config,
@@ -496,6 +647,7 @@ export function createHarness(options: HarnessOptions): Harness {
       : {}),
     ...(options.envStatus ? { envStatus: options.envStatus } : {}),
     ...(options.checkpointsSeam ? { checkpoints: options.checkpointsSeam } : {}),
+    ...(options.reconnectGraceMs !== undefined ? { reconnectGraceMs: options.reconnectGraceMs } : {}),
     ...(options.imageInputEnabled !== null ? { imageInputEnabled: media.imageInputEnabled } : {}),
     ...(options.imageFallbackAvailable !== undefined
       ? {
@@ -562,6 +714,30 @@ export function createHarness(options: HarnessOptions): Harness {
     rules,
     received,
     touches,
+    gated: gatedPort,
+    seedPendingPrompt(requestId: string, text: string): void {
+      // Test-only nonpublic access (narrow cast): the harness drives the REAL
+      // production capture/push path — never a fabricated wire message.
+      const internal = session as unknown as {
+        engine: { id: string };
+        pendingPrompt: { turnId: string; requestId: string; text: string } | null;
+        busy: boolean;
+        pushPendingPrompt(): void;
+      };
+      if (internal.engine.id !== "core" || internal.pendingPrompt !== null || internal.busy) {
+        return;
+      }
+      internal.pendingPrompt = { turnId: randomUUID(), requestId, text };
+      internal.pushPendingPrompt();
+    },
+    pendingPromptSlot(): { turnId: string; requestId: string; text: string } | null {
+      const internal = session as unknown as { pendingPrompt: { turnId: string; requestId: string; text: string } | null };
+      return internal.pendingPrompt === null ? null : { ...internal.pendingPrompt };
+    },
+    armContinuation(): void {
+      const internal = session as unknown as { continuationPending: boolean };
+      internal.continuationPending = true;
+    },
     send(message: UiToHostMessage): void {
       uiPort.postMessage(message);
     },
@@ -602,6 +778,29 @@ export function createHarness(options: HarnessOptions): Harness {
 }
 
 // ── stream-event builders (keep scripted steps terse and readable) ──────────
+
+/**
+ * TASK.117 phase-1 (test-only): wraps a FileSystemPort so Read's file fetch
+ * funnels through the injected hook (with the tool call's real AbortSignal).
+ * Every other method forwards verbatim.
+ */
+function wrapFsWithHook(
+  fs: FileSystemPort,
+  hook: NonNullable<HarnessOptions["fsHook"]>,
+): FileSystemPort {
+  const readFile = (path: string): Promise<string> => fs.readFile(path);
+  return {
+    // The extra `signal` arg is ignored by the underlying port (the
+    // dispatcher hands ctx.abortSignal positionally; FileSystemPort
+    // implementations take (path) and simply ignore extras).
+    readFile: ((path: string, signal?: AbortSignal) => hook(readFile, path, signal)) as FileSystemPort["readFile"],
+    writeFile: (path: string, content: string) => fs.writeFile(path, content),
+    stat: (path: string) => fs.stat(path),
+    exists: (path: string) => fs.exists(path),
+    mkdir: (path: string) => fs.mkdir(path),
+    readdir: (path: string) => fs.readdir(path),
+  };
+}
 
 export function textStep(text: string): ModelStreamEvent[] {
   return [

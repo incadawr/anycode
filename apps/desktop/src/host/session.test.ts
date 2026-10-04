@@ -93,6 +93,7 @@ import { IpcPermissionBroker } from "./permission-broker.js";
 import {
   MANUAL_COMPACTION_TURN_ID,
   Outbound,
+  REPLAY_BUFFER_CAP,
   Session,
   tapChildPermissions,
   type ChildProgressReport,
@@ -2082,6 +2083,103 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
   });
 });
 
+describe("Session — session_checkpoint (TASK.117 control/accounting checkpoint)", () => {
+  type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
+  const isCheckpoint = (m: HostToUiMessage): m is Of<"session_checkpoint"> => m.type === "session_checkpoint";
+
+  const usageStep = (usage: { inputTokens: number; outputTokens: number; totalTokens: number }, text: string): ModelStreamEvent[] => [
+    { type: "start" },
+    { type: "text_start", id: "t1" },
+    { type: "text_delta", id: "t1", text },
+    { type: "text_end", id: "t1" },
+    { type: "finish", finishReason: "stop", usage },
+  ];
+
+  it("core: regenerated on EVERY ui_ready (sendDirect), carrying cumulative finish totals + counted keys + latest context_usage; absent while nothing was captured", async () => {
+    const h = createHarness({
+      steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      // Before any turn: a checkpoint exists (core push is unconditional)
+      // but carries NO captured fields — an older renderer changes nothing.
+      const bare = await h.waitFor(isCheckpoint);
+      expect(bare.sessionTokens).toBeUndefined();
+      expect(bare.contextUsage).toBeUndefined();
+      expect(bare.permission).toBeUndefined();
+
+      h.send({ type: "user_message", requestId: "r1", text: "go" });
+      await h.waitFor((m): m is HostToUiMessage => m.type === "agent_event" && m.event.type === "loop_end");
+      await h.flush();
+
+      // Reconnect: the second checkpoint carries the emission-time totals
+      // and the counted fold key of the finished step.
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      const checkpoints = await (async () => {
+        await h.waitUntil(() => h.received.slice(before).some(isCheckpoint));
+        return h.received.slice(before).filter(isCheckpoint);
+      })();
+      expect(checkpoints).toHaveLength(1);
+      expect(checkpoints[0]?.sessionTokens).toEqual({ input: 10, output: 4, total: 14 });
+      expect(checkpoints[0]?.countedSteps).toBeDefined();
+      expect(checkpoints[0]?.countedSteps?.length).toBe(1);
+      // The counted key is the real fold key of the finished step.
+      const turnStarted = h.received.find((m) => m.type === "turn_started");
+      expect(turnStarted).toBeDefined();
+      expect(checkpoints[0]?.countedSteps?.[0]).toBe(`${turnStarted!.turnId}:1`);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("foreign engine: NO session_checkpoint is ever sent (native compat — REPLACE semantics of engine_session_tokens ride the ring untouched)", async () => {
+    const history: HistoryItem[] = [];
+    const engine: SessionEngine = {
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: false,
+        costAccounting: false,
+        supportsModelSelection: false,
+        supportsReasoningEffort: false,
+        supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+      mode: () => "build",
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(input: string): AsyncIterable<AgentEvent> {
+        history.push({ id: `i-${history.length}`, createdAt: Date.now(), message: { role: "user", content: input }, tokenEstimate: 1, kind: "normal" });
+        yield { type: "turn_start", turn: 1 };
+        yield { type: "finish", finishReason: "stop", usage: {} };
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      },
+      historyItems: () => [...history],
+      dispose: async () => {},
+    };
+    const h = createHarness({ steps: [], engine, bootHistory: [] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "native go" });
+      await h.waitFor((m): m is HostToUiMessage => m.type === "agent_event" && m.event.type === "loop_end");
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length === 2);
+      expect(h.received.some(isCheckpoint)).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+});
+
 describe("Session — permission allow + snapshots", () => {
   it("allow runs the tool and emits before/after file snapshots", async () => {
     const toolFs = new MemFs();
@@ -2149,7 +2247,18 @@ describe("Session — snapshot observer is fail-closed", () => {
 
 describe("Session — disconnect", () => {
   it("closing the UI port force-denies parked asks (disconnect)", async () => {
-    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    // TASK.117 (2026-10-04 product defect): the deny is no longer immediate —
+    // a renderer reload's close must not destroy the parked ask before main
+    // re-posts the successor port (did-finish-load), so the close arms a
+    // bounded grace window instead. This test pins the DEAD-session tail of
+    // that contract: no successor ever binds, the window expires, and the
+    // ask fails closed exactly as before (origin "disconnect"). A short
+    // injected window keeps the expiry deterministic; the reload-retention
+    // side of the contract is pinned by host/session-rebind.test.ts.
+    const h = createHarness({
+      steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
+      reconnectGraceMs: 50,
+    });
     const denySpy = vi.spyOn(h.broker, "denyAll");
     try {
       h.send({ type: "ui_ready" });
@@ -2159,10 +2268,17 @@ describe("Session — disconnect", () => {
       await h.waitFor(isPermissionRequest);
 
       h.close();
+      // Not settled within the window while a reconnect could still be in
+      // flight…
       await h.flush();
       await h.flush();
+      expect(denySpy).not.toHaveBeenCalled();
 
-      expect(denySpy).toHaveBeenCalledWith("ui disconnected", "disconnect");
+      // …and force-denied once the window expires with no successor.
+      await vi.waitFor(() => {
+        expect(denySpy).toHaveBeenCalledWith("ui disconnected", "disconnect");
+      }, 2_000);
+      expect(h.broker.pendingCount).toBe(0);
     } finally {
       h.close();
     }
@@ -2201,6 +2317,61 @@ describe("Session — replay", () => {
         .filter((m): m is Of<"agent_event"> => m.type === "agent_event")
         .map((e) => e.event.type);
       expect(replayedAgentTypes).toEqual(firstAgentTypes);
+    } finally {
+      h.close();
+    }
+  });
+
+  // TASK.117: a reconnecting renderer must get a session_history snapshot
+  // REBUILT from the engine's current durable history, not the boot-frozen
+  // one — otherwise, once the replay ring has overflowed (older messages
+  // shifted off), the delta "boot -> now" is unreachable and the renderer
+  // shows a stale host-start transcript forever.
+  it("TASK.117: after the replay ring overflows, a second ui_ready's session_history carries the LATEST engine history, emitted exactly once per ui_ready", async () => {
+    const bootHistory: HistoryItem[] = [
+      { id: "boot-1", createdAt: 1, message: { role: "user", content: "boot turn" }, tokenEstimate: 3, kind: "normal" },
+    ];
+    const h = createHarness({ steps: [textStep("latest output"), finishStep()], bootHistory });
+    // Same resume-hydration mirror as above: the real host seeds the loop
+    // history from persistence; the harness CoreEngine starts empty.
+    h.engine.replaceHistory!(bootHistory);
+    try {
+      h.send({ type: "ui_ready" });
+      const firstHandshake = await h.waitFor(isSessionHistory);
+      expect(firstHandshake.items.map((i) => i.id)).toEqual(["boot-1"]);
+
+      // Run a real turn so the engine's durable history grows past the boot
+      // snapshot...
+      h.send({ type: "user_message", requestId: "r1", text: "hi" });
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.flush();
+      const liveItems = h.engine.historyItems();
+      expect(liveItems.length).toBeGreaterThan(1);
+
+      // ...then overflow the replay ring so the live turn's buffered wire
+      // messages are unreachable via replay() (cap + headroom for the
+      // handshake/status messages buffered since).
+      for (let i = 0; i < REPLAY_BUFFER_CAP + 1_000; i++) {
+        h.outbound.emit({ type: "title_changed", title: `flood-${i}` });
+      }
+
+      // Reconnect: everything buffered is gone from the ring; only a FRESH
+      // snapshot can carry the live history now.
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some(isSessionHistory));
+
+      const postFlood = h.received.slice(before);
+      const handshakes = postFlood.filter(isSessionHistory);
+      expect(handshakes).toHaveLength(1);
+      // Ordering: host_ready -> session_history -> (empty-ish) replay.
+      expect(postFlood.findIndex(isHostReady)).toBeGreaterThanOrEqual(0);
+      expect(postFlood.findIndex(isHostReady)).toBeLessThan(postFlood.findIndex(isSessionHistory));
+
+      const secondHandshake = handshakes[0] as Of<"session_history">;
+      expect(secondHandshake.items.map((i) => i.id)).toEqual(liveItems.map((i) => i.id));
+      expect(secondHandshake.items.at(-1)?.id).toBe(liveItems.at(-1)?.id);
+      expect(secondHandshake.items.some((i) => i.id === "boot-1")).toBe(true);
     } finally {
       h.close();
     }
@@ -4848,12 +5019,17 @@ describe("Session — child mode: startProgrammaticTurn (CUT-S2 §2.6.3)", () =>
   });
 });
 
-describe("Session — child mode: sessionHistory is frozen at construction (CUT-S2 §10.4, mirrors CUT-S1 §9.1 along the child path)", () => {
-  it("a live startProgrammaticTurn's events never leak into a later ui_ready's session_history handshake", async () => {
+describe("Session — child mode: sessionHistory is rebuilt fresh on every ui_ready (TASK.117, supersedes the old CUT-S2 §10.4 frozen-snapshot rule)", () => {
+  it("a live startProgrammaticTurn's history items DO appear in a later ui_ready's session_history handshake", async () => {
     const bootHistory: HistoryItem[] = [
       { id: "h1", createdAt: 1, message: { role: "user", content: "earlier turn" }, tokenEstimate: 3, kind: "normal" },
     ];
     const h = createChildHarness({ steps: [textStep("live output")], bootHistory });
+    // Mirror the real resume wiring: host/index.ts seeds the loop history
+    // (`ConversationHistory({ initial })`) so `engine.historyItems()` returns
+    // the boot snapshot on resume — the fake CoreEngine starts empty, so seed
+    // it the same way Session's real engine would have been hydrated.
+    h.engine.replaceHistory!(bootHistory);
     try {
       h.send({ type: "ui_ready" });
       const firstHandshake = await h.waitFor(isSessionHistory);
@@ -4867,12 +5043,18 @@ describe("Session — child mode: sessionHistory is frozen at construction (CUT-
       await h.waitUntil(() => h.received.filter(isSessionHistory).length === 2);
       const secondHandshake = h.received.filter(isSessionHistory).at(-1) as Of<"session_history">;
 
-      // The turn that just ran produced real agent_events (visible in
-      // `received` via agent_event messages), but session_history is the
-      // FROZEN boot snapshot built once at construction — it must never grow
-      // from a live turn's events, on neither handshake.
-      expect(secondHandshake.items).toEqual(firstHandshake.items);
-      expect(secondHandshake.items).toHaveLength(1);
+      // TASK.117: session_history is rebuilt from the engine's CURRENT durable
+      // history on every ui_ready — the boot snapshot is no longer frozen at
+      // construction. The turn that just ran appended real history items
+      // (visible in `received` via agent_event messages), so the second
+      // handshake must carry them plus the original boot item, in order.
+      const currentItems = h.engine.historyItems();
+      expect(currentItems.length).toBeGreaterThan(1);
+      expect(secondHandshake.items).toHaveLength(currentItems.length);
+      expect(secondHandshake.items[0]).toMatchObject({ id: "h1" });
+      for (const [i, item] of currentItems.entries()) {
+        expect(secondHandshake.items[i]?.id).toBe(item.id);
+      }
       expect(h.received.some((m) => m.type === "agent_event" && m.event.type === "text_delta")).toBe(true);
     } finally {
       h.close();
@@ -5074,6 +5256,10 @@ describe("Session — TASK.145 срез 2: pendingChildReports seam + origin plu
       },
     ];
     const h = createHarness({ steps: [finishStep()], bootHistory });
+    // The real host resume path seeds the loop history from persistence
+    // (host/index.ts `ConversationHistory({ initial })`), so `historyItems()`
+    // is non-empty at the first ui_ready — mirror that here.
+    h.engine.replaceHistory!(bootHistory);
     try {
       h.send({ type: "ui_ready" });
       const sessionHistory = await h.waitFor(isSessionHistory);
