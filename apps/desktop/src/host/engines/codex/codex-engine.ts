@@ -958,6 +958,27 @@ export class CodexEngine implements SessionEngine {
     return settings.notices.splice(0, settings.notices.length);
   }
 
+  steeringStatus(): { supported: boolean; ready: boolean; nativeTurnId?: string } {
+    return { supported: true, ready: this.activeTurn !== null && !this.disposed && this.terminalError === null, ...(this.activeTurn ? { nativeTurnId: this.activeTurn.turnId } : {}) };
+  }
+
+  async steer(input: string): Promise<{ turnId: string }> {
+    const active = this.activeTurn;
+    if (active === null || this.disposed || this.terminalError !== null) throw new Error("No active Codex turn; use next_turn");
+    let result: { turnId?: string };
+    try { result = await this.client.request<{ turnId?: string }>("turn/steer", {
+      threadId: this.threadId,
+      expectedTurnId: active.turnId,
+      input: [{ type: "text", text: input }],
+    }, { timeoutMs: CODEX_TURN_START_TIMEOUT_MS });
+    } catch (error) {
+      if (typeof (error as { code?: unknown }).code === "number") throw error;
+      throw Object.assign(new Error("Codex steering transport failed; delivery unknown"), { deliveryState: "unknown" });
+    }
+    if (result.turnId !== active.turnId) throw Object.assign(new Error("Codex steering acknowledgement did not match expected turn; delivery unknown"), { deliveryState: "unknown" });
+    return { turnId: active.turnId };
+  }
+
   async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
     const turn = ++this.turnNumber;
     if (this.terminalError !== null || this.disposed) {

@@ -17,6 +17,8 @@ It intentionally differs from local `working-docs/`:
 - [Codex onboarding](codex-onboarding.md) — how a user enables the Codex
   Agent engine from Settings (no env var), and the `ANYCODE_CODEX_BIN`
   developer/diagnostic override.
+- [Agent communication](agent-communication.md) — opt-in production MCP, scoped
+  session messages and native Codex steering (unreleased).
 - [Release policy](release.md) — versioning, alpha/beta stages, and the changelog.
 
 ## Basic change cycle

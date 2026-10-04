@@ -3303,6 +3303,7 @@ async function boot(): Promise<void> {
 }
 
 const ready = boot();
+void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 
 async function handleShutdown(): Promise<void> {
   await ready;
@@ -3434,6 +3435,27 @@ process.parentPort.on("message", (event) => {
     return;
   }
 
+  const communication = event.data as { type?: string; requestId?: string; operation?: string; payload?: unknown } | undefined;
+  if (communication?.type === "communication_request") {
+    void ready.then(async () => {
+      try {
+        if (!session) throw new Error("Session not ready");
+        let result: unknown;
+        switch (communication.operation) {
+          case "get_session_result": result = session.communicationResult(); break;
+          case "get_session_status": result = session.communicationStatus(); break;
+          case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope); break;
+          case "restore_agent_messages": session.restoreAgentMessages(communication.payload as import("../shared/communication.js").AgentDelivery[]); result = {}; break;
+          case "get_message_status": result = session.agentMessageStatus(String(communication.payload)); break;
+          default: throw new Error("Unsupported communication operation");
+        }
+        process.parentPort.postMessage({ type: "communication_response", requestId: communication.requestId, result });
+      } catch (error) {
+        process.parentPort.postMessage({ type: "communication_response", requestId: communication.requestId, error: describeError(error) });
+      }
+    });
+    return;
+  }
   const data = event.data as { type?: unknown } | undefined;
   if (data && data.type === CREDENTIAL_RESPONSE_TYPE) {
     const response = data as CredentialResponse;
