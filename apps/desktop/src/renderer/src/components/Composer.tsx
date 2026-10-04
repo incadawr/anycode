@@ -1608,6 +1608,13 @@ export function Composer() {
                   <ArrowUp />
                 </button>
               )}
+              {engine?.id === "codex" && text.trim() && attachedImages.length === 0 && (
+                <button type="button" className="composer-send" aria-label="Steer active Codex turn" title="Steer active turn; acknowledgement does not prove model application" onClick={() => {
+                  sendToHost({ type: "steer_message", requestId: crypto.randomUUID(), text: reconstitutePasteMarkers(text, pasteBlocks) });
+                  setText("");
+                  setPasteBlocks([]);
+                }}><ArrowUp /></button>
+              )}
               <button
                 type="button"
                 className="composer-stop"

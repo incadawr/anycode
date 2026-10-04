@@ -1,3 +1,4 @@
+import { agentMessageText } from "../../shared/communication.js";
 /**
  * Renderer zustand store. FROZEN shape (design/phase-mvp.md §5) — MVP.1
  * fixed the state contract and a skeletal reducer over HostToUiMessage so
@@ -1043,6 +1044,17 @@ export interface DesktopState {
   lastErrorRetry: ErrorRetryMeta | null;
   /** TASK.33 W8 armed Try-again offer; see `RetryOffer` doc. Part of the session slice. */
   retry: RetryOffer | null;
+  /**
+   * TASK.117: the host-pushed in-flight prompt of the CURRENT outer turn
+   * (`pending_prompt` wire message, core-only). Rendered as a REAL pending
+   * bubble block (`pending:{turnId}`, appended by the pending_prompt handler
+   * itself) only while no durable user item (turnId, step 0) exists — the
+   * hydrated user_text block takes over the rendering the moment the frame
+   * is persisted. Cleared by every empty `pending_prompt` push (host clears
+   * at every terminal: teardown, cancel, shutdown, rewind, continuation) and
+   * by the session-slice reset. Part of the session slice.
+   */
+  pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null;
 
   /**
    * Prompt queue (slice P7.14 · F15): FIFO of prompts the user entered while a
@@ -1231,6 +1243,16 @@ interface SessionSlice {
   lastErrorRetry: ErrorRetryMeta | null;
   /** TASK.33 W8 armed Try-again offer; see `RetryOffer` doc. */
   retry: RetryOffer | null;
+  /**
+   * TASK.117: the host-pushed in-flight prompt of the CURRENT outer turn
+   * (`pending_prompt` wire message, core-only). Rendered as a pending bubble
+   * only while no durable user item (turnId, step 0) exists — the hydrated
+   * user_text block takes over the rendering the moment the frame is
+   * persisted. Cleared by every empty `pending_prompt` push (host clears at
+   * every terminal: teardown, cancel, shutdown, rewind success, continuation)
+   * and by the session-slice reset.
+   */
+  pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null;
 }
 
 function initialSessionSlice(): SessionSlice {
@@ -1260,6 +1282,7 @@ function initialSessionSlice(): SessionSlice {
     lastSentMessage: null,
     lastErrorRetry: null,
     retry: null,
+    pendingPrompt: null,
   };
 }
 
@@ -1300,8 +1323,16 @@ export interface FrameScheduler {
 
 const defaultScheduler: FrameScheduler = {
   schedule(flush) {
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(flush);
+    // TASK.117 boundary fix: `requestAnimationFrame` is reached through
+    // `globalThis` with a structural cast, not a bare DOM-global identifier —
+    // this module is imported by host-side integration tests
+    // (session-reconnect.test.ts) whose tsconfig (node lib, no DOM) must
+    // still typecheck. Runtime behavior in the renderer is byte-identical
+    // (the global resolves to the very same function), and the non-browser
+    // fallback below is unchanged.
+    const raf = (globalThis as { requestAnimationFrame?: (cb: () => void) => number }).requestAnimationFrame;
+    if (typeof raf === "function") {
+      raf(flush);
     } else {
       // Non-browser fallback (shouldn't happen in the renderer at runtime,
       // but keeps this module importable from a plain Node test context).
@@ -1461,9 +1492,266 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   // Maps the raw (step-scoped) stream id to the minted transcript block id
   // for the currently-open block, so text_delta/reasoning_delta know which
   // block to buffer into. Cleared on reset/respawn (drainPendingDeltas).
+  // TASK.117: keyed by the STREAM SCOPE `${turnId}:${step}:${streamId}` —
+  // SDK stream ids are REUSED across steps of one outer turn, so a bare-id
+  // key would route a later step's deltas into the earlier step's block.
   const openStreamBlocks = new Map<string, string>();
 
+  function streamScope(turnId: string, step: number | undefined, streamId: string): string {
+    return `${turnId}:${step ?? "_"}:${streamId}`;
+  }
+
+  // TASK.117 acceptance defect 1: blocks re-opened from a session_checkpoint
+  // `streams` entry, carrying the REMAINING replay budget — how many chars
+  // of this stream's delta text the replay ring still holds (host-computed
+  // `replayChars`, an exact SUFFIX length; the ring evicts from the front,
+  // so renderer-side prefix matching cannot recognize it). Each replayed
+  // delta consumes min(its length, budget); once the budget reaches 0 the
+  // stream is past the checkpoint tail and deltas append unconditionally.
+  // Entries live only while the block is open.
+  const checkpointStreams = new Map<string, number>();
+
+  // ── TASK.117 core-only typed wire-state checkpoint (fold) ───────────────
+  // A RECONNECT is: host_ready(reset) -> session_history(fresh durable) ->
+  // pending_prompt -> replay(ENTIRE ring). Core persists a user frame BEFORE
+  // generation and an assistant item BEFORE tool dispatch, so ring events for
+  // already-persisted turns replay ON TOP of hydrated blocks — with DIFFERENT
+  // block ids — and every reconnect duplicated the persisted transcript (the
+  // original TASK.117 symptom class). The fix is a fold checkpoint keyed by
+  // the wire's causal identity `${turnId}:${step}` (agent_event.step +
+  // WireHistoryItem.turnId/step — both core-only; foreign engines and legacy
+  // hosts leave both absent and NOTHING here engages):
+  //   • hydration registers every stamped item as durable coverage;
+  //   • every LIVE core agent_event first FOLDS the current wire state into
+  //     the checkpoint (BEFORE any cap/cut could drop it), then suppresses
+  //     the transcript-materializing handler iff that (turnId, step) is
+  //     already durably covered — replayed duplicates fold to no-ops while
+  //     their tool_result-equivalent patches still land ONCE;
+  //   • a turn is "covered" only when the terminal item for that step is
+  //     durable: assistant step S is covered iff an assistant item with that
+  //     (turnId, step) exists; a user frame (turnId, 0) covers only itself.
+  // The checkpoint is REBUILT (not merged) from each fresh session_history
+  // and cleared on every transcript-discard path (reset/rewind), so a cut
+  // history can never leave stale suppression shadowing later turns.
+  interface FoldStepState {
+    /** Ring/live tool_call inputs seen for this step, keyed by toolCallId (latest wins — replay is idempotent). */
+    readonly toolCalls: Map<string, { toolName: string; input: unknown }>;
+    /** toolCallIds whose RESULT is durably persisted (history tool item or a live tool_result folded once). */
+    readonly durableResults: Set<string>;
+    /** Session tokens accumulated from `finish` events folded for this step (exactly one finish per step). */
+    finishUsage: TokenUsage | null;
+    /** TASK.117 phase-1 defect 1: a finish's usage already applied to sessionTokens — a replayed duplicate must never re-arm it. */
+    finishApplied: boolean;
+    /** Latest context_usage reading folded for this step (session-scoped value; latest wins). */
+    contextUsage: ContextUsage | null;
+    /** Pending permission request id live at this step (folded from permission_request/settled). */
+    permissionRequestId: string | null;
+    /** Pending subagent attention ids (subagent_attention true) at fold time. */
+    readonly subagentWaiting: Set<string>;
+  }
+  const foldSteps = new Map<string, FoldStepState>();
+  /** Durable (turnId, step) pairs registered by the latest session_history. */
+  const durableSteps = new Set<string>();
+  /** Durable toolCallId -> result status/modelText/presentation, from hydrated tool items. */
+  const durableToolResults = new Map<string, { status: string; modelText: string }>();
+  /**
+   * TASK.117 phase-1 defect 2: whether the causal/durable fold is engaged at
+   * all. It is a CORE-engine contract — `host_ready` carries NO `engine`
+   * block for a core host (EnginePresentation is "present only for a
+   * non-core engine", protocol.ts), so a store that just saw an `engine`
+   * block is talking to a native Codex/Claude host. For such a host the
+   * fold must never engage: its FIXED boot snapshot may contain items that
+   * ALREADY carry {turnId, step} stamps (a resumed native session hydrated
+   * through the shared projection), and treating those as durable coverage
+   * would (a) suppress a genuinely NEW live/replayed tool_result whose id
+   * collides with a boot item's, and (b) key suppression to causal stamps
+   * the native host never emits on its own events (its agent_events carry no
+   * step). Engine identity comes from the handshake discriminator — never
+   * from the ABSENCE of metadata on individual events (a foreign engine's
+   * events legitimately lack stamps without being anyone's durable record).
+   * Cleared by performReset/clearFoldCheckpoint state resets; every host_ready
+   * re-derives it before any session_history/agent_event can land.
+   */
+  let causalFoldEngaged = false;
+  /**
+   * TASK.117 checkpoint: fold keys (`${turnId}:${step}`) whose finish usage
+   * is ALREADY INCLUDED in the sessionTokens value installed by the last
+   * `session_checkpoint` REPLACE (host-side emission-time accumulation, the
+   * `countedSteps` wire field). The finish branches of onAgentEvent consult
+   * this set EXACTLY — a replayed finish whose key is a member adds
+   * NOTHING (consumed), whether the step is durable-covered or not (core
+   * yields finish BEFORE history.append makes the step durable, so an
+   * uncovered replay is a real window); a LIVE finish for a key NOT in the
+   * set was emitted after the checkpoint push and applies normally.
+   * Cleared with the rest of the fold checkpoint; re-armed by each
+   * session_checkpoint that carries countedSteps.
+   */
+  const checkpointCountedSteps = new Set<string>();
+  /** TASK.117: outer turnIds whose loop_end footer already landed (once-per-turn guard against replay duplicates). */
+  const loopEndEmitted = new Set<string>();
+  /**
+   * TASK.117 acceptance defect 2: the TRUNCATED-snapshot cut boundary — per
+   * turnId, the oldest step the latest session_history still covers. Ring
+   * events with a causal key STRICTLY OLDER than the boundary replayed into
+   * a fresh store would RESURRECT content the cut deliberately discarded
+   * (the "replay content outside cut reappears" defect). Null when the
+   * latest snapshot was NOT truncated (no cut — nothing is below it);
+   * rebuilt on every hydrateSessionHistory; cleared with the fold
+   * checkpoint. Only consulted for core causal keys, never for legacy /
+   * unstamped events.
+   */
+  let historyCutBoundary: Map<string, number> | null = null;
+  /**
+   * TASK.117 acceptance defect 2: the live outer turn id asserted by the
+   * last session_checkpoint (`liveTurnId`, host-authoritative, sendDirect).
+   * The cut-replay guard's absent-turnId branch exempts EXACTLY this id —
+   * never `get().turn.turnId`, which a ring-replayed `turn_started` for a
+   * CUT turn re-sets mid-replay. Cleared with the fold checkpoint; re-armed
+   * by every session_checkpoint (the cascade delivers it before replay()).
+   */
+  let handshakeLiveTurnId: string | null = null;
+  /**
+   * TASK.117 acceptance defect 1 (strict ownership vs new turns): the turns
+   * the last TRUNCATED session_history cut away entirely, as listed by the
+   * last session_checkpoint's `cutTurnIds` (host-computed at push time from
+   * the same history the snapshot was built from). The below-cut guard's
+   * absent-turnId branch suppresses EXACTLY these ids — an unknown id (a
+   * genuinely NEW turn after the handshake) renders. Null when the last
+   * checkpoint carried no list (untruncated history or a legacy host) — the
+   * branch then falls back to the legacy suppress-unless-live rule. An
+   * AUTHORITATIVE EMPTY set (a truncated snapshot whose cut landed WITHIN
+   * its turns — no whole turnId vanished) is distinct from null: it lists
+   * nothing, so every absent-boundary turnId renders.
+   */
+  let handshakeCutTurnIds: Set<string> | null = null;
+
+  /**
+   * TASK.117 pure filter: transcript WITHOUT a turn's pending-prompt bubble
+   * block (id `pending:{turnId}`). Module-scope-pure (no get/set) so both
+   * the fold helpers and the create() closure can use it.
+   */
+  function stripPendingBubble(transcript: readonly TranscriptBlock[], turnId: string): TranscriptBlock[] {
+    const bubbleId = `pending:${turnId}`;
+    return transcript.some((block) => block.id === bubbleId)
+      ? transcript.filter((block) => block.id !== bubbleId)
+      : (transcript as TranscriptBlock[]);
+  }
+
+  function foldKey(turnId: string | undefined, step: number | undefined): string | null {
+    if (turnId === undefined || step === undefined) {
+      return null;
+    }
+    return `${turnId}:${step}`;
+  }
+
+  function foldStepState(key: string): FoldStepState {
+    let state = foldSteps.get(key);
+    if (state === undefined) {
+      state = {
+        toolCalls: new Map(),
+        durableResults: new Set(),
+        finishUsage: null,
+        finishApplied: false,
+        contextUsage: null,
+        permissionRequestId: null,
+        subagentWaiting: new Set(),
+      };
+      foldSteps.set(key, state);
+    }
+    return state;
+  }
+
+  /** Whether a (turnId, step) is durably covered by the latest session_history. */
+  function stepCovered(turnId: string | undefined, step: number | undefined): boolean {
+    if (!causalFoldEngaged) {
+      // TASK.117 phase-1 defect 2: no coverage without the core fold — a
+      // native host's events are never suppressed by boot-item stamps.
+      return false;
+    }
+    const key = foldKey(turnId, step);
+    return key !== null && durableSteps.has(key);
+  }
+
+  function clearFoldCheckpoint(): void {
+    foldSteps.clear();
+    durableSteps.clear();
+    durableToolResults.clear();
+    loopEndEmitted.clear();
+    // TASK.117 phase-1 defect 2: a discarded transcript has no durable
+    // coverage — the fold goes dormant until the next session_history
+    // (which re-derives engagement from the handshake's engine block).
+    causalFoldEngaged = false;
+    // TASK.117 checkpoint: the counted-key set dies with the coverage it
+    // guards — the next session_checkpoint re-arms it after its REPLACE.
+    checkpointCountedSteps.clear();
+    // TASK.117 acceptance defect 2: the cut boundary dies with the snapshot
+    // it was derived from, and the live-turn assertion with its connection.
+    historyCutBoundary = null;
+    handshakeLiveTurnId = null;
+    handshakeCutTurnIds = null;
+  }
+
   return create<DesktopState>()((set, get) => {
+      /**
+   * TASK.117 acceptance defect 1: guards one streamed delta against a
+   * checkpoint-reopened block. Returns false when the delta is RING-REPLAY
+   * and the stream's replay budget still covers it (the host shipped the
+   * EXACT suffix length in `streams[].replayChars` — computed at checkpoint
+   * push time from the ring the replay is about to deliver), in which case
+   * the caller must NOT append it; the budget is decremented by the consumed
+   * length. Once the budget is exhausted the stream is past the checkpoint
+   * tail (live) and every delta appends unconditionally. create()-closure
+   * scope: mutates only the closure-local budget map.
+   */
+  function applyStreamDelta(kind: "text" | "reasoning", blockId: string, text: string): boolean {
+    const remaining = checkpointStreams.get(blockId);
+    if (remaining === undefined) {
+      return true; // an ordinary live stream — nothing to dedupe against.
+    }
+    if (remaining <= 0) {
+      checkpointStreams.delete(blockId); // past the checkpoint tail — live from here on.
+      return true;
+    }
+    if (text.length <= remaining) {
+      checkpointStreams.set(blockId, remaining - text.length);
+      return false;
+    }
+    // A delta STRADDLING the boundary (replay prefix + live suffix in one
+    // event — impossible from a FIFO ring flush-per-event, defended anyway):
+    // consume the budget and append only the live remainder.
+    checkpointStreams.delete(blockId);
+    const live = text.slice(remaining);
+    if (live.length > 0) {
+      if (kind === "text") {
+        pendingText.set(blockId, (pendingText.get(blockId) ?? "") + live);
+        scheduleFlush();
+      } else {
+        pendingReasoning.set(blockId, (pendingReasoning.get(blockId) ?? "") + live);
+        scheduleFlush();
+      }
+    }
+    return false;
+  }
+
+/**
+     * TASK.117: removes the pending-prompt bubble block for a turn (if any).
+     * The bubble is a real `user_text` transcript block with the synthetic id
+     * `pending:{turnId}` — appended ONLY from the host's `pending_prompt` push
+     * (a reconnecting renderer has no Composer echo to show) and retired as
+     * soon as its rendering is superseded: the durable user frame hydrating
+     * (session_history registers `(turnId, 0)`), the turn's first live
+     * `turn_start` (core persists the user frame BEFORE the first model
+     * request, so generation starting PROVES durability), or any terminal/
+     * clear push. Never rendered twice: the append replaces by id.
+     */
+    function removePendingBubble(turnId: string | null): void {
+      const target = turnId ?? get().pendingPrompt?.turnId ?? null;
+      if (target === null) {
+        return;
+      }
+      set((state) => ({ transcript: stripPendingBubble(state.transcript, target) }));
+    }
+
     /** Drains buffered deltas into the store in one `set()`. Idempotent no-op when nothing is pending. */
     function flushDeltas(): void {
       flushScheduled = false;
@@ -1503,6 +1791,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       pendingText.clear();
       pendingReasoning.clear();
       openStreamBlocks.clear();
+      // TASK.117 acceptance defect 1: the checkpoint-stream registry dies with
+      // the open blocks it tracked (blockSeq is never rewound, so the minted
+      // ids can never be reused by a later text_start).
+      checkpointStreams.clear();
+      // TASK.117: the fold checkpoint mirrors durable coverage of the
+      // transcript — every path that discards the transcript must discard it
+      // too, or a stale suppression entry would shadow post-reset turns. The
+      // next session_history re-registers fresh coverage.
+      clearFoldCheckpoint();
       flushScheduled = false;
     }
 
@@ -2105,13 +2402,128 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       if (newBlocks.length > 0) {
         set((state) => ({ transcript: [...state.transcript, ...newBlocks] }));
       }
+      // TASK.117: REBUILD the fold checkpoint's durable coverage from this
+      // fresh snapshot. Every ui_ready on a reconnect rebuilds
+      // session_history from CURRENT persisted truth and then replays the
+      // WHOLE ring, so ring events for turns already persisted replay on top
+      // of these blocks — coverage is exactly "what the latest snapshot
+      // shows". Rewind/compaction honesty follows for free: a truncated
+      // snapshot simply registers less coverage.
+      clearFoldCheckpoint();
+      // TASK.117 phase-1 defect 2 FIX: re-derive engagement from the
+      // handshake's engine discriminator, mirrored in the `engine` state slot
+      // (host_ready sets it: null ⇔ core handshake ⇔ fold engages; a native
+      // EnginePresentation block ⇒ never). NEVER from this message (a
+      // session_history carries NO engine field — the old `message.engine`
+      // read here was a ReferenceError) and NEVER from item stamps (a native
+      // host's FIXED boot snapshot may legitimately carry {turnId, step}).
+      // The rewind transcript-scoped clear also wipes the slot's session
+      // slice, so a post-rewind re-hydration lands disengaged-until-proven —
+      // for a core host the very next host_ready/session_history pair
+      // re-derives core engagement, and pending_prompt's `causalFoldEngaged`
+      // retire guard stays inert for the cleared store either way.
+      causalFoldEngaged = get().engine === null;
+      // TASK.117 acceptance defect 2: the toolCallIds DECLARED by assistant
+      // items inside THIS snapshot. A tool item's result identity is
+      // registered for replay suppression ONLY when its declaring assistant
+      // item is also in the snapshot — the hydrated card (assistant
+      // tool_call part + paired tool result) is the rendering the suppressed
+      // replay would duplicate. An ORPHAN tool item (its assistant twin cut
+      // off below the boundary) renders nothing (tool items have no blocks),
+      // so its replayed tool_result must stay live to settle the
+      // replay-created card instead of vanishing with no rendering at all.
+      const assistantToolCallIds = new Set<string>();
+      for (const item of items) {
+        if (item.message.role === "assistant") {
+          for (const part of item.message.content) {
+            if (part.type === "tool_call") {
+              assistantToolCallIds.add(part.toolCallId);
+            }
+          }
+        }
+      }
+      for (const item of items) {
+        if (item.turnId === undefined || item.step === undefined) {
+          continue; // pre-117 / foreign-engine item: no causal identity, never matched.
+        }
+        if (!causalFoldEngaged) {
+          continue; // native host: stamps are inert, never fold coverage.
+        }
+        // TASK.117 acceptance defect 2: coverage is REGISTERED ONLY BY THE
+        // ROLE THAT OWNS THE RENDERING the suppression replaces — a USER
+        // item covers (turnId, 0) (retire the pending bubble) and an
+        // ASSISTANT item covers its own step (its hydrated blocks own the
+        // rendering of replayed text/tool_call). A TOOL item registers NO
+        // coverage: core appends a step's tool item only after that step's
+        // assistant item, so on a full history both keys exist and the
+        // behavior is unchanged — but on a history TAIL CUT that retains a
+        // tool item while dropping its assistant twin (both share (turnId,
+        // step)), tool-registered coverage would suppress the replayed
+        // assistant stream with NO hydrated assistant rendering to show
+        // instead (invisible assistant text + a tool card whose patched
+        // result lands on a card created only by the replayed tool_call —
+        // replay suppression class 2). Tool items still fold their durable
+        // RESULT identities (durableToolResults) below, which is the exact
+        // thing they own.
+        if (item.message.role === "user" || item.message.role === "assistant") {
+          durableSteps.add(`${item.turnId}:${item.step}`);
+        }
+        // TASK.117: a durable user frame (step 0) supersedes the pending
+        // bubble's rendering — the hydrated user_text block IS the prompt.
+        if (item.step === 0 && item.message.role === "user") {
+          removePendingBubble(item.turnId);
+        }
+        if (item.message.role === "assistant") {
+          for (const part of item.message.content) {
+            if (part.type === "tool_call") {
+              foldStepState(`${item.turnId}:${item.step}`).toolCalls.set(part.toolCallId, {
+                toolName: part.toolName,
+                input: part.input,
+              });
+            }
+          }
+        }
+        if (item.message.role === "tool") {
+          for (const part of item.message.content) {
+            if (!assistantToolCallIds.has(part.toolCallId)) {
+              // TASK.117 acceptance defect 2: orphaned below-cut tool item —
+              // no hydrated rendering owns this call; its replayed
+              // tool_result stays live (see assistantToolCallIds' doc).
+              continue;
+            }
+            durableToolResults.set(part.toolCallId, { status: part.status, modelText: part.text });
+            foldStepState(`${item.turnId}:${item.step}`).durableResults.add(part.toolCallId);
+          }
+        }
+      }
       if (truncated) {
+        // TASK.117 acceptance defect 2: record the CUT BOUNDARY — the
+        // oldest causal step the snapshot still covers, per turn. Ring
+        // events keyed STRICTLY OLDER than this boundary belong to a turn
+        // segment the host deliberately left out of the snapshot; their
+        // materializing handlers must not resurrect that content after the
+        // fresh truncated history (the cut's whole point). Non-content
+        // classes still apply (control/accounting are not transcript
+        // content). Cleared with the rest of the fold checkpoint (an
+        // untruncated snapshot has no boundary — nothing is below it).
+        historyCutBoundary = new Map();
+        for (const item of items) {
+          if (item.turnId === undefined || item.step === undefined) {
+            continue;
+          }
+          const known = historyCutBoundary.get(item.turnId);
+          if (known === undefined || item.step < known) {
+            historyCutBoundary.set(item.turnId, item.step);
+          }
+        }
         set({
           notice: {
             kind: "session_history_truncated",
             text: "Showing the tail of history — earlier messages were not loaded.",
           },
         });
+      } else {
+        historyCutBoundary = null;
       }
     }
 
@@ -2157,7 +2569,6 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         drainPendingDeltas();
         set({ transcript: [], waitingSubagents: new Set() });
       }
-
       const shortId = message.safetyCheckpointId?.slice(0, 8);
       set({
         lastRewindResult,
@@ -2172,8 +2583,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * Applies one agent_event envelope. Events whose `turnId` no longer
      * matches the active turn are dropped (design §3: late events from a
      * cancelled/replaced turn must not resurrect stale UI).
+     *
+     * TASK.117 fold: `onAgentEvent` is THE single choke point every core
+     * wire agent_event passes through — live streaming AND reconnect replay
+     * alike. Before dispatching to the transcript-materializing switch, the
+     * event is FOLDED into the wire-state checkpoint (capturing state BEFORE
+     * any cap/cut could evict it from the ring), and the materializing
+     * handler is SUPPRESSED iff this step is already durably covered by the
+     * latest session_history (a replayed duplicate). Non-materializing
+     * side-effects (permission/tokens/context) still apply from the fold so
+     * a reconnect never loses accounting. Foreign-engine/legacy envelopes
+     * carry no `step` and never engage the fold.
      */
-    function onAgentEvent(turnId: string, event: WireAgentEvent): void {
+    function onAgentEvent(turnId: string, event: WireAgentEvent, step: number | undefined): void {
       // `context_usage` is exempt from the turn-scoped guard: it is a
       // SESSION-scoped status-bar reading, not turn content. The Claude engine
       // reads it from `get_context_usage` AFTER the terminal result (the CLI's
@@ -2210,17 +2632,211 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       ) {
         return;
       }
+      // TASK.117: fold this wire event into the checkpoint BEFORE any
+      // suppression decision, then suppress the CONTENT-materializing handler
+      // iff the step's OWN content item is already durably covered by the
+      // latest session_history (a replayed duplicate). What suppression means
+      // is decided PER EVENT CLASS — the old WIP blanket return here was the
+      // defect: it also swallowed lifecycle/terminal/control events whose
+      // replayed duplicates are either idempotent by construction or carry
+      // state the hydration path does NOT reconstruct:
+      //   • text/reasoning stream content and tool_call APPENDS for a covered
+      //     ASSISTANT step are suppressed (the hydrated assistant item owns
+      //     the rendering; blocks carry different ids, so an append would
+      //     duplicate the transcript);
+      //   • tool_result applies by IDENTITY: suppressed only when THIS call's
+      //     result is already durable; a live call dispatched after hydration
+      //     settled is not in durableToolResults and its result lands;
+      //   • turn_start/tool_input_*/start/finish/context_usage are control
+      //   and accounting, never transcript content — they pass through
+      //     (finish/context_usage already fold once-per-step below, so a
+      //     replayed duplicate re-applies nothing);
+      //   • loop_end is TERMINAL/lifecycle: the reconnect's fresh store needs
+      //     it to append the footer once and flip the turn idle; a duplicate
+      //     footer is guarded by the loopEndEmitted marker per turnId.
+      const foldKeyStr = foldKey(turnId, step);
+      if (foldKeyStr !== null) {
+        const state = foldStepState(foldKeyStr);
+        switch (event.type) {
+          case "tool_call":
+            state.toolCalls.set(event.toolCall.id, { toolName: event.toolCall.name, input: event.toolCall.input });
+            break;
+          case "tool_result":
+            state.durableResults.add(event.outcome.toolCallId);
+            break;
+          case "finish":
+            // TASK.117 phase-1 defect 1: once-per-step — a replayed
+            // duplicate finish for a step whose usage already folded (or
+            // already applied) must never re-arm it.
+            if (state.finishUsage === null && !state.finishApplied) {
+              state.finishUsage = event.usage;
+            }
+            break;
+          case "context_usage":
+            state.contextUsage = { estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source };
+            break;
+          default:
+            break;
+        }
+      }
+      const covered = causalFoldEngaged && foldKeyStr !== null && durableSteps.has(foldKeyStr);
+      // TASK.117 acceptance defect 2: a TRUNCATED snapshot's cut boundary —
+      // ring events for a causal step STRICTLY OLDER than the oldest step
+      // the snapshot still covers belong to a turn segment the host
+      // deliberately discarded; their CONTENT materialization would
+      // resurrect discarded transcript after the fresh cut history. Same
+      // class list as covered-step suppression: control/accounting and
+      // lifecycle/terminal classes still apply (finish/context_usage are
+      // already folded exactly-once above; loop_end is footer-once-guarded).
+      const belowCut =
+        causalFoldEngaged &&
+        step !== undefined &&
+        historyCutBoundary !== null &&
+        (() => {
+          const boundary = historyCutBoundary.get(turnId);
+          // A turnId ABSENT from the boundary map was EITHER cut away
+          // ENTIRELY (no item survived) OR is unknown to the snapshot
+          // because it is NEWER than it — the CURRENT live turn whose
+          // durable items have not landed yet, or a genuinely NEW turn
+          // admitted after the handshake (the renderer keeps rendering
+          // turns until the next session_checkpoint refresh). The
+          // discriminator is host-authoritative: the checkpoint's
+          // `cutTurnIds` lists EXACTLY the turns the truncated snapshot cut
+          // away entirely, computed from the same history the snapshot was
+          // built from. Suppress iff listed; exempt the liveTurnId (belt
+          // and braces — the host never lists it); an id in NEITHER set is
+          // a NEW turn and RENDERS. Legacy host (no cutTurnIds on a
+          // truncated history): keep the old strict rule (suppress
+          // everything but the live turn) — never a resurrection.
+          if (boundary === undefined) {
+            if (handshakeCutTurnIds !== null) {
+              return handshakeCutTurnIds.has(turnId);
+            }
+            return turnId !== handshakeLiveTurnId;
+          }
+          return step < boundary;
+        })();
+      if (belowCut) {
+        const isContentClass =
+          event.type === "text_start" ||
+          event.type === "text_delta" ||
+          event.type === "text_end" ||
+          event.type === "reasoning_start" ||
+          event.type === "reasoning_delta" ||
+          event.type === "reasoning_end" ||
+          event.type === "tool_call" ||
+          event.type === "tool_execution_start" ||
+          event.type === "tool_result";
+        if (isContentClass) {
+          return;
+        }
+      }
+      // TASK.117: the pending bubble is NOT retired on turn_start — on a
+      // live connection no hydration event ever re-delivers the durable user
+      // frame, so the bubble stays as that prompt's ONLY rendered record
+      // until a fresh session_history supersedes it (hydrateSessionHistory
+      // removes it there, keyed by the durable (turnId, 0) item).
+      if (covered) {
+        // Once-per-step accounting materializes HERE (the materializing
+        // switch is skipped): a step's finish usage applies exactly once
+        // (finishUsage is nulled on first apply), and the latest
+        // context_usage reading applies idempotently (latest-wins scalar).
+        // TASK.117 phase-1 defect 1: a covered `finish` is FULLY CONSUMED by
+        // this branch — RETURN here so it can never fall through to the
+        // normal finish case below and add the same step's usage a SECOND
+        // time (the doubled sessionTokens defect). All other control/
+        // lifecycle classes fall through unchanged.
+        if (event.type === "finish") {
+          const state = foldStepState(foldKeyStr);
+          // TASK.117 checkpoint dedup (EXACT key): a finish whose usage is
+          // already INCLUDED in the checkpoint-installed sessionTokens
+          // (countedSteps member) must NEVER re-add — the REPLACE + re-add
+          // double-count. Applies to covered AND uncovered replayed
+          // finishes alike: core yields finish BEFORE history.append makes
+          // the step durable, so an uncovered replay is a real window the
+          // durability coverage alone cannot catch. A LIVE finish for a
+          // key NOT in the set was emitted after the checkpoint push and
+          // applies normally below (and its own finishApplied-once guard
+          // handles replays of it).
+          if (checkpointCountedSteps.has(foldKeyStr)) {
+            state.finishUsage = null;
+            state.finishApplied = true;
+            return;
+          }
+          if (state.finishUsage !== null) {
+            set((s) => ({ sessionTokens: accumulateSessionTokens(s.sessionTokens, state.finishUsage!) }));
+            state.finishUsage = null;
+            state.finishApplied = true;
+          }
+          return;
+        }
+        if (event.type === "context_usage") {
+          const state = foldStepState(foldKeyStr);
+          if (state.contextUsage !== null) {
+            set({ contextUsage: state.contextUsage });
+            state.contextUsage = null;
+          }
+          return;
+        }
+        // Content classes suppressed on a covered step: streamed
+        // text/reasoning would open NEW blocks (duplicate rendering);
+        // turn_start/tool_input_*/start/turn_end and every lifecycle/
+        // terminal/notice class fall through to their normal (idempotent or
+        // state-flipping) handlers below.
+        const isContentClass =
+          event.type === "text_start" ||
+          event.type === "text_delta" ||
+          event.type === "text_end" ||
+          event.type === "reasoning_start" ||
+          event.type === "reasoning_delta" ||
+          event.type === "reasoning_end" ||
+          event.type === "tool_call";
+        if (isContentClass) {
+          return;
+        }
+      }
       switch (event.type) {
         // ── streamed text (batched) ──
         case "text_start": {
+          // TASK.117 acceptance defect 2: idempotent open — CHECKPOINT-RESTORED
+          // SCOPES ONLY. The checkpoint re-opens the host's live streams
+          // BEFORE outbound.replay(), so a ring-replayed text_start for the
+          // SAME scope finds the entry already present — minting a fresh
+          // block here would create an empty TWIN and overwrite the scoped
+          // mapping, routing every replayed delta into the unbudgeted twin
+          // (doubled content). Skip instead: the existing block (carrying
+          // the checkpoint's full partial + replay budget) already owns this
+          // stream. The discriminator is the checkpoint registry itself
+          // (checkpointStreams, keyed by the block id): a scope mapped to a
+          // block WITHOUT an entry is a LEGACY/unstamped reuse of the same
+          // SDK stream id in a later step of the SAME turn — its earlier
+          // block is still open (per-step blocks are never closed) and MUST
+          // NOT absorb the new step's text: mint a fresh block.
+          const scope = streamScope(turnId, step, event.id);
+          const existing = openStreamBlocks.get(scope);
+          if (existing !== undefined && checkpointStreams.has(existing)) {
+            return;
+          }
           const blockId = `text:${blockSeq++}:${event.id}`;
-          openStreamBlocks.set(event.id, blockId);
+          openStreamBlocks.set(scope, blockId);
           appendBlock({ kind: "assistant_text", id: blockId, text: "" });
           return;
         }
         case "text_delta": {
-          const blockId = openStreamBlocks.get(event.id);
+          const blockId = openStreamBlocks.get(streamScope(turnId, step, event.id));
           if (blockId === undefined) {
+            return;
+          }
+          // TASK.117 acceptance defect 1 (replay dedupe): after a reconnect
+          // whose checkpoint re-opened this stream with its FULL partial
+          // body, the replay ring may still hold deltas of the SAME stream
+          // that the host folded BEFORE the checkpoint — appending them
+          // would duplicate the already-rendered prefix. A replayed delta
+          // is EXACTLY-covered iff its text is a prefix of the current
+          // rendered body at the matching offset; otherwise it is LIVE
+          // (post-checkpoint) and appends normally. The offset advances by
+          // the length of every applied (replay-covered or live) delta.
+          if (!applyStreamDelta("text", blockId, event.text)) {
             return;
           }
           pendingText.set(blockId, (pendingText.get(blockId) ?? "") + event.text);
@@ -2232,14 +2848,27 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
         // ── streamed reasoning (batched) ──
         case "reasoning_start": {
+          // TASK.117 acceptance defect 2: same checkpoint-only idempotent
+          // open as text_start above (see that comment) — a legacy/unstamped
+          // reuse of the stream id in a later step still mints a new block.
+          const scope = streamScope(turnId, step, event.id);
+          const existing = openStreamBlocks.get(scope);
+          if (existing !== undefined && checkpointStreams.has(existing)) {
+            return;
+          }
           const blockId = `reason:${blockSeq++}:${event.id}`;
-          openStreamBlocks.set(event.id, blockId);
+          openStreamBlocks.set(scope, blockId);
           appendBlock({ kind: "reasoning", id: blockId, text: "", collapsed: false });
           return;
         }
         case "reasoning_delta": {
-          const blockId = openStreamBlocks.get(event.id);
+          const blockId = openStreamBlocks.get(streamScope(turnId, step, event.id));
           if (blockId === undefined) {
+            return;
+          }
+          // TASK.117 acceptance defect 1: same replay-prefix dedupe as
+          // text_delta above (see that comment).
+          if (!applyStreamDelta("reasoning", blockId, event.text)) {
             return;
           }
           pendingReasoning.set(blockId, (pendingReasoning.get(blockId) ?? "") + event.text);
@@ -2250,24 +2879,60 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           return;
 
         // ── tool-call lifecycle: tool_call -> tool_execution_start -> tool_result (immediate) ──
-        case "tool_call":
-          appendBlock({
-            kind: "tool_call",
-            id: event.toolCall.id,
-            toolCallId: event.toolCall.id,
-            toolName: event.toolCall.name,
-            input: event.toolCall.input,
-            status: "proposed",
-            modelText: null,
-            snapshots: { before: null, after: null },
-            subagent: null,
-            workflow: null,
-          });
+        case "tool_call": {
+          // TASK.117: a replayed tool_call for an id ALREADY on screen
+          // (hydrated block from session_history, or a live block from an
+          // earlier event of this same replay) folds instead of appending —
+          // patchToolCall matches by toolCallId, so lifecycle patches above
+          // still land on the existing block with zero extra plumbing.
+          const alreadyOnScreen = get().transcript.some(
+            (block) => block.kind === "tool_call" && block.toolCallId === event.toolCall.id,
+          );
+          if (!alreadyOnScreen) {
+            appendBlock({
+              kind: "tool_call",
+              id: event.toolCall.id,
+              toolCallId: event.toolCall.id,
+              toolName: event.toolCall.name,
+              input: event.toolCall.input,
+              status: "proposed",
+              modelText: null,
+              snapshots: { before: null, after: null },
+              subagent: null,
+              workflow: null,
+            });
+          }
           return;
+        }
         case "tool_execution_start":
-          patchToolCall(event.toolCallId, { status: "running" });
+          // TASK.117 correction 1: a replayed/late start must never REGRESS
+          // an already-settled tool_call block (durable result or a live
+          // terminal status) back to "running" — patch only blocks still in
+          // a pre-terminal state.
+          set((state) => ({
+            transcript: state.transcript.map((block) =>
+              block.kind === "tool_call" && block.toolCallId === event.toolCallId && block.status === "proposed"
+                ? { ...block, status: "running" as const }
+                : block,
+            ),
+          }));
           return;
         case "tool_result": {
+          // TASK.117 correction 1: suppress ONLY if THIS RESULT is already
+          // durable — a durable assistant step's tool_call does NOT gate a
+          // LIVE result for a call created after hydration settled (its id
+          // is absent from durableToolResults). The hydration-time identity
+          // buffer covers an outcome that (impossibly, same port ordering)
+          // preceded its own block.
+          if (causalFoldEngaged && durableToolResults.has(event.outcome.toolCallId)) {
+            return;
+          }
+          if (causalFoldEngaged) {
+            durableToolResults.set(event.outcome.toolCallId, {
+              status: event.outcome.status,
+              modelText: event.outcome.modelText,
+            });
+          }
           // Live-canon (TASK.102 slice S1, CUT-S1 §3 W5 point 2): a settled
           // Agent call's tool_result carries the SAME persisted snapshot
           // (core W3) the ring-capped live subagent_* patches were
@@ -2299,6 +2964,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
         // ── loop end: footer block + turn goes idle again (immediate) ──
         case "loop_end": {
+          // TASK.117: the footer appends ONCE per outer turn — a replayed
+          // loop_end (ring duplicate of an already-terminated turn) must not
+          // stack a second footer. The idle flip below stays unconditional
+          // (idempotent).
+          const onceKey = `loop_end:${turnId}`;
+          if (loopEndEmitted.has(onceKey)) {
+            set((state) => ({ turn: { status: "idle", turnId: null, requestId: null } }));
+            return;
+          }
+          loopEndEmitted.add(onceKey);
           flushDeltas();
           const loopEndId = `loop_end:${turnId}`;
           set((state) => {
@@ -2354,6 +3029,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           return;
         case "start":
         case "turn_start":
+          // TASK.117 phase-1 defect 3: the turn's first STAMPED turn_start
+          // (core emits turn/step stamps and appends the user frame strictly
+          // before the first model request) proves the prompt is durably
+          // recorded — clear the pendingPrompt FIELD while the bubble BLOCK
+          // stays as the live rendering record (the durable user frame is
+          // only re-delivered by a later session_history, which retires the
+          // block by (turnId, 0)). Metadata-absent turn_starts (foreign
+          // engines never send a payload-bearing pending_prompt anyway)
+          // never trigger this.
+          if (event.type === "turn_start" && step !== undefined && get().pendingPrompt?.turnId === turnId) {
+            set({ pendingPrompt: null });
+          }
+          return;
         case "tool_input_start":
         case "tool_input_delta":
         case "tool_input_end":
@@ -2364,9 +3052,29 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // `sessionTokens` (accumulateSessionTokens), never replace. No
         // transcript representation (mirrors turn_start/tool_input_*
         // above); the ctx-popover is the sole reader.
-        case "finish":
-          set((state) => ({ sessionTokens: accumulateSessionTokens(state.sessionTokens, event.usage) }));
+        case "finish": {
+          // TASK.117 phase-1 defect 1: once-per-step on the LIVE path too —
+          // a duplicate finish (replayed or otherwise) for a step whose
+          // usage already applied must never add again. The
+          // checkpoint-counted key guards the SAME defect for the
+          // uncovered window (finish yielded before its append landed, so
+          // the step is not durability-covered — see the covered branch's
+          // own comment). UNKEYED finishes (no causal stamps: pre-117
+          // hosts, foreign engines) have no step identity to dedupe by, so
+          // they keep the legacy SUM semantics verbatim.
+          if (foldKeyStr !== null) {
+            if (checkpointCountedSteps.has(foldKeyStr)) {
+              return;
+            }
+            const state = foldStepState(foldKeyStr);
+            if (state.finishApplied) {
+              return;
+            }
+            state.finishApplied = true;
+          }
+          set((s) => ({ sessionTokens: accumulateSessionTokens(s.sessionTokens, event.usage) }));
           return;
+        }
 
         // ── Phase 1 context/retry events (design §2.12): compaction_*/
         // microcompact/stream_retry surface through the existing one-slot
@@ -2782,6 +3490,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // so the preservation lives here, not inside `performReset` itself.
             const armedRetry = get().retry;
             performReset();
+            // TASK.117 phase-1 defect 2 FIX: the causal/durable fold's engine
+            // identity is derived HERE, at the handshake — `host_ready.engine`
+            // is "present only for a non-core engine" (protocol.ts), so absent
+            // ⇔ core ⇔ the fold engages; a native Codex/Claude host (block
+            // present) NEVER engages it: its FIXED boot snapshot's
+            // {turnId, step} stamps are inert hydration data, and its own
+            // agent_events carry no step. Derived AFTER performReset (whose
+            // clearFoldCheckpoint disengages) and BEFORE the
+            // session_history/replay that follows on this same port; the
+            // `engine` slot set below mirrors the same discriminator so
+            // hydrateSessionHistory can re-derive it without its own copy.
+            causalFoldEngaged = message.engine === undefined;
             // Slice P7.14: `performReset` deliberately leaves the prompt queue
             // intact (it isn't in the session slice), so a respawn keeps the
             // user's typed-ahead prompts. But a respawn is an anomaly — restore
@@ -2921,9 +3641,79 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             });
             return;
           }
-          case "agent_event":
-            onAgentEvent(message.turnId, message.event);
+          case "agent_message": {
+            const d = message.delivery;
+            const id = `agent-message:${d.envelope.messageId}`;
+            const block: TranscriptBlock = { kind: "user_text", id, origin: "system", text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
+            set((state) => ({ transcript: [...state.transcript.filter((b) => b.id !== id && !(b.kind === "user_text" && b.text === agentMessageText(d.envelope))), block] }));
             return;
+          }
+          case "agent_event":
+            onAgentEvent(message.turnId, message.event, message.step);
+            return;
+          case "pending_prompt": {
+            // TASK.117: the host's authoritative in-flight prompt push. A
+            // non-empty payload renders a REAL user_text transcript bubble
+            // (id `pending:{turnId}`) IFF no durable user item (turnId,
+            // step 0) is registered — a reconnecting renderer has no
+            // Composer echo, so without this block the in-flight prompt
+            // would be invisible. Once the frame is durable the hydrated
+            // user_text block owns the rendering and the bubble is retired.
+            // An empty payload (turn terminal/cancel/shutdown/rewind)
+            // retires the FIELD but leaves the bubble BLOCK in the
+            // transcript — until a fresh session_history supersedes it, the
+            // bubble is the ONLY rendered record of that prompt (removing
+            // it at teardown would erase the user's message from view).
+            // Core-only by construction (foreign hosts never send a
+            // non-empty one).
+            if (message.turnId === undefined || message.text === undefined) {
+              // TASK.117 outcome semantics (see the protocol type's doc):
+              // "cancelled" retires the bubble block too — the prompt never
+              // became durable (cancel mid-hook/shutdown/rewind) and must
+              // not stay on screen; "settled" and the bare per-connect push
+              // keep it as the turn's rendered record. The push carries the
+              // turnId only on "settled"; a bare per-connect push is keyed
+              // to the CURRENT field, never to a stale one.
+              if (message.outcome === "cancelled") {
+                removePendingBubble(message.turnId ?? null);
+              }
+              if (get().pendingPrompt !== null) {
+                set({ pendingPrompt: null });
+              }
+              return;
+            }
+            if (causalFoldEngaged && durableSteps.has(`${message.turnId}:0`)) {
+              removePendingBubble(message.turnId);
+              if (get().pendingPrompt !== null) {
+                set({ pendingPrompt: null });
+              }
+              return;
+            }
+            removePendingBubble(null); // a new turn's push replaces the old turn's bubble
+            set({
+              pendingPrompt: {
+                turnId: message.turnId,
+                requestId: message.requestId ?? "",
+                text: message.text,
+                ...(message.images?.length ? { images: message.images } : {}),
+              },
+            });
+            // Live-connection dedupe: the Composer/tab-registry send path
+            // already echoed this prompt as a user_text block with id ===
+            // requestId — never stack a second bubble on top of it. A
+            // reconnected store has no such echo, so there the bubble is the
+            // prompt's only rendered form.
+            const echoed = message.requestId !== undefined && get().transcript.some((block) => block.id === message.requestId);
+            if (!echoed) {
+              appendBlock({
+                kind: "user_text",
+                id: `pending:${message.turnId}`,
+                text: message.text,
+                ...(message.images?.length ? { images: message.images } : {}),
+              });
+            }
+            return;
+          }
           case "permission_request":
             set({
               permission: {
@@ -2933,6 +3723,118 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 mode: message.mode,
                 metadata: message.metadata,
               },
+            });
+            return;
+          case "session_checkpoint":
+            // TASK.117 acceptance defect 2: capture the host-authoritative
+            // live turn id FIRST — the cut-replay guard below reads it.
+            handshakeLiveTurnId = message.liveTurnId ?? null;
+            // TASK.117 acceptance defect 1: the positive cut-entirely list —
+            // absent ONLY on an untruncated history / legacy host (null =
+            // legacy strict rule; see the below-cut guard). A shipped EMPTY
+            // list is authoritative: the truncated snapshot cut WITHIN its
+            // turns (no whole turnId vanished), so NO absent-boundary
+            // turnId is a cut one — every unknown id is NEW and renders.
+            // `Array.isArray` keeps a malformed non-array from arming the
+            // set-based path with garbage.
+            handshakeCutTurnIds =
+              message.cutTurnIds !== undefined && Array.isArray(message.cutTurnIds)
+                ? new Set(message.cutTurnIds)
+                : null;
+            // TASK.117 control/accounting checkpoint (host->renderer,
+            // sendDirect per ui_ready, core-only): REPLACES this store's
+            // slots with the host's emission-time wire state so a reconnect
+            // after a replay-ring overflow recovers exactly what the ring
+            // evicted (finish totals / context_usage / the parked ask).
+            // Replace, never add: the totals were accumulated host-side from
+            // the SAME finishes a prior connection's store already counted
+            // (double-apply is impossible), and a fresh store starts from
+            // the true value. Absent fields change nothing (older host /
+            // nothing captured yet); an absent permission field NEVER
+            // touches the slot (a settled ask cannot resurrect — only
+            // permission_settled or a newer ask may move it).
+            // TASK.117 acceptance defect 1: `streams` re-opens the host's
+            // currently-OPEN partial streams (bounded) on THIS store — each
+            // entry mints a fresh transcript block carrying the FULL partial
+            // body and registers the same `${turnId}:${step}:${streamId}`
+            // scope in openStreamBlocks, so (a) the partial text renders
+            // immediately and (b) LIVE deltas of the same stream that arrive
+            // after the checkpoint append onto it. This runs BEFORE
+            // outbound.replay() on the wire (same ui_ready cascade), so any
+            // ring-replayed text_start/text_delta pair for the SAME scope
+            // finds the entry already present: replayed text_start is
+            // idempotent (a new block would only stack an empty twin, and
+            // the delta then appends ALREADY-SEEN text to the partial —
+            // guarded below by the replay-prefix rule). A ring delta can
+            // never PRECEDE its own start (host emits through one for-await,
+            // the ring is FIFO), so no open stream can be missed here.
+            for (const stream of message.streams ?? []) {
+              const scope = streamScope(
+                get().turn.turnId ?? "",
+                stream.step,
+                stream.streamId,
+              );
+              if (openStreamBlocks.has(scope)) {
+                continue; // replay/idempotence: the block is already open.
+              }
+              const blockId =
+                stream.kind === "text"
+                  ? `text:${blockSeq++}:${stream.streamId}`
+                  : `reason:${blockSeq++}:${stream.streamId}`;
+              openStreamBlocks.set(scope, blockId);
+              // TASK.117 acceptance defect 1: register the host-computed
+              // replay budget (the exact chars of this stream the ring still
+              // holds) so the replayed suffix is consumed, not re-appended
+              // (see applyStreamDelta).
+              checkpointStreams.set(blockId, stream.replayChars);
+              appendBlock(
+                stream.kind === "text"
+                  ? { kind: "assistant_text", id: blockId, text: stream.text }
+                  : { kind: "reasoning", id: blockId, text: stream.text, collapsed: false },
+              );
+            }
+            if (message.sessionTokens !== undefined) {
+              // TASK.117 checkpoint: install the host's cumulative totals
+              // (REPLACE, never add) and register the exact finish keys it
+              // already includes — every finish that replays from this
+              // connect's ring is a countedSteps member and adds NOTHING
+              // (double-count guard, exact-key precision).
+              for (const key of message.countedSteps ?? []) {
+                checkpointCountedSteps.add(key);
+              }
+            }
+            // TASK.117 supervisor correction defect 1: the host's currently-
+            // executing calls — flip each hydrated `proposed` card to
+            // `running` (its ring-replayed tool_execution_start was evicted
+            // by the >CAP overflow; the durable assistant item alone cannot
+            // express "executing now"). Terminal statuses are never
+            // overwritten: only a `proposed` card flips (a settled result
+            // already landed on this store — the host set and the store agree
+            // on it, and a stale id must not resurrect progress).
+            if (message.runningTools !== undefined && message.runningTools.length > 0) {
+              const running = new Set(message.runningTools);
+              set((state) => ({
+                transcript: state.transcript.map((block) =>
+                  block.kind === "tool_call" && running.has(block.toolCallId) && block.status === "proposed"
+                    ? { ...block, status: "running" as const }
+                    : block,
+                ),
+              }));
+            }
+            set({
+              ...(message.sessionTokens !== undefined ? { sessionTokens: message.sessionTokens } : {}),
+              ...(message.contextUsage !== undefined ? { contextUsage: message.contextUsage } : {}),
+              ...(message.permission !== undefined
+                ? {
+                    permission: {
+                      requestId: message.permission.requestId,
+                      toolName: message.permission.toolName,
+                      input: message.permission.input,
+                      mode: message.permission.mode,
+                      metadata: message.permission.metadata,
+                    },
+                  }
+                : {}),
             });
             return;
           case "permission_settled": {

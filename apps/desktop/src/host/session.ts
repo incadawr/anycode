@@ -1,3 +1,4 @@
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult } from "../shared/communication.js";
 import { safeFailureMessage } from "./safe-failure.js";
 /**
  * Host session: the protocol server tying the UI wire to the core agent loop
@@ -57,6 +58,7 @@ import type {
   RewindScope,
   SessionPermissionRules,
   TelemetryStatus,
+  TokenUsage,
   ToolCallOutcome,
 } from "@anycode/core";
 import {
@@ -95,13 +97,36 @@ import { extractSnapshotPath, isSnapshotTool, readSnapshot } from "./snapshot-ho
 import { PreviewArtifactCollector } from "./preview-artifacts.js";
 import { describeError, sanitizeAgentEvent } from "./serialize.js";
 import { recordErrorDiagnostic } from "./error-diagnostics.js";
+import { toWireToolMeta } from "./permission-broker.js";
 import type { SessionEngine } from "./engines/session-engine.js";
 
 /** Cap on the replay ring buffer; older messages roll off (design §3). */
 export const REPLAY_BUFFER_CAP = 5_000;
 
+/**
+ * TASK.117 checkpoint: bound on `session_checkpoint.countedSteps`. A finish
+ * older than the replay ring's capacity can never replay again, so carrying
+ * more keys than the ring could hold is pure wire weight. Slightly above
+ * REPLAY_BUFFER_CAP to cover handshakes/status sends interleaved between
+ * finishes.
+ */
+const CHECKPOINT_COUNTED_STEPS_MAX = REPLAY_BUFFER_CAP + 512;
+
 /** Cap on hydrated `session_history` items; only the last N are shipped (design §3.3). */
 export const SESSION_HISTORY_MAX_ITEMS = 500;
+
+/**
+ * TASK.117 (2026-10-04 product defect): grace window between the CURRENT UI
+ * port's close and the fail-closed denyAll("ui disconnected"). A renderer
+ * reload closes the old port and main re-posts a fresh one on
+ * did-finish-load (deliverAllTabPorts) — AFTER the close is observed — so
+ * the window keeps a parked permission ask alive across that gap while the
+ * ask's own authoritative TTL keeps applying. Bounded: expiry with no
+ * successor denies exactly as before (origin "disconnect"). Sized to cover a
+ * full dev-page reload cycle with margin (observed live: port re-post landed
+ * ~1s after the close).
+ */
+export const UI_RECONNECT_GRACE_MS = 5_000;
 
 /**
  * A manual compaction (TASK.146, `onCompact`) runs BETWEEN turns — no real
@@ -304,6 +329,17 @@ export class Outbound {
   }
 
   /**
+   * TASK.117 acceptance defect 1: read-only view of the current ring, in
+   * emission order (oldest first). Used ONLY by pushSessionCheckpoint to
+   * compute, per open partial stream, how much of its delta text the ring
+   * still holds (the replay suffix a reconnecting renderer is about to
+   * receive again) — the buffer itself stays private; no mutation path.
+   */
+  ringView(): readonly HostToUiMessage[] {
+    return this.buffer;
+  }
+
+  /**
    * Drops the entire replay ring (slice P7.26/R2, design §3 drift-flag-1). After a
    * conversation-restoring rewind the pre-rewind turn events (turn_started /
    * agent_event / …) must NOT resurrect on a renderer re-handshake via replay();
@@ -481,6 +517,13 @@ export interface SessionOptions {
    */
   engineSettings?: EngineSettingsSeam;
   broker: IpcPermissionBroker;
+  /**
+   * TASK.117 (2026-10-04 product defect) TEST SEAM: overrides the
+   * close→denyAll grace window (see Session.reconnectGraceTimer). Absent ->
+   * production default; ONLY tests inject a value to pin the expiry path
+   * without real-time waits. Never read from the environment.
+   */
+  reconnectGraceMs?: number;
   /** Adapter for reading "after" snapshots (design §5). */
   fs: FileSystemPort;
   workspace: string;
@@ -870,7 +913,106 @@ export class Session {
   private relocating = false;
   private abort: AbortController | null = null;
   private turnId: string | null = null;
+  /**
+   * TASK.117: the CURRENT outer turn's pending prompt, recorded by
+   * `acceptUserMessage` the moment a turn is admitted (BEFORE runTurn) and
+   * cleared on EVERY terminal boundary of that turn: the turn's own teardown
+   * (finally), any pre-append refusal (unsupported_images / busy / not_ready
+   * rejects below), cancel, shutdown, rewind success (the turn never
+   * happened), and BEFORE a continuation or a new turn's first turn_start.
+   * Owner-checked by turnId+requestId so a stale older child finalizer can
+   * never clear a newer turn's prompt. Emits `pending_prompt` (sendDirect —
+   * regenerated per ui_ready, never ring-buffered) so a reconnecting
+   * renderer can render the in-flight prompt bubble ONLY while its turn is
+   * genuinely live and no durable user item (turnId, step 0) exists yet.
+   */
+  private pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null = null;
+  /**
+   * TASK.117: the CURRENT outer turn's inner request ordinal (core's
+   * `turn_start.turn`, 1-based, reset per outer turn). Maintained inside
+   * runTurn's event loop; undefined outside a turn / for foreign engines.
+   */
+  private currentStep: number | undefined;
+  /**
+   * TASK.117: the live outer turn's requestId (pair with this.turnId), kept
+   * only while the turn is in flight — the ui_ready cascade re-asserts
+   * `turn_started` as sendDirect handshake meta so a reconnecting renderer
+   * opens the turn even when the ring's buffered copy has been evicted.
+   */
+  private lastTurnRequest: { requestId: string; turnId: string } | undefined;
+  /**
+   * TASK.117 control/accounting checkpoint: cumulative session token totals,
+   * captured AT EMISSION TIME from every core `finish` AgentEvent (SUM
+   * semantics mirroring the renderer's accumulateSessionTokens) because
+   * durable history carries NO usage fields — once the replay ring evicts a
+   * finish (REPLAY_BUFFER_CAP overflow), this is the ONLY record of what the
+   * renderer's sessionTokens already counted. Null until the first finish.
+   * A later session_checkpoint REPLACES the fresh store's value with exactly
+   * this number (never re-adds), so live finishes after the reconnect stay
+   * exactly-once on top of it. Core-engine events only (foreign engines own
+   * their REPLACE-semantics engine_session_totals on the ring, untouched).
+   */
+  private checkpointSessionTokens: { input: number; output: number; total: number; latestCacheRead?: number; latestCacheInput?: number } | null = null;
+  /**
+   * TASK.117 checkpoint dedup: the fold keys (`${turnId}:${step}`) of every
+   * core finish accumulated into checkpointSessionTokens, newest-first.
+   * Shipped as `session_checkpoint.countedSteps` so the renderer can drop a
+   * REPLAYED finish by exact key instead of by durability coverage — the
+   * finish-yielded-before-append window (core yields finish BEFORE history.
+   * append makes the step durable) means an uncovered replay is possible,
+   * and coverage alone would re-add it on top of the REPLACE (double
+   * count). Bounded: entries older than the ring capacity cannot still
+   * replay, so the tail is trimmed to CHECKPOINT_COUNTED_STEPS_MAX.
+   */
+  private readonly checkpointCountedSteps: string[] = [];
+  /**
+   * TASK.117 control/accounting checkpoint: the LATEST core context_usage
+   * reading (latest-wins scalar), captured at emission for the same reason
+   * as checkpointSessionTokens above. Null until the first reading.
+   */
+  private checkpointContextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null = null;
+  /**
+   * TASK.117 acceptance defect 1: the LIVE turn's currently-open partial
+   * streams, folded at emission time from the raw stream events (BEFORE
+   * sanitizeAgentEvent strips nothing here — text/reasoning stream ids are
+   * wire-safe). Keyed `${turnId}:${step}:${streamId}` (SDK stream ids are
+   * reused across steps of one outer turn — the same scope the renderer's
+   * openStreamBlocks keys by); the value carries the FULL accumulated body
+   * plus the block kind, and a `settled` flag set on stream END (text_end /
+   * reasoning_end). TASK.117 acceptance defect 3: an ENDED stream is NOT
+   * dropped at emission time — core appends the assistant item only after
+   * the model stream's finish settles, so the end-to-append gap is exactly
+   * the reconnect window where the streamed text exists NOWHERE else (the
+   * ring may have evicted its start/deltas; the snapshot has no item yet).
+   * pushSessionCheckpoint ships an ended entry ONLY while its (turnId,
+   * step) is still missing from the engine's durable history; once the
+   * append lands the entry stops riding. Turn teardown (`liveStreams.clear()`
+   * beside snapshotPaths.clear()) bounds the lifetime from above, so cancel
+   * and ownership never leak a partial past the turn. Core-engine events
+   * only (captured under the same `engine.id === "core"` gate as the other
+   * checkpoint fields — foreign engines ride the ring).
+   */
+  private readonly liveStreams = new Map<string, { turnId: string; step: number; streamId: string; kind: "text" | "reasoning"; text: string; settled?: boolean }>();
+  /**
+   * TASK.117 supervisor correction defect 1: the LIVE turn's tool calls whose
+   * `tool_execution_start` has been emitted but whose `tool_result` has not
+   * landed yet — keyed by toolCallId. Captured AT EMISSION TIME (before any
+   * ring cap could evict the start event) for the same reason as the other
+   * checkpoint fields: the assistant item carrying the tool_call IS durable
+   * (core appends it BEFORE dispatch), so a fresh store hydrates the card as
+   * `proposed`, and the ring-replayed `tool_execution_start` is the ONLY
+   * thing that flips it to `running` — once the ring evicts that event the
+   * card reads `proposed` forever with the tool genuinely executing. The
+   * checkpoint ships this set so a reconnect restores `running`. Cleared per
+   * settled result and wholesale at turn teardown (beside liveStreams.clear()).
+   * Core-engine events only (captured under the same `engine.id === "core"`
+   * gate); a permission-PARKED call is deliberately NOT here — its start has
+   * not been emitted yet (dispatch is gated behind the ask), so its card is
+   * honestly `proposed` until allowed.
+   */
+  private readonly runningTools = new Map<string, true>();
   private currentTurn: Promise<void> | null = null;
+
   /**
    * TASK.102 CUT-S2 §10.12.1: flipped as the FIRST step of `shutdown()`,
    * strictly before `abort.abort()`/`denyAll`/`dispose` so any teardown woken
@@ -885,6 +1027,36 @@ export class Session {
    * Never cleared — a Session is never un-shut-down.
    */
   private shuttingDown = false;
+
+  /**
+   * TASK.117 (2026-10-04 product defect): the port the UI wire is currently
+   * bound to (the latest bindPort argument). Lets the onClose handler tell a
+   * STALE predecessor port's late close (a successor is already bound — the
+   * reload completed) apart from the CURRENT port dying. Identity is the
+   * WirePort reference itself — the same production seam every teardown path
+   * goes through; no new persistence identity.
+   */
+  private boundPort: WirePort | null = null;
+  /**
+   * TASK.117: armed when the CURRENT port closes with no successor bound —
+   * a renderer reload closes the old port and main re-posts a fresh one on
+   * did-finish-load (index.ts deliverAllTabPorts), i.e. AFTER the close is
+   * observed here, so the close handler cannot know at that moment whether a
+   * reconnect is in flight. The grace window holds the fail-closed deny;
+   * bindPort (reload completed) and shutdown (terminal settlement owns it)
+   * clear it. If no successor binds within the window the parked asks are
+   * denied exactly as before (origin "disconnect") — fail-closed with a
+   * bounded delay, never an indefinite permission.
+   */
+  private reconnectGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * TASK.117: the grace window's length. Default covers a renderer reload's
+   * full cycle (old port close -> fresh page load -> did-finish-load port
+   * re-post -> ui_ready) with margin; injectable ONLY as a test seam
+   * (SessionOptions.reconnectGraceMs) so the expiry path stays pinned
+   * without real-time waits. Production takes the default, never env-tunable.
+   */
+  private readonly reconnectGraceMs: number;
 
   /**
 
@@ -954,6 +1126,7 @@ export class Session {
     this.engine = options.engine;
     this.engineSettings = options.engineSettings;
     this.broker = options.broker;
+    this.reconnectGraceMs = options.reconnectGraceMs ?? UI_RECONNECT_GRACE_MS;
     this.fs = options.fs;
     this.workspace = options.workspace;
     this.projectRoot = options.projectRoot ?? options.workspace;
@@ -994,6 +1167,14 @@ export class Session {
     this.titleSet = options.hasTitle ?? false;
     this.historyMaxItems = options.historyMaxItems ?? SESSION_HISTORY_MAX_ITEMS;
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
+    const publicHistory = options.bootHistory ?? this.engine.historyItems();
+    for (const item of [...publicHistory].reverse()) {
+      if (item.message.role !== "assistant" || (item.kind !== undefined && item.kind !== "normal")) continue;
+      const text = item.message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+      if (!text) continue;
+      this.latestPublicResult = { source: "history_recovery", turnId: null, requestId: null, nativeTurnId: null, historyItemId: item.id, terminalReason: "unknown", publicAnswer: text.slice(0, 32000), truncated: text.length > 32000, completedAt: null };
+      break;
+    }
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
 
     // ready; unsubscribe on shutdown prevents a leaked listener / push-after-
@@ -1043,14 +1224,47 @@ export class Session {
     // mounted new renderer — the same not-yet-mounted-renderer race class the
     // 5.7-hostfix git_status fix addressed (host/session.ts git_status push).
     this.uiReady = false;
+    // TASK.117 (2026-10-04 product defect): remember WHICH port is current so
+    // a stale predecessor's late 'close' can be told apart from the CURRENT
+    // port dying, and disarm any pending grace deny — a port arriving here
+    // IS the successor of a completed renderer reload, so its predecessor's
+    // close described the reload, not a dead session.
+    this.boundPort = port;
+    if (this.reconnectGraceTimer !== null) {
+      clearTimeout(this.reconnectGraceTimer);
+      this.reconnectGraceTimer = null;
+    }
     this.outbound.attach(port);
     port.onMessage((raw) => {
       this.route(raw);
     });
     port.onClose(() => {
-      // No live client -> every parked ask fails closed (design §4). The turn
-      // itself keeps running so a reconnect replays the completed transcript.
-      this.broker.denyAll("ui disconnected", "disconnect");
+      // TASK.117: the old unconditional denyAll here destroyed the parked
+      // ask mid-reload (live S2: "ui disconnected" deny + no_pending_request
+      // 1.3s after a Page.reload — the close is observed BEFORE main re-posts
+      // the new port on did-finish-load, so at this instant the reload is
+      // indistinguishable from a dead session). Two closes must NOT settle:
+      //  - a STALE predecessor port (a successor is already bound): its
+      //    close describes the completed reload, not a dead session;
+      //  - a close during SHUTDOWN: shutdown() owns the terminal settlement
+      //    (denyAll("shutting down", "shutdown")) — a disconnect-origin
+      //    settle here would race it and misattribute the denial.
+      if (this.shuttingDown || this.boundPort !== port) {
+        return;
+      }
+      // Current port closed and no successor bound yet. The reload fix:
+      // instead of settling NOW, arm the bounded grace window — bindPort of
+      // a successor cancels it; expiry denies exactly as before (fail-closed
+      // origin "disconnect"). The parked asks' own authoritative TTL still
+      // applies throughout — the window never extends a permission.
+      this.uiReady = false;
+      if (this.reconnectGraceTimer === null) {
+        this.reconnectGraceTimer = setTimeout(() => {
+          this.reconnectGraceTimer = null;
+          // Still no successor and not shutting down -> genuinely dead.
+          this.broker.denyAll("ui disconnected", "disconnect");
+        }, this.reconnectGraceMs);
+      }
     });
   }
 
@@ -1064,15 +1278,128 @@ export class Session {
    * below: no code path early-returns on the flag, so the real teardown still
    * runs in full.
    */
+  private latestPublicResult: SessionPublicResult | null = null;
+  private readonly messageTurns = new Map<string, { hostTurnId: string | null; nativeTurnId?: string }>();
+
+  communicationResult() {
+    const latest = this.latestPublicResult;
+    const deliveredMessageIds = latest ? [...this.messageTurns.entries()].filter(([, identity]) =>
+      (latest.turnId !== null && identity.hostTurnId === latest.turnId) ||
+      (latest.nativeTurnId !== null && identity.nativeTurnId === latest.nativeTurnId)
+    ).map(([id]) => id) : [];
+    return {
+      sessionId: this.sessionId,
+      availability: this.busy ? "pending" : latest ? latest.source === "history_recovery" ? "recovered_unverified" : "available" : "unavailable",
+      activeTurnId: this.busy ? this.turnId : null,
+      latestResult: latest ? { ...latest, deliveredMessageIds, correlationMeaning: "transport_delivery_only" } : null,
+      limitation: "Latest completed public text block only. History recovery cannot establish terminal status or turn/message correlation. Completion does not prove a message was applied.",
+    };
+  }
+
+  private readonly agentInbox: AgentEnvelope[] = [];
+  private readonly agentDeliveries = new Map<string, AgentDelivery>();
+
+  communicationStatus(): { sessionId: string; engine: string; state: string; steering: { supported: boolean; ready: boolean; nativeTurnId?: string } } {
+    return { sessionId: this.sessionId, engine: this.engine.id, state: this.shuttingDown ? "closing" : this.busy ? "running" : "idle", steering: this.engine.steeringStatus?.() ?? { supported: false, ready: false } };
+  }
+
+  private agentDeliveryObserver?: (delivery: AgentDelivery) => void;
+  observeAgentDeliveries(observer: (delivery: AgentDelivery) => void): void { this.agentDeliveryObserver = observer; }
+
+  private publishAgentDelivery(delivery: AgentDelivery): void {
+    this.agentDeliveries.set(delivery.envelope.messageId, { ...delivery });
+    this.outbound.emit({ type: "agent_message", delivery: { ...delivery } });
+    try { this.agentDeliveryObserver?.({ ...delivery }); } catch { /* persistence observation cannot affect delivery */ }
+  }
+
+  async receiveAgentMessage(envelope: AgentEnvelope): Promise<AgentDelivery> {
+    const existing = this.agentDeliveries.get(envelope.messageId);
+    if (existing) return existing;
+    if (envelope.recipientSessionId !== this.sessionId || this.shuttingDown || this.relocating || (this.child !== undefined && this.childTerminalFinalized)) {
+      const delivery: AgentDelivery = { envelope, state: "rejected", detail: "Session unavailable" };
+      this.publishAgentDelivery(delivery);
+      return delivery;
+    }
+    const delivery: AgentDelivery = { envelope, state: "queued" };
+    this.publishAgentDelivery(delivery);
+    if (envelope.mode === "steer") {
+      if (!this.busy || !this.engine.steer) {
+        delivery.state = "rejected";
+        delivery.detail = "Steering requires an active supported Codex turn; use next_turn";
+      } else {
+        try {
+          const receivingTurnId = this.turnId;
+          const ack = await this.engine.steer(agentMessageText(envelope));
+          this.messageTurns.set(envelope.messageId, { hostTurnId: receivingTurnId, nativeTurnId: ack.turnId });
+          delivery.state = "acknowledged";
+          delivery.detail = `app-server accepted input for turn ${ack.turnId}; model application unverified`;
+        } catch (error) {
+          delivery.state = (error as { deliveryState?: string }).deliveryState === "unknown" ? "unknown" : "rejected";
+          delivery.detail = describeError(error);
+        }
+      }
+      this.publishAgentDelivery(delivery);
+    } else if (this.agentInbox.length >= 32) {
+      delivery.state = "rejected";
+      delivery.detail = "Inbox full";
+      this.publishAgentDelivery(delivery);
+    } else {
+      this.agentInbox.push(envelope);
+      this.drainAgentInbox();
+    }
+    return this.agentDeliveries.get(envelope.messageId)!;
+  }
+
+  restoreAgentMessages(deliveries: AgentDelivery[]): void {
+    for (const delivery of deliveries) {
+      if (delivery.envelope.recipientSessionId === this.sessionId && !this.agentDeliveries.has(delivery.envelope.messageId)) this.publishAgentDelivery(delivery);
+    }
+  }
+
+  agentMessageStatus(messageId: string): AgentDelivery | undefined {
+    return this.agentDeliveries.get(messageId);
+  }
+
+  private drainAgentInbox(settledChild = false): boolean {
+    if ((!settledChild && (this.busy || this.currentTurn !== null)) || this.shuttingDown || this.relocating || this.childTerminalFinalized) return false;
+    const envelope = this.agentInbox.shift();
+    if (!envelope) return false;
+    if (settledChild) this.busy = false;
+    const started = this.acceptUserMessage(envelope.messageId, agentMessageText(envelope), undefined, "system");
+    if (started) this.messageTurns.set(envelope.messageId, { hostTurnId: this.turnId });
+    this.publishAgentDelivery({ envelope, state: started ? "acknowledged" : "rejected", detail: started ? "Host started a next turn; model application unverified" : "Turn refused" });
+    return started;
+  }
+
   closeAdmissions(): void {
     this.shuttingDown = true;
+    // TASK.117: same disarm as shutdown() — once admissions close, the
+    // session is on its terminal path and the disconnect grace timer must
+    // never fire past the real settlement.
+    if (this.reconnectGraceTimer !== null) {
+      clearTimeout(this.reconnectGraceTimer);
+      this.reconnectGraceTimer = null;
+    }
+    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Session closing before queued delivery" });
   }
 
   /** Graceful shutdown: abort the turn, release parked asks, await turn teardown. */
   async shutdown(): Promise<void> {
     // TASK.102 CUT-S2 §10.11.1 N1: flipped FIRST, strictly before abort/
     // denyAll/dispose below, so teardown woken by the abort already sees it.
-    this.shuttingDown = true;
+    this.closeAdmissions();
+    // TASK.117: shutdown is the terminal settlement — disarm the reconnect
+    // grace window so its timer can never fire a disconnect-origin denyAll
+    // after (or beside) the shutdown settlement below.
+    if (this.reconnectGraceTimer !== null) {
+      clearTimeout(this.reconnectGraceTimer);
+      this.reconnectGraceTimer = null;
+    }
+    // TASK.117: shutdown is a terminal boundary — the live turn's pending
+    // prompt dies with it (a respawned host re-derives nothing). "cancelled":
+    // an in-flight prompt's frame may never land; retire the bubble.
+    this.pendingPrompt = null;
+    this.pushPendingPrompt("cancelled");
     // Slice P7.25/F3: release the LSP status subscription so no transition after
     // this point can push onto a shut-down session, and no listener reference
     // leaks past the session's life. (The host reaps lspManager BEFORE calling
@@ -1152,7 +1479,10 @@ export class Session {
     // attached to a dying host — replies to informational requests are moot).
     if (this.shuttingDown) {
       switch (message.type) {
-        case "user_message":
+        case "steer_message":
+        void this.receiveAgentMessage({ messageId: message.requestId, sender: "local-supervisor-ui", recipientSessionId: this.sessionId, kind: "agent_message", payload: message.text, mode: "steer", createdAt: new Date().toISOString() });
+        return;
+      case "user_message":
           this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
           break;
         case "exit_worktree":
@@ -1217,10 +1547,22 @@ export class Session {
           ...(presentation !== undefined && this.shell !== undefined ? { shell: this.shell } : {}),
         });
         // Phase-2 §3.3: session_history (transcript hydration of a resumed
-        // session) is emitted AFTER host_ready and BEFORE replay(), only when
-        // the boot history is non-empty. sendDirect (not buffered): the payload
-        // is a fixed boot snapshot, re-sent on every ui_ready (idempotent across
-        // renderer reloads). New-turn transcript rides Outbound.replay() below.
+        // session) is emitted AFTER host_ready and BEFORE replay(). sendDirect
+        // (not buffered). TASK.117: the snapshot is REBUILT from the engine's
+        // current durable history on EVERY ui_ready — not the boot-frozen
+        // snapshot from the constructor — so a renderer reconnecting after the
+        // Outbound replay ring has overflowed still sees the latest persisted
+        // transcript, not a stale host-start snapshot. The fresh snapshot is
+        // coherent with the events replayed after it (those are only newer),
+        // so no dedupe/watermarking of the ring is needed. CORE ONLY
+        // (phase-1 defect 2): the causal-stamp fold is a core contract; a
+        // native Codex/Claude host keeps the FIXED constructor boot snapshot
+        // — COMPLETE later-completed replay rides the ring exactly as
+        // before (native compat), and the rebuild gate must never touch
+        // their history projection.
+        if (this.engine.id === "core") {
+          this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
+        }
         if (this.sessionHistory) {
           this.outbound.sendDirect({
             type: "session_history",
@@ -1229,7 +1571,33 @@ export class Session {
             truncated: this.sessionHistory.truncated,
           });
         }
+        // TASK.117: the pending-prompt state rides the same per-connect
+        // cascade — a reconnecting renderer re-renders the in-flight prompt
+        // bubble (or clears it) BEFORE the replay ring's turn events land.
+        this.pushPendingPrompt();
+        // TASK.117: a LIVE outer turn's `turn_started` is re-asserted
+        // per-connect as handshake meta (sendDirect, regenerated on every
+        // ui_ready — never ring-buffered). Without it, a turn whose buffered
+        // turn_started has been evicted from the replay ring (REPLAY_BUFFER_CAP
+        // overflow) delivers its live agent_events to a fresh store that
+        // never saw the turn open — the renderer's turn-scoped guard drops
+        // every one, and the visible transcript freezes (the original
+        // TASK.117 symptom). Idempotent on the renderer: the handler sets the
+        // same running-turn state; the ring's own copy (if still present)
+        // replays to the same effect. Emitted for ANY engine's live turn —
+        // the wire contract for turn_started is engine-agnostic.
+        if (this.turnId !== null && this.lastTurnRequest !== undefined) {
+          this.outbound.sendDirect({ type: "turn_started", requestId: this.lastTurnRequest.requestId, turnId: this.turnId });
+        }
+        // TASK.117 control/accounting checkpoint: re-assert the wire state
+        // the ring may have evicted (cumulative finish totals, latest
+        // context_usage, the parked permission ask) BEFORE replay() — the
+        // fresh store's slots are then already correct, and any ring copy
+        // that still replays is idempotent (permission set-slot, finish
+        // once-per-step fold, context_usage latest-wins).
+        this.pushSessionCheckpoint();
         this.outbound.replay();
+        for (const delivery of this.agentDeliveries.values()) this.outbound.sendDirect({ type: "agent_message", delivery });
         // TASK.145 срез 2: re-post every still-unacknowledged detached-child
         // report to the just-(re)attached renderer — covers the race the
         // outer `sendDirect` at delivery time cannot: a renderer that was
@@ -1265,6 +1633,9 @@ export class Session {
           });
         }
         break;
+      case "steer_message":
+        void this.receiveAgentMessage({ messageId: message.requestId, sender: "local-supervisor-ui", recipientSessionId: this.sessionId, kind: "agent_message", payload: message.text, mode: "steer", createdAt: new Date().toISOString() });
+        return;
       case "user_message":
         // Typed input is proof that a human is at the screen (TASK.138): it
         // disarms the broker's unattended latch, so a session that went quiet
@@ -1527,6 +1898,68 @@ export class Session {
   }
 
   /**
+   * TASK.117: pushes the current pending-prompt state to the attached
+   * renderer. sendDirect (never ring-buffered — regenerated on every
+   * ui_ready). Only meaningful for a CORE host (its renderer owns the
+   * pending-bubble/pending_prompt folding; the capture itself is core-gated
+   * at admission, so a foreign engine never has a payload). `outcome`
+   * rides only the TERMINAL clears (see the protocol type's doc) — the
+   * per-connect state push carries none.
+   */
+  private pushPendingPrompt(outcome?: "settled" | "cancelled"): void {
+    // TASK.117 phase-1 defect 1: the pending_prompt wire contract is CORE
+    // ONLY — a foreign engine's renderer has no pending-bubble field at all,
+    // so it must never receive even a bare field-clear (the per-connect
+    // snapshot push below) or a terminal clear ("cancelled" would strip a
+    // block by turnId on a store that never had the field). The capture gate
+    // at admission already keeps pendingPrompt null on foreign engines; this
+    // guard makes the METHOD itself core-exclusive so no call site can leak a
+    // core-only message onto a native wire.
+    if (this.engine.id !== "core") {
+      return;
+    }
+    const pending = this.pendingPrompt;
+    // TASK.117 phase-1 defect 2: `outcome` rides ONLY the terminal clears —
+    // the per-connect state push is a pure snapshot and must never retire a
+    // live bubble ("cancelled" removes the renderer's block). Foreign
+    // engines have no payload ever (capture is core-gated), and a core host
+    // with nothing in flight still sends the bare field-clear so a
+    // reconnecting renderer cannot resurrect a stale pendingPrompt field.
+    if (pending === null && outcome !== undefined) {
+      this.outbound.sendDirect({ type: "pending_prompt", ...(outcome !== undefined ? { outcome } : {}) });
+      return;
+    }
+    this.outbound.sendDirect({
+      type: "pending_prompt",
+      ...(pending !== null
+        ? { turnId: pending.turnId, requestId: pending.requestId, text: pending.text, ...(pending.images?.length ? { images: pending.images } : {}) }
+        : {}),
+    });
+  }
+
+  /**
+   * TASK.117: the ONE exact-owner terminal clear, extracted VERBATIM from
+   * the turn teardown's `.finally` (behavior-identical: same owner equality
+   * on the captured requestId + outer turn UUID pair, same
+   * durability-derived outcome) so the regression for a stale older
+   * finalizer can invoke the REAL production guard against a NEWER
+   * admission-shaped pending record instead of a test replica. The owner
+   * check makes a stale clear a no-op: only the exact holder (the admission
+   * that minted the pair) may retire the slot; a NEWER turn's record always
+   * survives an older turn's terminal.
+   */
+  clearPendingPromptIfOwner(
+    requestId: string,
+    turnId: string,
+    outcome: "settled" | "cancelled",
+  ): void {
+    if (this.pendingPrompt !== null && this.pendingPrompt.requestId === requestId && this.pendingPrompt.turnId === turnId) {
+      this.pendingPrompt = null;
+      this.pushPendingPrompt(outcome);
+    }
+  }
+
+  /**
    * Slice P7.17 (F12, design §2.2): mirror of pushLspStatus — a pure read served
    * on demand, even mid-turn (contextBreakdown() never touches history/model/
    * events, safe to call while busy). sendDirect, never buffered: this is a
@@ -1536,6 +1969,140 @@ export class Session {
    */
   private pushContextBreakdown(): void {
     this.outbound.sendDirect({ type: "context_breakdown", breakdown: this.engine.contextBreakdown?.() ?? ZERO_CONTEXT_BREAKDOWN });
+  }
+
+  /**
+   * TASK.117 control/accounting checkpoint: ONE sendDirect snapshot re-sent
+   * on EVERY ui_ready (never ring-buffered), carrying exactly the wire state
+   * the replay ring may have evicted: cumulative finish totals, the latest
+   * context_usage reading, and the broker's CURRENTLY-SHOWN parked ask.
+   * CORE-ONLY by the capture gates (both checkpoint fields are written only
+   * for core-engine events; a foreign host's engine_session_tokens REPLACE
+   * semantics ride the ring untouched), so the whole push is core-gated
+   * here too — a native host never receives core checkpoint semantics.
+   * Additive-optional fields: whatever has not been captured yet is simply
+   * absent from the message (an older renderer / nothing-in-flight changes
+   * nothing). The permission re-assert re-sends the SAME
+   * `permission_request` payload the broker originally presented — the
+   * store's handler is idempotent (set-permission-slot), so a renderer that
+   * DID see the original (ring intact) just re-sets the same value.
+   */
+  private pushSessionCheckpoint(): void {
+    if (this.engine.id !== "core") {
+      return;
+    }
+    const shown = this.broker.pendingShownRequest();
+    // TASK.117 acceptance defect 1: for each open partial stream, count how
+    // much of its delta text the ring STILL HOLDS — the exact suffix the
+    // replay is about to redeliver to the fresh store. The fresh store's
+    // checkpoint re-open carries the FULL partial; the replayed suffix must
+    // not append again, so the ship carries `replayChars` = that suffix's
+    // length and the renderer consumes exactly that many chars of replayed
+    // deltas for this stream (see applyStreamDelta — an EXACT host-computed
+    // count, not a renderer-side prefix guess, because the ring holds an
+    // arbitrary SUFFIX of the stream, not its beginning).
+    const ring = this.outbound.ringView();
+    const replayCharsByKey = new Map<string, number>();
+    for (const message of ring) {
+      if (
+        message.type === "agent_event" &&
+        message.step !== undefined &&
+        (message.event.type === "text_delta" || message.event.type === "reasoning_delta")
+      ) {
+        const key = `${message.turnId}:${message.step}:${message.event.id}`;
+        replayCharsByKey.set(key, (replayCharsByKey.get(key) ?? 0) + message.event.text.length);
+      }
+    }
+    // TASK.117 acceptance defect 3: a SETTLED stream (text_end/reasoning_end
+    // seen, assistant append still pending behind the model finish) rides
+    // the checkpoint ONLY while its step has no durable assistant item yet —
+    // once the append lands the renderer re-opens from `session_history`
+    // hydration (the hydrated block owns the rendering), so shipping the
+    // settled partial would stack a twin block beside it. `settled === false`
+    // (mid-stream) always rides: the step is still being written.
+    const durableStepKeys = new Set<string>();
+    for (const item of this.engine.historyItems()) {
+      if (item.turnId !== undefined && item.step !== undefined && item.message.role === "assistant") {
+        durableStepKeys.add(`${item.turnId}:${item.step}`);
+      }
+    }
+    const streams = [...this.liveStreams.values()].filter(
+      (stream) => stream.settled !== true || !durableStepKeys.has(`${stream.turnId}:${stream.step}`),
+    );
+    // TASK.117 acceptance defect 1 (strict ownership vs new turns): when the
+    // last session_history was TRUNCATED, compute the set of turns it cut
+    // away ENTIRELY — present in durable history, absent from the snapshot
+    // the renderer holds, and not the live turn. The renderer's below-cut
+    // guard uses this as the positive discriminator for events whose turnId
+    // has no boundary entry (a NEW post-handshake turn is unknown to BOTH
+    // sets and must render). Same history the snapshot was built from, read
+    // at push time, so the two can never disagree.
+    let cutTurnIds: string[] | undefined;
+    if (this.sessionHistory?.truncated === true) {
+      const snapshotted = new Set(
+        this.sessionHistory.items.filter((item) => item.turnId !== undefined).map((item) => item.turnId as string),
+      );
+      const cut = new Set<string>();
+      for (const item of this.engine.historyItems()) {
+        if (item.turnId !== undefined && item.turnId !== this.turnId && !snapshotted.has(item.turnId)) {
+          cut.add(item.turnId);
+        }
+      }
+      // TASK.117 acceptance defect 1: on a truncated snapshot the field is
+      // ALWAYS shipped — an EMPTY list is authoritative ("the cut landed
+      // within turns; no whole turnId vanished") and must reach the renderer
+      // distinctly from an OMITTED one (untruncated history / older host),
+      // because the renderer's below-cut guard falls back to the LEGACY
+      // suppress-unless-live rule when the field is absent. Pre-fix the
+      // `cut.size > 0` gate made a truncated-but-no-whole-turn-cut
+      // checkpoint indistinguishable from a legacy one, so a NEW turn
+      // admitted after that handshake never rendered.
+      cutTurnIds = [...cut];
+    }
+    this.outbound.sendDirect({
+      type: "session_checkpoint",
+      // TASK.117 acceptance defect 2: the authoritative live turn id — see
+      // the protocol field's doc (the renderer's cut-replay guard exempts
+      // exactly this id, never a ring-replayed turn_started's).
+      ...(this.turnId !== null ? { liveTurnId: this.turnId } : {}),
+      ...(cutTurnIds !== undefined ? { cutTurnIds } : {}),
+      // TASK.117 acceptance defect 1: the currently-open partial streams ride
+      // the same per-connect checkpoint — an EMPTY liveStreams (idle turn)
+      // omits the field entirely, so an older renderer / an idle host sees a
+      // byte-identical message to before.
+      ...(streams.length > 0
+        ? {
+            streams: streams.map(({ turnId, step, streamId, kind, text }) => ({
+              step,
+              streamId,
+              kind,
+              text,
+              replayChars: replayCharsByKey.get(`${turnId}:${step}:${streamId}`) ?? 0,
+            })),
+          }
+        : {}),
+      // TASK.117 supervisor correction defect 1: the currently-executing tool
+      // calls — each id flips the reconnected store's hydrated `proposed`
+      // card to `running` (the ring-replayed tool_execution_start is the only
+      // other source, and a >CAP overflow evicts it). Absent when nothing is
+      // executing (idle turn / older renderer changes nothing).
+      ...(this.runningTools.size > 0 ? { runningTools: [...this.runningTools.keys()] } : {}),
+      ...(this.checkpointSessionTokens !== null
+        ? { sessionTokens: this.checkpointSessionTokens, ...(this.checkpointCountedSteps.length > 0 ? { countedSteps: [...this.checkpointCountedSteps] } : {}) }
+        : {}),
+      ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
+      ...(shown !== null
+        ? {
+            permission: {
+              requestId: shown.requestId,
+              toolName: shown.request.toolName,
+              input: shown.request.input,
+              mode: shown.request.mode,
+              metadata: toWireToolMeta(shown.request.metadata),
+            },
+          }
+        : {}),
+    });
   }
 
   private pushHooksList(): void {
@@ -1755,6 +2322,13 @@ export class Session {
         // renderer reload never resurrects the rewound-away conversation.
         this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
         this.outbound.clear();
+        // TASK.117: rewind success retires any leftover pending prompt — the
+        // rewound-to state owns the transcript tail now (rewind runs
+        // between turns, so this is normally already null; belt-and-braces
+        // for a rewind racing a just-admitted turn's early window).
+        // "cancelled": the rewound-away turn never happened.
+        this.pendingPrompt = null;
+        this.pushPendingPrompt("cancelled");
       }
       this.outbound.sendDirect({
         type: "rewind_result",
@@ -1790,6 +2364,7 @@ export class Session {
     } finally {
       this.busy = false;
       if (this.currentTurn === op) this.currentTurn = null;
+      this.drainAgentInbox();
       release();
     }
   }
@@ -1832,6 +2407,20 @@ export class Session {
         // events do — a fresh renderer attach should never see a half-open
         // "Compacting…" toast with no matching end.
         this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: sanitizeAgentEvent(event) });
+        // TASK.117 supervisor correction defect 2: the manual compaction's
+        // post-swap context_usage is the LATEST session-scoped reading — fold
+        // it into the emission-time checkpoint exactly like runTurn's loop
+        // does, so a reconnect whose >CAP overflow evicted the ring copy
+        // (sentinel-turnId event, plain emit) still restores the POST-swap
+        // meter instead of a stale pre-compaction one. Latest-wins scalar,
+        // same shape as checkpointContextUsage's other writers.
+        if (this.engine.id === "core" && event.type === "context_usage") {
+          this.checkpointContextUsage = {
+            estimatedTokens: event.estimatedTokens,
+            budgetTokens: event.budgetTokens,
+            source: event.source,
+          };
+        }
       }
     } catch (error) {
       // compactNow (AgentLoop.compactNow) is designed never to throw — a
@@ -1842,6 +2431,7 @@ export class Session {
       this.busy = false;
       this.abort = null;
       if (this.currentTurn === op) this.currentTurn = null;
+      this.drainAgentInbox();
       release();
     }
   }
@@ -1922,6 +2512,7 @@ export class Session {
    * broken durable sink, or shutdown already in progress).
    */
   private rejectQueuedSteerMessages(): void {
+    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Child session cannot accept queued delivery" });
     while (this.steerQueue.length > 0) {
       const queued = this.steerQueue.shift();
       if (queued !== undefined) {
@@ -1951,6 +2542,27 @@ export class Session {
     if (attachments !== undefined && (!this.engine.capabilities.supportsImages || !this.imagesAccepted())) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
       return false;
+    }
+    // TASK.117 phase-1 defect 3: the pending RAW prompt is captured HERE —
+    // at admission, AFTER the unsupported_images refusal (a refused message
+    // never becomes pending) and BEFORE the title derivation / hook /
+    // notices awaits below — owned by the outer turn UUID + requestId pair
+    // this method mints, so every later clear is an exact-owner check. CORE
+    // ONLY by construction: a foreign engine's renderer has no pending
+    // bubble contract, so it must never receive a payload-bearing
+    // pending_prompt (the capture gate, not a renderer-side engine guard).
+    // The RAW text is recorded — title/notices/plan-reminder augmentation is
+    // model-facing, never what the user typed.
+    const turnId = randomUUID();
+    const pendingTurnIdHolder: { turnId: string } = { turnId };
+    if (this.engine.id === "core") {
+      this.pendingPrompt = {
+        turnId,
+        requestId,
+        text,
+        ...(attachments?.length ? { images: attachments } : {}),
+      };
+      this.pushPendingPrompt();
     }
     // Title derivation (design §4.2): the first accepted user message in a
     // title-less session names it (the picker is useless without titles). Done
@@ -1990,8 +2602,22 @@ export class Session {
       }
     }
     this.busy = true;
-    const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice, origin).finally(
+    const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice, origin, pendingTurnIdHolder).finally(
       async () => {
+        // TASK.117: clear the pending prompt at this turn's terminal via the
+        // REAL exact-owner guard (`clearPendingPromptIfOwner` — extracted
+        // verbatim from this teardown, behavior-identical, so the guard is
+        // the one and only clear path). Outcome by DURABILITY, not by
+        // loop_end reason: a seen inner turn_start (currentStep set) PROVES
+        // the user frame was appended (core appends it before the first
+        // model request), so the renderer keeps the bubble as the rendering
+        // record ("settled") — without it the frame never landed and the
+        // bubble must be retired ("cancelled"), whatever ended the turn.
+        this.clearPendingPromptIfOwner(
+          requestId,
+          pendingTurnIdHolder.turnId,
+          this.currentStep !== undefined ? "settled" : "cancelled",
+        );
         // TASK.102 CUT-S2 §10.10.1 O1: `busy` means something different for a
         // root session than for a child, and that asymmetry is now explicit
         // instead of one flag doing two incompatible jobs. ROOT: `busy` means
@@ -2021,7 +2647,17 @@ export class Session {
         }
         this.abort = null;
         this.turnId = null;
+        this.currentStep = undefined;
+        this.lastTurnRequest = undefined;
         this.snapshotPaths.clear();
+        // TASK.117 acceptance defect 1: the partial-stream checkpoint dies with
+        // its turn — a settled turn's streams are finished (or dropped), so a
+        // later reconnect's session_checkpoint must not re-open a block for a
+        // stream nobody is emitting into anymore.
+        this.liveStreams.clear();
+        // TASK.117 supervisor correction defect 1: the running-tool set dies
+        // with its turn — no call of a settled turn is executing anymore.
+        this.runningTools.clear();
         this.flushPreviewArtifacts();
         // Tier-2 title refinement (design §3): fired after the FIRST turn's
         // teardown only (maybeRefineTitle no-ops once pendingTitleRefineText has
@@ -2072,6 +2708,7 @@ export class Session {
         if (this.currentTurn === turn) {
           this.currentTurn = null;
         }
+        this.drainAgentInbox();
       },
     );
     this.currentTurn = turn;
@@ -2120,6 +2757,7 @@ export class Session {
    * `finalizeChildTerminal`'s healthy-path re-check) instead of duplicated.
    */
   private startNextQueuedSteerTurn(): boolean {
+    if (this.drainAgentInbox(true)) return true;
     let next = this.steerQueue.shift();
     while (next !== undefined) {
       if (this.acceptUserMessage(next.requestId, next.text, next.images)) return true;
@@ -2406,12 +3044,29 @@ export class Session {
     attachments?: ImageAttachment[],
     carriesWorktreeExitNotice = false,
     origin?: "system",
+    pendingTurnIdHolder?: { turnId: string },
   ): Promise<void> {
-    const turnId = randomUUID();
+    // TASK.117 phase-1 defect 3: the outer turn UUID is minted by
+    // `acceptUserMessage` at ADMISSION (captured there into pendingPrompt,
+    // before any await) and threaded in via the holder — runTurn only
+    // adopts it here. Continuations (no holder: startContinuation's direct
+    // call) never carry a pending prompt.
+    const turnId = pendingTurnIdHolder?.turnId ?? randomUUID();
     const controller = new AbortController();
     this.turnId = turnId;
+    this.currentStep = undefined;
     this.abort = controller;
     this.outbound.emit({ type: "turn_started", requestId, turnId });
+    // TASK.117: remember the live turn's requestId for the per-connect
+    // turn_started re-assertion (see ui_ready) — the ring copy alone is not
+    // survivable past REPLAY_BUFFER_CAP overflow.
+    this.lastTurnRequest = { requestId, turnId };
+    const publicText = new Map<string, { text: string; truncated: boolean }>();
+    let lastCompletedText: { text: string; truncated: boolean } | null = null;
+    let nativeTurnId: string | null = null;
+    const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
+      this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? null, truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
+    };
 
     try {
       const options = {
@@ -2425,6 +3080,11 @@ export class Session {
         // all (its own doc comment), so AgentLoop.continueTurn's forwarded
         // `origin` is simply never read.
         ...(origin !== undefined ? { origin } : {}),
+        // TASK.117 causal stamp: the outer turn UUID rides into CoreEngine ->
+        // AgentLoop so every HistoryItem this turn appends (user frame step 0,
+        // assistant/tool items per inner step ordinal, cancelled stragglers
+        // included) carries {turnId, step}. Foreign engines ignore it.
+        ...(this.engine.id === "core" ? { turnId } : {}),
       };
       const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
       if (stream === undefined) {
@@ -2432,6 +3092,25 @@ export class Session {
       }
       let noticeConsumeAttempted = false;
       for await (const event of stream) {
+        nativeTurnId ??= this.engine.steeringStatus?.().nativeTurnId ?? null;
+        if (event.type === "text_start") publicText.set(event.id, { text: "", truncated: false });
+        if (event.type === "text_delta") {
+          const current = publicText.get(event.id) ?? { text: "", truncated: false };
+          const combined = current.text + event.text;
+          current.text = combined.slice(0, 32000); current.truncated ||= combined.length > 32000;
+          publicText.set(event.id, current);
+        }
+        if (event.type === "text_end") {
+          const complete = publicText.get(event.id);
+          if (complete?.text) lastCompletedText = { ...complete };
+          publicText.delete(event.id);
+        }
+        if (event.type === "finish" && event.finishReason !== "error") {
+          // Core providers can finish a text stream without a separate text_end.
+          for (const complete of publicText.values()) if (complete.text) lastCompletedText = { ...complete };
+          publicText.clear();
+        }
+        if (event.type === "loop_end") recordResult(event.reason);
         // TASK.159: the foreign-engine telemetry seam — see SessionOptions.
         // eventTap's own doc/invariant comment. Fires for every event this
         // loop observes (covers continueTurn too, since it drives the same
@@ -2471,7 +3150,29 @@ export class Session {
         this.captureSnapshotPath(event);
         this.previewArtifacts.observeStart(event);
         const wireEvent = sanitizeAgentEvent(event);
-        this.outbound.emit({ type: "agent_event", turnId, event: wireEvent });
+        // TASK.117: track the inner request ordinal (core's turn_start.turn,
+        // reset per outer turn) and stamp it onto the envelope for core
+        // turns — the renderer's fold checkpoint keys events and durable
+        // history items by `${turnId}:${step}`.
+        if (event.type === "turn_start") {
+          this.currentStep = event.turn;
+          // TASK.117 phase-1 defect 3: the FIRST core turn_start of the turn
+          // owning the pending slot hands ownership to DURABILITY — core
+          // appends the user frame strictly BEFORE the first model request,
+          // so generation starting proves the frame landed. Exact-owner
+          // check (turnId): a stale foreign/older event can never clear a
+          // newer turn's prompt. The renderer keeps its bubble as the live
+          // rendering record (host field cleared; no wire push here).
+          if (this.engine.id === "core" && this.pendingPrompt !== null && this.pendingPrompt.turnId === turnId) {
+            this.pendingPrompt = null;
+          }
+        }
+        this.outbound.emit({
+          type: "agent_event",
+          turnId,
+          ...(this.engine.id === "core" && this.currentStep !== undefined ? { step: this.currentStep } : {}),
+          event: wireEvent,
+        });
         if (this.child !== undefined) {
           this.observeChildEvent(event);
         }
@@ -2487,10 +3188,93 @@ export class Session {
           // producer) defaults to "unknown" rather than dropping the signal.
           this.reportProviderHealth?.({ kind: "failure", code: event.safe?.code ?? "unknown" });
         }
+        // TASK.117 control/accounting checkpoint: capture the wire state AT
+        // EMISSION TIME (before any ring cap/cut could evict it). Core-only:
+        // a finish's usage sums onto the cumulative session totals (mirrors
+        // the renderer's accumulateSessionTokens — the checkpoint REPLACES a
+        // fresh store's slot with exactly this, so the same finish can never
+        // double-count across a reconnect), and a context_usage reading is a
+        // latest-wins scalar. History items carry no usage fields, so after a
+        // ring overflow this host-side capture is the only surviving record.
+        if (this.engine.id === "core" && event.type === "finish") {
+          this.checkpointSessionTokens = accumulateCheckpointTokens(this.checkpointSessionTokens, event.usage);
+          // Newest-first; trimmed to the bounded window (an entry older
+          // than the ring capacity can never replay again).
+          if (this.currentStep !== undefined) {
+            this.checkpointCountedSteps.unshift(`${turnId}:${this.currentStep}`);
+            if (this.checkpointCountedSteps.length > CHECKPOINT_COUNTED_STEPS_MAX) {
+              this.checkpointCountedSteps.length = CHECKPOINT_COUNTED_STEPS_MAX;
+            }
+          }
+        }
+        if (this.engine.id === "core" && event.type === "context_usage") {
+          this.checkpointContextUsage = {
+            estimatedTokens: event.estimatedTokens,
+            budgetTokens: event.budgetTokens,
+            source: event.source,
+          };
+        }
+        // TASK.117 acceptance defect 1: fold the partial-stream checkpoint AT
+        // EMISSION TIME (before any ring cap could evict the stream's
+        // text_start). One Map entry per OPEN stream, keyed by the same
+        // `${turnId}:${step}:${streamId}` scope the renderer's
+        // openStreamBlocks uses; the value accumulates the FULL body so a
+        // reconnecting renderer can re-open the block and REPLACE with the
+        // complete partial (never re-append the already-streamed prefix).
+        // text_end/reasoning_end delete the entry below — only genuinely
+        // unfinished streams ride the checkpoint.
+        if (this.engine.id === "core" && this.currentStep !== undefined) {
+          if (event.type === "text_start") {
+            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, streamId: event.id, kind: "text", text: "" });
+          } else if (event.type === "text_delta") {
+            const entry = this.liveStreams.get(`${turnId}:${this.currentStep}:${event.id}`);
+            if (entry !== undefined) {
+              entry.text += event.text;
+            }
+          } else if (event.type === "text_end") {
+            // TASK.117 acceptance defect 3: do NOT delete on text_end — core
+            // appends the assistant item only AFTER the model stream's finish
+            // settles, so a reconnect inside that gap would otherwise see no
+            // checkpoint stream AND no durable item (and no ring text_start
+            // after >CAP): the fully-streamed text vanished. The entry rides
+            // until its step becomes DURABLE (pushSessionCheckpoint filters
+            // against engine history) or the turn's teardown clears it.
+            const endedText = this.liveStreams.get(`${turnId}:${this.currentStep}:${event.id}`);
+            if (endedText !== undefined) {
+              endedText.settled = true;
+            }
+          } else if (event.type === "reasoning_start") {
+            this.liveStreams.set(`${turnId}:${this.currentStep}:${event.id}`, { turnId, step: this.currentStep, streamId: event.id, kind: "reasoning", text: "" });
+          } else if (event.type === "reasoning_delta") {
+            const entry = this.liveStreams.get(`${turnId}:${this.currentStep}:${event.id}`);
+            if (entry !== undefined) {
+              entry.text += event.text;
+            }
+          } else if (event.type === "reasoning_end") {
+            // TASK.117 acceptance defect 3: same retention as text_end above
+            // — completed reasoning is never a durable item of its own; only
+            // the assistant append (after finish) makes the step durable.
+            const endedReasoning = this.liveStreams.get(`${turnId}:${this.currentStep}:${event.id}`);
+            if (endedReasoning !== undefined) {
+              endedReasoning.settled = true;
+            }
+          }
+        }
         if (event.type === "finish") {
           // TASK.45 W11: a model step that reached a finish reason completed a
           // real request against the pinned connection's credential/endpoint.
           this.reportProviderHealth?.({ kind: "success" });
+        }
+        // TASK.117 supervisor correction defect 1: fold the running-tool set AT
+        // EMISSION TIME (before any ring cap could evict the start event) —
+        // added on tool_execution_start, removed on its paired tool_result, so
+        // the set always reads "executing right now" at any later checkpoint
+        // push. Mirrors the liveStreams/checkpoint fields' capture discipline.
+        if (this.engine.id === "core" && event.type === "tool_execution_start") {
+          this.runningTools.set(event.toolCallId, true);
+        }
+        if (this.engine.id === "core" && event.type === "tool_result") {
+          this.runningTools.delete(event.outcome.toolCallId);
         }
         if (event.type === "tool_result") {
           await this.emitAfterSnapshot(event.outcome);
@@ -2500,6 +3284,7 @@ export class Session {
     } catch (error) {
       // runTurn is designed never to throw (it maps failures to loop_end), so
       // this is a defensive net; the host must not crash on a rogue turn.
+      recordResult("error");
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
     }
   }
@@ -2510,6 +3295,11 @@ export class Session {
     try {
       await this.onContinuationReady?.();
       if (this.continuationMode === "model") {
+        // TASK.117: a continuation has NO prompt — clear any stale pending
+        // state BEFORE the first turn_start of the resumed segment.
+        // "cancelled": nothing is in flight; retire any bubble outright.
+        this.pendingPrompt = null;
+        this.pushPendingPrompt("cancelled");
         await this.runTurn(randomUUID(), undefined);
       }
       if (!this.relocating) {
@@ -2519,9 +3309,16 @@ export class Session {
       this.busy = false;
       this.abort = null;
       this.turnId = null;
+      this.currentStep = undefined;
+      this.lastTurnRequest = undefined;
       this.snapshotPaths.clear();
+      this.liveStreams.clear();
+      // TASK.117 supervisor correction defect 1: same teardown bound as
+      // acceptUserMessage's — the running set never outlives its turn.
+      this.runningTools.clear();
       this.flushPreviewArtifacts();
       this.currentTurn = null;
+      this.drainAgentInbox();
     }
   }
 
@@ -2598,9 +3395,19 @@ export class Session {
   }
 
   private onCancel(): void {
+    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Cancelled by Stop before queued delivery" });
     if (this.abort) {
       this.abort.abort();
     }
+    // TASK.117: cancel is a terminal boundary for the pending prompt — the
+    // turn's teardown will also clear it, but clearing HERE covers the
+    // pre-append window (UserPromptSubmit hook await) where no teardown has
+    // started yet... teardown runs regardless; this early clear keeps a
+    // reconnect mid-cancel from resurrecting the bubble. "cancelled": the
+    // frame may never have become durable — the bubble must be retired, not
+    // kept as a rendering record.
+    this.pendingPrompt = null;
+    this.pushPendingPrompt("cancelled");
     // Release parked asks so the dispatcher unblocks; the loop then ends the turn
     // as cancelled (design §4.4 — the broker gets no AbortSignal by contract).
     this.broker.denyAll("turn cancelled", "turn_cancelled");
@@ -2824,6 +3631,35 @@ export class Session {
  * hydrate). `maxItems` is `SESSION_HISTORY_MAX_ITEMS` unless the composition
  * root resolved a dev/automation override (TASK.188 S4, Session.historyMaxItems).
  */
+/**
+ * TASK.117 control/accounting checkpoint: SUMs one core `finish` AgentEvent's
+ * TokenUsage onto the host-side cumulative totals — the EXACT semantics of
+ * the renderer's `accumulateSessionTokens` (store.ts), duplicated host-side
+ * by design: durable history carries no usage fields, so after a replay-ring
+ * overflow this accumulation is the only surviving record of what a fresh
+ * store must start from (the session_checkpoint REPLACES the fresh store's
+ * slot with this value; live finishes after the reconnect then stay
+ * exactly-once on top of it). Missing TokenUsage fields count as 0; `total`
+ * prefers the provider's own total when present, else input+output.
+ */
+function accumulateCheckpointTokens(
+  prev: { input: number; output: number; total: number; latestCacheRead?: number; latestCacheInput?: number } | null,
+  usage: TokenUsage,
+): { input: number; output: number; total: number; latestCacheRead?: number; latestCacheInput?: number } {
+  const base = prev ?? { input: 0, output: 0, total: 0 };
+  const input = usage.inputTokens ?? 0;
+  const output = usage.outputTokens ?? 0;
+  const total = usage.totalTokens ?? input + output;
+  return {
+    input: base.input + input,
+    output: base.output + output,
+    total: base.total + total,
+    ...(usage.cachedInputTokens !== undefined
+      ? { latestCacheRead: usage.cachedInputTokens, latestCacheInput: input }
+      : {}),
+  };
+}
+
 function buildSessionHistory(
   bootHistory: readonly HistoryItem[],
   maxItems: number,
@@ -2838,6 +3674,13 @@ function buildSessionHistory(
     createdAt: item.createdAt,
     ...(item.kind !== undefined ? { kind: item.kind } : {}),
     ...(item.origin !== undefined ? { origin: item.origin } : {}),
+    // TASK.117 phase-1 defect 2: the causal stamps ride verbatim — the
+    // renderer decides from the HANDSHAKE's engine discriminator whether
+    // they mean durable coverage (core) or are inert hydration data (a
+    // native host's fixed boot snapshot may carry stamped items through the
+    // shared projection), never from the stamps' presence/absence alone.
+    ...(item.turnId !== undefined ? { turnId: item.turnId } : {}),
+    ...(item.step !== undefined ? { step: item.step } : {}),
     message: item.message,
   }));
   return { items, truncated };

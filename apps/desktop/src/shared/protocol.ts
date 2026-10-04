@@ -1,3 +1,4 @@
+import type { AgentDelivery } from "./communication.js";
 /**
  * Wire protocol between the sandboxed renderer and the host utilityProcess
  * (design/phase-mvp.md §3). FROZEN by task MVP.1 — do not change shapes here
@@ -193,6 +194,16 @@ export interface WireHistoryItem {
   kind?: "normal" | "compact_summary" | "microcompact_cleared";
   /** TASK.145 срез 2: mirrors core's `HistoryItem.origin` — marks a `role:"user"` item the host injected (a detached child's report), not the human. See that field's own doc. */
   origin?: "system";
+  /**
+   * TASK.117 causal stamps, mirrored from core's `HistoryItem.turnId`/`step`
+   * (buildSessionHistory copies them verbatim). `turnId` = the outer turn
+   * UUID (`turn_started.turnId`), `step` = the inner request ordinal within
+   * that outer turn (user frame is 0). Absent on every pre-117 item and on
+   * foreign-engine history (their projection never stamps) — the renderer
+   * treats absent as "unknown" and never matches against it.
+   */
+  turnId?: string;
+  step?: number;
   message: ChatMessage; // type-only import from core; erased from the renderer bundle
 }
 
@@ -368,6 +379,7 @@ export type UiToHostMessage =
       // below is the fail-closed authority, not this type comment.
       origin?: "system";
     } // starts a turn
+  | { type: "steer_message"; requestId: string; text: string }
   | { type: "cancel_turn" } // abort the in-flight turn
   | { type: "exit_worktree"; cleanup: "auto" | "keep" }
   | {
@@ -497,11 +509,162 @@ export type HostToUiMessage =
   // ui_ready AFTER host_ready and BEFORE Outbound.replay(), only when the boot
   // history is non-empty. The renderer mapping into transcript blocks is task
   // 2.1.5; task 2.1.1 adds only the type + a no-op reducer branch.
+  | { type: "agent_message"; delivery: AgentDelivery }
   | { type: "session_history"; sessionId: string; items: WireHistoryItem[]; truncated: boolean }
   | { type: "worktree_notice"; message: string }
   | { type: "turn_started"; requestId: string; turnId: string }
   | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" }
-  | { type: "agent_event"; turnId: string; event: WireAgentEvent }
+  /**
+   * TASK.117 additive envelope step: the inner request ordinal within the
+   * outer turn, mirroring core's `turn_start.turn` (1-based; the loop resets
+   * it per outer turn). Sent ONLY by a core-engine host (session.ts stamps it
+   * when `engine.id === "core"`); absent on every foreign-engine and legacy
+   * message — the renderer treats absent as unknown and never matches
+   * against it. Rides EVERY agent_event of that step (turn_start, streams,
+   * tool lifecycle, turn_end alike) so replayed events and durable history
+   * items share one key space: `${turnId}:${step}`.
+   */
+  | { type: "agent_event"; turnId: string; step?: number; event: WireAgentEvent }
+  /**
+   * TASK.117: the host's authoritative pending-prompt push (sendDirect,
+   * regenerated on every ui_ready — never ring-buffered). Present iff an
+   * outer turn with a user prompt is live AND its durable user item
+   * (turnId, step 0) has not landed yet. A null payload (fields absent)
+   * clears the renderer's pending prompt state; `outcome` tells the renderer
+   * what to do with a rendered pending BUBBLE block on that clear:
+   *   • absent — the state push itself (ui_ready cascade); keep the bubble
+   *     (it is the turn's only rendered record until a fresh
+   *     session_history supersedes it — its frame may not be durable yet).
+   *   • "settled" — the turn TERMINATED normally (teardown); the user frame
+   *     IS durable, keep the bubble as the rendering record (the next
+   *     reconnect's session_history replaces it by identity).
+   *   • "cancelled" — the prompt never became durable (cancel mid-hook,
+   *     shutdown, rewind, pre-append refusal): retire the bubble too, the
+   *     conversation must not show a message that never happened.
+   * Core-engine hosts only; foreign engines never emit a non-empty one.
+   */
+  | {
+      type: "pending_prompt";
+      turnId?: string;
+      requestId?: string;
+      text?: string;
+      images?: ImageAttachment[];
+      outcome?: "settled" | "cancelled";
+    }
+  // TASK.117 control/accounting checkpoint: ONE snapshot message re-sent on
+  // EVERY ui_ready (sendDirect, regenerated per connect — never
+  // ring-buffered) so a reconnecting renderer recovers exactly the wire
+  // state the replay ring used to hold — even after the ring has overflowed
+  // (REPLAY_BUFFER_CAP) and evicted every finish/context_usage event.
+  // CORE-ENGINE ONLY: durable history carries no usage/control fields, so a
+  // core host captures these AT EMISSION TIME in its own turn-event loop; a
+  // native Codex/Claude host never sends one (their `engine_session_tokens`
+  // REPLACE semantics ride the ring exactly as before). Every field is
+  // additive-optional: absent (older host / nothing captured yet) = the
+  // renderer changes nothing.
+  //   • `sessionTokens` — the session's cumulative finish totals (SUM
+  //     semantics, mirroring the renderer's accumulateSessionTokens); a
+  //     fresh store REPLACES with this exact value, never re-adds.
+  //   • `contextUsage` — the latest context_usage reading (latest-wins
+  //     scalar; absent when the loop has not reported one yet).
+  //   • `permission` — the broker's CURRENTLY-SHOWN parked ask, re-asserted
+  //     so a reconnect (whose fresh store missed the evicted
+  //     permission_request) re-renders the modal. Absent when no ask is
+  //     parked — an absent field never resurrects a settled ask.
+  | {
+      /**
+       * TASK.117 acceptance defect 1: the live PARTIAL stream checkpoint. The
+       * agent_event replay ring is bounded (REPLAY_BUFFER_CAP); a long model
+       * stream (>CAP deltas between two ui_readys) evicts the step's
+       * `text_start`, and the renderer's `text_delta` handler DROPS deltas
+       * with no open stream block — the visible transcript froze at the last
+       * durable assistant item (the original TASK.117 symptom, surviving the
+       * snapshot rebuild). This field re-asserts the CURRENTLY-OPEN streams
+       * on the session_checkpoint (sendDirect, regenerated per ui_ready —
+       * never ring-buffered), so the reconnecting renderer re-opens its
+       * `openStreamBlocks` entries and BOTH the partial text and every later
+       * live delta of the same (turnId, step, streamId) render.
+       *
+       * Shape mirrors the wire stream events: one entry per OPEN stream
+       * (bounded — a step holds at most a couple), `text`/`reasoning` is the
+       * FULL accumulated body so far (host-side fold at emission time; the
+       * renderer REPLACES, never concatenates). `replayChars` is the exact
+       * number of chars of THIS stream's delta text the replay ring still
+       * holds — an arbitrary SUFFIX of the partial (the ring evicts from the
+       * front), so the renderer cannot recognize replayed deltas by prefix
+       * matching; the host computes the count at push time and the renderer
+       * consumes exactly that many chars of replayed deltas before appending
+       * live ones. Absent on an idle turn, on non-core engines (host-side
+       * capture gate) and on older hosts — the renderer changes nothing.
+       * `streamId` is the raw text_start id (step-scoped; the renderer keys
+       * by `${turnId}:${step}:${streamId}`). A ring delta never precedes its
+       * own text_start (same for-await, FIFO ring), so the replayed suffix
+       * is contiguous with the live tail and the char count is exact.
+       */
+      streams?: { step: number; streamId: string; kind: "text" | "reasoning"; text: string; replayChars: number }[];
+      /**
+       * TASK.117 acceptance defect 2: the LIVE outer turn's id at push time
+       * (`Session.turnId`), absent when no turn is running. The renderer's
+       * history-cut replay guard uses it to exempt the CURRENT turn's events
+       * from below-cut suppression when the truncated snapshot carries no
+       * item of that turn yet (all its durable items are still pending) —
+       * a ring-replayed `turn_started` for a CUT turn must never earn the
+       * same exemption (it re-sets the renderer's `turn.turnId` on replay,
+       * so the store's own slot is not a trustworthy discriminator).
+       */
+      liveTurnId?: string;
+      /**
+       * TASK.117 acceptance defect 1 (strict ownership vs new turns): the
+       * ids of every outer turn the truncated session_history cut away
+       * ENTIRELY (present in the engine's durable history, absent from the
+       * snapshot, and not the live turn). Computed by the host at push time
+       * from the SAME history the snapshot was built from — the only party
+       * that knows both sets. The renderer's below-cut guard uses it as the
+       * positive discriminator for events whose turnId has NO boundary
+       * entry: suppressed iff listed here; an UNKNOWN id (a genuinely NEW
+       * turn admitted after the handshake) renders. Shipped on EVERY
+       * truncated snapshot — an EMPTY list is authoritative (the cut landed
+       * within turns; nothing whole was cut, so no unknown id may be
+       * suppressed). Absent ONLY when the snapshot was not truncated
+       * (nothing was cut) and on older hosts — an older renderer ignores
+       * it, and a fresh renderer on an older host keeps the legacy
+       * suppress-unless-live rule.
+       */
+      cutTurnIds?: string[];
+      type: "session_checkpoint";
+      /**
+       * TASK.117 supervisor correction defect 1: toolCallIds whose
+       * `tool_execution_start` has been emitted and whose `tool_result` has
+       * not landed yet (host-side fold at emission time). The assistant item
+       * carrying the call is durable BEFORE dispatch, so a reconnecting
+       * store hydrates the card `proposed`; the ring-replayed start event is
+       * the only other `running` source and a >CAP overflow evicts it. Each
+       * id flips the hydrated card to `running`; a later live/replayed
+       * `tool_result` settles it normally. Absent when nothing is executing
+       * (idle turn, permission-parked call — its start was never emitted —
+       * or an older host): the renderer changes nothing.
+       */
+      runningTools?: string[];
+      sessionTokens?: { input: number; output: number; total: number; latestCacheRead?: number; latestCacheInput?: number };
+      /**
+       * Fold keys (`${turnId}:${step}`) of every finish whose usage the
+       * sessionTokens total ALREADY includes (host-side emission-time
+       * accumulation). The renderer must NEVER re-apply a finish whose key
+       * is in this set — whether it replays from the ring (the normal case)
+       * or arrives uncovered (the finish-yielded-before-append window).
+       * Present only alongside sessionTokens; bounded (the host keeps the
+       * newest entries — anything older cannot still be in the ring).
+       */
+      countedSteps?: string[];
+      contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
+      permission?: {
+        requestId: string;
+        toolName: string;
+        input: unknown;
+        mode: PermissionMode;
+        metadata: WireToolMeta;
+      };
+    }
   | {
       type: "permission_request";
       requestId: string;
@@ -952,6 +1115,7 @@ export const backgroundChildCancelRequestSchema = z
 export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   uiReadySchema,
   userMessageSchema,
+  z.object({ type: z.literal("steer_message"), requestId: z.string(), text: z.string().min(1).max(32000) }).strict(),
   cancelTurnSchema,
   exitWorktreeSchema,
   permissionResponseSchema,

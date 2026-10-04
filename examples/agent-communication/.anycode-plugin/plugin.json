@@ -1,0 +1,11 @@
+{
+  "name": "anycode-communication",
+  "version": "1.0.0",
+  "description": "Communicate with explicitly authorized live AnyCode sessions",
+  "mcpServers": {
+    "sessions": {
+      "command": "node",
+      "args": ["stdio.mjs", "/absolute/path/to/communication.json"]
+    }
+  }
+}

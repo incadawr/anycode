@@ -768,6 +768,8 @@ export class AgentLoop {
       systemContext?: string;
       /** TASK.145 срез 2: stamps the appended user HistoryItem's `origin` (host-injected, not human-typed). See HistoryItem.origin's doc. */
       origin?: "system";
+      /** TASK.117: outer turn UUID stamp threaded onto every HistoryItem this turn appends (see runTurnInner's own doc). */
+      turnId?: string;
     },
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const tap = this.config.eventTap;
@@ -792,7 +794,7 @@ export class AgentLoop {
    * exactly as the prior host segment left it.
    */
   async *continueTurn(
-    options?: { signal?: AbortSignal; mode?: PermissionMode },
+    options?: { signal?: AbortSignal; mode?: PermissionMode; turnId?: string },
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const tap = this.config.eventTap;
     if (tap === undefined) {
@@ -817,11 +819,22 @@ export class AgentLoop {
       attachments?: ImageAttachment[];
       systemContext?: string;
       origin?: "system";
+      /**
+       * TASK.117 causal stamps (optional, presentation-only): the HOST-OWNED
+       * outer turn UUID this run belongs to. When present, every HistoryItem
+       * this run appends is stamped with it plus the item's inner step
+       * ordinal (user frame = 0, assistant/tool = the emitting step's
+       * `turn_start.turn`, including cancelled stragglers). Absent (CLI,
+       * foreign engines, subagent children — every pre-117 caller) leaves
+       * every append byte-identical to before.
+       */
+      turnId?: string;
     },
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const signal = options?.signal;
     const maxTurns = this.config.maxTurns ?? DEFAULT_MAX_TURNS;
     const deadlineAt = this.config.deadlineAt;
+    const turnId = options?.turnId;
 
     // Pre-aborted: end immediately, before hooks or any model call.
     if (signal?.aborted) {
@@ -876,7 +889,7 @@ export class AgentLoop {
           content: promptText,
           ...(attachments?.length ? { images: attachments } : {}),
         },
-        { origin: options?.origin },
+        { origin: options?.origin, ...(turnId !== undefined ? { turnId, step: 0 } : {}) },
       );
     }
 
@@ -975,7 +988,7 @@ export class AgentLoop {
       let turn = 0;
       for (;;) {
         if (signal?.aborted) {
-          yield* this.emitLoopEnd("cancelled", turn, signal);
+          yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
           return;
         }
 
@@ -994,7 +1007,7 @@ export class AgentLoop {
         // on a timer would report `cancelled` (indistinguishable from a user
         // cancel) and would leave the history mid-turn.
         if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
-          yield* this.emitLoopEnd("max_turns", turn - 1, signal);
+          yield* this.emitLoopEnd("max_turns", turn - 1, signal, turnId, turn - 1 >= 1 ? turn - 1 : undefined);
           return;
         }
 
@@ -1016,7 +1029,7 @@ export class AgentLoop {
           if (this.config.ceiling?.supervisedRoot?.() !== true) {
             const granted = yield* this.tryCeilingGrant(maxTurns, signal);
             if (!granted) {
-              yield* this.emitLoopEnd("max_turns", turn - 1, signal);
+              yield* this.emitLoopEnd("max_turns", turn - 1, signal, turnId, turn - 1 >= 1 ? turn - 1 : undefined);
               return;
             }
           }
@@ -1037,7 +1050,7 @@ export class AgentLoop {
           yield* this.runCompactionCycle("auto", signal);
         }
         if (signal?.aborted) {
-          yield* this.emitLoopEnd("cancelled", turn, signal);
+          yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
           return;
         }
 
@@ -1198,7 +1211,7 @@ export class AgentLoop {
             // event (transcript block / CLI line / host log) before loop_end so the
             // real provider failure is diagnosable (TASK.2 DoD-c), never swallowed.
             if (signal?.aborted) {
-              yield* this.emitLoopEnd("cancelled", turn, signal);
+              yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
             } else {
               const { retry, safe } = buildErrorMetadata(error, attemptsMade, maxAttempts, hadModelOutput);
               yield { type: "error", error, retry, safe };
@@ -1206,9 +1219,9 @@ export class AgentLoop {
               // (before this generator resumes) — re-check so a synchronous
               // abort there still ends the loop as "cancelled", not "error".
               if (signal?.aborted) {
-                yield* this.emitLoopEnd("cancelled", turn, signal);
+                yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
               } else {
-                yield* this.emitLoopEnd("error", turn, signal);
+                yield* this.emitLoopEnd("error", turn, signal, turnId, turn);
               }
             }
             return;
@@ -1218,7 +1231,7 @@ export class AgentLoop {
         }
 
         if (signal?.aborted) {
-          yield* this.emitLoopEnd("cancelled", turn, signal);
+          yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
           return;
         }
 
@@ -1239,7 +1252,7 @@ export class AgentLoop {
         // and the error (still visible upstream, never swallowed) was already
         // being forgiven by construction before the loop was even noticed.
         if (streamErrored && !sawFinish && !degenerationVerdict) {
-          yield* this.emitLoopEnd("error", turn, signal);
+          yield* this.emitLoopEnd("error", turn, signal, turnId, turn);
           return;
         }
 
@@ -1247,10 +1260,10 @@ export class AgentLoop {
         // count anchors the delta correctly (design §2.5), then append the
         // assistant message and report context_usage.
         this.context.noteUsage(usage);
-        this.history.append({
-          role: "assistant",
-          content: buildAssistantParts(textParts.join(""), toolCalls),
-        });
+        this.history.append(
+          { role: "assistant", content: buildAssistantParts(textParts.join(""), toolCalls) },
+          ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []),
+        );
         const usageEstimate = this.context.estimate();
         yield {
           type: "context_usage",
@@ -1262,7 +1275,7 @@ export class AgentLoop {
         // Sentinel: a step with no proposed tool calls ends the loop.
         if (toolCalls.length === 0) {
           yield { type: "turn_end", turn, finishReason };
-          yield* this.emitLoopEnd("completed", turn, signal);
+          yield* this.emitLoopEnd("completed", turn, signal, turnId, turn);
           return;
         }
 
@@ -1305,7 +1318,7 @@ export class AgentLoop {
           const outcome = outcomeById.get(call.id);
           if (outcome) {
             const annotated = await this.annotateToolResultImages(outcome);
-            this.history.append(buildToolResultMessage(call, annotated));
+            this.history.append(buildToolResultMessage(call, annotated), ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []));
             if (annotated.status === "success") {
               this.ceilingSuccessfulToolCalls += 1;
             }
@@ -1324,14 +1337,14 @@ export class AgentLoop {
         if (transition !== undefined) {
           yield { type: "turn_end", turn, finishReason };
           yield { type: "workspace_transition", transition };
-          yield* this.emitLoopEnd("workspace_transition", turn, signal);
+          yield* this.emitLoopEnd("workspace_transition", turn, signal, turnId, turn);
           return;
         }
 
         // Cancellation mid-dispatch: history is now balanced (all outcomes written),
         // so this exit satisfies the no-dangling-tool_call invariant.
         if (signal?.aborted) {
-          yield* this.emitLoopEnd("cancelled", turn, signal);
+          yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
           return;
         }
 
@@ -1667,6 +1680,8 @@ export class AgentLoop {
     reason: LoopEndReason,
     turns: number,
     signal: AbortSignal | undefined,
+    turnId?: string,
+    step?: number,
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const dangling = this.history.unansweredToolCallIds();
     if (dangling.length > 0) {
@@ -1681,18 +1696,21 @@ export class AgentLoop {
           durationMs: 0,
         };
         yield { type: "tool_result", outcome };
-        this.history.append({
-          role: "tool",
-          content: [
-            {
-              type: "tool_result",
-              toolCallId,
-              toolName,
-              text: outcome.modelText,
-              status: "cancelled",
-            },
-          ],
-        });
+        this.history.append(
+          {
+            role: "tool",
+            content: [
+              {
+                type: "tool_result",
+                toolCallId,
+                toolName,
+                text: outcome.modelText,
+                status: "cancelled",
+              },
+            ],
+          },
+          ...(turnId !== undefined && step !== undefined ? [{ turnId, step }] as const : []),
+        );
       }
     }
 

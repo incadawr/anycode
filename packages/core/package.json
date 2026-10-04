@@ -1,6 +1,6 @@
 {
   "name": "@anycode/core",
-  "version": "0.0.30",
+  "version": "0.0.31",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,6 +12,7 @@
     "./persistence": "./src/adapters/node/sqlite-persistence.ts",
     "./node-git": "./src/adapters/node/node-git.ts",
     "./node-execution": "./src/adapters/node/node-execution.ts",
+    "./communication-mcp": "./src/mcp/communication-server.ts",
     "./mcp-admin": "./src/mcp/admin.ts",
     "./skills-admin": "./src/skills/admin.ts",
     "./subagents-admin": "./src/subagents/admin.ts",

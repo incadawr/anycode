@@ -120,8 +120,13 @@ describe("Session — session_history hydration", () => {
       const tail = h.received.slice(before);
       expect(tail[0]?.type).toBe("host_ready");
       expect(tail[1]?.type).toBe("session_history");
+      // TASK.117: the per-connect state cascade rides between session_history
+      // and replay() — pending_prompt (bare field-clear; no turn is live at
+      // this point) and session_checkpoint (core-only control snapshot).
+      expect(tail[2]?.type).toBe("pending_prompt");
+      expect(tail[3]?.type).toBe("session_checkpoint");
       // Everything after is the replayed buffer (turn_started first).
-      expect(tail[2]?.type).toBe("turn_started");
+      expect(tail[4]?.type).toBe("turn_started");
       expect(tail.some(agentEventOf("loop_end"))).toBe(true);
     } finally {
       h.close();
