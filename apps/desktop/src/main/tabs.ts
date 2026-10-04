@@ -1,3 +1,4 @@
+import type { AgentDelivery } from "../shared/communication.js";
 /**
  * TabHostManager (design/phase-2.md §2.2): the multi-host generalization of the
  * MVP single-host lifecycle. One window / one renderer / N host utilityProcesses
@@ -814,6 +815,39 @@ export class TabHostManager {
    * (S2d, not this slice) needs to see children too, tagged via `childOf`, to
    * project the child-run ledger next to the renderer's (child-blind) store.
    */
+  private readonly communicationListeners = new Set<(sessionId: string, delivery: AgentDelivery) => void>();
+  onCommunicationDelivery(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void {
+    this.communicationListeners.add(listener);
+    return () => { this.communicationListeners.delete(listener); };
+  }
+
+  /** Narrow production RPC; pins both tab and process generation at dispatch. */
+  communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string): Promise<unknown> {
+    const tab = [...this.tabs.values()].find((t) => t.sessionId === sessionId);
+    if (!tab?.proc || tab.state !== "running" || (expectedWorkspace !== undefined && tab.workspace !== expectedWorkspace)) return Promise.reject(new Error("Session host unavailable"));
+    const proc = tab.proc;
+    const requestId = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => finish(new Error("Host response timed out; delivery unknown")), 20000);
+      const onMessage = (raw: unknown) => {
+        const message = raw as { type?: string; requestId?: string; result?: unknown; error?: string };
+        if (message?.type !== "communication_response" || message.requestId !== requestId) return;
+        finish(message.error ? new Error(message.error) : undefined, message.result);
+      };
+      const onExit = () => finish(new Error("Host disconnected; delivery unknown"));
+      const finish = (error?: Error, result?: unknown) => {
+        clearTimeout(timer);
+        proc.removeListener("message", onMessage);
+        proc.removeListener("exit", onExit);
+        if (error) reject(error); else resolve(result);
+      };
+      proc.on("message", onMessage);
+      proc.once("exit", onExit);
+      try { proc.postMessage({ type: "communication_request", requestId, operation, payload }); }
+      catch (error) { finish(error instanceof Error ? error : new Error("Host unavailable")); }
+    });
+  }
+
   listTabs(): ReadonlyArray<TabSummary> {
     return [...this.tabs.values()].map((tab) => ({
       tabId: tab.tabId,
@@ -1097,6 +1131,12 @@ export class TabHostManager {
       return;
     }
     const data = message as { type?: unknown; requestId?: unknown };
+    if (data.type === "communication_delivery") {
+      const delivery = (message as { delivery?: AgentDelivery }).delivery;
+      if (tab.proc !== child || !delivery || delivery.envelope?.recipientSessionId !== tab.sessionId) return;
+      for (const listener of this.communicationListeners) { try { listener(tab.sessionId, delivery); } catch { /* independent observers */ } }
+      return;
+    }
     if (data.type === WORKTREE_TRANSITION_MESSAGE_TYPE) {
       await this.relocateTab(tab, child, message as WorktreeTransitionMessage);
       return;

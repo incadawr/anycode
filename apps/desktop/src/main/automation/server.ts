@@ -1358,6 +1358,10 @@ async function route(
   // Prompt-queue routes (slice-P7.14-cut.md §5 W3): mirror the SAME store
   // actions Composer/PromptQueue.tsx call, through the facade's thin wrappers
   // — no second path. Queue state itself is read via the existing GET /state.
+  if (method === "POST" && pathname === "/prompt/steer") {
+    const body = parseBody(rawBody, queuePromptBody);
+    return deps.callFacade("steerPrompt", [body.tabId, body.text]);
+  }
   if (method === "POST" && pathname === "/queue/prompt") {
     const body = parseBody(rawBody, queuePromptBody);
     return queuePrompt(deps, body.tabId, body.text);

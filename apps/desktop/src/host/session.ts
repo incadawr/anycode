@@ -1,3 +1,4 @@
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult } from "../shared/communication.js";
 import { safeFailureMessage } from "./safe-failure.js";
 /**
  * Host session: the protocol server tying the UI wire to the core agent loop
@@ -1166,6 +1167,14 @@ export class Session {
     this.titleSet = options.hasTitle ?? false;
     this.historyMaxItems = options.historyMaxItems ?? SESSION_HISTORY_MAX_ITEMS;
     this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
+    const publicHistory = options.bootHistory ?? this.engine.historyItems();
+    for (const item of [...publicHistory].reverse()) {
+      if (item.message.role !== "assistant" || (item.kind !== undefined && item.kind !== "normal")) continue;
+      const text = item.message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+      if (!text) continue;
+      this.latestPublicResult = { source: "history_recovery", turnId: null, requestId: null, nativeTurnId: null, historyItemId: item.id, terminalReason: "unknown", publicAnswer: text.slice(0, 32000), truncated: text.length > 32000, completedAt: null };
+      break;
+    }
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
 
     // ready; unsubscribe on shutdown prevents a leaked listener / push-after-
@@ -1269,6 +1278,99 @@ export class Session {
    * below: no code path early-returns on the flag, so the real teardown still
    * runs in full.
    */
+  private latestPublicResult: SessionPublicResult | null = null;
+  private readonly messageTurns = new Map<string, { hostTurnId: string | null; nativeTurnId?: string }>();
+
+  communicationResult() {
+    const latest = this.latestPublicResult;
+    const deliveredMessageIds = latest ? [...this.messageTurns.entries()].filter(([, identity]) =>
+      (latest.turnId !== null && identity.hostTurnId === latest.turnId) ||
+      (latest.nativeTurnId !== null && identity.nativeTurnId === latest.nativeTurnId)
+    ).map(([id]) => id) : [];
+    return {
+      sessionId: this.sessionId,
+      availability: this.busy ? "pending" : latest ? latest.source === "history_recovery" ? "recovered_unverified" : "available" : "unavailable",
+      activeTurnId: this.busy ? this.turnId : null,
+      latestResult: latest ? { ...latest, deliveredMessageIds, correlationMeaning: "transport_delivery_only" } : null,
+      limitation: "Latest completed public text block only. History recovery cannot establish terminal status or turn/message correlation. Completion does not prove a message was applied.",
+    };
+  }
+
+  private readonly agentInbox: AgentEnvelope[] = [];
+  private readonly agentDeliveries = new Map<string, AgentDelivery>();
+
+  communicationStatus(): { sessionId: string; engine: string; state: string; steering: { supported: boolean; ready: boolean; nativeTurnId?: string } } {
+    return { sessionId: this.sessionId, engine: this.engine.id, state: this.shuttingDown ? "closing" : this.busy ? "running" : "idle", steering: this.engine.steeringStatus?.() ?? { supported: false, ready: false } };
+  }
+
+  private agentDeliveryObserver?: (delivery: AgentDelivery) => void;
+  observeAgentDeliveries(observer: (delivery: AgentDelivery) => void): void { this.agentDeliveryObserver = observer; }
+
+  private publishAgentDelivery(delivery: AgentDelivery): void {
+    this.agentDeliveries.set(delivery.envelope.messageId, { ...delivery });
+    this.outbound.emit({ type: "agent_message", delivery: { ...delivery } });
+    try { this.agentDeliveryObserver?.({ ...delivery }); } catch { /* persistence observation cannot affect delivery */ }
+  }
+
+  async receiveAgentMessage(envelope: AgentEnvelope): Promise<AgentDelivery> {
+    const existing = this.agentDeliveries.get(envelope.messageId);
+    if (existing) return existing;
+    if (envelope.recipientSessionId !== this.sessionId || this.shuttingDown || this.relocating || (this.child !== undefined && this.childTerminalFinalized)) {
+      const delivery: AgentDelivery = { envelope, state: "rejected", detail: "Session unavailable" };
+      this.publishAgentDelivery(delivery);
+      return delivery;
+    }
+    const delivery: AgentDelivery = { envelope, state: "queued" };
+    this.publishAgentDelivery(delivery);
+    if (envelope.mode === "steer") {
+      if (!this.busy || !this.engine.steer) {
+        delivery.state = "rejected";
+        delivery.detail = "Steering requires an active supported Codex turn; use next_turn";
+      } else {
+        try {
+          const receivingTurnId = this.turnId;
+          const ack = await this.engine.steer(agentMessageText(envelope));
+          this.messageTurns.set(envelope.messageId, { hostTurnId: receivingTurnId, nativeTurnId: ack.turnId });
+          delivery.state = "acknowledged";
+          delivery.detail = `app-server accepted input for turn ${ack.turnId}; model application unverified`;
+        } catch (error) {
+          delivery.state = (error as { deliveryState?: string }).deliveryState === "unknown" ? "unknown" : "rejected";
+          delivery.detail = describeError(error);
+        }
+      }
+      this.publishAgentDelivery(delivery);
+    } else if (this.agentInbox.length >= 32) {
+      delivery.state = "rejected";
+      delivery.detail = "Inbox full";
+      this.publishAgentDelivery(delivery);
+    } else {
+      this.agentInbox.push(envelope);
+      this.drainAgentInbox();
+    }
+    return this.agentDeliveries.get(envelope.messageId)!;
+  }
+
+  restoreAgentMessages(deliveries: AgentDelivery[]): void {
+    for (const delivery of deliveries) {
+      if (delivery.envelope.recipientSessionId === this.sessionId && !this.agentDeliveries.has(delivery.envelope.messageId)) this.publishAgentDelivery(delivery);
+    }
+  }
+
+  agentMessageStatus(messageId: string): AgentDelivery | undefined {
+    return this.agentDeliveries.get(messageId);
+  }
+
+  private drainAgentInbox(settledChild = false): boolean {
+    if ((!settledChild && (this.busy || this.currentTurn !== null)) || this.shuttingDown || this.relocating || this.childTerminalFinalized) return false;
+    const envelope = this.agentInbox.shift();
+    if (!envelope) return false;
+    if (settledChild) this.busy = false;
+    const started = this.acceptUserMessage(envelope.messageId, agentMessageText(envelope), undefined, "system");
+    if (started) this.messageTurns.set(envelope.messageId, { hostTurnId: this.turnId });
+    this.publishAgentDelivery({ envelope, state: started ? "acknowledged" : "rejected", detail: started ? "Host started a next turn; model application unverified" : "Turn refused" });
+    return started;
+  }
+
   closeAdmissions(): void {
     this.shuttingDown = true;
     // TASK.117: same disarm as shutdown() — once admissions close, the
@@ -1278,13 +1380,14 @@ export class Session {
       clearTimeout(this.reconnectGraceTimer);
       this.reconnectGraceTimer = null;
     }
+    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Session closing before queued delivery" });
   }
 
   /** Graceful shutdown: abort the turn, release parked asks, await turn teardown. */
   async shutdown(): Promise<void> {
     // TASK.102 CUT-S2 §10.11.1 N1: flipped FIRST, strictly before abort/
     // denyAll/dispose below, so teardown woken by the abort already sees it.
-    this.shuttingDown = true;
+    this.closeAdmissions();
     // TASK.117: shutdown is the terminal settlement — disarm the reconnect
     // grace window so its timer can never fire a disconnect-origin denyAll
     // after (or beside) the shutdown settlement below.
@@ -1376,7 +1479,10 @@ export class Session {
     // attached to a dying host — replies to informational requests are moot).
     if (this.shuttingDown) {
       switch (message.type) {
-        case "user_message":
+        case "steer_message":
+        void this.receiveAgentMessage({ messageId: message.requestId, sender: "local-supervisor-ui", recipientSessionId: this.sessionId, kind: "agent_message", payload: message.text, mode: "steer", createdAt: new Date().toISOString() });
+        return;
+      case "user_message":
           this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
           break;
         case "exit_worktree":
@@ -1491,6 +1597,7 @@ export class Session {
         // once-per-step fold, context_usage latest-wins).
         this.pushSessionCheckpoint();
         this.outbound.replay();
+        for (const delivery of this.agentDeliveries.values()) this.outbound.sendDirect({ type: "agent_message", delivery });
         // TASK.145 срез 2: re-post every still-unacknowledged detached-child
         // report to the just-(re)attached renderer — covers the race the
         // outer `sendDirect` at delivery time cannot: a renderer that was
@@ -1526,6 +1633,9 @@ export class Session {
           });
         }
         break;
+      case "steer_message":
+        void this.receiveAgentMessage({ messageId: message.requestId, sender: "local-supervisor-ui", recipientSessionId: this.sessionId, kind: "agent_message", payload: message.text, mode: "steer", createdAt: new Date().toISOString() });
+        return;
       case "user_message":
         // Typed input is proof that a human is at the screen (TASK.138): it
         // disarms the broker's unattended latch, so a session that went quiet
@@ -2254,6 +2364,7 @@ export class Session {
     } finally {
       this.busy = false;
       if (this.currentTurn === op) this.currentTurn = null;
+      this.drainAgentInbox();
       release();
     }
   }
@@ -2320,6 +2431,7 @@ export class Session {
       this.busy = false;
       this.abort = null;
       if (this.currentTurn === op) this.currentTurn = null;
+      this.drainAgentInbox();
       release();
     }
   }
@@ -2400,6 +2512,7 @@ export class Session {
    * broken durable sink, or shutdown already in progress).
    */
   private rejectQueuedSteerMessages(): void {
+    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Child session cannot accept queued delivery" });
     while (this.steerQueue.length > 0) {
       const queued = this.steerQueue.shift();
       if (queued !== undefined) {
@@ -2595,6 +2708,7 @@ export class Session {
         if (this.currentTurn === turn) {
           this.currentTurn = null;
         }
+        this.drainAgentInbox();
       },
     );
     this.currentTurn = turn;
@@ -2643,6 +2757,7 @@ export class Session {
    * `finalizeChildTerminal`'s healthy-path re-check) instead of duplicated.
    */
   private startNextQueuedSteerTurn(): boolean {
+    if (this.drainAgentInbox(true)) return true;
     let next = this.steerQueue.shift();
     while (next !== undefined) {
       if (this.acceptUserMessage(next.requestId, next.text, next.images)) return true;
@@ -2946,6 +3061,12 @@ export class Session {
     // turn_started re-assertion (see ui_ready) — the ring copy alone is not
     // survivable past REPLAY_BUFFER_CAP overflow.
     this.lastTurnRequest = { requestId, turnId };
+    const publicText = new Map<string, { text: string; truncated: boolean }>();
+    let lastCompletedText: { text: string; truncated: boolean } | null = null;
+    let nativeTurnId: string | null = null;
+    const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
+      this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? null, truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
+    };
 
     try {
       const options = {
@@ -2971,6 +3092,25 @@ export class Session {
       }
       let noticeConsumeAttempted = false;
       for await (const event of stream) {
+        nativeTurnId ??= this.engine.steeringStatus?.().nativeTurnId ?? null;
+        if (event.type === "text_start") publicText.set(event.id, { text: "", truncated: false });
+        if (event.type === "text_delta") {
+          const current = publicText.get(event.id) ?? { text: "", truncated: false };
+          const combined = current.text + event.text;
+          current.text = combined.slice(0, 32000); current.truncated ||= combined.length > 32000;
+          publicText.set(event.id, current);
+        }
+        if (event.type === "text_end") {
+          const complete = publicText.get(event.id);
+          if (complete?.text) lastCompletedText = { ...complete };
+          publicText.delete(event.id);
+        }
+        if (event.type === "finish" && event.finishReason !== "error") {
+          // Core providers can finish a text stream without a separate text_end.
+          for (const complete of publicText.values()) if (complete.text) lastCompletedText = { ...complete };
+          publicText.clear();
+        }
+        if (event.type === "loop_end") recordResult(event.reason);
         // TASK.159: the foreign-engine telemetry seam — see SessionOptions.
         // eventTap's own doc/invariant comment. Fires for every event this
         // loop observes (covers continueTurn too, since it drives the same
@@ -3144,6 +3284,7 @@ export class Session {
     } catch (error) {
       // runTurn is designed never to throw (it maps failures to loop_end), so
       // this is a defensive net; the host must not crash on a rogue turn.
+      recordResult("error");
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
     }
   }
@@ -3177,6 +3318,7 @@ export class Session {
       this.runningTools.clear();
       this.flushPreviewArtifacts();
       this.currentTurn = null;
+      this.drainAgentInbox();
     }
   }
 
@@ -3253,6 +3395,7 @@ export class Session {
   }
 
   private onCancel(): void {
+    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Cancelled by Stop before queued delivery" });
     if (this.abort) {
       this.abort.abort();
     }

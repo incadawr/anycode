@@ -1,3 +1,4 @@
+import type { AgentDelivery } from "./communication.js";
 /**
  * Wire protocol between the sandboxed renderer and the host utilityProcess
  * (design/phase-mvp.md §3). FROZEN by task MVP.1 — do not change shapes here
@@ -378,6 +379,7 @@ export type UiToHostMessage =
       // below is the fail-closed authority, not this type comment.
       origin?: "system";
     } // starts a turn
+  | { type: "steer_message"; requestId: string; text: string }
   | { type: "cancel_turn" } // abort the in-flight turn
   | { type: "exit_worktree"; cleanup: "auto" | "keep" }
   | {
@@ -507,6 +509,7 @@ export type HostToUiMessage =
   // ui_ready AFTER host_ready and BEFORE Outbound.replay(), only when the boot
   // history is non-empty. The renderer mapping into transcript blocks is task
   // 2.1.5; task 2.1.1 adds only the type + a no-op reducer branch.
+  | { type: "agent_message"; delivery: AgentDelivery }
   | { type: "session_history"; sessionId: string; items: WireHistoryItem[]; truncated: boolean }
   | { type: "worktree_notice"; message: string }
   | { type: "turn_started"; requestId: string; turnId: string }
@@ -1112,6 +1115,7 @@ export const backgroundChildCancelRequestSchema = z
 export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   uiReadySchema,
   userMessageSchema,
+  z.object({ type: z.literal("steer_message"), requestId: z.string(), text: z.string().min(1).max(32000) }).strict(),
   cancelTurnSchema,
   exitWorktreeSchema,
   permissionResponseSchema,

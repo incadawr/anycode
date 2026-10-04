@@ -22,6 +22,7 @@ export function ChildReportBlock({ block, enter = false }: { block: UserTextBloc
   const [expanded, setExpanded] = useState(false);
   const textId = useId();
   const parsed = parseChildReportText(block.text);
+  const isAgentMessage = block.text.startsWith("[AnyCode authenticated agent message ");
 
   return (
     <div className={`message message-child-report${enter ? " message-enter" : ""}`}>
@@ -36,11 +37,11 @@ export function ChildReportBlock({ block, enter = false }: { block: UserTextBloc
           <Chevron />
         </span>
         <span className={`child-report-status child-report-status-${parsed.status}`} aria-hidden="true" />
-        {childReportCardLabel(parsed)}
+        {isAgentMessage ? `Agent message · ${block.text.match(/Delivery: ([a-z]+)/)?.[1] ?? "received"}` : childReportCardLabel(parsed)}
       </button>
       {expanded && (
         <pre id={textId} className="child-report-text" aria-live="off">
-          {parsed.summary}
+          {isAgentMessage ? block.text : parsed.summary}
         </pre>
       )}
     </div>

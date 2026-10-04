@@ -83,6 +83,9 @@ export interface SessionEngine {
   runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent>;
   /** Continue a terminal-control turn after rehost without a synthetic user frame. */
   continueTurn?(options: RunTurnOptions): AsyncIterable<AgentEvent>;
+  /** Owned transport only. Acknowledgement does not prove model application. */
+  steeringStatus?(): { supported: boolean; ready: boolean; nativeTurnId?: string };
+  steer?(input: string): Promise<{ turnId: string }>;
   historyItems(): readonly HistoryItem[];
   replaceHistory?(items: HistoryItem[]): void;
   contextBreakdown?(): ContextBreakdown;
