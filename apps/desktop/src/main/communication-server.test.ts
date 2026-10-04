@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile, readFile, stat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport, StdioClientTransport } from "@anycode/core/communication-mcp";
 import { startCommunicationServer } from "./communication-server.js";
@@ -30,7 +31,7 @@ describe("production communication MCP over real SDK HTTP", () => {
   it("connects a portable stdio MCP client through the discovery-file adapter", async () => {
     const f = await fixture();
     const client = new Client({ name: "portable-supervisor", version: "1" });
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve("../../examples/agent-communication/stdio.mjs"), f.discoveryFile] }));
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../../../examples/agent-communication/stdio.mjs", import.meta.url)), f.discoveryFile] }));
     cleanups.push(() => client.close());
     expect((await client.listTools()).tools).toHaveLength(5);
     expect(value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).engine).toBe("codex");
