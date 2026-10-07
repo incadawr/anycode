@@ -160,6 +160,7 @@ const MALFORMED_DESCRIPTION_MESSAGE = "Agent: the child session failed to start 
 const MALFORMED_PROMPT_MESSAGE = "Agent: the child session failed to start (malformed prompt).";
 const MALFORMED_MODEL_MESSAGE = "Agent: the child session failed to start (malformed model).";
 const MALFORMED_PROVIDER_MESSAGE = "Agent: the child session failed to start (malformed provider).";
+const MALFORMED_RESUME_MESSAGE = "Agent: the child session failed to start (malformed child session id to continue).";
 
 /**
  * Non-empty, capped free text — the exact shape `parseChildSpawnRequest`'s
@@ -202,6 +203,9 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
   }
   if (req.provider !== undefined && !isValidFreeText(req.provider, CHILD_PROVIDER_MAX_CHARS)) {
     return MALFORMED_PROVIDER_MESSAGE;
+  }
+  if (req.resumeChildSessionId !== undefined && (!isValidChildId(req.resumeChildSessionId) || req.engine !== undefined)) {
+    return MALFORMED_RESUME_MESSAGE;
   }
   return null;
 }
@@ -713,6 +717,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         // wire's own byte-compatible default — shared/child-sessions.ts's
         // file header).
         ...(req.engine !== undefined ? { engine: req.engine } : {}),
+        ...(req.resumeChildSessionId !== undefined ? { resumeChildSessionId: req.resumeChildSessionId } : {}),
         permissionMode: options.getPermissionMode(),
       };
       options.send(spawnRequest);
