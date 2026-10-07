@@ -9,6 +9,7 @@ import type { CatalogSummary, CustomProviderRecord } from "../../../shared/setti
 import {
   buildConnectionUpdate,
   chainWrite,
+  isPinSwitchInTab,
   modelDisplayName,
   modelMenuItems,
   modelPickDisabled,
@@ -416,5 +417,24 @@ describe("chainWrite (defect #2: fast A-then-B picks must not persist the older 
     await chain;
 
     expect(order).toEqual(["A", "B", "C"]);
+  });
+});
+
+describe("isPinSwitchInTab (TASK.153: a tab switch is not a provider switch)", () => {
+  const moderato = { connectionId: "conn-moderato" };
+  const glm = { connectionId: "conn-glm" };
+
+  it("a pin that moved within the same tab is a switch", () => {
+    expect(isPinSwitchInTab({ tabId: "a", pin: moderato }, "a", glm)).toBe(true);
+  });
+
+  it("another tab's different pin is a new baseline, not a switch", () => {
+    expect(isPinSwitchInTab({ tabId: "a", pin: moderato }, "b", glm)).toBe(false);
+  });
+
+  it("an unchanged pin or a missing end is never a switch", () => {
+    expect(isPinSwitchInTab({ tabId: "a", pin: glm }, "a", glm)).toBe(false);
+    expect(isPinSwitchInTab({ tabId: "a", pin: null }, "a", glm)).toBe(false);
+    expect(isPinSwitchInTab({ tabId: "a", pin: moderato }, "a", null)).toBe(false);
   });
 });
