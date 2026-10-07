@@ -2629,6 +2629,7 @@ async function boot(): Promise<void> {
           inputTokens: usage.inputTokens,
           outputTokens: usage.outputTokens,
           totalTokens: usage.totalTokens,
+          ...(usage.cachedInputTokens !== undefined ? { cachedInputTokens: usage.cachedInputTokens } : {}),
         });
       });
     };

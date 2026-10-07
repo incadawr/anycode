@@ -41,12 +41,23 @@ import {
 } from "./ProfilePane.js";
 
 function day(overrides: Partial<ProfileDayStatsView> = {}): ProfileDayStatsView {
-  return { tokens: 0, runs: 0, toolCalls: 0, subagentRuns: 0, sessions: 0, tools: {}, models: {}, ...overrides };
+  return {
+    tokens: 0,
+    runs: 0,
+    toolCalls: 0,
+    subagentRuns: 0,
+    sessions: 0,
+    tools: {},
+    models: {},
+    cache: { reportedInputTokens: 0, cachedInputTokens: 0 },
+    ...overrides,
+  };
 }
 
 function view(overrides: Partial<ProfileStatsView> = {}): ProfileStatsView {
   return {
     lifetimeTokens: 0,
+    cache: { reportedInputTokens: 0, cachedInputTokens: 0 },
     peakDay: null,
     longestSessionMs: 0,
     currentStreakDays: 0,
