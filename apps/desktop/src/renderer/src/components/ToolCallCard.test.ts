@@ -35,6 +35,8 @@ import {
   formatWorkflowCounters,
   isClickableChildBadge,
   moreLinesLabel,
+  statusLabel,
+  childActionBadge,
   layoutWorkflowMap,
   orderStepsByDependency,
   workflowMapLabel,
@@ -2340,5 +2342,26 @@ describe("collapsed tick strip (TASK.191 slice S7)", () => {
     expect(
       workflowTickLabel(mkRun([mkStep({ stepId: "a", final: { status: "completed", durationMs: 1 } })])),
     ).toBe("release-flow: 1 of 1 steps done");
+  });
+});
+
+describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
+  it("a detached Agent call that spawned its child reads Dispatched, not Success", () => {
+    expect(statusLabel(mkAgentBlock({ status: "success", input: { prompt: "p", detach: true } }))).toBe("Dispatched");
+    expect(statusLabel(mkAgentBlock({ status: "success" }))).toBe("Success");
+    expect(statusLabel(mkAgentBlock({ status: "error", input: { prompt: "p", detach: true } }))).toBe("Error");
+    expect(statusLabel({ toolName: "Bash", status: "success", input: { detach: true } })).toBe("Success");
+  });
+
+  it("an engine-tab Agent card (no subagent sub-status) takes its child badge from the relation", () => {
+    expect(childActionBadge(null, undefined)).toBeUndefined();
+    expect(childActionBadge(null, { childTabId: "t", childSessionId: "c", live: true })).toBe("running");
+    expect(childActionBadge(null, { childTabId: "t", childSessionId: "c", live: false })).toBe("done");
+  });
+
+  it("an inline subagent card keeps the old gate: no relation and not a session child -> no badge", () => {
+    const sub = mkSubagent({ final: null });
+    expect(childActionBadge(sub, undefined)).toBeUndefined();
+    expect(childActionBadge(sub, { childTabId: "t", childSessionId: "c", live: true })).toBe("running");
   });
 });
