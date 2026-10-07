@@ -17,6 +17,32 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   (`continue_session`): the finished child resumes with its own history and
   gets the follow-up as its next message, instead of a fresh child starting
   over.
+- A parent tab shows a strip of its running background agents with Open and
+  Stop, and a detached Agent card reads Dispatched/Running instead of looking
+  finished.
+- An agent profile can pin its children's reasoning effort with an `effort:`
+  frontmatter key (`off`, `low`, `medium`, `high`, `max`).
+- Telemetry records the provider-reported prompt-cache hits, and the profile
+  statistics keep a token-weighted cache hit rate per day and overall.
+
+### Changed
+
+- GLM-5.x sessions budget their context at 300k tokens instead of the
+  advertised 1M; past that point quality degrades before compaction would
+  start.
+- A background agent's report reaches its parent in full up to 16k characters
+  (was 2k), so a plan or a review is no longer cut mid-section.
+
+### Fixed
+
+- An unknown key in an agent profile's frontmatter is reported instead of being
+  silently ignored.
+- An opened background agent's pane counts its own turns and tool calls instead
+  of showing zeros.
+- With the sidebar collapsed and no tab open, the empty window shows a button
+  to bring the sidebar back and names the current shortcut.
+- Switching between tabs no longer writes a false "Provider switched" line into
+  the transcript.
 
 ## [0.0.31] — 2026-10-04
 
