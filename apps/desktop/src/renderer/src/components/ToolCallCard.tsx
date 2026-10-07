@@ -38,7 +38,7 @@ import { TabContext } from "../tab-context.js";
 import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
 import { childBadgeKind, childLayoutStore, type ChildBadgeKind } from "../child-layout.js";
-import { childRelationStore, hasOpenableChild } from "../child-sessions.js";
+import { childRelationStore, hasOpenableChild, type ChildRelation } from "../child-sessions.js";
 import { DiffView } from "./DiffView.js";
 import { Check, Chevron, Minus, Spinner, Warning, X } from "./icons.js";
 import { Markdown } from "./Markdown.js";
@@ -1011,16 +1011,45 @@ function useChildSessionAction(
       ? state.getRelation(parentSessionId, block.toolCallId)
       : undefined,
   );
-  const hydratedSessionChild = block.subagent?.sessionChild === true;
-  if (!isAgentCard || ctx === null || block.subagent === null || !hasOpenableChild(relation, hydratedSessionChild)) {
+  const badge = isAgentCard && ctx !== null ? childActionBadge(block.subagent, relation) : undefined;
+  if (badge === undefined || ctx === null) {
     return undefined;
   }
   const rootTabId = ctx.tabId;
   const spawnToolCallId = block.toolCallId;
-  return {
-    badge: childBadgeKind(block.subagent),
-    onOpen: () => childLayoutStore.getState().open(rootTabId, spawnToolCallId),
-  };
+  return { badge, onOpen: () => childLayoutStore.getState().open(rootTabId, spawnToolCallId) };
+}
+
+/**
+ * The child badge for an Agent card, or `undefined` when the card has no
+ * openable child. An engine tab's Agent card (a Codex supervisor's
+ * anycode_agent call) carries no subagent sub-status — its child session is
+ * known only through the relation, so the badge comes from `relation.live`.
+ * Before this branch such a child, detached ones above all, had no badge and
+ * no Open: invisible in the GUI while it worked.
+ */
+export function childActionBadge(
+  subagent: ToolCallBlock["subagent"],
+  relation: ChildRelation | undefined,
+): ChildBadgeKind | undefined {
+  if (subagent === null) {
+    return relation === undefined ? undefined : relation.live ? "running" : "done";
+  }
+  return hasOpenableChild(relation, subagent.sessionChild === true) ? childBadgeKind(subagent) : undefined;
+}
+
+/**
+ * A detached (`detach: true`) Agent call succeeds the moment the child is
+ * spawned — the child's own work is still ahead. "Success" on that card read
+ * as "the delegated work is done"; "Dispatched" says what actually happened,
+ * and the child badge beside it carries the child's live state.
+ */
+export function statusLabel(block: Pick<ToolCallBlock, "toolName" | "status" | "input">): string {
+  const input = block.input as { detach?: unknown } | null | undefined;
+  if (block.toolName === "Agent" && block.status === "success" && input?.detach === true) {
+    return "Dispatched";
+  }
+  return STATUS_LABELS[block.status];
 }
 
 /**
@@ -1750,7 +1779,7 @@ export function ToolCallHeaderRow({
         {block.workflow !== null && !expanded && block.workflow.steps.length > 0 && (
           <WorkflowCollapsedTicks workflow={block.workflow} />
         )}
-        <span className="tool-call-status-badge">{STATUS_LABELS[block.status]}</span>
+        <span className="tool-call-status-badge">{statusLabel(block)}</span>
         {/* TASK.102 CUT-S2 §2.5 (C3): the session-child badge lives in the
             ALWAYS-visible toggle row, not just the expanded body below — an
             Agent card defaults to COLLAPSED in every status
