@@ -24,7 +24,7 @@
  * the app shows the shell with zero tabs until the user opens or resumes a
  * session.
  */
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useStore } from "zustand";
 import { startConnectionManager } from "./port.js";
@@ -68,7 +68,7 @@ import { useOverlayFlag } from "./preview/overlay-flag.js";
 import { usePanelMountState } from "./preview/panel-bridge.js";
 import { computePreviewPanelOpen, usePreviewStore } from "./preview/preview-store.js";
 import type { PreviewPanelInfo } from "../../shared/preview-panel.js";
-import { buildChildBreadcrumb, childBadgeKind, childLayoutStore } from "./child-layout.js";
+import { buildChildBreadcrumb, childBadgeKind, childLayoutStore, withLiveChildCounters } from "./child-layout.js";
 import { childRelationStore, type ChildRelation } from "./child-sessions.js";
 import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
@@ -148,6 +148,23 @@ const FALLBACK_SUBAGENT_CARD: SubagentSubStatus = {
   activityDropped: 0,
   final: null,
 };
+
+/**
+ * A spawn block whose `subagent_start` never reached this renderer (F11: a
+ * detached Agent call) still names its child in its own input — the row
+ * keeps the requested agent type and description instead of "Subagent".
+ */
+function fallbackCardFromInput(input: unknown): SubagentSubStatus {
+  if (typeof input !== "object" || input === null) {
+    return FALLBACK_SUBAGENT_CARD;
+  }
+  const { agent_type: agentType, description } = input as { agent_type?: unknown; description?: unknown };
+  return {
+    ...FALLBACK_SUBAGENT_CARD,
+    ...(typeof agentType === "string" && agentType !== "" ? { agentType } : {}),
+    ...(typeof description === "string" ? { description } : {}),
+  };
+}
 
 /**
  * Welcome-gate decision (ruling §2 step 5/7): show Welcome only once the
@@ -460,6 +477,18 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
       ? state.getRelation(parentSessionId, focusedChildId)
       : undefined,
   );
+  // F11: the focused child's own transcript, read live off its tab store —
+  // the source of a split row's counters when the master's Agent card never
+  // hears that child's progress (a detached call). Null without a live child.
+  const focusedChildStore =
+    childRelation !== undefined && childRelation.live ? tabRegistry.getStore(childRelation.childTabId) : undefined;
+  const subscribeFocusedChild = useCallback(
+    (onChange: () => void) => (focusedChildStore ? focusedChildStore.subscribe(onChange) : () => {}),
+    [focusedChildStore],
+  );
+  const focusedChildTranscript = useSyncExternalStore(subscribeFocusedChild, () =>
+    focusedChildStore ? focusedChildStore.getState().transcript : null,
+  );
   // TASK.102 CUT-S2 §10.8.1 point 3: a NON-live child (relation.live===false,
   // OR no relation at all — the restart-Open case) is no longer a transient
   // error state to self-heal out of. C4's read-only branch (`ChildHistoryPane`
@@ -607,7 +636,11 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
     childView.kind === "split"
       ? childView.order.map((id) => {
           const block = transcript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === id);
-          const card: SubagentSubStatus = block && block.kind === "tool_call" && block.subagent ? block.subagent : FALLBACK_SUBAGENT_CARD;
+          const baseCard: SubagentSubStatus =
+            block && block.kind === "tool_call"
+              ? (block.subagent ?? fallbackCardFromInput(block.input))
+              : FALLBACK_SUBAGENT_CARD;
+          const card = id === focusedChildId ? withLiveChildCounters(baseCard, focusedChildTranscript) : baseCard;
           return { spawnToolCallId: id, card, badge: childBadgeKind(card) };
         })
       : EMPTY_CHILD_SPLIT_ROWS;

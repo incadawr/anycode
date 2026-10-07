@@ -17,10 +17,11 @@ import {
   exitSplit,
   MASTER_VIEW,
   openChild,
+  withLiveChildCounters,
   type ChildBadgeKind,
   type ChildLayoutView,
 } from "./child-layout.js";
-import type { SubagentSubStatus } from "./store.js";
+import type { SubagentSubStatus, TranscriptBlock } from "./store.js";
 
 describe("child-layout view reducer (openChild / closeChild)", () => {
   it("master -> child -> master: openChild switches the pane onto the given child, closeChild returns it to master", () => {
@@ -433,5 +434,59 @@ describe("F12: the retracted self-heal-bounce mechanic is fully removed, not lef
   it("the store no longer exposes a childGone method", () => {
     const api = createChildLayoutStore();
     expect("childGone" in api.getState()).toBe(false);
+  });
+});
+
+describe("withLiveChildCounters (F11: a detached child's counters come off its own transcript)", () => {
+  const zeroCard: SubagentSubStatus = {
+    agentType: "glm-planner",
+    description: "plan it",
+    model: null,
+    engine: null,
+    turns: 0,
+    toolCalls: 0,
+    lastTool: null,
+    activity: [],
+    activityDropped: 0,
+    final: null,
+  };
+  const toolCall = (id: string, toolName: string): TranscriptBlock => ({
+    kind: "tool_call",
+    id,
+    toolCallId: id,
+    toolName,
+    input: {},
+    status: "running",
+    modelText: null,
+    snapshots: { before: null, after: null },
+    subagent: null,
+    workflow: null,
+  });
+
+  it("counts the child's tool calls and last tool when the master card never heard its progress", () => {
+    const transcript: TranscriptBlock[] = [toolCall("a", "Read"), toolCall("b", "Grep"), toolCall("c", "Bash")];
+    const card = withLiveChildCounters(zeroCard, transcript);
+    expect(card.toolCalls).toBe(3);
+    expect(card.lastTool).toBe("Bash");
+    expect(card.turns).toBe(0);
+  });
+
+  it("adds each finished loop's turns", () => {
+    const transcript: TranscriptBlock[] = [
+      toolCall("a", "Read"),
+      { kind: "loop_end", id: "l1", reason: "completed", turns: 4 },
+      toolCall("b", "Edit"),
+      { kind: "loop_end", id: "l2", reason: "completed", turns: 2 },
+    ];
+    expect(withLiveChildCounters(zeroCard, transcript).turns).toBe(6);
+  });
+
+  it("returns the card untouched without a live transcript, once settled, or when the card is already ahead", () => {
+    const transcript: TranscriptBlock[] = [toolCall("a", "Read")];
+    expect(withLiveChildCounters(zeroCard, null)).toBe(zeroCard);
+    const settled: SubagentSubStatus = { ...zeroCard, final: { status: "completed", durationMs: 10 } };
+    expect(withLiveChildCounters(settled, transcript)).toBe(settled);
+    const ahead: SubagentSubStatus = { ...zeroCard, toolCalls: 5, turns: 3, lastTool: "Edit" };
+    expect(withLiveChildCounters(ahead, transcript)).toBe(ahead);
   });
 });
