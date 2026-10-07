@@ -76,7 +76,7 @@
  * and writes nothing but the `ChildLayoutView` it is handed.
  */
 import { create } from "zustand";
-import type { SubagentSubStatus } from "./store.js";
+import type { SubagentSubStatus, TranscriptBlock } from "./store.js";
 
 // ── layout view + reducer set ──
 
@@ -258,6 +258,48 @@ export function buildChildBreadcrumb(
     agentType: card.agentType,
     description: card.description,
     text: `${masterTitle} › ${card.agentType}`,
+  };
+}
+
+// ── live child counters ──
+
+/**
+ * A split row's counters for a child whose LIVE session surface is open
+ * (F11): a detached Agent call returns as soon as the child starts, so the
+ * master's card never receives that child's progress and stays at "turn 0 ·
+ * 0 tool calls" (or is missing entirely — then `card` is the zero fallback).
+ * The child's own tab transcript is the ground truth for what it has done:
+ * its tool_call blocks give the tool-call count and the last tool, and each
+ * finished loop's `loop_end.turns` adds to the turn count. A settled card
+ * (`final !== null`) is returned untouched — its own numbers are final — and
+ * a derived value never lowers a counter the card already carries.
+ */
+export function withLiveChildCounters(
+  card: SubagentSubStatus,
+  childTranscript: readonly TranscriptBlock[] | null,
+): SubagentSubStatus {
+  if (childTranscript === null || card.final !== null) {
+    return card;
+  }
+  let toolCalls = 0;
+  let lastTool: string | null = null;
+  let turns = 0;
+  for (const block of childTranscript) {
+    if (block.kind === "tool_call") {
+      toolCalls += 1;
+      lastTool = block.toolName;
+    } else if (block.kind === "loop_end") {
+      turns += block.turns;
+    }
+  }
+  if (toolCalls <= card.toolCalls && turns <= card.turns) {
+    return card;
+  }
+  return {
+    ...card,
+    toolCalls: Math.max(toolCalls, card.toolCalls),
+    lastTool: toolCalls > card.toolCalls ? lastTool : card.lastTool,
+    turns: Math.max(turns, card.turns),
   };
 }
 
