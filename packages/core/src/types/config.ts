@@ -493,13 +493,14 @@ export const DEGENERATION_CHECK_STRIDE_CHARS = 512;
 /**
  * TASK.145 срез 1 (cli/child-notification.ts): cap on a detached child's
  * report `summary` field inside the `<task-notification>` block delivered to
- * the parent session. Bigger than a card description (500) — this is a real
- * digest of what the child did/found, not a one-line label — but far below
- * SUBAGENT_OUTPUT_MAX_BYTES (100_000): the notification must stay a "short
- * report", never the child's full raw output (spec §7's "path, not content"
- * discipline — the parent opens the child's own tab for the full transcript).
+ * the parent session. The summary is the child's FINAL ANSWER only, never its
+ * transcript, so it may be as long as a real deliverable: a planner's plan or
+ * a reviewer's findings run 5–15k characters, and the parent MODEL has no way
+ * to "open the child's tab" — a 2_000 cap cut a live supervisor's plan
+ * mid-section and forced an extra planner round just to re-read it. Still far
+ * below SUBAGENT_OUTPUT_MAX_BYTES (100_000), so one wake stays bounded.
  */
-export const CHILD_NOTIFICATION_SUMMARY_MAX_CHARS = 2_000;
+export const CHILD_NOTIFICATION_SUMMARY_MAX_CHARS = 16_000;
 
 // ---------------------------------------------------------------------------
 // Phase 3 slice 3.2 constants (MCP client, design slice-3.2-cut.md §3.3)
