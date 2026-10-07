@@ -24,7 +24,10 @@ export class CodexDynamicToolBridge {
     private readonly resolveCatalog?: () => Promise<readonly AgentBridgeCatalogEntry[]>) {}
 
   declarations(): Record<string, unknown>[] {
-    const decl = buildAgentBridgeToolDecl(this.catalog);
+    // `detach` is safe to offer here: host/index.ts wires this bridge's port
+    // with `onDetachedTerminal`, so a background child's report comes back
+    // to this Codex session as a new turn instead of the turn idling on it.
+    const decl = buildAgentBridgeToolDecl(this.catalog, { detach: true });
     return decl ? [{ ...decl, name: ANYCODE_AGENT_TOOL, type: "function" }] : [];
   }
 

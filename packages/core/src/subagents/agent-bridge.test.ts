@@ -92,6 +92,26 @@ describe("buildAgentBridgeToolDecl (§3.1)", () => {
   });
 });
 
+describe("buildAgentBridgeToolDecl — detach option (orchestration loop)", () => {
+  const CATALOG: AgentBridgeCatalogEntry[] = [{ name: "glm-lead", description: "Leads", systemPrompt: "P" }];
+
+  it("is not declared unless the door opts in", () => {
+    const schema = buildAgentBridgeToolDecl(CATALOG)?.inputSchema as { properties?: Record<string, unknown> };
+    expect(Object.keys(schema.properties ?? {})).not.toContain("detach");
+  });
+
+  it("opted in: an optional boolean whose description tells the caller to end its turn instead of polling", () => {
+    const schema = buildAgentBridgeToolDecl(CATALOG, { detach: true })?.inputSchema as {
+      required?: string[];
+      properties?: Record<string, { type?: string; description?: string }>;
+    };
+    expect(schema.properties?.detach?.type).toBe("boolean");
+    expect(schema.required).not.toContain("detach");
+    expect(schema.properties?.detach?.description).toMatch(/end your turn/);
+    expect(schema.properties?.detach?.description).toMatch(/do not wait, poll/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // §3.2 — buildSessionSubagentRequest
 
@@ -406,6 +426,50 @@ describe("runAgentBridgeCall (§3.4)", () => {
   });
 });
 
+describe("runAgentBridgeCall — detach", () => {
+  const ENTRY: AgentBridgeCatalogEntry = { name: "glm-lead", description: "Leads", model: "glm-5.3", systemPrompt: "LEAD BODY" };
+
+  it("detach:true rides the request; the admit text is returned and no card is fabricated", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        // The host port's detached admit: status completed, background text, no subagent_start.
+        return {
+          status: "completed",
+          finalText: "Agent: child session child-9 started in the background.",
+          truncated: false,
+          turns: 0,
+          toolCalls: 0,
+          durationMs: 3,
+          childSessionId: "child-9",
+          parentSessionId: "parent-1",
+          spawnToolCallId: req.spawnToolCallId,
+        };
+      },
+    };
+    const result = await runAgentBridgeCall(
+      { agent_type: "glm-lead", description: "d", prompt: "do it", detach: true },
+      { catalog: [ENTRY], port, spawnToolCallId: "call_7" },
+    );
+    expect(seen?.detach).toBe(true);
+    expect(seen?.prompt).toBe("LEAD BODY\n\n---\n\ndo it");
+    expect(result).toEqual({ text: "Agent: child session child-9 started in the background.", isError: false });
+  });
+
+  it("no detach => the request carries no detach key at all (sync join, unchanged)", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "c", parentSessionId: "p", spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await runAgentBridgeCall({ agent_type: "glm-lead", description: "d", prompt: "p" }, { catalog: [ENTRY], port, spawnToolCallId: "call_8" });
+    expect(seen !== undefined && "detach" in seen).toBe(false);
+  });
+});
+
 describe("decodeAgentBridgeCallInput (TASK.226 срез S4)", () => {
   it("a well-formed args object decodes verbatim, including the optional model", () => {
     expect(
@@ -414,6 +478,19 @@ describe("decodeAgentBridgeCallInput (TASK.226 срез S4)", () => {
   });
 
   it("model is omitted from the result when the wire args omit it", () => {
+    expect(decodeAgentBridgeCallInput({ agent_type: "reviewer", description: "d", prompt: "p", detach: true })).toEqual({
+      agent_type: "reviewer",
+      description: "d",
+      prompt: "p",
+      detach: true,
+    });
+    // `detach:false` is the default sync join — normalized away, never carried.
+    expect(decodeAgentBridgeCallInput({ agent_type: "reviewer", description: "d", prompt: "p", detach: false })).toEqual({
+      agent_type: "reviewer",
+      description: "d",
+      prompt: "p",
+    });
+    expect(decodeAgentBridgeCallInput({ agent_type: "reviewer", description: "d", prompt: "p", detach: "yes" })).toBeNull();
     expect(decodeAgentBridgeCallInput({ agent_type: "reviewer", description: "d", prompt: "p" })).toEqual({
       agent_type: "reviewer",
       description: "d",

@@ -78,6 +78,21 @@ function describeCatalogEntry(entry: AgentBridgeCatalogEntry): string {
   return `- ${entry.name} (${engineLabel}, model ${modelLabel}): ${entry.description}`;
 }
 
+/** Model-facing meaning of `detach` — the supervisor's whole wait discipline rides on this sentence. */
+const AGENT_BRIDGE_DETACH_DESCRIPTION =
+  "Run the subagent in the background: the call returns at once with the child session id, and the child's report " +
+  "arrives later as a new message that starts your next turn. After a detached call, end your turn — do not wait, " +
+  "poll or re-check; nothing is lost while you are idle.";
+
+export interface AgentBridgeToolDeclOptions {
+  /**
+   * Declare the optional `detach` field (TASK.145 semantics). Only a door whose
+   * host delivers a detached child's terminal report back as a new parent turn
+   * may set this — otherwise the report would have nowhere to go.
+   */
+  detach?: boolean;
+}
+
 /**
  * Builds the `agent` tool declaration (§3.1). Returns null for an empty
  * catalog rather than declaring an enum with a single fabricated placeholder
@@ -85,7 +100,10 @@ function describeCatalogEntry(entry: AgentBridgeCatalogEntry): string {
  * profile would be a dishonest declaration, so the door is simply not opened
  * (the caller's `tools/list` announces nothing).
  */
-export function buildAgentBridgeToolDecl(catalog: readonly AgentBridgeCatalogEntry[]): AgentBridgeToolDecl | null {
+export function buildAgentBridgeToolDecl(
+  catalog: readonly AgentBridgeCatalogEntry[],
+  options: AgentBridgeToolDeclOptions = {},
+): AgentBridgeToolDecl | null {
   if (catalog.length === 0) {
     return null;
   }
@@ -99,6 +117,7 @@ export function buildAgentBridgeToolDecl(catalog: readonly AgentBridgeCatalogEnt
       .min(1)
       .optional()
       .describe("Exact model id to run the subagent on (defaults to the profile's own model)"),
+    ...(options.detach === true ? { detach: z.boolean().optional().describe(AGENT_BRIDGE_DETACH_DESCRIPTION) } : {}),
   });
   const description = [AGENT_BRIDGE_TOOL_DESCRIPTION_HEADER, ...catalog.map(describeCatalogEntry)].join("\n");
   return {
@@ -133,9 +152,9 @@ export interface BuildSessionSubagentRequestParams {
 /**
  * Builds ONE SessionSubagentRequest (§3.2), extracted byte-for-byte out of
  * the pre-S1 body of tools/agent.ts's runSessionTier (TASK.226 срез S1):
- * `provider` and `detach` are deliberately NOT set here — they ride only the
- * native Agent tool's own request (agent.ts §2.1 p.2 and TASK.145 срез 1
- * respectively), and the MCP bridge never sets either.
+ * `provider` and `detach` are deliberately NOT set here — `provider` rides
+ * only the native Agent tool's own request (agent.ts §2.1 p.2); `detach` is
+ * added by each caller that honors it (agent.ts, `runAgentBridgeCall`).
  */
 export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestParams): SessionSubagentRequest {
   const { agentType, description, prompt, model, spawnToolCallId, profile } = params;
@@ -384,6 +403,8 @@ export interface AgentBridgeCallInput {
   description: string;
   prompt: string;
   model?: string;
+  /** Background run (TASK.145): `run()` settles at admit; the report arrives later as a parent turn. */
+  detach?: boolean;
 }
 
 /**
@@ -409,7 +430,15 @@ export function decodeAgentBridgeCallInput(args: Record<string, unknown>): Agent
   if (typeof description !== "string" || description.length === 0) return null;
   if (typeof prompt !== "string" || prompt.length === 0) return null;
   if (model !== undefined && (typeof model !== "string" || model.length === 0)) return null;
-  return { agent_type: agentType, description, prompt, ...(model !== undefined ? { model: model as string } : {}) };
+  const detach = args.detach;
+  if (detach !== undefined && typeof detach !== "boolean") return null;
+  return {
+    agent_type: agentType,
+    description,
+    prompt,
+    ...(model !== undefined ? { model: model as string } : {}),
+    ...(detach === true ? { detach: true } : {}),
+  };
 }
 
 export interface AgentBridgeCallDeps {
@@ -471,7 +500,7 @@ export async function runAgentBridgeCall(
     entry.engine !== undefined
       ? { engine: entry.engine, systemPrompt: entry.systemPrompt, ...(entry.model !== undefined ? { model: entry.model } : {}) }
       : undefined;
-  const request = buildSessionSubagentRequest({
+  const built = buildSessionSubagentRequest({
     agentType: entry.name,
     description: input.description,
     prompt: profile === undefined && entry.systemPrompt.trim()
@@ -484,6 +513,10 @@ export async function runAgentBridgeCall(
     spawnToolCallId: deps.spawnToolCallId,
     profile,
   });
+  // A detached run settles at admit with the port's own "started in the
+  // background" text and no `subagent_start`, so the card below is null —
+  // the same shape the native Agent tool's detached call has.
+  const request: SessionSubagentRequest = input.detach === true ? { ...built, detach: true } : built;
 
   const controller = new AbortController();
   const unlink = deps.signal !== undefined ? linkAbortSignal(deps.signal, controller) : () => {};
