@@ -204,3 +204,25 @@ export const childRelationStore = createChildRelationStore();
 export function hasOpenableChild(relation: ChildRelation | undefined, hydratedSessionChild: boolean): boolean {
   return relation !== undefined || hydratedSessionChild;
 }
+
+/**
+ * The spawn tool-call id under which `parentSessionId` last registered the
+ * child session `childSessionId`, or `undefined` when this renderer never saw
+ * its port. A child continued with a follow-up (continue_session) is
+ * registered once per spawn; the LAST registration is the live one (a Map
+ * keeps insertion order).
+ */
+export function spawnToolCallIdForChild(
+  relations: ReadonlyMap<string, ChildRelation>,
+  parentSessionId: string,
+  childSessionId: string,
+): string | undefined {
+  const prefix = `${parentSessionId}\u0000`;
+  let found: string | undefined;
+  for (const [key, relation] of relations) {
+    if (key.startsWith(prefix) && relation.childSessionId === childSessionId) {
+      found = key.slice(prefix.length);
+    }
+  }
+  return found;
+}

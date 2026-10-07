@@ -31,6 +31,7 @@ import { ModeMenu, modeChangeDisabled } from "./ModeMenu.js";
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
 import { EngineModelMenu, EnginePresetMenu, engineControlDisabled } from "./EngineControls.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
+import { BackgroundAgents } from "./BackgroundAgents.js";
 import { PromptQueue } from "./PromptQueue.js";
 import { SlashMenu } from "./SlashMenu.js";
 import { ArrowUp, ImageIcon, Stop, X } from "./icons.js";
@@ -1413,6 +1414,7 @@ export function Composer() {
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      <BackgroundAgents />
       <PromptQueue />
       {isNewSession && <EnvironmentMenu placement="composer" />}
       {(pills.length > 0 || attachedImages.length > 0) && (
