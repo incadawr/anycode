@@ -47,6 +47,23 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
+  it("finish -> usage carries a reported cache figure, including an honest 0, and omits an unreported one (TASK.111)", () => {
+    const withCache = telemetryRecordFor({
+      type: "finish",
+      finishReason: "stop",
+      usage: { inputTokens: 1000, outputTokens: 20, totalTokens: 1020, cachedInputTokens: 900 },
+    });
+    expect(withCache).toMatchObject({ t: "usage", inputTokens: 1000, cachedInputTokens: 900 });
+    const zero = telemetryRecordFor({
+      type: "finish",
+      finishReason: "stop",
+      usage: { inputTokens: 1000, cachedInputTokens: 0 },
+    });
+    expect(zero).toMatchObject({ cachedInputTokens: 0 });
+    const unreported = telemetryRecordFor({ type: "finish", finishReason: "stop", usage: { inputTokens: 1000 } });
+    expect(unreported !== null && "cachedInputTokens" in unreported).toBe(false);
+  });
+
   it("tool_result -> tool", () => {
     const event: AgentEvent = {
       type: "tool_result",
@@ -553,6 +570,22 @@ describe("buildEngineTelemetryTap", () => {
     expect(sumInput).not.toBe(280);
     expect(sumOutput).toBe(50);
     expect(sumOutput).not.toBe(70);
+  });
+
+  it("cache pin: cachedInput is a fourth cumulative counter recorded as a delta, never above the input delta (TASK.111)", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex");
+    tap({ type: "engine_session_tokens", input: 100, output: 10, total: 110, cachedInput: 60 });
+    tap({ type: "engine_session_tokens", input: 300, output: 20, total: 320, cachedInput: 240 });
+    tap({ type: "engine_session_tokens", input: 310, output: 30, total: 340 });
+    expect(records[0]).toMatchObject({ inputTokens: 100, cachedInputTokens: 60 });
+    expect(records[1]).toMatchObject({ inputTokens: 200, cachedInputTokens: 180 });
+    expect("cachedInputTokens" in records[2]!).toBe(false);
+    const resetOnlyCache = makeRecordingPort();
+    const tap2 = buildEngineTelemetryTap(resetOnlyCache.port, "session-codex");
+    tap2({ type: "engine_session_tokens", input: 100, output: 0, total: 100, cachedInput: 90 });
+    tap2({ type: "engine_session_tokens", input: 110, output: 0, total: 110, cachedInput: 50 });
+    expect(resetOnlyCache.records[1]).toMatchObject({ inputTokens: 10, cachedInputTokens: 10 });
   });
 
   it("reset pin: a symmetric drop (total 250->40, input 200->30, output 50->10) starts a new baseline for all three, none negative", () => {

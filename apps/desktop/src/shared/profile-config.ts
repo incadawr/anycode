@@ -77,6 +77,8 @@ export interface ProfileDayStatsView {
   tools: Record<string, number>;
   /** Model -> tokens that day (deferred join, see stats.ts). */
   models: Record<string, number>;
+  /** That day's prompt-cache counters (TASK.111): input tokens of the usage records that reported a cache figure, and how many of them the provider served from cache. Hit rate = cached / reported. */
+  cache: { reportedInputTokens: number; cachedInputTokens: number };
 }
 
 /**
@@ -145,6 +147,8 @@ export interface ProfileStatsView {
   models: { model: string; tokens: number; sessions: number; engine?: "codex" | "claude" }[];
   /** "core" | "codex" | "claude" -> LIFETIME tokens attributed to that engine (session-scoped, not day-bucketed — always the full-history total, never filtered by period). */
   engineTokens: Record<string, number>;
+  /** LIFETIME prompt-cache counters (TASK.111) — same shape and meaning as `ProfileDayStatsView.cache`. */
+  cache: { reportedInputTokens: number; cachedInputTokens: number };
   /** Effective USER-scope resolution (§2-D2) — never per-tab, never a project override. */
   telemetryEnabled: boolean;
   /** True when the `ANYCODE_TELEMETRY` env kill-switch is active (toggle rendered disabled). */

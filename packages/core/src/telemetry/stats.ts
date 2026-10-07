@@ -47,6 +47,28 @@ export interface ProfileStats {
    *  parent session and inherits that session's engine) — so this sum
    *  always equals `lifetimeTokens` exactly, never less. */
   engineTokens: Record<string, number>;
+  /** Lifetime prompt-cache counters (TASK.111). */
+  cache: ProfileCacheStats;
+}
+
+/**
+ * Prompt-cache counters over the usage records whose provider REPORTED a
+ * cache figure (TASK.111). `cachedInputTokens` is a subset of
+ * `reportedInputTokens` — never add it to any token total. A record without
+ * the field contributes to neither side, so an old line reads "not reported"
+ * rather than dragging the hit rate toward 0%. Hit rate = cached / reported
+ * input, token-weighted — see `cacheHitRate`.
+ */
+export interface ProfileCacheStats {
+  /** Input tokens of the records that reported a cache figure. */
+  reportedInputTokens: number;
+  /** Of those, the input tokens served from the provider's prompt cache. */
+  cachedInputTokens: number;
+}
+
+/** Token-weighted cache hit rate in [0, 1], or null when nothing reported a cache figure. */
+export function cacheHitRate(cache: ProfileCacheStats): number | null {
+  return cache.reportedInputTokens > 0 ? cache.cachedInputTokens / cache.reportedInputTokens : null;
 }
 
 export interface ProfileDayStats {
@@ -61,6 +83,8 @@ export interface ProfileDayStats {
   /** Model -> tokens that day (deferred join — see the model-attribution
    *  comment on aggregateProfileStats). */
   models: Record<string, number>;
+  /** That day's prompt-cache counters (TASK.111). */
+  cache: ProfileCacheStats;
 }
 
 /** One sink file's name plus its raw JSONL lines (not yet parsed/validated). */
@@ -163,6 +187,8 @@ interface DayAggInternal {
   sessions: number;
   tools: Map<string, number>;
   models: Map<string, number>;
+  cacheReportedInput: number;
+  cachedInput: number;
 }
 
 /**
@@ -201,6 +227,15 @@ const VALID_RECORD_TYPES: ReadonlySet<string> = new Set([
  *  (W5-FIX finding 2, PoC-2). */
 function clampTokenValue(x: unknown): number {
   return typeof x === "number" && Number.isFinite(x) && x >= 0 ? x : 0;
+}
+
+/** A usage record's cache figure (TASK.111), or null when the provider did not
+ *  report one — or reported it without the input total it is a subset of.
+ *  Clamped to the input so a malformed line can never claim a >100% hit. */
+function usageCache(rec: Record<string, unknown>): { reported: number; cached: number } | null {
+  if (typeof rec.cachedInputTokens !== "number" || typeof rec.inputTokens !== "number") return null;
+  const reported = clampTokenValue(rec.inputTokens);
+  return { reported, cached: Math.min(clampTokenValue(rec.cachedInputTokens), reported) };
 }
 
 function usageTokens(rec: Record<string, unknown>): number {
@@ -253,7 +288,17 @@ function compareFileNames(a: string, b: string): number {
 function ensureDayAgg(dayAggs: Map<string, DayAggInternal>, day: string): DayAggInternal {
   let agg = dayAggs.get(day);
   if (agg === undefined) {
-    agg = { tokens: 0, runs: 0, toolCalls: 0, subagentRuns: 0, sessions: 0, tools: new Map(), models: new Map() };
+    agg = {
+      tokens: 0,
+      runs: 0,
+      toolCalls: 0,
+      subagentRuns: 0,
+      sessions: 0,
+      tools: new Map(),
+      models: new Map(),
+      cacheReportedInput: 0,
+      cachedInput: 0,
+    };
     dayAggs.set(day, agg);
   }
   return agg;
@@ -370,6 +415,8 @@ export function aggregateProfileStats(
   let truncated = false;
 
   let lifetimeTokens = 0;
+  let lifetimeCacheReported = 0;
+  let lifetimeCached = 0;
   const activeDays = new Set<string>();
   const filesWithValidRecord = new Set<string>();
 
@@ -429,6 +476,13 @@ export function aggregateProfileStats(
           lifetimeTokens += tokens;
           session.tokens += tokens;
           dayAgg.tokens += tokens;
+          const cache = usageCache(rec);
+          if (cache !== null) {
+            lifetimeCacheReported += cache.reported;
+            lifetimeCached += cache.cached;
+            dayAgg.cacheReportedInput += cache.reported;
+            dayAgg.cachedInput += cache.cached;
+          }
           // Deferred model attribution (158-trap-1): a sub.model override
           // routes straight to the (model, day) accumulator; everything else
           // (no sub, or sub without a model override) folds through the
@@ -597,6 +651,7 @@ export function aggregateProfileStats(
             sessions: agg.sessions,
             tools: Object.fromEntries(agg.tools),
             models: Object.fromEntries(agg.models),
+            cache: { reportedInputTokens: agg.cacheReportedInput, cachedInputTokens: agg.cachedInput },
           },
         ] as const,
     ),
@@ -637,6 +692,7 @@ export function aggregateProfileStats(
 
   return {
     lifetimeTokens,
+    cache: { reportedInputTokens: lifetimeCacheReported, cachedInputTokens: lifetimeCached },
     peakDay,
     longestSessionMs,
     currentStreakDays,
@@ -695,6 +751,9 @@ export interface ProfileFilePartialDay {
   toolCalls: number;
   subagentRuns: number;
   tools: Record<string, number>;
+  /** Prompt-cache counters (TASK.111) — see ProfileCacheStats. */
+  reportedInputTokens: number;
+  cachedInputTokens: number;
 }
 
 /**
@@ -774,6 +833,8 @@ interface PartialDayAgg {
   toolCalls: number;
   subagentRuns: number;
   tools: Map<string, number>;
+  reportedInputTokens: number;
+  cachedInputTokens: number;
 }
 
 /**
@@ -805,7 +866,7 @@ export function aggregateFilePartial(
     const day = dayKey(ts);
     let dayAgg = days.get(day);
     if (dayAgg === undefined) {
-      dayAgg = { tokens: 0, runs: 0, toolCalls: 0, subagentRuns: 0, tools: new Map() };
+      dayAgg = { tokens: 0, runs: 0, toolCalls: 0, subagentRuns: 0, tools: new Map(), reportedInputTokens: 0, cachedInputTokens: 0 };
       days.set(day, dayAgg);
     }
 
@@ -834,6 +895,11 @@ export function aggregateFilePartial(
         const tokens = usageTokens(rec);
         session.tokens += tokens;
         dayAgg.tokens += tokens;
+        const cache = usageCache(rec);
+        if (cache !== null) {
+          dayAgg.reportedInputTokens += cache.reported;
+          dayAgg.cachedInputTokens += cache.cached;
+        }
         const subModel = envelopeSubModel(rec);
         if (subModel !== undefined) {
           let byDay = subModelDayTokens.get(subModel);
@@ -901,6 +967,8 @@ export function aggregateFilePartial(
             toolCalls: agg.toolCalls,
             subagentRuns: agg.subagentRuns,
             tools: Object.fromEntries(agg.tools),
+            reportedInputTokens: agg.reportedInputTokens,
+            cachedInputTokens: agg.cachedInputTokens,
           },
         ] as const,
     ),
@@ -1022,6 +1090,8 @@ export function mergeProfilePartials(
   const sorted = [...named].sort((a, b) => compareFileNames(a.name, b.name));
 
   let lifetimeTokens = 0;
+  let lifetimeCacheReported = 0;
+  let lifetimeCached = 0;
   let totalRuns = 0;
   let toolCalls = 0;
   let subagentRuns = 0;
@@ -1044,6 +1114,10 @@ export function mergeProfilePartials(
       agg.runs += counts.runs;
       agg.toolCalls += counts.toolCalls;
       agg.subagentRuns += counts.subagentRuns;
+      agg.cacheReportedInput += counts.reportedInputTokens;
+      agg.cachedInput += counts.cachedInputTokens;
+      lifetimeCacheReported += counts.reportedInputTokens;
+      lifetimeCached += counts.cachedInputTokens;
       for (const [tool, calls] of Object.entries(counts.tools)) {
         agg.tools.set(tool, (agg.tools.get(tool) ?? 0) + calls);
       }
@@ -1183,6 +1257,7 @@ export function mergeProfilePartials(
             sessions: agg.sessions,
             tools: Object.fromEntries(agg.tools),
             models: Object.fromEntries(agg.models),
+            cache: { reportedInputTokens: agg.cacheReportedInput, cachedInputTokens: agg.cachedInput },
           },
         ] as const,
     ),
@@ -1221,6 +1296,7 @@ export function mergeProfilePartials(
   return {
     stats: {
       lifetimeTokens,
+      cache: { reportedInputTokens: lifetimeCacheReported, cachedInputTokens: lifetimeCached },
       peakDay,
       longestSessionMs,
       currentStreakDays,

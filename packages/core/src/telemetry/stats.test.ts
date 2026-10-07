@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { aggregateProfileStats, type ProfileStatsFile } from "./stats.js";
+import { aggregateProfileStats, cacheHitRate, type ProfileStatsFile } from "./stats.js";
 import { PROFILE_ACTIVITY_GAP_CAP_MS, PROFILE_STATS_MAX_SCAN_BYTES } from "../types/config.js";
 // TASK.187 S2 (task187-aggregator-semantics.md): the per-file partial +
 // merge path. Imported separately from the block above so that every line of
@@ -32,6 +32,10 @@ const utcDayKey = (ts: number): string => new Date(ts).toISOString().slice(0, 10
 function file(name: string, records: unknown[]): ProfileStatsFile {
   return { name, lines: records.map((r) => JSON.stringify(r)) };
 }
+
+
+/** No usage record in these fixtures reports a cache figure (TASK.111). */
+const NO_CACHE = { reportedInputTokens: 0, cachedInputTokens: 0 };
 
 describe("aggregateProfileStats — full fixture (2 sessions x 3 days, every field pinned)", () => {
   const T1 = Date.UTC(2026, 0, 1, 10, 0, 0); // 2026-01-01
@@ -64,6 +68,7 @@ describe("aggregateProfileStats — full fixture (2 sessions x 3 days, every fie
     const stats = aggregateProfileStats([sessB, sessA], { now: NOW, dayKey: utcDayKey });
     expect(stats).toEqual({
       lifetimeTokens: 1950,
+      cache: NO_CACHE,
       peakDay: { day: "2026-01-02", tokens: 1500 },
       longestSessionMs: 720_000,
       currentStreakDays: 3,
@@ -85,6 +90,7 @@ describe("aggregateProfileStats — full fixture (2 sessions x 3 days, every fie
           sessions: 1, // sess-a's session_start (its min ts) is on this day
           tools: { Read: 1 },
           models: { "model-x": 150 },
+          cache: NO_CACHE,
         },
         "2026-01-02": {
           tokens: 1500,
@@ -94,6 +100,7 @@ describe("aggregateProfileStats — full fixture (2 sessions x 3 days, every fie
           sessions: 1, // sess-b's session_start (its min ts) is on this day
           tools: { Bash: 2, Read: 1 },
           models: { "model-y": 1500 },
+          cache: NO_CACHE,
         },
         "2026-01-03": {
           tokens: 300,
@@ -103,6 +110,7 @@ describe("aggregateProfileStats — full fixture (2 sessions x 3 days, every fie
           sessions: 0, // sess-b already attributed to 01-02 (its min ts) — not double-counted
           tools: {},
           models: { "model-y": 300 },
+          cache: NO_CACHE,
         },
       },
       models: [
@@ -163,6 +171,7 @@ describe("aggregateProfileStats — fail-soft line handling", () => {
     const stats = aggregateProfileStats([], { now, dayKey: utcDayKey });
     expect(stats).toEqual({
       lifetimeTokens: 0,
+      cache: NO_CACHE,
       peakDay: null,
       longestSessionMs: 0,
       currentStreakDays: 0,
@@ -434,6 +443,7 @@ describe("aggregateProfileStats — days aggregate: multi-file bucketing", () =>
         sessions: 1,
         tools: { Bash: 1 },
         models: { mx: 40 },
+        cache: NO_CACHE,
       },
       "2026-01-02": {
         tokens: 70,
@@ -443,6 +453,7 @@ describe("aggregateProfileStats — days aggregate: multi-file bucketing", () =>
         sessions: 1,
         tools: { Read: 2 },
         models: { my: 70 },
+        cache: NO_CACHE,
       },
     });
   });
@@ -1956,5 +1967,51 @@ describe("TASK.187 S3 — activity clusters", () => {
         [10 * CAP, 10 * CAP + 5],
       ]),
     ).toBe(15 + CAP);
+  });
+});
+
+describe("prompt-cache counters (TASK.111)", () => {
+  const day1 = Date.UTC(2026, 0, 1, 10, 0, 0);
+  const day2 = Date.UTC(2026, 0, 2, 10, 0, 0);
+  const files: ProfileStatsFile[] = [
+    file("a.jsonl", [
+      { v: 1, ts: day1, session: "a", t: "usage", inputTokens: 1000, outputTokens: 10, cachedInputTokens: 900 },
+      { v: 1, ts: day1 + 1000, session: "a", t: "usage", inputTokens: 100, outputTokens: 10, cachedInputTokens: 0 },
+      // An old line without the field: counts toward tokens, not toward the hit rate.
+      { v: 1, ts: day2, session: "a", t: "usage", inputTokens: 5000, outputTokens: 10 },
+    ]),
+    file("b.jsonl", [
+      { v: 1, ts: day2, session: "b", t: "usage", inputTokens: 400, outputTokens: 0, cachedInputTokens: 300 },
+      // Malformed: claims more cache than input — clamped to the input.
+      { v: 1, ts: day2 + 1, session: "b", t: "usage", inputTokens: 10, outputTokens: 0, cachedInputTokens: 99 },
+    ]),
+  ];
+  const now = day2 + 3_600_000;
+
+  it("sums reported input and cache hits token-weighted, per day and lifetime, without touching token totals", () => {
+    const stats = aggregateProfileStats(files, { now, dayKey: utcDayKey });
+    expect(stats.lifetimeTokens).toBe(1010 + 110 + 5010 + 400 + 10);
+    expect(stats.cache).toEqual({ reportedInputTokens: 1510, cachedInputTokens: 1210 });
+    expect(stats.days["2026-01-01"]?.cache).toEqual({ reportedInputTokens: 1100, cachedInputTokens: 900 });
+    expect(stats.days["2026-01-02"]?.cache).toEqual({ reportedInputTokens: 410, cachedInputTokens: 310 });
+    // Weighted (1210/1510), not the mean of per-step rates (0.9, 0, 0.75, 1).
+    expect(cacheHitRate(stats.cache)).toBeCloseTo(1210 / 1510);
+  });
+
+  it("an honest 0% differs from nothing reported", () => {
+    const zero = aggregateProfileStats(
+      [file("z.jsonl", [{ v: 1, ts: day1, session: "z", t: "usage", inputTokens: 50, cachedInputTokens: 0 }])],
+      { now, dayKey: utcDayKey },
+    );
+    expect(cacheHitRate(zero.cache)).toBe(0);
+    const none = aggregateProfileStats(
+      [file("n.jsonl", [{ v: 1, ts: day1, session: "n", t: "usage", inputTokens: 50 }])],
+      { now, dayKey: utcDayKey },
+    );
+    expect(cacheHitRate(none.cache)).toBeNull();
+  });
+
+  it("the per-file partial path merges to the same counters as the full scan", () => {
+    expect(mergedStats(files, now, utcDayKey)).toEqual(legacyStats(files, now, utcDayKey));
   });
 });

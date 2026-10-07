@@ -42,7 +42,16 @@ import type { PermissionMode } from "../types/permissions.js";
  *  descriptions, labels, reasons are structurally unrepresentable). */
 export type TelemetryEventRecord =
   | { t: "turn_end"; turn: number; finishReason: FinishReason }
-  | { t: "usage"; inputTokens?: number; outputTokens?: number; totalTokens?: number }
+  | {
+      t: "usage";
+      inputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+      /** Input tokens the provider served from its prompt cache — a SUBSET of
+       *  `inputTokens`, never an addend. Absent = the provider did not report
+       *  it (not a 0% hit); 0 = an honest miss (TASK.111). */
+      cachedInputTokens?: number;
+    }
   | { t: "tool"; tool: string; status: ToolCallStatus; durationMs: number }
   | { t: "loop_end"; reason: LoopEndReason; turns: number }
   | { t: "compaction_start"; trigger: "auto" | "manual" }
