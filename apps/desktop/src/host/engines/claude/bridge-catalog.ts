@@ -24,5 +24,6 @@ export function catalogFromProfiles(profiles: readonly PersonaDefinition[]): Age
       systemPrompt: profile.systemPrompt,
       ...(profile.engine !== undefined ? { engine: profile.engine } : {}),
       ...(profile.model !== undefined ? { model: profile.model } : {}),
+      ...(profile.effort !== undefined ? { effort: profile.effort } : {}),
     }));
 }

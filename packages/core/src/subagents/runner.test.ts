@@ -2617,6 +2617,28 @@ describe("buildChildConfig — child-model settings (TASK.162, defect F6)", () =
 });
 
 describe("run() — child capabilities resolved for the child's own model (TASK.162)", () => {
+  it("a profile that declares only `effort:` runs on the parent's model at its own tier (TASK.127)", async () => {
+    const parentPort = new ScriptedModelPort((req) => (isChildRequest(req) ? textStep("planned") : textStep("n/a")));
+    Object.assign(parentPort, { modelId: "glm-5.3" });
+    const seen: Array<[string, string | undefined]> = [];
+    const runner = createSubagentRunner(
+      makeParent({ modelPort: parentPort, reasoningEffort: "max" }),
+      {
+        profiles: [{ ...(await makeProfile("planner", { body: "Plan." })), effort: "low" }],
+        resolveChildModelSettings: (modelId, profileEffort) => {
+          seen.push([modelId, profileEffort]);
+          return { maxOutputTokens: 131_072, reasoningEffort: profileEffort, contextWindowTokens: 1_000_000 };
+        },
+      },
+    );
+
+    const outcome = await runner.run({ ...REQ, agentType: "planner" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(seen).toEqual([["glm-5.3", "low"]]);
+    expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("low");
+  });
+
   it("the child's ModelRequest carries the SETTINGS' ceiling and effort, not the parent's", async () => {
     const parentPort = new ScriptedModelPort(() => textStep("parent never runs here"));
     const childPort = makeChildPort({ modelId: "glm-5.3-flash" });

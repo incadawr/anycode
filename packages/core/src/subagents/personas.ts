@@ -16,6 +16,7 @@
  */
 
 import type { AgentProfileEngine } from "./profiles.js";
+import type { ReasoningEffort } from "../types/config.js";
 
 export type PersonaName = "general-purpose" | "explore";
 
@@ -55,6 +56,12 @@ export interface PersonaDefinition {
    * hung child, not to end a working one (TASK.148).
    */
   turnBudget?: number;
+  /**
+   * Reasoning tier declared by a role (md-profile `effort:` frontmatter).
+   * Absent => the child runs at its connection's default tier. Built-in
+   * personas leave it undefined.
+   */
+  effort?: ReasoningEffort;
   /**
    * Md-profile `engine:` frontmatter. When set, children of this persona run as
    * a one-shot foreign CLI run (Codex or Claude Code) instead of an in-process

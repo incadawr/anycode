@@ -30,6 +30,7 @@ import {
   AGENT_PROFILE_PROMPT_MAX_BYTES,
   MAX_AGENT_PROFILES,
   SUBAGENT_MAX_TURNS_CEILING,
+  type ReasoningEffort,
 } from "../types/config.js";
 import { PERSONAS, isKnownPersona, type PersonaDefinition } from "./personas.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
@@ -77,6 +78,12 @@ export const AGENT_PROFILE_MAX_TURNS_RE = /^[0-9]+$/;
  */
 export type AgentProfileEngine = "codex" | "claude";
 
+/** Every frontmatter key a profile understands; any other key is reported as a problem. */
+export const AGENT_PROFILE_KEYS: readonly string[] = ["name", "description", "tools", "model", "engine", "maxTurns", "effort"];
+
+/** Frontmatter `effort:` vocabulary — the same tiers as ANYCODE_REASONING_EFFORT. */
+export const AGENT_PROFILE_EFFORT_LEVELS: readonly ReasoningEffort[] = ["off", "low", "medium", "high", "max"];
+
 /** One per-file parse of a profile `*.md`, ready for both discovery and admin. */
 export interface ParsedAgentProfile {
   /** Resolved name (frontmatter `name`, else the fallback), regex-valid, not reserved. */
@@ -121,6 +128,14 @@ export interface ParsedAgentProfile {
    */
   turnBudget?: number;
   /**
+   * Frontmatter `effort:` — the reasoning tier children of this profile run at
+   * (a planner on high, an executor on low). Absent (or blank) leaves it
+   * undefined, i.e. the child's connection default. Resolved against the
+   * child model's own tiers by the host, like the composer's effort pick; a
+   * word outside the vocabulary is FATAL (bad_effort), same rationale as `model`.
+   */
+  effort?: ReasoningEffort;
+  /**
    * Non-fatal per-file problems (path-free suffixes) — currently only explicit
    * spawn-tool requests. The caller prefixes each with `Agent profile <path>: `.
    */
@@ -141,6 +156,7 @@ export type AgentProfileParseError =
   | { kind: "bad_model"; name: string; model: string }
   | { kind: "bad_engine"; name: string; engine: string }
   | { kind: "bad_max_turns"; name: string; maxTurns: string }
+  | { kind: "bad_effort"; name: string; effort: string }
   | { kind: "engine_tools_conflict"; name: string; engine: AgentProfileEngine };
 
 export type ParseAgentProfileResult =
@@ -184,6 +200,13 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
   // as a problem. An absent list falls back to the general-purpose baseline (nine
   // non-spawn tools); a profile can never widen beyond the default registry.
   const problems: string[] = [];
+  // An unknown key is surfaced, not swallowed (TASK.217): a profile that writes
+  // `model_reasoning_effort: high` must learn it ran at the default tier.
+  for (const key of Object.keys(parsed.fields)) {
+    if (!AGENT_PROFILE_KEYS.includes(key)) {
+      problems.push(`unknown frontmatter key "${key}" — ignored (known: ${AGENT_PROFILE_KEYS.join(", ")})`);
+    }
+  }
   let tools: readonly string[];
   let toolsExplicit: boolean;
   if (parsed.fields.tools !== undefined) {
@@ -246,6 +269,20 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
     turnBudget = value;
   }
 
+  // effort: optional. Blank/absent means "the connection's default tier". A
+  // value outside the closed vocabulary is FATAL, mirroring `engine` above — a
+  // planner profile that asks for "high" and silently runs at the default is
+  // the dishonesty the fatal branches exist to stop.
+  const rawEffort = (parsed.fields.effort ?? "").trim();
+  let effort: ReasoningEffort | undefined;
+  if (rawEffort !== "") {
+    const normalizedEffort = rawEffort.toLowerCase();
+    if (!(AGENT_PROFILE_EFFORT_LEVELS as readonly string[]).includes(normalizedEffort)) {
+      return { error: { kind: "bad_effort", name, effort: rawEffort } };
+    }
+    effort = normalizedEffort as ReasoningEffort;
+  }
+
   // engine + tools: TASK.97 R4 (wave2-cut.md §1.3). ENFORCE was rejected — claude's
   // `--allowedTools` is a permission allowlist, not a registry restriction (the
   // complement-ban `--disallowedTools` is an open set across CLI versions), and
@@ -277,6 +314,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
       ...(model !== undefined ? { model } : {}),
       ...(engine !== undefined ? { engine } : {}),
       ...(turnBudget !== undefined ? { turnBudget } : {}),
+      ...(effort !== undefined ? { effort } : {}),
     },
   };
 }
@@ -407,6 +445,16 @@ export async function discoverAgentProfiles(
               `Agent profile ${path}: maxTurns "${err.maxTurns}" must be an integer between 1 and ${SUBAGENT_MAX_TURNS_CEILING} — ignored`,
             );
             break;
+          case "bad_effort":
+            // Same claim semantics as bad_model/bad_engine.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: effort "${err.effort}" must be one of ${AGENT_PROFILE_EFFORT_LEVELS.join(", ")} — ignored`,
+            );
+            break;
           case "engine_tools_conflict":
             // Same claim semantics as bad_model/bad_engine: the name IS claimed
             // (validation happens after the name resolves), so a lower-precedence
@@ -423,7 +471,7 @@ export async function discoverAgentProfiles(
         continue;
       }
 
-      const { name, description, tools, body, model, engine, turnBudget } = result.ok;
+      const { name, description, tools, body, model, engine, turnBudget, effort } = result.ok;
 
       // Precedence dedupe: a lower source's same-named file is shadowed silently.
       if (claimed.has(name)) {
@@ -454,6 +502,7 @@ export async function discoverAgentProfiles(
         ...(model !== undefined ? { model } : {}),
         ...(engine !== undefined ? { engine } : {}),
         ...(turnBudget !== undefined ? { turnBudget } : {}),
+        ...(effort !== undefined ? { effort } : {}),
       });
     }
   }

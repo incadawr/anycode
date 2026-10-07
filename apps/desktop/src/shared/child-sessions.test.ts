@@ -74,6 +74,13 @@ describe("parseChildSpawnRequest", () => {
     expect(parseChildSpawnRequest({ ...valid, resumeChildSessionId: "bad\u0000id" })).toBeNull();
   });
 
+  it("accepts a known effort tier and drops the message for any other (TASK.127)", () => {
+    const withEffort = { ...valid, effort: "low" };
+    expect(parseChildSpawnRequest(withEffort)).toEqual(withEffort);
+    expect(parseChildSpawnRequest({ ...valid, effort: "xhigh" })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, effort: 3 })).toBeNull();
+  });
+
   it("accepts optional provider and model when present", () => {
     const withOptional = { ...valid, provider: "anthropic-1", model: "claude-x" };
     expect(parseChildSpawnRequest(withOptional)).toEqual(withOptional);

@@ -18,6 +18,7 @@
  */
 
 import type { SubagentOutcome, SubagentRunOptions } from "./subagent.js";
+import type { ReasoningEffort } from "../types/config.js";
 
 /**
  * One session-tier spawn request; `provider`/`model` are main-resolved
@@ -50,6 +51,11 @@ export interface SessionSubagentRequest {
   provider?: string;
   /** Exact engine model id on that connection; defaults to the parent's model. */
   model?: string;
+  /**
+   * Reasoning tier from the profile's `effort:` frontmatter; the child host
+   * resolves it against its own model's tiers. Absent = the connection's default.
+   */
+  effort?: ReasoningEffort;
   /**
    * Set ONLY by the engine-profile route (tools/agent.ts, TASK.102 CUT-S4
    * §2.2): the child boots this engine instead of core. Never model-visible —
