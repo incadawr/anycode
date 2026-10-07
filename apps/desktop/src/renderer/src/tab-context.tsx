@@ -55,3 +55,8 @@ export function useTabSend(): (message: UiToHostMessage) => void {
   const { tabId } = useTabContextValue();
   return useCallback((message: UiToHostMessage) => tabRegistry.sendToTab(tabId, message), [tabId]);
 }
+
+/** The active tab's id, for components that address tab-scoped stores keyed by tabId. */
+export function useTabContextTabId(): string {
+  return useTabContextValue().tabId;
+}

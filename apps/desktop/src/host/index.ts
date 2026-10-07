@@ -853,6 +853,10 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   const bridgeRowId = args.sessionId ?? randomUUID();
   const agentCardLog = new SqliteCodexAgentCardLog(persistence, bridgeRowId);
   let codexAgentBridge: CodexDynamicToolBridge | undefined;
+  // The bridge's child port, kept so the Session below can surface its
+  // detached-children registry (background_children) — without it a Codex
+  // supervisor's background agents never reached the renderer at all.
+  let codexChildPort: ChildSessionPort | undefined;
   let codexParentEngine: import("./engines/codex/codex-engine.js").CodexEngine | undefined;
   if (args.child === undefined) {
     const profileRoots = buildAgentProfileRoots(workspace, homedir(), []);
@@ -867,6 +871,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         send: sendChildSessionMessage, subscribe: subscribeChildRunEvents,
         onDetachedTerminal: deliverDetachedChildReport, onDetachedStall: deliverDetachedChildStall,
       });
+      codexChildPort = port;
       codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog);
     }
   }
@@ -1104,6 +1109,16 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     // `connected.engine` already is (registry.ts's codex plugin is a
     // pass-through), so this is exactly what `historyItems()` returns.
     bootHistory: booted.engine.historyItems(),
+    ...(codexChildPort !== undefined
+      ? {
+          backgroundChildren: {
+            list: () => codexChildPort!.listBackgroundChildren(),
+            cancel: (childSessionId: string) => codexChildPort!.cancelBackgroundChild(childSessionId),
+            cancelAll: () => codexChildPort!.cancelAllBackgroundChildren(),
+            onChange: (listener: () => void) => codexChildPort!.onBackgroundChildrenChanged(listener),
+          },
+        }
+      : {}),
     // TASK.188 S4: dev/automation-ONLY replay-recording override, resolved
     // here (the composition root) and never inside Session itself.
     ...(codexHistoryMaxItems !== null ? { historyMaxItems: codexHistoryMaxItems } : {}),
