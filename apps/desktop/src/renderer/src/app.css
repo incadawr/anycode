@@ -1701,6 +1701,20 @@ body {
   padding: var(--sp-6);
   color: var(--text-3);
   font-size: var(--fs-sm);
+  position: relative;
+}
+
+/* TASK.129: a collapsed sidebar with no tab open — the pane's own way back,
+   in the spot the session header's expand button would occupy. */
+.main-empty-expand {
+  position: absolute;
+  top: var(--sp-3);
+  left: var(--sp-3);
+}
+
+/* Same traffic-light clearance as the collapsed session header above. */
+:root[data-platform="darwin"]:not([data-fullscreen="true"]) .main-empty-expand {
+  left: var(--titlebar-traffic-clearance);
 }
 
 /* ── New Session start screen (slice P7.12 §4.5, intake F5#1a, restyled in

@@ -208,6 +208,29 @@ export function selectMainPaneView(draftActive: boolean, hasActiveTab: boolean):
   return hasActiveTab ? "active" : "empty";
 }
 
+/**
+ * TASK.129: the empty main pane's way back to a collapsed sidebar. With no
+ * tab open there is no session header — and so no expand button — and the app
+ * has no native menu, so a collapsed sidebar would be unrecoverable by mouse.
+ * The pane then shows its own expand button and names the CURRENT binding
+ * (`hint`, off the effective keymap — it is user-editable), or none when the
+ * action is unassigned.
+ */
+export function emptyPaneSidebarAffordance(
+  collapsed: boolean,
+  hint: string | null,
+): { showExpand: boolean; text: string } {
+  if (!collapsed) {
+    return { showExpand: false, text: "Open or resume a task from the sidebar." };
+  }
+  return {
+    showExpand: true,
+    text: hint
+      ? `The sidebar is hidden — press ${hint} or the button above to show it.`
+      : "The sidebar is hidden — use the button above to show it.",
+  };
+}
+
 /** Esc-guard decision (slice P7.12 §4.6): Esc must be swallowed while the start screen is up — it has no cancel-worthy turn of its own, and letting Esc fall through to `activeTabId` would cancel a BACKGROUND tab's turn instead. */
 export function shouldSuppressEscForDraft(draftActive: boolean): boolean {
   return draftActive;
@@ -1507,6 +1530,7 @@ export function App() {
     const binding = bindingFor(action, effectiveKeymap);
     return binding ? formatBinding(binding, platform) : null;
   };
+  const emptyAffordance = emptyPaneSidebarAffordance(collapsed, hintFor("sidebar.toggle"));
   const paletteActions: PaletteAction[] = [
     {
       id: "session.new",
@@ -1595,7 +1619,19 @@ export function App() {
             onToast={pushToast}
           />
         ) : (
-          <div className="main-empty">Open or resume a task from the sidebar.</div>
+          <div className="main-empty">
+            {emptyAffordance.showExpand && (
+              <button
+                type="button"
+                className="session-header-expand main-empty-expand"
+                aria-label="Expand sidebar"
+                onClick={handleToggleSidebarCollapsed}
+              >
+                <CollapseIcon />
+              </button>
+            )}
+            <span>{emptyAffordance.text}</span>
+          </div>
         )}
 
         {/* The active tab's terminal must not float over the start screen (§4.6). */}
