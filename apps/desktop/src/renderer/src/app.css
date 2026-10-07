@@ -4259,6 +4259,78 @@ body {
 
 /* ── prompt queue (F15, slice-P7.14-cut.md §4) ── */
 
+/* Background agents strip: detached children still running (BackgroundAgents.tsx). */
+.background-agents {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-2);
+}
+
+.background-agents-heading {
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+}
+
+.background-agents-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.background-agents-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  font-size: var(--fs-xs);
+}
+
+.background-agents-type {
+  flex-shrink: 0;
+  color: var(--text-2);
+  font-weight: var(--w-medium);
+}
+
+.background-agents-description {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-1);
+}
+
+.background-agents-elapsed {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.background-agents-action {
+  flex-shrink: 0;
+  padding: 0.15rem 0.4rem;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+}
+
+.background-agents-action:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
 .prompt-queue {
   display: flex;
   flex-direction: column;

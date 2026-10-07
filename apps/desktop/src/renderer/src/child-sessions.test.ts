@@ -4,7 +4,7 @@
  * tab-registry.ts (C2) and the JSX layer (C3).
  */
 import { describe, expect, it } from "vitest";
-import { childRelationKey, classifyPortEnvelope, createChildRelationStore, hasOpenableChild } from "./child-sessions.js";
+import { childRelationKey, classifyPortEnvelope, createChildRelationStore, hasOpenableChild, spawnToolCallIdForChild } from "./child-sessions.js";
 import type { PortEnvelope } from "../../shared/envelopes.js";
 
 /** A realistic root-tab envelope (no `child` field) — today's only shape, unchanged. */
@@ -198,5 +198,20 @@ describe("hasOpenableChild (TASK.102 CUT-S2 §2.5/§10.8.1: ToolCallCard's Open 
 
   it("STAYS true after the relation flips live:false — the BADGE remains visible for an already-gone child (its settled status is still honest); ToolCallCard.tsx's Open action is unconditional once visibility is true (C4 builds the read-only surface for exactly this case)", () => {
     expect(hasOpenableChild({ childTabId: "tab-child-1", childSessionId: "session-child-1", live: false }, false)).toBe(true);
+  });
+});
+
+describe("spawnToolCallIdForChild", () => {
+  it("finds the spawn under which a parent registered a child, the last one for a continued child", () => {
+    const store = createChildRelationStore();
+    store.getState().registerChild("p1", "spawn-a", "tab-1", "child-1");
+    store.getState().registerChild("p1", "spawn-b", "tab-2", "child-2");
+    store.getState().registerChild("p1", "spawn-c", "tab-3", "child-1"); // follow-up to child-1
+    store.getState().registerChild("p10", "spawn-x", "tab-4", "child-1"); // another parent, same prefix start
+    const relations = store.getState().relations;
+    expect(spawnToolCallIdForChild(relations, "p1", "child-1")).toBe("spawn-c");
+    expect(spawnToolCallIdForChild(relations, "p1", "child-2")).toBe("spawn-b");
+    expect(spawnToolCallIdForChild(relations, "p1", "nope")).toBeUndefined();
+    expect(spawnToolCallIdForChild(relations, "p10", "child-1")).toBe("spawn-x");
   });
 });

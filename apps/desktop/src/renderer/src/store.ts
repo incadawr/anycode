@@ -122,6 +122,7 @@ import type {
   HostToUiMessage,
   SerializedError,
   WireAgentEvent,
+  WireBackgroundChild,
   WireCheckpointMeta,
   WireContextBreakdown,
   WireEnvStatus,
@@ -977,6 +978,12 @@ export interface DesktopState {
   /** Accumulated output chunks keyed by taskId. */
   backgroundTaskOutput: Record<string, string>;
   /**
+   * Detached (background) child agents still running for this session, as the
+   * host's registry last pushed them (background_children, replaced wholesale).
+   * Their parent turn has already ended, so this is the only live sign of them.
+   */
+  backgroundChildren: WireBackgroundChild[];
+  /**
    * GUI-git slice (design slice-5.8-cut.md §2.5): per-tab, part of the session
    * slice so `reset()`/a respawned `host_ready` clear it wholesale — a fresh
 
@@ -1227,6 +1234,7 @@ interface SessionSlice {
   hookConfigError: string | null;
   backgroundTasks: BackgroundTaskSnapshot[];
   backgroundTaskOutput: Record<string, string>;
+  backgroundChildren: WireBackgroundChild[];
   git: GitSlice;
   envStatus: WireEnvStatus | null;
   contextBreakdown: WireContextBreakdown | null;
@@ -1272,6 +1280,7 @@ function initialSessionSlice(): SessionSlice {
     hookConfigError: null,
     backgroundTasks: [],
     backgroundTaskOutput: {},
+    backgroundChildren: [],
     git: initialGitSlice(),
     envStatus: null,
     contextBreakdown: null,
@@ -4082,12 +4091,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           }
           case "background_children":
+            // Full snapshot replacement, pushed on ui_ready and on every
+            // admit/terminal of a detached child (host/session.ts).
+            set({ backgroundChildren: message.children });
+            return;
           case "background_child_cancel_result":
-            // TASK.145 срез 3: data/command-only this slice (host/session.ts,
-            // shared/protocol.ts) — deliberately no renderer surface yet (the
-            // mandate reserves that for a later slice). No-op here purely to
-            // keep the exhaustive switch below total; not a decision that
-            // this data goes unused forever.
+            // The host re-pushes background_children right after a cancel, so
+            // the list itself already reflects it; only a refusal is news.
+            if (!message.ok) {
+              get().setNotice({ kind: "background_task_rejected", text: `Could not stop the background agent: ${message.reason ?? "unknown reason"}` });
+            }
             return;
           case "image_fallback_changed":
             // TASK.198 срез D: fires after the host has COMMITTED a recognizer

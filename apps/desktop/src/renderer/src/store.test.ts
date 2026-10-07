@@ -6413,3 +6413,26 @@ describe("TASK.242 visible agent provenance", () => {
     expect((blocks[0] as { text: string }).text).toContain("model application unverified");
   });
 });
+
+describe("desktop store — background_children (detached agents strip)", () => {
+  const CHILD = { childSessionId: "child-1", agentType: "glm-lead", description: "fix it", startedAt: 1 };
+
+  it("background_children replaces the list wholesale, and an empty push clears it", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    expect(store.getState().backgroundChildren).toEqual([]);
+    store.getState().applyHostMessage({ type: "background_children", children: [CHILD] });
+    expect(store.getState().backgroundChildren).toEqual([CHILD]);
+    store.getState().applyHostMessage({ type: "background_children", children: [] });
+    expect(store.getState().backgroundChildren).toEqual([]);
+  });
+
+  it("a refused cancel surfaces a notice; an accepted one stays silent", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "background_child_cancel_result", requestId: "r1", ok: true });
+    expect(store.getState().notice).toBeNull();
+    store.getState().applyHostMessage({ type: "background_child_cancel_result", requestId: "r2", ok: false, reason: "already finished" });
+    expect(store.getState().notice?.text).toContain("already finished");
+  });
+});
