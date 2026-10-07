@@ -79,12 +79,20 @@ during a session become callable at the next turn.
 ### 4. How the supervisor reaches GLM
 
 Inside a Codex session, AnyCode injects an `anycode_agent` tool whose
-arguments are `agent_type`, `description`, `prompt`, and an optional `model`
-override. The tool declares exactly the profiles found in the project's
+arguments are `agent_type`, `description`, `prompt`, an optional `model`
+override and an optional `detach`. The tool declares exactly the profiles found in the project's
 `.anycode/agents/`; an unknown `agent_type` is refused with the available
 list. Calling it with `agent_type: "glm-lead"` boots a child session running
 the lead's profile body plus your prompt — its transcript, progress and
 result card appear in the parent session.
+
+With `detach: true` the call returns at once with the child session id and the
+supervisor ends its turn. When the child finishes, AnyCode delivers its report
+to the supervisor session as a new message, which starts the supervisor's next
+turn; a child that stays silent too long produces a stall notice the same way.
+The supervisor therefore never holds a turn open or polls while GLM works.
+Without `detach` the call blocks the supervisor's turn until the child ends,
+and ending that turn early cancels the child.
 
 The `model:` frontmatter is a default, not a guarantee: the tool call's
 `model` argument outranks it. Each call is a fresh child — the schema has no

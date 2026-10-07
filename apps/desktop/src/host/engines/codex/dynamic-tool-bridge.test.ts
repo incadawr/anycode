@@ -61,6 +61,35 @@ describe("Codex AnyCode dynamic tool", () => {
   });
 });
 
+describe("Codex bridge — detached (background) children", () => {
+  it("declares detach for the Codex door", () => {
+    const s = setup();
+    const decl = s.bridge.declarations()[0] as { inputSchema: { properties: Record<string, { type?: string }> } };
+    expect(decl.inputSchema.properties.detach?.type).toBe("boolean");
+  });
+
+  it("a detach:true call answers at admit, and ending the turn afterwards never reaches the child", async () => {
+    const s = setup();
+    let childSignal: AbortSignal | undefined;
+    s.run.mockImplementation(async (req, options) => {
+      childSignal = options?.signal;
+      // The host port's detached admit (child-session-port.ts): settles at "accepted".
+      return { status: "completed", finalText: "Agent: child session child-2 started in the background.",
+        turns: 0, toolCalls: 0, truncated: false, durationMs: 1, childSessionId: "child-2", parentSessionId: "parent-1",
+        spawnToolCallId: req.spawnToolCallId };
+    });
+    await s.call({ ...params, arguments: { ...params.arguments, detach: true } });
+    expect(s.run.mock.calls[0]![0]).toMatchObject({ detach: true, spawnToolCallId: "call-1" });
+    expect(s.response.result).toHaveBeenCalledWith({ success: true,
+      contentItems: [{ type: "inputText", text: "Agent: child session child-2 started in the background." }] });
+    // The turn ends (or the user presses Stop) after the call returned: the
+    // bridge holds nothing for this call any more, so nothing is aborted.
+    const { cancelled } = s.bridge.cancelAwaiting();
+    expect(cancelled).toBe(false);
+    expect(childSignal?.aborted).toBe(false);
+  });
+});
+
 describe("Codex bridge lifecycle boundaries", () => {
   it("rejects completed-call redelivery but permits the same call id in a new turn", async () => {
     const s = setup();

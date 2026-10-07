@@ -7,6 +7,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- A Codex supervisor can start an AnyCode subagent in the background
+  (`anycode_agent` with `detach: true`): its turn ends immediately and the
+  subagent's report starts the supervisor's next turn, so it no longer holds a
+  turn open polling while GLM works.
+
 ## [0.0.31] — 2026-10-04
 
 ### Added
