@@ -27,7 +27,7 @@ import type {
 import type { ToolResult } from "../types/tools.js";
 import type { SubagentCardTarget, ToolResultPresentation } from "../types/subagent-card.js";
 import type { AgentOutput } from "../tools/schemas.js";
-import { SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS, SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS } from "../types/config.js";
+import { SUBAGENT_ACTIVITY_TOOL_NAME_MAX_CHARS, SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS, type ReasoningEffort } from "../types/config.js";
 import { sanitizeAndCap, SUBAGENT_ACTIVITY_SUMMARY_MAX_CHARS } from "./summarize-tool.js";
 import {
   createSubagentCardAccumulator,
@@ -57,6 +57,8 @@ export interface AgentBridgeCatalogEntry {
   engine?: "claude" | "codex";
   /** Default model id for this profile's children (frontmatter `model:`); absent = inherit the parent's/host's default. */
   model?: string;
+  /** Reasoning tier for this profile's children (frontmatter `effort:`); absent = the connection's default. */
+  effort?: ReasoningEffort;
   /** Child profile body — included in the initial task for both core and engine session children. */
   systemPrompt: string;
 }
@@ -75,7 +77,8 @@ const AGENT_BRIDGE_TOOL_DESCRIPTION_HEADER =
 function describeCatalogEntry(entry: AgentBridgeCatalogEntry): string {
   const engineLabel = entry.engine ?? "core";
   const modelLabel = entry.model ?? "inherited";
-  return `- ${entry.name} (${engineLabel}, model ${modelLabel}): ${entry.description}`;
+  const effortLabel = entry.effort !== undefined ? `, effort ${entry.effort}` : "";
+  return `- ${entry.name} (${engineLabel}, model ${modelLabel}${effortLabel}): ${entry.description}`;
 }
 
 /** Model-facing meaning of `detach` — the supervisor's whole wait discipline rides on this sentence. */
@@ -162,6 +165,8 @@ export interface BuildSessionSubagentRequestParams {
   model?: string;
   spawnToolCallId: string;
   profile?: EngineProfileInfo;
+  /** The profile's own `effort:` frontmatter, if any. */
+  effort?: ReasoningEffort;
 }
 
 /**
@@ -172,7 +177,7 @@ export interface BuildSessionSubagentRequestParams {
  * added by each caller that honors it (agent.ts, `runAgentBridgeCall`).
  */
 export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestParams): SessionSubagentRequest {
-  const { agentType, description, prompt, model, spawnToolCallId, profile } = params;
+  const { agentType, description, prompt, model, spawnToolCallId, profile, effort } = params;
   // Model precedence (model plumbing fix, unchanged by this extraction): an
   // explicit override always outranks the profile's own frontmatter default.
   const resolvedModel = model ?? profile?.model;
@@ -183,6 +188,7 @@ export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestP
     spawnToolCallId,
     ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
     ...(profile !== undefined ? { engine: profile.engine } : {}),
+    ...(effort !== undefined ? { effort } : {}),
   };
 }
 
@@ -543,6 +549,8 @@ export async function runAgentBridgeCall(
     model: continueSession !== undefined ? undefined : profile !== undefined ? input.model : (input.model ?? entry.model),
     spawnToolCallId: deps.spawnToolCallId,
     profile,
+    // A continued child keeps the tier its session was started on.
+    ...(continueSession === undefined && entry.effort !== undefined ? { effort: entry.effort } : {}),
   });
   // A detached run settles at admit with the port's own "started in the
   // background" text and no `subagent_start`, so the card below is null —

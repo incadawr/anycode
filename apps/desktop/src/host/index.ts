@@ -2907,7 +2907,8 @@ async function boot(): Promise<void> {
           // below. Never `config.reasoningEffort`, whose `undefined` after a
           // switch to a non-reasoning parent would silently drop the child's
           // effort even though the child's own model can honor the tier.
-          resolveChildModelSettings: (id: string) => settingsForChild(id, selectedEffort),
+          resolveChildModelSettings: (id: string, profileEffort?: ReasoningEffort) =>
+            settingsForChild(id, profileEffort ?? selectedEffort),
         }),
         ext.workflows,
       ),

@@ -252,3 +252,40 @@ describe("discoverAgentProfiles byte-invariance (post-extraction regression)", (
     ]);
   });
 });
+
+describe("parseAgentProfileMd — effort frontmatter and unknown keys (TASK.127/TASK.217)", () => {
+  it("maps a valid effort (case-insensitive) onto the profile", () => {
+    const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "High" }, "b"), "f");
+    expect("ok" in res && res.ok.effort).toBe("high");
+  });
+
+  it("absent or blank effort leaves it undefined", () => {
+    const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: " " }, "b"), "f");
+    expect("ok" in res && "effort" in res.ok).toBe(false);
+  });
+
+  it("an effort outside the vocabulary is fatal, not silently dropped", () => {
+    const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "xhigh" }, "b"), "f");
+    expect(res).toEqual({ error: { kind: "bad_effort", name: "planner", effort: "xhigh" } });
+  });
+
+  it("an unknown key is reported as a problem, the profile still loads", () => {
+    const res = parseAgentProfileMd(md({ name: "sol", description: "d", model_reasoning_effort: "xhigh" }, "b"), "f");
+    expect("ok" in res).toBe(true);
+    if (!("ok" in res)) return;
+    expect(res.ok.problems).toEqual([expect.stringContaining('unknown frontmatter key "model_reasoning_effort"')]);
+  });
+
+  it("discovery carries effort into the persona and words a bad one", async () => {
+    const fs = new FakeFs({
+      [WS]: {
+        "planner.md": md({ description: "Plans", effort: "low" }, "Plan."),
+        "broken.md": md({ description: "Broken", effort: "turbo" }, "B."),
+      },
+    });
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+    expect(profiles.find((p) => p.name === "planner")?.effort).toBe("low");
+    expect(profiles.find((p) => p.name === "broken")).toBeUndefined();
+    expect(problems).toEqual([expect.stringContaining('effort "turbo" must be one of off, low, medium, high, max')]);
+  });
+});

@@ -2299,6 +2299,34 @@ describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", (
   });
 });
 
+describe("TabHostManager — a profile's effort reaches a core child's host (TASK.127)", () => {
+  function rig() {
+    const { hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window);
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-effort", resume: false, connectionId: "conn-parent" }).ok).toBe(true);
+    return { hosts, forkSpy };
+  }
+
+  it("stamps ANYCODE_REASONING_EFFORT on the child fork when the request carries effort", () => {
+    const { hosts, forkSpy } = rig();
+    hosts[0]!.emit("message", spawnRequest({ requestId: "effort-1", effort: "low" }));
+    expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_REASONING_EFFORT: "low" });
+  });
+
+  it("no effort on the request leaves the connection's own tier untouched", () => {
+    const { hosts, forkSpy } = rig();
+    hosts[0]!.emit("message", spawnRequest({ requestId: "effort-2" }));
+    expect(forkSpy.mock.calls[1]?.[2]?.env ?? {}).not.toHaveProperty("ANYCODE_REASONING_EFFORT");
+  });
+});
+
 describe("TabHostManager — non-recursion lock #3: a child cannot spawn its own child (TASK.102 CUT-S2 §0.2)", () => {
   it("a spawn request from a tab that IS a child is rejected recursion, replied to on the CHILD's OWN process — the root never sees it, and nothing is forked", () => {
     const { fork, hosts } = shutdownableForkRig();

@@ -32,7 +32,7 @@
  * sender is authorized to say it.
  */
 
-import type { PermissionMode } from "@anycode/core";
+import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 
 // ── parentPort message types (parent host <-> main, child host <-> main) ──
 
@@ -62,6 +62,13 @@ export interface ChildSpawnRequest {
   prompt: string;
   provider?: string;
   model?: string;
+  /**
+   * Reasoning tier from the profile's `effort:` frontmatter. Core children
+   * only: main stamps it as the child host's ANYCODE_REASONING_EFFORT, which
+   * the host resolves against the child model's own tiers. Absent = the
+   * connection's default.
+   */
+  effort?: ReasoningEffort;
   permissionMode: PermissionMode;
   /**
    * Child engine (TASK.102 CUT-S4 §3.1). Absent = core (byte-compatible with
@@ -359,12 +366,19 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "prompt",
   "provider",
   "model",
+  "effort",
   "permissionMode",
   // TASK.102 CUT-S4 §3.1: additive key, authorized amendment (mirrors the
   // §2.6 п.4 amendment style already used for `activitySuppressed` below).
   "engine",
   "resumeChildSessionId",
 ] as const;
+
+const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "max"] satisfies readonly ReasoningEffort[];
+
+export function isChildEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === "string" && CHILD_EFFORT_VALUES.includes(value);
+}
 
 function isChildEngine(value: unknown): value is "claude" | "codex" {
   return typeof value === "string" && CHILD_ENGINE_VALUES.includes(value);
@@ -392,6 +406,9 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.model !== undefined && !isIdString(msg.model, CHILD_MODEL_MAX_CHARS)) {
     return null;
   }
+  if (msg.effort !== undefined && !isChildEffort(msg.effort)) {
+    return null;
+  }
   if (!isPermissionMode(msg.permissionMode)) {
     return null;
   }
@@ -413,6 +430,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     prompt: msg.prompt,
     ...(msg.provider !== undefined ? { provider: msg.provider as string } : {}),
     ...(msg.model !== undefined ? { model: msg.model as string } : {}),
+    ...(msg.effort !== undefined ? { effort: msg.effort } : {}),
     permissionMode: msg.permissionMode,
     ...(msg.engine !== undefined ? { engine: msg.engine } : {}),
     ...(msg.resumeChildSessionId !== undefined ? { resumeChildSessionId: msg.resumeChildSessionId as string } : {}),

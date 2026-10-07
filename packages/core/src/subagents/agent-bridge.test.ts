@@ -585,3 +585,48 @@ describe("decodeAgentBridgeCallInput (TASK.226 срез S4)", () => {
     ).toBeNull();
   });
 });
+
+describe("runAgentBridgeCall — profile effort (TASK.127/TASK.217)", () => {
+  const PLANNER: AgentBridgeCatalogEntry = { name: "glm-planner", description: "Plans", model: "glm-5.3", effort: "high", systemPrompt: "PLAN BODY" };
+
+  function capture(): { port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
+    let seen: SessionSubagentRequest | undefined;
+    return {
+      seen: () => seen,
+      port: {
+        run: async (req) => {
+          seen = req;
+          return { status: "completed", finalText: "ok", truncated: false, turns: 0, toolCalls: 0, durationMs: 1, childSessionId: "c", parentSessionId: "p", spawnToolCallId: req.spawnToolCallId };
+        },
+      },
+    };
+  }
+
+  it("a fresh call carries the profile's effort on the request", async () => {
+    const { port, seen } = capture();
+    await runAgentBridgeCall({ agent_type: "glm-planner", description: "d", prompt: "plan it" }, { catalog: [PLANNER], port, spawnToolCallId: "call_1" });
+    expect(seen()?.effort).toBe("high");
+  });
+
+  it("a continued child keeps its own tier — no effort rides the follow-up", async () => {
+    const { port, seen } = capture();
+    await runAgentBridgeCall(
+      { agent_type: "glm-planner", description: "d", prompt: "again", continue_session: "child-1" },
+      { catalog: [PLANNER], port, spawnToolCallId: "call_2" },
+    );
+    expect(seen() !== undefined && "effort" in seen()!).toBe(false);
+  });
+
+  it("a profile without effort puts no effort key on the wire", async () => {
+    const { port, seen } = capture();
+    await runAgentBridgeCall(
+      { agent_type: "plain", description: "d", prompt: "p" },
+      { catalog: [{ name: "plain", description: "P", systemPrompt: "B" }], port, spawnToolCallId: "call_3" },
+    );
+    expect(seen() !== undefined && "effort" in seen()!).toBe(false);
+  });
+
+  it("the tool description names the profile's effort", () => {
+    expect(buildAgentBridgeToolDecl([PLANNER])?.description).toContain("- glm-planner (core, model glm-5.3, effort high): Plans");
+  });
+});

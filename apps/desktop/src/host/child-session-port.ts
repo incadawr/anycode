@@ -122,6 +122,7 @@ import {
   CHILD_RUN_CANCEL_TYPE,
   CHILD_SPAWN_REQUEST_TYPE,
   isValidChildId,
+  isChildEffort,
   isValidChildModel,
   type ChildRunCancel,
   type ChildRunEvent,
@@ -160,6 +161,7 @@ const MALFORMED_DESCRIPTION_MESSAGE = "Agent: the child session failed to start 
 const MALFORMED_PROMPT_MESSAGE = "Agent: the child session failed to start (malformed prompt).";
 const MALFORMED_MODEL_MESSAGE = "Agent: the child session failed to start (malformed model).";
 const MALFORMED_PROVIDER_MESSAGE = "Agent: the child session failed to start (malformed provider).";
+const MALFORMED_EFFORT_MESSAGE = "Agent: the child session failed to start (malformed reasoning effort).";
 const MALFORMED_RESUME_MESSAGE = "Agent: the child session failed to start (malformed child session id to continue).";
 
 /**
@@ -203,6 +205,9 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
   }
   if (req.provider !== undefined && !isValidFreeText(req.provider, CHILD_PROVIDER_MAX_CHARS)) {
     return MALFORMED_PROVIDER_MESSAGE;
+  }
+  if (req.effort !== undefined && !isChildEffort(req.effort)) {
+    return MALFORMED_EFFORT_MESSAGE;
   }
   if (req.resumeChildSessionId !== undefined && (!isValidChildId(req.resumeChildSessionId) || req.engine !== undefined)) {
     return MALFORMED_RESUME_MESSAGE;
@@ -713,6 +718,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         prompt: req.prompt,
         ...(req.provider !== undefined ? { provider: req.provider } : {}),
         ...(req.model !== undefined ? { model: req.model } : {}),
+        ...(req.effort !== undefined ? { effort: req.effort } : {}),
         // TASK.102 CUT-S4 §3.1: verbatim passthrough, absent = core (the
         // wire's own byte-compatible default — shared/child-sessions.ts's
         // file header).
