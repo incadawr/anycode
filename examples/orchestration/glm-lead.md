@@ -19,6 +19,11 @@ do not conflict with an explicit task brief.
   anchored to concrete source locations.
 - Use real seams in the code; never invent persistence identities or assume
   events are already durable.
+- Exploration budget: at most ~30 read/search calls before your first edit,
+  even on complex work. Once you can name the files you will change and the
+  test that proves it, stop reading and edit. Saying "I have the full
+  picture" means your next call is an edit, not another read; if a fact is
+  still missing, read only that and then edit.
 - If the brief says PLAN-ONLY, change nothing and return the chosen contract
   with verified facts vs assumptions, then wait for acceptance. A plan
   acceptance is not task acceptance.
