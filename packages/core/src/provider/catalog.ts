@@ -24,6 +24,14 @@ export interface CatalogModel {
   id: string;
   name?: string;
   contextWindow: number;
+  /**
+   * The most context the model still works well with, when that is below the
+   * advertised `contextWindow` (GLM-5.x: 1M advertised, quality drops past
+   * ~300k — owner-measured, 2026-10-07). Sessions budget against this instead:
+   * auto-compaction and the context meter use it, so a long run is compacted
+   * before it degrades. ANYCODE_CONTEXT_WINDOW still overrides both.
+   */
+  usableContextWindow?: number;
   maxOutputTokens?: number;
   /** Static hint that the endpoint accepts Anthropic-compatible thinking. */
   reasoning?: boolean;

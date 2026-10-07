@@ -50,7 +50,10 @@ export function resolveContextWindow(
     return override;
   }
   const model = entry?.models.find((candidate) => candidate.id === modelId);
-  return model?.contextWindow;
+  if (model === undefined) {
+    return undefined;
+  }
+  return Math.min(model.contextWindow, model.usableContextWindow ?? model.contextWindow);
 }
 
 /**

@@ -185,6 +185,22 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
     expect(resolveContextWindow("glm-4.6", Z_AI_ENTRY, undefined)).toBe(200_000);
   });
 
+  it("without override, a model's usableContextWindow caps its advertised window; an override still wins", () => {
+    const entry: CatalogProviderEntry = {
+      ...Z_AI_ENTRY,
+      models: [{ id: "big", contextWindow: 1_000_000, usableContextWindow: 300_000 }],
+    };
+    expect(resolveContextWindow("big", entry, undefined)).toBe(300_000);
+    expect(resolveContextWindow("big", entry, 800_000)).toBe(800_000);
+  });
+
+  it("the shipped GLM-5.x rows budget at 300k, not their advertised 1M (owner, 2026-10-07)", () => {
+    const zai = findCatalogEntry("z-ai");
+    for (const id of ["glm-5.3", "glm-5.3-flash", "glm-5.2"]) {
+      expect(resolveContextWindow(id, zai, undefined)).toBe(300_000);
+    }
+  });
+
   it("without override, an unknown model id resolves undefined", () => {
     expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined)).toBeUndefined();
   });

@@ -1187,8 +1187,8 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
 
   it("carries the selected tier onto a reasoning-capable model", () => {
     const out = makeSwitcher()("glm-5.2", "max");
-    expect(out.setContextWindowCalls).toEqual([1_000_000]);
-    expect(out.config.context).toEqual({ contextWindowTokens: 1_000_000 });
+    expect(out.setContextWindowCalls).toEqual([300_000]);
+    expect(out.config.context).toEqual({ contextWindowTokens: 300_000 });
     expect(out.config.maxOutputTokens).toBe(131_072);
     expect(out.config.reasoningEffort).toBe("max");
     expect(out.result.reasoningEffort).toBe("max");
