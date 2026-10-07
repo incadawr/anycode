@@ -115,6 +115,7 @@ export interface TabIpcDeps {
     | "listRootSessions"
     | "touchSession"
     | "getChildSession"
+    | "getSessionById"
     | "loadHistory"
     | "deleteSession"
     | "listSessionsOlderThan"
@@ -427,7 +428,7 @@ function toWireHistoryItems(items: readonly HistoryItem[]): WireHistoryItem[] {
  * the truthful sender of an invoke call, contextBridge's whole point).
  */
 export async function handleChildHistory(
-  deps: Pick<TabIpcDeps, "persistence">,
+  deps: Pick<TabIpcDeps, "persistence"> & { manager?: Pick<TabHostManager, "followUpChildSessionId"> },
   raw: unknown,
 ): Promise<ChildHistoryResult> {
   if (typeof raw !== "object" || raw === null) {
@@ -437,7 +438,15 @@ export async function handleChildHistory(
   if (!isValidChildId(parentSessionId) || !isValidChildId(spawnToolCallId)) {
     return { ok: false, reason: "invalid_id" };
   }
-  const meta = await deps.persistence.getChildSession(parentSessionId, spawnToolCallId);
+  let meta = await deps.persistence.getChildSession(parentSessionId, spawnToolCallId);
+  if (meta === null) {
+    // A follow-up run continued an existing child: its row keeps the FIRST
+    // spawn's call id, so main's own alias (never the renderer's) maps this
+    // card to it — and the row must still name this parent.
+    const aliased = deps.manager?.followUpChildSessionId(parentSessionId, spawnToolCallId);
+    const candidate = aliased !== undefined ? await deps.persistence.getSessionById(aliased) : null;
+    meta = candidate !== null && candidate.parentSessionId === parentSessionId ? candidate : null;
+  }
   if (meta === null) {
     return { ok: false, reason: "not_found" };
   }

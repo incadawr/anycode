@@ -49,13 +49,15 @@ call. Do not split it, do not implement parts yourself.
 
 ## Returning defects
 
-Send concrete defects back with ANOTHER `anycode_agent` call
-(`agent_type: "glm-lead"`, prompt = the numbered defect list, each with a
-file/line anchor and the check that fails). The tool has no resume or
-session-reference parameter — each call is a fresh child that must re-read
-the current state, so anchor defects in files and lines, not in "what you
-were told earlier". Re-verify the same anchors after the fix. When the work
-meets the brief, reply **ACCEPT** with one line of evidence.
+Send concrete defects back to the SAME lead: another `anycode_agent` call
+with `agent_type: "glm-lead"`, `continue_session` = the lead's child session
+id (the `<agent-id>` of its report), `detach: true`, and prompt = the numbered defect list, each
+with a file/line anchor and the check that fails. The lead resumes with its
+full history, so it does not re-plan from scratch; end your turn exactly as
+after the first dispatch. If AnyCode refuses the continuation (for example
+after an app restart), start a fresh lead instead and make the defect list
+self-contained. Re-verify the same anchors after the fix. When the work meets
+the brief, reply **ACCEPT** with one line of evidence.
 
 ## Boundaries
 

@@ -84,6 +84,12 @@ const AGENT_BRIDGE_DETACH_DESCRIPTION =
   "arrives later as a new message that starts your next turn. After a detached call, end your turn — do not wait, " +
   "poll or re-check; nothing is lost while you are idle.";
 
+/** Model-facing meaning of `continue_session` — a follow-up keeps the child's context instead of starting over. */
+const AGENT_BRIDGE_CONTINUE_DESCRIPTION =
+  "Child session id from an earlier finished call of this session: the same child resumes with its full history and " +
+  "receives `prompt` as its next message (use it to return defects for rework). Its profile and model stay as they " +
+  "were; `model` is ignored. The child must have finished and belong to this session.";
+
 export interface AgentBridgeToolDeclOptions {
   /**
    * Declare the optional `detach` field (TASK.145 semantics). Only a door whose
@@ -91,6 +97,12 @@ export interface AgentBridgeToolDeclOptions {
    * may set this — otherwise the report would have nowhere to go.
    */
   detach?: boolean;
+  /**
+   * Declare the optional `continue_session` field: a follow-up turn on an
+   * earlier finished core child of the same parent session (main resumes the
+   * child's own session row and history).
+   */
+  continueSession?: boolean;
 }
 
 /**
@@ -118,6 +130,9 @@ export function buildAgentBridgeToolDecl(
       .optional()
       .describe("Exact model id to run the subagent on (defaults to the profile's own model)"),
     ...(options.detach === true ? { detach: z.boolean().optional().describe(AGENT_BRIDGE_DETACH_DESCRIPTION) } : {}),
+    ...(options.continueSession === true
+      ? { continue_session: z.string().min(1).optional().describe(AGENT_BRIDGE_CONTINUE_DESCRIPTION) }
+      : {}),
   });
   const description = [AGENT_BRIDGE_TOOL_DESCRIPTION_HEADER, ...catalog.map(describeCatalogEntry)].join("\n");
   return {
@@ -405,6 +420,8 @@ export interface AgentBridgeCallInput {
   model?: string;
   /** Background run (TASK.145): `run()` settles at admit; the report arrives later as a parent turn. */
   detach?: boolean;
+  /** Follow-up to an earlier finished child of this session: its id; the child resumes with its own history. */
+  continue_session?: string;
 }
 
 /**
@@ -432,12 +449,15 @@ export function decodeAgentBridgeCallInput(args: Record<string, unknown>): Agent
   if (model !== undefined && (typeof model !== "string" || model.length === 0)) return null;
   const detach = args.detach;
   if (detach !== undefined && typeof detach !== "boolean") return null;
+  const continueSession = args.continue_session;
+  if (continueSession !== undefined && (typeof continueSession !== "string" || continueSession.length === 0)) return null;
   return {
     agent_type: agentType,
     description,
     prompt,
     ...(model !== undefined ? { model: model as string } : {}),
     ...(detach === true ? { detach: true } : {}),
+    ...(continueSession !== undefined ? { continue_session: continueSession as string } : {}),
   };
 }
 
@@ -496,6 +516,14 @@ export async function runAgentBridgeCall(
     };
   }
 
+  const continueSession = input.continue_session;
+  if (continueSession !== undefined && entry.engine !== undefined) {
+    return {
+      text: `Agent: continue_session is supported only for AnyCode (core) profiles; "${entry.name}" runs on ${entry.engine}. Start a new call instead.`,
+      isError: true,
+    };
+  }
+
   const profile: EngineProfileInfo | undefined =
     entry.engine !== undefined
       ? { engine: entry.engine, systemPrompt: entry.systemPrompt, ...(entry.model !== undefined ? { model: entry.model } : {}) }
@@ -503,20 +531,27 @@ export async function runAgentBridgeCall(
   const built = buildSessionSubagentRequest({
     agentType: entry.name,
     description: input.description,
-    prompt: profile === undefined && entry.systemPrompt.trim()
+    // A continued child already carries its profile body in its own history;
+    // only the follow-up message is sent.
+    prompt: continueSession === undefined && profile === undefined && entry.systemPrompt.trim()
       ? `${entry.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
     // A core (non-engine) entry has no `profile` for the builder to fall back
     // onto, so its own default model is resolved here instead (scenario E,
     // plan §9 p.4: a core profile's `model:` frontmatter must still reach the
     // child; its body is explicitly included above).
-    model: profile !== undefined ? input.model : (input.model ?? entry.model),
+    // A continued child keeps the model its session was started on.
+    model: continueSession !== undefined ? undefined : profile !== undefined ? input.model : (input.model ?? entry.model),
     spawnToolCallId: deps.spawnToolCallId,
     profile,
   });
   // A detached run settles at admit with the port's own "started in the
   // background" text and no `subagent_start`, so the card below is null —
   // the same shape the native Agent tool's detached call has.
-  const request: SessionSubagentRequest = input.detach === true ? { ...built, detach: true } : built;
+  const request: SessionSubagentRequest = {
+    ...built,
+    ...(input.detach === true ? { detach: true } : {}),
+    ...(continueSession !== undefined ? { resumeChildSessionId: continueSession } : {}),
+  };
 
   const controller = new AbortController();
   const unlink = deps.signal !== undefined ? linkAbortSignal(deps.signal, controller) : () => {};

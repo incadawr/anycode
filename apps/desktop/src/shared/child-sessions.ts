@@ -72,6 +72,12 @@ export interface ChildSpawnRequest {
    * `SessionSubagentRequest.engine`, CUT-S4 §2.3), never model-visible.
    */
   engine?: "claude" | "codex";
+  /**
+   * Follow-up to an earlier finished core child of the sender's session: main
+   * resumes that child session instead of minting a new one, and `prompt` is
+   * its next message. Main alone decides whether it is resumable.
+   */
+  resumeChildSessionId?: string;
 }
 
 /** Aborts a running child (parent turn cancel/timeout, §0.5's ctx.abortSignal). */
@@ -357,6 +363,7 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   // TASK.102 CUT-S4 §3.1: additive key, authorized amendment (mirrors the
   // §2.6 п.4 amendment style already used for `activitySuppressed` below).
   "engine",
+  "resumeChildSessionId",
 ] as const;
 
 function isChildEngine(value: unknown): value is "claude" | "codex" {
@@ -394,6 +401,9 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.engine !== undefined && !isChildEngine(msg.engine)) {
     return null;
   }
+  if (msg.resumeChildSessionId !== undefined && !isIdString(msg.resumeChildSessionId, CHILD_ID_MAX_CHARS)) {
+    return null;
+  }
   return {
     type: CHILD_SPAWN_REQUEST_TYPE,
     requestId: msg.requestId,
@@ -405,6 +415,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     ...(msg.model !== undefined ? { model: msg.model as string } : {}),
     permissionMode: msg.permissionMode,
     ...(msg.engine !== undefined ? { engine: msg.engine } : {}),
+    ...(msg.resumeChildSessionId !== undefined ? { resumeChildSessionId: msg.resumeChildSessionId as string } : {}),
   };
 }
 

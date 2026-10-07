@@ -90,6 +90,7 @@ const persistenceStub: TabIpcDeps["persistence"] = {
     counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
   }),
   getChildSession: async () => null,
+  getSessionById: async () => null,
   loadHistory: async () => [],
 };
 
@@ -295,6 +296,7 @@ describe("handleCreate — persisted engine identity", () => {
     const workspace = process.cwd();
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -334,6 +336,7 @@ describe("handleCreate — persisted engine identity", () => {
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -365,6 +368,7 @@ describe("handleCreate — persisted engine identity", () => {
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -397,6 +401,7 @@ describe("handleCreate — imported-session model override (codex-profiles S4-1 
   }
   const importPersistence = (id = "s-import"): TabIpcDeps["persistence"] => ({
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -531,6 +536,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-x" }));
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -553,6 +559,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const resolveResumePin = vi.fn(async () => ({ ok: false as const, connectionId: "conn-gone" }));
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -574,6 +581,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const resolveResumePin = vi.fn(async () => ({ ok: true as const }));
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -597,6 +605,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-x", release }));
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -619,6 +628,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-x", release }));
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -640,6 +650,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const touchSession = vi.fn(async () => {});
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -673,6 +684,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const touchSession = vi.fn(async () => {});
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -704,6 +716,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     const touchSession = vi.fn(async () => {});
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -737,6 +750,7 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
     });
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -994,6 +1008,7 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     const resolveCodexProfile = vi.fn(async () => ({ ok: true as const }));
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -1017,6 +1032,7 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -1040,6 +1056,7 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     const resolveCodexProfile = vi.fn(async () => ({ ok: false as const }));
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -1064,6 +1081,7 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     const resolveCodexProfile = vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } }));
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -1119,6 +1137,7 @@ describe("handleCreate — readiness gate keys on the PICKED Codex profile (S3-1
     const resolveCodexProfile = vi.fn(async (id: string) => ({ ok: true as const, codexProfile: { id } }));
     const persistence: TabIpcDeps["persistence"] = {
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -1298,6 +1317,7 @@ describe("handleCreate — unknown-readiness hydration (TASK.64)", () => {
   });
   const metaPersistence = (meta: ReturnType<typeof codexMeta>): TabIpcDeps["persistence"] => ({
       getChildSession: async () => null,
+      getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
       deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
       listSessionsOlderThan: async () => [],
@@ -1731,6 +1751,25 @@ describe("handleChildHistory — CHILD_HISTORY_CHANNEL (TASK.102 CUT-S2 §2.5/§
     };
     return { deps, getChildSession, loadHistory };
   }
+
+  it("a follow-up card's own call id resolves through main's alias to the continued child, only while the row still names this parent", async () => {
+    const loadHistory = vi.fn(async (_id: string) => [HISTORY_ITEM]);
+    const getSessionById = vi.fn(async (id: string) => (id === CHILD_META.id ? CHILD_META : null));
+    const followUpChildSessionId = vi.fn((parent: string, spawn: string) =>
+      parent === "session-master" && spawn === "call-followup" ? CHILD_META.id : undefined,
+    );
+    const deps = {
+      persistence: { ...persistenceStub, getChildSession: async () => null, getSessionById, loadHistory },
+      manager: { followUpChildSessionId },
+    };
+
+    expect(await handleChildHistory(deps, { parentSessionId: "session-master", spawnToolCallId: "call-followup" })).toMatchObject({ ok: true });
+    expect(loadHistory).toHaveBeenCalledWith(CHILD_META.id);
+    expect(await handleChildHistory(deps, { parentSessionId: "session-master", spawnToolCallId: "call-other" })).toEqual({ ok: false, reason: "not_found" });
+
+    followUpChildSessionId.mockReturnValue(CHILD_META.id);
+    expect(await handleChildHistory(deps, { parentSessionId: "session-elsewhere", spawnToolCallId: "call-followup" })).toEqual({ ok: false, reason: "not_found" });
+  });
 
   it("§10.8.1 point 5: a malformed parentSessionId (fails isValidChildId — control character) is refused invalid_id, and persistence is NEVER touched (fail-closed BEFORE any query)", async () => {
     const { deps, getChildSession, loadHistory } = makeFakePersistence();

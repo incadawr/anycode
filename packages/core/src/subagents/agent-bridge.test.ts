@@ -470,6 +470,61 @@ describe("runAgentBridgeCall — detach", () => {
   });
 });
 
+describe("runAgentBridgeCall — continue_session (follow-up to a finished child)", () => {
+  const ENTRY: AgentBridgeCatalogEntry = { name: "glm-lead", description: "Leads", model: "glm-5.3", systemPrompt: "LEAD BODY" };
+  const ENGINE_ENTRY: AgentBridgeCatalogEntry = { name: "codex-worker", description: "W", engine: "codex", systemPrompt: "B" };
+
+  function capturingPort(): { port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
+    let seen: SessionSubagentRequest | undefined;
+    return {
+      seen: () => seen,
+      port: {
+        run: async (req) => {
+          seen = req;
+          return { status: "completed", finalText: "ok", truncated: false, turns: 0, toolCalls: 0, durationMs: 1, childSessionId: "child-9", parentSessionId: "p", spawnToolCallId: req.spawnToolCallId };
+        },
+      },
+    };
+  }
+
+  it("names the child to resume and sends ONLY the follow-up: no profile body again, no model override", async () => {
+    const { port, seen } = capturingPort();
+    await runAgentBridgeCall(
+      { agent_type: "glm-lead", description: "d", prompt: "fix defect 1", model: "glm-other", detach: true, continue_session: "child-9" },
+      { catalog: [ENTRY], port, spawnToolCallId: "call_9" },
+    );
+    expect(seen()).toMatchObject({ resumeChildSessionId: "child-9", prompt: "fix defect 1", detach: true });
+    expect(seen() !== undefined && "model" in seen()!).toBe(false);
+  });
+
+  it("an engine profile cannot be continued — refused before the port is called", async () => {
+    const { port, seen } = capturingPort();
+    const result = await runAgentBridgeCall(
+      { agent_type: "codex-worker", description: "d", prompt: "p", continue_session: "child-9" },
+      { catalog: [ENGINE_ENTRY], port, spawnToolCallId: "call_10" },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/continue_session is supported only/);
+    expect(seen()).toBeUndefined();
+  });
+
+  it("is declared only when the door opts in, and decodes as a non-empty string", () => {
+    const plain = buildAgentBridgeToolDecl([ENTRY])?.inputSchema as { properties?: Record<string, unknown> };
+    expect(Object.keys(plain.properties ?? {})).not.toContain("continue_session");
+    const opted = buildAgentBridgeToolDecl([ENTRY], { continueSession: true })?.inputSchema as {
+      required?: string[];
+      properties?: Record<string, { type?: string }>;
+    };
+    expect(opted.properties?.continue_session?.type).toBe("string");
+    expect(opted.required).not.toContain("continue_session");
+    expect(decodeAgentBridgeCallInput({ agent_type: "a", description: "d", prompt: "p", continue_session: "c-1" })).toEqual({
+      agent_type: "a", description: "d", prompt: "p", continue_session: "c-1",
+    });
+    expect(decodeAgentBridgeCallInput({ agent_type: "a", description: "d", prompt: "p", continue_session: "" })).toBeNull();
+    expect(decodeAgentBridgeCallInput({ agent_type: "a", description: "d", prompt: "p", continue_session: 7 })).toBeNull();
+  });
+});
+
 describe("decodeAgentBridgeCallInput (TASK.226 срез S4)", () => {
   it("a well-formed args object decodes verbatim, including the optional model", () => {
     expect(

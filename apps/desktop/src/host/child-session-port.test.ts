@@ -160,6 +160,24 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
     await pending;
   });
 
+  describe("resumeChildSessionId passthrough (follow-up to a finished child)", () => {
+    it("forwards a well-formed id verbatim into the ChildSpawnRequest", () => {
+      const { port, sent } = harness();
+      port.run({ agentType: "glm-lead", description: "d", prompt: "fix", spawnToolCallId: "spawn-r", resumeChildSessionId: "child-1" }, {});
+      expect(spawns(sent)[0]!.resumeChildSessionId).toBe("child-1");
+    });
+
+    it("refuses a malformed id, or one combined with an engine, before anything reaches main", async () => {
+      for (const extra of [{ resumeChildSessionId: "--resume=x" }, { resumeChildSessionId: "child-1", engine: "codex" as const }]) {
+        const { port, sent } = harness();
+        const outcome = await port.run({ agentType: "a", description: "d", prompt: "p", spawnToolCallId: "spawn-bad", ...extra }, {});
+        expect(spawns(sent)).toHaveLength(0);
+        expect(outcome.status).toBe("error");
+        expect(outcome.finalText).toMatch(/malformed child session id to continue/);
+      }
+    });
+  });
+
   // TASK.102 CUT-S4 §3.1: `req.engine` rides the wire verbatim into the
   // ChildSpawnRequest AND into the "start" progress event on `accepted` —
   // the client never re-derives it, only forwards whatever the engine-profile

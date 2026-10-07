@@ -80,7 +80,7 @@ during a session become callable at the next turn.
 
 Inside a Codex session, AnyCode injects an `anycode_agent` tool whose
 arguments are `agent_type`, `description`, `prompt`, an optional `model`
-override and an optional `detach`. The tool declares exactly the profiles found in the project's
+override, an optional `detach` and an optional `continue_session`. The tool declares exactly the profiles found in the project's
 `.anycode/agents/`; an unknown `agent_type` is refused with the available
 list. Calling it with `agent_type: "glm-lead"` boots a child session running
 the lead's profile body plus your prompt — its transcript, progress and
@@ -95,8 +95,16 @@ Without `detach` the call blocks the supervisor's turn until the child ends,
 and ending that turn early cancels the child.
 
 The `model:` frontmatter is a default, not a guarantee: the tool call's
-`model` argument outranks it. Each call is a fresh child — the schema has no
-resume or session-reference parameter. Profile files must not combine
+`model` argument outranks it.
+
+Without `continue_session` each call is a fresh child. With
+`continue_session` set to the session id of a finished child of the same
+supervisor session, AnyCode resumes that child with its full history and
+delivers `prompt` as its next message. Use this to return defects to the same
+lead. The continued child keeps its original connection and model. Only
+AnyCode (Native) children can be continued, and only during the app run that
+spawned them; after a restart, AnyCode refuses the call and you start a fresh
+child. Profile files must not combine
 `tools:` with an `engine:` line (these examples carry no `engine:` line —
 both run on the Native engine).
 
