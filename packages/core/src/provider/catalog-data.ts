@@ -30,6 +30,13 @@ import { assertTransportContract, type CatalogProviderEntry, type ProviderCatalo
 /** Sentinel id for the user-supplied endpoint whose baseUrl lives in settings. */
 export const CUSTOM_PROVIDER_ID = "custom";
 
+/**
+ * GLM-5.x advertises 1M tokens of context, but its answers degrade past ~300k
+ * (owner, 2026-10-07, after long orchestration runs). Budgeting sessions on
+ * the full 1M put auto-compaction at ~900k — far past that point.
+ */
+const GLM_USABLE_CONTEXT_TOKENS = 300_000;
+
 const ENTRIES: CatalogProviderEntry[] = [
   {
     id: "anthropic",
@@ -104,9 +111,9 @@ const ENTRIES: CatalogProviderEntry[] = [
     // `guides/vlm/`, and nobody has claimed images for it.
     models: [
       // GLM-5.3/5.3-flash/5.2: 1M context, 128K max output (docs.z.ai spec boxes).
-      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"] },
-      { id: "glm-5.3-flash", name: "GLM-5.3 Flash", contextWindow: 1_000_000, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
-      { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1_000_000, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
+      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "glm-5.3-flash", name: "GLM-5.3 Flash", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "glm-5.2", name: "GLM-5.2", contextWindow: 1_000_000, usableContextWindow: GLM_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["off", "high", "max"] },
       // GLM-5.1/5/5-turbo/4.7/4.6: 200K context, 128K max output (docs.z.ai spec boxes).
       { id: "glm-5.1", name: "GLM-5.1", contextWindow: 200_000, maxOutputTokens: 131_072 },
       { id: "glm-5", name: "GLM-5", contextWindow: 200_000, maxOutputTokens: 131_072 },
