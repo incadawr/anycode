@@ -165,6 +165,22 @@ export function shouldMarkConnectionChange(
   return prev !== null && next !== null && prev.connectionId !== next.connectionId;
 }
 
+/**
+ * TASK.153: whether a pin change seen by the pill is a switch IN THIS TAB.
+ * Switching tabs is a pure re-render (tab-context.tsx), so the same pill
+ * instance sees tab A's pin replaced by tab B's — two different tabs, not a
+ * switch; reporting it wrote a false "Provider switched" line into B. Only a
+ * pin that moved while the pill stayed on the same tab is a switch.
+ * Exported for unit testing.
+ */
+export function isPinSwitchInTab(
+  prev: { tabId: string | undefined; pin: { connectionId: string } | null },
+  tabId: string | undefined,
+  next: { connectionId: string } | null,
+): boolean {
+  return prev.tabId === tabId && shouldMarkConnectionChange(prev.pin, next);
+}
+
 interface PendingPick {
   kind: "model" | "effort";
   value: string;
@@ -453,7 +469,20 @@ export function ModelPill() {
   const writeChainRef = useRef<Promise<unknown>>(Promise.resolve());
   // The pin this component last reported in the transcript (§D5). Seeded with
   // the pin the tab already had, so a mount is never mistaken for a switch.
-  const lastPinRef = useRef<{ connectionId: string; providerId: string } | null>(pinnedConnection);
+  // Tagged with its tab (TASK.153): a pin inherited from another tab is a
+  // new baseline, never a switch.
+  const lastPinRef = useRef<{ tabId: string | undefined; pin: { connectionId: string; providerId: string } | null }>({
+    tabId,
+    pin: pinnedConnection,
+  });
+  // The tab the per-pick slots below were filled in (TASK.153): a pending pick
+  // or effort reset belongs to the tab it was made in and is dropped, not
+  // replayed into the next tab, when the pill is re-rendered for another tab.
+  const slotsTabRef = useRef<string | undefined>(tabId);
+  if (slotsTabRef.current !== tabId) {
+    slotsTabRef.current = tabId;
+    pendingPickRef.current = null;
+  }
   // Carries the effort reset a rebind decided (§D3) from the pick to the ledger
   // line the pin-watching effect writes once the new host is up; cleared as
   // soon as it is spent or the rebind fails.
@@ -627,12 +656,17 @@ export function ModelPill() {
     if (!ready) {
       return;
     }
-    const prev = lastPinRef.current;
+    const prevEntry = lastPinRef.current;
+    const prev = prevEntry.pin;
     const next = pinnedConnection;
-    lastPinRef.current = next;
+    lastPinRef.current = { tabId, pin: next };
+    if (prevEntry.tabId !== tabId) {
+      effortResetRef.current = undefined;
+      return;
+    }
     // The two null checks are the ones `shouldMarkConnectionChange` itself
     // makes, spelled out here so both ends narrow for the labels below.
-    if (prev === null || next === null || !shouldMarkConnectionChange(prev, next)) {
+    if (prev === null || next === null || !isPinSwitchInTab(prevEntry, tabId, next)) {
       return;
     }
     const effortResetTo = effortResetRef.current;
@@ -646,7 +680,7 @@ export function ModelPill() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the two
     // axes the rule is about (the pin, and whether the new host is up); the
     // labels/model are read at write time from the same render.
-  }, [pinnedConnection, ready]);
+  }, [pinnedConnection, ready, tabId]);
 
   function pickModel(id: string): void {
     if (pickDisabled) {
