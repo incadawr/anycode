@@ -14,6 +14,7 @@ import {
   computeGitPanelOpen,
   computeSessionContentColumns,
   dispatchTryAgain,
+  emptyPaneSidebarAffordance,
   selectMainPaneView,
   shouldShowWelcome,
   shouldSuppressEscForDraft,
@@ -405,5 +406,26 @@ describe("dispatchTryAgain — TASK.56 W3-FIX entry gate against the live model 
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ type: "user_message", text: "look at this", images: [IMAGE.attachment] });
     expect(store.getState().retry).toBeNull();
+  });
+});
+
+describe("emptyPaneSidebarAffordance (TASK.129)", () => {
+  it("an open sidebar needs no affordance", () => {
+    expect(emptyPaneSidebarAffordance(false, "⌘B")).toEqual({
+      showExpand: false,
+      text: "Open or resume a task from the sidebar.",
+    });
+  });
+
+  it("a collapsed sidebar gets a button and names the current binding", () => {
+    const vm = emptyPaneSidebarAffordance(true, "Ctrl+Shift+S");
+    expect(vm.showExpand).toBe(true);
+    expect(vm.text).toContain("Ctrl+Shift+S");
+  });
+
+  it("an unassigned binding still leaves the button, and names no shortcut", () => {
+    const vm = emptyPaneSidebarAffordance(true, null);
+    expect(vm.showExpand).toBe(true);
+    expect(vm.text).not.toMatch(/press/);
   });
 });
