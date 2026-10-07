@@ -15,6 +15,12 @@ Requires **AnyCode 0.0.30 or newer**.
 | `glm-lead` | Native engine, `glm-5.3` | session-tier child via `anycode_agent` | plans, implements, self-reviews |
 | `flash-builder` (optional) | Native engine, `glm-5.3-flash` | inline child spawned by `glm-lead` | one bounded, fully-resolved task |
 
+A second layout splits the lead in two (`examples/orchestration/supervisor-plan-execute.md`):
+`glm-planner` (`glm-5.3`, `effort: high`, read-only) returns one executable
+plan, and an executor — `glm-executor` (`glm-5.3`, `effort: low`) or
+`flash-executor` (`glm-5.3-flash`, `effort: low`) — carries it out from a fresh
+context. Both are session children the supervisor dispatches in turn.
+
 Inline vs session is a real difference, not a naming one:
 
 - An **inline** child (`flash-builder`) runs inside `glm-lead`'s process as a
@@ -71,6 +77,9 @@ PROJECT=/path/to/your-project
 mkdir -p "$PROJECT/.anycode/agents"
 cp -n "$ANYCODE/examples/orchestration/glm-lead.md" \
       "$ANYCODE/examples/orchestration/flash-builder.md" \
+      "$ANYCODE/examples/orchestration/glm-planner.md" \
+      "$ANYCODE/examples/orchestration/glm-executor.md" \
+      "$ANYCODE/examples/orchestration/flash-executor.md" \
       "$PROJECT/.anycode/agents/"
 ```
 
