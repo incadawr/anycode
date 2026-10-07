@@ -19,7 +19,7 @@ import type { AgentDelivery } from "../shared/communication.js";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type { MessagePortMain, UtilityProcess } from "electron";
-import type { PermissionMode } from "@anycode/core";
+import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import {
   CREDENTIAL_REQUEST_TYPE,
   CREDENTIAL_RESPONSE_TYPE,
@@ -60,7 +60,7 @@ import {
 } from "../shared/preview.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
-import { ENV_CONNECTION_ID, ENV_MODEL } from "./host-env.js";
+import { ENV_CONNECTION_ID, ENV_MODEL, ENV_REASONING_EFFORT } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import {
   ENGINE_PROCESS_REGISTRATION_TYPE,
@@ -335,6 +335,12 @@ export interface TabHost {
    * nothing — byte-identical to today.
    */
   modelOverride?: string;
+  /**
+   * Per-fork ANYCODE_REASONING_EFFORT for a core child whose profile declares
+   * `effort:` (stamped over the connection's own tier, resolved host-side
+   * against the child model's tiers). Absent = the connection's default.
+   */
+  effortOverride?: ReasoningEffort;
   /** Engine choice is main-owned and retained across every host respawn. */
   engine: EngineId;
   /**
@@ -432,6 +438,7 @@ interface ResumableChild {
   parentSessionId: string;
   connectionId?: string;
   modelOverride?: string;
+  effortOverride?: ReasoningEffort;
   /** Settles once the finished host has exited, i.e. its history is flushed. */
   reaped: Promise<void>;
   reapPending: boolean;
@@ -1140,6 +1147,7 @@ export class TabHostManager {
         // like ANYCODE_CONNECTION_ID above and rides every respawn (lives on the
         // tab). Absent for every non-import spawn ⇒ nothing stamped.
         ...(tab.modelOverride !== undefined ? { [ENV_MODEL]: tab.modelOverride } : {}),
+        ...(tab.effortOverride !== undefined ? { [ENV_REASONING_EFFORT]: tab.effortOverride } : {}),
         ...engineEnvOverlay,
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
       },
@@ -1521,6 +1529,8 @@ export class TabHostManager {
     const childTabId = this.genId();
     const childSessionId = req.resumeChildSessionId ?? this.genId();
     const modelOverride = resumable !== undefined ? resumable.modelOverride : req.model;
+    // A follow-up keeps the tier its child was started on, like the model.
+    const effortOverride = resumable !== undefined ? resumable.effortOverride : req.effort;
     const entry: ChildRunLedgerEntry = {
       requestId: req.requestId,
       parentTabId: parentTab.tabId,
@@ -1567,6 +1577,7 @@ export class TabHostManager {
       sessionId: childSessionId,
       ...(engine === "core" && connectionId !== undefined ? { connectionId } : {}),
       ...(engine === "core" && modelOverride !== undefined ? { modelOverride } : {}),
+      ...(engine === "core" && effortOverride !== undefined ? { effortOverride } : {}),
       engine,
       engineModel: engine !== "core" ? (req.model ?? null) : null,
       enginePreset: null,
@@ -2034,6 +2045,7 @@ export class TabHostManager {
       parentSessionId: entry.parentSessionId,
       ...(childTab.connectionId !== undefined ? { connectionId: childTab.connectionId } : {}),
       ...(childTab.modelOverride !== undefined ? { modelOverride: childTab.modelOverride } : {}),
+      ...(childTab.effortOverride !== undefined ? { effortOverride: childTab.effortOverride } : {}),
       reaped,
       reapPending: true,
     };
@@ -2259,6 +2271,7 @@ export class TabHostManager {
     // (core reads its model off the fork env on a resume boot); a stale per-fork
     // override from an imported session must not follow the tab to another account.
     delete tab.modelOverride;
+    delete tab.effortOverride;
     tab.initialResume = true;
     tab.rapidRespawns = 0;
     tab.state = "running";

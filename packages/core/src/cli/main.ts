@@ -111,7 +111,7 @@ import {
   REPO_MAP_MIN_TOKENS,
   REPO_MAP_WINDOW_FRACTION,
 } from "../types/config.js";
-import type { CoreEnvConfig } from "../types/config.js";
+import type { CoreEnvConfig, ReasoningEffort } from "../types/config.js";
 import { type PermissionMode } from "../types/permissions.js";
 import { loadImageAttachment } from "../util/images.js";
 import { loadWebSearchConfig, type ResolvedWebSearchBackend } from "../websearch/index.js";
@@ -1340,7 +1340,10 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         // verbatim is correct: resolveReasoningEffort treats "off" and
         // undefined identically.
         ...(modelPortFactory !== undefined
-          ? { resolveChildModelSettings: (id: string) => settingsForChild(id, selectedReasoningEffort) }
+          ? {
+              resolveChildModelSettings: (id: string, profileEffort?: ReasoningEffort) =>
+                settingsForChild(id, profileEffort ?? selectedReasoningEffort),
+            }
           : {}),
       },
     ),

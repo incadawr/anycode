@@ -144,9 +144,11 @@ export interface SubagentRunnerOptions {
    * cannot distinguish "the user selected off" from "a remembered tier the
    * parent model cannot honor", and hosts deliberately preserve the selected
    * tier across model switches. The runner therefore carries no effort
-   * knowledge at all.
+   * knowledge at all — except a role's own declared tier (md-profile
+   * `effort:`), passed as `profileEffort`; the host lets it outrank the
+   * user-selected tier and still resolves it against the child model.
    */
-  resolveChildModelSettings?: (modelId: string) => ResolvedChildModelSettings;
+  resolveChildModelSettings?: (modelId: string, profileEffort?: ReasoningEffort) => ResolvedChildModelSettings;
   /**
    * Runs ONE engine persona's child as a one-shot foreign CLI run (md-profile
    * `engine:` frontmatter) instead of an in-process AgentLoop. `run()` builds the
@@ -640,11 +642,26 @@ export function createSubagentRunner(
         // right above: falling back to the parent's already-resolved values
         // would silently reinstate the very defect this resolver removes.
         try {
-          childSettings = opts?.resolveChildModelSettings?.(requestedModel);
+          childSettings = opts?.resolveChildModelSettings?.(requestedModel, persona.effort);
         } catch (error) {
           return {
             status: "error",
             finalText: `Agent: model "${requestedModel}" settings could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
+            truncated: false,
+            turns: 0,
+            toolCalls: 0,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+      } else if (persona.effort !== undefined && parent.modelPort.modelId !== undefined) {
+        // A role that declares only `effort:` runs on the parent's model at
+        // its own tier. Same throw-is-an-error posture as above.
+        try {
+          childSettings = opts?.resolveChildModelSettings?.(parent.modelPort.modelId, persona.effort);
+        } catch (error) {
+          return {
+            status: "error",
+            finalText: `Agent: effort "${persona.effort}" could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
             truncated: false,
             turns: 0,
             toolCalls: 0,
