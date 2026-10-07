@@ -135,6 +135,7 @@ import { registerProviderIpc } from "./provider-ipc.js";
 import {
   applyConnectionHealthEvent,
   handleSet,
+  handleSwapCodexBinaryPath,
   projectCatalogSummary,
   registerSettingsIpc,
   sanitizeProviderFailureCode,
@@ -172,6 +173,7 @@ import {
 import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
 import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
 import { registerCodexInstallIpc } from "./codex-install.js";
+import { runCodexManagedUpgrade } from "./codex-managed-upgrade.js";
 import {
   activeCodexVersionPolicy,
   codexSupportPolicyFor,
@@ -2322,6 +2324,37 @@ void app.whenReady().then(async () => {
         // now be wrong (e.g. a version that just became unsupported) — force.
         void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
       }
+      // TASK.237: with the freshest policy in hand, move a previously MANAGED
+      // install (settings.codex.binaryPath inside ~/.anycode/codex/bin/) up
+      // to the manifest's recommended version — the app-upgrade path the
+      // 0.144.3 incident showed was missing. Runs only when a managed binary
+      // path is persisted; an explicit external binary is never touched, and
+      // any failure leaves the old install in place (next boot retries).
+      // Fire-and-forget like everything around it: a slow download must not
+      // block boot, and `onChanged` pushes ENGINES_CHANGED + a forced
+      // recheck once an upgrade lands.
+      void runCodexManagedUpgrade({
+        ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
+        doctorSourceEnv: () => codexDoctorSourceEnv(bootEnv, codexEngineProxyUrl),
+        readBinaryPathSetting: async () => settings?.codex?.binaryPath,
+        swapBinaryPath: (expected, next) => handleSwapCodexBinaryPath(settingsIpcDeps, expected, next),
+        onChanged: () => {
+          sendToMainWindow(win, ENGINES_CHANGED_CHANNEL);
+          void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
+        },
+      })
+        .then((result) => {
+          if (result.ok && result.upgraded) {
+            console.log(`[main] managed Codex upgraded ${result.fromVersion} -> ${result.toVersion} (${result.binaryPath})`);
+          } else if (!result.ok) {
+            // Honest, bounded diagnostics: the app still works on the old
+            // binary; the next boot retries. Never a boot failure.
+            console.warn(`[main] managed Codex upgrade did not complete: ${result.error}`);
+          }
+        })
+        .catch((error: unknown) => {
+          console.warn(`[main] managed Codex upgrade crashed: ${error instanceof Error ? error.message : String(error)}`);
+        });
     })
     .catch(() => {});
 
