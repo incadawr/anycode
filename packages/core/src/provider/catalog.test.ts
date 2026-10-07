@@ -166,6 +166,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       id: "glm-5.3-flash",
       name: "GLM-5.3 Flash",
       contextWindow: 1_000_000,
+      usableContextWindow: 300_000,
       maxOutputTokens: 131_072,
       imageInput: true,
       reasoning: true,

@@ -46,10 +46,18 @@ session's active connection, so Z.AI must be the active one for the profiles'
 `glm-5.3` / `glm-5.3-flash` ids to resolve. A wrong or unavailable id is
 refused, never silently substituted. Flash is optional.
 
-The catalog lists `glm-5.3` and `glm-5.3-flash` (1M context, 128K max output,
-reasoning-capable). Reasoning effort (`low`/`high`/`max`) is a **connection
-setting** chosen in the model/effort picker — not a separate model id, and
-there is no effort frontmatter in a profile.
+The catalog lists `glm-5.3` and `glm-5.3-flash` (1M context advertised, 128K
+max output, reasoning-capable). AnyCode budgets GLM-5.x sessions at 300k
+tokens: past that the answers degrade, so auto-compaction and the context meter
+use 300k instead of 1M (`ANYCODE_CONTEXT_WINDOW` still overrides it).
+
+Reasoning effort (`low`/`high`/`max`) is a connection setting chosen in the
+model/effort picker, not a separate model id. A profile can pin its own tier
+with `effort:` frontmatter (`off`, `low`, `medium`, `high` or `max`) — for
+example a planner on `high` and an executor on `low`. The tier is resolved
+against the child model's own levels; a continued child keeps the tier it was
+started on. Any other unknown frontmatter key is reported as a profile
+problem rather than silently ignored.
 
 ### 3. Copy the profiles into your project
 
