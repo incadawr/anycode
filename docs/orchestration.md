@@ -125,6 +125,14 @@ both run on the Native engine).
   A separate run confirmed GLM delegation to inline Flash and successful return
   to Codex. Direct GLM cancellation, restart, restored cancellation status and
   opening the saved child target were checked on a fresh app.
+- A live loop run (`ANYCODE_ORCH_LIVE_SMOKE=1 node
+  apps/desktop/scripts/orchestration-loop-live-smoke.mjs`) confirmed a Codex
+  supervisor dispatching a detached `glm-lead`, ending its turn without polling,
+  waking on the report, returning a defect with `continue_session` to the same
+  child and accepting the fixed result. It needs a signed-in Codex account and a
+  Z.AI key. When run from a process that is itself sandboxed (for example a
+  coding agent's shell), add `--no-chromium-sandbox`: Chromium cannot apply its
+  own sandbox there and the GPU process exits.
 - Cancellation while an inline Flash Bash command is still running has not
   completed live acceptance. The successful completion run does not prove that
   cancellation case.
