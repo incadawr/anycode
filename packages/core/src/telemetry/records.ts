@@ -23,6 +23,9 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         inputTokens: event.usage.inputTokens,
         outputTokens: event.usage.outputTokens,
         totalTokens: event.usage.totalTokens,
+        // Copied only when reported: an absent key reads "not reported",
+        // never a 0% cache hit (TASK.111).
+        ...(event.usage.cachedInputTokens !== undefined ? { cachedInputTokens: event.usage.cachedInputTokens } : {}),
       };
     case "tool_result":
       return {
@@ -210,16 +213,19 @@ export function buildEngineTelemetryTap(
   let prevTotal = 0;
   let prevInput = 0;
   let prevOutput = 0;
+  let prevCached = 0;
   let awaitingBaseline = opts?.baselineFromFirstEvent === true;
   return (event) => {
     if (event.type === "engine_session_tokens") {
       const total = event.total;
       const input = event.input;
       const output = event.output;
+      const cached = event.cachedInput;
       if (awaitingBaseline) {
         prevTotal = total;
         if (typeof input === "number") prevInput = input;
         if (typeof output === "number") prevOutput = output;
+        if (typeof cached === "number") prevCached = cached;
         awaitingBaseline = false;
         return;
       }
@@ -236,6 +242,16 @@ export function buildEngineTelemetryTap(
         outputDelta = deltaSince(output, prevOutput);
         prevOutput = output;
       }
+      // TASK.111: the cache-read counter is a fourth independent cumulative
+      // counter, recorded only alongside an input delta it is a subset of —
+      // clamped to it so a lone reset of one counter can never claim more
+      // cached input than input.
+      let cachedDelta: number | undefined;
+      if (typeof cached === "number") {
+        const delta = deltaSince(cached, prevCached);
+        prevCached = cached;
+        if (inputDelta !== undefined) cachedDelta = Math.min(delta, inputDelta);
+      }
       port.record({
         v: 1,
         ts: Date.now(),
@@ -244,6 +260,7 @@ export function buildEngineTelemetryTap(
         ...(inputDelta !== undefined ? { inputTokens: inputDelta } : {}),
         ...(outputDelta !== undefined ? { outputTokens: outputDelta } : {}),
         totalTokens: totalDelta,
+        ...(cachedDelta !== undefined ? { cachedInputTokens: cachedDelta } : {}),
       });
       return;
     }

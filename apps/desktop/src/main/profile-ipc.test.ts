@@ -769,6 +769,26 @@ describe("profile stats cache — budgets, holes and oversized files (D-2)", () 
     expect(restarted.opens).toBe(0);
   });
 
+  it("T-cache-counters-restart: prompt-cache counters survive the cache file (TASK.111)", async () => {
+    const { home, telemetryDir, cachePath } = await cacheHome();
+    await seedAt(
+      telemetryDir,
+      "c1.jsonl",
+      [{ v: 1, ts: DAY1, session: "c1", t: "usage", inputTokens: 1000, outputTokens: 5, cachedInputTokens: 800 }],
+      MTIME_BASE,
+    );
+    const first = await handleProfileStatsGet(cacheDeps(home, new CountingProfileFs()));
+    expect(first.ok && first.view.cache).toEqual({ reportedInputTokens: 1000, cachedInputTokens: 800 });
+
+    const restarted = new CountingProfileFs();
+    const store = createProfileStatsCacheStore(restarted, cachePath);
+    const cached = await handleProfileStatsCached(cacheDeps(home, restarted, { cache: store }));
+    expect(cached.ok).toBe(true);
+    if (!cached.ok) return;
+    expect(cached.view.cache).toEqual({ reportedInputTokens: 1000, cachedInputTokens: 800 });
+    expect(restarted.opens).toBe(0);
+  });
+
   it("T-oversized: a file over the per-file ceiling is never opened and cuts the history", async () => {
     const { home, telemetryDir } = await cacheHome();
     await seedAt(telemetryDir, "n1.jsonl", usage("n1", DAY1 + 2000, 1), MTIME_BASE + 20);

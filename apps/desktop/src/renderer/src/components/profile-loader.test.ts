@@ -40,6 +40,7 @@ import {
 function view(overrides: Partial<ProfileStatsView> = {}): ProfileStatsView {
   return {
     lifetimeTokens: 0,
+    cache: { reportedInputTokens: 0, cachedInputTokens: 0 },
     peakDay: null,
     longestSessionMs: 0,
     currentStreakDays: 0,

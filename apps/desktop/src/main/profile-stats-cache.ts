@@ -71,7 +71,7 @@ import type { ProfileFileStat, ProfileFs } from "./profile-ipc.js";
 export const PROFILE_STATS_CACHE_SCHEMA = 2;
 /** Aggregation-rules version — bump when the MATH changes while the encoding
  *  stays put (a stale cache would otherwise be a silent lie). */
-export const PROFILE_STATS_CACHE_ALGO = 1;
+export const PROFILE_STATS_CACHE_ALGO = 2;
 /** Cache file name, next to `config.json` under `<home>/.anycode`. */
 export const PROFILE_STATS_CACHE_FILE_NAME = "profile-stats-cache.json";
 /** Orphaned tmp files (a crash between the tmp write and the rename) older
@@ -195,6 +195,9 @@ interface EncodedDay {
   c?: number;
   g?: number;
   l?: Record<string, number>;
+  /** Prompt-cache counters (TASK.111): reported input, cached input. */
+  p?: number;
+  h?: number;
 }
 
 interface EncodedSession {
@@ -281,6 +284,8 @@ function encodeDay(day: ProfileFilePartialDay): EncodedDay {
   if (day.toolCalls !== 0) out.c = day.toolCalls;
   if (day.subagentRuns !== 0) out.g = day.subagentRuns;
   if (Object.keys(day.tools).length > 0) out.l = day.tools;
+  if (day.reportedInputTokens !== 0) out.p = day.reportedInputTokens;
+  if (day.cachedInputTokens !== 0) out.h = day.cachedInputTokens;
   return out;
 }
 
@@ -297,9 +302,12 @@ function decodeDay(value: unknown): ProfileFilePartialDay | undefined {
   const toolCalls = obj.c === undefined ? 0 : nonNegativeInteger(obj.c);
   const subagentRuns = obj.g === undefined ? 0 : nonNegativeInteger(obj.g);
   const tools = obj.l === undefined ? {} : numberMap(obj.l, true);
+  const reportedInputTokens = obj.p === undefined ? 0 : nonNegativeNumber(obj.p);
+  const cachedInputTokens = obj.h === undefined ? 0 : nonNegativeNumber(obj.h);
   if (tokens === undefined || runs === undefined || toolCalls === undefined) return undefined;
   if (subagentRuns === undefined || tools === undefined) return undefined;
-  return { tokens, runs, toolCalls, subagentRuns, tools };
+  if (reportedInputTokens === undefined || cachedInputTokens === undefined) return undefined;
+  return { tokens, runs, toolCalls, subagentRuns, tools, reportedInputTokens, cachedInputTokens };
 }
 
 function encodeSession(session: ProfileFilePartialSession): EncodedSession {
