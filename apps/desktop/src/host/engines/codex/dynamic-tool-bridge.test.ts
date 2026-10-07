@@ -68,6 +68,14 @@ describe("Codex bridge — detached (background) children", () => {
     expect(decl.inputSchema.properties.detach?.type).toBe("boolean");
   });
 
+  it("declares continue_session and passes it to the port as the child to resume", async () => {
+    const s = setup();
+    const decl = s.bridge.declarations()[0] as { inputSchema: { properties: Record<string, { type?: string }> } };
+    expect(decl.inputSchema.properties.continue_session?.type).toBe("string");
+    await s.call({ ...params, arguments: { ...params.arguments, detach: true, continue_session: "child-2" } });
+    expect(s.run.mock.calls[0]![0]).toMatchObject({ resumeChildSessionId: "child-2", detach: true });
+  });
+
   it("a detach:true call answers at admit, and ending the turn afterwards never reaches the child", async () => {
     const s = setup();
     let childSignal: AbortSignal | undefined;

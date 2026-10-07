@@ -4522,3 +4522,131 @@ describe("TASK.242 owned process communication routing", () => {
     expect(listener).not.toHaveBeenCalled(); unsubscribe();
   });
 });
+
+describe("TabHostManager — follow-up to a finished child (resumeChildSessionId)", () => {
+  /** shutdownableForkRig plus each fork's argv/env, in fork order. */
+  function argvRig() {
+    const rig = shutdownableForkRig();
+    const forks: { args: readonly string[]; env: NodeJS.ProcessEnv | undefined }[] = [];
+    const fork: HostForkFn = (entry, args, opts) => {
+      forks.push({ args, env: opts.env });
+      return rig.fork(entry, args, opts);
+    };
+    return { fork, hosts: rig.hosts, forks };
+  }
+
+  async function finishedChild(sessionId: string, overrides: Partial<ChildSpawnRequest> = {}) {
+    const { fork, hosts, forks } = argvRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { validateChildModel: () => {} });
+    expect(manager.createTab({ workspace: "/ws", sessionId, resume: false }).ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "first", ...overrides }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "first" && e.kind === "accepted");
+    const childSessionId = accepted?.kind === "accepted" ? accepted.childSessionId : "";
+    hosts[1]!.emit("message", childTerminalMsg({ finalText: "found defects" }));
+    return { manager, hosts, forks, rootHost, childSessionId };
+  }
+
+  it("boots a new host on the SAME child session with --resume and its pinned model, once the old host has exited", async () => {
+    const { hosts, forks, rootHost, childSessionId } = await finishedChild("root-resume", { model: "glm-5.3" });
+    rootHost.emit("message", spawnRequest({ requestId: "again", resumeChildSessionId: childSessionId, prompt: "fix defect 1" }));
+    // The finished host is still exiting: nothing is forked or answered yet.
+    expect(hosts).toHaveLength(2);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(hosts).toHaveLength(3);
+    const args = forks[2]!.args;
+    expect(args.slice(0, 2)).toEqual(["--resume", childSessionId]);
+    expect(args).toContain("--child-parent");
+    expect(forks[2]!.env?.ANYCODE_MODEL).toBe("glm-5.3");
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "again" && e.kind === "accepted");
+    expect(accepted).toMatchObject({ childSessionId, model: "glm-5.3" });
+
+    // The follow-up prompt alone is released at child-ready.
+    hosts[2]!.emit("message", childReadyMsg());
+    expect(hosts[2]!.postMessage.mock.calls.map((c) => c[0])).toContainEqual(
+      expect.objectContaining({ prompt: "fix defect 1" }),
+    );
+
+    // Its terminal reaches the parent under the new requestId, and the child stays continuable.
+    hosts[2]!.emit("message", childTerminalMsg({ finalText: "fixed" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "again" && e.kind === "terminal")).toMatchObject({
+      childSessionId,
+      finalText: "fixed",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rootHost.emit("message", spawnRequest({ requestId: "third", resumeChildSessionId: childSessionId }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "third")).toMatchObject({ kind: "accepted", childSessionId });
+  });
+
+  it("refuses a child id this parent never spawned, without forking", async () => {
+    const { hosts, rootHost } = await finishedChild("root-unknown");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rootHost.emit("message", spawnRequest({ requestId: "bogus", resumeChildSessionId: "someone-elses-child" }));
+    expect(hosts).toHaveLength(2);
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "bogus")).toMatchObject({
+      kind: "rejected",
+      reason: "not_ready",
+    });
+  });
+
+  it("refuses another parent's finished child", async () => {
+    const { manager, hosts, childSessionId } = await finishedChild("root-owner");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-other", resume: false }).ok).toBe(true);
+    const otherHost = hosts[2]!;
+    otherHost.emit("message", spawnRequest({ requestId: "steal", resumeChildSessionId: childSessionId }));
+    expect(hosts).toHaveLength(3);
+    expect(childRunEvents(otherHost).find((e) => e.requestId === "steal")).toMatchObject({ kind: "rejected", reason: "not_ready" });
+  });
+
+  it("refuses a model/provider override and a second follow-up while the first is still running", async () => {
+    const { hosts, rootHost, childSessionId } = await finishedChild("root-busy");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rootHost.emit("message", spawnRequest({ requestId: "override", resumeChildSessionId: childSessionId, model: "other" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "override")).toMatchObject({ kind: "rejected", reason: "not_ready" });
+
+    rootHost.emit("message", spawnRequest({ requestId: "run", resumeChildSessionId: childSessionId }));
+    rootHost.emit("message", spawnRequest({ requestId: "dup", resumeChildSessionId: childSessionId }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "run")).toMatchObject({ kind: "accepted" });
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "dup")).toMatchObject({ kind: "rejected", reason: "spawn_failed" });
+    expect(hosts).toHaveLength(3);
+  });
+
+  it("an engine child is never continuable", async () => {
+    const { fork, hosts } = argvRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { engineReady: () => true });
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-engine", resume: false }).ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "eng", engine: "codex" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "eng" && e.kind === "accepted");
+    const childSessionId = accepted?.kind === "accepted" ? accepted.childSessionId : "";
+    hosts[1]!.emit("message", childTerminalMsg());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rootHost.emit("message", spawnRequest({ requestId: "eng2", resumeChildSessionId: childSessionId }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "eng2")).toMatchObject({ kind: "rejected", reason: "not_ready" });
+  });
+});
+
+describe("TabHostManager — follow-up card alias", () => {
+  it("maps a follow-up run's own call id to the continued child; a fresh spawn gets no alias", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-alias", resume: false }).ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "a1", spawnToolCallId: "call-a1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "a1" && e.kind === "accepted");
+    const childSessionId = accepted?.kind === "accepted" ? accepted.childSessionId : "";
+    hosts[1]!.emit("message", childTerminalMsg());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rootHost.emit("message", spawnRequest({ requestId: "a2", spawnToolCallId: "call-a2", resumeChildSessionId: childSessionId }));
+
+    expect(manager.followUpChildSessionId("root-alias", "call-a2")).toBe(childSessionId);
+    expect(manager.followUpChildSessionId("root-alias", "call-a1")).toBeUndefined();
+    expect(manager.followUpChildSessionId("other-root", "call-a2")).toBeUndefined();
+  });
+});

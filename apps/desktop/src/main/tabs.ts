@@ -164,6 +164,23 @@ const CHILD_UNREAPED_MESSAGE =
 const CHILD_DUPLICATE_SPAWN_MESSAGE =
   "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.";
 
+/**
+ * Follow-up refusals for `ChildSpawnRequest.resumeChildSessionId`. The unknown
+ * text deliberately does not say which check failed (foreign parent, engine
+ * child, never spawned, or spawned before this app run) — same discipline as
+ * the child-history `not_found`.
+ */
+const CHILD_RESUME_UNKNOWN_MESSAGE =
+  "Agent: that child session cannot be continued — only a finished AnyCode (core) child spawned by this session during the current app run can. Start a new call instead.";
+const CHILD_RESUME_BUSY_MESSAGE =
+  "Agent: that child session is still running or open. Wait for its report before sending a follow-up.";
+const CHILD_RESUME_OVERRIDE_MESSAGE =
+  "Agent: a continued child keeps its own connection and model; omit provider/model when continuing.";
+/** Bound on the finished-children memory below; the oldest entries are forgotten first. */
+const RESUMABLE_CHILDREN_MAX = 64;
+/** Bound on follow-up card aliases (`followUpChildSessionId`); the oldest are forgotten first. */
+const FOLLOW_UP_ALIASES_MAX = 256;
+
 function childProviderNotReadyMessage(provider: string): string {
   return `Agent: provider connection "${provider}" is not available in this host. Omit "provider" to use the parent session's connection.`;
 }
@@ -403,6 +420,21 @@ interface ChildRunLedgerEntry {
   prompt: string;
   /** Cleared (and the field deleted) on `child-ready`; fires `handleChildStartTimeout` otherwise. */
   startDeadline?: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * A finished core child main itself spawned during this app run, remembered so
+ * the same parent session can continue it (`resumeChildSessionId`). Main's own
+ * memory is the ownership authority — never the payload, never a DB lookup —
+ * so a follow-up can only ever reach a child this parent really had.
+ */
+interface ResumableChild {
+  parentSessionId: string;
+  connectionId?: string;
+  modelOverride?: string;
+  /** Settles once the finished host has exited, i.e. its history is flushed. */
+  reaped: Promise<void>;
+  reapPending: boolean;
 }
 
 /**
@@ -715,6 +747,14 @@ export class TabHostManager {
    * `purgeChildSpawnWaiters` for a waiter that dies before ever admitting.
    */
   private readonly childSpawnKeys = new Map<string, string>();
+  /** childSessionId -> finished core child (insertion order = age), see `ResumableChild`. */
+  private readonly resumableChildren = new Map<string, ResumableChild>();
+  /**
+   * `childSpawnKey(parent, follow-up spawnToolCallId)` -> the continued child's
+   * session id. The child's row keeps its FIRST spawn's call id, so a
+   * follow-up card's transcript lookup needs this alias (app-run lifetime).
+   */
+  private readonly followUpAliases = new Map<string, string>();
   /**
    * FIFO arrival order of currently-queued `requestId`s (TASK.147 срез 1) —
    * one manager-wide queue, not one per parent: a slot freed by ANY parent's
@@ -900,6 +940,11 @@ export class TabHostManager {
 
   getTab(tabId: string): TabHost | undefined {
     return this.tabs.get(tabId);
+  }
+
+  /** The continued child session a follow-up run's card (its own spawnToolCallId) refers to, if any. */
+  followUpChildSessionId(parentSessionId: string, spawnToolCallId: string): string | undefined {
+    return this.followUpAliases.get(childSpawnKey(parentSessionId, spawnToolCallId));
   }
 
   /* */
@@ -1305,6 +1350,16 @@ export class TabHostManager {
       reject("closing", CHILD_CLOSING_MESSAGE);
       return;
     }
+    if (req.resumeChildSessionId !== undefined) {
+      // A follow-up must not boot a second host on the child's session while
+      // the finished one is still flushing/exiting: re-enter once it is gone,
+      // through every check above again (the parent may have died meanwhile).
+      const resumable = this.resumableChildren.get(req.resumeChildSessionId);
+      if (resumable?.reapPending === true && resumable.parentSessionId === parentTab.sessionId) {
+        void resumable.reaped.then(() => this.spawnChild(parentTab, sender, req));
+        return;
+      }
+    }
     // In-flight dedup of the (parentSessionId, spawnToolCallId) pair (cut
     // §10.5 п.3): `parentSessionId` is the ACTUAL sender's tab, never
     // `req`'s payload (same law as everything else in this section) —
@@ -1410,6 +1465,24 @@ export class TabHostManager {
       reject("not_ready", childEngineNotReadyMessage(engine));
       return;
     }
+    // Follow-up to a finished child: checked HERE (not only in spawnChild) so a
+    // request that waited in the queue is judged against what is true now.
+    let resumable: ResumableChild | undefined;
+    if (req.resumeChildSessionId !== undefined) {
+      resumable = this.resumableChildren.get(req.resumeChildSessionId);
+      if (engine !== "core" || resumable === undefined || resumable.parentSessionId !== parentTab.sessionId) {
+        reject("not_ready", CHILD_RESUME_UNKNOWN_MESSAGE);
+        return;
+      }
+      if (req.provider !== undefined || req.model !== undefined) {
+        reject("not_ready", CHILD_RESUME_OVERRIDE_MESSAGE);
+        return;
+      }
+      if (resumable.reapPending || this.isChildSessionLive(req.resumeChildSessionId)) {
+        reject("spawn_failed", CHILD_RESUME_BUSY_MESSAGE);
+        return;
+      }
+    }
     if (req.provider !== undefined && engine !== "core") {
       // §3.2 п.3: an engine child runs on its own CLI account — "provider" is
       // a core-connection concept and is meaningless here. core-side already
@@ -1417,7 +1490,7 @@ export class TabHostManager {
       reject("not_ready", CHILD_ENGINE_PROVIDER_MESSAGE);
       return;
     }
-    let connectionId = parentTab.connectionId;
+    let connectionId = resumable !== undefined ? resumable.connectionId : parentTab.connectionId;
     if (req.provider !== undefined) {
       // Explicit resolve, synchronous (deps doc: main already holds the
       // connections registry in memory) — an unknown/deleted provider id
@@ -1446,7 +1519,8 @@ export class TabHostManager {
     // itself is NOT (re-)written here — the caller already holds it, from
     // before this request was even known to fit under cap (TASK.147 срез 1).
     const childTabId = this.genId();
-    const childSessionId = this.genId();
+    const childSessionId = req.resumeChildSessionId ?? this.genId();
+    const modelOverride = resumable !== undefined ? resumable.modelOverride : req.model;
     const entry: ChildRunLedgerEntry = {
       requestId: req.requestId,
       parentTabId: parentTab.tabId,
@@ -1476,7 +1550,9 @@ export class TabHostManager {
     // Main NEVER trusts payload identity (cut §2.3's own header): workspace,
     // projectRoot and the parent linkage below all come from the ACTUAL
     // parentTab record, never from `req`. A child never has a worktree and
-    // never resumes (children never respawn, cut §0.6). CUT-S4 §3.2 п.4: a
+    // never respawns (cut §0.6); the one exception to "never resumes" is a
+    // follow-up run (`resumable`), which boots a NEW host once on the finished
+    // child's own session, connection and model — still one spawn per run. CUT-S4 §3.2 п.4: a
     // CORE child keeps every S2 field byte-identical (modelOverride,
     // connectionId inherited); an ENGINE child instead carries its model as
     // `engineModel` (rides `--engine-model` on the child's one, always-first
@@ -1490,7 +1566,7 @@ export class TabHostManager {
       projectRoot: parentTab.projectRoot,
       sessionId: childSessionId,
       ...(engine === "core" && connectionId !== undefined ? { connectionId } : {}),
-      ...(engine === "core" && req.model !== undefined ? { modelOverride: req.model } : {}),
+      ...(engine === "core" && modelOverride !== undefined ? { modelOverride } : {}),
       engine,
       engineModel: engine !== "core" ? (req.model ?? null) : null,
       enginePreset: null,
@@ -1501,7 +1577,7 @@ export class TabHostManager {
       spawnedAt: 0,
       rapidRespawns: 0,
       state: "running",
-      initialResume: false,
+      initialResume: resumable !== undefined,
       childOf: {
         parentTabId: parentTab.tabId,
         parentSessionId: parentTab.sessionId,
@@ -1529,6 +1605,12 @@ export class TabHostManager {
     }
 
     this.tabs.set(childTabId, childTab);
+    if (resumable !== undefined) {
+      this.followUpAliases.set(spawnKey, childSessionId);
+      while (this.followUpAliases.size > FOLLOW_UP_ALIASES_MAX) {
+        this.followUpAliases.delete(this.followUpAliases.keys().next().value as string);
+      }
+    }
     // TASK.147 срез 1: this timer starts HERE, at the REAL fork, whether the
     // request forked immediately or spent time queued first — never at
     // park/enqueue time. A long wait therefore never eats into the window a
@@ -1547,7 +1629,7 @@ export class TabHostManager {
       kind: "accepted",
       childSessionId,
       childTabId,
-      model: req.model ?? (engine === "core" ? this.describeChildModel(connectionId) : "default"),
+      model: modelOverride ?? (engine === "core" ? this.describeChildModel(connectionId) : "default"),
     });
   }
 
@@ -1937,12 +2019,42 @@ export class TabHostManager {
     const childTab = this.tabs.get(entry.childTabId);
     if (childTab !== undefined) {
       this.tabs.delete(entry.childTabId);
-      if (childTab.proc !== null) {
-        void this.shutdownTabHost(childTab);
+      const reaped = childTab.proc !== null ? this.shutdownTabHost(childTab) : Promise.resolve();
+      if (childTab.engine === "core") {
+        this.rememberResumableChild(entry, childTab, reaped);
       }
     }
 
     this.pumpChildSpawnQueue();
+  }
+
+  /** Records a finished core child as continuable by its own parent session (bounded, oldest forgotten first). */
+  private rememberResumableChild(entry: ChildRunLedgerEntry, childTab: TabHost, reaped: Promise<void>): void {
+    const record: ResumableChild = {
+      parentSessionId: entry.parentSessionId,
+      ...(childTab.connectionId !== undefined ? { connectionId: childTab.connectionId } : {}),
+      ...(childTab.modelOverride !== undefined ? { modelOverride: childTab.modelOverride } : {}),
+      reaped,
+      reapPending: true,
+    };
+    record.reaped = reaped.then(
+      () => { record.reapPending = false; },
+      () => { record.reapPending = false; },
+    );
+    this.resumableChildren.delete(entry.childSessionId);
+    this.resumableChildren.set(entry.childSessionId, record);
+    while (this.resumableChildren.size > RESUMABLE_CHILDREN_MAX) {
+      const oldest = this.resumableChildren.keys().next().value as string;
+      this.resumableChildren.delete(oldest);
+    }
+  }
+
+  /** True while some admitted run (any parent) or an open tab holds this child session id. */
+  private isChildSessionLive(childSessionId: string): boolean {
+    for (const run of this.childRuns.values()) {
+      if (run.childSessionId === childSessionId) return true;
+    }
+    return this.bindings.has(childSessionId);
   }
 
   /** No `child-ready` within CHILD_START_DEADLINE_MS of a successful fork (cut §2.3/§2.6.4). */

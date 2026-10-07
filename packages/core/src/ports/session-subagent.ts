@@ -69,6 +69,14 @@ export interface SessionSubagentRequest {
    * = the existing sync-join behavior, byte-identical to pre-145.
    */
   detach?: boolean;
+  /**
+   * Follow-up to an earlier finished CORE child of the same parent session:
+   * main resumes that child's own session (row + history) instead of minting
+   * a new one, and `prompt` becomes its next user message. Main alone decides
+   * whether the id is resumable (owned by this parent, finished, core) and
+   * refuses otherwise. Absent = a fresh child, byte-identical to before.
+   */
+  resumeChildSessionId?: string;
 }
 
 /**

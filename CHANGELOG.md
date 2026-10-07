@@ -13,6 +13,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   (`anycode_agent` with `detach: true`): its turn ends immediately and the
   subagent's report starts the supervisor's next turn, so it no longer holds a
   turn open polling while GLM works.
+- The supervisor can send defects back to the same subagent
+  (`continue_session`): the finished child resumes with its own history and
+  gets the follow-up as its next message, instead of a fresh child starting
+  over.
 
 ## [0.0.31] — 2026-10-04
 

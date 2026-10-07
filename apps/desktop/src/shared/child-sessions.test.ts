@@ -66,6 +66,14 @@ describe("parseChildSpawnRequest", () => {
     expect(parseChildSpawnRequest(valid)).toEqual(valid);
   });
 
+  it("accepts a well-formed resumeChildSessionId and drops a malformed one", () => {
+    const withResume = { ...valid, resumeChildSessionId: "child-1" };
+    expect(parseChildSpawnRequest(withResume)).toEqual(withResume);
+    expect(parseChildSpawnRequest({ ...valid, resumeChildSessionId: "" })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, resumeChildSessionId: 1 })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, resumeChildSessionId: "bad\u0000id" })).toBeNull();
+  });
+
   it("accepts optional provider and model when present", () => {
     const withOptional = { ...valid, provider: "anthropic-1", model: "claude-x" };
     expect(parseChildSpawnRequest(withOptional)).toEqual(withOptional);

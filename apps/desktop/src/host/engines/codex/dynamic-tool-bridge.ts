@@ -27,7 +27,9 @@ export class CodexDynamicToolBridge {
     // `detach` is safe to offer here: host/index.ts wires this bridge's port
     // with `onDetachedTerminal`, so a background child's report comes back
     // to this Codex session as a new turn instead of the turn idling on it.
-    const decl = buildAgentBridgeToolDecl(this.catalog, { detach: true });
+    // `continue_session` rides the same port: main resumes the finished child
+    // for a follow-up (defect return) instead of minting a fresh one.
+    const decl = buildAgentBridgeToolDecl(this.catalog, { detach: true, continueSession: true });
     return decl ? [{ ...decl, name: ANYCODE_AGENT_TOOL, type: "function" }] : [];
   }
 
