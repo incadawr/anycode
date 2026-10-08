@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  childNotificationSummaryOverflows,
   formatChildReportCapNotice,
   formatChildStallNotice,
   formatChildTaskNotification,
@@ -85,6 +86,24 @@ describe("formatChildTaskNotification (spec §4bis/§7)", () => {
     // codePoints of the kept prefix + the truncation marker, never the full oversized input.
     expect(summaryBody.length).toBeLessThan(longSummary.length);
     expect(summaryBody.startsWith("a".repeat(CHILD_NOTIFICATION_SUMMARY_MAX_CHARS))).toBe(true);
+  });
+
+  it("names the saved full report in the truncation marker, so the parent reads it instead of re-asking the child", () => {
+    const longSummary = "c".repeat(CHILD_NOTIFICATION_SUMMARY_MAX_CHARS + 10);
+    expect(childNotificationSummaryOverflows(longSummary)).toBe(true);
+    const text = formatChildTaskNotification(input({ summary: longSummary, fullReportPath: "/tmp/r/child-1.md" }));
+    expect(text).toContain(
+      `…[truncated — the full report (${CHILD_NOTIFICATION_SUMMARY_MAX_CHARS + 10} characters) is in /tmp/r/child-1.md]`,
+    );
+    expect(text).not.toContain("…[truncated]");
+  });
+
+  it("ignores fullReportPath when nothing is cut", () => {
+    const exact = "d".repeat(CHILD_NOTIFICATION_SUMMARY_MAX_CHARS);
+    expect(childNotificationSummaryOverflows(exact)).toBe(false);
+    const text = formatChildTaskNotification(input({ summary: exact, fullReportPath: "/tmp/r/child-1.md" }));
+    expect(text).toContain(`<summary>${exact}</summary>`);
+    expect(text).not.toContain("/tmp/r/child-1.md");
   });
 
   it("a summary at exactly the cap is NOT truncated (boundary)", () => {

@@ -169,6 +169,7 @@ import { randomUUID } from "node:crypto";
 import { homedir, release } from "node:os";
 import { realpath as fsRealpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { defaultChildReportDir, saveFullChildReport } from "./child-report-spill.js";
 import {
   AgentLoop,
   AiSdkModelPort,
@@ -225,6 +226,7 @@ import {
   exitWorktreeTool,
   discoverExtensions,
   formatChildStallNotice,
+  childNotificationSummaryOverflows,
   formatChildTaskNotification,
   generateSessionTitle,
   loadEnvConfig,
@@ -499,6 +501,9 @@ function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel): v
  * renderer's (store.ts's `child_report` case).
  */
 function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): void {
+  const fullReportPath = childNotificationSummaryOverflows(outcome.finalText)
+    ? saveFullChildReport(defaultChildReportDir(), outcome.childSessionId, outcome.finalText)
+    : undefined;
   const text = formatChildTaskNotification({
     taskId: outcome.spawnToolCallId,
     toolUseId: outcome.spawnToolCallId,
@@ -506,6 +511,7 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     subagentType: req.agentType,
     status: mapChildRunStatusToNotification(outcome.status),
     summary: outcome.finalText,
+    ...(fullReportPath !== undefined ? { fullReportPath } : {}),
   });
   childReportQueue.add(outcome.spawnToolCallId, text);
 }
