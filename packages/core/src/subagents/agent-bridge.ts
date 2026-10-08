@@ -222,6 +222,13 @@ export function outcomeToResult(
   // max_turns outcome can never provoke a blind re-delegation.
   if (outcome.status === "max_turns") {
     const partial = outcome.finalText.trim();
+    if (outcome.declaredDoneAtCeiling) {
+      const error = partial
+        ? `Agent: the subagent reached its turn limit after ${outcome.turns} turns and reported the work finished. ` +
+          `Its report below is the final answer.\n\n${partial}`
+        : `Agent: the subagent reached its turn limit after ${outcome.turns} turns and reported the work finished, but produced no final text.`;
+      return { ok: false, errorKind: "max_turns", error, output: toAgentOutput(outcome), ...presentation };
+    }
     const error = partial
       ? `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing.\n` +
         `INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. ` +

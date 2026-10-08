@@ -330,6 +330,28 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
     });
   });
 
+  it("terminal declaredDoneAtCeiling reaches the attached outcome (and is absent otherwise) (TASK 4149)", async () => {
+    for (const flag of [true, false]) {
+      const { port, sent, emit } = harness();
+      const pending = port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: `spawn-ceiling-${flag}` },
+        {},
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-c", childTabId: "tab-c", model: "m" });
+      emit(
+        terminalEvent(requestId, {
+          status: "max_turns",
+          childSessionId: "child-c",
+          ...(flag ? { declaredDoneAtCeiling: true } : {}),
+        }),
+      );
+      const outcome = await pending;
+      expect(outcome.status).toBe("max_turns");
+      expect("declaredDoneAtCeiling" in outcome).toBe(flag);
+    }
+  });
+
   it("abort sends EXACTLY ONE ChildRunCancel; a terminal arriving after abort still resolves (never throws) and does not provoke a second cancel", async () => {
     const { port, sent, emit } = harness();
     const controller = new AbortController();
@@ -715,6 +737,19 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
       }).not.toThrow();
 
       expect(onProgress).not.toHaveBeenCalled();
+    });
+
+    it("detached terminal declaredDoneAtCeiling reaches onDetachedTerminal's outcome (TASK 4149)", async () => {
+      const { port, sent, emit, detachedTerminals } = detachHarness();
+      const pending = port.run(
+        { agentType: "explore", description: "d", prompt: "p", spawnToolCallId: "spawn-detach-ceiling", detach: true },
+        {},
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-dc", childTabId: "t1", model: "m" });
+      await pending;
+      emit(terminalEvent(requestId, { status: "max_turns", childSessionId: "child-dc", declaredDoneAtCeiling: true }));
+      expect(detachedTerminals[0]!.outcome.declaredDoneAtCeiling).toBe(true);
     });
 
     it("terminal arriving AFTER admit does NOT re-resolve the (already settled) promise, emits NO onProgress, and invokes onDetachedTerminal with the FULL outcome + the original request", async () => {

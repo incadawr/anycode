@@ -395,6 +395,8 @@ export interface ChildTerminalReport {
    * `runner.ts:573`'s inline `activitySuppressed`). Present only when >0.
    */
   activitySuppressed?: number;
+  /** TASK 4149: the last loop_end's ceiling verdict declared the work done. Present only when true. */
+  declaredDoneAtCeiling?: boolean;
 }
 
 /**
@@ -1092,6 +1094,8 @@ export class Session {
   private childToolCalls = 0;
   /** The last loop_end's status (workspace_transition mapped to "error" — a child never actually relocates); undefined until the first loop_end. */
   private childLoopStatus: ChildRunStatus | undefined;
+  /** The last loop_end's `declaredDoneAtCeiling` (TASK 4149). */
+  private childDeclaredDoneAtCeiling = false;
   private childSafeError: string | undefined;
   /** Once-latch (F7): true once `finalizeChildTerminal` has actually invoked `child.onTerminal` (or handed off an error terminal) — guards its docstring's "exactly once" contract against a second concurrent call. */
   private childTerminalFinalized = false;
@@ -2916,6 +2920,7 @@ export class Session {
         toolCalls: this.childToolCalls,
         durationMs,
         ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
+        ...(this.childDeclaredDoneAtCeiling && this.childLoopStatus === "max_turns" ? { declaredDoneAtCeiling: true } : {}),
       });
     } catch (error) {
       console.error(`[host] child.onTerminal threw: ${describeError(error)}`);
@@ -2977,6 +2982,7 @@ export class Session {
         // widening ChildRunStatus, mirroring runner.ts's own precedent.
         this.childLoopStatus = event.reason === "workspace_transition" ? "error" : event.reason;
         this.childTurns += event.turns;
+        this.childDeclaredDoneAtCeiling = event.declaredDoneAtCeiling === true;
         break;
       default:
         break;

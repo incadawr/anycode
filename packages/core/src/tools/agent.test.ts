@@ -186,6 +186,54 @@ describe("agentTool — honest outcome mapping (TASK.44)", () => {
     expect(agentTool.formatResultForModel?.(result)).not.toContain("raise maxTurns");
   });
 
+  it("max_turns with declaredDoneAtCeiling → honest final-answer wording, no INCOMPLETE marker", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "max_turns",
+          finalText: "Found 3 files; analysis complete.",
+          truncated: false,
+          turns: 8,
+          toolCalls: 7,
+          durationMs: 42,
+          declaredDoneAtCeiling: true,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("max_turns");
+    expect(result.error).toContain("reported the work finished");
+    expect(result.error).toContain("8 turns");
+    expect(result.error).toContain("final answer");
+    expect(result.error).toContain("Found 3 files");
+    expect(result.error).not.toContain("INCOMPLETE SUBAGENT RESULT");
+    expect(result.error).not.toContain("ran out of budget");
+    expect(agentTool.formatResultForModel?.(result)).toBe(result.error);
+  });
+
+  it("max_turns with declaredDoneAtCeiling and an EMPTY finalText → honest no-final-text wording", async () => {
+    const result = await agentTool.handler(
+      { description: "x", prompt: "y", agent_type: "general-purpose" },
+      makeCtx({
+        subagents: portReturning({
+          status: "max_turns",
+          finalText: "",
+          truncated: false,
+          turns: 8,
+          toolCalls: 7,
+          durationMs: 42,
+          declaredDoneAtCeiling: true,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errorKind).toBe("max_turns");
+    expect(result.error).toContain("reported the work finished");
+    expect(result.error).toContain("no final text");
+    expect(result.error).not.toContain("INCOMPLETE");
+  });
+
   it("REGRESSION: max_turns with an EMPTY finalText → ok:false, non-empty error, never a silent success", async () => {
     // The original incident: 8 turns, empty finalText → parent saw an empty
     // successful tool result and re-delegated blindly.

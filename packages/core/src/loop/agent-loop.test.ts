@@ -1265,6 +1265,24 @@ describe("AgentLoop.runTurn — ceiling decision ladder (TASK.124 cut-1)", () =>
     expect(loop.history.unansweredToolCallIds()).toEqual([]);
   });
 
+  it("a readable verdict done:true ends with declaredDoneAtCeiling:true and no grant", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      verdictStep([], { done: true }),
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 1, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toHaveLength(0);
+    expect(events.at(-1)).toEqual({
+      type: "loop_end",
+      reason: "max_turns",
+      turns: 1,
+      declaredDoneAtCeiling: true,
+    });
+  });
+
   it("a round with zero successful tool calls since the last grant is refused WITHOUT a model call, whatever the verdict would have said", async () => {
     const modelPort = new MockModelPort([
       toolTurnStep("c1"),

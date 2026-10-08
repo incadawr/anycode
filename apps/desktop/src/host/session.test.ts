@@ -3523,6 +3523,36 @@ describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)
   });
 });
 
+describe("Session — child mode: declaredDoneAtCeiling reaches the terminal report (TASK 4149)", () => {
+  async function terminalFor(loopEnd: AgentEvent): Promise<ChildTerminalReport | undefined> {
+    const h = createChildHarness({ steps: [] });
+    try {
+      vi.spyOn(h.engine, "runTurn").mockImplementation(async function* (): AsyncIterable<AgentEvent> {
+        yield loopEnd;
+      });
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      return h.onTerminal.mock.calls[0]?.[0];
+    } finally {
+      h.close();
+    }
+  }
+
+  it("a max_turns loop_end that declared done carries declaredDoneAtCeiling:true on the terminal", async () => {
+    const report = await terminalFor({ type: "loop_end", reason: "max_turns", turns: 5, declaredDoneAtCeiling: true });
+    expect(report?.status).toBe("max_turns");
+    expect(report?.declaredDoneAtCeiling).toBe(true);
+  });
+
+  it("a plain max_turns loop_end leaves the key absent", async () => {
+    const report = await terminalFor({ type: "loop_end", reason: "max_turns", turns: 5 });
+    expect(report?.status).toBe("max_turns");
+    expect(report && "declaredDoneAtCeiling" in report).toBe(false);
+  });
+});
+
 describe("Session — child mode: an unfamiliar turn_end.finishReason breaks nothing (TASK.210)", () => {
   it('the child\'s own degeneration-guard cutoff ("degenerate") reaches a normal "completed" terminal, not a crash', async () => {
     // observeChildEvent's `turn_end` case (session.ts) never reads

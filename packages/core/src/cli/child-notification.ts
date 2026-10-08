@@ -96,6 +96,7 @@ function capSummary(text: string, maxChars: number): string {
  */
 export function mapChildRunStatusToNotification(
   status: "completed" | "max_turns" | "cancelled" | "error",
+  declaredDoneAtCeiling = false,
 ): ChildTaskNotificationStatus {
   switch (status) {
     case "completed":
@@ -103,6 +104,8 @@ export function mapChildRunStatusToNotification(
     case "cancelled":
       return "cancelled";
     case "max_turns":
+      // The child declared its work finished at its turn ceiling: its report is final.
+      return declaredDoneAtCeiling ? "completed" : "failed";
     case "error":
       return "failed";
   }
