@@ -198,6 +198,9 @@ export interface AgentLoopRecognizerConfig {
   portFactory?: (endpoint: RecognizerEndpoint) => ModelPort;
 }
 
+/** Tri-state ceiling decision: granted an extension, refused, or the verdict declared the work done. */
+type CeilingDecision = "granted" | "refused" | "done";
+
 export interface AgentLoopConfig {
   modelPort: ModelPort;
   registry: ToolRegistry;
@@ -1027,9 +1030,16 @@ export class AgentLoop {
           // were never reached. Children never receive this predicate
           // (buildChildConfig omits it), so they always keep the ladder.
           if (this.config.ceiling?.supervisedRoot?.() !== true) {
-            const granted = yield* this.tryCeilingGrant(maxTurns, signal);
-            if (!granted) {
-              yield* this.emitLoopEnd("max_turns", turn - 1, signal, turnId, turn - 1 >= 1 ? turn - 1 : undefined);
+            const ceiling = yield* this.tryCeilingGrant(maxTurns, signal);
+            if (ceiling !== "granted") {
+              yield* this.emitLoopEnd(
+                "max_turns",
+                turn - 1,
+                signal,
+                turnId,
+                turn - 1 >= 1 ? turn - 1 : undefined,
+                ceiling === "done",
+              );
               return;
             }
           }
@@ -1358,11 +1368,13 @@ export class AgentLoop {
   }
 
   /**
-   * One round of the turn-ceiling ladder (TASK.124 cut-1). Returns true when a
-   * grant was issued (the effective cap is raised and `ceiling_grant` has been
-   * emitted); false is a refusal, and every refusal is silent — the caller's
-   * `loop_end`/`max_turns` already says the run stopped, so a second event
-   * variant for "asked and was told no" would only multiply consumers (§1.8).
+   * One round of the turn-ceiling ladder (TASK.124 cut-1). Returns a tri-state
+   * CeilingDecision: "granted" when a grant was issued (the effective cap is
+   * raised and `ceiling_grant` has been emitted), "done" when the verdict was
+   * a readable done:true declaration that the work is finished, and "refused"
+   * for every silent refusal — the caller's `loop_end`/`max_turns` already
+   * says the run stopped, so a second event variant for "asked and was told
+   * no" would only multiply consumers (§1.8).
    *
    * The cheap gates run BEFORE the model call: a ladder that spends a call to
    * discover it had no round, no successful tool call or no grant budget left
@@ -1371,10 +1383,10 @@ export class AgentLoop {
   private async *tryCeilingGrant(
     maxTurns: number,
     signal: AbortSignal | undefined,
-  ): AsyncGenerator<AgentEvent, boolean, unknown> {
+  ): AsyncGenerator<AgentEvent, CeilingDecision, unknown> {
     const config = this.config.ceiling;
     if (config?.enabled === false || this.ceilingRounds >= MAX_CEILING_ROUNDS) {
-      return false;
+      return "refused";
     }
     const round = this.ceilingRounds + 1;
     // Round 1 gates on the verdict alone: "at least one successful tool call
@@ -1382,15 +1394,15 @@ export class AgentLoop {
     // requiring it would make the ladder unreachable for a run that spent its
     // whole budget on a single long-running dispatch (§1.5).
     if (round >= 2 && this.ceilingSuccessfulToolCalls <= 0) {
-      return false;
+      return "refused";
     }
     const grant = ceilingGrant(round, maxTurns, this.ceilingGrantedTurns, config);
     if (grant <= 0) {
-      return false;
+      return "refused";
     }
     const windowMs = ceilingWindowMs(config, Date.now());
     if (windowMs === null) {
-      return false;
+      return "refused";
     }
 
     const verdict = await requestCeilingVerdict({
@@ -1407,8 +1419,13 @@ export class AgentLoop {
       windowMs,
       signal,
     });
+    if (verdict === null) {
+      return "refused";
+    }
+    if (verdict.done) {
+      return "done";
+    }
     if (
-      verdict === null ||
       !acceptCeilingVerdict({
         verdict,
         round,
@@ -1416,7 +1433,7 @@ export class AgentLoop {
         successfulToolCalls: this.ceilingSuccessfulToolCalls,
       })
     ) {
-      return false;
+      return "refused";
     }
 
     this.ceilingRounds = round;
@@ -1433,7 +1450,7 @@ export class AgentLoop {
       remaining: [...verdict.remaining],
       ...(verdict.nextAction !== undefined ? { nextAction: verdict.nextAction } : {}),
     };
-    return true;
+    return "granted";
   }
 
   /**
@@ -1682,6 +1699,7 @@ export class AgentLoop {
     signal: AbortSignal | undefined,
     turnId?: string,
     step?: number,
+    declaredDoneAtCeiling?: boolean,
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const dangling = this.history.unansweredToolCallIds();
     if (dangling.length > 0) {
@@ -1727,7 +1745,7 @@ export class AgentLoop {
       // fail-open (design §2.11).
     }
 
-    yield { type: "loop_end", reason, turns };
+    yield { type: "loop_end", reason, turns, ...(declaredDoneAtCeiling ? { declaredDoneAtCeiling: true } : {}) };
   }
 
   /** Map of toolCallId -> toolName from every assistant tool_call in history. */

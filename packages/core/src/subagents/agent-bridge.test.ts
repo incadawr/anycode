@@ -358,6 +358,28 @@ describe("runAgentBridgeCall (§3.4)", () => {
     expect(result.text).toContain("4 turns");
   });
 
+  it("max_turns outcome with declaredDoneAtCeiling => honest final-answer text, no incomplete marker", async () => {
+    const result = await runAgentBridgeCall(
+      { agent_type: "reviewer", description: "d", prompt: "p" },
+      {
+        catalog: [CORE_ENTRY],
+        port: portReturning({
+          ...BASE_OUTCOME,
+          status: "max_turns",
+          declaredDoneAtCeiling: true,
+          finalText: "partial work",
+          turns: 4,
+        }),
+        spawnToolCallId: "toolu_4b",
+      },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("reported the work finished");
+    expect(result.text).toContain("partial work");
+    expect(result.text).toContain("4 turns");
+    expect(result.text).not.toContain("INCOMPLETE SUBAGENT RESULT");
+  });
+
   it("onEvent receives start/progress/end, each stamped with the passed spawnToolCallId", async () => {
     const events: SubagentCardEvent[] = [];
     const port: SessionSubagentPort = {

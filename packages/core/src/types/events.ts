@@ -126,7 +126,13 @@ export type AgentEvent =
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; input: unknown }
   | { type: "tool_result"; outcome: ToolCallOutcome }
   | { type: "workspace_transition"; transition: WorkspaceTransition }
-  | { type: "loop_end"; reason: LoopEndReason; turns: number }
+  | {
+      type: "loop_end";
+      reason: LoopEndReason;
+      turns: number;
+      /** True only for a READABLE turn-cap verdict done:true; unreadable/refused leaves it unset. */
+      declaredDoneAtCeiling?: boolean;
+    }
   /**
    * `trigger: "auto"` is the threshold-driven compaction the loop runs
    * inside a turn; `"manual"` is a user-initiated one, reaching the same

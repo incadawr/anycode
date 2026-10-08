@@ -78,6 +78,13 @@ export interface SubagentOutcome {
    * before any turn_end) — there is no turn to attribute a reason to.
    */
   finalTurnFinishReason?: FinishReason;
+  /**
+   * The child DECLARED its work finished (a readable ceiling verdict done:true)
+   * at its turn limit: the completion declaration is honored in the parent's
+   * text, while the status stays `max_turns` — the budget is still exhausted
+   * factually. Session hosts forwarding outcomes must forward this flag too.
+   */
+  declaredDoneAtCeiling?: boolean;
 }
 
 /**
