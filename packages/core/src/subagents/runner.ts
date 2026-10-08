@@ -995,7 +995,14 @@ export function createSubagentRunner(
             SUBAGENT_OUTCOME_DEADLINE_MS - (Date.now() - startedAt),
           );
           if (windowMs >= SUBAGENT_WRAPUP_MIN_WINDOW_MS) {
-            finalText = await runWrapUp(childConfig, loop, finalText, windowMs, signal);
+            const wrapUp = await runWrapUp(childConfig, loop, finalText, windowMs, signal);
+            finalText = wrapUp.text;
+            // The winning attempt's usage joins the run total; a finish that
+            // arrived before a later failure stays billed (runWrapUp only
+            // returns usage it actually observed on a finish event).
+            if (wrapUp.usage !== undefined) {
+              usage = mergeUsage(usage, wrapUp.usage);
+            }
           }
         }
 
@@ -1146,11 +1153,13 @@ function mergeUsage(base: TokenUsage | undefined, delta: TokenUsage): TokenUsage
  * whenever the call throws, aborts, times out or produces nothing but
  * whitespace — the rescue can only improve the outcome, never worsen it.
  *
- * TASK.160 (known accepted gap, not fixed here): because this call runs
- * OUTSIDE the AgentLoop it never reaches `config.eventTap` (the very tap
- * buildChildConfig installs from `parent.subagentEventTap`) — its tokens go
- * unrecorded even when the parent's telemetry is fully wired. A wrap-up call
- * is one model call per rescued child, so the undercount is small and bounded.
+ * TASK.160 (gap closed): wrap-up stream events now reach `config.eventTap`
+ * (the very tap buildChildConfig installs from `parent.subagentEventTap`)
+ * with the existing ModelStreamEvent shapes — they are a subset of
+ * AgentEvent, so no new event shape was invented. Tap observer exceptions
+ * are swallowed (fail-open, same contract as AgentLoop.runTurn's wrapper),
+ * and the finish event's usage joins the run's total via mergeUsage at the
+ * call site; a finish received before a subsequent failure stays billed.
  */
 async function runWrapUp(
   config: AgentLoopConfig,
@@ -1158,10 +1167,15 @@ async function runWrapUp(
   fallback: string,
   windowMs: number,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<{ text: string; usage?: TokenUsage }> {
   const controller = new AbortController();
   const dispose = signal ? linkAbortSignal(signal, controller) : () => {};
   const timer = setTimeout(() => controller.abort("wrapup-timeout"), windowMs);
+  // Declared BEFORE the try so both success and catch can return it: a
+  // finish that already arrived stays billed even when the stream later
+  // throws (the provider was still paid for those tokens).
+  const tap = config.eventTap;
+  let usage: TokenUsage = {};
   try {
     let text = "";
     const stream = config.modelPort.streamText({
@@ -1176,18 +1190,37 @@ async function runWrapUp(
       abortSignal: controller.signal,
     });
     for await (const event of stream) {
+      // Forward every event to the child config's tap (TASK.160): the wrap-up
+      // runs outside the AgentLoop, so this wrapper is the only bridge. An
+      // observer must never break the rescue (same contract as
+      // AgentLoop.runTurn's eventTap wrapper).
+      if (tap !== undefined) {
+        try {
+          tap(event);
+        } catch {
+          // fail-open: an observer exception is swallowed.
+        }
+      }
       if (event.type === "text_delta") {
         text += event.text;
       } else if (event.type === "stream_retry") {
-        // The step is replayed from scratch; discard the aborted attempt's text
-        // (mirror of the loop's own accumulator reset).
+        // The step is replayed from scratch; discard the aborted attempt's
+        // text and usage (mirror of the loop's own accumulator reset).
         text = "";
+        usage = {};
+      } else if (event.type === "finish") {
+        usage = event.usage;
       }
     }
-    return text.trim().length > 0 ? text : fallback;
+    const finalText = text.trim().length > 0 ? text : fallback;
+    return hasAnyUsage(usage)
+      ? { text: finalText, usage }
+      : { text: finalText };
   } catch {
-    // Degradation by design: any failure leaves today's raw partial in place.
-    return fallback;
+    // Degradation by design: any failure leaves today's raw partial in
+    // place — but a finish already received keeps its usage in the return,
+    // because those tokens were spent regardless of the later failure.
+    return hasAnyUsage(usage) ? { text: fallback, usage } : { text: fallback };
   } finally {
     clearTimeout(timer);
     dispose();
