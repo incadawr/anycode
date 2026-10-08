@@ -784,8 +784,38 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
       expect(detachedTerminals[0]!.outcome.finalText).toBe("first");
     });
 
-    it("propagates non-completed statuses (max_turns/cancelled/error) to onDetachedTerminal honestly — the admit message never claimed the CHILD finished, only that it started", async () => {
-      for (const status of ["max_turns", "cancelled", "error"] as const) {
+    it("finalTurnFinishReason \"length\": attached run resolves with the field AND emits it on the end-progress; detached run hands it to onDetachedTerminal", async () => {
+      // Attached (sync-join) run:
+      const attached = harness();
+      const attachedProgress: SubagentProgress[] = [];
+      const attachedPending = attached.port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-length-attached" },
+        { onProgress: (p) => attachedProgress.push(p) },
+      );
+      const attachedReq = spawns(attached.sent)[0]!.requestId;
+      attached.emit({ type: CHILD_RUN_EVENT_TYPE, requestId: attachedReq, kind: "accepted", childSessionId: "c-len", childTabId: "t1", model: "m" });
+      attached.emit(terminalEvent(attachedReq, { childSessionId: "c-len", finalTurnFinishReason: "length" }));
+      const attachedOutcome = await attachedPending;
+      expect(attachedOutcome.finalTurnFinishReason).toBe("length");
+      const attachedEnd = attachedProgress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+      expect(attachedEnd[attachedEnd.length - 1]!.finalTurnFinishReason).toBe("length");
+
+      // Detached run:
+      const detached = detachHarness();
+      const detachedPending = detached.port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-length-detached", detach: true },
+        {},
+      );
+      const detachedReq = spawns(detached.sent)[0]!.requestId;
+      detached.emit({ type: CHILD_RUN_EVENT_TYPE, requestId: detachedReq, kind: "accepted", childSessionId: "c-len2", childTabId: "t1", model: "m" });
+      const admitOutcome = await detachedPending;
+      expect(admitOutcome.status).toBe("completed");
+      detached.emit(terminalEvent(detachedReq, { childSessionId: "c-len2", finalTurnFinishReason: "length" }));
+      expect(detached.detachedTerminals).toHaveLength(1);
+      expect(detached.detachedTerminals[0]!.outcome.finalTurnFinishReason).toBe("length");
+    });
+
+    it("propagates non-completed statuses (max_turns/cancelled/error) to onDetachedTerminal honestly — the admit message never claimed the CHILD finished, only that it started", async () => {      for (const status of ["max_turns", "cancelled", "error"] as const) {
         const { port, sent, emit, detachedTerminals } = detachHarness();
         const pending = port.run(
           { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: `spawn-detach-${status}`, detach: true },

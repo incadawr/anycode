@@ -207,8 +207,12 @@ export function outcomeToResult(
   outcome: SubagentOutcome,
   presentation: { presentation?: ToolResultPresentation },
 ): ToolResult<AgentOutput> {
+  const lengthNote =
+    outcome.finalTurnFinishReason === "length"
+      ? `\nNOTE: the subagent's final turn was also cut by the model's output-token ceiling (finishReason "length") — the partial text is cut mid-stream.`
+      : "";
   if (outcome.status === "error") {
-    return { ok: false, error: outcome.finalText || "Agent: the subagent failed.", ...presentation };
+    return { ok: false, error: (outcome.finalText || "Agent: the subagent failed.") + lengthNote, ...presentation };
   }
   // max_turns (TASK.44 + TASK.74): the child exhausted its budget — the turn
   // cap or the wall-clock deadline, which share this status because the
@@ -225,8 +229,8 @@ export function outcomeToResult(
     const error = partial
       ? `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing.\n` +
         `INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. ` +
-        `Missing checks may invalidate the conclusions below.\n\n${partial}`
-      : `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing and produced no partial result. The task was not completed — split it into narrower delegations, or ask the user to raise the subagent turn budget (Settings → Tools → "Maximum turns (subagents)").`;
+        `Missing checks may invalidate the conclusions below.\n\n${partial}` + lengthNote
+      : `Agent: the subagent ran out of budget after ${outcome.turns} turns without finishing and produced no partial result. The task was not completed — split it into narrower delegations, or ask the user to raise the subagent turn budget (Settings → Tools → "Maximum turns (subagents)").` + lengthNote;
     return { ok: false, errorKind: "max_turns", error, output: toAgentOutput(outcome), ...presentation };
   }
   // cancelled (TASK.44): preserve cancellation semantics — never success.
@@ -236,7 +240,7 @@ export function outcomeToResult(
     return {
       ok: false,
       errorKind: "cancelled",
-      error: "Agent: the subagent was cancelled.",
+      error: "Agent: the subagent was cancelled." + lengthNote,
       output: toAgentOutput(outcome),
       ...presentation,
     };
@@ -278,6 +282,17 @@ export function outcomeToResult(
     const error =
       `Agent: the subagent's output degenerated into a repetition loop and the turn was cut.\n` +
       `INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. ${tailClaim}\n\n${partial}`;
+    return { ok: false, error, output: toAgentOutput(outcome), ...presentation };
+  }
+  if (outcome.finalTurnFinishReason === "length") {
+    const partial = outcome.finalText.trim();
+    const capNote = outcome.truncated
+      ? ` The report also exceeded the ${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap; its tail was dropped.`
+      : "";
+    const error =
+      `Agent: the subagent's final turn was cut by the model's output-token ceiling (finishReason "length").\n` +
+      `INCOMPLETE SUBAGENT RESULT — DO NOT TREAT AS A FINISHED REPORT. ` +
+      `The report below is cut mid-stream and its tail is missing.${capNote}\n\n${partial}`;
     return { ok: false, error, output: toAgentOutput(outcome), ...presentation };
   }
   // The runner already capped finalText and set truncated; forward the outcome
@@ -393,6 +408,7 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         // distinct, independently-optional fields — never conflated.
         ...(progress.model !== undefined ? { model: progress.model } : {}),
         ...(progress.responseModel !== undefined ? { responseModel: progress.responseModel } : {}),
+        ...(progress.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: progress.finalTurnFinishReason } : {}),
       };
     case "attention":
       return {

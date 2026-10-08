@@ -410,7 +410,7 @@ describe("agentTool — degeneration/truncation markers (TASK.210)", () => {
     expect(result.error).toContain(headText.slice(0, 100));
   });
 
-  it("length-cut completed outcome gets the TRUNCATED-ceiling prefix in model text, output.finalText stays raw", async () => {
+  it("length-cut completed outcome is NOT a success", async () => {
     const rawText = "a full report, cut off by the provider mid-sentence";
     const result = await agentTool.handler(
       { description: "x", prompt: "y", agent_type: "general-purpose" },
@@ -426,14 +426,42 @@ describe("agentTool — degeneration/truncation markers (TASK.210)", () => {
         }),
       }),
     );
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("INCOMPLETE SUBAGENT RESULT");
+    expect(result.error).toContain("output-token ceiling");
     // The card/persistence path reads output.finalText — the marker must
-    // never land there, only in the model-visible text (plan §4).
+    // never land there, only in the model-visible error text.
     expect(result.output?.finalText).toBe(rawText);
-    const modelText = agentTool.formatResultForModel?.(result) ?? "";
-    expect(modelText).toContain("TRUNCATED SUBAGENT RESULT");
-    expect(modelText).toContain("output-token ceiling");
-    expect(modelText.endsWith(rawText)).toBe(true);
+    expect(result.error).toContain(rawText);
+  });
+
+  it("length-cut non-success statuses append the ceiling note to their own error text", async () => {
+    const cases: Array<{ status: SubagentOutcome["status"]; keepErrorKind?: string }> = [
+      { status: "error" },
+      { status: "max_turns" },
+      { status: "cancelled", keepErrorKind: "cancelled" },
+    ];
+    for (const { status, keepErrorKind } of cases) {
+      const result = await agentTool.handler(
+        { description: "x", prompt: "y", agent_type: "general-purpose" },
+        makeCtx({
+          subagents: portReturning({
+            status,
+            finalText: "partial text",
+            truncated: false,
+            turns: 2,
+            toolCalls: 1,
+            durationMs: 1_000,
+            finalTurnFinishReason: "length",
+          }),
+        }),
+      );
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("output-token ceiling");
+      if (keepErrorKind !== undefined) {
+        expect(result.errorKind).toBe(keepErrorKind);
+      }
+    }
   });
 
   it("byte-capped outcome gets the result-cap prefix naming SUBAGENT_OUTPUT_MAX_BYTES", async () => {
@@ -458,7 +486,7 @@ describe("agentTool — degeneration/truncation markers (TASK.210)", () => {
     expect(modelText.endsWith(cappedText)).toBe(true);
   });
 
-  it("length + truncated stack in fixed order (б) then (в) when the incident hits both at once", async () => {
+  it("length + truncated: the ok:false error names both the output-token ceiling and the byte result cap", async () => {
     const cappedText = "z".repeat(SUBAGENT_OUTPUT_MAX_BYTES);
     const result = await agentTool.handler(
       { description: "x", prompt: "y", agent_type: "general-purpose" },
@@ -474,12 +502,9 @@ describe("agentTool — degeneration/truncation markers (TASK.210)", () => {
         }),
       }),
     );
-    const modelText = agentTool.formatResultForModel?.(result) ?? "";
-    const lengthIdx = modelText.indexOf("output-token ceiling");
-    const capIdx = modelText.indexOf("result cap");
-    expect(lengthIdx).toBeGreaterThanOrEqual(0);
-    expect(capIdx).toBeGreaterThan(lengthIdx);
-    expect(modelText.endsWith(cappedText)).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("output-token ceiling");
+    expect(result.error).toContain(`${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap`);
   });
 
   it("byte-lock: no flags set produces no prefix at all (mirrors the invariant at line ~120 above)", async () => {
@@ -1104,6 +1129,33 @@ describe("agentTool — presentation attach across all four settle branches (TAS
     expect(result.errorKind).toBeUndefined();
     expect(result.output).toBeUndefined();
     expect(result.presentation?.subagent?.final).toEqual({ status: "error", durationMs: 7 });
+  });
+
+  it("a length-cut outcome's persisted snapshot carries final.finalTurnFinishReason via the fallback threading", async () => {
+    // The port resolves WITHOUT emitting an end-progress carrying the field —
+    // the finalize fallback (tools/agent.ts) threads it from the outcome.
+    const outcome: SubagentOutcome = {
+      status: "completed",
+      finalText: "cut mid-stream",
+      truncated: false,
+      turns: 1,
+      toolCalls: 0,
+      durationMs: 60,
+      finalTurnFinishReason: "length",
+    };
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        runOpts.onProgress?.({ kind: "start", agentType: "explore", description: "d", model: "glm-4.6" });
+        return outcome;
+      },
+    };
+    const result = await agentTool.handler(
+      { description: "look", prompt: "go", agent_type: "explore" },
+      makeCtx({ subagents: port }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.presentation?.subagent?.final).toEqual({ status: "completed", durationMs: 60, finalTurnFinishReason: "length" });
   });
 
   it("an error BEFORE the port ever calls onProgress (no subagent_start reached) attaches NO presentation", async () => {

@@ -3655,6 +3655,46 @@ describe("Session — child mode: finalizeChildTerminal once-latch (F7, revised 
       h.close();
     }
   });
+
+  it("a final turn_end with finishReason \"length\" carries finalTurnFinishReason on the terminal report (internal status stays \"completed\"); \"stop\" omits it", async () => {
+    const lengthStep: ModelStreamEvent[] = [
+      { type: "start" },
+      { type: "text_delta", id: "t1", text: "cut off mid-report by the provider ceiling" },
+      { type: "finish", finishReason: "length", usage: {} },
+    ];
+    const h = createChildHarness({ steps: [lengthStep] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      // Internal status keeps the frozen wire vocabulary; the non-success is
+      // produced downstream (notification formatter, renderer labels).
+      expect(report?.status).toBe("completed");
+      expect(report?.finalTurnFinishReason).toBe("length");
+    } finally {
+      h.close();
+    }
+
+    const stopH = createChildHarness({ steps: [textStep("an honest complete report")] });
+    try {
+      stopH.send({ type: "ui_ready" });
+      await stopH.waitFor(isHostReady);
+
+      stopH.session.startProgrammaticTurn("go");
+      await stopH.waitUntil(() => stopH.onTerminal.mock.calls.length > 0);
+
+      const stopReport = stopH.onTerminal.mock.calls[0]?.[0];
+      expect(stopReport?.finalTurnFinishReason).toBeUndefined();
+      expect(stopReport && "finalTurnFinishReason" in stopReport).toBe(false);
+    } finally {
+      stopH.close();
+    }
+  });
 });
 
 describe("Session — child mode: teardown contract (TASK.102 CUT-S2 §10.10.1)", () => {
