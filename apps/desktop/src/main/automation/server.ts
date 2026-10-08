@@ -264,11 +264,13 @@ const createTabBody = z.discriminatedUnion("kind", [
     replacementConnectionId: z.string().min(1).max(128).optional(),
   }),
 ]);
-const waitBody = z.object({
+// `turnStatus` allowed values: "idle", "running", "compacting" — manual
+// compaction is itself a busy turn status, so a driver can wait on it.
+export const waitBody = z.object({
   tabId: z.string().min(1),
   until: z.object({
     connection: z.enum(["awaiting_port", "awaiting_host_ready", "ready", "host_exited"]).optional(),
-    turnStatus: z.enum(["idle", "running"]).optional(),
+    turnStatus: z.enum(["idle", "running", "compacting"]).optional(),
     permissionPending: z.boolean().optional(),
     transcriptIncludes: z.string().optional(),
     gitStatusKnown: z.boolean().optional(),
