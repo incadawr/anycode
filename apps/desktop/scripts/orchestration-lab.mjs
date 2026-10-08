@@ -62,7 +62,7 @@ const CONNECTION_ID = "conn-orch-lab";
 const GLM_MODEL = "glm-5.3";
 
 function now() {
-  return new Date().toISOString().slice(11, 19);
+  return new Date().toTimeString().slice(0, 8); // local time, like the owner's clock
 }
 function event(line) {
   const text = `${now()} ${line}`;
