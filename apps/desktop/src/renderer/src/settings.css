@@ -1240,6 +1240,29 @@
   white-space: nowrap;
 }
 
+/* Close button: same icon-button idiom as .notice-toast-dismiss (app.css) —
+   an inline-flex svg, never a text glyph, so it aligns on the banner's
+   baseline-free flex row. */
+.update-banner-dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 0;
+}
+
+.update-banner-dismiss svg {
+  width: 14px;
+  height: 14px;
+}
+
+.update-banner-dismiss:hover {
+  color: var(--text-1);
+}
+
 /* ── always-allow rules list ── */
 
 .settings-rule-list {
