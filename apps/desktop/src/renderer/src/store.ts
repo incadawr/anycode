@@ -226,6 +226,8 @@ export interface SubagentSubStatus {
      * no raw claim. This is the provider's CLAIM, not proof of serving.
      */
     responseModel?: string;
+    /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
+    finalTurnFinishReason?: "length";
   } | null;
   /**
    * PRESENCE, not value, is the signal: `true` while a session-tier child
@@ -2120,6 +2122,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       durationMs: number,
       activitySuppressed?: number,
       responseModel?: string,
+      finalTurnFinishReason?: "length",
     ): void {
       flushDeltas();
       set((state) => {
@@ -2133,7 +2136,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             ...block.subagent,
             turns,
             activityDropped: block.subagent.activityDropped + (activitySuppressed ?? 0),
-            final: { status, durationMs, ...(responseModel !== undefined ? { responseModel } : {}) },
+            final: {
+              status,
+              durationMs,
+              ...(responseModel !== undefined ? { responseModel } : {}),
+              ...(finalTurnFinishReason !== undefined ? { finalTurnFinishReason } : {}),
+            },
           };
           // The settle strips any stale permission-wait flag in the SAME
           // atomic update (TASK.102 CUT-S2 §2.5/§10.1): a child cancelled or
@@ -3283,6 +3291,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             event.durationMs,
             event.activitySuppressed,
             event.responseModel,
+            event.finalTurnFinishReason,
           );
           return;
         // Per-child-tool activity (slice P7.18/F16b, design §4 W2): additive
@@ -4087,6 +4096,74 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               queueInFlight?.item.originId === message.id;
             if (!alreadyQueued) {
               get().enqueuePrompt({ text: message.text, images: [], origin: "system", originId: message.id });
+            }
+            // Truncation correction (additive): a detached child's report
+            // carries structured terminal metadata when its final turn was
+            // cut by the model's output-token ceiling — patch the spawning
+            // Agent block's subagent card so it never reads as
+            // Completed/Done. A detached child never had a live card
+            // (no subagent_start was ever emitted for it), so the card is
+            // synthesized from the block's own input, mirroring App.tsx's
+            // fallbackCardFromInput.
+            if (message.childTerminal?.finalTurnFinishReason === "length") {
+              const term: { status: "completed" | "max_turns" | "cancelled" | "error"; durationMs: number; finalTurnFinishReason: "length" } = {
+                status: message.childTerminal.status,
+                durationMs: message.childTerminal.durationMs,
+                finalTurnFinishReason: "length" as const,
+              };
+              set((state) => {
+                let matched = false;
+                const transcript = state.transcript.map((block) => {
+                  if (block.kind !== "tool_call" || block.toolCallId !== message.id) {
+                    return block;
+                  }
+                  matched = true;
+                  if (block.subagent !== null) {
+                    // Authoritative length terminal metadata corrects even an
+                    // already-settled card (the child_report is the detached
+                    // child's ONLY terminal channel; a live settle can only
+                    // have come from the admit turn's tool_result). The
+                    // childTerminal fact wins and the patch is idempotent.
+                    return {
+                      ...block,
+                      subagent: {
+                        ...block.subagent,
+                        sessionChild: true as const,
+                        final: {
+                          status: term.status,
+                          durationMs: term.durationMs,
+                          finalTurnFinishReason: "length" as const,
+                        },
+                      },
+                    };
+                  }
+                  const input = block.input;
+                  const base =
+                    typeof input === "object" && input !== null
+                      ? (input as { agent_type?: unknown; description?: unknown })
+                      : {};
+                  const synthesized: SubagentSubStatus = {
+                    agentType:
+                      typeof base.agent_type === "string" && base.agent_type !== "" ? base.agent_type : "general-purpose",
+                    description: typeof base.description === "string" ? base.description : "",
+                    model: null,
+                    engine: null,
+                    turns: 0,
+                    toolCalls: 0,
+                    lastTool: null,
+                    activity: [],
+                    activityDropped: 0,
+                    sessionChild: true as const,
+                    final: {
+                      status: term.status,
+                      durationMs: term.durationMs,
+                      finalTurnFinishReason: "length" as const,
+                    },
+                  };
+                  return { ...block, subagent: synthesized };
+                });
+                return matched ? { transcript } : {};
+              });
             }
             return;
           }

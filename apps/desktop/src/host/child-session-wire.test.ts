@@ -369,6 +369,55 @@ describe("session-tier Agent call over a fake parentPort (TASK.102 CUT-S2 §3 sl
     expect(snapshot?.activity.dropped).toBe(7);
   });
 
+  it("a length-cut child produces a terminal with finalTurnFinishReason and a relayed subagent_end carrying it", async () => {
+    const channel = fakeParentPort();
+    const port = createChildSessionPort({
+      parentSessionId: "parent-len",
+      getPermissionMode: () => "build",
+      send: channel.hostSend,
+      subscribe: channel.hostSubscribe,
+    });
+    wireScriptedMain(channel, (spawn) => {
+      channel.sendToHost({
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: spawn.requestId,
+        kind: "accepted",
+        childSessionId: "child-len",
+        childTabId: "tab-len",
+        model: "m",
+      });
+      channel.sendToHost(
+        terminalEvent(spawn.requestId, {
+          finalText: "cut mid-report",
+          turns: 1,
+          toolCalls: 1,
+          durationMs: 100,
+          childSessionId: "child-len",
+          finalTurnFinishReason: "length",
+        }),
+      );
+    });
+
+    const config = buildConfig({
+      args: ROOT_ARGS,
+      meta: rootMeta(),
+      sessionSubagentsPort: port,
+      steps: [toolStep("call-len", "Agent", { description: "d", prompt: "p", tier: "session" }), finishStep()],
+    });
+    const loop = new AgentLoop(config);
+
+    const events: AgentEvent[] = [];
+    for await (const event of loop.runTurn("delegate")) {
+      events.push(event);
+    }
+
+    expect(events.some((e) => e.type === "subagent_end" && e.finalTurnFinishReason === "length")).toBe(true);
+    const toolResult = events.find(isToolResult("call-len"))!;
+    expect(toolResult.outcome.result?.ok).toBe(false);
+    const snapshot = toolResult.outcome.result?.presentation?.subagent;
+    expect(snapshot?.final.finalTurnFinishReason).toBe("length");
+  });
+
   it("aborting the master's turn sends exactly ONE ChildRunCancel over the fake parentPort; the run stays pending (sync-join, cut §0.5) until the scripted main answers with a cancelled terminal", async () => {
     const channel = fakeParentPort();
     const port = createChildSessionPort({

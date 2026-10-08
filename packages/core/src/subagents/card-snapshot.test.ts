@@ -201,6 +201,16 @@ describe("reduceSubagentCardEvent — subagent_end", () => {
     acc = reduceSubagentCardEvent(acc, end());
     expect(acc.end && "responseModel" in acc.end).toBe(false);
   });
+
+  it("folds finalTurnFinishReason:\"length\" into acc.end; absent on the event => key absent", () => {
+    let withLength = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    withLength = reduceSubagentCardEvent(withLength, end({ finalTurnFinishReason: "length" }));
+    expect(withLength.end?.finalTurnFinishReason).toBe("length");
+
+    let without = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    without = reduceSubagentCardEvent(without, end());
+    expect(without.end && "finalTurnFinishReason" in without.end).toBe(false);
+  });
 });
 
 describe("reduceSubagentCardEvent — subagent_attention (TASK.102 CUT-S2 §2.2/§0.8)", () => {
@@ -305,6 +315,21 @@ describe("finalizeSubagentCard", () => {
     acc = reduceSubagentCardEvent(acc, end({ status: "completed", turns: 2, durationMs: 100 }));
     const snapshot = finalizeSubagentCard(acc, fallback);
     expect(snapshot && "responseModel" in snapshot.final).toBe(false);
+  });
+
+  it("finalized snapshot carries finalTurnFinishReason from the reducer's end (regression: finalization must not drop it)", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    acc = reduceSubagentCardEvent(acc, end({ status: "completed", turns: 2, durationMs: 100, finalTurnFinishReason: "length" }));
+    const snapshot = finalizeSubagentCard(acc, fallback);
+    expect(snapshot?.final.finalTurnFinishReason).toBe("length");
+  });
+
+  it("fallback consistency: no finalTurnFinishReason in the fallback => key absent; present => key present", () => {
+    const startedOnly = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
+    const without = finalizeSubagentCard(startedOnly, { status: "error", durationMs: 7 });
+    expect(without && "finalTurnFinishReason" in without.final).toBe(false);
+    const withLength = finalizeSubagentCard(startedOnly, { status: "error", durationMs: 7, finalTurnFinishReason: "length" });
+    expect(withLength?.final.finalTurnFinishReason).toBe("length");
   });
 
   it("with an end event, uses the end's status/durationMs (not the fallback)", () => {

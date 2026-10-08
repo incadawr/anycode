@@ -29,6 +29,23 @@ describe("ChildReportQueue (TASK.145 срез 2 §4 point 1)", () => {
     expect(outbound.sent).toEqual([{ type: "child_report", id: "report-1", text: "hello" }]);
   });
 
+  it("add() with childTerminal sends {id, text, childTerminal} and resendAll() re-sends it after ui_ready; without meta the payload equals today's shape", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const meta = { status: "completed" as const, durationMs: 42, finalTurnFinishReason: "length" as const };
+
+    queue.add("report-meta", "cut short", meta);
+
+    expect(outbound.sent).toEqual([{ type: "child_report", id: "report-meta", text: "cut short", childTerminal: meta }]);
+    // A resend after ui_ready re-sends the SAME payload, meta included.
+    outbound.sent.length = 0;
+    queue.resendAll();
+    expect(outbound.sent).toEqual([{ type: "child_report", id: "report-meta", text: "cut short", childTerminal: meta }]);
+    // Without meta, the payload equals today's shape (no childTerminal key).
+    queue.add("report-plain", "plain");
+    expect(outbound.sent.at(-1)).toEqual({ type: "child_report", id: "report-plain", text: "plain" });
+  });
+
   it("ack() removes the report so a later resendAll() never re-sends it", () => {
     const outbound = stubOutbound();
     const queue = new ChildReportQueue(outbound);

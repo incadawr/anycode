@@ -63,6 +63,12 @@ export interface SubagentCardSnapshotV1 {
      * not proof of serving.
      */
     responseModel?: string;
+    /**
+     * Present only when the child's final turn_end carried finishReason "length" —
+     * the report was cut by the model's output-token ceiling. Absent on legacy
+     * snapshots and runs whose final turn ended normally.
+     */
+    finalTurnFinishReason?: "length";
   };
   /** Reserved for S2 (the "waiting for permission" badge). S1 never writes or reads this. */
   attention?: "waiting_permission";
