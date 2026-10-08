@@ -913,6 +913,8 @@ export class Session {
   private relocating = false;
   private abort: AbortController | null = null;
   private turnId: string | null = null;
+  /** Epoch ms the live turn began (host clock) — rides every turn_started, including the per-connect re-assertion. */
+  private turnStartedAt: number | undefined = undefined;
   /**
    * TASK.117: the CURRENT outer turn's pending prompt, recorded by
    * `acceptUserMessage` the moment a turn is admitted (BEFORE runTurn) and
@@ -1587,7 +1589,12 @@ export class Session {
         // replays to the same effect. Emitted for ANY engine's live turn —
         // the wire contract for turn_started is engine-agnostic.
         if (this.turnId !== null && this.lastTurnRequest !== undefined) {
-          this.outbound.sendDirect({ type: "turn_started", requestId: this.lastTurnRequest.requestId, turnId: this.turnId });
+          this.outbound.sendDirect({
+            type: "turn_started",
+            requestId: this.lastTurnRequest.requestId,
+            turnId: this.turnId,
+            ...(this.turnStartedAt !== undefined ? { startedAt: this.turnStartedAt } : {}),
+          });
         }
         // TASK.117 control/accounting checkpoint: re-assert the wire state
         // the ring may have evicted (cumulative finish totals, latest
@@ -3056,7 +3063,8 @@ export class Session {
     this.turnId = turnId;
     this.currentStep = undefined;
     this.abort = controller;
-    this.outbound.emit({ type: "turn_started", requestId, turnId });
+    this.turnStartedAt = Date.now();
+    this.outbound.emit({ type: "turn_started", requestId, turnId, startedAt: this.turnStartedAt });
     // TASK.117: remember the live turn's requestId for the per-connect
     // turn_started re-assertion (see ui_ready) — the ring copy alone is not
     // survivable past REPLAY_BUFFER_CAP overflow.

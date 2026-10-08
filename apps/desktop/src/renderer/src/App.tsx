@@ -68,11 +68,19 @@ import { useOverlayFlag } from "./preview/overlay-flag.js";
 import { usePanelMountState } from "./preview/panel-bridge.js";
 import { computePreviewPanelOpen, usePreviewStore } from "./preview/preview-store.js";
 import type { PreviewPanelInfo } from "../../shared/preview-panel.js";
-import { buildChildBreadcrumb, childBadgeKind, childLayoutStore, withLiveChildCounters } from "./child-layout.js";
-import { childRelationStore, type ChildRelation } from "./child-sessions.js";
+import {
+  buildChildBreadcrumb,
+  childBadgeKind,
+  childLayoutStore,
+  detachedOutcomeFromParent,
+  lastLiveChildCard,
+  rememberLiveChildCard,
+  withLiveChildCounters,
+} from "./child-layout.js";
+import { childRelationKey, childRelationStore, type ChildRelation } from "./child-sessions.js";
 import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
-import { isSessionBusy, type SubagentSubStatus } from "./store.js";
+import { isSessionBusy, type SubagentSubStatus, type TranscriptBlock } from "./store.js";
 import "./settings.css";
 
 /** localStorage key for the renderer-only sidebar collapse flag (design §2.1). */
@@ -126,6 +134,7 @@ const EMPTY_PREVIEWS: readonly PreviewPanelInfo[] = [];
 
 /** Stable empty identity for the split stack's row list when the layout isn't `split` at all (mirrors EMPTY_PREVIEWS above). */
 const EMPTY_CHILD_SPLIT_ROWS: readonly ChildSplitRow[] = [];
+const EMPTY_IDS: readonly string[] = [];
 
 /**
  * CUT-S3 §3.3's "отсутствующая карточка → фолбэк ..., как в B" fallback,
@@ -164,6 +173,47 @@ function fallbackCardFromInput(input: unknown): SubagentSubStatus {
     ...(typeof agentType === "string" && agentType !== "" ? { agentType } : {}),
     ...(typeof description === "string" ? { description } : {}),
   };
+}
+
+/**
+ * One child row's card. The master's own Agent card first; for a detached
+ * call that card never hears the child, so: the child's live store when its
+ * host runs, else the last card this renderer saw live, else the outcome the
+ * parent's `<task-notification>` reported — never "running" for a child that
+ * has ended.
+ */
+function resolveChildRowCard(
+  spawnToolCallId: string,
+  parentTranscript: readonly TranscriptBlock[],
+  childStore: DesktopStoreApi | undefined,
+): SubagentSubStatus {
+  const block = parentTranscript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === spawnToolCallId);
+  if (!block || block.kind !== "tool_call") {
+    return FALLBACK_SUBAGENT_CARD;
+  }
+  const baseCard = block.subagent ?? fallbackCardFromInput(block.input);
+  const detached = (block.input as { detach?: unknown } | null)?.detach === true;
+  if (childStore !== undefined) {
+    const state = childStore.getState();
+    const card = withLiveChildCounters(
+      baseCard,
+      { transcript: state.transcript, modelTurns: state.modelTurns, running: state.turn.status !== "idle" },
+      detached,
+    );
+    if (detached) rememberLiveChildCard(spawnToolCallId, card);
+    return card;
+  }
+  if (!detached || baseCard.final !== null) {
+    return baseCard;
+  }
+  const remembered = lastLiveChildCard(spawnToolCallId);
+  const outcome = detachedOutcomeFromParent(parentTranscript, spawnToolCallId);
+  const card = remembered ?? baseCard;
+  if (card.final !== null || outcome === null) {
+    return card;
+  }
+  // Ended before this renderer saw its last turn: the outcome is known, the duration is not.
+  return { ...card, final: { status: outcome, durationMs: -1 } };
 }
 
 /**
@@ -500,17 +550,37 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
       ? state.getRelation(parentSessionId, focusedChildId)
       : undefined,
   );
-  // F11: the focused child's own transcript, read live off its tab store —
-  // the source of a split row's counters when the master's Agent card never
-  // hears that child's progress (a detached call). Null without a live child.
-  const focusedChildStore =
-    childRelation !== undefined && childRelation.live ? tabRegistry.getStore(childRelation.childTabId) : undefined;
-  const subscribeFocusedChild = useCallback(
-    (onChange: () => void) => (focusedChildStore ? focusedChildStore.subscribe(onChange) : () => {}),
-    [focusedChildStore],
+  // F11: every split row's (and layout B's) live child store, so each row
+  // counts its own child's progress — not only the expanded one. A row whose
+  // child host is gone keeps the last card it showed (`lastLiveChildCard`).
+  const relations = childRelationStore((state) => state.relations);
+  const liveChildIds: readonly string[] =
+    childView.kind === "split" ? childView.order : focusedChildId !== undefined ? [focusedChildId] : EMPTY_IDS;
+  const liveChildStores = useMemo(() => {
+    const stores = new Map<string, DesktopStoreApi>();
+    if (parentSessionId === null || parentSessionId === undefined) return stores;
+    for (const id of liveChildIds) {
+      const relation = relations.get(childRelationKey(parentSessionId, id));
+      const store = relation?.live === true ? tabRegistry.getStore(relation.childTabId) : undefined;
+      if (store !== undefined) stores.set(id, store);
+    }
+    return stores;
+  }, [liveChildIds, parentSessionId, relations]);
+  const subscribeLiveChildren = useCallback(
+    (onChange: () => void) => {
+      const unsubscribes = [...liveChildStores.values()].map((store) => store.subscribe(onChange));
+      return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+    },
+    [liveChildStores],
   );
-  const focusedChildTranscript = useSyncExternalStore(subscribeFocusedChild, () =>
-    focusedChildStore ? focusedChildStore.getState().transcript : null,
+  // A string snapshot (stable between renders) of what the rows read below.
+  useSyncExternalStore(subscribeLiveChildren, () =>
+    [...liveChildStores.values()]
+      .map((store) => {
+        const state = store.getState();
+        return `${state.transcript.length}:${state.modelTurns}:${state.turn.status}`;
+      })
+      .join("|"),
   );
   // TASK.102 CUT-S2 §10.8.1 point 3: a NON-live child (relation.live===false,
   // OR no relation at all — the restart-Open case) is no longer a transient
@@ -658,12 +728,7 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const childSplitRows: readonly ChildSplitRow[] =
     childView.kind === "split"
       ? childView.order.map((id) => {
-          const block = transcript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === id);
-          const baseCard: SubagentSubStatus =
-            block && block.kind === "tool_call"
-              ? (block.subagent ?? fallbackCardFromInput(block.input))
-              : FALLBACK_SUBAGENT_CARD;
-          const card = id === focusedChildId ? withLiveChildCounters(baseCard, focusedChildTranscript) : baseCard;
+          const card = resolveChildRowCard(id, transcript, liveChildStores.get(id));
           return { spawnToolCallId: id, card, badge: childBadgeKind(card) };
         })
       : EMPTY_CHILD_SPLIT_ROWS;

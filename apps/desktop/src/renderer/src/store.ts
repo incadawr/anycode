@@ -430,7 +430,8 @@ export type TranscriptBlock =
    * must say so, never silently).
    */
   | { kind: "degeneration"; id: string; channel: "text" | "reasoning"; period: number; repeats: number }
-  | { kind: "loop_end"; id: string; reason: string; turns: number }
+  /** `durationMs`: wall time from this renderer's `turn_started` to the loop_end; absent when the start was not seen live (a replayed/reconnected turn). */
+  | { kind: "loop_end"; id: string; reason: string; turns: number; durationMs?: number }
   /**
    * One persisted line per `stream_retry` AgentEvent (TASK.33 W8), ADDITIVE to
    * the existing one-slot `notice` toast (which still shows the LATEST retry
@@ -983,6 +984,8 @@ export interface DesktopState {
    * Their parent turn has already ended, so this is the only live sign of them.
    */
   backgroundChildren: WireBackgroundChild[];
+  /** Model turns this tab finished (`turn_end` count) — a live child's "turn N" while its loop still runs. */
+  modelTurns: number;
   /**
    * GUI-git slice (design slice-5.8-cut.md §2.5): per-tab, part of the session
    * slice so `reset()`/a respawned `host_ready` clear it wholesale — a fresh
@@ -1235,6 +1238,7 @@ interface SessionSlice {
   backgroundTasks: BackgroundTaskSnapshot[];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
+  modelTurns: number;
   git: GitSlice;
   envStatus: WireEnvStatus | null;
   contextBreakdown: WireContextBreakdown | null;
@@ -1281,6 +1285,7 @@ function initialSessionSlice(): SessionSlice {
     backgroundTasks: [],
     backgroundTaskOutput: {},
     backgroundChildren: [],
+    modelTurns: 0,
     git: initialGitSlice(),
     envStatus: null,
     contextBreakdown: null,
@@ -1598,6 +1603,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   const checkpointCountedSteps = new Set<string>();
   /** TASK.117: outer turnIds whose loop_end footer already landed (once-per-turn guard against replay duplicates). */
   const loopEndEmitted = new Set<string>();
+  /** turnId -> when this renderer saw it start; consumed by that turn's loop_end footer. */
+  const turnStartedAt = new Map<string, number>();
   /**
    * TASK.117 acceptance defect 2: the TRUNCATED-snapshot cut boundary — per
    * turnId, the oldest step the latest session_history still covers. Ring
@@ -2985,6 +2992,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           loopEndEmitted.add(onceKey);
           flushDeltas();
           const loopEndId = `loop_end:${turnId}`;
+          const startedAt = turnStartedAt.get(turnId);
+          turnStartedAt.delete(turnId);
+          const durationMs = startedAt === undefined ? undefined : Math.max(0, Date.now() - startedAt);
           set((state) => {
             const lastSent = state.lastSentMessage;
             const retryMeta = state.lastErrorRetry;
@@ -3000,7 +3010,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return {
               transcript: [
                 ...state.transcript,
-                { kind: "loop_end", id: loopEndId, reason: event.reason, turns: event.turns },
+                {
+                  kind: "loop_end",
+                  id: loopEndId,
+                  reason: event.reason,
+                  turns: event.turns,
+                  ...(durationMs !== undefined ? { durationMs } : {}),
+                },
               ],
               ...(armRetry && lastSent !== null
                 ? { retry: { loopEndBlockId: loopEndId, text: lastSent.text, images: lastSent.images } }
@@ -3032,6 +3048,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // the frozen TranscriptBlock union (design §5 enumerates exactly:
         // user_text, assistant_text, reasoning, tool_call, loop_end) ──
         case "turn_end":
+          set((state) => ({ modelTurns: state.modelTurns + 1 }));
           if (event.finishReason === "length") {
             appendBlock({ kind: "output_truncated", id: `output_truncated:${turnId}:${event.turn}` });
           }
@@ -3614,6 +3631,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // here would show "active" slightly before the host itself can
             // honestly claim that.
             const inFlight = get().queueInFlight;
+            // The host's own clock when it sends one: a turn_started re-asserted
+            // on reconnect would otherwise restart the footer's duration at ~0.
+            if (message.startedAt !== undefined) {
+              turnStartedAt.set(message.turnId, message.startedAt);
+            } else if (!turnStartedAt.has(message.turnId)) {
+              turnStartedAt.set(message.turnId, Date.now());
+            }
             set({
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId },
               // TASK.33 W8: a new turn starting — whether via the Try-again

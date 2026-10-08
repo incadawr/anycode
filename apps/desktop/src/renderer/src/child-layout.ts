@@ -263,36 +263,64 @@ export function buildChildBreadcrumb(
 
 // ── live child counters ──
 
+/** What a live child tab's own store says about it — the input of `withLiveChildCounters`. */
+export interface LiveChildSnapshot {
+  transcript: readonly TranscriptBlock[];
+  /** Model turns the child finished so far (`turn_end` count, store.ts) — ticks while its loop runs. */
+  modelTurns: number;
+  /** The child's own turn is running (or compacting). */
+  running: boolean;
+}
+
+const LOOP_END_TO_FINAL: Record<string, NonNullable<SubagentSubStatus["final"]>["status"]> = {
+  completed: "completed",
+  max_turns: "max_turns",
+  cancelled: "cancelled",
+};
+
 /**
- * A split row's counters for a child whose LIVE session surface is open
- * (F11): a detached Agent call returns as soon as the child starts, so the
- * master's card never receives that child's progress and stays at "turn 0 ·
- * 0 tool calls" (or is missing entirely — then `card` is the zero fallback).
- * The child's own tab transcript is the ground truth for what it has done:
- * its tool_call blocks give the tool-call count and the last tool, and each
- * finished loop's `loop_end.turns` adds to the turn count. A settled card
- * (`final !== null`) is returned untouched — its own numbers are final — and
- * a derived value never lowers a counter the card already carries.
+ * A row's counters for a child whose LIVE session is known (F11): a detached
+ * Agent call returns as soon as the child starts, so the master's card never
+ * receives that child's progress and stays at "turn 0 · 0 tool calls" (or is
+ * missing entirely — then `card` is the zero fallback). The child's own tab
+ * is the ground truth: its tool_call blocks give the tool-call count and the
+ * last tool, its `turn_end` count gives the turns while the loop still runs.
+ *
+ * `detached`: the parent's card can never settle for such a call, so once the
+ * child is idle after a finished loop, its last `loop_end` becomes the card's
+ * `final` — otherwise a finished planner stays an orange "running" row
+ * forever. A settled card (`final !== null`) is returned untouched, and a
+ * derived value never lowers a counter the card already carries.
  */
 export function withLiveChildCounters(
   card: SubagentSubStatus,
-  childTranscript: readonly TranscriptBlock[] | null,
+  live: LiveChildSnapshot | null,
+  detached = false,
 ): SubagentSubStatus {
-  if (childTranscript === null || card.final !== null) {
+  if (live === null || card.final !== null) {
     return card;
   }
   let toolCalls = 0;
   let lastTool: string | null = null;
-  let turns = 0;
-  for (const block of childTranscript) {
+  let loopTurns = 0;
+  let durationMs = 0;
+  let lastLoopEnd: Extract<TranscriptBlock, { kind: "loop_end" }> | null = null;
+  for (const block of live.transcript) {
     if (block.kind === "tool_call") {
       toolCalls += 1;
       lastTool = block.toolName;
     } else if (block.kind === "loop_end") {
-      turns += block.turns;
+      loopTurns += block.turns;
+      durationMs += block.durationMs ?? 0;
+      lastLoopEnd = block;
     }
   }
-  if (toolCalls <= card.toolCalls && turns <= card.turns) {
+  const turns = Math.max(loopTurns, live.modelTurns);
+  const final =
+    detached && !live.running && lastLoopEnd !== null
+      ? { status: LOOP_END_TO_FINAL[lastLoopEnd.reason] ?? ("error" as const), durationMs }
+      : null;
+  if (toolCalls <= card.toolCalls && turns <= card.turns && final === null) {
     return card;
   }
   return {
@@ -300,7 +328,53 @@ export function withLiveChildCounters(
     toolCalls: Math.max(toolCalls, card.toolCalls),
     lastTool: toolCalls > card.toolCalls ? lastTool : card.lastTool,
     turns: Math.max(turns, card.turns),
+    final,
   };
+}
+
+/**
+ * Last card each detached row showed while its child was live. A finished
+ * child's host is reaped at once (tabs.ts), so without this the row would fall
+ * back to the zero card the moment the child ends. Keyed by spawnToolCallId,
+ * renderer-lifetime, bounded.
+ */
+const lastLiveCards = new Map<string, SubagentSubStatus>();
+const LAST_LIVE_CARDS_LIMIT = 200;
+
+export function rememberLiveChildCard(spawnToolCallId: string, card: SubagentSubStatus): void {
+  lastLiveCards.delete(spawnToolCallId);
+  lastLiveCards.set(spawnToolCallId, card);
+  if (lastLiveCards.size > LAST_LIVE_CARDS_LIMIT) {
+    const oldest = lastLiveCards.keys().next().value;
+    if (oldest !== undefined) lastLiveCards.delete(oldest);
+  }
+}
+
+export function lastLiveChildCard(spawnToolCallId: string): SubagentSubStatus | undefined {
+  return lastLiveCards.get(spawnToolCallId);
+}
+
+/**
+ * A detached child's outcome as its parent heard it: the `<task-notification>`
+ * the host delivered into the parent transcript (host/index.ts
+ * `deliverDetachedChildReport`). The fallback when the child already ended
+ * before this renderer ever saw it live — the row then says Completed/Error
+ * instead of running forever, with no invented counters or duration.
+ */
+export function detachedOutcomeFromParent(
+  parentTranscript: readonly TranscriptBlock[],
+  spawnToolCallId: string,
+): NonNullable<SubagentSubStatus["final"]>["status"] | null {
+  const idTag = `<tool-use-id>${spawnToolCallId}</tool-use-id>`;
+  for (let i = parentTranscript.length - 1; i >= 0; i -= 1) {
+    const block = parentTranscript[i]!;
+    if (block.kind !== "user_text" || !block.text.includes(idTag)) continue;
+    const status = /<status>(completed|failed|cancelled)<\/status>/.exec(block.text)?.[1];
+    if (status === "completed") return "completed";
+    if (status === "cancelled") return "cancelled";
+    if (status === "failed") return "error";
+  }
+  return null;
 }
 
 // ── split stack head VM ──

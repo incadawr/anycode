@@ -17,6 +17,9 @@ import {
   exitSplit,
   MASTER_VIEW,
   openChild,
+  detachedOutcomeFromParent,
+  lastLiveChildCard,
+  rememberLiveChildCard,
   withLiveChildCounters,
   type ChildBadgeKind,
   type ChildLayoutView,
@@ -465,7 +468,7 @@ describe("withLiveChildCounters (F11: a detached child's counters come off its o
 
   it("counts the child's tool calls and last tool when the master card never heard its progress", () => {
     const transcript: TranscriptBlock[] = [toolCall("a", "Read"), toolCall("b", "Grep"), toolCall("c", "Bash")];
-    const card = withLiveChildCounters(zeroCard, transcript);
+    const card = withLiveChildCounters(zeroCard, { transcript, modelTurns: 0, running: true });
     expect(card.toolCalls).toBe(3);
     expect(card.lastTool).toBe("Bash");
     expect(card.turns).toBe(0);
@@ -478,15 +481,82 @@ describe("withLiveChildCounters (F11: a detached child's counters come off its o
       toolCall("b", "Edit"),
       { kind: "loop_end", id: "l2", reason: "completed", turns: 2 },
     ];
-    expect(withLiveChildCounters(zeroCard, transcript).turns).toBe(6);
+    expect(withLiveChildCounters(zeroCard, { transcript, modelTurns: 0, running: true }).turns).toBe(6);
   });
 
   it("returns the card untouched without a live transcript, once settled, or when the card is already ahead", () => {
     const transcript: TranscriptBlock[] = [toolCall("a", "Read")];
     expect(withLiveChildCounters(zeroCard, null)).toBe(zeroCard);
     const settled: SubagentSubStatus = { ...zeroCard, final: { status: "completed", durationMs: 10 } };
-    expect(withLiveChildCounters(settled, transcript)).toBe(settled);
+    expect(withLiveChildCounters(settled, { transcript, modelTurns: 0, running: true })).toBe(settled);
     const ahead: SubagentSubStatus = { ...zeroCard, toolCalls: 5, turns: 3, lastTool: "Edit" };
-    expect(withLiveChildCounters(ahead, transcript)).toBe(ahead);
+    expect(withLiveChildCounters(ahead, { transcript, modelTurns: 0, running: true })).toBe(ahead);
+  });
+
+  const loopEnd = (id: string, reason: string, turns: number, durationMs?: number): TranscriptBlock =>
+    ({ kind: "loop_end", id, reason, turns, ...(durationMs === undefined ? {} : { durationMs }) }) as TranscriptBlock;
+  const userText = (id: string, text: string): TranscriptBlock =>
+    ({ kind: "user_text", id, origin: "system", text }) as TranscriptBlock;
+
+  it("modelTurns drives turns while the loop is running", () => {
+    const live = { transcript: [toolCall("a", "Read")], modelTurns: 3, running: true };
+    expect(withLiveChildCounters(zeroCard, live).turns).toBe(3);
+  });
+
+  it("detached + idle + loop_end settles the card with the last reason and summed duration", () => {
+    const transcript = [loopEnd("l1", "max_turns", 2, 1000), loopEnd("l2", "completed", 3, 2500)];
+    const card = withLiveChildCounters(zeroCard, { transcript, modelTurns: 5, running: false }, true);
+    expect(card.final).toEqual({ status: "completed", durationMs: 3500 });
+    expect(card.turns).toBe(5);
+  });
+
+  it("maps cancelled and max_turns 1:1", () => {
+    const run = (reason: string) =>
+      withLiveChildCounters(zeroCard, { transcript: [loopEnd("l", reason, 1)], modelTurns: 1, running: false }, true).final;
+    expect(run("cancelled")).toEqual({ status: "cancelled", durationMs: 0 });
+    expect(run("max_turns")).toEqual({ status: "max_turns", durationMs: 0 });
+  });
+
+  it("not detached: final stays null", () => {
+    const live = { transcript: [loopEnd("l", "completed", 1, 10)], modelTurns: 1, running: false };
+    expect(withLiveChildCounters(zeroCard, live, false).final).toBeNull();
+  });
+
+  it("running: final stays null even when detached", () => {
+    const live = { transcript: [loopEnd("l", "completed", 1, 10)], modelTurns: 1, running: true };
+    expect(withLiveChildCounters(zeroCard, live, true).final).toBeNull();
+  });
+
+  it("an unknown loop_end reason maps to error", () => {
+    const live = { transcript: [loopEnd("l", "workspace_transition", 1, 10)], modelTurns: 1, running: false };
+    expect(withLiveChildCounters(zeroCard, live, true).final).toEqual({ status: "error", durationMs: 10 });
+  });
+
+  describe("detachedOutcomeFromParent", () => {
+    const note = (id: string, status: string) =>
+      userText(`n-${id}-${status}`, `<task-notification><tool-use-id>${id}</tool-use-id><status>${status}</status></task-notification>`);
+
+    it("maps completed / failed / cancelled", () => {
+      expect(detachedOutcomeFromParent([note("x", "completed")], "x")).toBe("completed");
+      expect(detachedOutcomeFromParent([note("x", "failed")], "x")).toBe("error");
+      expect(detachedOutcomeFromParent([note("x", "cancelled")], "x")).toBe("cancelled");
+    });
+
+    it("returns null when nothing matches", () => {
+      expect(detachedOutcomeFromParent([], "x")).toBeNull();
+      expect(detachedOutcomeFromParent([note("y", "completed")], "x")).toBeNull();
+      expect(detachedOutcomeFromParent([userText("u", "<tool-use-id>x</tool-use-id> no status")], "x")).toBeNull();
+    });
+
+    it("picks the latest matching block", () => {
+      expect(detachedOutcomeFromParent([note("x", "failed"), note("y", "cancelled"), note("x", "completed")], "x")).toBe("completed");
+    });
+  });
+
+  it("rememberLiveChildCard / lastLiveChildCard round trip", () => {
+    expect(lastLiveChildCard("never-seen")).toBeUndefined();
+    const card: SubagentSubStatus = { ...zeroCard, turns: 2, toolCalls: 4 };
+    rememberLiveChildCard("remember-1", card);
+    expect(lastLiveChildCard("remember-1")).toBe(card);
   });
 });
