@@ -256,6 +256,13 @@ export type AgentEvent =
        * accounting investigation.
        */
       responseModel?: string;
+      /**
+       * Present only when the child's final turn_end carried finishReason
+       * "length" — the report was cut by the model's output-token ceiling.
+       * Additive-optional: absent on legacy replays and runs whose final
+       * turn ended normally; never inferred from other fields.
+       */
+      finalTurnFinishReason?: "length";
     }
   /**
    * Permission-broker gate crossing for a session-tier subagent (

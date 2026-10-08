@@ -134,6 +134,7 @@ export type SubagentProgress =
       activitySuppressed?: number;
       model?: string;
       responseModel?: string;
+      finalTurnFinishReason?: "length";
     }
   // Permission-broker gate crossing ( CUT-S2 §2.2/§0.8): ONLY the
   // session-tier port (SessionSubagentPort) ever produces this — a child

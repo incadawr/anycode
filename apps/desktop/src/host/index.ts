@@ -512,8 +512,13 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     status: mapChildRunStatusToNotification(outcome.status),
     summary: outcome.finalText,
     ...(fullReportPath !== undefined ? { fullReportPath } : {}),
+    ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
   });
-  childReportQueue.add(outcome.spawnToolCallId, text);
+  childReportQueue.add(outcome.spawnToolCallId, text, {
+    status: outcome.status,
+    durationMs: outcome.durationMs,
+    ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
+  });
 }
 
 /**
@@ -786,6 +791,7 @@ function buildChildSessionOptions(flushHistory: () => Promise<void>): ChildSessi
         toolCalls: report.toolCalls,
         durationMs: report.durationMs,
         ...(report.activitySuppressed !== undefined ? { activitySuppressed: report.activitySuppressed } : {}),
+        ...(report.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: report.finalTurnFinishReason } : {}),
       } satisfies ChildTerminal);
     },
     onProgress: (report) => {

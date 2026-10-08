@@ -1989,6 +1989,8 @@ export class TabHostManager {
       durationMs: number;
       /** Additive (CUT-S2 §10.7 п.4/§10.8.2); present only when the caller relays one (>0 at the source). */
       activitySuppressed?: number;
+      /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
+      finalTurnFinishReason?: "length";
     },
   ): void {
     const entry = this.childRuns.get(requestId);
@@ -2187,6 +2189,7 @@ export class TabHostManager {
       // it is orthogonal to `status`/`finalText`, both of which the cut's
       // §10.8.2 п.3 wording ratifies verbatim for a cancelled run.
       ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed } : {}),
+      ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason } : {}),
     });
   }
 

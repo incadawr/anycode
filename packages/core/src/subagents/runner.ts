@@ -1048,6 +1048,7 @@ export function createSubagentRunner(
           // from ONE record, without correlating back to an earlier start line.
           ...(requestedModel !== undefined ? { model: requestedModel } : {}),
           ...(responseModel !== undefined ? { responseModel } : {}),
+          ...(finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
         });
 
         // Fire SubagentStop observers INSIDE the permit (semaphore still held,
