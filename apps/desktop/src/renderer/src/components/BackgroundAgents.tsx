@@ -12,13 +12,11 @@ import { childLayoutStore } from "../child-layout.js";
 import { childRelationStore, spawnToolCallIdForChild } from "../child-sessions.js";
 import { useTabContextTabId, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
+import { formatElapsed } from "./WorkingRow.js";
 
-/** "running 3m" / "running 45s" — coarse on purpose; it ticks every 15 s. */
+/** "45s" / "5m 12s" / "1h 02m" — the same clock as the Working row; ticks every second. */
 export function backgroundElapsed(startedAt: number, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  return formatElapsed(Math.max(0, Math.floor((now - startedAt) / 1000)));
 }
 
 export function backgroundHeading(count: number): string {
@@ -35,7 +33,7 @@ export function BackgroundAgents() {
 
   useEffect(() => {
     if (children.length === 0) return undefined;
-    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [children.length]);
 

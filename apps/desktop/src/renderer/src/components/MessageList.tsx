@@ -35,7 +35,7 @@ import { TodoPanel } from "./TodoPanel.js";
 import { PreviewConsoleRow } from "./PreviewConsoleRow.js";
 import { ToolCallCard } from "./ToolCallCard.js";
 import { ToolCallStack } from "./ToolCallStack.js";
-import { WorkingRow, getTurnStartedAt } from "./WorkingRow.js";
+import { WorkingRow, formatElapsed, getTurnStartedAt } from "./WorkingRow.js";
 import { formatUsageLimitReset } from "../provider-notices.js";
 
 /** ≥ this many new blocks in one render = bulk (hydration/replay), not a live append. */
@@ -785,7 +785,9 @@ export function MessageList({
                     // or refused. Pointing at Settings would name an action
                     // that is no longer the one that happened.
                     ? `Stopped: turn limit reached (${block.turns} turns).`
-                    : `Turn ended: ${block.reason} (${block.turns} turn${block.turns === 1 ? "" : "s"})`}
+                    : `Turn ended: ${block.reason} (${block.turns} turn${block.turns === 1 ? "" : "s"}${
+                        block.durationMs !== undefined ? ` · ${formatElapsed(Math.round(block.durationMs / 1000))}` : ""
+                      })`}
                   {showTryAgainButton(retry, block.id, connection) && (
                     <button type="button" className="retry-try-again-button" onClick={onTryAgain}>
                       Try again

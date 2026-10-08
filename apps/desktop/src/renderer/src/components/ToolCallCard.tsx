@@ -42,6 +42,7 @@ import { childRelationStore, hasOpenableChild, type ChildRelation } from "../chi
 import { DiffView } from "./DiffView.js";
 import { Check, Chevron, Minus, Spinner, Warning, X } from "./icons.js";
 import { Markdown } from "./Markdown.js";
+import { formatElapsed } from "./WorkingRow.js";
 
 const STATUS_LABELS: Record<ToolCallBlock["status"], string> = {
   proposed: "Proposed",
@@ -141,6 +142,11 @@ function ChildBadge({ badge, onOpen }: { badge: ChildBadgeKind; onOpen?: () => v
  * call(s)[ · lastTool]`, turn segment omitted for codex. Once settled:
  * `<label> · [N turn(s) · ]D.Ds`, turn segment omitted for codex.
  */
+/** Under a minute keeps the tenths ("4.2s"); longer reads as "11m 02s" (WorkingRow's formatElapsed). */
+function formatCardDuration(durationMs: number): string {
+  return durationMs < 60_000 ? `${(durationMs / 1000).toFixed(1)}s` : formatElapsed(Math.floor(durationMs / 1000));
+}
+
 export function formatSubagentCounters(subagent: SubagentSubStatus): string {
   const prefix = subagent.engine ? `${subagent.engine} · ` : "";
   if (subagent.final === null) {
@@ -149,13 +155,15 @@ export function formatSubagentCounters(subagent: SubagentSubStatus): string {
     const turnSegment = subagent.engine === "codex" ? "" : `turn ${subagent.turns} · `;
     return `${prefix}${turnSegment}${toolCalls}${lastTool}`;
   }
-  const seconds = (subagent.final.durationMs / 1000).toFixed(1);
   const label = SUBAGENT_FINAL_LABELS[subagent.final.status];
+  // A negative duration = a detached child that ended before this renderer saw
+  // its last turn (App.tsx resolveChildRowCard): the outcome is known, the time is not.
+  const duration = subagent.final.durationMs < 0 ? "" : ` · ${formatCardDuration(subagent.final.durationMs)}`;
   if (subagent.engine === "codex") {
-    return `${label} · ${seconds}s`;
+    return `${label}${duration}`;
   }
-  const turns = `${subagent.turns} turn${subagent.turns === 1 ? "" : "s"}`;
-  return `${label} · ${turns} · ${seconds}s`;
+  const turns = subagent.turns > 0 || subagent.toolCalls > 0 ? ` · ${subagent.turns} turn${subagent.turns === 1 ? "" : "s"}` : "";
+  return `${label}${turns}${duration}`;
 }
 
 const WORKFLOW_FINAL_LABELS: Record<NonNullable<WorkflowSubStatus["final"]>["status"], string> = {
