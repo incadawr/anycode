@@ -9,6 +9,10 @@
  *   start   --workspace <dir> --brief <file> [--no-chromium-sandbox]
  *           launch the app (detached, outlives this script), open a Codex tab
  *           on <dir> and send <file> as its first prompt.
+ *   task    --workspace <dir> --brief <file>
+ *           open a NEW Codex supervisor tab in the already running app (no
+ *           relaunch — keeps the sandbox of an app the owner started from a
+ *           terminal) and make it the lab's supervisor.
  *   watch   [--quiet-min N]  poll until something worth a look happens, print
  *           it and exit 0: supervisor turn ended, a child started/finished,
  *           a permission is pending, a tab repeats the same tool call, nothing
@@ -169,6 +173,31 @@ async function start() {
   if (!lab.supervisorTabId) throw new Error("codex tab was not created");
   writeLab(lab);
   event(`START supervisor tab ${lab.supervisorTabId} on ${workspace}`);
+}
+
+async function task() {
+  const workspace = resolve(opt("--workspace", ""));
+  const briefPath = opt("--brief");
+  if (!existsSync(workspace) || !briefPath || !existsSync(briefPath)) throw new Error("need --workspace <dir> and --brief <file>");
+  const lab = readLab();
+  const ctx = ctxOf(lab);
+  if (ctx === null) throw new Error("app is not running (the owner launches it; do not relaunch from here)");
+  await api(ctx, "POST", "/start-screen/open", { workspace });
+  await api(ctx, "POST", "/start-screen/engine", { engineId: "codex" });
+  await api(ctx, "POST", "/start-screen/prompt", { text: readFileSync(briefPath, "utf8") });
+  let tabId = null;
+  for (let i = 0; i < 120; i += 1) {
+    const r = await api(ctx, "POST", "/start-screen/submit", {});
+    if (r.body?.ok === true) {
+      tabId = r.body.tabId;
+      break;
+    }
+    await sleep(500);
+  }
+  if (tabId === null) throw new Error("codex tab was not created");
+  writeLab({ ...lab, workspace, supervisorTabId: tabId });
+  event(`TASK supervisor tab ${tabId} on ${workspace}`);
+  console.log(tabId);
 }
 
 /** Child tabs are not in the renderer snapshot; their history is in the lab DB. */
@@ -361,6 +390,7 @@ async function simple(method, pathFor, bodyFor) {
 
 const handlers = {
   start,
+  task,
   watch,
   show,
   child,
