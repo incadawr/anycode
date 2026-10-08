@@ -34,6 +34,9 @@ import {
 import { commandOf, fileChangesOf, type TurnItemIndex } from "./turn-item-index.js";
 import type { ServerRequestResponder } from "./app-server-client.js";
 
+/** Reason shown for a `kind: "writeStdin"` command approval (codex 0.161+). */
+export const STDIN_WRITE_REASON = "Send input to the command that is already running (not a new command).";
+
 export const CODEX_APPROVAL_ERROR_CODE = -32002;
 
 export interface ActiveCodexTurn {
@@ -123,7 +126,11 @@ function decode(request: JsonRpcServerRequest, items: TurnItemIndex | undefined)
     // absent optional field must never turn into a denial.
     const command = optionalString(params.command) ?? fromItem.command;
     const cwd = optionalString(params.cwd) ?? fromItem.cwd;
-    const reason = optionalString(params.reason);
+    // 0.161: `kind: "writeStdin"` is input sent to a command that is ALREADY
+    // running, not a new command — the same `command` would otherwise read as
+    // a second run of it. Said in the reason the dialog shows.
+    const stdinWrite = params.kind === "writeStdin";
+    const reason = optionalString(params.reason) ?? (stdinWrite ? STDIN_WRITE_REASON : null);
     return {
       threadId,
       turnId,
@@ -136,6 +143,7 @@ function decode(request: JsonRpcServerRequest, items: TurnItemIndex | undefined)
           ...(reason === null ? {} : { reason }),
           ...(Array.isArray(params.commandActions) ? { commandActions: params.commandActions } : {}),
           ...(availableDecisions === undefined ? {} : { availableDecisions }),
+          ...(stdinWrite ? { kind: "writeStdin" } : {}),
         },
         metadata: EXEC_METADATA,
         mode: "build",
