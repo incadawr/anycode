@@ -806,6 +806,7 @@ export function createSubagentRunner(
         let turnEndCount = 0;
         let loopReason: SubagentOutcome["status"] | undefined;
         let loopTurns: number | undefined;
+        let ceilingDone = false;
         // TASK.193 slice S5: the redacted reason the child died on, if it died on
         // the provider. Set from the loop's {type:"error"} event (case below) or,
         // failing that, from the bare catch — never from the raw thrown value.
@@ -928,6 +929,7 @@ export function createSubagentRunner(
                 // than widening the public SubagentOutcome status contract.
                 loopReason = event.reason === "workspace_transition" ? "error" : event.reason;
                 loopTurns = event.turns;
+                ceilingDone = event.declaredDoneAtCeiling === true;
                 break;
               case "error":
                 // TASK.193 (inline-tier mirror of TASK.190's finding): this event was
@@ -1033,6 +1035,7 @@ export function createSubagentRunner(
           durationMs: Date.now() - startedAt,
           ...(usage !== undefined ? { usage } : {}),
           ...(finalTurnFinishReason !== undefined ? { finalTurnFinishReason } : {}),
+          ...(ceilingDone ? { declaredDoneAtCeiling: true } : {}),
         };
 
         onProgress?.({

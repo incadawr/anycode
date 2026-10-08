@@ -2873,6 +2873,25 @@ describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (TASK.102 
     expect(terminal).toMatchObject({ activitySuppressed: 7 });
   });
 
+  it("ChildTerminal.declaredDoneAtCeiling:true is relayed into the terminal ChildRunEvent; absent stays absent (TASK 4149)", () => {
+    for (const [id, overrides, expected] of [
+      ["relay-done-ceiling", { status: "max_turns", declaredDoneAtCeiling: true }, true],
+      ["relay-no-done-ceiling", { status: "max_turns" }, false],
+    ] as const) {
+      const { fork, hosts } = shutdownableForkRig();
+      const { window } = windowRig();
+      const manager = childManager(fork, window);
+      const root = manager.createTab({ workspace: "/ws", sessionId: `root-${id}`, resume: false });
+      expect(root.ok).toBe(true);
+      const rootHost = hosts[0]!;
+      rootHost.emit("message", spawnRequest({ requestId: id }));
+      hosts[1]!.emit("message", childTerminalMsg(overrides));
+      const terminal = childRunEvents(rootHost).find((e) => e.requestId === id && e.kind === "terminal");
+      expect(terminal).toBeDefined();
+      expect(terminal && "declaredDoneAtCeiling" in terminal).toBe(expected);
+    }
+  });
+
   it("a ChildTerminal WITHOUT activitySuppressed relays a terminal event carrying NO such key (presence-encoded, not a stray 0/undefined)", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();

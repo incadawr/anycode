@@ -157,6 +157,13 @@ describe("mapChildRunStatusToNotification (spec §4bis: 4-way -> 3-way)", () => 
     expect(mapChildRunStatusToNotification("max_turns")).toBe("failed");
   });
 
+  it("max_turns with declaredDoneAtCeiling -> completed (TASK 4149); the flag never rescues error/cancelled", () => {
+    expect(mapChildRunStatusToNotification("max_turns", true)).toBe("completed");
+    expect(mapChildRunStatusToNotification("max_turns", false)).toBe("failed");
+    expect(mapChildRunStatusToNotification("error", true)).toBe("failed");
+    expect(mapChildRunStatusToNotification("cancelled", true)).toBe("cancelled");
+  });
+
   it("error -> failed", () => {
     expect(mapChildRunStatusToNotification("error")).toBe("failed");
   });

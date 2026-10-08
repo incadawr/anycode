@@ -1991,6 +1991,8 @@ export class TabHostManager {
       activitySuppressed?: number;
       /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
       finalTurnFinishReason?: "length";
+      /** Additive (TASK 4149); present only when true. */
+      declaredDoneAtCeiling?: boolean;
     },
   ): void {
     const entry = this.childRuns.get(requestId);
@@ -2190,6 +2192,8 @@ export class TabHostManager {
       // §10.8.2 п.3 wording ratifies verbatim for a cancelled run.
       ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed } : {}),
       ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason } : {}),
+      // A cancel-race overrides status, so the "done at ceiling" claim no longer applies.
+      ...(msg.declaredDoneAtCeiling === true && !cancelling ? { declaredDoneAtCeiling: true } : {}),
     });
   }
 
