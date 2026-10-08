@@ -57,6 +57,18 @@ export interface ChildTaskNotificationInput {
   status: ChildTaskNotificationStatus;
   /** Short digest of what the child did/found — NEVER the raw transcript (file header). Truncated here if oversized. */
   summary: string;
+  /**
+   * Where the caller saved the whole `summary` when it exceeds the cap
+   * (`childNotificationSummaryOverflows`). Named in the truncation marker so
+   * the parent reads the rest itself instead of asking the child to repeat
+   * it — a planner's 20k plan used to cost the supervisor a whole extra round.
+   */
+  fullReportPath?: string;
+}
+
+/** True when `summary` would be cut by `formatChildTaskNotification` — the caller's cue to save the whole text first. */
+export function childNotificationSummaryOverflows(summary: string): boolean {
+  return Array.from(summary).length > CHILD_NOTIFICATION_SUMMARY_MAX_CHARS;
 }
 
 /**
@@ -77,12 +89,16 @@ function escapeXmlText(value: string): string {
  * Newlines are preserved (unlike subagents/summarize-tool.ts's activity-line
  * cap): a background-task digest is prose, not a one-line label.
  */
-function capSummary(text: string, maxChars: number): string {
+function capSummary(text: string, maxChars: number, fullReportPath?: string): string {
   const codePoints = Array.from(text);
   if (codePoints.length <= maxChars) {
     return text;
   }
-  return `${codePoints.slice(0, maxChars).join("")}\n…[truncated]`;
+  const marker =
+    fullReportPath === undefined
+      ? "…[truncated]"
+      : `…[truncated — the full report (${codePoints.length} characters) is in ${fullReportPath}]`;
+  return `${codePoints.slice(0, maxChars).join("")}\n${marker}`;
 }
 
 /**
@@ -116,7 +132,7 @@ export function mapChildRunStatusToNotification(
  * local_workflow/remote_agent) out of scope for this system.
  */
 export function formatChildTaskNotification(input: ChildTaskNotificationInput): string {
-  const summary = capSummary(input.summary, CHILD_NOTIFICATION_SUMMARY_MAX_CHARS);
+  const summary = capSummary(input.summary, CHILD_NOTIFICATION_SUMMARY_MAX_CHARS, input.fullReportPath);
   const body = [
     "<task-notification>",
     `  <task-id>${escapeXmlText(input.taskId)}</task-id>`,

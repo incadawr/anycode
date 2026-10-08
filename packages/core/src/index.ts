@@ -67,6 +67,7 @@ export { withBackgroundTaskNotices } from "./cli/background-notice.js";
 // own tests pin.
 export {
   formatChildTaskNotification,
+  childNotificationSummaryOverflows,
   formatChildReportCapNotice,
   formatChildStallNotice,
   mapChildRunStatusToNotification,
