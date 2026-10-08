@@ -89,6 +89,7 @@ import type {
 import type { WireEnvStatus, WireRepoMapStatus } from "../../../shared/protocol.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { applyThemePreference } from "../theme.js";
+import { dismissUpdateBanner, isUpdateBannerDismissed, readDismissedUpdateBanner } from "../update-dismissal.js";
 import { tabRegistry } from "../tab-registry.js";
 import { useTabsStore } from "../tabs-store.js";
 import { CodexEnginePane } from "./CodexEnginePane.js";
@@ -106,7 +107,7 @@ import { SubagentsPane } from "./SubagentsPane.js";
 import { ProfilePane } from "./ProfilePane.js";
 import { VisionPane } from "./VisionPane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
-import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Person, Plus, Robot, Search, ServerStack, Sliders, Terminal } from "./icons.js";
+import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Person, Plus, Robot, Search, ServerStack, Sliders, Terminal, X } from "./icons.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { readTurnNotifyEnabled, TURN_NOTIFY_KEY } from "../notifications.js";
@@ -1771,9 +1772,16 @@ export interface SettingsDialogProps {
  * manual-only `available`, "Open GitHub Releases"), so the update is
  * actionable without ever needing to open Settings. Consent-first
  * throughout: install/download only fire on an explicit click here.
+ *
+ * The banner is also dismissable (close button): a notice pinned to the top
+ * edge for the life of a release is intrusive, and the manual-only darwin
+ * path has no in-app action that would ever clear it. Dismissal is keyed by
+ * the message rather than a hidden flag (update-dismissal.ts), so a newer
+ * version — or this one reaching `downloaded` — raises the banner again.
  */
 function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: SettingsStoreApi }) {
-  if (!shouldShowUpdateBanner(status)) {
+  const [dismissed, setDismissed] = useState<string | null>(() => readDismissedUpdateBanner());
+  if (!shouldShowUpdateBanner(status) || isUpdateBannerDismissed(status, dismissed)) {
     return null;
   }
   return (
@@ -1789,6 +1797,15 @@ function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: Se
           Open GitHub Releases
         </button>
       )}
+      <button
+        type="button"
+        className="update-banner-dismiss"
+        aria-label="Dismiss update notice"
+        title="Dismiss"
+        onClick={() => setDismissed(dismissUpdateBanner(status))}
+      >
+        <X />
+      </button>
     </div>
   );
 }
