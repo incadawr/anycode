@@ -340,6 +340,20 @@ export const MAX_CONCURRENT_SUBAGENTS = 2;
 export const SUBAGENT_OUTPUT_MAX_BYTES = 100_000;
 
 /**
+ * Default and hard cap on a subagent child's maxOutputTokens. A resolved
+ * ceiling above this is clamped down; an undefined resolution (model declares
+ * no ceiling) falls back to this. Sized to SUBAGENT_OUTPUT_MAX_BYTES: the
+ * 100 KB final-text limit holds roughly 25k English / 45k Cyrillic tokens,
+ * so 32k output tokens is a bounded budget in the same order as that cap.
+ */
+export const SUBAGENT_MAX_OUTPUT_TOKENS = 32_768;
+
+/** Clamps a resolved child output ceiling to SUBAGENT_MAX_OUTPUT_TOKENS; undefined falls back to it. */
+export function clampSubagentMaxOutputTokens(resolved: number | undefined): number {
+  return Math.min(resolved ?? SUBAGENT_MAX_OUTPUT_TOKENS, SUBAGENT_MAX_OUTPUT_TOKENS);
+}
+
+/**
  * Per-run cap on subagent tool-activity events emitted into the parent stream
  * (slice P7.18/F16b). The activity feed is a bounded live view — once a child
  * loop emits this many tool-activity one-liners the runner stops emitting them;

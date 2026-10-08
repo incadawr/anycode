@@ -243,6 +243,7 @@ import {
   resolveImageInput,
   resolveIncludeUsage,
   resolveMaxOutputTokens,
+  clampSubagentMaxOutputTokens,
   resolveReasoningEffort,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
   REPO_MAP_MAX_TOKENS,
@@ -2160,7 +2161,11 @@ async function boot(): Promise<void> {
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
     const bootContextWindow = resolveContextWindow(envConfig.model, catalogEntry, envConfig.contextWindowTokens);
-    const bootMaxOutputTokens = resolveMaxOutputTokens(
+    // Taskana 4150: a detached child is a subagent too; the 100 KB finalText cap
+    // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
+    const clampChildOutput = (resolved: number | undefined): number | undefined =>
+      isChildSessionBoot(args, sessionMeta) ? clampSubagentMaxOutputTokens(resolved) : resolved;
+    const bootMaxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
       envConfig.model,
       catalogEntry,
       envConfig.maxOutputTokens,
@@ -2168,7 +2173,7 @@ async function boot(): Promise<void> {
         console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
       (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
-    );
+    ));
     const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry);
     // TASK.162 (F6): the same catalog + env overrides the three boot
@@ -2986,7 +2991,7 @@ async function boot(): Promise<void> {
         // back to the DEFAULT window (never a stale previous model's window).
         const contextWindow =
           resolveContextWindow(id, catalogEntry, envConfig.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-        config.maxOutputTokens = resolveMaxOutputTokens(
+        config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
           id,
           catalogEntry,
           envConfig.maxOutputTokens,
@@ -2994,7 +2999,7 @@ async function boot(): Promise<void> {
             console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
           (modelId, applied) =>
             console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
-        );
+        ));
         const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier);
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
