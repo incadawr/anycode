@@ -2422,6 +2422,238 @@ describe("wrap-up degrades without ever worsening the outcome (TASK.74 §7 F4, D
   });
 });
 
+describe("wrap-up usage reporting (TASK.4157 — TASK.160 gap closed)", () => {
+  /** start + one text_delta + finish carrying the supplied usage. */
+  function usageStep(text: string, usage: TokenUsage): ModelStreamEvent[] {
+    return [
+      { type: "start" },
+      { type: "text_delta", id: "t", text },
+      { type: "finish", finishReason: "stop", usage },
+    ];
+  }
+
+  /** Ordinary/ceiling finishes carry EMPTY usage: they still map to t:usage
+   *  records (telemetryRecordFor has no empty check) but with every token
+   *  field undefined — those must not obscure the assertions below. */
+  const billedUsageRecords = (recs: TelemetryRecord[]): TelemetryRecord[] =>
+    recs.filter(
+      (r) =>
+        r.t === "usage" &&
+        (r.inputTokens !== undefined ||
+          r.outputTokens !== undefined ||
+          r.totalTokens !== undefined ||
+          r.cachedInputTokens !== undefined),
+    );
+
+  /** Ordinary (non-wrap-up, non-ceiling) child turns answer with a TodoRead tool step. */
+  it("(a) the wrap-up report's usage reaches the parent's subagentEventTap as one t:usage record and joins the outcome", async () => {
+    const { port, records } = makeRecordingPort();
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        return usageStep("REPORT: done looking", { inputTokens: 11, outputTokens: 7, totalTokens: 18 });
+      }
+      if (isCeilingRequest(req)) {
+        return usageStep("done", {});
+      }
+      return toolStep("c1", "TodoRead", {}, "turn-1");
+    });
+    const parent = makeParent({
+      modelPort: model,
+      mode: "yolo",
+      subagentEventTap: (spawn) => buildSubagentTelemetryTap(port, "parent-session", spawn),
+    });
+    const runner = createSubagentRunner(parent);
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("REPORT: done looking");
+    // Ordinary/ceiling finishes carry empty usage -> their t:usage records
+    // hold no billed field; the wrap-up's finish is the only BILLED one.
+    const usageRecords = billedUsageRecords(records);
+    expect(usageRecords).toHaveLength(1);
+    expect(usageRecords[0]).toMatchObject({
+      session: "parent-session",
+      sub: { agentType: "general-purpose" },
+      inputTokens: 11,
+      outputTokens: 7,
+      totalTokens: 18,
+    });
+    expect(outcome.usage).toEqual({ inputTokens: 11, outputTokens: 7, totalTokens: 18 });
+  });
+
+  it("(b) wrap-up usage merges into the run total from the ordinary turns", async () => {
+    let step = 0;
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        return usageStep("REPORT: done looking", { inputTokens: 11, outputTokens: 7, totalTokens: 18 });
+      }
+      if (isCeilingRequest(req)) {
+        return usageStep("done", {});
+      }
+      step += 1;
+      const events = toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+      // Replace the empty finish usage with the turn's spend.
+      const finish = events[events.length - 1]!;
+      if (finish.type === "finish") {
+        finish.usage = { inputTokens: 100, outputTokens: 50, totalTokens: 150 };
+      }
+      return events;
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.usage).toEqual({ inputTokens: 211, outputTokens: 107, totalTokens: 318 });
+  });
+
+  it("(c) a stream_retry discards the aborted wrap-up attempt's usage; only the winning finish is billed", async () => {
+    const { port, records } = makeRecordingPort();
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        return [
+          { type: "start" },
+          { type: "text_delta", id: "t", text: "half a sentence that never" },
+          { type: "finish", finishReason: "stop", usage: { inputTokens: 5 } },
+          { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 0, reason: "stall" },
+          ...usageStep("REPORT: the retried findings", { inputTokens: 11, outputTokens: 4, totalTokens: 15 }),
+        ];
+      }
+      if (isCeilingRequest(req)) {
+        return usageStep("done", {});
+      }
+      return toolStep("c1", "TodoRead", {}, "turn-1");
+    });
+    const parent = makeParent({
+      modelPort: model,
+      mode: "yolo",
+      subagentEventTap: (spawn) => buildSubagentTelemetryTap(port, "parent-session", spawn),
+    });
+    const runner = createSubagentRunner(parent);
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    // The tap still SAW both finishes (observer of the stream, not the
+    // accounting) — but the run total bills only the winning attempt.
+    const usageRecords = billedUsageRecords(records);
+    expect(usageRecords).toHaveLength(2);
+    expect(usageRecords[0]).toMatchObject({ inputTokens: 5 });
+    expect(usageRecords[1]).toMatchObject({ inputTokens: 11, outputTokens: 4, totalTokens: 15 });
+    expect(outcome.finalText).toBe("REPORT: the retried findings");
+    expect(outcome.usage).toEqual({ inputTokens: 11, outputTokens: 4, totalTokens: 15 });
+  });
+
+  it("(d) a throwing subagentEventTap observer cannot break the rescue or the usage merge", async () => {
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        return usageStep("REPORT: done looking", { inputTokens: 11, outputTokens: 7, totalTokens: 18 });
+      }
+      if (isCeilingRequest(req)) {
+        return usageStep("done", {});
+      }
+      return toolStep("c1", "TodoRead", {}, "turn-1");
+    });
+    const throwingPort: TelemetryPort = {
+      record: () => {
+        throw new Error("tap boom");
+      },
+      status: () => ({ filePath: "/tmp/x.jsonl", written: 0, dropped: 0 }),
+      flush: async () => {},
+      dispose: async () => {},
+    };
+    const parent = makeParent({
+      modelPort: model,
+      mode: "yolo",
+      subagentEventTap: (spawn) => buildSubagentTelemetryTap(throwingPort, "parent-session", spawn),
+    });
+    const runner = createSubagentRunner(parent);
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("REPORT: done looking");
+    expect(outcome.usage).toEqual({ inputTokens: 11, outputTokens: 7, totalTokens: 18 });
+  });
+
+  it("(e) a caller abort during the wrap-up resolves without throwing, keeps the raw partial and invents no usage", async () => {
+    const controller = new AbortController();
+    const events = usageStep("REPORT: never delivered", { inputTokens: 11, outputTokens: 7, totalTokens: 18 });
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        // Abort the caller mid-wrap-up-stream: the ScriptedModelPort's
+        // generator throws AbortError on the next pull once aborted.
+        controller.abort();
+        return events;
+      }
+      if (isCeilingRequest(req)) {
+        return usageStep("done", {});
+      }
+      return toolStep("c1", "TodoRead", {}, "turn-1");
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, { signal: controller.signal });
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("turn-1");
+    // No finish was ever delivered -> no invented total.
+    expect("usage" in outcome).toBe(false);
+  });
+
+  it("(f) a finish followed by a throw resolves to the fallback while keeping the already-reported usage billed", async () => {
+    const { port, records } = makeRecordingPort();
+    // A custom port (ScriptedModelPort's script must return a plain array):
+    // the wrap-up stream delivers start/delta/finish and THEN rejects.
+    let step = 0;
+    const model: ModelPort = {
+      streamText(req: ModelRequest): AsyncIterable<ModelStreamEvent> {
+        if (isWrapUpRequest(req)) {
+          return (async function* () {
+            yield { type: "start" } as ModelStreamEvent;
+            yield { type: "text_delta", id: "t", text: "partial" } as ModelStreamEvent;
+            yield {
+              type: "finish",
+              finishReason: "stop",
+              usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+            } as ModelStreamEvent;
+            throw new Error("post-finish boom");
+          })();
+        }
+        if (isCeilingRequest(req)) {
+          return (async function* () {
+            for (const event of usageStep("done", {})) {
+              yield event;
+            }
+          })();
+        }
+        step += 1;
+        const events = toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+        return (async function* () {
+          for (const event of events) {
+            yield event;
+          }
+        })();
+      },
+    };
+    const parent = makeParent({
+      modelPort: model,
+      mode: "yolo",
+      subagentEventTap: (spawn) => buildSubagentTelemetryTap(port, "parent-session", spawn),
+    });
+    const runner = createSubagentRunner(parent);
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe("turn-2");
+    const usageRecords = billedUsageRecords(records);
+    expect(usageRecords).toHaveLength(1);
+    expect(usageRecords[0]).toMatchObject({ inputTokens: 3, outputTokens: 2, totalTokens: 5 });
+    expect(outcome.usage).toEqual({ inputTokens: 3, outputTokens: 2, totalTokens: 5 });
+  });
+});
+
 describe("wrap-up window gate (TASK.74 §4.3, DoD-6)", () => {
   /** Runs a 2-turn child whose second step advances the clock by `elapsedMs`. */
   async function runWithElapsed(elapsedMs: number): Promise<{
