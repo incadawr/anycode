@@ -34,6 +34,7 @@ import {
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SUBAGENT_LOOP_DEADLINE_MS,
   SUBAGENT_OUTCOME_DEADLINE_MS,
+  clampSubagentMaxOutputTokens,
   SUBAGENT_OUTPUT_MAX_BYTES,
   SUBAGENT_STALL_TIMEOUT_MS,
   SUBAGENT_WRAPUP_MIN_WINDOW_MS,
@@ -85,7 +86,10 @@ const INLINE_STALL_POLL_INTERVAL_MS = 2_000;
  * it: the runner must keep zero catalog/provider dependencies, and the shape
  * is the whole contract. `maxOutputTokens: undefined` is a legal resolution
  * (claude-* models declare no ceiling), so the field's absence is an answer,
- * not a gap.
+ * not a gap. Downstream of this contract, buildChildConfig clamps whatever it
+ * resolves (child settings or inherited parent value) to
+ * SUBAGENT_MAX_OUTPUT_TOKENS, and an undefined resolution falls back to that
+ * same constant — an absent ceiling never reaches the child as undefined.
  */
 export interface ResolvedChildModelSettings {
   maxOutputTokens?: number;
@@ -282,11 +286,15 @@ export function buildChildConfig(
       env: extras?.env,
       memorySection: extras?.memorySection,
     }),
-    // TASK.162 (F6): with settings resolved for the child's OWN model, all
-    // three capability rows come from there wholesale; without them the child
-    // inherits the parent's already-resolved values, exactly as before.
-    maxOutputTokens:
+    // TASK.162 (F6): with settings resolved for the child's OWN model, the
+    // capability rows come from there wholesale; without them the child
+    // inherits the parent's already-resolved values. On top of either path
+    // the resolved ceiling is clamped to SUBAGENT_MAX_OUTPUT_TOKENS and an
+    // undefined resolution (model declares no ceiling) defaults to it —
+    // the parent object is never mutated.
+    maxOutputTokens: clampSubagentMaxOutputTokens(
       extras?.modelSettings !== undefined ? extras.modelSettings.maxOutputTokens : parent.maxOutputTokens,
+    ),
     reasoningEffort:
       extras?.modelSettings !== undefined ? extras.modelSettings.reasoningEffort : parent.reasoningEffort,
     // NEW empty history WITHOUT a sink: children are ephemeral, never written to
