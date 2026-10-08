@@ -512,7 +512,8 @@ export type HostToUiMessage =
   | { type: "agent_message"; delivery: AgentDelivery }
   | { type: "session_history"; sessionId: string; items: WireHistoryItem[]; truncated: boolean }
   | { type: "worktree_notice"; message: string }
-  | { type: "turn_started"; requestId: string; turnId: string }
+  /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */
+  | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
   | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" }
   /**
    * TASK.117 additive envelope step: the inner request ordinal within the
