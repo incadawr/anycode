@@ -645,6 +645,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 childSessionId: event.childSessionId,
                 parentSessionId: options.parentSessionId,
                 spawnToolCallId: req.spawnToolCallId,
+                ...(event.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: event.finalTurnFinishReason } : {}),
               };
               // TASK.145 срез 1: this run's `run()` promise already settled
               // at admit (above) — this terminal can no longer resolve it.
@@ -687,6 +688,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 turns: event.turns,
                 durationMs: event.durationMs,
                 ...(event.activitySuppressed !== undefined ? { activitySuppressed: event.activitySuppressed } : {}),
+                ...(event.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: event.finalTurnFinishReason } : {}),
               };
               opts.onProgress?.(progress);
               finish(outcome);

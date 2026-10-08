@@ -30,7 +30,7 @@ import { createAutomationFacade, type AnycodeBridge } from "./automation.js";
 // W5 test 9): NOT a component render — ToolCallCard.tsx itself is untouched
 // by this slice. Same "pure function exported from a .tsx, imported by a
 // .test.ts" precedent as ToolCallCard.test.ts's own import below it.
-import { activityRows, workflowStepKind } from "./components/ToolCallCard.js";
+import { activityRows, childActionBadge, workflowStepKind } from "./components/ToolCallCard.js";
 import { createTabRegistry } from "./tab-registry.js";
 import { createTabsStore } from "./tabs-store.js";
 import type {
@@ -2166,6 +2166,130 @@ describe("desktop store — subagent_end.responseModel forwarding (TASK.161 slic
 
     const block = findByToolCallId(store, "call-1");
     expect(block).toMatchObject({ subagent: { final: { status: "completed", durationMs: 100, responseModel: "glm-5.3" } } });
+  });
+
+  it("subagent_end with finalTurnFinishReason \"length\" sets final.finalTurnFinishReason", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-len");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-len", agentType: "explore", description: "d" },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_end",
+        toolCallId: "call-len",
+        status: "completed",
+        turns: 1,
+        durationMs: 100,
+        finalTurnFinishReason: "length",
+      },
+    });
+
+    const block = findByToolCallId(store, "call-len");
+    expect(block).toMatchObject({ subagent: { final: { status: "completed", durationMs: 100, finalTurnFinishReason: "length" } } });
+  });
+
+  it("child_report with childTerminal.finalTurnFinishReason patches the matching Agent block (synthesizing the card when subagent was null, sessionChild set); without childTerminal the block is untouched", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "spawn-9");
+    // A detached child: NO subagent_start — the block's subagent stays null.
+
+    store.getState().applyHostMessage({
+      type: "child_report",
+      id: "spawn-9",
+      text: "report text",
+      childTerminal: { status: "completed", durationMs: 1234, finalTurnFinishReason: "length" },
+    });
+
+    const block = findByToolCallId(store, "spawn-9");
+    expect(block).toBeDefined();
+    if (block === undefined || block.kind !== "tool_call") {
+      throw new Error("block missing");
+    }
+    expect(block.subagent).not.toBeNull();
+    expect(block.subagent?.final).toEqual({ status: "completed", durationMs: 1234, finalTurnFinishReason: "length" });
+    expect(block.subagent?.agentType).toBe("general-purpose");
+    // sessionChild lives ON the card (SubagentSubStatus), not the block —
+    // that's what childActionBadge reads (ToolCallCard.tsx ~1040).
+    expect(block.subagent?.sessionChild).toBe(true);
+    expect("sessionChild" in block).toBe(false);
+    // Real childActionBadge with NO relation (restart/Open gate) must observe
+    // the truncation as error, not lose the badge to undefined.
+    expect(childActionBadge(block.subagent, undefined)).toBe("error");
+
+    // Without childTerminal the block is untouched.
+    const { scheduler: scheduler2 } = createManualScheduler();
+    const store2 = createDesktopStore(scheduler2);
+    beginAgentToolCall(store2, turnId, "spawn-10");
+    store2.getState().applyHostMessage({ type: "child_report", id: "spawn-10", text: "plain report" });
+    const block2 = findByToolCallId(store2, "spawn-10");
+    if (block2 === undefined || block2.kind !== "tool_call") {
+      throw new Error("block2 missing");
+    }
+    expect(block2.subagent).toBeNull();
+  });
+
+  it("a length child_report CORRECTS an already-settled subagent.final (authoritative) and is idempotent", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "spawn-settled");
+    // The admit turn settled the card as a plain completed run (a live
+    // subagent_start/end pair — e.g. an ATTACHED session-tier child whose
+    // wire settle arrived without the length fact).
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "spawn-settled", agentType: "explore", description: "d" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "spawn-settled", status: "completed", turns: 2, durationMs: 500 },
+    });
+    const settled = findByToolCallId(store, "spawn-settled");
+    if (settled === undefined || settled.kind !== "tool_call") {
+      throw new Error("settled block missing");
+    }
+    expect(settled.subagent?.final).toEqual({ status: "completed", durationMs: 500 });
+
+    // The detached child's terminal report arrives WITH the length fact —
+    // it must overwrite the settled final, not be skipped.
+    store.getState().applyHostMessage({
+      type: "child_report",
+      id: "spawn-settled",
+      text: "late truncated report",
+      childTerminal: { status: "completed", durationMs: 900, finalTurnFinishReason: "length" },
+    });
+    const corrected = findByToolCallId(store, "spawn-settled");
+    if (corrected === undefined || corrected.kind !== "tool_call") {
+      throw new Error("corrected block missing");
+    }
+    expect(corrected.subagent?.final).toEqual({ status: "completed", durationMs: 900, finalTurnFinishReason: "length" });
+    expect(corrected.subagent?.sessionChild).toBe(true);
+    expect(childActionBadge(corrected.subagent, undefined)).toBe("error");
+
+    // Idempotent: re-delivering the same report changes nothing.
+    store.getState().applyHostMessage({
+      type: "child_report",
+      id: "spawn-settled",
+      text: "late truncated report",
+      childTerminal: { status: "completed", durationMs: 900, finalTurnFinishReason: "length" },
+    });
+    const again = findByToolCallId(store, "spawn-settled");
+    if (again === undefined || again.kind !== "tool_call") {
+      throw new Error("again block missing");
+    }
+    expect(again.subagent?.final).toEqual({ status: "completed", durationMs: 900, finalTurnFinishReason: "length" });
   });
 });
 

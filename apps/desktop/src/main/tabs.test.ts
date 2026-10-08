@@ -2891,6 +2891,34 @@ describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (TASK.102 
     expect(terminal).toBeDefined();
     expect(terminal && "activitySuppressed" in terminal).toBe(false);
   });
+
+  it("ChildTerminal.finalTurnFinishReason is copied VERBATIM into the terminal ChildRunEvent; absent => key absent", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-length", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "relay-length" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childTerminalMsg({ finalTurnFinishReason: "length" }));
+
+    const terminal = childRunEvents(rootHost).find(
+      (e) => e.requestId === "relay-length" && e.kind === "terminal",
+    );
+    expect(terminal).toMatchObject({ finalTurnFinishReason: "length" });
+
+    // Absence case — same rig, a second run:
+    rootHost.emit("message", spawnRequest({ requestId: "relay-no-length" }));
+    const childHost2 = hosts[2]!;
+    childHost2.emit("message", childTerminalMsg());
+    const terminal2 = childRunEvents(rootHost).find(
+      (e) => e.requestId === "relay-no-length" && e.kind === "terminal",
+    );
+    expect(terminal2).toBeDefined();
+    expect(terminal2 && "finalTurnFinishReason" in terminal2).toBe(false);
+  });
 });
 
 describe("TabHostManager — children are invisible outside the manager (TASK.102 CUT-S2 §2.6.4)", () => {

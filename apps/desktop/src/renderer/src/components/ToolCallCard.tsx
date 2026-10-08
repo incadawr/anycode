@@ -155,7 +155,9 @@ export function formatSubagentCounters(subagent: SubagentSubStatus): string {
     const turnSegment = subagent.engine === "codex" ? "" : `turn ${subagent.turns} · `;
     return `${prefix}${turnSegment}${toolCalls}${lastTool}`;
   }
-  const label = SUBAGENT_FINAL_LABELS[subagent.final.status];
+  const label = subagent.final.finalTurnFinishReason === "length"
+    ? "Truncated (output limit)"
+    : SUBAGENT_FINAL_LABELS[subagent.final.status];
   // A negative duration = a detached child that ended before this renderer saw
   // its last turn (App.tsx resolveChildRowCard): the outcome is known, the time is not.
   const duration = subagent.final.durationMs < 0 ? "" : ` · ${formatCardDuration(subagent.final.durationMs)}`;
@@ -221,11 +223,21 @@ export type SubStatusKind =
   | "skipped"
   | "failed";
 
-/** null → "running"; otherwise the wire status verbatim. Drives both the glyph
- *  and the `substatus-*` class. Accepts any of the three vocabularies' `final`
- *  (all subsets of the union above). */
-export function substatusKind(final: { status: Exclude<SubStatusKind, "running"> } | null): SubStatusKind {
-  return final === null ? "running" : final.status;
+/** null → "running"; otherwise the wire status verbatim — EXCEPT a subagent
+ * final whose turn was cut by the model's output-token ceiling
+ * (`finalTurnFinishReason: "length"`), which must never render as
+ * completed/success anywhere on the card: the glyph and `substatus-*` class
+ * collapse to "error" (the counters line relabels to "Truncated (output
+ * limit)"). Accepts any of the three vocabularies' `final` (all subsets of
+ * the union above); the length field exists only on the subagent vocabulary,
+ * so workflow semantics are untouched. */
+export function substatusKind(
+  final: { status: Exclude<SubStatusKind, "running">; finalTurnFinishReason?: "length" } | null,
+): SubStatusKind {
+  if (final === null) {
+    return "running";
+  }
+  return final.finalTurnFinishReason === "length" ? "error" : final.status;
 }
 
 /**

@@ -310,6 +310,35 @@ describe("projectSubagentCard", () => {
       responseModel: "glm-5.3",
     });
   });
+
+  it("finalTurnFinishReason \"length\" round-trips decode+projection; garbage values decode as absent; legacy snapshots project unchanged", () => {
+    const withLength: SubagentCardSnapshotV1 = {
+      ...VALID_SNAPSHOT,
+      final: { ...VALID_SNAPSHOT.final, finalTurnFinishReason: "length" },
+    };
+    const decoded = decodeSubagentCardSnapshot(withLength, CTX);
+    expect(decoded?.final?.finalTurnFinishReason).toBe("length");
+    expect(projectSubagentCard(decoded ?? withLength).final?.finalTurnFinishReason).toBe("length");
+
+    // Garbage values (fail-soft, never reject):
+    const garbageString = decodeSubagentCardSnapshot(
+      { ...VALID_SNAPSHOT, final: { ...VALID_SNAPSHOT.final, finalTurnFinishReason: "stop" } },
+      CTX,
+    );
+    expect(garbageString).not.toBeNull();
+    expect(garbageString && "finalTurnFinishReason" in garbageString.final!).toBe(false);
+    const garbageNumber = decodeSubagentCardSnapshot(
+      { ...VALID_SNAPSHOT, final: { ...VALID_SNAPSHOT.final, finalTurnFinishReason: 42 } },
+      CTX,
+    );
+    expect(garbageNumber).not.toBeNull();
+    expect(garbageNumber && "finalTurnFinishReason" in garbageNumber.final!).toBe(false);
+
+    // Legacy snapshot without the key projects unchanged:
+    const legacy = projectSubagentCard(VALID_SNAPSHOT);
+    expect(legacy.final).toEqual({ status: "completed", durationMs: 4200 });
+    expect("finalTurnFinishReason" in legacy.final!).toBe(false);
+  });
 });
 
 describe("projectSubagentCard — sessionChild discriminant (TASK.102 CUT-S2 §10.8.1)", () => {

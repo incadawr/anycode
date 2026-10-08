@@ -144,6 +144,8 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
        * dies in main, contradicting `ChildTerminal`'s "S1 parity" promise).
        */
       activitySuppressed?: number;
+      /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
+      finalTurnFinishReason?: "length";
     }
 );
 
@@ -181,6 +183,8 @@ export interface ChildTerminal {
   toolCalls: number;
   durationMs: number;
   activitySuppressed?: number;
+  /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
+  finalTurnFinishReason?: "length";
 }
 
 // ── admission/timing constants (§2.3) ──
@@ -470,6 +474,7 @@ const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   "childSessionId",
   // TASK.102 CUT-S2 §10.7 п.4: additive key, authorized amendment.
   "activitySuppressed",
+  "finalTurnFinishReason",
 ] as const;
 
 export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
@@ -579,6 +584,9 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       if (msg.activitySuppressed !== undefined && !isCounter(msg.activitySuppressed)) {
         return null;
       }
+      if (msg.finalTurnFinishReason !== undefined && msg.finalTurnFinishReason !== "length") {
+        return null;
+      }
       return {
         type: CHILD_RUN_EVENT_TYPE,
         requestId,
@@ -591,6 +599,7 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         durationMs: msg.durationMs,
         childSessionId: msg.childSessionId,
         ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed as number } : {}),
+        ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
       };
     }
     default:
@@ -690,6 +699,7 @@ const CHILD_TERMINAL_KEYS = [
   "toolCalls",
   "durationMs",
   "activitySuppressed",
+  "finalTurnFinishReason",
 ] as const;
 
 export function parseChildTerminal(msg: unknown): ChildTerminal | null {
@@ -714,6 +724,9 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
   if (msg.activitySuppressed !== undefined && !isCounter(msg.activitySuppressed)) {
     return null;
   }
+  if (msg.finalTurnFinishReason !== undefined && msg.finalTurnFinishReason !== "length") {
+    return null;
+  }
   return {
     type: CHILD_TERMINAL_TYPE,
     status: msg.status as ChildRunStatus,
@@ -723,5 +736,6 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
     toolCalls: msg.toolCalls,
     durationMs: msg.durationMs,
     ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed as number } : {}),
+    ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
   };
 }

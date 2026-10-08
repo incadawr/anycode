@@ -228,7 +228,7 @@ export function childBadgeKind(subagent: Pick<SubagentSubStatus, "waiting" | "fi
   if (subagent.final === null) {
     return "running";
   }
-  return subagent.final.status === "error" ? "error" : "done";
+  return subagent.final.status === "error" || subagent.final.finalTurnFinishReason === "length" ? "error" : "done";
 }
 
 // ── breadcrumb VM ──
