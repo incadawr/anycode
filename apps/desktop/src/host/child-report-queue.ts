@@ -47,7 +47,15 @@ export const CHILD_REPORT_QUEUE_MAX_PENDING = 20;
 const CAP_NOTICE_ID = "__child_report_cap_notice__";
 
 export class ChildReportQueue {
-  private readonly pending: Array<{ id: string; text: string }> = [];
+  private readonly pending: Array<{
+    id: string;
+    text: string;
+    childTerminal?: {
+      status: "completed" | "max_turns" | "cancelled" | "error";
+      durationMs: number;
+      finalTurnFinishReason?: "length";
+    };
+  }> = [];
   /** Reports dropped since the current cap-notice entry (if any) was created; reset when that notice is acked. */
   private droppedSinceNotice = 0;
 
@@ -60,7 +68,15 @@ export class ChildReportQueue {
    * once) — the refused report's own content is lost, but its occurrence is
    * never silent (see `upsertCapNotice`).
    */
-  add(id: string, text: string): void {
+  add(
+    id: string,
+    text: string,
+    childTerminal?: {
+      status: "completed" | "max_turns" | "cancelled" | "error";
+      durationMs: number;
+      finalTurnFinishReason?: "length";
+    },
+  ): void {
     if (this.pending.length >= CHILD_REPORT_QUEUE_MAX_PENDING) {
       this.droppedSinceNotice += 1;
       console.error(
@@ -69,8 +85,13 @@ export class ChildReportQueue {
       this.upsertCapNotice();
       return;
     }
-    this.pending.push({ id, text });
-    this.outbound.sendDirect({ type: "child_report", id, text });
+    this.pending.push({ id, text, ...(childTerminal !== undefined ? { childTerminal } : {}) });
+    this.outbound.sendDirect({
+      type: "child_report",
+      id,
+      text,
+      ...(childTerminal !== undefined ? { childTerminal } : {}),
+    });
   }
 
   /**
@@ -123,7 +144,12 @@ export class ChildReportQueue {
   /** Re-posts every still-unacknowledged report — called on every `ui_ready` (Session). */
   resendAll(): void {
     for (const report of this.pending) {
-      this.outbound.sendDirect({ type: "child_report", id: report.id, text: report.text });
+      this.outbound.sendDirect({
+        type: "child_report",
+        id: report.id,
+        text: report.text,
+        ...(report.childTerminal !== undefined ? { childTerminal: report.childTerminal } : {}),
+      });
     }
   }
 

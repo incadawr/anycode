@@ -42,6 +42,8 @@ export interface SubagentCardAccumulator {
     activitySuppressed?: number;
     /** Provider-reported model id, capped at SUBAGENT_CARD_MODEL_MAX_CHARS. The provider's CLAIM, not proof of serving. */
     responseModel?: string;
+    /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
+    finalTurnFinishReason?: "length";
   } | null;
 }
 
@@ -144,6 +146,7 @@ export function reduceSubagentCardEvent(
           ...(ev.responseModel !== undefined
             ? { responseModel: capCodePoints(ev.responseModel, SUBAGENT_CARD_MODEL_MAX_CHARS) }
             : {}),
+          ...(ev.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: ev.finalTurnFinishReason } : {}),
         },
       };
     }
@@ -183,7 +186,7 @@ export function reduceSubagentCardEvent(
  */
 export function finalizeSubagentCard(
   acc: SubagentCardAccumulator,
-  fallback: { status: SubagentCardFinalStatus; durationMs: number },
+  fallback: { status: SubagentCardFinalStatus; durationMs: number; finalTurnFinishReason?: "length" },
   target?: SubagentCardTarget,
 ): SubagentCardSnapshotV1 | null {
   if (!acc.started || acc.identity === null) {
@@ -195,6 +198,9 @@ export function finalizeSubagentCard(
           status: acc.end.status,
           durationMs: acc.end.durationMs,
           ...(acc.end.responseModel !== undefined ? { responseModel: acc.end.responseModel } : {}),
+          ...(acc.end.finalTurnFinishReason !== undefined
+            ? { finalTurnFinishReason: acc.end.finalTurnFinishReason }
+            : {}),
         }
       : fallback;
   return {

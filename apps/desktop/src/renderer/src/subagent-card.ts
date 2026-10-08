@@ -192,10 +192,16 @@ function decodeFinal(raw: unknown): SubagentCardSnapshotV1["final"] | null {
   // as a reason to discard an otherwise-valid terminal record.
   const responseModel =
     typeof raw.responseModel === "string" ? capCodePoints(raw.responseModel, MODEL_MAX_CHARS) : undefined;
+  // finalTurnFinishReason: fail-soft, same discipline as responseModel —
+  // only the narrow wire literal "length" is legal; anything else decodes
+  // as absent rather than rejecting the snapshot.
+  const finalTurnFinishReason =
+    typeof raw.finalTurnFinishReason === "string" && raw.finalTurnFinishReason === "length" ? "length" : undefined;
   return {
     status: raw.status as SubagentCardFinalStatus,
     durationMs: raw.durationMs,
     ...(responseModel !== undefined ? { responseModel } : {}),
+    ...(finalTurnFinishReason !== undefined ? { finalTurnFinishReason } : {}),
   };
 }
 
