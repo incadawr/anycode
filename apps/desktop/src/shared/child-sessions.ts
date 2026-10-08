@@ -146,6 +146,8 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       activitySuppressed?: number;
       /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
       finalTurnFinishReason?: "length";
+      /** Additive (TASK 4149): the child declared its work finished at its turn ceiling; present only when true. */
+      declaredDoneAtCeiling?: boolean;
     }
 );
 
@@ -185,6 +187,8 @@ export interface ChildTerminal {
   activitySuppressed?: number;
   /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
   finalTurnFinishReason?: "length";
+  /** Additive (TASK 4149): present only when true. */
+  declaredDoneAtCeiling?: boolean;
 }
 
 // ── admission/timing constants (§2.3) ──
@@ -475,6 +479,7 @@ const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   // TASK.102 CUT-S2 §10.7 п.4: additive key, authorized amendment.
   "activitySuppressed",
   "finalTurnFinishReason",
+  "declaredDoneAtCeiling",
 ] as const;
 
 export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
@@ -584,7 +589,10 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       if (msg.activitySuppressed !== undefined && !isCounter(msg.activitySuppressed)) {
         return null;
       }
-      if (msg.finalTurnFinishReason !== undefined && msg.finalTurnFinishReason !== "length") {
+      if (
+        (msg.finalTurnFinishReason !== undefined && msg.finalTurnFinishReason !== "length") ||
+        (msg.declaredDoneAtCeiling !== undefined && msg.declaredDoneAtCeiling !== true)
+      ) {
         return null;
       }
       return {
@@ -600,6 +608,7 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         childSessionId: msg.childSessionId,
         ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed as number } : {}),
         ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
+        ...(msg.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true as const } : {}),
       };
     }
     default:
@@ -700,6 +709,7 @@ const CHILD_TERMINAL_KEYS = [
   "durationMs",
   "activitySuppressed",
   "finalTurnFinishReason",
+  "declaredDoneAtCeiling",
 ] as const;
 
 export function parseChildTerminal(msg: unknown): ChildTerminal | null {
@@ -724,7 +734,10 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
   if (msg.activitySuppressed !== undefined && !isCounter(msg.activitySuppressed)) {
     return null;
   }
-  if (msg.finalTurnFinishReason !== undefined && msg.finalTurnFinishReason !== "length") {
+  if (
+    (msg.finalTurnFinishReason !== undefined && msg.finalTurnFinishReason !== "length") ||
+    (msg.declaredDoneAtCeiling !== undefined && msg.declaredDoneAtCeiling !== true)
+  ) {
     return null;
   }
   return {
@@ -737,5 +750,6 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
     durationMs: msg.durationMs,
     ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed as number } : {}),
     ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
+    ...(msg.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true as const } : {}),
   };
 }

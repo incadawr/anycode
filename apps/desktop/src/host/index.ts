@@ -509,7 +509,7 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     toolUseId: outcome.spawnToolCallId,
     agentId: outcome.childSessionId,
     subagentType: req.agentType,
-    status: mapChildRunStatusToNotification(outcome.status),
+    status: mapChildRunStatusToNotification(outcome.status, outcome.declaredDoneAtCeiling === true),
     summary: outcome.finalText,
     ...(fullReportPath !== undefined ? { fullReportPath } : {}),
     ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
@@ -792,6 +792,7 @@ function buildChildSessionOptions(flushHistory: () => Promise<void>): ChildSessi
         durationMs: report.durationMs,
         ...(report.activitySuppressed !== undefined ? { activitySuppressed: report.activitySuppressed } : {}),
         ...(report.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: report.finalTurnFinishReason } : {}),
+        ...(report.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true } : {}),
       } satisfies ChildTerminal);
     },
     onProgress: (report) => {

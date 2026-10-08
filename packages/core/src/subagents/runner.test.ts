@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AgentLoop, type AgentLoopConfig } from "../loop/agent-loop.js";
+import { formatResultForModel, outcomeToResult } from "./agent-bridge.js";
 import { ConversationHistory, type HistorySink } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
@@ -119,6 +120,11 @@ function isWrapUpRequest(req: ModelRequest): boolean {
     last?.role === "user" &&
     last.content === SUBAGENT_WRAPUP_PROMPT
   );
+}
+
+/** A ceiling-verdict decision call: exactly the one verdict tool declared. */
+function isCeilingRequest(req: ModelRequest): boolean {
+  return req.tools.length === 1 && req.tools[0]?.name === "ceiling_verdict";
 }
 
 function isChildRequest(req: ModelRequest): boolean {
@@ -712,6 +718,68 @@ describe("output cap + status mapping", () => {
     // answers every non-wrap-up request with a "TodoRead" tool call, which is
     // not `ceiling_verdict`) + one wrap-up call (TASK.124).
     expect(model.calls).toBe(4);
+  });
+
+  it("a readable done-at-ceiling verdict carries declaredDoneAtCeiling and gives the parent an honest final-answer report", async () => {
+    let step = 0;
+    const model = new ScriptedModelPort((req) => {
+      if (isCeilingRequest(req)) {
+        return [
+          { type: "start" },
+          { type: "tool_call", toolCall: { id: "v1", name: "ceiling_verdict", input: { done: true, remaining: [] } } },
+          { type: "finish", finishReason: "tool_calls", usage: {} },
+        ];
+      }
+      if (isWrapUpRequest(req)) {
+        return textStep("REPORT: everything done");
+      }
+      step += 1;
+      return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.declaredDoneAtCeiling).toBe(true);
+    expect(outcome.finalText).toBe("REPORT: everything done");
+
+    const result = outcomeToResult(outcome, {});
+    expect(result.ok).toBe(false);
+    const modelText = formatResultForModel(result);
+    expect(modelText).toContain("reported the work finished");
+    expect(modelText).toContain("2 turns");
+    expect(modelText).toContain("final answer");
+    expect(modelText).toContain("REPORT: everything done");
+    expect(modelText).not.toContain("INCOMPLETE SUBAGENT RESULT");
+    expect(modelText).not.toContain("ran out of budget");
+  });
+
+  it("an UNREADABLE ceiling verdict keeps declaredDoneAtCeiling undefined and the fail-closed parent wording", async () => {
+    let step = 0;
+    const model = new ScriptedModelPort((req) => {
+      if (isCeilingRequest(req)) {
+        return [
+          { type: "start" },
+          { type: "tool_call", toolCall: { id: "v1", name: "TodoRead", input: {} } }, // not ceiling_verdict => unreadable
+          { type: "finish", finishReason: "tool_calls", usage: {} },
+        ];
+      }
+      if (isWrapUpRequest(req)) {
+        return textStep("REPORT: cut short");
+      }
+      step += 1;
+      return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.declaredDoneAtCeiling).toBeUndefined();
+
+    const result = outcomeToResult(outcome, {});
+    const modelText = formatResultForModel(result);
+    expect(modelText).toContain("ran out of budget");
+    expect(modelText).toContain("INCOMPLETE SUBAGENT RESULT");
   });
 
   it("returns an error outcome for an unknown persona without throwing", async () => {
