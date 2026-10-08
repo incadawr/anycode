@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
-import { CODEX_APPROVAL_ERROR_CODE, CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js";
+import { CODEX_APPROVAL_ERROR_CODE, CodexApprovalBridge, STDIN_WRITE_REASON, type ActiveCodexTurn } from "./approval-bridge.js";
 import type { JsonRpcServerRequest } from "./protocol.js";
 import { TurnItemIndex } from "./turn-item-index.js";
 
@@ -227,5 +227,20 @@ describe("CodexApprovalBridge — tolerant decoding (TASK.38 DoD)", () => {
     bridge.handle(command({ command: undefined, cwd: undefined }), response);
     await flush();
     expect(ask(emitted).input).toMatchObject({ command: "rg TODO", cwd: "/repo" });
+  });
+
+  it("says a 0.161 writeStdin approval is input to the running command, not a new run of it", async () => {
+    const { bridge, emitted } = rig();
+    bridge.handle(command({ kind: "writeStdin" }), responder());
+    await flush();
+    expect(ask(emitted).input).toMatchObject({ command: "git status", kind: "writeStdin", reason: STDIN_WRITE_REASON });
+  });
+
+  it("an ordinary command approval (kind absent or \"command\") gets no stdin label", async () => {
+    const { bridge, emitted } = rig();
+    bridge.handle(command({ kind: "command" }), responder());
+    await flush();
+    expect(ask(emitted).input).not.toHaveProperty("kind");
+    expect(ask(emitted).input).not.toHaveProperty("reason");
   });
 });

@@ -54,6 +54,7 @@
  *   ANYCODE_CODEX_BIN            Optional absolute path to the codex binary
  *                                 (else `which codex` / `where codex` on PATH).
  *   --keep                       Do not delete the temp workspaces/profile on exit (debugging).
+ *   --no-chromium-sandbox        Launch Electron without Chromium's sandbox (a sandboxed launcher).
  *   --port <n>                   Forwarded as ANYCODE_AUTOMATION_PORT to BOTH launches.
  *
  * Each of the 10 frozen steps prints `[step N] PASS/FAIL <detail>`; the
@@ -86,11 +87,13 @@ const ORPHAN_POLL_MS = 250;
 // ── CLI flags ──
 
 function parseArgs(argv) {
-  const flags = { keep: false, port: undefined };
+  const flags = { keep: false, port: undefined, noChromiumSandbox: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--keep") {
       flags.keep = true;
+    } else if (arg === "--no-chromium-sandbox") {
+      flags.noChromiumSandbox = true;
     } else if (arg === "--port") {
       i += 1;
       flags.port = argv[i];
@@ -115,7 +118,7 @@ function skip(message) {
 // src/**/*.ts, same posture as codex-contract-extract.mjs. Raising the
 // ceiling in protocol.ts means raising it here in the same commit.)
 
-const SUPPORTED_CODEX_VERSION = "<0.161.0";
+const SUPPORTED_CODEX_VERSION = "<0.162.0";
 
 function parseCodexVersion(output) {
   const match = /^codex-cli (\d+)\.(\d+)\.(\d+)\s*$/.exec(output);
@@ -562,7 +565,11 @@ async function launchApp(ctx, step, markerTime) {
     env.ANYCODE_AUTOMATION_PORT = String(FLAGS.port);
   }
 
-  const child = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
+  // --no-chromium-sandbox: for a launcher that is itself sandboxed (a coding
+  // agent's shell), where Chromium's own sandbox cannot initialize and the GPU
+  // process dies before the renderer comes up. Same flag as orchestration-lab.
+  const devArgs = ["--filter", "@anycode/desktop", "dev", ...(FLAGS.noChromiumSandbox ? ["--noSandbox"] : [])];
+  const child = spawn("pnpm", devArgs, {
     cwd: repoRoot,
     env,
     stdio: ["ignore", "inherit", "inherit"],
