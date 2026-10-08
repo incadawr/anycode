@@ -1415,6 +1415,15 @@ describe("matchesUntil predicate (§4.3)", () => {
     expect(matchesUntil(base, { gitPendingEmpty: true })).toBe(true);
     expect(matchesUntil(base, { gitPendingEmpty: false })).toBe(false);
   });
+
+  it("turnStatus matrix: idle/running/compacting match exactly, reject unequal", () => {
+    for (const actual of ["idle", "running", "compacting"] as const) {
+      for (const requested of ["idle", "running", "compacting"] as const) {
+        const state = { ...base, turn: { status: actual } };
+        expect(matchesUntil(state, { turnStatus: requested })).toBe(actual === requested);
+      }
+    }
+  });
 });
 
 describe("waitFor poller (§4.3)", () => {
@@ -1475,6 +1484,39 @@ describe("waitFor poller (§4.3)", () => {
     });
     const result = await waitFor(deps, "tab-a", { connection: "ready" }, 10_000_000);
     expect(result.matched).toBe(false);
+  });
+
+  it("polls past running and matches once the turn settles into compacting", async () => {
+    let call = 0;
+    const callFacade = vi.fn(async () => {
+      call += 1;
+      // "running" for the first poll, "compacting" from the second on.
+      const status = call >= 2 ? "compacting" : "running";
+      return {
+        states: {
+          "tab-a": { connection: "ready", turn: { status }, permission: null, transcript: [] },
+        },
+      };
+    });
+    let t = 0;
+    const deps = fakeDeps({
+      callFacade,
+      now: () => t,
+      sleep: async () => {
+        t += 100;
+      },
+      pollMs: 0,
+    });
+
+    const result = await waitFor(deps, "tab-a", { turnStatus: "compacting" }, 60_000);
+    expect(result.matched).toBe(true);
+    expect(call).toBe(2);
+    expect(result.state).toEqual({
+      connection: "ready",
+      turn: { status: "compacting" },
+      permission: null,
+      transcript: [],
+    });
   });
 });
 
