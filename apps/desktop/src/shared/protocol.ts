@@ -822,7 +822,22 @@ export type HostToUiMessage =
   // pending-report queue (child-report-queue.ts) track which reports are
   // still unacknowledged and re-`sendDirect` them on the NEXT `ui_ready`
   // (session.ts) if this attempt never reached a live renderer.
-  | { type: "child_report"; id: string; text: string }
+  | {
+      type: "child_report";
+      id: string;
+      text: string;
+      /**
+       * Structured terminal metadata for the renderer's subagent-card patch
+       * (additive): present only for reports emitted by a host that tracks
+       * the child's final turn's finishReason; absent for stall notices,
+       * cap notices, and reports from older host binaries.
+       */
+      childTerminal?: {
+        status: "completed" | "max_turns" | "cancelled" | "error";
+        durationMs: number;
+        finalTurnFinishReason?: "length";
+      };
+    }
   // TASK.198 срез C (plan §1.3): fires strictly AFTER a live recognizer-config
   // push (main's RecognizerConfigChanged, TASK.198 E1) has been COMMITTED
   // host-side — applied immediately while idle, or deferred to the very next

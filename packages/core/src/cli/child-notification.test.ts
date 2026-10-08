@@ -31,6 +31,25 @@ function input(overrides?: Partial<ChildTaskNotificationInput>): ChildTaskNotifi
 }
 
 describe("formatChildTaskNotification (spec §4bis/§7)", () => {
+  it("finalTurnFinishReason \"length\" + status completed maps to failed with the TRUNCATED CHILD REPORT marker", () => {
+    const text = formatChildTaskNotification(input({ finalTurnFinishReason: "length" }));
+    expect(text).toContain("<status>failed</status>");
+    expect(text).toContain("TRUNCATED CHILD REPORT");
+    expect(text).toContain("cut mid-stream");
+  });
+
+  it("field absent keeps <status>completed</status> with no marker", () => {
+    const text = formatChildTaskNotification(input());
+    expect(text).toContain("<status>completed</status>");
+    expect(text).not.toContain("TRUNCATED CHILD REPORT");
+  });
+
+  it("status failed + field stays failed, marker present", () => {
+    const text = formatChildTaskNotification(input({ status: "failed", finalTurnFinishReason: "length" }));
+    expect(text).toContain("<status>failed</status>");
+    expect(text).toContain("TRUNCATED CHILD REPORT");
+  });
+
   it("starts with the VERBATIM anti-spoofing header, byte-for-byte", () => {
     const text = formatChildTaskNotification(input());
     expect(text.startsWith("[SYSTEM NOTIFICATION - NOT USER INPUT]\n")).toBe(true);

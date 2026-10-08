@@ -175,6 +175,26 @@ describe("formatSubagentCounters — settled (final set)", () => {
       "Error · 8 turns · 1.0s",
     );
   });
+
+  it("finalTurnFinishReason \"length\" relabels to Truncated (output limit); without it, Completed is unchanged", () => {
+    const base: Omit<SubagentSubStatus, "final"> = {
+      agentType: "explore",
+      description: "d",
+      turns: 3,
+      toolCalls: 2,
+      lastTool: null,
+      activity: [],
+      model: null,
+      engine: null,
+      activityDropped: 0,
+    };
+    expect(
+      formatSubagentCounters({ ...base, final: { status: "completed", durationMs: 1000, finalTurnFinishReason: "length" } }),
+    ).toMatch(/^Truncated \(output limit\) · /);
+    expect(formatSubagentCounters({ ...base, final: { status: "completed", durationMs: 1000 } })).toMatch(
+      /^Completed · /,
+    );
+  });
 });
 
 describe("formatSubagentCounters — engine-aware (TASK.97 R5, wave2-cut §1.4)", () => {
@@ -608,6 +628,16 @@ describe("substatusKind", () => {
     expect(substatusKind({ status: "error" })).toBe("error");
     expect(substatusKind({ status: "skipped" })).toBe("skipped");
     expect(substatusKind({ status: "failed" })).toBe("failed");
+  });
+
+  it("a subagent final cut by the output-token ceiling (finalTurnFinishReason \"length\") NEVER yields completed — the glyph/substatus kind collapses to error", () => {
+    // This is the projection SubagentStatus renders (glyph + substatus-* CSS),
+    // not just the counters text: a length-cut report must not read as success.
+    expect(substatusKind({ status: "completed", finalTurnFinishReason: "length" })).toBe("error");
+    expect(substatusKind({ status: "max_turns", finalTurnFinishReason: "length" })).toBe("error");
+    // Without the field, completed stays completed (workflow semantics and
+    // ordinary runs untouched):
+    expect(substatusKind({ status: "completed" })).toBe("completed");
   });
 });
 

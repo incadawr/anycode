@@ -395,6 +395,8 @@ export interface ChildTerminalReport {
    * `runner.ts:573`'s inline `activitySuppressed`). Present only when >0.
    */
   activitySuppressed?: number;
+  /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
+  finalTurnFinishReason?: "length";
 }
 
 /**
@@ -1097,6 +1099,7 @@ export class Session {
   private childSafeError: string | undefined;
   /** Once-latch (F7): true once `finalizeChildTerminal` has actually invoked `child.onTerminal` (or handed off an error terminal) — guards its docstring's "exactly once" contract against a second concurrent call. */
   private childTerminalFinalized = false;
+  private childFinalTurnFinishReason: "length" | undefined;
   /** Wall-clock start of the child's turn chain, set once by startProgrammaticTurn — the terminal report's durationMs baseline. */
   private childStartedAt = 0;
   /**
@@ -2923,6 +2926,7 @@ export class Session {
         toolCalls: this.childToolCalls,
         durationMs,
         ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
+        ...(this.childFinalTurnFinishReason !== undefined ? { finalTurnFinishReason: this.childFinalTurnFinishReason } : {}),
       });
     } catch (error) {
       console.error(`[host] child.onTerminal threw: ${describeError(error)}`);
@@ -2975,6 +2979,7 @@ export class Session {
       case "turn_end":
         this.childFinalText = fixateFinalText(this.childFinalText);
         this.childTurnEndCount += 1;
+        this.childFinalTurnFinishReason = event.finishReason === "length" ? "length" : undefined;
         this.emitChildProgressBoundary();
         break;
       case "loop_end":

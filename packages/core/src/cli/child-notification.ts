@@ -55,6 +55,8 @@ export interface ChildTaskNotificationInput {
   /** The agent_type the child ran as (e.g. "general-purpose"). */
   subagentType: string;
   status: ChildTaskNotificationStatus;
+  /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
+  finalTurnFinishReason?: "length";
   /** Short digest of what the child did/found — NEVER the raw transcript (file header). Truncated here if oversized. */
   summary: string;
   /**
@@ -132,7 +134,12 @@ export function mapChildRunStatusToNotification(
  * local_workflow/remote_agent) out of scope for this system.
  */
 export function formatChildTaskNotification(input: ChildTaskNotificationInput): string {
-  const summary = capSummary(input.summary, CHILD_NOTIFICATION_SUMMARY_MAX_CHARS, input.fullReportPath);
+  const lengthCut = input.finalTurnFinishReason === "length";
+  const status = lengthCut && input.status === "completed" ? "failed" : input.status;
+  const base = capSummary(input.summary, CHILD_NOTIFICATION_SUMMARY_MAX_CHARS, input.fullReportPath);
+  const summary = lengthCut
+    ? `[TRUNCATED CHILD REPORT — the child's final turn hit the model's output-token ceiling; the text below is cut mid-stream and its tail is missing.]\n\n${base}`
+    : base;
   const body = [
     "<task-notification>",
     `  <task-id>${escapeXmlText(input.taskId)}</task-id>`,
@@ -140,7 +147,7 @@ export function formatChildTaskNotification(input: ChildTaskNotificationInput): 
     "  <task-type>subagent_child</task-type>",
     `  <agent-id>${escapeXmlText(input.agentId)}</agent-id>`,
     `  <subagent-type>${escapeXmlText(input.subagentType)}</subagent-type>`,
-    `  <status>${escapeXmlText(input.status)}</status>`,
+    `  <status>${escapeXmlText(status)}</status>`,
     `  <summary>${escapeXmlText(summary)}</summary>`,
     "</task-notification>",
   ].join("\n");

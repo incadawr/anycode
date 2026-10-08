@@ -558,6 +558,32 @@ describe("parseChildRunEvent", () => {
     it("rejects a non-number activitySuppressed", () => {
       expect(parseChildRunEvent({ ...validTerminal, activitySuppressed: "3" })).toBeNull();
     });
+
+    it("round-trips finalTurnFinishReason \"length\" through terminal events and ChildTerminal; absent => no key; \"stop\" => null", () => {
+      // ChildRunEvent terminal variant:
+      const withLength = { ...validTerminal, finalTurnFinishReason: "length" as const };
+      const parsedEvent = parseChildRunEvent(withLength);
+      expect(parsedEvent).toEqual(withLength);
+      const parsedAbsent = parseChildRunEvent(validTerminal);
+      expect(parsedAbsent && "finalTurnFinishReason" in parsedAbsent).toBe(false);
+      expect(parseChildRunEvent({ ...validTerminal, finalTurnFinishReason: "stop" })).toBeNull();
+
+      // ChildTerminal (child host -> main):
+      const terminalValid = {
+        type: CHILD_TERMINAL_TYPE,
+        status: "completed" as const,
+        finalText: "the result",
+        truncated: false,
+        turns: 4,
+        toolCalls: 10,
+        durationMs: 5000,
+      };
+      const withLengthTerminal = { ...terminalValid, finalTurnFinishReason: "length" as const };
+      expect(parseChildTerminal(withLengthTerminal)).toEqual(withLengthTerminal);
+      const parsedTerminalAbsent = parseChildTerminal(terminalValid);
+      expect(parsedTerminalAbsent && "finalTurnFinishReason" in parsedTerminalAbsent).toBe(false);
+      expect(parseChildTerminal({ ...terminalValid, finalTurnFinishReason: "stop" })).toBeNull();
+    });
   });
 
   it("rejects an unknown kind", () => {

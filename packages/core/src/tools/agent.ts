@@ -284,7 +284,11 @@ async function runInlineTier(
   // never fabricated from nothing, CUT-S1 §3 W1). The fallback status/
   // durationMs cover the case where the port settled without ever sending
   // an end-progress (e.g. a throw in the runner).
-  const snapshot = finalizeSubagentCard(acc, { status: outcome.status, durationMs: outcome.durationMs });
+  const snapshot = finalizeSubagentCard(acc, {
+    status: outcome.status,
+    durationMs: outcome.durationMs,
+    ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
+  });
   const presentation: { presentation?: ToolResultPresentation } =
     snapshot !== null ? { presentation: { subagent: snapshot } } : {};
   return outcomeToResult(outcome, presentation);
@@ -393,7 +397,11 @@ async function runSessionTier(
     parentSessionId: outcome.parentSessionId,
     spawnToolCallId: outcome.spawnToolCallId,
   };
-  const snapshot = finalizeSubagentCard(acc, { status: outcome.status, durationMs: outcome.durationMs }, target);
+  const snapshot = finalizeSubagentCard(acc, {
+    status: outcome.status,
+    durationMs: outcome.durationMs,
+    ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
+  }, target);
   const presentation: { presentation?: ToolResultPresentation } =
     snapshot !== null ? { presentation: { subagent: snapshot } } : {};
   return outcomeToResult(outcome, presentation);

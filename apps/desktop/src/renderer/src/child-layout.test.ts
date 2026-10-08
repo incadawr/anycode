@@ -76,6 +76,11 @@ describe("childBadgeKind (priority: waiting_permission > running > error/done)",
   it("no waiting + final error -> error (NOT lumped into done)", () => {
     expect(childBadgeKind(card(undefined, { status: "error", durationMs: 1 }))).toBe("error");
   });
+
+  it("finalTurnFinishReason \"length\" collapses a completed final to error; waiting still outranks it", () => {
+    expect(childBadgeKind(card(undefined, { status: "completed", durationMs: 1, finalTurnFinishReason: "length" }))).toBe("error");
+    expect(childBadgeKind(card(true, { status: "completed", durationMs: 1, finalTurnFinishReason: "length" }))).toBe("waiting_permission");
+  });
 });
 
 describe("buildChildBreadcrumb", () => {

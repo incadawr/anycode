@@ -648,6 +648,33 @@ describe("output cap + status mapping", () => {
     expect(outcome.finalTurnFinishReason).toBe("length");
   });
 
+  it("a length-final run's kind:end progress carries finalTurnFinishReason, a stop-final run's does not", async () => {
+    const lengthModel = new ScriptedModelPort(() => [
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "cut short by the provider's own output ceiling" },
+      { type: "finish", finishReason: "length", usage: {} },
+    ]);
+    const lengthRunner = createSubagentRunner(makeParent({ modelPort: lengthModel }));
+    const lengthProgress: SubagentProgress[] = [];
+    await lengthRunner.run({ ...REQ, agentType: "explore" }, { onProgress: (p) => lengthProgress.push(p) });
+    const lengthEnd = lengthProgress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+    expect(lengthEnd.length).toBeGreaterThan(0);
+    expect(lengthEnd[lengthEnd.length - 1]!.finalTurnFinishReason).toBe("length");
+
+    const stopModel = new ScriptedModelPort(() => [
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "an honest, complete report" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]);
+    const stopRunner = createSubagentRunner(makeParent({ modelPort: stopModel }));
+    const stopProgress: SubagentProgress[] = [];
+    await stopRunner.run({ ...REQ, agentType: "explore" }, { onProgress: (p) => stopProgress.push(p) });
+    const stopEnd = stopProgress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+    expect(stopEnd.length).toBeGreaterThan(0);
+    expect(stopEnd[stopEnd.length - 1]!.finalTurnFinishReason).toBeUndefined();
+    expect("finalTurnFinishReason" in stopEnd[stopEnd.length - 1]!).toBe(false);
+  });
+
   it('outcome carries "degenerate" end-to-end when the child\'s own turn is cut by its degeneration guard (TASK.210)', async () => {
     // Same margin degeneration-detector.test.ts and agent-loop.test.ts use: the
     // periodicity check only re-runs every STRIDE fed chars, so the loop text
