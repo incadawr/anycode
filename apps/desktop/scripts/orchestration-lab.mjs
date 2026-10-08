@@ -182,6 +182,11 @@ async function task() {
   const lab = readLab();
   const ctx = ctxOf(lab);
   if (ctx === null) throw new Error("app is not running (the owner launches it; do not relaunch from here)");
+  // A fresh worktree has no node_modules: without them the supervisor cannot run its validation.
+  if (existsSync(join(workspace, "pnpm-lock.yaml")) && !existsSync(join(workspace, "node_modules"))) {
+    event(`TASK pnpm install in ${workspace}`);
+    execFileSync("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"], { cwd: workspace, stdio: "ignore" });
+  }
   await api(ctx, "POST", "/start-screen/open", { workspace });
   await api(ctx, "POST", "/start-screen/engine", { engineId: "codex" });
   await api(ctx, "POST", "/start-screen/prompt", { text: readFileSync(briefPath, "utf8") });
