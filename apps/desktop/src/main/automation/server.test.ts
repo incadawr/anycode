@@ -16,6 +16,7 @@ import {
   isLoopback,
   startAutomationServer,
   tokenMatches,
+  waitBody,
   type AutomationServerDeps,
   type AutomationServerHandle,
 } from "./server.js";
@@ -24,6 +25,23 @@ import type { CreateTabResult, TabHost, TabSummary } from "../tabs.js";
 import type { PreviewHostHandle } from "../preview/preview-host.js";
 
 const TOKEN = "0".repeat(64); // deterministic 64-hex-char token for the tests
+
+describe("waitBody schema (socket-free)", () => {
+  it.each(["idle", "running", "compacting"])("accepts turnStatus %s", (turnStatus) => {
+    const parsed = waitBody.safeParse({ tabId: "tab-a", until: { turnStatus } });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("allows omitted turnStatus", () => {
+    const parsed = waitBody.safeParse({ tabId: "tab-a", until: {} });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects an unknown turnStatus", () => {
+    const parsed = waitBody.safeParse({ tabId: "tab-a", until: { turnStatus: "hmm" } });
+    expect(parsed.success).toBe(false);
+  });
+});
 
 let handle: AutomationServerHandle | null = null;
 
