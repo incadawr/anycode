@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.32] — 2026-10-08
+
 ### Added
 
 - A Codex supervisor can start an AnyCode subagent in the background
@@ -27,6 +29,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Codex CLI 0.161.x is supported and is now the version AnyCode installs; a
+  request to type into an already running command is labeled as such in the
+  approval prompt.
 - GLM-5.x sessions budget their context at 300k tokens instead of the
   advertised 1M; past that point quality degrades before compaction would
   start.
