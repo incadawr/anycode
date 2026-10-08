@@ -50,6 +50,7 @@ import {
 import { SUBAGENT_WRAPUP_PROMPT } from "../prompts/subagent.js";
 import type { EngineChildSpec, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
 import type { ToolContext } from "../types/tools.js";
+import { SUBAGENT_MAX_OUTPUT_TOKENS, clampSubagentMaxOutputTokens } from "../types/config.js";
 import { SPAWN_TOOLS, buildChildConfig, createSubagentRunner, withSubagents } from "./runner.js";
 import { PERSONAS, getPersona, type PersonaDefinition } from "./personas.js";
 import { discoverAgentProfiles, type AgentProfileRoot } from "./profiles.js";
@@ -2664,10 +2665,18 @@ const startOf = (progress: SubagentProgress[]): Extract<SubagentProgress, { kind
   return starts[0]!;
 };
 
+describe("clampSubagentMaxOutputTokens (Taskana 4150)", () => {
+  it("clamps above the cap, passes below it, and defaults undefined to the cap", () => {
+    expect(clampSubagentMaxOutputTokens(131_072)).toBe(32_768);
+    expect(clampSubagentMaxOutputTokens(8_000)).toBe(8_000);
+    expect(clampSubagentMaxOutputTokens(undefined)).toBe(SUBAGENT_MAX_OUTPUT_TOKENS);
+  });
+});
+
 describe("buildChildConfig — child-model settings (TASK.162, defect F6)", () => {
   const PARENT_CONTEXT = { contextWindowTokens: 200_000, keepRecentMessages: 7 };
 
-  it("replaces the ceiling and effort wholesale and overlays ONLY contextWindowTokens", () => {
+  it("replaces the effort wholesale and caps the ceiling at SUBAGENT_MAX_OUTPUT_TOKENS, overlaying ONLY contextWindowTokens", () => {
     const parent = makeParent({
       maxOutputTokens: 8_192,
       reasoningEffort: "medium",
@@ -2675,10 +2684,11 @@ describe("buildChildConfig — child-model settings (TASK.162, defect F6)", () =
     });
 
     const child = buildChildConfig(parent, getPersona("explore"), REQ, {
+      // Catalog-like resolution above the clamp: 131_072 -> 32_768.
       modelSettings: { maxOutputTokens: 131_072, reasoningEffort: "high", contextWindowTokens: 1_000_000 },
     });
 
-    expect(child.maxOutputTokens).toBe(131_072);
+    expect(child.maxOutputTokens).toBe(32_768);
     expect(child.reasoningEffort).toBe("high");
     // Only the window moved; every other budget knob the resolver knows
     // nothing about survives the overlay, and the parent's object is not
@@ -2686,9 +2696,21 @@ describe("buildChildConfig — child-model settings (TASK.162, defect F6)", () =
     expect(child.context).toEqual({ contextWindowTokens: 1_000_000, keepRecentMessages: 7 });
     expect(child.context).not.toBe(parent.context);
     expect(parent.context).toEqual(PARENT_CONTEXT);
+    expect(parent.maxOutputTokens).toBe(8_192);
   });
 
-  it("an `undefined` INSIDE the settings is that model's resolution, never patched from the parent", () => {
+  it("an explicit child ceiling BELOW the cap survives the clamp unchanged", () => {
+    const parent = makeParent({ maxOutputTokens: 131_072, reasoningEffort: "medium", context: PARENT_CONTEXT });
+
+    const child = buildChildConfig(parent, getPersona("explore"), REQ, {
+      modelSettings: { maxOutputTokens: 8_000, reasoningEffort: "high", contextWindowTokens: 1_000_000 },
+    });
+
+    expect(child.maxOutputTokens).toBe(8_000);
+    expect(parent.maxOutputTokens).toBe(131_072);
+  });
+
+  it("an `undefined` INSIDE the settings defaults to the cap, never patched from the parent", () => {
     const parent = makeParent({ maxOutputTokens: 8_192, reasoningEffort: "medium", context: PARENT_CONTEXT });
 
     const child = buildChildConfig(parent, getPersona("explore"), REQ, {
@@ -2696,11 +2718,26 @@ describe("buildChildConfig — child-model settings (TASK.162, defect F6)", () =
       modelSettings: { contextWindowTokens: 200_000 },
     });
 
-    expect(child.maxOutputTokens).toBeUndefined();
+    expect(child.maxOutputTokens).toBe(32_768);
     expect(child.reasoningEffort).toBeUndefined();
+    expect(parent.maxOutputTokens).toBe(8_192);
   });
 
-  it("without modelSettings the three rows stay the parent's, by reference where they were (legacy path)", () => {
+  it("without modelSettings a parent ceiling ABOVE the cap is clamped; an undefined parent ceiling defaults to the cap", () => {
+    const parent = makeParent({ maxOutputTokens: 131_072, reasoningEffort: "medium", context: PARENT_CONTEXT });
+    const child = buildChildConfig(parent, getPersona("explore"), REQ);
+
+    expect(child.maxOutputTokens).toBe(32_768);
+    expect(parent.maxOutputTokens).toBe(131_072);
+
+    const ceilingless = makeParent({ reasoningEffort: "medium", context: PARENT_CONTEXT });
+    const ceilinglessChild = buildChildConfig(ceilingless, getPersona("explore"), REQ);
+
+    expect(ceilinglessChild.maxOutputTokens).toBe(32_768);
+    expect(ceilingless.maxOutputTokens).toBeUndefined();
+  });
+
+  it("without modelSettings a parent ceiling BELOW the cap stays the parent's (legacy path)", () => {
     const parent = makeParent({ maxOutputTokens: 8_192, reasoningEffort: "medium", context: PARENT_CONTEXT });
 
     const child = buildChildConfig(parent, getPersona("explore"), REQ);
@@ -2734,7 +2771,7 @@ describe("run() — child capabilities resolved for the child's own model (TASK.
     expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("low");
   });
 
-  it("the child's ModelRequest carries the SETTINGS' ceiling and effort, not the parent's", async () => {
+  it("the child's ModelRequest carries the CAPPED settings ceiling and effort, not the parent's", async () => {
     const parentPort = new ScriptedModelPort(() => textStep("parent never runs here"));
     const childPort = makeChildPort({ modelId: "glm-5.3-flash" });
     const resolvedFor: string[] = [];
@@ -2759,7 +2796,8 @@ describe("run() — child capabilities resolved for the child's own model (TASK.
     expect(outcome.status).toBe("completed");
     expect(resolvedFor).toEqual(["glm-5.3-flash"]);
     expect(childPort.requests).toHaveLength(1);
-    expect(childPort.requests[0]!.maxOutputTokens).toBe(131_072);
+    // Resolved 131_072 is clamped to SUBAGENT_MAX_OUTPUT_TOKENS.
+    expect(childPort.requests[0]!.maxOutputTokens).toBe(32_768);
     expect(childPort.requests[0]!.reasoningEffort).toBe("high");
     expect(parentPort.calls).toBe(0);
   });
