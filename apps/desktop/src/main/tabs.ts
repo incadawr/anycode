@@ -1989,6 +1989,8 @@ export class TabHostManager {
       durationMs: number;
       /** Additive (CUT-S2 §10.7 п.4/§10.8.2); present only when the caller relays one (>0 at the source). */
       activitySuppressed?: number;
+      /** Additive (TASK 4149); present only when true. */
+      declaredDoneAtCeiling?: boolean;
     },
   ): void {
     const entry = this.childRuns.get(requestId);
@@ -2187,6 +2189,8 @@ export class TabHostManager {
       // it is orthogonal to `status`/`finalText`, both of which the cut's
       // §10.8.2 п.3 wording ratifies verbatim for a cancelled run.
       ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed } : {}),
+      // A cancel-race overrides status, so the "done at ceiling" claim no longer applies.
+      ...(msg.declaredDoneAtCeiling === true && !cancelling ? { declaredDoneAtCeiling: true } : {}),
     });
   }
 

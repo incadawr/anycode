@@ -685,6 +685,31 @@ describe("parseChildTerminal", () => {
     expect(parseChildTerminal(withSuppressed)).toEqual(withSuppressed);
   });
 
+  it("round-trips declaredDoneAtCeiling:true on ChildTerminal and ChildRunEvent terminal; rejects non-true values; absent stays absent (TASK 4149)", () => {
+    const withFlag = { ...valid, status: "max_turns" as const, declaredDoneAtCeiling: true };
+    expect(parseChildTerminal(withFlag)).toEqual(withFlag);
+    expect(parseChildTerminal({ ...withFlag, declaredDoneAtCeiling: false })).toBeNull();
+    expect(parseChildTerminal({ ...withFlag, declaredDoneAtCeiling: "yes" })).toBeNull();
+    expect("declaredDoneAtCeiling" in (parseChildTerminal(valid) ?? {})).toBe(false);
+    const event = {
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "terminal" as const,
+      status: "max_turns" as const,
+      finalText: "done",
+      truncated: false,
+      turns: 3,
+      toolCalls: 9,
+      durationMs: 1200,
+      childSessionId: "sess-1",
+      declaredDoneAtCeiling: true as const,
+    };
+    expect(parseChildRunEvent(event)).toEqual(event);
+    expect(parseChildRunEvent({ ...event, declaredDoneAtCeiling: false })).toBeNull();
+    const { declaredDoneAtCeiling: _omit, ...plain } = event;
+    expect("declaredDoneAtCeiling" in (parseChildRunEvent(plain) ?? {})).toBe(false);
+  });
+
   it("rejects a negative activitySuppressed", () => {
     expect(parseChildTerminal({ ...valid, activitySuppressed: -1 })).toBeNull();
   });
