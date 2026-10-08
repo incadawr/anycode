@@ -1,6 +1,6 @@
 {
   "name": "@anycode/cli",
-  "version": "0.0.31",
+  "version": "0.0.32",
   "private": true,
   "type": "module",
   "description": "AnyCode \u2014 AI coding agent CLI",
