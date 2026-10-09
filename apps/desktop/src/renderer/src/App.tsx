@@ -52,6 +52,7 @@ import { ConnectedPermissionModal } from "./components/PermissionModal.js";
 import { Collapse as CollapseIcon } from "./components/icons.js";
 import { GitPanel } from "./components/GitPanel.js";
 import { GitConfirmDialog } from "./components/GitConfirmDialog.js";
+import { ConfirmDialog } from "./components/ConfirmDialog.js";
 import { LspPanel } from "./components/LspPanel.js";
 import { HooksPanel } from "./components/HooksPanel.js";
 import { TimelinePanel } from "./components/TimelinePanel.js";
@@ -1131,6 +1132,12 @@ function ActiveTab({
   );
 }
 
+export const CLOSE_TAB_CONFIRM = {
+  title: "Close tab",
+  body: "This tab has a turn in progress. Close it anyway?",
+  confirmLabel: "Close tab",
+} as const;
+
 export function App() {
   const tabs = useTabsStore((state) => state.tabs);
   const activeTabId = useTabsStore((state) => state.activeTabId);
@@ -1146,6 +1153,9 @@ export function App() {
     [settingsSnapshot],
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // TASK.126: pending close-tab confirm (tabId of the tab awaiting the user's
+  // verdict) — replaces the blocking window.confirm in handleCloseTab.
+  const [closeTabConfirm, setCloseTabConfirm] = useState<string | null>(null);
   const welcomeEngineRef = useRef<"core" | "codex" | "claude">("core");
   const welcomeVisible = shouldShowWelcome(settingsSnapshot, tabs.length, hasExternalEngine);
   const wasWelcomeVisible = useRef(false);
@@ -1432,9 +1442,15 @@ export function App() {
     // tab's own turn state; if the tab isn't registered for some reason, fall
     // straight through to the close request.
     const running = tabRegistry.getStore(tabId)?.getState().turn.status === "running";
-    if (running && !window.confirm("This tab has a turn in progress. Close it anyway?")) {
+    if (running) {
+      setCloseTabConfirm(tabId);
       return;
     }
+    closeTabNow(tabId);
+  }
+
+  /** The committed close (TASK.126): the ConfirmDialog's Confirm path. */
+  function closeTabNow(tabId: string): void {
     window.anycode
       .closeTab(tabId)
       .then((result) => {
@@ -1704,6 +1720,19 @@ export function App() {
       </div>
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+
+      {/* TASK.126: close-with-running-turn confirm (replaces window.confirm). */}
+      <ConfirmDialog
+        request={closeTabConfirm === null ? null : CLOSE_TAB_CONFIRM}
+        onCancel={() => setCloseTabConfirm(null)}
+        onConfirm={() => {
+          const tabId = closeTabConfirm;
+          setCloseTabConfirm(null);
+          if (tabId !== null) {
+            closeTabNow(tabId);
+          }
+        }}
+      />
 
       {paletteOpen && (
         <CommandPalette
