@@ -206,6 +206,13 @@ export interface CodexOnboardingController {
    */
   hasVerdictFor(profileId?: string): boolean;
   /**
+   * The last cached doctor verdict for this profile (absent id = the active
+   * one), or undefined when none has landed. Reads the existing cache only —
+   * never runs the doctor. Lets callers (e.g. the tab gate) carry the doctor's
+   * exact status into not_ready failures.
+   */
+  lastReportFor(profileId?: string): CodexDoctorReport | undefined;
+  /**
    * App-lifecycle teardown (W2-review Critical). Every child this controller
    * opened — doctor, login, version preflight — is spawned `detached` (its own
    * POSIX process group), so it does NOT die with main: an Electron exit that
@@ -877,6 +884,10 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
 
     hasVerdictFor(profileId?: string): boolean {
       return reports.has(profileId ?? cachedActiveProfileId);
+    },
+
+    lastReportFor(profileId?: string): CodexDoctorReport | undefined {
+      return reports.get(profileId ?? cachedActiveProfileId)?.snapshot.report;
     },
 
     async shutdown(): Promise<void> {
