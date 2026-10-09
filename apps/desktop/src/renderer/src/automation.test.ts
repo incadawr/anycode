@@ -3876,6 +3876,14 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
     clickImportButton: vi.fn(),
     clickApplyButton: () => false,
     importResultsSignature: () => "",
+    formOpen: () => false,
+    clickAddServerButton: vi.fn(),
+    setFormText: () => false,
+    formTextValue: () => null,
+    clickFormRadio: () => false,
+    formRadioChecked: () => false,
+    clickFormSubmit: () => false,
+    formErrorText: () => null,
   };
 
   /** A bare zustand settings store with no snapshot — the Skills facade methods never read it, but `createAutomationFacade`'s signature requires one. */
@@ -4219,6 +4227,497 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
   });
 });
 
+describe("automation facade — MCP pane add-server driver (TASK.186/4061 item 4)", () => {
+  const noTranscriptDom6: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
+  const noTodoPanelDom6: TodoPanelDom = { panel: () => null };
+  const noStartScreenDom6: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
+  const noModelPillDom6: ModelPillDom = {
+    mounted: () => false,
+    popoverOpen: () => false,
+    currentPage: () => "root",
+    manageDisabled: () => true,
+    clickChip: vi.fn(),
+    clickRootRow: vi.fn(),
+    clickItemAt: vi.fn(),
+  };
+  const inertSettingsDom6: SettingsDom = {
+    mounted: () => false,
+    activePane: () => null,
+    panesVisible: () => [],
+    searchQuery: () => "",
+    clickSidebarSettings: vi.fn(),
+    clickBackToApp: vi.fn(),
+    clickPaneTab: vi.fn(() => false),
+    fillPermissionTool: vi.fn(() => false),
+    fillPermissionPattern: vi.fn(),
+    permissionToolInputValue: () => "",
+    canSubmitPermissionAdd: () => false,
+    clickPermissionAdd: vi.fn(),
+    clickPermissionRemove: vi.fn(() => false),
+    permissionRemoveRowExists: () => false,
+  };
+  const inertCtxPopoverDom6: CtxPopoverDom = {
+    mounted: () => false,
+    open: () => false,
+    clickTrigger: vi.fn(),
+    percentText: () => null,
+    headline: () => null,
+    rows: () => [],
+    sessionLineVisible: () => false,
+  };
+  const inertAgentCardDom6: AgentCardDom = { state: () => null, clickToggle: vi.fn(() => false) };
+
+  function emptySettingsStore6() {
+    const store = createSettingsStore();
+    store.setState({ snapshot: null });
+    return store;
+  }
+
+  /** Builds a facade wired ONLY for the MCP add-server method — the fake sits at the `mcpPaneDom` slot (12 positional args; the remaining params keep their defaults). */
+  function buildMcpAddFacade(dom: McpPaneDom) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      noTranscriptDom6,
+      noTodoPanelDom6,
+      noStartScreenDom6,
+      noModelPillDom6,
+      emptySettingsStore6(),
+      inertSettingsDom6,
+      inertCtxPopoverDom6,
+      inertAgentCardDom6,
+      dom,
+    );
+  }
+
+  type FormLabel = "Name" | "Command" | "URL" | "Arguments (one per line)";
+
+  /**
+   * A fully-controllable fake `McpPaneDom` for the add-server driver: mutable
+   * closure state (`formOpenNow`, `errorText`, committed text/radio values)
+   * so a test can model DELAYED React commits (supervisor correction 3) —
+   * `setFormText`/`clickFormRadio` commit their readback values only after
+   * the configured delay, never synchronously.
+   */
+  function fakeMcpPaneDom(
+    overrides: Partial<{
+      mounted: boolean;
+      formInitiallyOpen: boolean;
+      clickDoesNotOpen: boolean;
+      submitDisabled: boolean;
+      refuseWithError: string;
+      missingField: FormLabel;
+      disabledRadios: Array<"mcp-scope:project" | "mcp-scope:user" | "mcp-transport:stdio" | "mcp-transport:http">;
+      radioCommitDelayMs: number;
+      radioNeverCommits: boolean;
+      fieldCommitDelayMs: number;
+      fieldNeverCommits: boolean;
+    }> = {},
+  ): McpPaneDom {
+    const state = {
+      formOpenNow: overrides.formInitiallyOpen ?? false,
+      errorText: null as string | null,
+      texts: new Map<string, string>(),
+      radios: new Map<string, boolean>([
+        ["mcp-scope:project", true],
+        ["mcp-transport:stdio", true],
+      ]),
+    };
+    const disabled = new Set(overrides.disabledRadios ?? []);
+    return {
+      mounted: () => overrides.mounted ?? true,
+      rows: () => [],
+      rowEnabled: () => undefined,
+      clickRowToggle: () => false,
+      problemCount: () => 0,
+      importOpen: () => false,
+      importScanLoaded: () => false,
+      importCandidates: () => [],
+      consentChecked: () => false,
+      setCandidateChecked: () => false,
+      setConsentChecked: vi.fn(),
+      clickImportButton: vi.fn(),
+      clickApplyButton: () => false,
+      importResultsSignature: () => "",
+      formOpen: () => state.formOpenNow,
+      clickAddServerButton: vi.fn(() => {
+        if (!overrides.clickDoesNotOpen) {
+          state.formOpenNow = true;
+        }
+      }),
+      setFormText: vi.fn((label: FormLabel, value: string) => {
+        if (overrides.missingField === label) {
+          return false;
+        }
+        if (!overrides.fieldNeverCommits) {
+          setTimeout(() => {
+            state.texts.set(label, value);
+          }, overrides.fieldCommitDelayMs ?? 0);
+        }
+        return true;
+      }),
+      formTextValue: (label: FormLabel) => state.texts.get(label) ?? "",
+      clickFormRadio: vi.fn((group: "mcp-scope" | "mcp-transport", value: string) => {
+        const key = `${group}:${value}`;
+        if (disabled.has(key as "mcp-scope:project")) {
+          return false;
+        }
+        if (!overrides.radioNeverCommits) {
+          setTimeout(() => {
+            state.radios.set(key, true);
+          }, overrides.radioCommitDelayMs ?? 0);
+        }
+        return true;
+      }),
+      formRadioChecked: (group: "mcp-scope" | "mcp-transport", value: string) => state.radios.get(`${group}:${value}`) ?? false,
+      clickFormSubmit: vi.fn(() => {
+        if (overrides.submitDisabled) {
+          return false;
+        }
+        if (overrides.refuseWithError !== undefined) {
+          state.errorText = overrides.refuseWithError;
+          return true;
+        }
+        state.formOpenNow = false;
+        return true;
+      }),
+      formErrorText: () => state.errorText,
+    };
+  }
+
+  it("refuses pane_not_mounted without any DOM drive calls", async () => {
+    const dom = fakeMcpPaneDom({ mounted: false });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv" })).resolves.toEqual({ ok: false, reason: "pane_not_mounted" });
+    expect(dom.clickAddServerButton).not.toHaveBeenCalled();
+  });
+
+  it("refuses form_already_open when the form is already in the DOM", async () => {
+    const dom = fakeMcpPaneDom({ formInitiallyOpen: true });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv" })).resolves.toEqual({ ok: false, reason: "form_already_open" });
+    expect(dom.clickAddServerButton).not.toHaveBeenCalled();
+  });
+
+  it("reports did_not_open when the click never opens the form", async () => {
+    const dom = fakeMcpPaneDom({ clickDoesNotOpen: true });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv" })).resolves.toEqual({ ok: false, reason: "did_not_open" });
+    expect(dom.clickAddServerButton).toHaveBeenCalledTimes(1);
+  });
+
+  it("happy path: fills Name+Command, clicks submit once, form closes -> ok", async () => {
+    const dom = fakeMcpPaneDom();
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node" })).resolves.toEqual({ ok: true });
+    expect(dom.setFormText).toHaveBeenCalledWith("Name", "srv");
+    expect(dom.setFormText).toHaveBeenCalledWith("Command", "node");
+    expect(dom.clickFormSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicks the transport radio BEFORE any text fill (switching transport swaps which fields render)", async () => {
+    const dom = fakeMcpPaneDom();
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", transport: "http", url: "https://x" })).resolves.toEqual({ ok: true });
+    const radioOrder = (dom.clickFormRadio as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    const firstFillOrder = (dom.setFormText as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    expect(radioOrder).toBeLessThan(firstFillOrder);
+    expect(dom.clickFormRadio).toHaveBeenCalledWith("mcp-transport", "http");
+  });
+
+  it("refuses submit_disabled when the commit button is disabled", async () => {
+    const dom = fakeMcpPaneDom({ submitDisabled: true });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node" })).resolves.toEqual({ ok: false, reason: "submit_disabled" });
+  });
+
+  it("refuses 'refused' when submit surfaces a problem strip and the form stays open", async () => {
+    const dom = fakeMcpPaneDom({ refuseWithError: "Name already configured" });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node" })).resolves.toEqual({ ok: false, reason: "refused" });
+  });
+
+  it("refuses field_not_found when a text field is missing", async () => {
+    const dom = fakeMcpPaneDom({ missingField: "Command" });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node" })).resolves.toEqual({ ok: false, reason: "field_not_found" });
+    expect(dom.clickFormSubmit).not.toHaveBeenCalled();
+  });
+
+  it("refuses field_not_found for a disabled Project radio (supervisor correction 2) — never submits", async () => {
+    const dom = fakeMcpPaneDom({ disabledRadios: ["mcp-scope:project"] });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({
+      ok: false,
+      reason: "field_not_found",
+    });
+    expect(dom.clickFormSubmit).not.toHaveBeenCalled();
+  });
+
+  it("awaits a DELAYED radio commit before proceeding to the text fills (supervisor correction 3)", async () => {
+    const dom = fakeMcpPaneDom({ radioCommitDelayMs: 30 });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", transport: "http", url: "https://x" })).resolves.toEqual({ ok: true });
+  });
+
+  it("awaits a DELAYED field commit before the next write and before submit", async () => {
+    const dom = fakeMcpPaneDom({ fieldCommitDelayMs: 30 });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node" })).resolves.toEqual({ ok: true });
+    expect(dom.clickFormSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses set_failed when a radio click never commits its checked readback — never submits", async () => {
+    const dom = fakeMcpPaneDom({ radioNeverCommits: true });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", transport: "http", url: "https://x" })).resolves.toEqual({
+      ok: false,
+      reason: "set_failed",
+    });
+    expect(dom.clickFormSubmit).not.toHaveBeenCalled();
+  });
+
+  it("refuses set_failed when a field write never commits its value readback — never submits", async () => {
+    const dom = fakeMcpPaneDom({ fieldNeverCommits: true });
+    const facade = buildMcpAddFacade(dom);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node" })).resolves.toEqual({ ok: false, reason: "set_failed" });
+    expect(dom.clickFormSubmit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A minimal DOM stub faithful to the NATIVE semantics the two defects live
+   * in — this is the regression harness for the REAL `realMcpPaneDom` adapter
+   * (installed as the facade's default `mcpPaneDom`), not another fake:
+   * - `HTMLElement.click()` returns `undefined` (REJECT defect 1: an
+   *   `?.click() ?? false` adapter returned `false` for every present
+   *   enabled radio, so explicit scope/HTTP transport always died with
+   *   `field_not_found` without ever clicking).
+   * - A native value setter / radio click changes the DOM `value`/`checked`
+   *   SYNCHRONOUSLY, while the React state commit — and, after a transport
+   *   click, the render of the transport-dependent fields — lands on the
+   *   NEXT MACROTASK (REJECT defect 2: a readback that can pass
+   *   synchronously let the facade race through all writes and submit
+   *   without yielding a single macrotask, so the submit gate read only
+   *   uncommitted state and a transport-following URL write hit a field that
+   *   had not rendered yet).
+   * `committed` is only ever mutated from `setTimeout(0)` — nothing commits
+   * synchronously; the transport-dependent fields (Command/args for stdio,
+   * URL for http) render from COMMITTED state, exactly like
+   * `McpFormDialog`'s conditional JSX, and the submit gate reads COMMITTED
+   * state like the real `canSubmitMcpForm`. Without the facade's
+   * unconditional `await nextTick()` after each radio click / field write,
+   * this stub makes `mcpAddServer` fail (`submit_disabled` on the stdio
+   * form, `field_not_found` on the http URL) — the race made visible.
+   */
+  function stubFormDocument() {
+    const committed = {
+      texts: new Map<string, string>(),
+      radios: new Map<string, boolean>([
+        ["mcp-scope:project", true],
+        ["mcp-scope:user", false],
+        ["mcp-transport:stdio", true],
+        ["mcp-transport:http", false],
+      ]),
+    };
+    let formMounted = false;
+    const scheduleCommit = (fn: () => void) => {
+      setTimeout(fn, 0); // React commit lands on the next macrotask
+    };
+    function makeTextInput(label: string) {
+      const node = {
+        _value: "",
+        disabled: false,
+        dispatchEvent: () => true,
+        set value(v: string) {
+          // Native setter semantics: the DOM reads the new value immediately;
+          // the React state commit lands a macrotask later.
+          this._value = v;
+          scheduleCommit(() => committed.texts.set(label, v));
+        },
+        get value() {
+          return this._value;
+        },
+      };
+      return node;
+    }
+    const textInputs = new Map<string, ReturnType<typeof makeTextInput>>();
+    for (const label of ["Name", "Command", "URL", "Arguments (one per line)"]) {
+      textInputs.set(label, makeTextInput(label));
+    }
+    function makeRadio(group: string, value: string, labelText: string) {
+      const node = {
+        name: group,
+        _checked: committed.radios.get(`${group}:${value}`) ?? false,
+        disabled: false,
+        _labelText: labelText,
+        _value: value,
+        closest: (sel: string) => (sel === "label" ? { textContent: ` ${labelText} ` } : null),
+        click() {
+          // Native HTMLInputElement.click(): `checked` flips SYNCHRONOUSLY,
+          // the return value is undefined.
+          this._checked = true;
+          scheduleCommit(() => committed.radios.set(`${group}:${value}`, true));
+          return undefined as void;
+        },
+        get checked() {
+          return this._checked;
+        },
+      };
+      return node;
+    }
+    const radios = [
+      makeRadio("mcp-scope", "project", "Project"),
+      makeRadio("mcp-scope", "user", "User"),
+      makeRadio("mcp-transport", "stdio", "stdio"),
+      makeRadio("mcp-transport", "http", "http"),
+    ];
+    /** The fields the form currently RENDERS — transport-dependent fields follow COMMITTED state, like McpFormDialog's conditional JSX. */
+    const renderedFieldLabels = (): string[] => {
+      const http = committed.radios.get("mcp-transport:http") === true;
+      return http ? ["Name", "URL"] : ["Name", "Command", "Arguments (one per line)"];
+    };
+    const formDialogObj: Record<string, unknown> = {
+      querySelectorAll: (sel: string) => {
+        if (sel === ".settings-field") {
+          return renderedFieldLabels().map((label) => ({
+            querySelector: (s: string) =>
+              s === ".settings-field-label"
+                ? { textContent: ` ${label} ` }
+                : s === "input.settings-field-input" || s === "textarea.settings-field-input"
+                  ? textInputs.get(label)
+                  : null,
+          }));
+        }
+        const nameMatch = /input\[name="([^"]+)"\]/.exec(sel);
+        if (nameMatch) {
+          return radios.filter((r) => r.name === nameMatch[1]);
+        }
+        return [];
+      },
+      querySelector: (sel: string) => {
+        if (sel === ".mcp-dialog-actions .settings-button-primary") {
+          // canSubmit gates on name + command/url, read from COMMITTED state —
+          // exactly the real `canSubmitMcpForm` gate the plan leans on.
+          return {
+            get disabled() {
+              return !(committed.texts.get("Name") && (committed.texts.get("Command") || committed.texts.get("URL")));
+            },
+            click: () => {
+              formMounted = false; // happy-path submit closes the form
+              return undefined as void;
+            },
+          };
+        }
+        return null;
+      },
+    };
+    const document = {
+      querySelector: (sel: string) => {
+        if (sel === ".mcp-pane") return { querySelectorAll: () => [] };
+        if (sel === "dialog.mcp-form-dialog:not(.mcp-import-dialog)") return formMounted ? formDialogObj : null;
+        if (sel === '.mcp-pane .mcp-pane-actions [aria-label="Add MCP server"]') {
+          return { click: () => (formMounted = true) };
+        }
+        return null;
+      },
+    };
+    return {
+      document,
+      committed,
+      radios,
+      getFormMounted: () => formMounted,
+      /** Browser classes `setNativeInputValue`'s descriptor lookup needs in a node test env — the fallback plain-assign + `input` event path then runs against the stub inputs. */
+      browserGlobals: {
+        HTMLInputElement: class {},
+        HTMLTextAreaElement: class {},
+        Event: class {
+          constructor(
+            public type: string,
+            public init?: { bubbles?: boolean },
+          ) {}
+        },
+      },
+    };
+  }
+
+  /** Builds a facade wired with the REAL `realMcpPaneDom` adapter (deliberately NO explicit mcpPaneDom) against a stubbed `document` global. */
+  function buildRealAdapterFacade(stub: ReturnType<typeof stubFormDocument>) {
+    vi.stubGlobal("document", stub.document);
+    vi.stubGlobal("HTMLInputElement", stub.browserGlobals.HTMLInputElement);
+    vi.stubGlobal("HTMLTextAreaElement", stub.browserGlobals.HTMLTextAreaElement);
+    vi.stubGlobal("Event", stub.browserGlobals.Event);
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      noTranscriptDom6,
+      noTodoPanelDom6,
+      noStartScreenDom6,
+      noModelPillDom6,
+      emptySettingsStore6(),
+      inertSettingsDom6,
+      inertCtxPopoverDom6,
+      inertAgentCardDom6,
+    );
+  }
+
+  it("REGRESSION (defect 1, real adapter): explicit scope and HTTP transport drive PAST radio selection — a present enabled radio clicks (click() returns undefined) and reports true, never field_not_found", async () => {
+    const stub = stubFormDocument();
+    const facade = buildRealAdapterFacade(stub);
+    try {
+      const result = await facade.mcpAddServer({ name: "srv", transport: "http", url: "https://x", scope: "user" });
+      expect(result).toEqual({ ok: true }); // NOT { ok: false, reason: "field_not_found" }
+      expect(stub.committed.radios.get("mcp-transport:http")).toBe(true);
+      expect(stub.committed.radios.get("mcp-scope:user")).toBe(true);
+      expect(stub.committed.texts.get("Name")).toBe("srv");
+      expect(stub.committed.texts.get("URL")).toBe("https://x");
+      expect(stub.getFormMounted()).toBe(false); // submitted
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("REGRESSION (defect 2, real adapter): native DOM readback changes IMMEDIATELY while the React commit lands asynchronously — the exact submitted Name/Command/argsText and HTTP URL arrive intact, writes and submit never race", async () => {
+    const stub = stubFormDocument();
+    const facade = buildRealAdapterFacade(stub);
+    try {
+      // stdio form: three consecutive writes whose native readback passes
+      // synchronously but whose state commits only 10ms later.
+      const a = await facade.mcpAddServer({ name: "srv-a", command: "node", argsText: "one\ntwo" });
+      expect(a).toEqual({ ok: true });
+      expect(stub.committed.texts.get("Name")).toBe("srv-a");
+      expect(stub.committed.texts.get("Command")).toBe("node");
+      expect(stub.committed.texts.get("Arguments (one per line)")).toBe("one\ntwo");
+
+      // http form: the URL field only renders once the transport COMMIT
+      // lands — the facade must not write it before that render.
+      const b = await facade.mcpAddServer({ name: "srv-b", transport: "http", url: "https://x" });
+      expect(b).toEqual({ ok: true });
+      expect(stub.committed.texts.get("Name")).toBe("srv-b");
+      expect(stub.committed.texts.get("URL")).toBe("https://x");
+      expect(stub.committed.radios.get("mcp-transport:http")).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-cut.md §4 W4)", () => {
   // Subagents is a GLOBAL (app-level) probe/driver — no `:tabId` guard family
   // (same posture as the Skills pane block above). Every non-Subagents DI slot
@@ -4289,6 +4788,14 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
     clickImportButton: vi.fn(),
     clickApplyButton: () => false,
     importResultsSignature: () => "",
+    formOpen: () => false,
+    clickAddServerButton: vi.fn(),
+    setFormText: () => false,
+    formTextValue: () => null,
+    clickFormRadio: () => false,
+    formRadioChecked: () => false,
+    clickFormSubmit: () => false,
+    formErrorText: () => null,
   };
   const inertSkillsPaneDom5: SkillsPaneDom = {
     mounted: () => false,

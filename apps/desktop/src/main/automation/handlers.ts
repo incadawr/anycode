@@ -1239,6 +1239,10 @@ export function mcpImportApply(deps: HandlerDeps, args: { consent: boolean; name
   return deps.callFacade("mcpImportApply", [args]);
 }
 
+export function mcpAddServer(deps: HandlerDeps, args: { name: string; command?: string; argsText?: string; url?: string; transport?: "stdio" | "http"; scope?: "project" | "user" }): Promise<unknown> {
+  return deps.callFacade("mcpAddServer", [args]);
+}
+
 // --- Skills pane probe/driver (design/slice-P7.20-cut.md §5 W4): thin
 // wrappers over the frozen facade contract, same discipline as the MCP pane
 // probe/driver above — the facade owns every guard (pane_not_mounted /
