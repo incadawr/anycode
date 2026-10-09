@@ -124,6 +124,8 @@ export interface McpConfigSnapshot {
   entries: McpConfigEntryView[];
   /** Fail-soft parse/read problems across all three sources (never throws). */
   problems: string[];
+  /** Whether the request's tab workspace resolved (main-side truth) — the pane's scope default and Project-radio enable derive from this, never from tabId presence. */
+  projectAvailable: boolean;
 }
 
 export interface McpConfigGetRequest {
