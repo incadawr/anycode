@@ -402,7 +402,7 @@ const handlers = {
   tabs,
   allow: () => simple("POST", () => `/tabs/${positional(1)}/permission`, () => ({ behavior: "allow" })),
   deny: () => simple("POST", () => `/tabs/${positional(1)}/permission`, () => ({ behavior: "deny" })),
-  send: () => simple("POST", () => `/tabs/${positional(1)}/prompt`, () => ({ text: argv.slice(2).join(" ") })),
+  send: () => simple("POST", () => `/tabs/${positional(1)}/prompt`, () => ({ text: argv.slice(2).filter((a, i, rest) => !VALUE_OPTS.has(a) && !VALUE_OPTS.has(rest[i - 1])).join(" ") })),
   stop: () => simple("POST", () => `/tabs/${positional(1)}/stop`, () => ({})),
   quit: () => simple("POST", () => "/quit", () => ({})),
 };
