@@ -42,6 +42,7 @@ import { buildSystemPrompt, type SystemPromptEnv } from "../prompts/identity.js"
 import type { PersonaDefinition } from "../subagents/personas.js";
 import { backgroundCapableBashTool, bashKillTool, bashOutputTool, createDefaultToolRegistry } from "../tools/index.js";
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
+import { SUBAGENT_MAX_OUTPUT_TOKENS } from "../types/config.js";
 import type { AgentEvent, ModelStreamEvent } from "../types/events.js";
 import type { ImageAttachment } from "../types/images.js";
 
@@ -4521,6 +4522,11 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     // copied verbatim; the two ceilings are deliberately different catalog
     // values here so equality below can only pass by genuinely re-resolving
     // against the child's model, not by coincidence.
-    expect(childPort!.requests[0]!.maxOutputTokens).toBe(131_072);
+    // Taskana 4150: the child's resolved 131_072 is then capped at
+    // SUBAGENT_MAX_OUTPUT_TOKENS (what its 100 KB result can carry), which
+    // happens to equal the parent's 32_768 — so this line no longer tells the
+    // two apart; the effort assertion above still does, and runner.test.ts
+    // pins the cap against an explicit below-cap child ceiling.
+    expect(childPort!.requests[0]!.maxOutputTokens).toBe(SUBAGENT_MAX_OUTPUT_TOKENS);
   });
 });
