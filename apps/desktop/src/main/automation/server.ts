@@ -129,6 +129,7 @@ import {
   mcpToggle,
   mcpImportOpen,
   mcpImportApply,
+  mcpAddServer,
   skillsPaneState,
   skillsToggle,
   skillsDelete,
@@ -450,6 +451,14 @@ const mcpToggleBody = z.object({ name: z.string().min(1).max(256) });
 const mcpImportApplyBody = z.object({
   consent: z.boolean(),
   names: z.array(z.string().min(1).max(256)).max(256).optional(),
+});
+const mcpAddServerBody = z.object({
+  name: z.string().min(1).max(256),
+  command: z.string().max(4096).optional(),
+  argsText: z.string().max(65536).optional(),
+  url: z.string().max(4096).optional(),
+  transport: z.union([z.literal("stdio"), z.literal("http")]).optional(),
+  scope: z.union([z.literal("project"), z.literal("user")]).optional(),
 });
 
 // ── Skills pane bodies (slice-P7.20-cut.md §5 W4): global (app-level)
@@ -1232,6 +1241,10 @@ async function route(
   if (method === "POST" && pathname === "/settings/mcp/import/apply") {
     const body = parseBody(rawBody, mcpImportApplyBody);
     return mcpImportApply(deps, { consent: body.consent, names: body.names });
+  }
+  if (method === "POST" && pathname === "/settings/mcp/add") {
+    const body = parseBody(rawBody, mcpAddServerBody);
+    return mcpAddServer(deps, body);
   }
   // Skills pane routes (slice-P7.20-cut.md §5 W4): mirror the SAME DOM paths
   // SkillsPane.tsx itself uses (a row's enable switch, the row's
