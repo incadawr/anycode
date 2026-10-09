@@ -7,6 +7,37 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.33] — 2026-10-09
+
+### Changed
+
+- Codex CLI 0.162.x is supported and is now the version AnyCode installs.
+- Deleting a task, deleting old tasks and closing a tab with a running turn ask
+  for confirmation in AnyCode's own dialog (a red Delete / Close tab button,
+  Cancel focused, Esc cancels) instead of the system dialog that froze the
+  window.
+- The update banner can be closed; it comes back for a newer version or once
+  the update is downloaded.
+- A subagent's output per turn is capped at 32k tokens, about what its 100 KB
+  report can carry, so long reports no longer pay for text that is thrown
+  away.
+- Background agent rows keep their own tool-call and turn counts after you
+  open them, settle on their real outcome, and turn footers show how long the
+  turn took, with seconds.
+
+### Fixed
+
+- A subagent whose last turn was cut by the output-token limit is reported as
+  truncated, never as a success, including background agents.
+- A subagent that reports its work finished on its last allowed turn is no
+  longer reported as out of turns.
+- A background agent report longer than 16k characters says which file holds
+  the full text.
+- The tokens of a subagent's final wrap-up call are counted in telemetry.
+- One unreadable or oversized newest telemetry file no longer blanks the
+  Profile panel: older history is shown with a note about the skipped file.
+- The automation API's `/wait` can wait for the `compacting` turn status.
+
 ## [0.0.32] — 2026-10-08
 
 ### Added
