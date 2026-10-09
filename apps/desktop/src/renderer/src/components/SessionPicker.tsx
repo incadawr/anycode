@@ -44,7 +44,25 @@ export function describeCreateTabFailure(
         return "Set up and sign in to Claude Code in Settings → Claude before opening a task.";
       }
       if (engine === "codex") {
-        return "Sign in to a Codex account in Settings → Codex before opening a tab.";
+        // Taskana 4227: main carries the doctor's exact verdict for the
+        // requested/resumed profile; absent reason (no dependency wired /
+        // legacy) keeps the historical sign-in copy.
+        switch (result.notReadyReason) {
+          case "codex_signed_out":
+          case undefined:
+            return "Sign in to a Codex account in Settings → Codex before opening a tab.";
+          case "codex_update_required":
+            return `This Codex version${result.notReadyDetail ? ` (${result.notReadyDetail})` : ""} is not supported — install the recommended version in Settings → Codex.`;
+          case "codex_not_installed":
+            return "Install the Codex CLI in Settings → Codex before opening a tab.";
+          case "codex_error":
+            if (result.notReadyBinaryPath) {
+              return `AnyCode will not run the Codex binary at ${result.notReadyBinaryPath} — see Settings → Codex for details.`;
+            }
+            return "Codex is not ready — open Settings → Codex for details.";
+          default:
+            return "Codex is not ready — open Settings → Codex for details.";
+        }
       }
       if (result.notReadyReason === "model_missing") {
         return "Choose a model for this connection in Settings → Providers. Your API key is already configured.";

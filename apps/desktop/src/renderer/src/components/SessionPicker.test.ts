@@ -50,6 +50,77 @@ describe("describeCreateTabFailure", () => {
       expect(codexCopy.toLowerCase()).toContain("codex");
     });
 
+    // Taskana 4227: main carries the doctor's exact verdict into not_ready.
+    it("codex signed_out keeps the sign-in copy", () => {
+      const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "codex_signed_out" };
+      expect(describeCreateTabFailure(result, "codex")).toBe(
+        "Sign in to a Codex account in Settings → Codex before opening a tab.",
+      );
+    });
+
+    it("codex absent reason (legacy wiring) keeps the sign-in copy", () => {
+      expect(describeCreateTabFailure(NOT_READY, "codex")).toBe(
+        "Sign in to a Codex account in Settings → Codex before opening a tab.",
+      );
+    });
+
+    it("codex update_required with detail substitutes the version", () => {
+      const result: CreateTabResult = {
+        ok: false,
+        reason: "not_ready",
+        notReadyReason: "codex_update_required",
+        notReadyDetail: "0.144.3",
+      };
+      expect(describeCreateTabFailure(result, "codex")).toBe(
+        "This Codex version (0.144.3) is not supported — install the recommended version in Settings → Codex.",
+      );
+    });
+
+    it("codex update_required without detail omits the parentheses", () => {
+      const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "codex_update_required" };
+      expect(describeCreateTabFailure(result, "codex")).toBe(
+        "This Codex version is not supported — install the recommended version in Settings → Codex.",
+      );
+    });
+
+    it("codex error with a trust binaryPath names the refused path", () => {
+      const result: CreateTabResult = {
+        ok: false,
+        reason: "not_ready",
+        notReadyReason: "codex_error",
+        notReadyBinaryPath: "/usr/local/bin/codex",
+      };
+      expect(describeCreateTabFailure(result, "codex")).toBe(
+        "AnyCode will not run the Codex binary at /usr/local/bin/codex — see Settings → Codex for details.",
+      );
+    });
+
+    it("codex not_installed points at the CLI install", () => {
+      const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "codex_not_installed" };
+      expect(describeCreateTabFailure(result, "codex")).toBe(
+        "Install the Codex CLI in Settings → Codex before opening a tab.",
+      );
+    });
+
+    it("codex error without a trust path is the generic copy", () => {
+      const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "codex_error" };
+      expect(describeCreateTabFailure(result, "codex")).toBe("Codex is not ready — open Settings → Codex for details.");
+    });
+
+    it("any other explicit codex reason falls back to the generic copy", () => {
+      // `codex_signed_out`…`codex_error` are the only defined members; use an
+      // engine_not_ready reason as a stand-in "other explicit reason" to pin
+      // the default branch.
+      const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "engine_not_ready" };
+      expect(describeCreateTabFailure(result, "codex")).toBe("Codex is not ready — open Settings → Codex for details.");
+    });
+
+    it("core receiving a codex reason keeps the existing core copy", () => {
+      const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "codex_signed_out" };
+      expect(describeCreateTabFailure(result, "core")).toBe(CORE_COPY);
+      expect(describeCreateTabFailure(result)).toBe(CORE_COPY);
+    });
+
     it("engine parameterization only affects the not_ready branch — other reasons are unaffected by engine:'codex'", () => {
       const result: CreateTabResult = { ok: false, reason: "max_tabs" };
       expect(describeCreateTabFailure(result, "codex")).toBe(describeCreateTabFailure(result));

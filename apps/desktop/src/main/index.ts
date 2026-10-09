@@ -1943,6 +1943,10 @@ void app.whenReady().then(async () => {
         await claudeOnboarding.recheck();
       }
     },
+    // Taskana 4227: read-only access to the doctor's cached verdict so a
+    // not_ready refusal can carry the exact status. Closure over the nullable
+    // holder — registration happens before codex onboarding initialization.
+    latestCodexReport: (codexProfileId) => codexOnboarding?.lastReportFor(codexProfileId),
     validateWorktreeResume: async (meta) => {
       if (meta.worktree === undefined || meta.projectRoot === undefined) return false;
       try {
