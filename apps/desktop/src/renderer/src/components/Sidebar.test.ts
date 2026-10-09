@@ -21,6 +21,7 @@ import {
   isRowDeletable,
   limitGroupRows,
   parseOlderThanDays,
+  sidebarConfirmCopy,
   singleDeleteConfirm,
   SIDEBAR_GROUP_ROW_LIMIT,
   type FilteredSidebarRow,
@@ -495,6 +496,35 @@ describe("bulkDeleteConfirm (TASK.114)", () => {
   });
 });
 
+// TASK.126: the ConfirmDialog copy per pending confirm — must reuse the exact
+// singleDeleteConfirm / bulkDeleteConfirm text the old window.confirm calls
+// quoted (their own tests above stay authoritative for that text).
+describe("sidebarConfirmCopy (TASK.126)", () => {
+  it("single: 'Delete task' title, singleDeleteConfirm body, 'Delete' verb", () => {
+    expect(sidebarConfirmCopy({ kind: "delete-session", sessionId: "s1", title: "Fix login" })).toEqual({
+      title: "Delete task",
+      body: singleDeleteConfirm("Fix login"),
+      confirmLabel: "Delete",
+    });
+  });
+
+  it("bulk: 'Delete old tasks' title, bulkDeleteConfirm body, count-carrying verb", () => {
+    expect(sidebarConfirmCopy({ kind: "delete-older", workspace: "/w", days: 30, count: 42 })).toEqual({
+      title: "Delete old tasks",
+      body: bulkDeleteConfirm(42, 30),
+      confirmLabel: "Delete 42",
+    });
+  });
+
+  it("bulk count 1 keeps the singular body and a 'Delete 1' verb", () => {
+    expect(sidebarConfirmCopy({ kind: "delete-older", workspace: "/w", days: 30, count: 1 })).toEqual({
+      title: "Delete old tasks",
+      body: bulkDeleteConfirm(1, 30),
+      confirmLabel: "Delete 1",
+    });
+  });
+});
+
 describe("deleteOlderNotice (TASK.114)", () => {
   it("reports the deleted count", () => {
     expect(deleteOlderNotice(3, 0)).toBe("Deleted 3 tasks.");
@@ -511,22 +541,23 @@ describe("deleteOlderNotice (TASK.114)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// REVIEW 15.08 (TASK.114 defect 1) — THE PROMPT GUARD. window.prompt is NOT
-// supported by Electron: it THROWS "prompt() is not supported" the moment it
-// is called. The old bulk-delete flow called it as the FIRST line of its
-// handler (before every try), via `void …` — so the button silently did
-// nothing: no dialog, no error, no notice. This guard fails on ANY occurrence
-// of window.prompt / globalThis.prompt in the renderer's PRODUCTION source —
-// so the next builder cannot quietly reintroduce a dead dialog. Pure-fn
-// tests around the handler can never catch this class of bug.
+// REVIEW 15.08 (TASK.114 defect 1) + TASK.126 — THE NATIVE DIALOG GUARD.
+// window.prompt is NOT supported by Electron: it THROWS "prompt() is not
+// supported" the moment it is called. window.confirm/alert are blocking and
+// freeze the renderer behind a dialog the WebContentsView overlay can't hide.
+// This guard fails on ANY occurrence of confirm/alert/prompt in the
+// renderer's PRODUCTION source — bare, `window.`-qualified or
+// `globalThis.`-qualified — so the next builder cannot quietly reintroduce a
+// blocking native dialog. Pure-fn tests around handlers can never catch this
+// class of bug.
 
-describe("renderer prompt guard (TASK.114 review 15.08)", () => {
-  it("no renderer production source calls window.prompt / globalThis.prompt (Electron throws on it)", async () => {
+describe("renderer native-dialog guard (TASK.114 review 15.08, TASK.126)", () => {
+  it("no renderer production source calls confirm/alert/prompt — window., globalThis. or bare (Electron blocks/freezes them)", async () => {
     const { readdir, readFile } = await import("node:fs/promises");
     const { join, extname } = await import("node:path");
 
     const rendererRoot = join(__dirname, "..");
-    const banned = /(?:window|globalThis)\s*\.\s*prompt\s*\(/;
+    const banned = /(?<![.\w$])(?:(?:window|globalThis)\s*\.\s*)?(?:confirm|alert|prompt)\(/;
 
     async function* walk(dir: string): AsyncGenerator<string> {
       for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -547,7 +578,7 @@ describe("renderer prompt guard (TASK.114 review 15.08)", () => {
     const offenders: string[] = [];
     for await (const file of walk(rendererRoot)) {
       const src = await readFile(file, "utf8");
-      // Strip comments so a mentioned-in-passing prompt never trips the guard;
+      // Strip comments so a mentioned-in-passing call never trips the guard;
       // real call sites survive the strip.
       const stripped = src
         .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -558,5 +589,34 @@ describe("renderer prompt guard (TASK.114 review 15.08)", () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+
+  // Table-driven pinning of the guard's matching contract itself: all nine
+  // banned forms (3 names × 3 qualifications) must match, while member
+  // methods on other objects and longer identifiers containing the banned
+  // name as a substring must not.
+  it("the banned regex matches all nine native call forms and only them", () => {
+    const banned = /(?<![.\w$])(?:(?:window|globalThis)\s*\.\s*)?(?:confirm|alert|prompt)\(/;
+    const bannedForms = [
+      "confirm(",
+      "window.confirm(",
+      "globalThis.confirm(",
+      "alert(",
+      "window.alert(",
+      "globalThis.alert(",
+      "prompt(",
+      "window.prompt(",
+      "globalThis.prompt(",
+    ];
+    for (const form of bannedForms) {
+      expect(banned.test(form)).toBe(true);
+    }
+    expect(banned.test("dialog.confirm(")).toBe(false);
+    expect(banned.test("myWindow.alert(")).toBe(false);
+    expect(banned.test("confirmed(")).toBe(false);
+    expect(banned.test("alerts(")).toBe(false);
+    expect(banned.test("prompted(")).toBe(false);
+    // UI copy such as "System prompt (body)" is prose, not a call.
+    expect(banned.test("System prompt (body)")).toBe(false);
   });
 });
