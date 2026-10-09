@@ -139,6 +139,18 @@ describe("handleMcpConfigGet", () => {
     const snapshot = await handleMcpConfigGet(deps, { tabId: TAB_ID });
     expect(snapshot.entries.find((e) => e.name === "withCwd")?.cwd).toBe("/work/x");
   });
+
+  it("snapshot carries projectAvailable:true when the tab's workspace resolves", async () => {
+    const { deps } = makeDeps();
+    const snapshot = await handleMcpConfigGet(deps, { tabId: TAB_ID });
+    expect(snapshot.projectAvailable).toBe(true);
+  });
+
+  it("snapshot carries projectAvailable:false when no workspace resolves (no tab / unknown tab)", async () => {
+    const { deps } = makeDeps({}, { noTab: true });
+    expect((await handleMcpConfigGet(deps, { tabId: TAB_ID })).projectAvailable).toBe(false);
+    expect((await handleMcpConfigGet(deps, {})).projectAvailable).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -156,6 +168,7 @@ describe("handleMcpUpsert", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.snapshot.entries.map((e) => e.name)).toEqual(["srv"]);
+      expect(result.snapshot.projectAvailable).toBe(true);
     }
     const written = JSON.parse(files[PROJECT_CONFIG] ?? "{}");
     expect(written.mcpServers.srv).toEqual({ command: "node", args: ["srv.js"] });

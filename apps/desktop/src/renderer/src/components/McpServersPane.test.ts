@@ -22,7 +22,8 @@ import {
   buildDeleteRequest,
   canManageMcpEntry,
   canSubmitMcpForm,
-  defaultImportScope,
+  defaultMcpScope,
+  mcpEmptyKind,
   defaultImportSelection,
   describeMcpConfigRow,
   envRowsFromKeys,
@@ -400,13 +401,35 @@ describe("buildDeleteRequest / buildFormUpsertRequest", () => {
 
 // ── import scan/select/group ──
 
-describe("defaultImportScope", () => {
-  it("defaults to project scope when a workspace tabId is resolvable (owner's per-project import pain)", () => {
-    expect(defaultImportScope("tab-1")).toBe("project");
+describe("defaultMcpScope", () => {
+  it("yields project when main reports a resolvable workspace", () => {
+    expect(defaultMcpScope(true)).toBe("project");
   });
 
-  it("falls back to user scope in the pre-tab case (no workspace to write project config into)", () => {
-    expect(defaultImportScope(undefined)).toBe("user");
+  it("yields user when it does not — tabId presence is never the proxy (the removed bug)", () => {
+    expect(defaultMcpScope(false)).toBe("user");
+  });
+});
+
+describe("mcpEmptyKind", () => {
+  it("reads none when nothing is configured and no query is active", () => {
+    expect(mcpEmptyKind(0, 0, "")).toBe("none");
+  });
+
+  it("reads no_match when nothing is configured but a query is active", () => {
+    expect(mcpEmptyKind(0, 0, "ozo")).toBe("no_match");
+  });
+
+  it("reads no_match when configured rows exist but the filter hid them all", () => {
+    expect(mcpEmptyKind(2, 0, "zn")).toBe("no_match");
+  });
+
+  it("is null when configured rows survive the filter", () => {
+    expect(mcpEmptyKind(2, 1, "ozo")).toBe(null);
+  });
+
+  it("treats a whitespace-only query as no query", () => {
+    expect(mcpEmptyKind(0, 0, "   ")).toBe("none");
   });
 });
 

@@ -68,7 +68,7 @@ import type {
   McpTransport,
 } from "../../../shared/mcp-config.js";
 import { describeMcpServer, type McpRowKind } from "./SettingsScreen.js";
-import { Download, Pencil, Plus, Search, Trash, X } from "./icons.js";
+import { Pencil, Search, Trash, X } from "./icons.js";
 
 // ── bridge (DI, same ethic as SettingsScreen.tsx's SettingsBridge) ──
 
@@ -446,9 +446,18 @@ export function importFooterLabel(selection: Record<string, boolean>): string {
   return `Import ${n} server${n === 1 ? "" : "s"} (disabled until you enable them)`;
 }
 
-/** Project scope when a workspace tab is resolvable (owner's pain = per-project import); user scope only as the pre-tab fallback. */
-export function defaultImportScope(tabId?: string): "project" | "user" {
-  return tabId ? "project" : "user";
+export function defaultMcpScope(projectAvailable: boolean): "project" | "user" {
+  return projectAvailable ? "project" : "user";
+}
+export type McpEmptyKind = "none" | "no_match" | null;
+/**
+ * "no_match" = the active query hid every configured row (or there are none but a query is active);
+ * "none" = nothing configured and no active query (CTA state); null = rows visible.
+ */
+export function mcpEmptyKind(configuredTotal: number, filteredCount: number, query: string): McpEmptyKind {
+  if (filteredCount > 0) return null;
+  if (query.trim().length > 0) return "no_match";
+  return "none";
 }
 
 export function importResultText(item: McpImportApplyResultItem): string {
@@ -480,7 +489,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
   const [importScanResult, setImportScanResult] = useState<McpImportScanResult | null>(null);
   const [importSelection, setImportSelection] = useState<Record<string, boolean>>({});
   const [importConsent, setImportConsent] = useState(false);
-  const [importScope, setImportScope] = useState<"project" | "user">(defaultImportScope(tabId));
+  const [importScope, setImportScope] = useState<"project" | "user">("user");
   const [importResults, setImportResults] = useState<McpImportApplyResultItem[] | null>(null);
 
   useEffect(() => {
@@ -499,11 +508,14 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
   const rows = snapshot ? joinMcpRows(snapshot.entries, servers) : [];
   const filtered = filterMcpRows(rows, searchQuery);
   const { configured, compat } = partitionMcpRows(filtered);
+  const allConfigured = partitionMcpRows(rows).configured;
+  const emptyKind = mcpEmptyKind(allConfigured.length, configured.length, searchQuery);
+  const projectAvailable = snapshot?.projectAvailable ?? false; // never a tabId proxy; user-safe pre-snapshot
   const visibleProblems = (snapshot?.problems ?? []).filter((p) => !dismissedProblems.has(p));
 
   function openAddForm(): void {
     setFormError(null);
-    setForm({ mode: "add", fields: blankMcpFormFields("project") });
+    setForm({ mode: "add", fields: blankMcpFormFields(defaultMcpScope(projectAvailable)) });
   }
 
   function openEditForm(entry: McpConfigEntryView): void {
@@ -560,7 +572,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
     setImportOpen(true);
     setImportResults(null);
     setImportConsent(false);
-    setImportScope(defaultImportScope(tabId));
+    setImportScope(defaultMcpScope(projectAvailable));
     const scan = await bridge.importScan({ tabId });
     setImportScanResult(scan);
     setImportSelection(defaultImportSelection(scan.candidates));
@@ -602,11 +614,11 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
           />
         </label>
         <div className="mcp-pane-actions">
-          <button type="button" className="mcp-icon-button" aria-label="Add MCP server" onClick={openAddForm}>
-            <Plus />
+          <button type="button" className="settings-button" aria-label="Add MCP server" onClick={openAddForm}>
+            Add server
           </button>
-          <button type="button" className="mcp-icon-button" aria-label="Import MCP servers" onClick={() => void openImportDialog()}>
-            <Download />
+          <button type="button" className="settings-button" aria-label="Import MCP servers" onClick={() => void openImportDialog()}>
+            Import
           </button>
         </div>
       </div>
@@ -634,7 +646,19 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
               Configured servers <span className="mcp-section-count">{configured.length} item{configured.length === 1 ? "" : "s"}</span>
             </div>
             {configured.length === 0 ? (
-              <div className="settings-mcp-empty">No MCP servers configured yet.</div>
+              <div className="mcp-empty-state">
+                <div className="settings-mcp-empty">{emptyKind === "no_match" ? "No servers match your search." : "No MCP servers configured yet."}</div>
+                {emptyKind === "none" && (
+                  <div className="mcp-empty-actions">
+                    <button type="button" className="settings-button settings-button-primary" onClick={openAddForm}>
+                      Add server
+                    </button>
+                    <button type="button" className="settings-button" onClick={() => void openImportDialog()}>
+                      Import
+                    </button>
+                  </div>
+                )}
+              </div>
             ) : (
               <ul className="mcp-row-list">
                 {configured.map((row) => (
@@ -684,6 +708,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
           mode={form.mode}
           fields={form.fields}
           error={formError}
+          projectAvailable={projectAvailable}
           onChange={(fields) => setForm({ mode: form.mode, fields })}
           onCancel={() => setForm(null)}
           onSubmit={() => void submitForm()}
@@ -696,6 +721,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
           selection={importSelection}
           consent={importConsent}
           scope={importScope}
+          projectAvailable={projectAvailable}
           results={importResults}
           onToggleRow={toggleImportRow}
           onConsentChange={setImportConsent}
@@ -804,12 +830,13 @@ interface McpFormDialogProps {
   mode: "add" | "edit";
   fields: McpFormFields;
   error: string | null;
+  projectAvailable: boolean;
   onChange: (fields: McpFormFields) => void;
   onCancel: () => void;
   onSubmit: () => void;
 }
 
-function McpFormDialog({ mode, fields, error, onChange, onCancel, onSubmit }: McpFormDialogProps) {
+function McpFormDialog({ mode, fields, error, projectAvailable, onChange, onCancel, onSubmit }: McpFormDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -883,7 +910,13 @@ function McpFormDialog({ mode, fields, error, onChange, onCancel, onSubmit }: Mc
             <span className="settings-field-label">Scope</span>
             <div className="mcp-radio-row">
               <label>
-                <input type="radio" name="mcp-scope" checked={fields.scope === "project"} onChange={() => set("scope", "project")} />
+                <input
+                  type="radio"
+                  name="mcp-scope"
+                  checked={fields.scope === "project"}
+                  disabled={!projectAvailable}
+                  onChange={() => set("scope", "project")}
+                />
                 Project
               </label>
               <label>
@@ -891,6 +924,7 @@ function McpFormDialog({ mode, fields, error, onChange, onCancel, onSubmit }: Mc
                 User
               </label>
             </div>
+            {!projectAvailable && <div className="mcp-row-hint">No workspace open — project scope unavailable.</div>}
           </div>
         )}
 
@@ -1007,7 +1041,11 @@ function McpFormDialog({ mode, fields, error, onChange, onCancel, onSubmit }: Mc
           </span>
         </div>
 
-        {error && <div className="settings-env-warning">{error}</div>}
+        {error && (
+          <div className="mcp-problem-strip" role="alert">
+            <span>{error}</span>
+          </div>
+        )}
       </div>
       <div className="mcp-dialog-actions">
         <button type="button" className="settings-button" onClick={onCancel}>
@@ -1028,6 +1066,7 @@ interface McpImportDialogProps {
   selection: Record<string, boolean>;
   consent: boolean;
   scope: "project" | "user";
+  projectAvailable: boolean;
   results: McpImportApplyResultItem[] | null;
   onToggleRow: (id: string) => void;
   onConsentChange: (checked: boolean) => void;
@@ -1041,6 +1080,7 @@ function McpImportDialog({
   selection,
   consent,
   scope,
+  projectAvailable,
   results,
   onToggleRow,
   onConsentChange,
@@ -1128,10 +1168,17 @@ function McpImportDialog({
                   User
                 </label>
                 <label>
-                  <input type="radio" name="mcp-import-scope" checked={scope === "project"} onChange={() => onScopeChange("project")} />
+                  <input
+                    type="radio"
+                    name="mcp-import-scope"
+                    checked={scope === "project"}
+                    disabled={!projectAvailable}
+                    onChange={() => onScopeChange("project")}
+                  />
                   Project
                 </label>
               </div>
+              {!projectAvailable && <div className="mcp-row-hint">No workspace open — project scope unavailable.</div>}
             </div>
 
             <label className="mcp-consent-row">
