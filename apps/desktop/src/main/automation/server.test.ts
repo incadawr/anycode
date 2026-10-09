@@ -2557,6 +2557,7 @@ describe("MCP pane routes (design/slice-P7.19-cut.md §4 W4)", () => {
     { path: "/settings/mcp/toggle", body: { name: "my-server" } },
     { path: "/settings/mcp/import/open", body: {} },
     { path: "/settings/mcp/import/apply", body: { consent: false } },
+    { path: "/settings/mcp/add", body: { name: "my-server" } },
   ];
 
   it("401s GET /settings/mcp without a token", async () => {
@@ -2631,6 +2632,14 @@ describe("MCP pane routes (design/slice-P7.19-cut.md §4 W4)", () => {
       expect(calls).toHaveLength(0);
     });
 
+    it("POST /settings/mcp/add — missing name -> 400", async () => {
+      const { window, calls } = fakeWindowCapture();
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/mcp/add"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+      expect(res.status).toBe(400);
+      expect(calls).toHaveLength(0);
+    });
+
     it("junk JSON on every POST /settings/mcp/* route -> 400, facade never invoked", async () => {
       for (const route of MCP_POST_ROUTES) {
         const { window, calls } = fakeWindowCapture();
@@ -2682,6 +2691,21 @@ describe("MCP pane routes (design/slice-P7.19-cut.md §4 W4)", () => {
       expect(await res.json()).toEqual(facadeResult);
       expect(calls[0]).toContain('"mcpImportApply"');
       expect(calls[0]).toContain('[{"consent":true,"names":["a","b"]}]');
+    });
+
+    it("POST /settings/mcp/add -> mcpAddServer([args])", async () => {
+      const facadeResult = { ok: true };
+      const { window, calls } = fakeWindowCapture(facadeResult);
+      const h = await boot({ getWindow: () => window });
+      const res = await fetch(url(h, "/settings/mcp/add"), {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ name: "my-server", command: "node" }),
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(facadeResult);
+      expect(calls[0]).toContain('"mcpAddServer"');
+      expect(calls[0]).toContain('[{"name":"my-server","command":"node"}]');
     });
 
     it("POST /settings/mcp/import/apply with no names -> mcpImportApply([{consent}])", async () => {
