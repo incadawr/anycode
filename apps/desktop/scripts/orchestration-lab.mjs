@@ -187,6 +187,14 @@ async function task() {
     event(`TASK pnpm install in ${workspace}`);
     execFileSync("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"], { cwd: workspace, stdio: "ignore" });
   }
+  // The app caps open tabs: close the previous task's supervisor tab once it is idle (its session stays saved).
+  if (lab.supervisorTabId) {
+    const prev = (await api(ctx, "GET", "/state")).body?.snapshot?.states?.[lab.supervisorTabId];
+    if (prev && prev.turn?.status === "idle") {
+      await api(ctx, "POST", `/tabs/${lab.supervisorTabId}/close`, {});
+      event(`TASK closed idle supervisor tab ${lab.supervisorTabId}`);
+    }
+  }
   await api(ctx, "POST", "/start-screen/open", { workspace });
   await api(ctx, "POST", "/start-screen/engine", { engineId: "codex" });
   await api(ctx, "POST", "/start-screen/prompt", { text: readFileSync(briefPath, "utf8") });
