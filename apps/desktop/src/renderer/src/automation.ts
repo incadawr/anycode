@@ -885,6 +885,22 @@ export interface McpPaneDom {
   clickApplyButton(): boolean;
   /** A cheap change-detection signature of the dialog's post-apply results list (`""` before any apply) — used to await an in-flight apply's commit without re-deriving its content. */
   importResultsSignature(): string;
+  /** Whether the add/edit form dialog (`dialog.mcp-form-dialog`, never the import dialog) is currently in the DOM. */
+  formOpen(): boolean;
+  /** A real `.click()` on the pane toolbar's "Add MCP server" button. */
+  clickAddServerButton(): void;
+  /** Sets the named form field's text via native React-visible events; `false` if the form isn't open or no field with that label is rendered. */
+  setFormText(label: "Name" | "Command" | "URL" | "Arguments (one per line)", value: string): boolean;
+  /** The named form field's current text value, or `null` if not rendered. */
+  formTextValue(label: "Name" | "Command" | "URL" | "Arguments (one per line)"): string | null;
+  /** A real `.click()` on the named radio group's matching input (skipped if already checked); `false` if absent OR disabled. */
+  clickFormRadio(group: "mcp-scope" | "mcp-transport", value: "project" | "user" | "stdio" | "http"): boolean;
+  /** Whether the named radio group's matching input is currently checked. */
+  formRadioChecked(group: "mcp-scope" | "mcp-transport", value: "project" | "user" | "stdio" | "http"): boolean;
+  /** A real `.click()` on the form dialog's submit (primary) button; `false` if the form isn't open or the button is currently `disabled`. */
+  clickFormSubmit(): boolean;
+  /** The form dialog's `.mcp-problem-strip` text (the submit-refusal surface), or `null` if none. */
+  formErrorText(): string | null;
 }
 
 /**
@@ -2536,6 +2552,7 @@ export interface AutomationFacade {
   mcpToggle(name: string): Promise<FacadeResult>;
   mcpImportOpen(): Promise<FacadeResult>;
   mcpImportApply(args: { consent: boolean; names?: string[] }): Promise<FacadeResult>;
+  mcpAddServer(args: { name: string; command?: string; argsText?: string; url?: string; transport?: "stdio" | "http"; scope?: "project" | "user" }): Promise<FacadeResult>;
   // ── Skills pane probe/driver (design/slice-P7.20-cut.md §5 W4) — a
   // DEDICATED probe, `snapshot()`/`settingsState()`/`mcpPaneState()` stay
   // byte-untouched (§4 custody: dedicated route family). Same "no mirrored
@@ -3399,6 +3416,31 @@ function realMcpPaneDom(): McpPaneDom {
   function importDialog(): HTMLElement | null {
     return document.querySelector<HTMLElement>(".mcp-import-dialog");
   }
+  function formDialog(): HTMLElement | null {
+    return document.querySelector<HTMLElement>("dialog.mcp-form-dialog:not(.mcp-import-dialog)");
+  }
+  /** The `.settings-field` whose own `.settings-field-label` text matches — same structural identification a sighted user relies on (SubagentsPane precedent). */
+  function formField(label: string): HTMLElement | null {
+    for (const field of formDialog()?.querySelectorAll<HTMLElement>(".settings-field") ?? []) {
+      if (field.querySelector(".settings-field-label")?.textContent?.trim() === label) {
+        return field;
+      }
+    }
+    return null;
+  }
+  /** The radio input for `group`/`value`, or `null` when absent OR disabled (never click a disabled Project radio and report success). */
+  function formRadio(group: string, value: string): HTMLInputElement | null {
+    for (const input of formDialog()?.querySelectorAll<HTMLInputElement>(`input[name="${group}"]`) ?? []) {
+      if (input.disabled) {
+        continue;
+      }
+      const labelText = (input.closest("label")?.textContent ?? "").toLowerCase();
+      if (labelText.includes(value)) {
+        return input;
+      }
+    }
+    return null;
+  }
   function candidateRow(name: string): HTMLLabelElement | null {
     return importDialog()?.querySelector<HTMLLabelElement>(`.mcp-import-row[data-mcp-import-name="${CSS.escape(name)}"]`) ?? null;
   }
@@ -3453,7 +3495,9 @@ function realMcpPaneDom(): McpPaneDom {
       }
     },
     clickImportButton: () => {
-      document.querySelector<HTMLButtonElement>('.mcp-pane .mcp-icon-button[aria-label="Import MCP servers"]')?.click();
+      document
+        .querySelector<HTMLButtonElement>('.mcp-pane .mcp-pane-actions [aria-label="Import MCP servers"]')
+        ?.click();
     },
     clickApplyButton: () => {
       const button = importDialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .settings-button-primary");
@@ -3467,6 +3511,60 @@ function realMcpPaneDom(): McpPaneDom {
       Array.from(importDialog()?.querySelectorAll(".mcp-import-result") ?? [])
         .map((el) => el.textContent ?? "")
         .join("|"),
+    formOpen: () => formDialog() !== null,
+    clickAddServerButton: () => {
+      document.querySelector<HTMLButtonElement>('.mcp-pane .mcp-pane-actions [aria-label="Add MCP server"]')?.click();
+    },
+    setFormText: (label, value) => {
+      const field = formField(label);
+      if (!field) {
+        return false;
+      }
+      const input = field.querySelector<HTMLInputElement>("input.settings-field-input");
+      if (input) {
+        setNativeInputValue(input, value);
+        return true;
+      }
+      const textarea = field.querySelector<HTMLTextAreaElement>("textarea.settings-field-input");
+      if (textarea) {
+        setNativeTextAreaValue(textarea, value);
+        return true;
+      }
+      return false;
+    },
+    formTextValue: (label) => {
+      const field = formField(label);
+      const input = field?.querySelector<HTMLInputElement>("input.settings-field-input");
+      if (input) {
+        return input.value;
+      }
+      return field?.querySelector<HTMLTextAreaElement>("textarea.settings-field-input")?.value ?? null;
+    },
+    clickFormRadio: (group, value) => {
+      const input = formRadio(group, value);
+      // `HTMLElement.click()` returns undefined, so an optional-chain
+      // `?.click() ?? false` would report failure for every PRESENT radio —
+      // check presence explicitly, skip the click when already checked (a
+      // no-op re-click would fire the group's onChange needlessly), and
+      // report success only for a usable (present, enabled) input.
+      if (!input) {
+        return false;
+      }
+      if (!input.checked) {
+        input.click();
+      }
+      return true;
+    },
+    formRadioChecked: (group, value) => formRadio(group, value)?.checked ?? false,
+    clickFormSubmit: () => {
+      const button = formDialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .settings-button-primary");
+      if (!button || button.disabled) {
+        return false;
+      }
+      button.click();
+      return true;
+    },
+    formErrorText: () => formDialog()?.querySelector(".mcp-problem-strip")?.textContent?.trim() ?? null,
   };
 }
 
@@ -7488,6 +7586,64 @@ export function createAutomationFacade(
       // races an in-flight write.
       const applied = await waitUntil(() => mcpPaneDom.importResultsSignature() !== before, MCP_PANE_APPLY_DEADLINE_MS);
       return applied ? { ok: true } : { ok: false, reason: "apply_timeout" };
+    },
+
+    async mcpAddServer(args: { name: string; command?: string; argsText?: string; url?: string; transport?: "stdio" | "http"; scope?: "project" | "user" }): Promise<FacadeResult> {
+      if (!mcpPaneDom.mounted()) return { ok: false, reason: "pane_not_mounted" };
+      if (mcpPaneDom.formOpen()) return { ok: false, reason: "form_already_open" };
+      mcpPaneDom.clickAddServerButton();
+      if (!(await waitUntil(() => mcpPaneDom.formOpen(), MCP_PANE_COMMIT_DEADLINE_MS))) return { ok: false, reason: "did_not_open" };
+      // Radio clicks before text fills — switching transport swaps which fields render.
+      // Supervisor correction 3 (strict): the native setter changes `input.value`
+      // and the radio's `checked` SYNCHRONOUSLY, so a readback equality check can
+      // pass before React has committed the state update (and, after a transport
+      // click, before the transport-dependent fields have rendered at all).
+      // `waitUntil` polls starting with an IMMEDIATE predicate check, so on a DOM
+      // adapter it could sail through every write and submit without yielding a
+      // single macrotask — a race on the form's own `set()` (which builds the new
+      // fields object from the RENDER's fields, so a second synchronous write
+      // overwrites the first). The explicit `await nextTick()` after each
+      // radio-click/field-write guarantees a real React commit opportunity before
+      // the readback poll and the next action; the bounded `waitUntil` still
+      // guards against a write that never commits.
+      if (args.transport !== undefined) {
+        const transport = args.transport;
+        if (!mcpPaneDom.clickFormRadio("mcp-transport", transport)) return { ok: false, reason: "field_not_found" };
+        await nextTick();
+        if (!mcpPaneDom.formRadioChecked("mcp-transport", transport)) {
+          if (!(await waitUntil(() => mcpPaneDom.formRadioChecked("mcp-transport", transport), MCP_PANE_COMMIT_DEADLINE_MS))) {
+            return { ok: false, reason: "set_failed" };
+          }
+        }
+      }
+      if (args.scope !== undefined) {
+        const scope = args.scope;
+        if (!mcpPaneDom.clickFormRadio("mcp-scope", scope)) return { ok: false, reason: "field_not_found" };
+        await nextTick();
+        if (!mcpPaneDom.formRadioChecked("mcp-scope", scope)) {
+          if (!(await waitUntil(() => mcpPaneDom.formRadioChecked("mcp-scope", scope), MCP_PANE_COMMIT_DEADLINE_MS))) {
+            return { ok: false, reason: "set_failed" };
+          }
+        }
+      }
+      const fills: Array<["Name" | "Command" | "URL" | "Arguments (one per line)", string]> = [["Name", args.name]];
+      if (args.command !== undefined) fills.push(["Command", args.command]);
+      if (args.argsText !== undefined) fills.push(["Arguments (one per line)", args.argsText]);
+      if (args.url !== undefined) fills.push(["URL", args.url]);
+      for (const [label, value] of fills) {
+        if (!mcpPaneDom.setFormText(label, value)) return { ok: false, reason: "field_not_found" };
+        await nextTick();
+        if (mcpPaneDom.formTextValue(label) !== value) {
+          if (!(await waitUntil(() => mcpPaneDom.formTextValue(label) === value, MCP_PANE_COMMIT_DEADLINE_MS))) {
+            return { ok: false, reason: "set_failed" };
+          }
+        }
+      }
+      // The submit button's disabled state IS the readback: canSubmitMcpForm gates it on name + command/url.
+      if (!mcpPaneDom.clickFormSubmit()) return { ok: false, reason: "submit_disabled" };
+      const settled = await waitUntil(() => !mcpPaneDom.formOpen() || mcpPaneDom.formErrorText() !== null, MCP_PANE_APPLY_DEADLINE_MS);
+      if (!settled) return { ok: false, reason: "did_not_settle" };
+      return mcpPaneDom.formOpen() ? { ok: false, reason: "refused" } : { ok: true };
     },
 
     skillsPaneState(): SkillsPaneState {

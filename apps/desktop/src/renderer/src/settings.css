@@ -1671,6 +1671,19 @@
   flex-shrink: 0;
 }
 
+.mcp-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+}
+
+.mcp-empty-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
 .mcp-icon-button {
   display: inline-flex;
   align-items: center;

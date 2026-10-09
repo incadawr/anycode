@@ -108,6 +108,7 @@ import {
   mcpToggle,
   mcpImportOpen,
   mcpImportApply,
+  mcpAddServer,
   skillsPaneState,
   skillsToggle,
   skillsDelete,
@@ -651,6 +652,12 @@ describe("MCP pane thin facade commands forward method + args (design/slice-P7.1
     const deps = fakeDeps();
     await mcpImportApply(deps, { consent: false, names: undefined });
     expect(deps.callFacade).toHaveBeenCalledWith("mcpImportApply", [{ consent: false, names: undefined }]);
+  });
+
+  it("mcpAddServer -> callFacade('mcpAddServer', [args])", async () => {
+    const deps = fakeDeps();
+    await mcpAddServer(deps, { name: "srv", command: "node" });
+    expect(deps.callFacade).toHaveBeenCalledWith("mcpAddServer", [{ name: "srv", command: "node" }]);
   });
 });
 

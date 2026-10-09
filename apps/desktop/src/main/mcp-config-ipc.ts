@@ -362,7 +362,7 @@ async function buildSnapshot(deps: McpConfigIpcDeps, tabId: string | undefined):
     }
   }
 
-  return { entries, problems };
+  return { entries, problems, projectAvailable: workspace !== undefined };
 }
 
 // ── handlers (exported for unit tests) ──
