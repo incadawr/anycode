@@ -349,6 +349,7 @@ interface ProfileCoverage {
   truncated: boolean;
   coverageStartTs: number | null;
   backlogRemaining: number;
+  skippedNewestFiles: number;
   pendingExactSessions: number;
 }
 
@@ -364,6 +365,7 @@ function toView(stats: ProfileStats, status: ResolvedProfileDir, coverage: Profi
     dir: status.dir,
     coverageStartTs: coverage.coverageStartTs,
     backlogRemaining: coverage.backlogRemaining,
+    skippedNewestFiles: coverage.skippedNewestFiles,
     pendingExactSessions: coverage.pendingExactSessions,
   };
 }
