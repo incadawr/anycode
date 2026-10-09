@@ -69,6 +69,7 @@ import type {
 } from "../../../shared/profile-config.js";
 import {
   computeCollapseProgress,
+  profileSkippedNewestNoteText,
   computeProfilePhase,
   createProfileLoader,
   initialProfileLoadState,
@@ -936,6 +937,7 @@ function ProfileBody({ result, now, onToggle, onReveal, telemetryBusy, backlogPr
   // `coverageStartTs` is a required `number | null` on the wire type (S10) —
   // no absent case left to normalize here.
   const notice = coverageNotice(v.coverageStartTs, startKey, effectiveNow, v.backlogRemaining, backlogProgress);
+  const skippedNote = profileSkippedNewestNoteText(v);
 
   return (
     <>
@@ -947,6 +949,9 @@ function ProfileBody({ result, now, onToggle, onReveal, telemetryBusy, backlogPr
       {/* A backlog always means a cut view, but the two are separate wire
           fields — render the note for either, so a producer that reports one
           without the other still tells the truth on screen. */}
+      {skippedNote !== null && (
+        <p className="profile-stale-note" role="status">{skippedNote}</p>
+      )}
       {(v.truncated || v.backlogRemaining > 0) && (
         <p className="profile-truncated-note">{truncatedNoteText(v.backlogRemaining, backlogProgress)}</p>
       )}

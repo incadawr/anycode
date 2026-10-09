@@ -950,11 +950,15 @@ describe("profile stats cache — fingerprint and coherent reads (D-6)", () => {
     const after = await handleProfileStatsGet(deps);
     expect(after.ok).toBe(true);
     if (!after.ok) return;
-    // Neither the stale 10 nor the unread 99 may be shown, and everything
-    // older than the hole is cut too — truthfulness over completeness.
-    expect(after.view.lifetimeTokens).toBe(0);
+    // Neither the stale 10 nor the unread 99 may be shown; the NEWEST file
+    // failing with readable older history is a newest-end SKIP: the older
+    // file still contributes, and the view says so.
+    expect(after.view.lifetimeTokens).toBe(4);
     expect(after.view.truncated).toBe(true);
     expect(after.view.backlogRemaining).toBe(1);
+    expect(after.view.skippedNewestFiles).toBe(1);
+    // Only the newest file is missing; the older file fully covers history,
+    // so there is no older-history boundary to report.
     expect(after.view.coverageStartTs).toBeNull();
   });
 });
@@ -1680,11 +1684,13 @@ describe("profile stats cache — a metadata error is not an absent file", () =>
       const result = await handleProfileStatsGet(deps);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      // Nothing is known about where this file sits in time, so the honest
-      // answer is "coverage is incomplete", not a number that quietly omits it.
-      expect(result.view.lifetimeTokens).toBe(0);
+      // Nothing is known about where this file sits in time, so it is assumed
+      // NEWEST (conservative) — which now makes it a newest-END SKIP: the
+      // readable older history still contributes, and the view says so.
+      expect(result.view.lifetimeTokens).toBe(4);
       expect(result.view.truncated).toBe(true);
       expect(result.view.backlogRemaining).toBe(1);
+      expect(result.view.skippedNewestFiles).toBe(1);
     },
   );
 });
