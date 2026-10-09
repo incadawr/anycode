@@ -534,6 +534,37 @@ describe("codex profiles control plane (TASK.50, cut §2/§4)", () => {
     expect(controller.hasVerdictFor("no-such")).toBe(false);
   });
 
+  it("lastReportFor() returns the cached verdict without running the doctor (Taskana 4227)", async () => {
+    const runDoctor = profileAwareDoctor((id) => (id === "good" ? "ready" : "signed_out"));
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    expect((await controller.createProfile({ label: "good" })).ok).toBe(true);
+    expect((await controller.createProfile({ label: "bad" })).ok).toBe(true);
+    expect((await controller.setActiveProfile("bad")).ok ?? true).toBe(true);
+
+    // Before any diagnosis: undefined, and no doctor spawn.
+    expect(controller.lastReportFor("good")).toBeUndefined();
+    expect(controller.lastReportFor(undefined)).toBeUndefined();
+
+    await controller.recheck("good");
+    await controller.recheck("bad");
+
+    // A diagnosed profile returns its cached verdict...
+    expect(controller.lastReportFor("good")?.status).toBe("ready");
+    expect(controller.lastReportFor("bad")?.status).toBe("signed_out");
+    // ...an explicit profile can never read the ACTIVE profile's report.
+    expect(controller.lastReportFor("bad")?.status).not.toBe(controller.lastReportFor("good")?.status);
+    // A missing profile returns undefined.
+    expect(controller.lastReportFor("no-such")).toBeUndefined();
+    // Undefined selects the active profile.
+    expect(controller.lastReportFor(undefined)?.status).toBe("signed_out");
+
+    // Pure cache read: the doctor is not re-run for an already-cached profile.
+    const callsBefore = runDoctor.mock.calls.length;
+    expect(controller.lastReportFor("good")?.status).toBe("ready");
+    expect(runDoctor.mock.calls.length).toBe(callsBefore);
+  });
+
   it("recheck of an UNKNOWN profile is an error snapshot with no doctor spawn", async () => {
     const runDoctor = vi.fn();
     const deps = makeDeps({ runDoctor });

@@ -40,7 +40,9 @@ import type {
   TabRebindRequest,
   TabRebindResult,
   WorkspacePickResult,
+  CodexNotReadyReason,
 } from "../shared/tabs.js";
+import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type { TabHostManager } from "./tabs.js";
 import { isEngineId, type EngineId } from "../shared/engines.js";
 // TASK.102 CUT-S2 §10.5/§10.8.1 point 5: `isValidChildId` is the SAME
@@ -219,10 +221,62 @@ export interface TabIpcDeps {
    * the caller and leaves the gate fail-closed.
    */
   hydrateEngineReady?(engine: EngineId, codexProfileId?: string): Promise<unknown>;
+  /**
+   * Taskana 4227: the last cached Codex doctor verdict for this profile
+   * (absent id = the active one), or undefined when none landed. Read-only —
+   * lets `notReady` carry the doctor's exact status (signed_out,
+   * update_required, not_installed, error) into the refusal so the renderer
+   * can show engine-correct copy instead of the generic one. Absent = legacy
+   * wiring / unit fixtures: plain refusal, byte-identical to before.
+   */
+  latestCodexReport?(codexProfileId?: string): CodexDoctorReport | undefined;
 }
 
-async function notReady(deps: TabIpcDeps, engine: string, connectionId?: string): Promise<CreateTabResult> {
-  if (engine !== "core") return { ok: false, reason: "not_ready" };
+async function notReady(
+  deps: TabIpcDeps,
+  engine: string,
+  connectionId?: string,
+  codexProfileId?: string,
+): Promise<CreateTabResult> {
+  if (engine !== "core") {
+    // Taskana 4227: with the doctor-cache dependency wired, carry the exact
+    // verdict for the requested/resumed profile into the refusal. No report,
+    // a ready report inconsistent with the spawn gate, a getter failure, or
+    // any other status all fall back to the generic codex_error. A trust
+    // refusal stays codex_error and carries its binary path separately.
+    if (engine === "codex" && deps.latestCodexReport !== undefined) {
+      let report: CodexDoctorReport | undefined;
+      try {
+        report = deps.latestCodexReport(codexProfileId);
+      } catch {
+        report = undefined;
+      }
+      let notReadyReason: CodexNotReadyReason | undefined;
+      let notReadyDetail: string | undefined;
+      let notReadyBinaryPath: string | undefined;
+      if (report?.status === "signed_out") {
+        notReadyReason = "codex_signed_out";
+      } else if (report?.status === "update_required") {
+        notReadyReason = "codex_update_required";
+        notReadyDetail = report.version;
+      } else if (report?.status === "not_installed") {
+        notReadyReason = "codex_not_installed";
+      } else if (report?.status === "error") {
+        notReadyReason = "codex_error";
+        notReadyBinaryPath = report.trustRefusal?.binaryPath;
+      } else {
+        notReadyReason = "codex_error";
+      }
+      return {
+        ok: false,
+        reason: "not_ready",
+        notReadyReason,
+        ...(notReadyDetail !== undefined ? { notReadyDetail } : {}),
+        ...(notReadyBinaryPath !== undefined ? { notReadyBinaryPath } : {}),
+      };
+    }
+    return { ok: false, reason: "not_ready" };
+  }
   if (!deps.providerReadiness) return { ok: false, reason: "not_ready" };
   try {
     const status = await deps.providerReadiness(connectionId);
@@ -521,7 +575,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // TASK.64: an UNKNOWN verdict (boot recheck in flight / never-diagnosed
     // profile) awaits the first snapshot instead of falsely refusing.
     if (!(await spawnableWhenKnown(deps, engine, req.codexProfileId))) {
-      return notReady(deps, engine, req.connectionId);
+      return notReady(deps, engine, req.connectionId, req.codexProfileId);
     }
     // Codex-profiles W3-F: resolve the draft's profile pick BEFORE prompting
     // (same "never make the user pick a folder for a refused request"
@@ -637,7 +691,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // the active-profile answer. TASK.64: same UNKNOWN-await as the "new" branch —
   // a resumed profile nobody diagnosed since boot is hydrated, not refused.
   if (!isEngineId(engine) || !(await spawnableWhenKnown(deps, engine, meta.codexProfileId))) {
-    return notReady(deps, engine, meta.connectionId);
+    return notReady(deps, engine, meta.connectionId, meta.codexProfileId);
   }
   const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);
   if (openInTabId !== undefined) {

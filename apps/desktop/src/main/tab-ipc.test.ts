@@ -2058,3 +2058,174 @@ it("reports a missing model without blaming the configured key or prompting for 
   expect(showOpenDialog).not.toHaveBeenCalled();
   expect(rig.createTab).not.toHaveBeenCalled();
 });
+
+// ── Taskana 4227: not_ready carries the doctor's exact verdict ──
+describe("handleCreate — codex not_ready carries the doctor verdict (Taskana 4227)", () => {
+  type ReportLike = import("../shared/codex-doctor.js").CodexDoctorReport;
+  function rig(report: ReportLike | undefined) {
+    const { manager, createTab } = makeManager({ canSpawn: false });
+    const { dialog, showOpenDialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const latestCodexReport = vi.fn(() => report);
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, latestCodexReport };
+    return { deps, createTab, showOpenDialog, latestCodexReport };
+  }
+  const req = { kind: "new" as const, workspace: "/x", engine: "codex" as const };
+
+  it("signed_out maps to codex_signed_out", async () => {
+    const r = rig({ status: "signed_out" });
+    expect(await handleCreate(r.deps, { ...req, codexProfileId: "work" })).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_signed_out",
+    });
+    expect(r.latestCodexReport).toHaveBeenCalledWith("work");
+  });
+
+  it("update_required maps to codex_update_required and carries the version", async () => {
+    const r = rig({ status: "update_required", version: "0.144.3" });
+    expect(await handleCreate(r.deps, req)).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_update_required",
+      notReadyDetail: "0.144.3",
+    });
+  });
+
+  it("not_installed maps to codex_not_installed", async () => {
+    const r = rig({ status: "not_installed" });
+    expect(await handleCreate(r.deps, req)).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_not_installed",
+    });
+  });
+
+  it("error with a structured trust refusal carries the binary path under codex_error", async () => {
+    const r = rig({ status: "error", trustRefusal: { binaryPath: "/opt/codex/bin/codex", reason: "untrusted", staleConsent: false } });
+    expect(await handleCreate(r.deps, req)).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_error",
+      notReadyBinaryPath: "/opt/codex/bin/codex",
+    });
+  });
+
+  it("plain error maps to codex_error with no path", async () => {
+    const r = rig({ status: "error" });
+    expect(await handleCreate(r.deps, req)).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_error",
+    });
+  });
+
+  it("wired dependency returning undefined (no verdict yet) is the generic codex_error", async () => {
+    const r = rig(undefined);
+    expect(await handleCreate(r.deps, req)).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_error",
+    });
+  });
+
+  it("a ready report inconsistent with the spawn gate is the generic codex_error", async () => {
+    const r = rig({ status: "ready" });
+    expect(await handleCreate(r.deps, req)).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_error",
+    });
+  });
+
+  it("a throwing getter is caught and degrades to codex_error", async () => {
+    const { manager } = makeManager({ canSpawn: false });
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: persistenceStub,
+      dialog,
+      latestCodexReport: () => {
+        throw new Error("cache exploded");
+      },
+    };
+    expect(await handleCreate(deps, req)).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_error",
+    });
+  });
+
+  it("absent dependency keeps the exact legacy plain refusal", async () => {
+    const r = rig({ status: "signed_out" });
+    const deps: TabIpcDeps = { manager: r.deps.manager, persistence: persistenceStub, dialog: r.deps.dialog };
+    expect(await handleCreate(deps, req)).toEqual({ ok: false, reason: "not_ready" });
+  });
+
+  it("absent profile selects the active profile via undefined", async () => {
+    const r = rig({ status: "not_installed" });
+    await handleCreate(r.deps, req); // no codexProfileId on the request
+    expect(r.latestCodexReport).toHaveBeenCalledWith(undefined);
+  });
+
+  it("core not_ready keeps its providerReadiness mapping (no codex reasons leak)", async () => {
+    const { manager } = makeManager({ canSpawn: false });
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: persistenceStub,
+      dialog,
+      providerReadiness: async () => ({ apiKeyReady: false, modelReady: false, transportReady: true }),
+      latestCodexReport: (): import("../shared/codex-doctor.js").CodexDoctorReport => ({ status: "signed_out" }),
+    };
+    expect(await handleCreate(deps, { kind: "new", workspace: "/x", engine: "core" })).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "credential_missing",
+    });
+  });
+
+  it("resume: the persisted profile reaches the getter and its verdict reaches the refusal", async () => {
+    const { manager } = makeManager({ canSpawn: false });
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const latestCodexReport = vi.fn((): import("../shared/codex-doctor.js").CodexDoctorReport => ({ status: "signed_out" }));
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: metaPersistenceResume(codexMetaResume("work")),
+      dialog,
+      latestCodexReport,
+    };
+    expect(await handleCreate(deps, { kind: "resume", sessionId: "s-codex" })).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_signed_out",
+    });
+    expect(latestCodexReport).toHaveBeenCalledWith("work");
+  });
+});
+
+/** Resume-path stubs for the Taskana 4227 describe (same shape as the TASK.64 codexMeta/metaPersistence rig). */
+function codexMetaResume(codexProfileId?: string) {
+  return {
+    id: "s-codex",
+    workspace: "/project",
+    model: "m",
+    mode: "build" as const,
+    createdAt: 1,
+    updatedAt: 1,
+    engineId: "codex",
+    ...(codexProfileId !== undefined ? { codexProfileId } : {}),
+  };
+}
+function metaPersistenceResume(meta: ReturnType<typeof codexMetaResume>): TabIpcDeps["persistence"] {
+  return {
+    getChildSession: async () => null,
+    getSessionById: async () => null,
+    deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+    listSessionsOlderThan: async () => [],
+    deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+    loadHistory: async () => [],
+    getRootSession: async () => meta,
+    listRootSessions: async () => [],
+    touchSession: async () => {},
+  };
+}

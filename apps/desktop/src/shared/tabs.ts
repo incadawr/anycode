@@ -208,8 +208,28 @@ export type CreateTabResult =
       focusTabId?: string; // already_open -> renderer focuses this tab
       worktreePath?: string; // actionable recovery detail for worktree_unavailable
       connectionId?: string; // connection_missing -> the deleted pin
-      notReadyReason?: "credential_missing" | "model_missing" | "transport_unsupported" | "engine_not_ready";
+      notReadyReason?:
+        | "credential_missing"
+        | "model_missing"
+        | "transport_unsupported"
+        | "engine_not_ready"
+        | CodexNotReadyReason;
+      /** Unsupported Codex version detail (codex_update_required). */
+      notReadyDetail?: string;
+      /** Structured trust refusal path (codex_error). */
+      notReadyBinaryPath?: string;
     };
+
+/**
+ * Codex doctor verdict vocabulary carried into not_ready failures.
+ * `codex_error` is the generic fallback (including trust refusals, which carry
+ * a separate binary path rather than a distinct status).
+ */
+export type CodexNotReadyReason =
+  | "codex_signed_out"
+  | "codex_update_required"
+  | "codex_not_installed"
+  | "codex_error";
 
 /** Result of a close-tab request; main refuses to close the last remaining tab or an id it doesn't know about. */
 export type CloseTabResult = { ok: true } | { ok: false; reason: "last_tab" | "unknown_tab" };
