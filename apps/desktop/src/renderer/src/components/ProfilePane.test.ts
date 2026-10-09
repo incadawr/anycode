@@ -70,6 +70,7 @@ function view(overrides: Partial<ProfileStatsView> = {}): ProfileStatsView {
     coverageStartTs: null,
     backlogRemaining: 0,
     pendingExactSessions: 0,
+    skippedNewestFiles: 0,
     days: {},
     models: [],
     engineTokens: {},

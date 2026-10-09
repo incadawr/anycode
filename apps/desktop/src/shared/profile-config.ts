@@ -141,6 +141,14 @@ export interface ProfileStatsView {
    * about activity precision.
    */
   pendingExactSessions: number;
+  /**
+   * Positively identified unreadable/oversized/stat-unavailable files at the
+   * NEWEST end of history that were SKIPPED while older readable history
+   * still contributed to this view — NOT budget deferrals and NOT holes
+   * behind an aggregated newer file. REQUIRED: both producers fill it, so no
+   * future one can silently drop the number.
+   */
+  skippedNewestFiles: number;
   /** dayKey (same `dayKey(ts)` call as the core aggregator) -> that day's stats. TASK.158 slice 2: the period filter's only data source below the heatmap. */
   days: Record<string, ProfileDayStatsView>;
   /** FULL model list (no top-N cut), tokens desc then name. Absent `engine` means every session attributed to that model was core (no engine boot). */
