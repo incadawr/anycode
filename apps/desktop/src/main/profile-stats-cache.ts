@@ -68,7 +68,7 @@ import {
 import type { ProfileFileStat, ProfileFs } from "./profile-ipc.js";
 
 /** Cache-file format version — bump when the ON-DISK ENCODING below changes. */
-export const PROFILE_STATS_CACHE_SCHEMA = 2;
+export const PROFILE_STATS_CACHE_SCHEMA = 3;
 /** Aggregation-rules version — bump when the MATH changes while the encoding
  *  stays put (a stale cache would otherwise be a silent lie). */
 export const PROFILE_STATS_CACHE_ALGO = 2;
@@ -183,6 +183,8 @@ interface CacheState {
   truncated: boolean;
   coverageStartTs: number | null;
   backlogRemaining: number;
+  /** Newest-end skips positively identified by the last completed pass. */
+  skippedNewestFiles: number;
   files: Map<string, CachedFileEntry>;
   exact: Map<string, ExactSessionEntry>;
 }
@@ -230,6 +232,7 @@ const cacheHeaderSchema = z.object({
   trunc: z.boolean(),
   cov: z.union([z.number(), z.null()]),
   backlog: z.number().int().nonnegative(),
+  skip: z.number().int().nonnegative(),
   files: z.record(z.string(), z.unknown()),
   exact: z.record(z.string(), z.unknown()),
 });
@@ -506,6 +509,7 @@ function serializeState(state: CacheState): string {
     trunc: state.truncated,
     cov: state.coverageStartTs,
     backlog: state.backlogRemaining,
+    skip: state.skippedNewestFiles,
     files,
     exact,
   });
@@ -542,6 +546,7 @@ function deserializeState(raw: string): CacheState | null {
     truncated: data.trunc,
     coverageStartTs: data.cov,
     backlogRemaining: data.backlog,
+    skippedNewestFiles: data.skip,
     files,
     exact,
   };
@@ -564,6 +569,13 @@ interface StatedJsonlFile {
    * position so the shortfall is visible instead of silent.
    */
   statUnavailable?: boolean;
+  /**
+   * The file is over the per-file size ceiling AND sits in the NEWEST tail
+   * (nothing newer than it is readable). Stamped by the pass that judged it
+   * so `skippedNewestFiles` can distinguish a genuine newest-end skip from a
+   * budget-deferred file or a hole behind an aggregated newer file.
+   */
+  oversized?: boolean;
 }
 
 function stripTrailingSep(base: string): string {
@@ -664,8 +676,17 @@ export interface ProfileCacheStatsOutcome {
   /** REACHABLE files still waiting to be opened (never counts the permanent
    *  cut behind an oversized file — "Refresh continues" must not be a lie). */
   backlogRemaining: number;
-  /** Cross-file sessions whose exact activity has not finished folding yet:
-   *  their contribution to `longestSessionMs` is provisional. */
+  /**
+   * Positively identified unreadable/oversized/stat-unavailable files at the
+   * NEWEST end of history that this pass SKIPPED while older readable history
+   * still contributed to `stats`. NOT budget deferrals (those remain ordinary
+   * contiguous-prefix holes with `backlogRemaining`) and NOT holes behind an
+   * aggregated newer file.
+   */
+  skippedNewestFiles: number;
+  /**
+   * Cross-file sessions whose exact activity has not finished folding yet:
+   * their contribution to `longestSessionMs` is provisional. */
   pendingExactSessions: number;
 }
 
@@ -867,6 +888,7 @@ export class ProfileStatsCacheStore {
         truncated: false,
         coverageStartTs: null,
         backlogRemaining: 0,
+        skippedNewestFiles: 0,
         files: new Map(),
         exact: new Map(),
       };
@@ -896,20 +918,36 @@ export class ProfileStatsCacheStore {
     /** Index of the first file over the per-file ceiling: the permanent end
      *  of reachable history (D-2). `stated.length` when there is none. */
     let reachableEnd = stated.length;
+    /** Whether any file has been positively identified as readable this pass. */
+    let seenAvailable = false;
+    /** NEWEST-end skips positively identified this pass (read-failed but not
+     *  gone, stat-unavailable, or oversized) — the tail the view excludes. */
+    const tailSkip = new Set<string>();
     for (let index = 0; index < stated.length; index += 1) {
       const entry = stated[index]!;
       // Unjudgeable this pass: not read, not compared, not treated as an
       // oversized cut either — its recorded size is last pass's, not today's.
-      if (entry.statUnavailable === true) continue;
+      if (entry.statUnavailable === true) {
+        tailSkip.add(entry.name);
+        continue;
+      }
       if (entry.size > budgets.maxFileBytes) {
         // Never read, never cached, and nothing behind it is worth opening:
         // the prefix rule could never show it.
         if (state.files.delete(entry.name)) dirty = true;
+        if (!seenAvailable) {
+          entry.oversized = true;
+          tailSkip.add(entry.name);
+          continue;
+        }
         reachableEnd = index;
         break;
       }
       const cached = state.files.get(entry.name);
-      if (cached !== undefined && sameFingerprint(cached, entry)) continue;
+      if (cached !== undefined && sameFingerprint(cached, entry)) {
+        seenAvailable = true;
+        continue;
+      }
       if (opens >= budgets.maxNewReadsPerPass) break;
       // `opens > 0` keeps the byte guard from starving a pass: the first file
       // of a pass is always allowed through (its size is already bounded by
@@ -927,6 +965,7 @@ export class ProfileStatsCacheStore {
         // KNOW has changed is worse than a hole in coverage.
         if (state.files.delete(entry.name)) dirty = true;
         if (read.gone) vanished.add(entry.name);
+        else tailSkip.add(entry.name);
         continue;
       }
       bytes += read.fingerprint.size;
@@ -939,6 +978,7 @@ export class ProfileStatsCacheStore {
       });
       contentThisPass.set(entry.name, read.lines);
       readThisPass.add(entry.name);
+      seenAvailable = true;
       dirty = true;
     }
 
@@ -982,19 +1022,39 @@ export class ProfileStatsCacheStore {
         cached !== undefined &&
         (readThisPass.has(entry.name) || sameFingerprint(cached, entry));
       available.push(ok);
-      if (!ok) backlogRemaining += 1;
+      if (!ok && entry.oversized !== true) backlogRemaining += 1;
     }
-    let prefixEnd = 0;
+    let start = 0;
+    let advanced = true;
+    while (start < reachable.length && available[start] !== true) {
+      if (!tailSkip.has(reachable[start]!.name)) {
+        advanced = false;
+        break;
+      }
+      start += 1;
+    }
+    const haveAny = advanced && start < reachable.length && available[start] === true;
+    const skippedNewestFiles = haveAny ? start : 0;
+    if (!haveAny) start = 0;
+    let prefixEnd = start;
     while (prefixEnd < reachable.length && available[prefixEnd] === true) prefixEnd += 1;
 
     const included: Array<{ name: string; entry: CachedFileEntry }> = [];
-    for (let index = 0; index < prefixEnd; index += 1) {
+    for (let index = start; index < prefixEnd; index += 1) {
       const name = reachable[index]!.name;
       included.push({ name, entry: state.files.get(name)! });
     }
-    const truncated = prefixEnd < knownFiles;
+    const truncated = included.length < knownFiles;
     const oldest = included.length === 0 ? undefined : included[included.length - 1]!.entry;
-    const coverageStartTs = truncated && oldest !== undefined ? (oldest.firstLineTs ?? oldest.mtimeMs) : null;
+    // The coverage boundary is the OLDER-history edge: publish it only when
+    // the included run stops before older KNOWN history (a middle hole, an
+    // oversized older cut, budget truncation). When the only thing missing is
+    // the NEWEST tail (`skippedNewestFiles` accounts for every known file the
+    // view lacks), the gap is at the newest end — an "history before X not
+    // included" note would be a lie, so the boundary is null.
+    const olderHistoryMissing = knownFiles - included.length > skippedNewestFiles;
+    const coverageStartTs =
+      truncated && olderHistoryMissing && oldest !== undefined ? (oldest.firstLineTs ?? oldest.mtimeMs) : null;
 
     // Stamp membership onto the entries themselves, so `getStatsCached` after
     // a restart replays exactly this prefix instead of re-deriving it.
@@ -1020,13 +1080,15 @@ export class ProfileStatsCacheStore {
     if (
       state.truncated !== truncated ||
       state.coverageStartTs !== coverageStartTs ||
-      state.backlogRemaining !== backlogRemaining
+      state.backlogRemaining !== backlogRemaining ||
+      state.skippedNewestFiles !== skippedNewestFiles
     ) {
       dirty = true;
     }
     state.truncated = truncated;
     state.coverageStartTs = coverageStartTs;
     state.backlogRemaining = backlogRemaining;
+    state.skippedNewestFiles = skippedNewestFiles;
 
     if (this.epoch !== epoch) {
       // The cache was discarded while this pass was running. Its numbers are
@@ -1039,6 +1101,7 @@ export class ProfileStatsCacheStore {
         truncated,
         coverageStartTs,
         backlogRemaining,
+        skippedNewestFiles,
         pendingExactSessions: resolved.pendingExactSessions,
       };
     }
@@ -1051,6 +1114,7 @@ export class ProfileStatsCacheStore {
       truncated,
       coverageStartTs,
       backlogRemaining,
+      skippedNewestFiles,
       pendingExactSessions: resolved.pendingExactSessions,
     };
   }
@@ -1085,6 +1149,7 @@ export class ProfileStatsCacheStore {
       // participant that changed since then is invisible here and a session
       // can read as settled until the next real pass says otherwise.
       pendingExactSessions: resolved.pendingExactSessions,
+      skippedNewestFiles: state.skippedNewestFiles,
     };
   }
 

@@ -29,6 +29,7 @@ import {
   isProfileCatchingUp,
   isProfileRequestAllowed,
   profileLoadReducer,
+  profileSkippedNewestNoteText,
   profileUpdateErrorText,
   shouldAutoContinue,
   type ProfileFreshRequestKind,
@@ -53,6 +54,7 @@ function view(overrides: Partial<ProfileStatsView> = {}): ProfileStatsView {
     coverageStartTs: null,
     backlogRemaining: 0,
     pendingExactSessions: 0,
+    skippedNewestFiles: 0,
     days: {},
     models: [],
     engineTokens: {},
@@ -94,6 +96,26 @@ function run(actions: ProfileLoadAction[], from: ProfileLoadState = initialProfi
 }
 
 const FRESH_KINDS: ProfileFreshRequestKind[] = ["mount-fresh", "refresh", "set-telemetry", "rebuild"];
+
+// ── newest-end skip note ──
+
+describe("profileSkippedNewestNoteText", () => {
+  it("one skipped newest file names the newest file", () => {
+    expect(profileSkippedNewestNoteText(view({ skippedNewestFiles: 1 }))).toBe(
+      "The newest telemetry file could not be read — the numbers below exclude it.",
+    );
+  });
+
+  it("two skipped newest files name the count", () => {
+    expect(profileSkippedNewestNoteText(view({ skippedNewestFiles: 2 }))).toBe(
+      "The 2 newest telemetry files could not be read — the numbers below exclude them.",
+    );
+  });
+
+  it("no skips produces no note", () => {
+    expect(profileSkippedNewestNoteText(view())).toBeNull();
+  });
+});
 
 // ── reducer: the happy paths ──
 
@@ -452,6 +474,30 @@ describe("createProfileLoader — mount", () => {
 
     expect(computeProfilePhase(loader.getState())).toBe("skeleton");
     expect(loader.getState().error).toBeNull();
+  });
+
+  it("a fresh view with newest-end skips keeps the numbers and shows no collapse", async () => {
+    const { bridge, queues } = fakeBridge();
+    const loader = createProfileLoader(bridge, () => {});
+    loader.mount();
+
+    queues.getStatsCached[0]!.resolve(noCache);
+    queues.getStats[0]!.resolve({
+      ok: true,
+      view: view({
+        totalSessions: 3,
+        lifetimeTokens: 7,
+        truncated: true,
+        backlogRemaining: 1,
+        skippedNewestFiles: 1,
+      }),
+    });
+    await settleAll();
+
+    const state = loader.getState();
+    expect(state.view?.lifetimeTokens).toBe(7);
+    expect(state.coverageCollapse).toBeNull();
+    expect(profileSkippedNewestNoteText(state.view!)).not.toBeNull();
   });
 
   it("a second mount() on the same loader is ignored", () => {

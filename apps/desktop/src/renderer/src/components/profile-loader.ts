@@ -339,6 +339,20 @@ export function computeCollapseProgress(state: ProfileLoadState): ProfileCollaps
 }
 
 /**
+ * The on-screen note for NEWEST-END skips: telemetry files at the newest end
+ * of history that were unreadable (EPERM etc.), stat-unavailable, or over the
+ * per-file size ceiling, while older readable history still contributed to
+ * the view. Reports the count of skipped newest files; NOT budget deferrals
+ * or holes behind an aggregated newer file (those render as other notes).
+ */
+export function profileSkippedNewestNoteText(view: ProfileStatsView): string | null {
+  if (view.skippedNewestFiles <= 0) return null;
+  return view.skippedNewestFiles === 1
+    ? "The newest telemetry file could not be read — the numbers below exclude it."
+    : `The ${view.skippedNewestFiles} newest telemetry files could not be read — the numbers below exclude them.`;
+}
+
+/**
  * Whether the controller should issue another pass BY ITSELF (TASK.187 S4
  * catch-up). The owner's requirement is that the numbers fill in on their
  * own — a cold cache needs three passes on a 60k-file directory, and a note
