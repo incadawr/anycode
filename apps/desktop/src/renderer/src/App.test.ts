@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import type { SettingsSnapshot } from "../../shared/settings.js";
 import type { UiToHostMessage } from "../../shared/protocol.js";
 import {
+  CLOSE_TAB_CONFIRM,
   computeGitPanelOpen,
   computeSessionContentColumns,
   dispatchTryAgain,
@@ -427,5 +428,15 @@ describe("emptyPaneSidebarAffordance (TASK.129)", () => {
     const vm = emptyPaneSidebarAffordance(true, null);
     expect(vm.showExpand).toBe(true);
     expect(vm.text).not.toMatch(/press/);
+  });
+});
+
+// TASK.126: the close-with-running-turn confirm copy — the exact text the old
+// blocking window.confirm quoted, now carried by the shared ConfirmDialog.
+describe("CLOSE_TAB_CONFIRM (TASK.126)", () => {
+  it("carries the exact title, body and Close tab verb", () => {
+    expect(CLOSE_TAB_CONFIRM.title).toBe("Close tab");
+    expect(CLOSE_TAB_CONFIRM.body).toBe("This tab has a turn in progress. Close it anyway?");
+    expect(CLOSE_TAB_CONFIRM.confirmLabel).toBe("Close tab");
   });
 });

@@ -21,6 +21,7 @@ import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { rowStatusKind, useTabStatusStore, type RowStatusKind } from "../tab-status-store.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { handleCreateTabResult, resolveConnectionMissingAction } from "./SessionPicker.js";
+import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
 import { ArrowUp, Chevron, Collapse, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
 
@@ -370,6 +371,30 @@ export function singleDeleteConfirm(title: string): string {
   return `Delete “${title}” permanently? This cannot be undone.`;
 }
 
+// TASK.126: the pending Sidebar confirm. A discriminated union (not a loose
+// object) so the Confirm handler dispatches to exactly one performer.
+export type SidebarConfirm =
+  | { kind: "delete-session"; sessionId: string; title: string }
+  | { kind: "delete-older"; workspace: string; days: number; count: number };
+
+/** Copy for the ConfirmDialog per pending confirm (TASK.126). */
+export function sidebarConfirmCopy(confirm: SidebarConfirm): { title: string; body: string; confirmLabel: string } {
+  switch (confirm.kind) {
+    case "delete-session":
+      return {
+        title: "Delete task",
+        body: singleDeleteConfirm(confirm.title),
+        confirmLabel: "Delete",
+      };
+    case "delete-older":
+      return {
+        title: "Delete old tasks",
+        body: bulkDeleteConfirm(confirm.count, confirm.days),
+        confirmLabel: `Delete ${confirm.count}`,
+      };
+  }
+}
+
 /**
  * TASK.114 (review 15.08, defect 1): `window.prompt` is NOT supported by
  * Electron — it throws "prompt() is not supported" the moment it is called.
@@ -522,6 +547,9 @@ export function Sidebar({
   // REVIEW 15.08 DEFECT 1: preset submenu (7/30/90 days) replaces window.prompt.
   const [deleteOlderSubmenuFor, setDeleteOlderSubmenuFor] = useState<string | null>(null);
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
+  // TASK.126: pending destructive-confirm request for the shared ConfirmDialog
+  // (replaces the two blocking window.confirm calls below).
+  const [confirm, setConfirm] = useState<SidebarConfirm | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const menuItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -636,11 +664,8 @@ export function Sidebar({
   // gate is main's (`isSessionActive` in main/tab-ipc.ts) — the renderer only
   // gates the AFFORDANCE and surfaces refusals as notices.
 
-  const deleteSessionById = useCallback(
-    async (sessionId: string, title: string) => {
-      if (!window.confirm(singleDeleteConfirm(title))) {
-        return;
-      }
+  const performDeleteSession = useCallback(
+    async (sessionId: string) => {
       try {
         const result = await window.anycode.deleteSession(sessionId);
         if (result.ok) {
@@ -688,9 +713,16 @@ export function Sidebar({
         setNoticeAction(null);
         return;
       }
-      if (!window.confirm(bulkDeleteConfirm(count, days))) {
-        return;
-      }
+      // TASK.126: stage the destructive intent — the shared ConfirmDialog
+      // (not a blocking window.confirm) performs it only on Confirm.
+      setConfirm({ kind: "delete-older", workspace, days, count });
+    },
+    [],
+  );
+
+  /** The committed bulk delete (TASK.126): the ConfirmDialog's Confirm path. */
+  const performDeleteOlder = useCallback(
+    async (workspace: string, days: number) => {
       try {
         const result = await window.anycode.deleteSessionsOlder(workspace, days);
         if (!result.ok) {
@@ -709,6 +741,24 @@ export function Sidebar({
     [refetchSessions],
   );
 
+  /** Trash-row delete (TASK.126): stage the single-delete confirm. */
+  const askDeleteSession = useCallback((sessionId: string, title: string) => {
+    setConfirm({ kind: "delete-session", sessionId, title });
+  }, []);
+
+  /** ConfirmDialog Confirm: capture the pending intent, clear it, run it. */
+  const handleConfirm = useCallback(() => {
+    const current = confirm;
+    setConfirm(null);
+    if (current === null) {
+      return;
+    }
+    if (current.kind === "delete-session") {
+      void performDeleteSession(current.sessionId);
+    } else {
+      void performDeleteOlder(current.workspace, current.days);
+    }
+  }, [confirm, performDeleteSession, performDeleteOlder]);
 
   // trigger is excluded so its own click stays a toggle), any scroll of the
   // sidebar list (capture phase — fixed coords go stale), and window resize.
@@ -1074,7 +1124,7 @@ export function Sidebar({
                         className="sidebar-row-delete"
                         aria-label={`Delete ${row.title}`}
                         disabled={!isRowDeletable(row.kind, tabs.some((t) => t.sessionId === row.sessionId))}
-                        onClick={() => void deleteSessionById(row.sessionId!, row.title)}
+                        onClick={() => askDeleteSession(row.sessionId!, row.title)}
                       >
                         <Trash />
                       </button>
@@ -1231,6 +1281,13 @@ export function Sidebar({
           )}
         </div>
       )}
+
+      {/* TASK.126: the Sidebar's single shared destructive-confirm dialog. */}
+      <ConfirmDialog
+        request={confirm === null ? null : sidebarConfirmCopy(confirm)}
+        onConfirm={handleConfirm}
+        onCancel={() => setConfirm(null)}
+      />
     </nav>
   );
 }
