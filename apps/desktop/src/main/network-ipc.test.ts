@@ -21,6 +21,8 @@ import {
   type NetworkIpcDeps,
 } from "./network-ipc.js";
 import { PROXY_PROBE_MARKER, type ProxyProbeSpawnRequest, type ProxyProbeSpawner } from "./proxy-probe.js";
+import { applyConnectionProxy, shellOwnsProxyFamily } from "./host-env.js";
+import { stripEngineProxyCarriers } from "../shared/engines.js";
 import { connectionFixture, providerV2Multi } from "../shared/provider-v2-fixture.js";
 import type { MaterializedProxy, ProxyProfile, SystemProxyOutcome, SystemProxyResolver } from "../shared/proxy.js";
 import type { AnycodeSettings } from "../shared/settings.js";
@@ -72,6 +74,50 @@ function harness(over: Partial<NetworkIpcDeps> & { systemOutcome?: SystemProxyOu
     ...over,
   };
   return { deps, spawns, envs };
+}
+
+/**
+ * Behavioural-parity harness for the shell-wins gate. Unlike `harness` above it
+ * does NOT fake `composeProbeEnv`: it runs the same two steps production's
+ * wiring runs — `{ ...bootEnv }` (a fresh copy, as `index.ts` does),
+ * `stripEngineProxyCarriers`, then the real `applyConnectionProxy` — and the
+ * canonical `shellOwnsProxyFamily`. So a Check verdict and the env a fork would
+ * actually receive cannot disagree about who owns the family.
+ */
+function parityHarness(
+  over: Partial<NetworkIpcDeps> = {},
+): { deps: NetworkIpcDeps; spawns: ProxyProbeSpawnRequest[] } {
+  const bootEnv = over.bootEnv ?? {};
+  const spawns: ProxyProbeSpawnRequest[] = [];
+  const spawn: ProxyProbeSpawner = vi.fn(async (request) => {
+    spawns.push(request);
+    return {
+      exitCode: 0,
+      stdout: `${PROXY_PROBE_MARKER}${JSON.stringify({ ok: true, status: 401 })}\n`,
+      stderr: "",
+    };
+  });
+  const systemProxy: SystemProxyResolver = {
+    cached: () => ({ kind: "unresolved" }),
+    resolve: async () => ({ kind: "unresolved" }),
+  };
+  const deps: NetworkIpcDeps = {
+    readSettings: () => settingsWith([MANUAL]),
+    bootEnv,
+    execPath: "/electron",
+    systemProxy,
+    readPassword: async () => undefined,
+    composeProbeEnv: (proxy) => {
+      const env = { ...bootEnv };
+      stripEngineProxyCarriers(env);
+      applyConnectionProxy(env, bootEnv, proxy);
+      return env;
+    },
+    spawn,
+    shellOwnsProxyFamily,
+    ...over,
+  };
+  return { deps, spawns };
 }
 
 describe("parseProxyCheckRequest", () => {
@@ -146,10 +192,15 @@ describe("effectiveNoProxy", () => {
 });
 
 describe("bootEnvOwnsProxyFamily", () => {
-  it("is true for any of the four variables and false for a blank one", () => {
+  it("delegates to the canonical gate: a DECLARED family var owns it, blank included", () => {
     expect(bootEnvOwnsProxyFamily({})).toBe(false);
     expect(bootEnvOwnsProxyFamily({ https_proxy: "http://s:1" })).toBe(true);
-    expect(bootEnvOwnsProxyFamily({ HTTP_PROXY: "  " })).toBe(false);
+    // CHANGED by design review B-01: `export HTTP_PROXY=` is a shell STATEMENT,
+    // so a declared-but-blank variable still owns the family. The old assertion
+    // here read a blank value as "unset", which contradicted host-env's gate.
+    expect(bootEnvOwnsProxyFamily({ HTTP_PROXY: "  " })).toBe(true);
+    // ALL_PROXY is deliberately NOT a member of the family.
+    expect(bootEnvOwnsProxyFamily({ ALL_PROXY: "http://s:1" })).toBe(false);
   });
 });
 
@@ -390,5 +441,192 @@ describe("handleProxyCheck — the shell override", () => {
     const { deps } = harness({ bootEnv: { HTTPS_PROXY: "http://shell:8080" }, shellOwnsProxyFamily: () => false });
     const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
     expect(result).toMatchObject({ proxyUsed: true, shellOverride: false });
+  });
+});
+
+describe("handleProxyCheck — shell-wins parity with the real env materialisation", () => {
+  it("A: an ABSENT HTTPS_PROXY lets the profile fill the family and switch NODE_USE_ENV_PROXY on", async () => {
+    const { deps, spawns } = parityHarness({ bootEnv: {} });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({ ok: true, verdict: "ok", proxyUsed: true, shellOverride: false });
+    expect(spawns).toHaveLength(1);
+    const env = spawns[0]?.env ?? {};
+    expect(env.HTTPS_PROXY).toBe("http://proxy.corp:3128/");
+    expect(env.HTTP_PROXY).toBe("http://proxy.corp:3128/");
+    expect(env.https_proxy).toBe("http://proxy.corp:3128/");
+    expect(env.http_proxy).toBe("http://proxy.corp:3128/");
+    expect(env.NODE_USE_ENV_PROXY).toBe("1");
+    expect(env.NO_PROXY).toContain("127.0.0.1");
+    const detail = result.ok ? (result.detail ?? "") : "";
+    expect(detail).toBe("via http://proxy.corp:3128/: target answered HTTP 401");
+    expect(detail).not.toContain(SHELL_OVERRIDE_NOTE);
+  });
+
+  it("A: an explicitly undefined HTTPS_PROXY behaves exactly like an absent one", async () => {
+    const { deps, spawns } = parityHarness({ bootEnv: { HTTPS_PROXY: undefined } });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({ ok: true, verdict: "ok", proxyUsed: true, shellOverride: false });
+    const env = spawns[0]?.env ?? {};
+    expect(env.HTTPS_PROXY).toBe("http://proxy.corp:3128/");
+    expect(env.NODE_USE_ENV_PROXY).toBe("1");
+  });
+
+  it("B: an EMPTY HTTPS_PROXY is a shell statement — nothing materialised, no profile exercised", async () => {
+    const { deps, spawns } = parityHarness({ bootEnv: { HTTPS_PROXY: "" } });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({ ok: true, verdict: "ok", proxyUsed: false, shellOverride: true });
+    const env = spawns[0]?.env ?? {};
+    expect(env.HTTPS_PROXY).toBe("");
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.https_proxy).toBeUndefined();
+    expect(env.http_proxy).toBeUndefined();
+    expect(env.NO_PROXY).toBeUndefined();
+    expect(env.NODE_USE_ENV_PROXY).toBeUndefined();
+    const detail = result.ok ? (result.detail ?? "") : "";
+    expect(detail.startsWith(SHELL_OVERRIDE_NOTE)).toBe(true);
+    expect(detail).toContain("was not exercised");
+  });
+
+  it("B: a WHITESPACE HTTPS_PROXY counts the same as empty", async () => {
+    const { deps, spawns } = parityHarness({ bootEnv: { HTTPS_PROXY: "   " } });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({ ok: true, verdict: "ok", proxyUsed: false, shellOverride: true });
+    const env = spawns[0]?.env ?? {};
+    expect(env.HTTPS_PROXY).toBe("   ");
+    expect(env.NODE_USE_ENV_PROXY).toBeUndefined();
+    const detail = result.ok ? (result.detail ?? "") : "";
+    expect(detail).toContain(SHELL_OVERRIDE_NOTE);
+    expect(detail).toContain("was not exercised");
+  });
+
+  for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
+    it(`C: a shell ${name} owns the family — empty or nonempty — and is preserved untouched`, async () => {
+      for (const value of ["", "http://shell:8080"]) {
+        const { deps, spawns } = parityHarness({ bootEnv: { [name]: value } });
+        const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+        expect(result).toMatchObject({ ok: true, verdict: "ok", proxyUsed: false, shellOverride: true });
+        expect(spawns).toHaveLength(1);
+        const env = spawns[0]?.env ?? {};
+        expect(env[name]).toBe(value);
+        expect(env.NODE_USE_ENV_PROXY).toBeUndefined();
+        for (const other of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]) {
+          if (other !== name) {
+            expect(env[other]).toBeUndefined();
+          }
+        }
+        const detail = result.ok ? (result.detail ?? "") : "";
+        expect(detail).toContain(SHELL_OVERRIDE_NOTE);
+        expect(detail).toContain("was not exercised");
+      }
+    });
+  }
+
+  it("C: a shell NODE_USE_ENV_PROXY=1 is preserved through the shell-owned early return", async () => {
+    const { deps, spawns } = parityHarness({
+      bootEnv: { HTTPS_PROXY: "http://shell:8080", NODE_USE_ENV_PROXY: "1" },
+    });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({ shellOverride: true, proxyUsed: false });
+    expect(spawns[0]?.env.NODE_USE_ENV_PROXY).toBe("1");
+  });
+
+  it("C: a shell NODE_USE_ENV_PROXY=1 is preserved even when the profile fills the family", async () => {
+    const { deps, spawns } = parityHarness({ bootEnv: { NODE_USE_ENV_PROXY: "1" } });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({ shellOverride: false, proxyUsed: true });
+    expect(spawns[0]?.env.NODE_USE_ENV_PROXY).toBe("1");
+    expect(spawns[0]?.env.HTTPS_PROXY).toBe("http://proxy.corp:3128/");
+  });
+
+  for (const name of ["ALL_PROXY", "all_proxy"] as const) {
+    it(`D: a shell ${name} alone does NOT own the family — preserved while the profile fills it`, async () => {
+      for (const value of ["", "http://shell:8080"]) {
+        const { deps, spawns } = parityHarness({ bootEnv: { [name]: value } });
+        const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+        // Unchanged host contract: ALL_PROXY is outside the four-variable gate,
+        // so the profile IS exercised and the verdict carries no shell caveat.
+        expect(result).toMatchObject({ ok: true, verdict: "ok", proxyUsed: true, shellOverride: false });
+        const env = spawns[0]?.env ?? {};
+        expect(env[name]).toBe(value);
+        expect(env.HTTPS_PROXY).toBe("http://proxy.corp:3128/");
+        expect(env.NODE_USE_ENV_PROXY).toBe("1");
+        const detail = result.ok ? (result.detail ?? "") : "";
+        expect(detail).not.toContain(SHELL_OVERRIDE_NOTE);
+      }
+    });
+  }
+
+  for (const name of ["NO_PROXY", "no_proxy"] as const) {
+    it(`E: a shell ${name} alone does not own the family, and a nonmatching shell exemption survives`, async () => {
+      const other = name === "NO_PROXY" ? "no_proxy" : "NO_PROXY";
+      const { deps, spawns } = parityHarness({ bootEnv: { [name]: "corp.internal" } });
+      const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+      expect(result).toMatchObject({ ok: true, verdict: "ok", shellOverride: false, proxyUsed: true });
+      const env = spawns[0]?.env ?? {};
+      // The profile filled the proxy family...
+      expect(env.HTTPS_PROXY).toBe("http://proxy.corp:3128/");
+      expect(env.HTTP_PROXY).toBe("http://proxy.corp:3128/");
+      expect(env.NODE_USE_ENV_PROXY).toBe("1");
+      // ...but the shell's lone exemption is preserved AS IS, and the other
+      // spelling is NOT injected alongside it (the pair stays atomic).
+      expect(env[name]).toBe("corp.internal");
+      expect(env[other]).toBeUndefined();
+      const detail = result.ok ? (result.detail ?? "") : "";
+      expect(detail).not.toContain(SHELL_OVERRIDE_NOTE);
+    });
+  }
+
+  it("E: an EMPTY shell NO_PROXY lets the default + profile exemptions compose", async () => {
+    const exempt: ProxyProfile = { ...MANUAL, noProxy: "corp.internal" };
+    const { deps, spawns } = parityHarness({
+      bootEnv: { NO_PROXY: "" },
+      readSettings: () => settingsWith([exempt]),
+    });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({ shellOverride: false, proxyUsed: true });
+    const env = spawns[0]?.env ?? {};
+    expect(env.NO_PROXY).toContain("127.0.0.1");
+    expect(env.NO_PROXY).toContain("corp.internal");
+    expect(env.no_proxy).toBe(env.NO_PROXY);
+  });
+
+  it("E: an EMPTY HTTPS_PROXY plus a shell NO_PROXY preserves the shell env and the override verdict", async () => {
+    const { deps, spawns } = parityHarness({ bootEnv: { HTTPS_PROXY: "", NO_PROXY: "corp.internal" } });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({ shellOverride: true, proxyUsed: false });
+    const env = spawns[0]?.env ?? {};
+    expect(env.HTTPS_PROXY).toBe("");
+    expect(env.NO_PROXY).toBe("corp.internal");
+    expect(env.NODE_USE_ENV_PROXY).toBeUndefined();
+  });
+
+  it("F: a matching profile exemption bypasses the proxy with no spawn", async () => {
+    const exempt: ProxyProfile = { ...MANUAL, noProxy: "anthropic.com" };
+    const { deps, spawns } = parityHarness({ readSettings: () => settingsWith([exempt]) });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({
+      ok: true,
+      verdict: "bypassed_by_no_proxy",
+      proxyUsed: false,
+      shellOverride: false,
+    });
+    expect(spawns).toHaveLength(0);
+  });
+
+  it("F: the same no-spawn verdict names the shell caveat when HTTPS_PROXY is empty", async () => {
+    const exempt: ProxyProfile = { ...MANUAL, noProxy: "anthropic.com" };
+    const { deps, spawns } = parityHarness({
+      bootEnv: { HTTPS_PROXY: "" },
+      readSettings: () => settingsWith([exempt]),
+    });
+    const result = await handleProxyCheck(deps, { profileId: "proxy-1" });
+    expect(result).toMatchObject({
+      verdict: "bypassed_by_no_proxy",
+      proxyUsed: false,
+      shellOverride: true,
+    });
+    const detail = result.ok ? (result.detail ?? "") : "";
+    expect(detail).toContain(SHELL_OVERRIDE_NOTE);
+    expect(spawns).toHaveLength(0);
   });
 });
