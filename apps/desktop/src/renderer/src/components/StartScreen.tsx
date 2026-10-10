@@ -1094,6 +1094,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const draftImages = draft.images ?? [];
   const sendDisabledReason = submitting ? "Sending…" : computeSendDisabledReason(draft, draftImages.length);
   const canSend = sendDisabledReason === undefined;
+  // TASK 4236: the only blocker is the missing project — say so visibly.
+  const needsProject = !submitting && draft.workspace === null && hasSendableDraft(draft.prompt, draftImages.length);
   const codexDraft = draft.engine === "codex";
   // SLICE-CC C5 (cut §1.4): the Claude draft's own branch of the composer
   // footer. Both values are plain derived reads (no fetch — see
@@ -1617,7 +1619,10 @@ export function StartScreen({ onToast }: StartScreenProps) {
           onKeyDown={(event) => {
             if (isSendKeydown(event)) {
               event.preventDefault();
-              void submit();
+              // TASK 4236: Enter with a draft but no project opens the picker
+              // instead of silently doing nothing.
+              if (needsProject) setProjectMenuOpen(true);
+              else void submit();
             }
           }}
         />
@@ -1752,6 +1757,11 @@ export function StartScreen({ onToast }: StartScreenProps) {
           </div>
           <span className="composer-hint visually-hidden" aria-hidden="true" />
           <div className="composer-footer-right">
+            {needsProject && (
+              <button type="button" className="start-send-needs-project" onClick={() => setProjectMenuOpen(true)}>
+                Choose a project to send
+              </button>
+            )}
             <button
               type="button"
               className="composer-send"
