@@ -22,7 +22,12 @@ import { ConversationHistory } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
 import { ToolRegistry, createDefaultToolRegistry } from "../tools/registry.js";
-import { SUBAGENT_WRAPUP_PROMPT, buildSubagentSystemPrompt } from "../prompts/subagent.js";
+import {
+  SUBAGENT_WRAPUP_DEGRADED_PREFIX,
+  SUBAGENT_WRAPUP_FAILED_NOTICE,
+  SUBAGENT_WRAPUP_PROMPT,
+  buildSubagentSystemPrompt,
+} from "../prompts/subagent.js";
 import type { SystemPromptEnv } from "../prompts/system.js";
 import type { ModelPort } from "../ports/model.js";
 import { capUtf8Bytes } from "../util/bytes.js";
@@ -996,7 +1001,11 @@ export function createSubagentRunner(
           );
           if (windowMs >= SUBAGENT_WRAPUP_MIN_WINDOW_MS) {
             const wrapUp = await runWrapUp(childConfig, loop, finalText, windowMs, signal);
-            finalText = wrapUp.text;
+            finalText = wrapUp.degraded
+              ? finalText.trim().length > 0
+                ? `${SUBAGENT_WRAPUP_DEGRADED_PREFIX}\n\n${finalText}`
+                : SUBAGENT_WRAPUP_FAILED_NOTICE
+              : wrapUp.text;
             // The winning attempt's usage joins the run total; a finish that
             // arrived before a later failure stays billed (runWrapUp only
             // returns usage it actually observed on a finish event).
@@ -1149,9 +1158,12 @@ function mergeUsage(base: TokenUsage | undefined, delta: TokenUsage): TokenUsage
  * request's `messages`, so the transcript stays exactly as `loop_end` left it —
  * balanced and terminal. Compaction is not available here; an overflowing
  * history therefore fails the call, which degrades to `fallback` like every
- * other failure. Returns the report, or `fallback` (the raw last-turn text)
- * whenever the call throws, aborts, times out or produces nothing but
- * whitespace — the rescue can only improve the outcome, never worsen it.
+ * other failure — observable via `degraded: true` (TASK.196): the caller
+ * marks the fallback so a raw partial is clearly distinguished from a real
+ * report. Returns `{ text, degraded: false }` for a non-whitespace reply, or
+ * `{ text: fallback, degraded: true, usage? }` whenever the call throws,
+ * aborts, times out or produces nothing but whitespace — the rescue can only
+ * improve the outcome, never worsen it.
  *
  * TASK.160 (gap closed): wrap-up stream events now reach `config.eventTap`
  * (the very tap buildChildConfig installs from `parent.subagentEventTap`)
@@ -1161,13 +1173,13 @@ function mergeUsage(base: TokenUsage | undefined, delta: TokenUsage): TokenUsage
  * and the finish event's usage joins the run's total via mergeUsage at the
  * call site; a finish received before a subsequent failure stays billed.
  */
-async function runWrapUp(
+export async function runWrapUp(
   config: AgentLoopConfig,
   loop: AgentLoop,
   fallback: string,
   windowMs: number,
   signal?: AbortSignal,
-): Promise<{ text: string; usage?: TokenUsage }> {
+): Promise<{ text: string; usage?: TokenUsage; degraded: boolean }> {
   const controller = new AbortController();
   const dispose = signal ? linkAbortSignal(signal, controller) : () => {};
   const timer = setTimeout(() => controller.abort("wrapup-timeout"), windowMs);
@@ -1213,14 +1225,20 @@ async function runWrapUp(
       }
     }
     const finalText = text.trim().length > 0 ? text : fallback;
-    return hasAnyUsage(usage)
-      ? { text: finalText, usage }
-      : { text: finalText };
+    return {
+      text: finalText,
+      degraded: text.trim().length === 0,
+      ...(hasAnyUsage(usage) ? { usage } : {}),
+    };
   } catch {
     // Degradation by design: any failure leaves today's raw partial in
     // place — but a finish already received keeps its usage in the return,
     // because those tokens were spent regardless of the later failure.
-    return hasAnyUsage(usage) ? { text: fallback, usage } : { text: fallback };
+    return {
+      text: fallback,
+      degraded: true,
+      ...(hasAnyUsage(usage) ? { usage } : {}),
+    };
   } finally {
     clearTimeout(timer);
     dispose();
