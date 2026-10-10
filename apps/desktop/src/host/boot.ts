@@ -92,6 +92,13 @@ export interface HostChildArgs {
   parentSessionId: string;
   spawnToolCallId: string;
   initialMode: PermissionMode;
+  /**
+   * TASK.180: the creating spawn's turn budget (`--child-max-turns <n>`),
+   * present only when the child was spawned from a profile with one. A
+   * decimal positive safe integer within 1..200 (SUBAGENT_MAX_TURNS_CEILING);
+   * anything else is dropped, consistently with the child-mode drop rule.
+   */
+  maxTurns?: number;
 }
 
 export interface HostArgs {
@@ -121,6 +128,7 @@ export function parseHostArgs(argv: string[]): HostArgs {
   let childParent: string | undefined;
   let childSpawnCall: string | undefined;
   let childMode: PermissionMode | undefined;
+  let childMaxTurns: number | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -192,12 +200,38 @@ export function parseHostArgs(argv: string[]): HostArgs {
       if (isPermissionMode(value)) {
         childMode = value;
       }
+      continue;
+    }
+    // TASK.180: the creating spawn's turn budget. Only a complete decimal
+    // positive safe integer within 1..200 is accepted — parseInt prefixes
+    // ("5x"), fractions, NaN, Infinity, zero, negatives and over-ceiling
+    // values are all DROPPED (never clamped), same fail-closed drop as an
+    // unrecognized --child-mode above. Only present when the child linkage
+    // triple is complete does it ride args.child.
+    if (arg === "--child-max-turns") {
+      const value = argv[i + 1];
+      i++;
+      if (value !== undefined && isChildMaxTurns(value)) {
+        childMaxTurns = Number(value);
+      }
+      continue;
+    }
+    if (arg.startsWith("--child-max-turns=")) {
+      const value = arg.slice("--child-max-turns=".length);
+      if (isChildMaxTurns(value)) {
+        childMaxTurns = Number(value);
+      }
     }
   }
 
   const child =
     childParent !== undefined && childSpawnCall !== undefined && childMode !== undefined
-      ? { parentSessionId: childParent, spawnToolCallId: childSpawnCall, initialMode: childMode }
+      ? {
+          parentSessionId: childParent,
+          spawnToolCallId: childSpawnCall,
+          initialMode: childMode,
+          ...(childMaxTurns !== undefined ? { maxTurns: childMaxTurns } : {}),
+        }
       : undefined;
 
   return child !== undefined ? { sessionId, resume, child } : { sessionId, resume };
@@ -205,6 +239,30 @@ export function parseHostArgs(argv: string[]): HostArgs {
 
 function isPermissionMode(value: string): value is PermissionMode {
   return (PERMISSION_MODES as readonly string[]).includes(value);
+}
+
+/**
+ * TASK.180: the child host's core AgentLoopConfig.maxTurns resolution — a
+ * creating spawn's profile budget (args.child.maxTurns) overrides the env
+ * default; an absent budget preserves it byte-identically. Extracted as a
+ * pure helper so the precedence is unit-testable (host/index.ts wires it:
+ * `resolveChildMaxTurns(args.child, envConfig.maxTurns)`).
+ */
+export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTurns: number | undefined): number | undefined {
+  return child?.maxTurns ?? envMaxTurns;
+}
+
+/**
+ * TASK.180: a complete decimal positive integer within 1..200 — no sign, no
+ * fraction, no exponent, no parseInt-prefix tolerance ("5x" fails). The
+ * ceiling mirrors core's SUBAGENT_MAX_TURNS_CEILING.
+ */
+function isChildMaxTurns(value: string): boolean {
+  if (!/^[0-9]+$/.test(value)) {
+    return false;
+  }
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n >= 1 && n <= 200;
 }
 
 /**

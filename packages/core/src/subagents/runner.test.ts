@@ -3784,3 +3784,33 @@ describe("provider-error reason in finalText (TASK.193 slice S5)", () => {
     expect(outcome.finalText).toBe("child report");
   });
 });
+
+// TASK.180: persona.turnBudget relays through engineProfile() the same way
+// model does — present when the profile declares one, key entirely absent
+// otherwise.
+describe("engineProfile() — turnBudget relay (TASK.180)", () => {
+  const codexPersona: PersonaDefinition = {
+    name: "codex-worker",
+    description: "runs on the codex engine",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    engine: "codex",
+  };
+
+  it("carries persona.turnBudget onto the returned EngineProfileInfo when the profile declares one", () => {
+    const withBudget: PersonaDefinition = { ...codexPersona, turnBudget: 25 };
+    const runner = createSubagentRunner(makeParent(), { profiles: [withBudget] });
+    expect(runner.engineProfile?.("codex-worker")).toEqual({
+      engine: "codex",
+      systemPrompt: "PERSONA BODY",
+      turnBudget: 25,
+    });
+  });
+
+  it("omits the turnBudget key entirely when the profile declares none", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
+    const info = runner.engineProfile?.("codex-worker") ?? null;
+    expect(info).toEqual({ engine: "codex", systemPrompt: "PERSONA BODY" });
+    expect(info !== null && "turnBudget" in info).toBe(false);
+  });
+});

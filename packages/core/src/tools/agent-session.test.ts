@@ -1131,3 +1131,47 @@ describe("agentTool handler — detach admit outcome mapping (TASK.145 срез 
     expect(result.output).not.toHaveProperty("spawnToolCallId");
   });
 });
+
+// TASK.180: an engine profile's turnBudget frontmatter reaches the captured
+// SessionSubagentRequest as maxTurns; absent budget leaves the key off.
+describe("agentTool handler — engine-profile turn budget (TASK.180)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  it("profile turnBudget rides the session request as maxTurns", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker" },
+      makeCtx({
+        toolCallId: "call-budget-1",
+        subagents: enginePort("claude-worker", { engine: "claude", systemPrompt: "PERSONA BODY", turnBudget: 9 }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen?.maxTurns).toBe(9);
+  });
+
+  it("profile without a turnBudget puts no maxTurns key on the request", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker" },
+      makeCtx({
+        toolCallId: "call-budget-2",
+        subagents: enginePort("claude-worker", { engine: "claude", systemPrompt: "PERSONA BODY" }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen !== undefined && "maxTurns" in seen!).toBe(false);
+  });
+});

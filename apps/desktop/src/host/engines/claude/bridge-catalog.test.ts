@@ -59,3 +59,33 @@ describe("catalogFromProfiles (TASK.226 срез S4)", () => {
     ]);
   });
 });
+
+// TASK.180: a profile's turnBudget survives the catalog projection as
+// maxTurns — for engine profiles AND core profiles alike.
+describe("catalogFromProfiles — turnBudget (TASK.180)", () => {
+  it("carries turnBudget through as maxTurns for a core profile", () => {
+    expect(catalogFromProfiles([profile({ turnBudget: 20 })])).toEqual([
+      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code.", maxTurns: 20 },
+    ]);
+  });
+
+  it("carries turnBudget through as maxTurns for an engine profile", () => {
+    expect(
+      catalogFromProfiles([profile({ name: "codex-reviewer", engine: "codex", turnBudget: 30 })]),
+    ).toEqual([
+      {
+        name: "codex-reviewer",
+        description: "Reviews code",
+        systemPrompt: "You review code.",
+        engine: "codex",
+        maxTurns: 30,
+      },
+    ]);
+  });
+
+  it("omits maxTurns when the profile declares no budget", () => {
+    expect(catalogFromProfiles([profile()])).toEqual([
+      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code." },
+    ]);
+  });
+});

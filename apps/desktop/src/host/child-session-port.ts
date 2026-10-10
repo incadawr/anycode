@@ -117,6 +117,7 @@ import {
 import {
   CHILD_AGENT_TYPE_MAX_CHARS,
   CHILD_DESCRIPTION_MAX_CHARS,
+  CHILD_MAX_TURNS_CEILING,
   CHILD_PROMPT_MAX_CHARS,
   CHILD_PROVIDER_MAX_CHARS,
   CHILD_RUN_CANCEL_TYPE,
@@ -163,6 +164,7 @@ const MALFORMED_MODEL_MESSAGE = "Agent: the child session failed to start (malfo
 const MALFORMED_PROVIDER_MESSAGE = "Agent: the child session failed to start (malformed provider).";
 const MALFORMED_EFFORT_MESSAGE = "Agent: the child session failed to start (malformed reasoning effort).";
 const MALFORMED_RESUME_MESSAGE = "Agent: the child session failed to start (malformed child session id to continue).";
+const MALFORMED_MAX_TURNS_MESSAGE = "Agent: the child session failed to start (malformed turn budget).";
 
 /**
  * Non-empty, capped free text — the exact shape `parseChildSpawnRequest`'s
@@ -211,6 +213,14 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
   }
   if (req.resumeChildSessionId !== undefined && (!isValidChildId(req.resumeChildSessionId) || req.engine !== undefined)) {
     return MALFORMED_RESUME_MESSAGE;
+  }
+  // TASK.180: mirrors parseChildSpawnRequest's budget check — a defined
+  // maxTurns must be a safe integer within 1..CHILD_MAX_TURNS_CEILING.
+  if (
+    req.maxTurns !== undefined &&
+    !(typeof req.maxTurns === "number" && Number.isSafeInteger(req.maxTurns) && req.maxTurns >= 1 && req.maxTurns <= CHILD_MAX_TURNS_CEILING)
+  ) {
+    return MALFORMED_MAX_TURNS_MESSAGE;
   }
   return null;
 }
@@ -735,6 +745,9 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         // file header).
         ...(req.engine !== undefined ? { engine: req.engine } : {}),
         ...(req.resumeChildSessionId !== undefined ? { resumeChildSessionId: req.resumeChildSessionId } : {}),
+        // TASK.180: the turn budget rides only the CREATING spawn — a
+        // resume request (resumeChildSessionId set) never re-imposes a budget.
+        ...(req.resumeChildSessionId === undefined && req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
         permissionMode: options.getPermissionMode(),
       };
       options.send(spawnRequest);

@@ -44,6 +44,7 @@ import {
   childRetryPolicy,
   isChildSessionBoot,
   parseHostArgs,
+  resolveChildMaxTurns,
   resolveBootSession,
   routePreviewMessage,
   scrubSecretEnv,
@@ -1041,5 +1042,63 @@ describe("childRetryPolicy (Taskana 4226)", () => {
       baseDelayMs: 7,
       networkRetryBudgetMs: 180_000,
     });
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TASK.180: --child-max-turns — the creating spawn's turn budget on the child
+// host's argv. Both flag forms; only decimal positive safe integers 1..200.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe("parseHostArgs — --child-max-turns (TASK.180)", () => {
+  const LINKAGE = ["--child-parent", "p", "--child-spawn-call", "c", "--child-mode", "build"];
+
+  it("parses the space form into complete child args", () => {
+    const result = parseHostArgs([...LINKAGE, "--child-max-turns", "12"]);
+    expect(result.child).toEqual({ parentSessionId: "p", spawnToolCallId: "c", initialMode: "build", maxTurns: 12 });
+  });
+
+  it("parses the = form into complete child args", () => {
+    const result = parseHostArgs([...LINKAGE, "--child-max-turns=7"]);
+    expect(result.child).toEqual({ parentSessionId: "p", spawnToolCallId: "c", initialMode: "build", maxTurns: 7 });
+  });
+
+  it("absent flag leaves maxTurns off the child args", () => {
+    const result = parseHostArgs([...LINKAGE]);
+    expect(result.child).toEqual({ parentSessionId: "p", spawnToolCallId: "c", initialMode: "build" });
+  });
+
+  it("drops malformed, zero, negative, fraction, prefix and over-ceiling values", () => {
+    const base = { parentSessionId: "p", spawnToolCallId: "c", initialMode: "build" };
+    for (const value of ["abc", "0", "-3", "2.5", "5x", "+8", "201", "1e3", ""]) {
+      expect(parseHostArgs([...LINKAGE, "--child-max-turns", value]).child).toEqual(base);
+      expect(parseHostArgs([...LINKAGE, `--child-max-turns=${value}`]).child).toEqual(base);
+    }
+  });
+
+  it("accepts the boundaries 1 and 200", () => {
+    expect(parseHostArgs([...LINKAGE, "--child-max-turns", "1"]).child).toMatchObject({ maxTurns: 1 });
+    expect(parseHostArgs([...LINKAGE, "--child-max-turns", "200"]).child).toMatchObject({ maxTurns: 200 });
+  });
+
+  it("no complete child linkage means no child budget, even if the flag appeared", () => {
+    const result = parseHostArgs(["--child-max-turns", "12"]);
+    expect(result.child).toBeUndefined();
+  });
+});
+
+// TASK.180: the child host's core AgentLoopConfig.maxTurns precedence — a
+// creating spawn's profile budget overrides the env default; absent preserves
+// it (the helper host/index.ts wires at its envConfig.maxTurns anchor).
+describe("resolveChildMaxTurns (TASK.180)", () => {
+  const child = { parentSessionId: "p", spawnToolCallId: "c", initialMode: "build" as const };
+  it("a child budget overrides the env default", () => {
+    expect(resolveChildMaxTurns({ ...child, maxTurns: 15 }, 40)).toBe(15);
+  });
+  it("an absent budget preserves the env default", () => {
+    expect(resolveChildMaxTurns(child, 40)).toBe(40);
+  });
+  it("a non-child boot (no args.child) preserves the env default", () => {
+    expect(resolveChildMaxTurns(undefined, 40)).toBe(40);
   });
 });
