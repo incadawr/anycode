@@ -63,7 +63,7 @@ const templateStringSchema = z
 
 const stepSchema = z.object({
   id: z.string().min(1),
-  agentType: z.string().min(1),
+  agentType: z.string().min(1).max(128, { message: "exceeds 128 characters" }),
   promptTemplate: templateStringSchema,
   dependsOn: z.array(z.string()).optional(),
   maxTurns: z.number().int().min(1).max(SUBAGENT_MAX_TURNS_CEILING).optional(),
