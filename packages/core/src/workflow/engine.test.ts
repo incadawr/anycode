@@ -1075,7 +1075,7 @@ describe("integration with the real subagent runner", () => {
         })();
       },
     };
-    const subagents = createSubagentRunner(makeParent({ modelPort: gatedModel, mode: "yolo" }));
+    const subagents = createSubagentRunner(makeParent({ modelPort: gatedModel, mode: "yolo" }), { maxConcurrent: 2 }); // pin the width: the default follows DEFAULT_TOOL_CONCURRENCY (Taskana 4059)
     const wf = def("fan", [
       { id: "s1", agentType: "general-purpose", promptTemplate: "${input}" },
       { id: "s2", agentType: "general-purpose", promptTemplate: "${input}" },
