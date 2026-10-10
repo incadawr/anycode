@@ -104,6 +104,7 @@ import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
 import {
   ArtifactConsentStore,
+  WorkspaceTailIndex,
   NodeArtifactsFs,
   registerArtifactsIpc,
   resolveArtifactPath,
@@ -1540,6 +1541,7 @@ void app.whenReady().then(async () => {
     openPath: (path) => shell.openPath(path),
     reveal: (path) => shell.showItemInFolder(path),
     consent: artifactConsentStore,
+    tailIndex: new WorkspaceTailIndex(),
     // Night-track wave-1 (owner ask): routes a click-to-preview request into
     // the SAME PreviewHost instance turn-end auto-open uses, via
     // `openForPathClick` (not `openForTab` directly) — the owner smoke-test
