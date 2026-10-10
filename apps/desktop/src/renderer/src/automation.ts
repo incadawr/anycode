@@ -66,6 +66,7 @@ import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { tabRegistry, type DesktopStoreApi, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabInfo, type TabsStoreApi } from "./tabs-store.js";
 import { childLayoutStore as defaultChildLayoutStore, type ChildLayoutStoreApi, type ChildLayoutView } from "./child-layout.js";
+import { childRelationKey, childRelationStore, sameChildPredicate } from "./child-sessions.js";
 import {
   createReplayClock,
   defaultReplayTimer,
@@ -6634,7 +6635,20 @@ export function createAutomationFacade(
       if (!tabsStore.getState().tabs.some((tab) => tab.tabId === rootTabId)) {
         return { ok: false, reason: "unknown_tab" };
       }
-      childLayoutStore.getState().open(rootTabId, spawnToolCallId);
+      // TASK.218: resolve this spawn's childSessionId through the real
+      // relation store and pass the same-child predicate, so opening a
+      // continuation of a child already on the split stack folds onto that
+      // row instead of appending a second one — the same Open-path fold
+      // ToolCallCard/BackgroundAgents use.
+      const parentSessionId = tabsStore.getState().tabs.find((tab) => tab.tabId === rootTabId)?.sessionId ?? undefined;
+      const relations = childRelationStore.getState().relations;
+      const cs =
+        parentSessionId !== undefined
+          ? relations.get(childRelationKey(parentSessionId, spawnToolCallId))?.childSessionId
+          : undefined;
+      childLayoutStore
+        .getState()
+        .open(rootTabId, spawnToolCallId, cs !== undefined && parentSessionId !== undefined ? sameChildPredicate(relations, parentSessionId, cs) : undefined);
       return { ok: true };
     },
 

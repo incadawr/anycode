@@ -74,6 +74,15 @@ describe("formatChildTaskNotification (spec §4bis/§7)", () => {
     expect(text).toContain("</task-notification>");
   });
 
+  it("TASK.218: the follow-up hint rides AFTER the block — agent-id inside, continue_session prose outside", () => {
+    const text = formatChildTaskNotification(input({ agentId: "child-9" }));
+    expect(text).toContain("<agent-id>child-9</agent-id>");
+    expect(text).toMatch(/pass its agent-id as continue_session/);
+    // Prose after the closing tag — renderer regexes only read inside the block.
+    const tail = text.slice(text.indexOf("</task-notification>"));
+    expect(tail).toContain("continue_session");
+  });
+
   it("XML-escapes &, <, and > in every substituted field (defense against a model-authored agent_type/summary breaking the tag structure)", () => {
     const text = formatChildTaskNotification(
       input({
@@ -90,8 +99,9 @@ describe("formatChildTaskNotification (spec §4bis/§7)", () => {
   it("never leaks the raw child transcript — only the header, task-notification shell, and the (capped) summary field appear", () => {
     const text = formatChildTaskNotification(input({ summary: "one short paragraph" }));
     expect(text.split("\n").filter((line) => line.trim().length > 0)).toHaveLength(
-      // 3 header lines + 8 task-notification lines (open/7 fields incl. close... see below)
-      3 + 9,
+      // 3 header lines + 9 task-notification lines (open/7 fields incl. close... see below)
+      // + 1 TASK.218 follow-up hint line after the block
+      3 + 9 + 1,
     );
   });
 

@@ -173,6 +173,27 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
+      // TASK.218: `continue_session` is session-tier only (a resumed child is
+      // a full child session by construction) and cannot re-target a
+      // connection — the resumed child keeps the one it was started on
+      // (mirrors main's CHILD_RESUME_OVERRIDE_MESSAGE contract). `model` is
+      // NOT rejected here: like the agent bridge, a continuation ignores it.
+      if (input.continue_session !== undefined && tier !== "session") {
+        return {
+          ok: false,
+          errorKind: "invalid_input",
+          error: 'Agent: "continue_session" is only valid with tier "session".',
+        };
+      }
+      if (input.continue_session !== undefined && input.provider !== undefined) {
+        return {
+          ok: false,
+          errorKind: "invalid_input",
+          error:
+            'Agent: "continue_session" cannot be combined with "provider" — the resumed child keeps the connection it was started on.',
+        };
+      }
+
       // Validate the agent_type (design §2.3/§3.4): the set of runnable types is
       // delegated to the port (built-in personas + md-profiles) so slice 3.3's
       // profiles are reachable WITHOUT touching the frozen schema. A port lacking
@@ -205,6 +226,15 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
             ok: false,
             errorKind: "invalid_input",
             error: 'Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account.',
+          };
+        }
+        // TASK.218: continuations are core-child-only, same refusal the
+        // agent bridge (agent-bridge.ts) gives for an engine entry.
+        if (input.continue_session !== undefined) {
+          return {
+            ok: false,
+            errorKind: "invalid_input",
+            error: `Agent: continue_session is supported only for AnyCode (core) profiles; "${agentType}" runs on ${engineProfile.engine}. Start a new call instead.`,
           };
         }
         // Fail-closed: without a SessionSubagentPort an engine profile cannot
@@ -337,15 +367,32 @@ async function runSessionTier(
   // claude-CLI-initiated subagent call goes through byte-identical
   // composition — `provider`/`detach` stay this tool's own fields (agent-
   // bridge.ts never sets either), spread on afterward.
+  const resumeChildSessionId = input.continue_session;
   const request: SessionSubagentRequest = {
-    ...buildSessionSubagentRequest({
-      agentType,
-      description: input.description,
-      prompt: input.prompt,
-      model: input.model,
-      spawnToolCallId: ctx.toolCallId,
-      profile: engineProfile,
-    }),
+    // TASK.218: a continuation branches the request build rather than
+    // post-patching the spread — a resumed child keeps its own profile body
+    // and model (both already in its history), so NEITHER a model override
+    // NOR the profile's own defaults ride the request: model AND profile are
+    // passed undefined (supervisor correction 2: no profile-default model,
+    // no repeated system prompt). `model` on the input is ignored, not
+    // rejected. A fresh spawn builds the request exactly as before.
+    ...(resumeChildSessionId !== undefined
+      ? buildSessionSubagentRequest({
+          agentType,
+          description: input.description,
+          prompt: input.prompt,
+          model: undefined,
+          spawnToolCallId: ctx.toolCallId,
+        })
+      : buildSessionSubagentRequest({
+          agentType,
+          description: input.description,
+          prompt: input.prompt,
+          model: input.model,
+          spawnToolCallId: ctx.toolCallId,
+          profile: engineProfile,
+        })),
+    ...(resumeChildSessionId !== undefined ? { resumeChildSessionId } : {}),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     // TASK.145 срез 1: only ever `true` here — the validation check above
     // already refused `detach:true` on any tier but "session", and `false`/

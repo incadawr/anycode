@@ -18,7 +18,9 @@ import {
   MASTER_VIEW,
   openChild,
   detachedOutcomeFromParent,
+  continuationSiblingSpawnIds,
   lastLiveChildCard,
+  mergeContinuationCards,
   rememberLiveChildCard,
   withLiveChildCounters,
   type ChildBadgeKind,
@@ -202,6 +204,129 @@ describe("openChild: split branches (CUT-S3 §2.2)", () => {
       expect(new Set(next.order).size).toBe(CHILD_SPLIT_MAX_ROWS);
       expect(next.order).toContain(next.expandedId);
     }
+  });
+
+  // TASK.218: the same-logical-child fold — opening a continuation of a
+  // child already on the stack retargets that row in place AND expands it.
+  it("fold: a same-child predicate retargets the aliased row id in place and expands it (position preserved)", () => {
+    const view = split(["a", "b"], "b");
+    expect(openChild(view, "c", (id) => id === "a")).toEqual({ kind: "split", order: ["c", "b"], expandedId: "c" });
+  });
+
+  it("fold: a predicate matching nothing falls through to the plain append path", () => {
+    const view = split(["a", "b"], "b");
+    expect(openChild(view, "c", () => false)).toEqual({ kind: "split", order: ["a", "b", "c"], expandedId: "c" });
+  });
+
+  it("fold: the opened id itself is never its own alias (id !== spawnToolCallId in the find)", () => {
+    const view = split(["a", "b"], "b");
+    // Even if the predicate would match "b", the opened id "b" re-expands
+    // through the same-branch (order untouched).
+    expect(openChild(view, "b", (id) => id === "b")).toEqual({ kind: "split", order: ["a", "b"], expandedId: "b" });
+  });
+
+  it("fold: the store's open passes the predicate through to the reducer", () => {
+    const store = createChildLayoutStore();
+    store.getState().open("tab-1", "a");
+    store.getState().open("tab-1", "b");
+    store.getState().enterSplit("tab-1"); // order [b], via child b -> split
+    // Retarget to layout B first, then open "a" with the fold predicate.
+    store.getState().open("tab-1", "a", (id) => id === "b");
+    const view = store.getState().view("tab-1");
+    // From split [b] expanded b: opening "a" (same logical child as "b")
+    // retargets the row id to "a" in place.
+    expect(view).toEqual({ kind: "split", order: ["a"], expandedId: "a" });
+  });
+});
+
+// TASK.218: continuation aggregation helpers.
+describe("mergeContinuationCards (TASK.218)", () => {
+  const card = (overrides: Partial<SubagentSubStatus>): SubagentSubStatus => ({
+    agentType: "glm-lead",
+    description: "d",
+    model: null,
+    engine: null,
+    turns: 0,
+    toolCalls: 0,
+    lastTool: null,
+    activity: [],
+    activityDropped: 0,
+    final: null,
+    ...overrides,
+  });
+
+  it("a single card is returned unchanged", () => {
+    const one = card({ turns: 3 });
+    expect(mergeContinuationCards([one])).toBe(one);
+  });
+
+  it("settled + settled: turns summed, durations summed", () => {
+    const merged = mergeContinuationCards([
+      card({ turns: 1, final: { status: "completed", durationMs: 6400 } }),
+      card({ turns: 1, final: { status: "completed", durationMs: 8000 } }),
+    ]);
+    expect(merged.turns).toBe(2);
+    expect(merged.final).toEqual({ status: "completed", durationMs: 14400 });
+  });
+
+  it("settled + running: final stays null — a prior completion never leaks into a running continuation", () => {
+    const merged = mergeContinuationCards([
+      card({ turns: 1, final: { status: "completed", durationMs: 6400 } }),
+      card({ turns: 0, final: null }),
+    ]);
+    expect(merged.final).toBeNull();
+    expect(merged.turns).toBe(1);
+  });
+
+  it("an unknown (-1) PRIOR duration makes the settled total unknown too — no partial sum as total (defect 2)", () => {
+    const merged = mergeContinuationCards([
+      card({ turns: 1, final: { status: "completed", durationMs: -1 } }),
+      card({ turns: 1, final: { status: "completed", durationMs: 8000 } }),
+    ]);
+    expect(merged.final).toEqual({ status: "completed", durationMs: -1 });
+  });
+
+  it("an unknown LAST duration stays unknown — no partial sum is fabricated as a total", () => {
+    const merged = mergeContinuationCards([
+      card({ turns: 1, final: { status: "completed", durationMs: 6400 } }),
+      card({ turns: 1, final: { status: "completed", durationMs: -1 } }),
+    ]);
+    expect(merged.final).toEqual({ status: "completed", durationMs: -1 });
+  });
+
+  it("identity/model/engine/lastTool come from the LAST card", () => {
+    const merged = mergeContinuationCards([
+      card({ agentType: "first", lastTool: "Read" }),
+      card({ agentType: "last", lastTool: "Edit" }),
+    ]);
+    expect(merged.agentType).toBe("last");
+    expect(merged.lastTool).toBe("Edit");
+  });
+});
+
+describe("continuationSiblingSpawnIds (TASK.218)", () => {
+  const toolCall = (id: string): TranscriptBlock => ({
+    kind: "tool_call",
+    id,
+    toolCallId: id,
+    toolName: "Agent",
+    input: {},
+    status: "running",
+    modelText: null,
+    snapshots: { before: null, after: null },
+    subagent: null,
+    workflow: null,
+  });
+
+  it("returns both continuation ids in transcript order when they map to one child", () => {
+    const transcript = [toolCall("tc-1"), toolCall("tc-other"), toolCall("tc-2")];
+    const mapping: Record<string, string> = { "tc-1": "child-9", "tc-2": "child-9", "tc-other": "child-8" };
+    expect(continuationSiblingSpawnIds(transcript, "tc-1", (id) => mapping[id])).toEqual(["tc-1", "tc-2"]);
+  });
+
+  it("an unmapped row id yields just itself", () => {
+    const transcript = [toolCall("tc-1"), toolCall("tc-2")];
+    expect(continuationSiblingSpawnIds(transcript, "tc-1", () => undefined)).toEqual(["tc-1"]);
   });
 });
 

@@ -4,7 +4,7 @@
  * tab-registry.ts (C2) and the JSX layer (C3).
  */
 import { describe, expect, it } from "vitest";
-import { childRelationKey, classifyPortEnvelope, createChildRelationStore, hasOpenableChild, spawnToolCallIdForChild } from "./child-sessions.js";
+import { childRelationKey, classifyPortEnvelope, createChildRelationStore, hasOpenableChild, sameChildPredicate, spawnToolCallIdForChild } from "./child-sessions.js";
 import type { PortEnvelope } from "../../shared/envelopes.js";
 
 /** A realistic root-tab envelope (no `child` field) — today's only shape, unchanged. */
@@ -213,5 +213,24 @@ describe("spawnToolCallIdForChild", () => {
     expect(spawnToolCallIdForChild(relations, "p1", "child-2")).toBe("spawn-b");
     expect(spawnToolCallIdForChild(relations, "p1", "nope")).toBeUndefined();
     expect(spawnToolCallIdForChild(relations, "p10", "child-1")).toBe("spawn-x");
+  });
+});
+
+describe("sameChildPredicate (TASK.218)", () => {
+  it("true for spawn ids registered under the same childSessionId, false otherwise", () => {
+    const store = createChildRelationStore();
+    store.getState().registerChild("p1", "spawn-a", "tab-1", "child-9");
+    store.getState().registerChild("p1", "spawn-b", "tab-2", "child-8");
+    const predicate = sameChildPredicate(store.getState().relations, "p1", "child-9");
+    expect(predicate("spawn-a")).toBe(true);
+    expect(predicate("spawn-b")).toBe(false);
+    expect(predicate("spawn-unknown")).toBe(false);
+  });
+
+  it("an undefined parentSessionId yields a predicate that matches nothing", () => {
+    const store = createChildRelationStore();
+    store.getState().registerChild("p1", "spawn-a", "tab-1", "child-9");
+    const predicate = sameChildPredicate(store.getState().relations, undefined, "child-9");
+    expect(predicate("spawn-a")).toBe(false);
   });
 });
