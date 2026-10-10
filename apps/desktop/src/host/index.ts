@@ -306,6 +306,7 @@ import {
 } from "../shared/worktrees.js";
 import {
   buildResolveApiKey,
+  childRetryPolicy,
   createPreviewRpcClient,
   hostDiagnosticSink,
   isChildSessionBoot,
@@ -1874,6 +1875,10 @@ async function boot(): Promise<void> {
     // object the loop/ContextManager/subagents/titling all capture by reference
     // (through the `modelPort` decorator below, which forwards every call to
     // it), so a setPort between turns is instantly visible to every holder.
+    // Taskana 4226: a child session rides out a short network outage. The
+    // session meta resolves AFTER this factory is first used, so the flag
+    // starts argv-only and is widened (with a port rebuild) once it is known.
+    let childRetryBoot = args.child !== undefined;
     const modelPortFactory = (m: string): ModelPort =>
       new AiSdkModelPort(
         {
@@ -1884,6 +1889,7 @@ async function boot(): Promise<void> {
           ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
+          ...(childRetryBoot ? { retry: childRetryPolicy(true) } : {}),
         },
         hostDiagnosticSink,
       );
@@ -1942,6 +1948,10 @@ async function boot(): Promise<void> {
     });
     let sessionMeta = resolvedSession.sessionMeta;
     const { initialHistory, resumedMissing } = resolvedSession;
+    if (!childRetryBoot && isChildSessionBoot(args, sessionMeta)) {
+      childRetryBoot = true;
+      switchableModelPort.setPort(modelPortFactory(envConfig.model));
+    }
     if (sessionMeta.worktreeTransition !== undefined) {
       const pending = sessionMeta.worktreeTransition;
       if (hasDurableTransitionResult(initialHistory, pending.kind, pending.origin, pending.toolCallId)) {

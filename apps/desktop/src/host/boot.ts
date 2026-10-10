@@ -49,13 +49,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { ConversationHistory, PERMISSION_MODES, SessionPermissionRules } from "@anycode/core";
+import { CHILD_NETWORK_RETRY_BUDGET_MS, ConversationHistory, PERMISSION_MODES, SessionPermissionRules } from "@anycode/core";
 import type {
   DiagnosticSink,
   HistoryItem,
   HistorySink,
   PermissionMode,
   PersistencePort,
+  RetryPolicy,
   SessionMeta,
 } from "@anycode/core";
 import { SECRET_ENV_KEYS } from "../shared/settings.js";
@@ -225,6 +226,22 @@ function isPermissionMode(value: string): value is PermissionMode {
  */
 export function isChildSessionBoot(args: HostArgs, meta: SessionMeta): boolean {
   return args.child !== undefined || meta.parentSessionId !== undefined;
+}
+
+/**
+ * Retry policy for a session's model port (Taskana 4226): a child session
+ * (detached or in-process) keeps retrying a transient network outage for
+ * CHILD_NETWORK_RETRY_BUDGET_MS past the normal retry count; a main session
+ * keeps `retry` untouched. An explicit endpoint retry setting is preserved —
+ * only the budget field is added. (maxRetries 0 still disables retrying: the
+ * port ignores the budget then.)
+ */
+export function childRetryPolicy(
+  isChild: boolean,
+  retry?: Partial<RetryPolicy>,
+): Partial<RetryPolicy> | undefined {
+  if (!isChild) return retry;
+  return { ...retry, networkRetryBudgetMs: CHILD_NETWORK_RETRY_BUDGET_MS };
 }
 
 export interface BootSessionResult {
