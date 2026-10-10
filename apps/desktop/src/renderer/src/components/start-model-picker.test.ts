@@ -72,9 +72,9 @@ describe("orderModelsByCatalog (TASK.131 D4 — catalog order, not the provider'
 });
 
 describe("connectionOfferedModels (TASK.131 D4)", () => {
-  it("resolves via providerModelsFor (live list wins) and orders catalog-first", () => {
+  it("resolves via providerModelsFor (connection ids UNIONED with catalog hints) and orders catalog-first", () => {
     const conn = connection({ id: "c1", providerId: "z-ai", models: ["glm-4.5", "glm-5.3"] });
-    expect(connectionOfferedModels(conn, CATALOG, undefined)?.map((m) => m.id)).toEqual(["glm-5.3", "glm-4.5"]);
+    expect(connectionOfferedModels(conn, CATALOG, undefined)?.map((m) => m.id)).toEqual(["glm-5.3", "glm-5.2", "glm-4.5"]);
   });
 
   it("a curated custom subset resolves for a custom:<slug> connection and orders against the custom record's own catalog miss (no catalog entry → offered order)", () => {
@@ -324,5 +324,58 @@ describe("popover geometry (TASK.131 — the popover MOVES, it never grows a scr
     const cap = startModelMenuMaxHeightPx(300, { top: 250, bottom: 274 }, false, 8);
     expect(cap).toBeLessThan(5 * START_MODEL_ROW_HEIGHT_PX);
     expect(cap).toBeGreaterThan(0);
+  });
+});
+
+// ── TASK.183: per-connection manual model ids in the New Session picker ──
+
+describe("connectionOfferedModels / buildStartModelGroups (TASK.183 — manual ids are per connection)", () => {
+  const TWO_KIMI: ProviderConnection[] = [
+    connection({ id: "conn-a", providerId: "kimi", models: ["manual-a"] }),
+    connection({ id: "conn-b", providerId: "kimi", models: ["manual-b"] }),
+  ];
+
+  it("two connections of the SAME provider each offer their OWN additions plus the catalog hints — no leakage", () => {
+    const a = connectionOfferedModels(TWO_KIMI[0]!, CATALOG, undefined)?.map((m) => m.id) ?? [];
+    const b = connectionOfferedModels(TWO_KIMI[1]!, CATALOG, undefined)?.map((m) => m.id) ?? [];
+    expect(a).toContain("manual-a");
+    expect(a).not.toContain("manual-b");
+    expect(b).toContain("manual-b");
+    expect(b).not.toContain("manual-a");
+    // The catalog hints belong to both, in catalog order after the additions.
+    expect(a).toContain("kimi-for-coding");
+    expect(b).toContain("kimi-for-coding");
+  });
+
+  it("the same isolation holds after a FRESH settings load fixture (restart simulation)", async () => {
+    // Round-trip the provider block through JSON, as a reloaded settings file
+    // would deliver it, and assert the grouping is unchanged.
+    const reloaded = JSON.parse(JSON.stringify({ connections: TWO_KIMI })) as { connections: ProviderConnection[] };
+    const groups = buildStartModelGroups(reloaded.connections, CATALOG, undefined, { connectionId: "conn-a", modelId: "manual-a" });
+    const byId = new Map(groups.map((group) => [group.connectionId, group.items.map((m) => m.id)]));
+    expect(byId.get("conn-a")).toContain("manual-a");
+    expect(byId.get("conn-a")).not.toContain("manual-b");
+    expect(byId.get("conn-b")).toContain("manual-b");
+    expect(byId.get("conn-b")).not.toContain("manual-a");
+  });
+
+  it("openrouter / vllm / custom connections with NO catalog entry still offer their own additions", () => {
+    for (const providerId of ["openrouter", "vllm", "custom"]) {
+      const conn = connection({ id: `c-${providerId}`, providerId, models: [`manual-${providerId}`] });
+      expect(connectionOfferedModels(conn, CATALOG, undefined)?.map((m) => m.id)).toEqual([`manual-${providerId}`]);
+    }
+  });
+
+  it("a custom:<slug> connection with an EMPTY curated record still offers its own additions", () => {
+    const custom: CustomProviderRecord[] = [
+      { id: "custom:bare", name: "bare", baseUrl: "https://b.example", kind: "openai-compatible", models: [] },
+    ];
+    const conn = connection({ id: "c1", providerId: "custom:bare", models: ["manual-x"] });
+    expect(connectionOfferedModels(conn, CATALOG, custom)?.map((m) => m.id)).toEqual(["manual-x"]);
+  });
+
+  it("a connection with no additions keeps its catalog-only list byte-identical", () => {
+    const conn = connection({ id: "c1", providerId: "kimi" });
+    expect(connectionOfferedModels(conn, CATALOG, undefined)?.map((m) => m.id)).toEqual(["kimi-for-coding", "k3"]);
   });
 });

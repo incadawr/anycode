@@ -45,6 +45,7 @@ import {
   isEffectivePostureWeaker,
   type CodexPermissionPresetDefinition,
 } from "./presets.js";
+import { CollabAgentCardIndex } from "./collab-agent-index.js";
 import { CodexQuotaTracker } from "./quota.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
 import { TurnItemIndex } from "./turn-item-index.js";
@@ -201,6 +202,8 @@ export interface ConnectedCodexEngine {
 export interface CodexSessionSelection {
   model?: string;
   presetId?: string;
+  /** Draft effort tier (profile `effort:`), resolved against the live catalog; unrecognized degrades to the model default. */
+  effort?: string;
   /** A resumed session's stored ids predate this slice; an unrecognized one is a silent default, not a user error. */
   origin?: "draft" | "persisted";
 }
@@ -304,11 +307,20 @@ function buildSettings(
   result: ThreadResult,
   model: string,
   notices: AgentEvent[],
+  requestedEffort?: string,
 ): CodexEngineSettings {
   driftNotice(preset, result, notices);
   // The model is the SERVER-CONFIRMED one from the thread echo, so the effort is
   // resolved against what the thread actually runs, not against what was asked for.
-  const effort = catalog.resolveEffort(model, effectiveSettings(result).effort);
+  // A profile-declared requestedEffort (draft `--engine-effort`) outranks the
+  // thread echo; if the model cannot honor it, resolveEffort's fallback tier is
+  // used and a warning says so.
+  const effort = catalog.resolveEffort(model, requestedEffort ?? effectiveSettings(result).effort);
+  if (requestedEffort !== undefined && effort !== requestedEffort) {
+    notices.push(
+      warning(`Requested effort "${requestedEffort}" is unavailable for model "${model}"; the model default "${effort ?? "default"}" is used.`),
+    );
+  }
   const effortsByModel = new Map<string, string>();
   if (effort !== undefined) {
     effortsByModel.set(model, effort);
@@ -514,7 +526,7 @@ export async function createNativeCodexSession(
   }, { timeoutMs: bounds.bootRpcMs });
   const native = nativeThread(result, "thread/start");
   const quota = await pullQuotaSnapshot(client, bounds.bootRpcMs);
-  const settings = buildSettings(workspace, catalog, preset, result, native.model, notices);
+  const settings = buildSettings(workspace, catalog, preset, result, native.model, notices, selection?.effort);
   return {
     // A fresh thread has zero prior turns: no history to hydrate, and the
     // FIRST turn this launch runs is native turn ordinal 0 (cut §2(e)).
@@ -596,7 +608,7 @@ export async function resumeNativeCodexSession(
   // say so (recoverable, TASK.39 DoD-2), rather than burning the user's turn.
   const stored = resolveModel(catalog, selection, notices);
   const model = stored ?? native.model;
-  const settings = buildSettings(workspace, catalog, preset, resumed, model, notices);
+  const settings = buildSettings(workspace, catalog, preset, resumed, model, notices, selection?.effort);
   return {
     engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota, agentBridge, agentCardLog),
     threadId: native.threadId,
@@ -699,6 +711,13 @@ export class CodexEngine implements SessionEngine {
   private activeTurn: ActiveCodexTurn | null = null;
   /** Item index of the turn currently being started/run; written by the transport tap. */
   private activeItems: TurnItemIndex | null = null;
+  /**
+   * TASK.95: ONE session-lifetime collab correlation index per engine — a
+   * spawn card opened in an earlier turn must still be patchable by a child
+   * observation delivered in a later parent turn. Deliberately an instance
+   * field (never per-runTurn) and cleared only on disposal.
+   */
+  private readonly collabIndex = new CollabAgentCardIndex();
   /** Per-turn latch: exactly one `turn/interrupt` may ever be sent for one turn. */
   private interruptSent = false;
   private terminalError: Error | null = null;
@@ -1180,6 +1199,10 @@ export class CodexEngine implements SessionEngine {
         // sparse push merges onto everything already known (cut §6.3), not
         // onto a fresh per-turn blank.
         ...(this.quota !== undefined ? { quota: this.quota } : {}),
+        // TASK.95: the SESSION-lifetime collab correlation index rides every
+        // per-turn translator (same rationale as the quota tracker above) so
+        // later child observations patch the original spawn card.
+        collab: this.collabIndex,
       });
       let terminal = false;
       // Two independent per-turn counters, both reset to 0 for every turn
@@ -1356,6 +1379,9 @@ export class CodexEngine implements SessionEngine {
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
     this.agentBridge?.cancel();
+    // TASK.95: drop the session-lifetime collab correlation. This never
+    // manufactures a child completion — it only forgets the mapping.
+    this.collabIndex.clear();
     this.disposed = true;
     this.unobserve();
     this.appliedListeners.clear();

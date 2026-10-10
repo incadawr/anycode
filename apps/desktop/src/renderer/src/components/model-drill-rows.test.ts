@@ -14,6 +14,7 @@ import {
   pickSessionDrillRow,
   resolveRebindEffort,
 } from "./model-drill-rows.js";
+import { buildStartModelGroups } from "./start-model-picker.js";
 
 function connection(over: Partial<ProviderConnection> & { id: string; providerId: string }): ProviderConnection {
   return over;
@@ -235,5 +236,63 @@ describe("isForeignPick / modelDrillEffortLabel", () => {
     expect(modelDrillEffortLabel("off")).toBe("No thinking");
     expect(modelDrillEffortLabel("max")).toBe("Max");
     expect(modelDrillEffortLabel("turbo")).toBe("turbo");
+  });
+});
+
+// ── TASK.183: the composer's drill rows and the StartScreen groups offer the
+// SAME per-connection union (manual additions + catalog hints) ──
+
+describe("buildSessionDrillRows vs buildStartModelGroups (TASK.183 consistency)", () => {
+  const MANUAL: ProviderConnection[] = [
+    connection({ id: "c-manual", providerId: "z-ai", models: ["manual-composer"] }),
+    connection({ id: "c-other", providerId: "z-ai", models: ["manual-other"] }),
+  ];
+
+  it("a connection's manual addition appears in the composer rows and never in the sibling's", () => {
+    const { groups } = buildSessionDrillRows({
+      connections: MANUAL,
+      catalog: CATALOG,
+      custom: undefined,
+      currentConnectionId: "c-manual",
+      currentModelId: "manual-composer",
+      recentModelIds: [],
+    });
+    const mine = groups.find((group) => group.connectionId === "c-manual")!;
+    const sibling = groups.find((group) => group.connectionId === "c-other")!;
+    expect(mine.items.map((item) => item.id)).toContain("manual-composer");
+    expect(sibling.items.map((item) => item.id)).not.toContain("manual-composer");
+    expect(sibling.items.map((item) => item.id)).toContain("manual-other");
+  });
+
+  it("the composer rows and the StartScreen groups agree on the same connection's effective ids", () => {
+    const composer = buildSessionDrillRows({
+      connections: MANUAL,
+      catalog: CATALOG,
+      custom: undefined,
+      currentConnectionId: "c-manual",
+      currentModelId: "manual-composer",
+      recentModelIds: [],
+    }).groups;
+    const start = buildStartModelGroups(MANUAL, CATALOG, undefined, { connectionId: "c-manual", modelId: "manual-composer" });
+    const composerIds = composer.find((group) => group.connectionId === "c-manual")!.items.map((item) => item.id);
+    const startIds = start.find((group) => group.connectionId === "c-manual")!.items.map((item) => item.id);
+    expect(composerIds).toEqual(startIds);
+    expect(composerIds).toContain("manual-composer");
+  });
+
+  it("keeps the existing display ordering: catalog hints first, the manual id appended, current flag on the selection", () => {
+    const { groups } = buildSessionDrillRows({
+      connections: MANUAL,
+      catalog: CATALOG,
+      custom: undefined,
+      currentConnectionId: "c-manual",
+      currentModelId: "manual-composer",
+      recentModelIds: [],
+    });
+    const mine = groups.find((group) => group.connectionId === "c-manual")!;
+    // The catalog order is preserved; the manual id (unknown to the catalog) is
+    // appended after it rather than being allowed to reshuffle the hints.
+    expect(mine.items.map((item) => item.id)).toEqual(["glm-5.3", "glm-5.2", "manual-composer"]);
+    expect(mine.items.at(-1)).toMatchObject({ id: "manual-composer", current: true });
   });
 });

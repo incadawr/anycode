@@ -158,6 +158,13 @@ const connectionSchema = z.object({
   // back as "no explicit ceiling", which is the pre-TASK.150 behaviour.
   // Strictness lives at the IPC boundary (main/settings-ipc.ts).
   maxOutputTokens: z.number().int().positive().optional().catch(undefined),
+  // Per-model context window (TASK.142). Same fail-soft `.catch(undefined)` as
+  // `maxOutputTokens` above — a hand-edited bad value reads back as "no
+  // override" instead of resetting the whole document. `contextWindowModel` is
+  // carried verbatim: a surviving binding with no valid tokens is inert (the
+  // host-env emission requires BOTH a valid value and a matching model).
+  contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
+  contextWindowModel: z.string().optional(),
   authOptional: z.boolean().optional(),
   // Live-fetched model ids (connection-scoped fetch, main/provider-ipc.ts) —
   // advisory display data, same round-trip discipline as `lastHealth`.

@@ -493,7 +493,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   // ContextManager, subagents and titling — a /model setPort re-routes them all
   // between turns. Name kept `modelPort` so loopConfig/titling need no changes.
   const modelPort = new SwitchableModelPort(baseModelPort);
-  const bootContextWindow = resolveContextWindow(envConfig.model, catalogEntry, envConfig.contextWindowTokens);
+  const bootContextWindow = resolveContextWindow(envConfig.model, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
   const bootMaxOutputTokens = resolveMaxOutputTokens(
     envConfig.model,
     catalogEntry,
@@ -519,6 +519,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     catalogEntry,
     envMaxOutputTokens: envConfig.maxOutputTokens,
     envContextWindow: envConfig.contextWindowTokens,
+    envContextWindowModel: envConfig.contextWindowModel,
     onClamp: (requested, clamped, modelId) =>
       bootWrite(
         `[warn] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}\n`,
@@ -1078,9 +1079,11 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   let currentModel = envConfig.model;
 
   // Boot context-window resolution (slice 6.4, design slice-6.4-cut.md §2-C3):
-  // env ANYCODE_CONTEXT_WINDOW > catalog window of the boot model > absent.
-  // Absent keeps loopConfig.context omitted, so an unknown model/endpoint boots
-  // byte-identical to pre-6.4 (DEFAULT_CONTEXT_WINDOW_TOKENS via the defaults).
+  // env ANYCODE_CONTEXT_WINDOW (when its model binding is absent or names the
+  // boot model) > catalog window of the boot model > the assumed 8192 fallback
+  // (UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS, TASK.142). The result is always a
+  // number, so loopConfig.context is always populated and an unknown model boots
+  // at the degraded 8192 window rather than the DEFAULT_CONTEXT_WINDOW_TOKENS.
   // Telemetry sink (slice 6.6, design slice-6.6-cut.md §2-C1): opt-in — a
   // resolved config builds the per-session JSONL sink and the eventTap
   // closure; null keeps loopConfig.eventTap absent, so the default boot stays
@@ -1607,11 +1610,13 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
               // window takes effect on the very next turn — the manager's compaction
               // threshold and the context_usage denominator follow (loop.setContextWindow),
               // and loopConfig.context flows to children spawned after the switch
-              // (buildChildConfig copies parent.context by reference at spawn). The env
-              // override still wins inside resolveContextWindow; an unknown id falls back
-              // to the DEFAULT window (never a stale previous model's window).
+              // (buildChildConfig copies parent.context by reference at spawn). The
+              // env override still applies inside resolveContextWindow, but ONLY if
+              // its model binding is absent or names THIS id (TASK.142) — a pair saved
+              // for model A must never leak its window onto B. An unknown id resolves
+              // the assumed fallback (8192), never a stale previous model's window.
               const contextWindow =
-                resolveContextWindow(id, catalogEntry, envConfig.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+                resolveContextWindow(id, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
               loopConfig.maxOutputTokens = resolveMaxOutputTokens(
                 id,
                 catalogEntry,

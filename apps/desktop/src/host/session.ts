@@ -1134,6 +1134,8 @@ export class Session {
   /** The last loop_end's `declaredDoneAtCeiling` (TASK 4149). */
   private childDeclaredDoneAtCeiling = false;
   private childSafeError: string | undefined;
+  /** TASK.116: latched when an engine error event carried safe.code "engine_dead" — no live engine remains, so queued steers are rejected, never drained into a turn that can only die again. */
+  private childEngineDead = false;
   /** Once-latch (F7): true once `finalizeChildTerminal` has actually invoked `child.onTerminal` (or handed off an error terminal) — guards its docstring's "exactly once" contract against a second concurrent call. */
   private childTerminalFinalized = false;
   private childFinalTurnFinishReason: "length" | undefined;
@@ -2804,6 +2806,13 @@ export class Session {
    * `finalizeChildTerminal`'s healthy-path re-check) instead of duplicated.
    */
   private startNextQueuedSteerTurn(): boolean {
+    // TASK.116: a dead engine (claude latched its terminal error and closed the transport)
+    // must never be handed a queued steer — the drain would start a turn that can only
+    // error again (the incident's double "Claude exited during a turn"). Reject honestly;
+    // every caller (onChildTurnSettled AND finalizeChildTerminal's two re-checks) then
+    // falls through to committing the terminal with the real reason. Core recoverable
+    // provider errors set no such safe code and keep the drain-into-retry behavior.
+    if (this.childEngineDead) { this.rejectQueuedSteerMessages(); return false; }
     if (this.drainAgentInbox(true)) return true;
     let next = this.steerQueue.shift();
     while (next !== undefined) {
@@ -3068,6 +3077,7 @@ export class Session {
       case "error": {
         const wire = sanitizeAgentEvent(event);
         if (wire.type === "error") this.childSafeError = wire.error.message;
+        if (event.safe?.code === "engine_dead") this.childEngineDead = true;
         break;
       }
       case "text_delta":

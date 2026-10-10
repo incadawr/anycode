@@ -134,6 +134,7 @@ import type {
 } from "../../shared/protocol.js";
 import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { type UsageLimitNotice } from "./provider-notices.js";
+import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
 import { decodeSubagentCardSnapshot, projectSubagentCard } from "./subagent-card.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
 
@@ -910,6 +911,28 @@ export interface DesktopState {
    * steer message where it would sit forever.
    */
   childSurface: boolean;
+  /**
+   * Taskana 4234: provider-switch markers are STAGED renderer-locally while
+   * the hydrated history of the respawned host has not landed yet
+   * (`hostHistoryArrived` false ⇔ the `host_ready` reset happened but the
+   * following `session_history` has not), and flushed/persisted at that same
+   * boundary. Outside the session slice so a `host_ready` reset never drops
+   * them; the public `reset()` clears them. `lastHistoryTail` is the last
+   * hydrated item's id (persistence anchor); `sessionId` is the tab's session
+   * when known. NEVER sent into host/model history.
+   */
+  hostHistoryArrived: boolean;
+  lastHistoryTail: string | null;
+  pendingConnectionChanges: Array<{
+    id?: string;
+    fromLabel: string;
+    toLabel: string;
+    model: string;
+    effortResetTo?: string;
+    sessionId: string | null;
+  }>;
+  /** Taskana 4234: the tab's session id, lifted at attach; null before the handshake. */
+  sessionId: string | null;
   workspace: string | null;
   model: string | null;
   mode: PermissionMode | null;
@@ -1147,10 +1170,26 @@ export interface DesktopState {
    * minted here unless one is passed (tests pin it). Must be called AFTER the
    * respawned host's `host_ready` — `performReset` wipes the transcript, so a
    * line written before it would never be seen.
+   *
+   * Taskana 4234: while the hydrated history has not arrived yet
+   * (`hostHistoryArrived` false) the marker is STAGED (with the caller's
+   * optional `sessionId`) and flushed at the `session_history` boundary —
+   * staged/persisted renderer-locally, never sent to the host/model.
    */
   appendConnectionChanged(
-    block: Omit<Extract<TranscriptBlock, { kind: "connection_changed" }>, "kind" | "id"> & { id?: string },
+    block: Omit<Extract<TranscriptBlock, { kind: "connection_changed" }>, "kind" | "id"> & {
+      id?: string;
+      sessionId?: string | null;
+    },
   ): void;
+  /**
+   * Taskana 4234: restores persisted provider-switch markers into the
+   * transcript at their recorded history boundaries (chronological; ids
+   * already present are skipped; null/missing/truncated anchors insert at the
+   * earliest visible boundary). Pure transcript insertion — no writes, no
+   * host sends.
+   */
+  insertConnectionChangedAt(records: readonly ConnectionSwitchRecord[]): void;
   /**
    * TASK.33 W8: snapshots the text+images just put on the wire as
    * `lastSentMessage`, so a later terminal retryable failure can offer to
@@ -1868,7 +1907,95 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      */
     function performReset(): void {
       drainPendingDeltas();
+      // Taskana 4234: the transcript is being discarded — the hydration
+      // anchor/projection info indexing it dies with it (public reset also
+      // clears the public staging fields itself).
+      hydrationItemIds = null;
       set({ ...initialSessionSlice(), lastFatal: null });
+    }
+
+    // ── Taskana 4234: renderer-local provider-switch marker staging/replay ──
+    // Hydration anchor info: the item ids of the LATEST session_history, in
+    // hydration order, retained so insertConnectionChangedAt can resolve a
+    // non-rendering anchor (e.g. a tool item, which projects no blocks) to the
+    // preceding visible boundary. Cleared on every transcript-discard path.
+    let hydrationItemIds: string[] | null = null;
+
+    /** The newest transcript index owned by `itemId`'s projected blocks, or -1. */
+    function lastBlockIndexOfItem(transcript: readonly TranscriptBlock[], itemId: string): number {
+      const prefix = `${itemId}:`;
+      let last = -1;
+      for (let index = 0; index < transcript.length; index += 1) {
+        if (transcript[index]!.id.startsWith(prefix)) {
+          last = index;
+        }
+      }
+      return last;
+    }
+
+    /**
+     * Insertion index for one persisted marker: after the anchor's LAST
+     * projected block; a non-rendering anchor (present in the hydration order
+     * but projecting no blocks) resolves to the boundary after the nearest
+     * PRECEDING item that rendered; a null/missing/truncated anchor resolves
+     * to the earliest visible boundary (transcript start).
+     */
+    function switchMarkerInsertIndex(afterItemId: string | null): number {
+      const transcript = get().transcript;
+      if (afterItemId !== null) {
+        const last = lastBlockIndexOfItem(transcript, afterItemId);
+        if (last !== -1) {
+          return last + 1;
+        }
+        if (hydrationItemIds !== null) {
+          const order = hydrationItemIds.indexOf(afterItemId);
+          for (let index = order - 1; index >= 0; index -= 1) {
+            const previous = lastBlockIndexOfItem(transcript, hydrationItemIds[index]!);
+            if (previous !== -1) {
+              return previous + 1;
+            }
+          }
+        }
+      }
+      return 0;
+    }
+
+    /** Renders one marker block from a persisted record (no sessionId/anchor leak). */
+    function connectionChangedBlock(
+      record: Pick<ConnectionSwitchRecord, "id" | "fromLabel" | "toLabel" | "model" | "effortResetTo">,
+    ): Extract<TranscriptBlock, { kind: "connection_changed" }> {
+      return {
+        kind: "connection_changed",
+        id: record.id,
+        fromLabel: record.fromLabel,
+        toLabel: record.toLabel,
+        model: record.model,
+        ...(record.effortResetTo !== undefined ? { effortResetTo: record.effortResetTo } : {}),
+      };
+    }
+
+    /**
+     * Consumes staged markers in order, appends them after the (just-hydrated)
+     * transcript tail, and persists each with the current `lastHistoryTail`
+     * anchor for a non-null sessionId. Keeps any supplied id; otherwise mints
+     * a restart-safe crypto.randomUUID (never the reset-prone errorSeq).
+     */
+    function flushStagedConnectionChanges(): void {
+      const staged = get().pendingConnectionChanges;
+      if (staged.length === 0) {
+        return;
+      }
+      const anchor = get().lastHistoryTail;
+      const storeSessionId = get().sessionId;
+      set({ pendingConnectionChanges: [] });
+      for (const entry of staged) {
+        const id = entry.id ?? crypto.randomUUID();
+        appendBlock(connectionChangedBlock({ id, fromLabel: entry.fromLabel, toLabel: entry.toLabel, model: entry.model, effortResetTo: entry.effortResetTo }));
+        const sessionId = entry.sessionId ?? storeSessionId;
+        if (sessionId !== null) {
+          saveConnectionSwitch(sessionId, { id, fromLabel: entry.fromLabel, toLabel: entry.toLabel, model: entry.model, ...(entry.effortResetTo !== undefined ? { effortResetTo: entry.effortResetTo } : {}), afterItemId: anchor });
+        }
+      }
     }
 
     /**
@@ -2512,6 +2639,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       if (newBlocks.length > 0) {
         set((state) => ({ transcript: [...state.transcript, ...newBlocks] }));
       }
+      // Taskana 4234: the hydrated boundary has arrived — record the tail
+      // anchor and hydration order, then flush any provider-switch markers
+      // staged while the history was outstanding (they append after the
+      // hydrated tail, persisted with this anchor).
+      hydrationItemIds = items.map((item) => item.id);
+      set({ hostHistoryArrived: true, lastHistoryTail: items.length > 0 ? items[items.length - 1]!.id : null });
+      flushStagedConnectionChanges();
       // TASK.117: REBUILD the fold checkpoint's durable coverage from this
       // fresh snapshot. Every ui_ready on a reconnect rebuilds
       // session_history from CURRENT persisted truth and then replays the
@@ -3584,6 +3718,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // slice so a host_ready respawn reset never drops it.
       pinnedConnection: null,
       childSurface: false,
+      // Taskana 4234: provider-switch marker staging (see DesktopState docs).
+      hostHistoryArrived: false,
+      lastHistoryTail: null,
+      pendingConnectionChanges: [],
+      sessionId: null,
       workspace: null,
       model: null,
       mode: null,
@@ -3620,6 +3759,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // so the preservation lives here, not inside `performReset` itself.
             const armedRetry = get().retry;
             performReset();
+            // Taskana 4234: the respawn reset discards the old transcript, so
+            // the previous hydration boundary is void — markers arriving before
+            // the NEW session_history stage instead of appending into a
+            // transcript about to be replaced.
+            set({ hostHistoryArrived: false, lastHistoryTail: null });
             // TASK.117 phase-1 defect 2 FIX: the causal/durable fold's engine
             // identity is derived HERE, at the handshake — `host_ready.engine`
             // is "present only for a non-core engine" (protocol.ts), so absent
@@ -3656,6 +3800,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             });
             set({
               connection: "ready",
+              // Taskana 4234: the tab's session id, lifted for marker persistence.
+              sessionId: message.sessionId,
               workspace: message.workspace,
               mode: message.mode,
               engine: message.engine ?? null,
@@ -3722,6 +3868,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             set({ notice: { kind: "worktree_notice", text: message.message } });
             return;
           case "turn_started": {
+            // Taskana 4234 fallback: a turn starting means post-switch content
+            // is about to land — if the hydration boundary never arrived (no
+            // session_history at all), flush staged markers NOW so they
+            // precede the new content rather than trailing it forever.
+            if (!get().hostHistoryArrived) {
+              flushStagedConnectionChanges();
+            }
             // Slice P7.14: a queued item whose drain this turn_started
             // acknowledges is officially accepted — clear the in-flight slot so
             // the drainer can dispatch the next item on the following turn-end.
@@ -4393,9 +4546,74 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       },
 
       appendConnectionChanged(block): void {
-        const { id, ...rest } = block;
-        appendBlock({ kind: "connection_changed", id: id ?? `connection-changed:${errorSeq}`, ...rest });
-        errorSeq += 1;
+        const { id, sessionId, ...rest } = block;
+        if (!get().hostHistoryArrived) {
+          // Taskana 4234: the respawned host's history has not landed — stage
+          // (retaining any supplied id + the nullable sessionId); the
+          // session_history boundary (or the turn_started fallback) flushes.
+          set((state) => ({
+            pendingConnectionChanges: [...state.pendingConnectionChanges, { ...rest, ...(id !== undefined ? { id } : {}), sessionId: sessionId ?? null }],
+          }));
+          return;
+        }
+        flushStagedConnectionChanges();
+        const markerId = id ?? crypto.randomUUID();
+        appendBlock(connectionChangedBlock({ id: markerId, ...rest }));
+        const storeSessionId = get().sessionId;
+        const persistSessionId = sessionId ?? storeSessionId;
+        if (persistSessionId !== null) {
+          saveConnectionSwitch(persistSessionId, {
+            id: markerId,
+            ...rest,
+            afterItemId: get().lastHistoryTail,
+          });
+        }
+      },
+
+      insertConnectionChangedAt(records): void {
+        if (records.length === 0) {
+          return;
+        }
+        const currentIds = () =>
+          new Set(
+            get()
+              .transcript.filter(
+                (block): block is Extract<TranscriptBlock, { kind: "connection_changed" }> => block.kind === "connection_changed",
+              )
+              .map((block) => block.id),
+          );
+        // Chronological order of THIS record list (the persisted log is saved
+        // chronologically): a marker restored by an EARLIER replay (its id
+        // already in the transcript) must keep preceding a NEWER record that a
+        // LATER replay adds at the SAME boundary.
+        const orderById = new Map(records.map((record, index) => [record.id, index] as const));
+        const pending = records.filter((record) => !currentIds().has(record.id));
+        for (const record of pending) {
+          const order = orderById.get(record.id)!;
+          let insertAt = switchMarkerInsertIndex(record.afterItemId);
+          // Advance past SAME-BOUNDARY markers that are chronologically older
+          // per this list — both ones restored by earlier iterations and ones
+          // a previous replay already inserted. A marker whose id is NOT in
+          // this list (a live marker appended after hydration) is by
+          // construction NEWER than every persisted record: stop before it.
+          const transcript = get().transcript;
+          while (insertAt < transcript.length) {
+            const block = transcript[insertAt]!;
+            if (block.kind !== "connection_changed") {
+              break;
+            }
+            const otherOrder = orderById.get(block.id);
+            if (otherOrder === undefined || otherOrder > order) {
+              break;
+            }
+            insertAt += 1;
+          }
+          set((state) => {
+            const next = [...state.transcript];
+            next.splice(insertAt, 0, connectionChangedBlock(record));
+            return { transcript: next };
+          });
+        }
       },
 
       recordSentMessage(text: string, images: readonly QueuedPromptImage[]): void {
@@ -4448,6 +4666,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       reset(): void {
         performReset();
+        // Taskana 4234: a genuinely new session drops staged markers, the
+        // boundary flags and the lifted session id along with the transcript.
+        set({ hostHistoryArrived: false, lastHistoryTail: null, pendingConnectionChanges: [], sessionId: null });
         // A genuinely new session in the same tab does NOT own the prior
         // session's queued prompts (slice P7.14) — unlike the respawn path,
         // clear them outright.

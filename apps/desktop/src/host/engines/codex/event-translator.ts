@@ -7,9 +7,134 @@
 import type { AgentEvent, CodexRateLimitsWire, FinishReason, ToolCallOutcome, ToolCallStatus } from "@anycode/core";
 import type { JsonRpcNotification } from "./protocol.js";
 import type { TurnItemIndex } from "./turn-item-index.js";
+import { CollabAgentCardIndex } from "./collab-agent-index.js";
 
 /** One sub-tool-call a single native item projects to — a `fileChange` with N files projects to N of these. */
 type ToolProjection = { toolCallId: string; toolName: string; input: unknown };
+
+/** TASK.95: the ONE honest, non-inferred persona label for a Codex collab child. Never refined from model/path. */
+const CODEX_SUBAGENT_PERSONA = "codex subagent";
+/** The outer Agent tool card's renderer tool name. */
+const AGENT_TOOL_NAME = "Agent";
+/** Bound for a single DISPLAYED generic field value (never applied to the dedicated spawn prompt). */
+const GENERIC_VALUE_MAX = 2000;
+const GENERIC_TRUNCATION_MARKER = " \u2026[truncated]";
+/** Up to eight actual scalar fields reach a generic card (explicit counter — never `input.size`). */
+const GENERIC_FIELD_LIMIT = 8;
+const COLLAB_TOOL_TYPE = "collabAgentToolCall";
+const SUBAGENT_ACTIVITY_TYPE = "subAgentActivity";
+
+/**
+ * Known conversation/plan/review/context bookkeeping surfaces and bridge-owned
+ * dynamic tool calls: none of these may become a generic tool card. Centralized
+ * so dedicated collab/activity handling can never be mistaken for generic
+ * recovery (TASK.95 §3).
+ */
+const EXCLUDED_ITEM_TYPES = new Set<string>([
+  "userMessage",
+  "hookPrompt",
+  "agentMessage",
+  "reasoning",
+  "plan",
+  "enteredReviewMode",
+  "exitedReviewMode",
+  "contextCompaction",
+  "dynamicToolCall",
+  COLLAB_TOOL_TYPE,
+  SUBAGENT_ACTIVITY_TYPE,
+]);
+
+/**
+ * Generic cards for the handful of non-family item types with a KNOWN display
+ * field set. Explicit order both keeps the card readable and, for `imageView`,
+ * refuses to inline a raw base64 `image` field (only the actual `path`).
+ */
+const DEDICATED_GENERIC_FIELDS: Record<string, readonly string[]> = {
+  imageView: ["path"],
+  sleep: ["durationMs"],
+  imageGeneration: ["savedPath", "revisedPrompt", "status", "result"],
+};
+
+function boundGenericString(value: string): string {
+  return value.length > GENERIC_VALUE_MAX ? value.slice(0, GENERIC_VALUE_MAX) + GENERIC_TRUNCATION_MARKER : value;
+}
+
+/**
+ * Extracts up to {@link GENERIC_FIELD_LIMIT} ACTUAL scalar input fields from an
+ * item (excluding `id`/`type`), bounding displayed strings. Missing/nested
+ * values are skipped — never invented.
+ */
+function genericInput(item: Record<string, unknown>, order?: readonly string[]): Record<string, unknown> {
+  const keys = order ?? Object.keys(item);
+  const input: Record<string, unknown> = {};
+  let count = 0;
+  for (const key of keys) {
+    if (key === "id" || key === "type") continue;
+    const value = item[key];
+    if (value === null || value === undefined) continue;
+    const kind = typeof value;
+    if (kind === "string") input[key] = boundGenericString(value as string);
+    else if (kind === "number" || kind === "boolean") input[key] = value;
+    else continue;
+    count += 1;
+    if (count >= GENERIC_FIELD_LIMIT) break;
+  }
+  return input;
+}
+
+/**
+ * Generic operation completion status: only EXPLICIT failure/denial/
+ * cancellation markers map away from success. A missing or unfamiliar
+ * free-form status is NEVER turned into a fabricated error — it stays a
+ * "receipt of item/completed" success with the raw value carried visibly
+ * (TASK.95 §4).
+ */
+function genericStatusFor(itemStatus: unknown): ToolCallStatus {
+  if (itemStatus === "failed" || itemStatus === "error") return "error";
+  if (itemStatus === "declined" || itemStatus === "denied") return "denied";
+  if (itemStatus === "interrupted" || itemStatus === "cancelled") return "cancelled";
+  return "success";
+}
+
+function isDedupedFamily(itemType: unknown): boolean {
+  return isToolFamily(itemType) || itemType === COLLAB_TOOL_TYPE || itemType === SUBAGENT_ACTIVITY_TYPE;
+}
+
+/** Non-empty string members of a wire array, in wire order. */
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+}
+
+/**
+ * Decodes a collab `agentsStates` map into observations. Entries without a
+ * string `status` are dropped (never invented); the optional `message` is kept
+ * only when it is an actual non-empty string.
+ */
+function normalizeStates(raw: unknown): Record<string, { status: string; message?: string }> {
+  const value = record(raw);
+  if (value === null) return {};
+  const states: Record<string, { status: string; message?: string }> = {};
+  for (const [receiver, rawState] of Object.entries(value)) {
+    const state = record(rawState);
+    if (state === null || typeof state.status !== "string") continue;
+    const message = typeof state.message === "string" && state.message.length > 0 ? state.message : undefined;
+    states[receiver] = { status: state.status, ...(message !== undefined ? { message } : {}) };
+  }
+  return states;
+}
+
+function stateSummary(observation: { status: string; message?: string }): string {
+  return observation.message !== undefined ? `${observation.status}: ${observation.message}` : observation.status;
+}
+
+/** Real `subAgentActivity` fields only — kind/path/thread, never invented. */
+function activitySummary(item: Record<string, unknown>): string {
+  const kind = typeof item.kind === "string" ? item.kind : "activity";
+  const path = typeof item.agentPath === "string" && item.agentPath.length > 0 ? item.agentPath : undefined;
+  const thread = typeof item.agentThreadId === "string" && item.agentThreadId.length > 0 ? item.agentThreadId : undefined;
+  return [kind, path, thread].filter((part): part is string => part !== undefined).join(" · ");
+}
 
 /**
  * The engine-owned quota tracker's narrow face (quota.ts `CodexQuotaTracker`,
@@ -36,6 +161,15 @@ export interface TurnTranslatorOptions {
   items?: TurnItemIndex;
   /** Session-lifetime quota tracker (codex-profiles cut §6); absent -> quota pushes are silently dropped. */
   quota?: QuotaUpdateSink;
+  /**
+   * Engine-owned SESSION-lifetime collab correlation index (TASK.95). The
+   * engine constructs exactly ONE of these and passes it to every per-turn
+   * translator, so a `wait`/`sendInput`/`resumeAgent`/`closeAgent` (or a bare
+   * `subAgentActivity`) observed in a LATER parent turn can still patch the
+   * spawn card created earlier. Absent in direct unit tests -> the translator
+   * falls back to a translator-local index so its behavior stays isolated.
+   */
+  collab?: CollabAgentCardIndex;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -122,17 +256,28 @@ function projectTools(item: Record<string, unknown>): ToolProjection[] {
       input: typeof item.query === "string" ? { query: item.query } : {},
     }];
   }
-  // Intentional exclusions (TASK.181): userMessage, hookPrompt, agentMessage
-  // (handled as text separately), reasoning, plan, enteredReviewMode,
-  // exitedReviewMode and contextCompaction are conversation/plan/review/
-  // bookkeeping surfaces, not tool executions. sleep, imageView and
-  // imageGeneration are intentionally outside this task's four execution
-  // families (not assertively classified as never tools).
-  // dynamicToolCall is intentionally excluded because dynamic-tool-bridge.ts
-  // already emits call/start/result for bridge-owned calls (projecting here
-  // would double-count). collabAgentToolCall and subAgentActivity are
-  // intentionally outside this change.
-  return [];
+  // TASK.95 dedicated generic cards for the non-family types with a KNOWN
+  // display field set. Only ACTUAL fields are read; a raw base64 image field
+  // is never inlined. Their status (imageGeneration's is free-form) rides the
+  // generic outcome path, displayed rather than guessed.
+  if (typeof item.type === "string" && item.type in DEDICATED_GENERIC_FIELDS) {
+    return [{ toolCallId: itemId, toolName: `codex:${item.type}`, input: genericInput(item, DEDICATED_GENERIC_FIELDS[item.type]) }];
+  }
+  // Intentional exclusions: userMessage, hookPrompt, agentMessage (handled as
+  // text separately), reasoning, plan, enteredReviewMode, exitedReviewMode and
+  // contextCompaction are conversation/plan/review/context bookkeeping
+  // surfaces, not tool executions. dynamicToolCall is excluded because
+  // dynamic-tool-bridge.ts already emits call/start/result for bridge-owned
+  // calls (projecting here would double-count). collabAgentToolCall and
+  // subAgentActivity have DEDICATED handlers in TurnTranslator and must never
+  // fall through to generic recovery.
+  if (typeof item.type !== "string" || EXCLUDED_ITEM_TYPES.has(item.type)) return [];
+  // TASK.95 PLAN RULE: any OTHER non-excluded string type is a future/unknown
+  // family. It surfaces as an honest generic card rather than vanishing — an
+  // unknown execution must never be silently dropped. Logged for diagnostics.
+  // eslint-disable-next-line no-console
+  console.warn(`[codex] unobserved item type projected as a generic card: ${item.type}`);
+  return [{ toolCallId: itemId, toolName: `codex:${item.type}`, input: genericInput(item) }];
 }
 
 /** The renderer-side tool name whose card the TodoPanel projects (core's TodoWrite). */
@@ -214,6 +359,14 @@ export class TurnTranslator {
   private readonly completedItemIds = new Set<string>();
   /** Accumulated `item/commandExecution/outputDelta` text per itemId (cut §2(i) live command-output deltas). */
   private readonly commandOutputBuffers = new Map<string, string>();
+  /**
+   * TASK.95 collab correlation. Production passes the ENGINE-owned instance;
+   * absent (direct unit tests) the translator-local fallback keeps each
+   * translator's behavior isolated.
+   */
+  private readonly collab: CollabAgentCardIndex;
+  /** Native `subAgentActivity` ids already rendered as a mapped activity ROW, so start+complete yields one row. */
+  private readonly activityRowIds = new Set<string>();
   private finished = false;
   /** Monotonic per-turn suffix for synthetic plan-card ids (`turn/plan/updated` carries no item id of its own). */
   private planRevision = 0;
@@ -222,7 +375,9 @@ export class TurnTranslator {
   /** Latches the ONE terminal `{type:"error"}` event a turn may ever emit (cut §2(i)) — a live `error` notification and a fallback in `finish()` must never double-report the same failure. */
   private errorEmitted = false;
 
-  constructor(private readonly options: TurnTranslatorOptions) {}
+  constructor(private readonly options: TurnTranslatorOptions) {
+    this.collab = options.collab ?? new CollabAgentCardIndex();
+  }
 
   onNotification(notification: JsonRpcNotification): AgentEvent[] {
     if (this.finished) return [];
@@ -278,26 +433,39 @@ export class TurnTranslator {
     // started must create zero new blocks (see startedItemIds' own comment).
     if (this.startedItemIds.has(item.id)) return [];
     this.startedItemIds.add(item.id);
-    // TASK.181: a late item/started for an item id that already completed
-    // (paired or completed-only recovered) must never resurrect a lifecycle.
-    if (isToolFamily(item.type) && this.completedItemIds.has(item.id)) return [];
+    // TASK.181 + TASK.95: a late item/started for an item id that already
+    // completed (paired or completed-only recovered) must never resurrect a
+    // lifecycle — extended to collab/activity, which live outside isToolFamily.
+    if (isDedupedFamily(item.type) && this.completedItemIds.has(item.id)) return [];
     if (item.type === "agentMessage") {
       this.openText.add(item.id);
       return [{ type: "text_start", id: item.id }];
     }
+    // Dedicated collab/activity dispatch — BEFORE generic projection, so a
+    // spawn is never mistaken for a generic recovery and neither is dropped.
+    if (item.type === COLLAB_TOOL_TYPE) return this.onCollabStarted(item);
+    if (item.type === SUBAGENT_ACTIVITY_TYPE) return this.onActivityStarted(item);
     const projections = projectTools(item);
     if (projections.length === 0) return [];
     // Defensive: never reopen projections that already produced a tool_result.
     if (projections.every((projection) => this.completedToolCallIds.has(projection.toolCallId))) return [];
-    this.itemToolCallIds.set(item.id, projections.map((projection) => projection.toolCallId));
+    return this.startProjections(item.id, projections);
+  }
+
+  /**
+   * Shared start routine for every projection (family + generic): records the
+   * item -> sub-id mapping, opens the renderer-required `tool_call` block and
+   * its `tool_execution_start`. Renderer contract (store.ts): a tool_call block
+   * is created ONLY on `{type:"tool_call"}` — tool_execution_start/tool_result
+   * are patch-only, silent no-ops without it (W17 fix: this emission was
+   * missing, so a live turn's real commands/file-changes never rendered any
+   * card at all, allow/deny/cancel alike).
+   */
+  private startProjections(itemId: string, projections: ToolProjection[]): AgentEvent[] {
+    this.itemToolCallIds.set(itemId, projections.map((projection) => projection.toolCallId));
     const events: AgentEvent[] = [];
     for (const projection of projections) {
       this.tools.set(projection.toolCallId, projection);
-      // Renderer contract (store.ts): a tool_call block is created ONLY on
-      // {type:"tool_call"} — tool_execution_start/tool_result are patch-only,
-      // silent no-ops without it (W17 fix: this emission was missing, so a
-      // live turn's real commands/file-changes never rendered any card at
-      // all, allow/deny/cancel alike).
       events.push({
         type: "tool_call",
         toolCall: { id: projection.toolCallId, name: projection.toolName, input: projection.input },
@@ -382,39 +550,60 @@ export class TurnTranslator {
     if (item.type === "agentMessage" && this.openText.delete(item.id)) {
       return [{ type: "text_end", id: item.id }];
     }
-    // TASK.181 ITEM-level dedup: a repeated completion — even with a
-    // different payload shape (sparse vs populated fileChange changes) —
-    // must never recover a second lifecycle under different projection ids.
-    if (isToolFamily(item.type) && this.completedItemIds.has(item.id)) return [];
+    // TASK.181 + TASK.95 ITEM-level dedup: a repeated completion — even with a
+    // different payload shape (sparse vs populated fileChange changes) — must
+    // never recover a second lifecycle under different projection ids.
+    // Extended to collab/activity, which live outside isToolFamily.
+    if (isDedupedFamily(item.type) && this.completedItemIds.has(item.id)) return [];
+    // Dedicated collab/activity completion — never a generic recovery.
+    if (item.type === COLLAB_TOOL_TYPE) {
+      this.completedItemIds.add(item.id);
+      return this.onCollabCompleted(item);
+    }
+    if (item.type === SUBAGENT_ACTIVITY_TYPE) {
+      this.completedItemIds.add(item.id);
+      return this.onActivityCompleted(item);
+    }
     const toolCallIds = this.itemToolCallIds.get(item.id);
     if (toolCallIds === undefined) {
-      // TASK.181 completed-only recovery: a completion of a recognized tool
-      // family whose item/started never arrived (or produced no projection)
-      // must not silently disappear. Emit the full renderer-required
-      // lifecycle (tool_call -> tool_execution_start -> tool_result) here.
-      // A previously seen start with no projection must not block recovery.
-      if (!isToolFamily(item.type)) return [];
+      // Completed-only recovery: a completion of a projectable item whose
+      // item/started never arrived (or produced no projection) must not
+      // silently disappear. Emit the full renderer-required lifecycle
+      // (tool_call -> tool_execution_start -> tool_result) here. A previously
+      // seen start with no projection must not block recovery.
       const projections = projectTools(item).filter((projection) => !this.completedToolCallIds.has(projection.toolCallId));
       if (projections.length === 0) return [];
       // Mark completion only once a real tool_result will actually be produced.
       this.completedItemIds.add(item.id);
-      const events: AgentEvent[] = [];
-      for (const projection of projections) {
-        events.push({
-          type: "tool_call",
-          toolCall: { id: projection.toolCallId, name: projection.toolName, input: projection.input },
-        });
-        events.push({ type: "tool_execution_start", toolCallId: projection.toolCallId, toolName: projection.toolName, input: projection.input });
-        events.push({ type: "tool_result", outcome: this.toolOutcome(projection.toolCallId, projection, item) });
-        this.completedToolCallIds.add(projection.toolCallId);
-      }
-      // Synthetic completed-only tools must never linger in the maps for
-      // finish() to count again — itemToolCallIds was never set for them, and
-      // the tools map stays untouched.
-      return events;
+      return this.finishProjectionsCompletedOnly(item, projections);
     }
     this.itemToolCallIds.delete(item.id);
     this.completedItemIds.add(item.id);
+    return this.finishProjectionsPaired(item, toolCallIds);
+  }
+
+  /**
+   * Completed-only recovery lifecycle for projections whose start never
+   * registered. Synthetic completed-only tools must never linger in the maps
+   * for finish() to count again — itemToolCallIds was never set for them, and
+   * the tools map stays untouched.
+   */
+  private finishProjectionsCompletedOnly(item: Record<string, unknown>, projections: ToolProjection[]): AgentEvent[] {
+    const events: AgentEvent[] = [];
+    for (const projection of projections) {
+      events.push({
+        type: "tool_call",
+        toolCall: { id: projection.toolCallId, name: projection.toolName, input: projection.input },
+      });
+      events.push({ type: "tool_execution_start", toolCallId: projection.toolCallId, toolName: projection.toolName, input: projection.input });
+      events.push({ type: "tool_result", outcome: this.outcomeFor(projection.toolCallId, projection, item) });
+      this.completedToolCallIds.add(projection.toolCallId);
+    }
+    return events;
+  }
+
+  /** Paired completion: closes each projection opened by a matching start. */
+  private finishProjectionsPaired(item: Record<string, unknown>, toolCallIds: readonly string[]): AgentEvent[] {
     const events: AgentEvent[] = [];
     for (const toolCallId of toolCallIds) {
       const projection = this.tools.get(toolCallId);
@@ -422,9 +611,16 @@ export class TurnTranslator {
       this.tools.delete(toolCallId);
       if (this.completedToolCallIds.has(toolCallId)) continue;
       this.completedToolCallIds.add(toolCallId);
-      events.push({ type: "tool_result", outcome: this.toolOutcome(toolCallId, projection, item) });
+      events.push({ type: "tool_result", outcome: this.outcomeFor(toolCallId, projection, item) });
     }
     return events;
+  }
+
+  /** Family outcomes keep their exact semantics; every other type uses the honest generic outcome. */
+  private outcomeFor(toolCallId: string, projection: ToolProjection, item: Record<string, unknown>): ToolCallOutcome {
+    return isToolFamily(item.type)
+      ? this.toolOutcome(toolCallId, projection, item)
+      : this.genericOutcome(toolCallId, projection, item);
   }
 
   private toolOutcome(toolCallId: string, projection: ToolProjection, item: Record<string, unknown>): ToolCallOutcome {
@@ -448,6 +644,298 @@ export class TurnTranslator {
       modelText,
       durationMs: typeof durationRaw === "number" && durationRaw >= 0 ? durationRaw : 0,
       ...(status === "success" ? { result: { ok: true, output: modelText } } : { result: { ok: false, error: "Codex tool did not complete" } }),
+    };
+  }
+
+  /**
+   * Generic (non-family) completion outcome. `success` here means ONLY "the
+   * item/completed receipt arrived" — it never asserts semantic child/task
+   * success. Explicit failed/error, declined/denied and interrupted/cancelled
+   * map to error/denied/cancelled. A missing or unfamiliar free-form status is
+   * NOT a fabricated error: the raw value is carried in the visible
+   * text and the observation is labelled as item completion. Real output/
+   * message/duration fields are used when present; nothing is invented.
+   */
+  private genericOutcome(toolCallId: string, projection: ToolProjection, item: Record<string, unknown>): ToolCallOutcome {
+    const rawStatus = item.status;
+    const status = genericStatusFor(rawStatus);
+    const detail = [item.output, item.message, item.text, item.result].find((value): value is string => typeof value === "string" && value.length > 0);
+    const notes: string[] = [];
+    if (typeof rawStatus === "string" && rawStatus.length > 0) notes.push(`status: ${rawStatus}`);
+    if (status === "success") notes.push("operation item completed");
+    const modelText = [detail !== undefined ? boundGenericString(detail) : "", notes.join(" · ")].filter((part) => part.length > 0).join("\n");
+    const durationRaw = item.durationMs !== undefined ? item.durationMs : item.duration_ms;
+    return {
+      toolCallId,
+      toolName: projection.toolName,
+      status,
+      modelText,
+      durationMs: typeof durationRaw === "number" && durationRaw >= 0 ? durationRaw : 0,
+      ...(status === "success"
+        ? { result: { ok: true, output: modelText } }
+        : { result: { ok: false, error: modelText.length > 0 ? modelText : "Codex operation did not complete" } }),
+    };
+  }
+
+  // ── TASK.95 collab (Agent) + sub-agent activity ───────────────────────────
+
+  private onCollabStarted(item: Record<string, unknown>): AgentEvent[] {
+    if (item.tool === "spawnAgent") return this.onSpawnStarted(item);
+    return this.onCollabOperationStarted(item);
+  }
+
+  private onCollabCompleted(item: Record<string, unknown>): AgentEvent[] {
+    if (item.tool === "spawnAgent") return this.onSpawnCompleted(item);
+    return this.onCollabOperationCompleted(item);
+  }
+
+  /**
+   * A spawn CALL start. Registers the card/receivers BEFORE applying any
+   * `agentsStates` from the snapshot, opens the outer Agent card, seeds the
+   * subagent region, and only THEN appends the state observations. The prompt
+   * and the REQUESTED model ride verbatim; persona is the explicit neutral
+   * label — never inferred from model/path.
+   */
+  private onSpawnStarted(item: Record<string, unknown>): AgentEvent[] {
+    const cardId = item.id as string;
+    const promptText = typeof item.prompt === "string" ? item.prompt : "";
+    const model = typeof item.model === "string" && item.model.length > 0 ? item.model : null;
+    const receivers = stringArray(item.receiverThreadIds);
+    this.collab.register(cardId, {
+      prompt: promptText.length > 0 ? promptText : null,
+      model,
+      receiverThreadIds: receivers,
+    });
+    const input: Record<string, unknown> = { prompt: promptText, ...(model !== null ? { model } : {}) };
+    // Outer CALL tracking: finish()'s cancelled sweep must be able to close a
+    // still-open spawn CALL — but it never touches the child region.
+    this.tools.set(cardId, { toolCallId: cardId, toolName: AGENT_TOOL_NAME, input });
+    const events: AgentEvent[] = [
+      { type: "tool_call", toolCall: { id: cardId, name: AGENT_TOOL_NAME, input } },
+      { type: "tool_execution_start", toolCallId: cardId, toolName: AGENT_TOOL_NAME, input },
+      {
+        type: "subagent_start",
+        toolCallId: cardId,
+        agentType: CODEX_SUBAGENT_PERSONA,
+        description: promptText,
+        ...(model !== null ? { model } : {}),
+        engine: "codex",
+      },
+    ];
+    events.push(...this.applyStates(item));
+    return events;
+  }
+
+  /**
+   * A spawn CALL completion. Paired and completed-only share this recovery
+   * path: an unseeded completion emits the full three-event start sequence
+   * from the completing snapshot; a seeded one merges receivers/sparse
+   * metadata. Actual states are applied, the CALL settles exactly once with a
+   * tool_result, and the per-turn outer-tool tracking is removed — child
+   * correlation is preserved across turns. A FAILED call with no child ever
+   * observed closes the region once with an explicit failure activity so it
+   * cannot spin forever; a failed call WITH an observed child is left to those
+   * observations (never a fabricated cancellation).
+   */
+  private onSpawnCompleted(item: Record<string, unknown>): AgentEvent[] {
+    const cardId = item.id as string;
+    const promptText = typeof item.prompt === "string" ? item.prompt : "";
+    const model = typeof item.model === "string" && item.model.length > 0 ? item.model : null;
+    const receivers = stringArray(item.receiverThreadIds);
+    const events: AgentEvent[] = [];
+    const existing = this.collab.get(cardId);
+    if (existing === undefined) {
+      this.collab.register(cardId, {
+        prompt: promptText.length > 0 ? promptText : null,
+        model,
+        receiverThreadIds: receivers,
+      });
+      const input: Record<string, unknown> = { prompt: promptText, ...(model !== null ? { model } : {}) };
+      this.tools.set(cardId, { toolCallId: cardId, toolName: AGENT_TOOL_NAME, input });
+      events.push({ type: "tool_call", toolCall: { id: cardId, name: AGENT_TOOL_NAME, input } });
+      events.push({ type: "tool_execution_start", toolCallId: cardId, toolName: AGENT_TOOL_NAME, input });
+      events.push({
+        type: "subagent_start",
+        toolCallId: cardId,
+        agentType: CODEX_SUBAGENT_PERSONA,
+        description: promptText,
+        ...(model !== null ? { model } : {}),
+        engine: "codex",
+      });
+    } else {
+      this.collab.merge(cardId, {
+        prompt: promptText.length > 0 ? promptText : null,
+        model,
+        receiverThreadIds: receivers,
+      });
+    }
+    events.push(...this.applyStates(item));
+    // A failed spawn CALL whose child was NEVER observed must not leave the
+    // region spinning: close it once, honestly, with a failure note. A failed
+    // call whose child WAS observed keeps those observations (no fabrication).
+    if (item.status === "failed" && !this.collab.hasObservedChild(cardId) && !this.collab.hasTerminal(cardId)) {
+      events.push({
+        type: "subagent_activity",
+        toolCallId: cardId,
+        toolName: CODEX_SUBAGENT_PERSONA,
+        summary: "spawn call failed before any child was observed",
+      });
+      this.collab.markTerminal(cardId);
+      const card = this.collab.get(cardId);
+      events.push({
+        type: "subagent_end",
+        toolCallId: cardId,
+        status: "error",
+        turns: 0,
+        durationMs: -1,
+        ...(card?.model !== null && card?.model !== undefined ? { model: card.model } : {}),
+      });
+    }
+    // Settle the outer CALL once and drop only the per-turn outer tracking.
+    this.tools.delete(cardId);
+    events.push({ type: "tool_result", outcome: this.collabCallOutcome(cardId, item) });
+    return events;
+  }
+
+  /**
+   * Non-spawn verbs (wait/sendInput/resumeAgent/closeAgent, and any unfamiliar
+   * `tool`): an honest `codex:collab:<verb>` generic operation card. Never a
+   * phantom Agent card. `agentsStates` are applied to already mapped children.
+   */
+  private onCollabOperationStarted(item: Record<string, unknown>): AgentEvent[] {
+    const projections = [this.collabOperationProjection(item)];
+    return [...this.startProjections(item.id as string, projections), ...this.applyStates(item)];
+  }
+
+  private onCollabOperationCompleted(item: Record<string, unknown>): AgentEvent[] {
+    const projection = this.collabOperationProjection(item);
+    const toolCallIds = this.itemToolCallIds.get(item.id as string);
+    let events: AgentEvent[];
+    if (toolCallIds === undefined) {
+      events = this.finishProjectionsCompletedOnly(item, [projection]);
+    } else {
+      this.itemToolCallIds.delete(item.id as string);
+      events = this.finishProjectionsPaired(item, toolCallIds);
+    }
+    return [...events, ...this.applyStates(item)];
+  }
+
+  private collabOperationProjection(item: Record<string, unknown>): ToolProjection {
+    const verb = typeof item.tool === "string" && item.tool.length > 0 ? item.tool : "unknown";
+    const input: Record<string, unknown> = {};
+    if (typeof item.status === "string") input.status = item.status;
+    const receivers = stringArray(item.receiverThreadIds);
+    if (receivers.length > 0) input.receiverThreadIds = receivers;
+    if (typeof item.prompt === "string" && item.prompt.length > 0) input.prompt = boundGenericString(item.prompt);
+    if (typeof item.model === "string" && item.model.length > 0) input.model = item.model;
+    return { toolCallId: item.id as string, toolName: `codex:collab:${verb}`, input };
+  }
+
+  private collabCallOutcome(cardId: string, item: Record<string, unknown>): ToolCallOutcome {
+    const status: ToolCallStatus = item.status === "failed" ? "error" : "success";
+    const modelText = status === "success" ? "" : "Codex spawn call failed";
+    return {
+      toolCallId: cardId,
+      toolName: AGENT_TOOL_NAME,
+      status,
+      modelText,
+      durationMs: 0,
+      result: status === "success" ? { ok: true, output: "" } : { ok: false, error: modelText },
+    };
+  }
+
+  /**
+   * Folds `agentsStates` observations onto their owning spawn cards. Only
+   * fields actually reported are stored; an unrecognized receiver we never saw
+   * is skipped (no phantom card). A repeated identical observation adds
+   * nothing. When EVERY known receiver of a card has reached a known terminal
+   * state, ONE aggregate `subagent_end` is emitted (precedence error >
+   * cancelled > completed) and the card is latched — so a later duplicate can
+   * never resurrect or re-settle it. Non-terminal states (including
+   * interrupted/pendingInit/notFound/unknown) stay visible as activity and
+   * keep the correlation.
+   */
+  private applyStates(item: Record<string, unknown>): AgentEvent[] {
+    const states = normalizeStates(item.agentsStates);
+    const events: AgentEvent[] = [];
+    for (const [receiver, observation] of Object.entries(states)) {
+      const cardId = this.collab.cardFor(receiver);
+      if (cardId === undefined) continue;
+      const previous = this.collab.stateFor(cardId, receiver);
+      if (previous !== undefined && previous.status === observation.status && (previous.message ?? "") === (observation.message ?? "")) continue;
+      this.collab.observeStates(cardId, { [receiver]: observation });
+      events.push({
+        type: "subagent_activity",
+        toolCallId: cardId,
+        toolName: CODEX_SUBAGENT_PERSONA,
+        summary: boundGenericString(stateSummary(observation)),
+      });
+      if (!this.collab.hasTerminal(cardId)) {
+        const terminal = this.collab.terminalFor(cardId);
+        if (terminal !== null) {
+          this.collab.markTerminal(cardId);
+          const card = this.collab.get(cardId);
+          events.push({
+            type: "subagent_end",
+            toolCallId: cardId,
+            status: terminal,
+            // turns:0 is a transport placeholder (never a measured count) and
+            // durationMs:-1 means "unknown" — rendering suppresses the time.
+            turns: 0,
+            durationMs: -1,
+            ...(card?.model !== null && card?.model !== undefined ? { model: card.model } : {}),
+          });
+        }
+      }
+    }
+    return events;
+  }
+
+  private onActivityStarted(item: Record<string, unknown>): AgentEvent[] {
+    const activityId = item.id as string;
+    const receiver = typeof item.agentThreadId === "string" ? item.agentThreadId : "";
+    const cardId = receiver.length > 0 ? this.collab.cardFor(receiver) : undefined;
+    if (cardId !== undefined && !this.collab.hasTerminal(cardId)) {
+      if (this.activityRowIds.has(activityId)) return [];
+      this.activityRowIds.add(activityId);
+      return [{
+        type: "subagent_activity",
+        toolCallId: cardId,
+        toolName: CODEX_SUBAGENT_PERSONA,
+        summary: boundGenericString(activitySummary(item)),
+      }];
+    }
+    // Unmapped or already-settled receiver: an honest generic marker card.
+    return this.startProjections(activityId, [this.activityMarkerProjection(item)]);
+  }
+
+  private onActivityCompleted(item: Record<string, unknown>): AgentEvent[] {
+    const activityId = item.id as string;
+    const receiver = typeof item.agentThreadId === "string" ? item.agentThreadId : "";
+    const cardId = receiver.length > 0 ? this.collab.cardFor(receiver) : undefined;
+    if (cardId !== undefined && !this.collab.hasTerminal(cardId)) {
+      if (this.activityRowIds.has(activityId)) return [];
+      this.activityRowIds.add(activityId);
+      return [{
+        type: "subagent_activity",
+        toolCallId: cardId,
+        toolName: CODEX_SUBAGENT_PERSONA,
+        summary: boundGenericString(activitySummary(item)),
+      }];
+    }
+    const toolCallIds = this.itemToolCallIds.get(activityId);
+    if (toolCallIds === undefined) {
+      return this.finishProjectionsCompletedOnly(item, [this.activityMarkerProjection(item)]);
+    }
+    this.itemToolCallIds.delete(activityId);
+    return this.finishProjectionsPaired(item, toolCallIds);
+  }
+
+  private activityMarkerProjection(item: Record<string, unknown>): ToolProjection {
+    return {
+      toolCallId: item.id as string,
+      toolName: `codex:${SUBAGENT_ACTIVITY_TYPE}`,
+      input: genericInput(item),
     };
   }
 
@@ -569,6 +1057,13 @@ export class TurnTranslator {
     }
     for (const id of this.openText) events.push({ type: "text_end", id });
     this.openText.clear();
+    // The sweep cancels still-open TOOL CALLS only. It deliberately emits NO
+    // inferred `subagent_end`: a child is not the call, and the end of a parent
+    // turn (completed, interrupted or failed) is no evidence about a child
+    // still running. The engine-owned collab correlation is NOT cleared here —
+    // later turns keep patching the same card. Completed calls were already
+    // removed from `tools`/`itemToolCallIds` by their completion, so they can
+    // never produce a second result here.
     for (const [id, projection] of this.tools) {
       events.push({
         type: "tool_result",

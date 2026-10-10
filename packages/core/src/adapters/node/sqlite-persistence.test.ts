@@ -1501,6 +1501,164 @@ describe("SqlitePersistenceAdapter", () => {
       // full table every launch.
       expect((await adapter.listSessionsForMaintenance({ limit: 1 })).length).toBe(1);
     });
+
+    // TASK.142: the janitor's window is only a safety bound if the STORE selects
+    // the N most recent rows — a mock that slices an already-ordered array cannot
+    // prove that. Insert in an order that CONTRADICTS recency (newest first,
+    // oldest last) so an insertion-order/rowid implementation picks the wrong
+    // rows, and include the oldest row on an unreachable removable-volume path
+    // (the TCC-prompt source the window must exclude).
+    it("listSessionsForMaintenance({limit}) selects the N most recent by updated_at DESC regardless of insertion order, leaving the oldest unreachable-path row out (TASK.142)", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const STALE = "/Volumes/External/repo";
+      vi.setSystemTime(5_000);
+      await adapter.createSession({ id: "s-newest", workspace: "/recent", model: "m", mode: "build" });
+      vi.setSystemTime(4_000);
+      await adapter.createSession({ id: "s-mid", workspace: "/recent", model: "m", mode: "build" });
+      vi.setSystemTime(3_000);
+      await adapter.createSession({ id: "s-old-2", workspace: "/older", model: "m", mode: "build" });
+      vi.setSystemTime(1_000);
+      await adapter.createSession({
+        id: "s-oldest-unreachable",
+        workspace: STALE,
+        projectRoot: STALE,
+        model: "m",
+        mode: "build",
+      });
+
+      // Only `updated_at` can produce this: the two most recent rows were the
+      // two inserted FIRST, so insertion order would have picked the wrong pair.
+      const limited = await adapter.listSessionsForMaintenance({ limit: 2 });
+      expect(limited.map((s) => s.id)).toEqual(["s-newest", "s-mid"]);
+      // The oldest row — the unreachable-volume one — is exactly what the window
+      // excludes, so the janitor never probes it.
+      expect(limited.some((s) => s.workspace.startsWith("/Volumes/"))).toBe(false);
+
+      const three = await adapter.listSessionsForMaintenance({ limit: 3 });
+      expect(three.map((s) => s.id)).toEqual(["s-newest", "s-mid", "s-old-2"]);
+      // Unbounded selection still sees everyone, threshold row included.
+      expect((await adapter.listSessionsForMaintenance()).map((s) => s.id)).toEqual([
+        "s-newest",
+        "s-mid",
+        "s-old-2",
+        "s-oldest-unreachable",
+      ]);
+    });
+
+    it("listWorktreeClaims returns claim-bearing rows of any age (worktree, cleanup, transition) and nothing else", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      // An OLD claim-bearing row (age must not matter) and a fresh claim-free one.
+      await adapter.createSession({
+        id: "old-worktree",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        worktree: {
+          id: "task-1",
+          path: "/repo/.anycode/worktrees/task-1",
+          branch: "anycode-wt/task-1",
+          baseRef: "main",
+          ownedByAnyCode: true,
+        },
+      });
+      vi.setSystemTime(2_000);
+      await adapter.createSession({
+        id: "old-cleanup",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        worktreeCleanup: {
+          path: "/repo/.anycode/worktrees/task-2",
+          mode: "auto",
+          ownedByAnyCode: true,
+          branch: "anycode-wt/task-2",
+        },
+      });
+      vi.setSystemTime(3_000);
+      await adapter.createSession({
+        id: "old-transition",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        worktreeTransition: {
+          origin: "tool",
+          kind: "enter_worktree",
+          projectRoot: "/repo",
+          fromWorkspace: "/repo",
+          toWorkspace: "/repo/.anycode/worktrees/task-3",
+          worktree: {
+            id: "task-3",
+            path: "/repo/.anycode/worktrees/task-3",
+            branch: "anycode-wt/task-3",
+            baseRef: "main",
+            ownedByAnyCode: true,
+          },
+          toolCallId: "call-3",
+        },
+      });
+      vi.setSystemTime(4_000);
+      await adapter.createSession({ id: "fresh-clean", workspace: "/repo", model: "m", mode: "build" });
+      await adapter.createSession({
+        id: "fresh-child-clean",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        parentSessionId: "fresh-clean",
+        spawnToolCallId: "call-x",
+      });
+      // TASK.142 review: an OLD CHILD claimant — the janitor's claim map must see
+      // it even though the recency window never iterates it, or a live child's
+      // worktree could be reaped. Age and child-ness must not matter here.
+      await adapter.createSession({
+        id: "old-child-claimant",
+        workspace: "/repo",
+        model: "m",
+        mode: "build",
+        parentSessionId: "old-worktree",
+        spawnToolCallId: "call-child",
+        worktree: {
+          id: "task-1",
+          path: "/repo/.anycode/worktrees/task-1",
+          branch: "anycode-wt/task-1",
+          baseRef: "main",
+          ownedByAnyCode: true,
+        },
+      });
+
+      const claims = await adapter.listWorktreeClaims();
+      expect(claims.map((s) => s.id).sort()).toEqual([
+        "old-child-claimant",
+        "old-cleanup",
+        "old-transition",
+        "old-worktree",
+      ]);
+      // The claim facts survive intact (the janitor's buildClaims reads them).
+      expect(claims.find((s) => s.id === "old-worktree")?.worktree?.path).toBe("/repo/.anycode/worktrees/task-1");
+      expect(claims.find((s) => s.id === "old-cleanup")?.worktreeCleanup?.path).toBe("/repo/.anycode/worktrees/task-2");
+      expect(claims.find((s) => s.id === "old-transition")?.worktreeTransition?.worktree.path).toBe(
+        "/repo/.anycode/worktrees/task-3",
+      );
+      // ...and the old child still knows its parent, so the janitor can tell a
+      // live child's claim from a stale root's.
+      expect(claims.find((s) => s.id === "old-child-claimant")?.parentSessionId).toBe("old-worktree");
+      // The metadata-only scan never touches the filesystem: it returns rows
+      // whose paths are pure strings, an undecidable path included.
+      await adapter.createSession({
+        id: "unreachable-claimant",
+        workspace: "/Volumes/External/repo",
+        projectRoot: "/Volumes/External/repo",
+        model: "m",
+        mode: "build",
+        worktreeCleanup: {
+          path: "/Volumes/External/elsewhere",
+          mode: "auto",
+          ownedByAnyCode: true,
+          branch: "b",
+        },
+      });
+      const withUnreachable = await adapter.listWorktreeClaims();
+      expect(withUnreachable.map((s) => s.id)).toContain("unreachable-claimant");
+    });
   });
 
   describe("child sessions — authorized access + cascade delete (TASK.102 S2a A3)", () => {
@@ -2662,6 +2820,9 @@ describe("WriteBehindHistorySink", () => {
       throw new Error("not used in this test");
     }
     listSessionsForMaintenance(): Promise<SessionMeta[]> {
+      throw new Error("not used in this test");
+    }
+    listWorktreeClaims(): Promise<SessionMeta[]> {
       throw new Error("not used in this test");
     }
     getSessionById(): Promise<SessionMeta | null> {

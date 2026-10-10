@@ -39,6 +39,7 @@ import type {
 import type { HookRunner, SubagentStopHookInput } from "../types/hooks.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
+  DEFAULT_TOOL_CONCURRENCY,
   DEGENERATION_CHECK_STRIDE_CHARS,
   DEGENERATION_MIN_RUN_CHARS,
   MAX_CONCURRENT_SUBAGENTS,
@@ -55,7 +56,13 @@ import { SUBAGENT_WRAPUP_PROMPT } from "../prompts/subagent.js";
 import type { EngineChildSpec, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
 import type { ToolContext } from "../types/tools.js";
 import { SUBAGENT_MAX_OUTPUT_TOKENS, clampSubagentMaxOutputTokens } from "../types/config.js";
-import { SPAWN_TOOLS, buildChildConfig, createSubagentRunner, withSubagents } from "./runner.js";
+import {
+  ENV_SUBAGENT_CONCURRENCY,
+  SPAWN_TOOLS,
+  buildChildConfig,
+  createSubagentRunner,
+  withSubagents,
+} from "./runner.js";
 import { PERSONAS, getPersona, type PersonaDefinition } from "./personas.js";
 import { discoverAgentProfiles, type AgentProfileRoot } from "./profiles.js";
 import { buildSubagentTelemetryTap } from "../telemetry/records.js";
@@ -865,7 +872,9 @@ describe("Agent-tool model override (slice 4.6, design §2.5)", () => {
       },
     };
     // No resolveChildModelPort: an overridden spawn can only ever error out.
-    const runner = createSubagentRunner(makeParent({ modelPort: gatedModel, mode: "yolo" }));
+    const runner = createSubagentRunner(makeParent({ modelPort: gatedModel, mode: "yolo" }), {
+      maxConcurrent: MAX_CONCURRENT_SUBAGENTS,
+    });
 
     // Two real children hold BOTH semaphore permits (MAX_CONCURRENT_SUBAGENTS = 2)
     // and are gated open (never complete until releaseGate()).
@@ -976,7 +985,9 @@ describe("MAX_CONCURRENT_SUBAGENTS semaphore", () => {
         })();
       },
     };
-    const runner = createSubagentRunner(makeParent({ modelPort: gatedModel, mode: "yolo" }));
+    const runner = createSubagentRunner(makeParent({ modelPort: gatedModel, mode: "yolo" }), {
+      maxConcurrent: MAX_CONCURRENT_SUBAGENTS,
+    });
 
     const third = new AbortController();
     const p1 = runner.run({ ...REQ, agentType: "explore", prompt: "1" }, {});
@@ -2006,6 +2017,7 @@ describe("engine persona (one-shot foreign CLI run)", () => {
     // No runEngineChild: an engine-persona spawn can only ever error out.
     const runner = createSubagentRunner(makeParent({ modelPort: gatedModel, mode: "yolo" }), {
       profiles: [enginePersona],
+      maxConcurrent: MAX_CONCURRENT_SUBAGENTS,
     });
 
     // Two real (built-in, in-process) children hold BOTH semaphore permits
@@ -2111,6 +2123,87 @@ describe("engineProfile() (TASK.102 CUT-S4 §2.1)", () => {
     const runner = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
     const info = runner.engineProfile?.("codex-worker");
     expect(info && "model" in info).toBe(false);
+  });
+
+  it("exposes the profile's declared effort verbatim (xhigh included), omitted when absent", () => {
+    const withEffort: PersonaDefinition = { ...codexPersona, effort: "xhigh" };
+    const runner = createSubagentRunner(makeParent(), { profiles: [withEffort] });
+    expect(runner.engineProfile?.("codex-worker")).toEqual({
+      engine: "codex",
+      systemPrompt: "PERSONA BODY",
+      effort: "xhigh",
+    });
+    const without = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
+    const info = without.engineProfile?.("codex-worker");
+    expect(info && "effort" in info).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// profileRouting() port method (Taskana 4269): tools/agent.ts's routing branch
+// resolves an md-profile's `connection:`/`provider:` frontmatter through this
+// method. Realized through the SAME thunk mechanism as engineProfile
+// (currentProfiles()) — no second list/cache. Built-ins and engine profiles
+// always resolve to null. The workflow/direct-port backstop in run() refuses a
+// routed profile honestly when no session tier exists.
+
+describe("profileRouting() (Taskana 4269)", () => {
+  const glmPlanner: PersonaDefinition = {
+    name: "glm-planner",
+    description: "plans on GLM",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    model: "glm-5.3",
+    connection: "conn-glm",
+  };
+  const dsExecutor: PersonaDefinition = {
+    name: "ds-executor",
+    description: "executes on DeepSeek",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    provider: "deepseek",
+  };
+  const codexPersona: PersonaDefinition = {
+    name: "codex-worker",
+    description: "runs on the codex engine",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    engine: "codex",
+  };
+
+  it("returns the declared route for a routed md-profile (connection / provider)", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [glmPlanner, dsExecutor] });
+    expect(runner.profileRouting?.("glm-planner")).toEqual({ connection: "conn-glm" });
+    expect(runner.profileRouting?.("ds-executor")).toEqual({ provider: "deepseek" });
+  });
+
+  it("returns null for built-ins, engine profiles, unrouted profiles, and unknown types", async () => {
+    const plain = await makeProfile("reviewer", { body: "P" });
+    const runner = createSubagentRunner(makeParent(), { profiles: [glmPlanner, codexPersona, plain] });
+    expect(runner.profileRouting?.("general-purpose")).toBeNull();
+    expect(runner.profileRouting?.("explore")).toBeNull();
+    expect(runner.profileRouting?.("codex-worker")).toBeNull();
+    expect(runner.profileRouting?.("reviewer")).toBeNull();
+    expect(runner.profileRouting?.("no-such-type")).toBeNull();
+  });
+
+  it("reads the current profiles thunk — an edited route is returned by the next fresh lookup", () => {
+    let live: PersonaDefinition[] = [glmPlanner];
+    const runner = createSubagentRunner(makeParent(), { profiles: () => live });
+    expect(runner.profileRouting?.("glm-planner")).toEqual({ connection: "conn-glm" });
+    // A mid-session route edit (THUNK form, same mechanism engineProfile uses).
+    live = [{ ...glmPlanner, connection: undefined, provider: "deepseek" }];
+    expect(runner.profileRouting?.("glm-planner")).toEqual({ provider: "deepseek" });
+    // ...and a removal leaves it unrouted (null).
+    live = [{ ...glmPlanner, connection: undefined }];
+    expect(runner.profileRouting?.("glm-planner")).toBeNull();
+  });
+
+  it("run() refuses a routed profile with the honest session-tier backstop error", async () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [glmPlanner] });
+    const outcome = await runner.run({ ...REQ, agentType: "glm-planner" }, {});
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toContain("session-tier child");
   });
 });
 
@@ -2858,7 +2951,9 @@ describe("wrap-up lifecycle and semaphore (TASK.74 §7 F8, DoD-7)", () => {
         journal.push(`stop:${(input as SubagentStopHookInput).description}`);
       },
     });
-    const runner = createSubagentRunner(makeParent({ modelPort: model, hooks, mode: "yolo" }));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, hooks, mode: "yolo" }), {
+      maxConcurrent: MAX_CONCURRENT_SUBAGENTS,
+    });
 
     const pA = runner.run({ ...REQ, description: "A", prompt: "A", maxTurns: 1 }, {});
     const pB = runner.run({ ...REQ, description: "B", prompt: "B" }, {});
@@ -3077,6 +3172,29 @@ describe("run() — child capabilities resolved for the child's own model (TASK.
     expect(outcome.status).toBe("completed");
     expect(seen).toEqual([["glm-5.3", "low"]]);
     expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("low");
+  });
+
+  it("an effort-only xhigh profile maps to core max at the resolver and the model request", async () => {
+    const parentPort = new ScriptedModelPort((req) => (isChildRequest(req) ? textStep("planned") : textStep("n/a")));
+    Object.assign(parentPort, { modelId: "glm-5.3" });
+    const seen: Array<[string, string | undefined]> = [];
+    const runner = createSubagentRunner(
+      makeParent({ modelPort: parentPort, reasoningEffort: "medium" }),
+      {
+        profiles: [{ ...(await makeProfile("planner", { body: "Plan." })), effort: "xhigh" }],
+        resolveChildModelSettings: (modelId, profileEffort) => {
+          seen.push([modelId, profileEffort]);
+          return { maxOutputTokens: 131_072, reasoningEffort: profileEffort, contextWindowTokens: 1_000_000 };
+        },
+      },
+    );
+
+    const outcome = await runner.run({ ...REQ, agentType: "planner" }, {});
+
+    expect(outcome.status).toBe("completed");
+    // xhigh is mapped to the existing core "max" at this core consumption boundary.
+    expect(seen).toEqual([["glm-5.3", "max"]]);
+    expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("max");
   });
 
   it("the child's ModelRequest carries the CAPPED settings ceiling and effort, not the parent's", async () => {
@@ -3812,5 +3930,654 @@ describe("engineProfile() — turnBudget relay (TASK.180)", () => {
     const info = runner.engineProfile?.("codex-worker") ?? null;
     expect(info).toEqual({ engine: "codex", systemPrompt: "PERSONA BODY" });
     expect(info !== null && "turnBudget" in info).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Configurable inline child width (TASK.229). Precedence is
+// opts.maxConcurrent > ANYCODE_SUBAGENT_CONCURRENCY > DEFAULT_TOOL_CONCURRENCY,
+// snapshotted at construction. These tests drive real gated child loops and
+// observe admission from both how many model calls START and the `start`
+// progress records (which carry the request description, so FIFO order is
+// provable). Every gated test releases its gates in a `finally`.
+
+interface GatedChildModel {
+  port: ModelPort;
+  calls: () => number;
+  release: (index: number) => void;
+  /**
+   * Releases every pending gate AND unblocks every FUTURE admission, so a drain
+   * settles without any polling or sleeps. Idempotent and safe to call from a
+   * `finally`, so a failing assertion can never strand a child loop on its gate.
+   */
+  drain: () => void;
+}
+
+/** A ModelPort whose every streamText call parks on its own gate. `calls()` is
+ *  the number of calls that actually reached the model (admitted children). */
+function gatedChildModel(): GatedChildModel {
+  const gates: Array<() => void> = [];
+  let calls = 0;
+  let draining = false;
+  const port: ModelPort = {
+    streamText(req: ModelRequest): AsyncIterable<ModelStreamEvent> {
+      const index = calls;
+      calls += 1;
+      const gate = new Promise<void>((resolve) => {
+        gates[index] = resolve;
+        if (draining) resolve();
+      });
+      const signal = req.abortSignal;
+      return (async function* () {
+        await gate;
+        if (signal?.aborted) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        yield { type: "start" };
+        yield { type: "text_delta", id: "t", text: `child-${index}` };
+        yield { type: "finish", finishReason: "stop", usage: {} };
+      })();
+    },
+  };
+  return {
+    port,
+    calls: () => calls,
+    release: (index: number) => gates[index]?.(),
+    drain: () => {
+      draining = true;
+      for (const release of gates) release?.();
+    },
+  };
+}
+
+/** Drains every gate and awaits the tracked runs — for cleanup in a `finally`. */
+async function settleGated(
+  model: GatedChildModel,
+  runs: ReadonlyArray<Promise<SubagentOutcome>>,
+): Promise<void> {
+  model.drain();
+  await Promise.allSettled(runs);
+}
+
+/** Drains every gate and returns the settled outcomes in the tracked order. */
+async function drainGated(
+  model: GatedChildModel,
+  runs: ReadonlyArray<Promise<SubagentOutcome>>,
+): Promise<SubagentOutcome[]> {
+  model.drain();
+  return Promise.all(runs);
+}
+
+/**
+ * A real AbortController whose `removeEventListener` flips `aborted` the moment
+ * the semaphore hands a permit to a parked waiter (its `release()` removes the
+ * abort listener just before resolving). This deterministically induces the
+ * release-to-continuation race that the runner's post-acquire recheck guards.
+ *
+ * `parked()` resolves once the waiter has actually registered its abort listener
+ * (i.e. it is queued behind the held permit) — an observed readiness signal that
+ * lets a test release the holder WITHOUT an arbitrary sleep.
+ */
+function handoffAbortSignal(): { signal: AbortSignal; parked: () => Promise<void> } {
+  const controller = new AbortController();
+  const signal = controller.signal;
+  let announceParked: () => void = () => {};
+  const parked = new Promise<void>((resolve) => {
+    announceParked = resolve;
+  });
+  const originalAdd = signal.addEventListener.bind(signal);
+  signal.addEventListener = ((...args: Parameters<typeof originalAdd>) => {
+    originalAdd(...args);
+    if (args[0] === "abort") {
+      announceParked();
+    }
+  }) as typeof signal.addEventListener;
+  const originalRemove = signal.removeEventListener.bind(signal);
+  signal.removeEventListener = ((...args: Parameters<typeof originalRemove>) => {
+    originalRemove(...args);
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  }) as typeof signal.removeEventListener;
+  return { signal, parked: () => parked };
+}
+
+describe("configurable inline child width (TASK.229)", () => {
+  const originalEnv = process.env[ENV_SUBAGENT_CONCURRENCY];
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalEnv === undefined) {
+      delete process.env[ENV_SUBAGENT_CONCURRENCY];
+    } else {
+      process.env[ENV_SUBAGENT_CONCURRENCY] = originalEnv;
+    }
+  });
+
+  it("R1: with neither option nor env, DEFAULT_TOOL_CONCURRENCY children reach the model", async () => {
+    delete process.env[ENV_SUBAGENT_CONCURRENCY];
+    const model = gatedChildModel();
+    const runner = createSubagentRunner(makeParent({ modelPort: model.port, mode: "yolo" }));
+    const starts: string[] = [];
+    const runs: Promise<SubagentOutcome>[] = [];
+    const onProgress = (progress: SubagentProgress): void => {
+      if (progress.kind === "start") starts.push(progress.description);
+    };
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        runs.push(
+          runner.run({ ...REQ, agentType: "explore", description: `p${i}`, prompt: `p${i}` }, {
+            onProgress,
+          }),
+        );
+      }
+      await vi.waitFor(() => expect(model.calls()).toBe(DEFAULT_TOOL_CONCURRENCY));
+      // Nothing frees a slot before a gate is released, so both counts are
+      // stable here — no sleep is needed to prove the fifth child never started.
+      expect(model.calls()).toBe(DEFAULT_TOOL_CONCURRENCY);
+      expect(starts).toEqual(["p0", "p1", "p2", "p3"]); // the fifth emitted no start progress
+      const outcomes = await drainGated(model, runs);
+      expect(outcomes.every((o) => o.status === "completed")).toBe(true);
+    } finally {
+      await settleGated(model, runs);
+    }
+  });
+
+  it("R2: width 2 rolls the next FIFO waiter in as soon as one finishes", async () => {
+    const model = gatedChildModel();
+    const runner = createSubagentRunner(makeParent({ modelPort: model.port, mode: "yolo" }), {
+      maxConcurrent: 2,
+    });
+    const starts: string[] = [];
+    const runs: Promise<SubagentOutcome>[] = [];
+    const onProgress = (progress: SubagentProgress): void => {
+      if (progress.kind === "start") starts.push(progress.description);
+    };
+    try {
+      for (const p of ["A", "B", "C", "D"]) {
+        runs.push(
+          runner.run({ ...REQ, agentType: "explore", description: p, prompt: p }, { onProgress }),
+        );
+      }
+      await vi.waitFor(() => expect(starts).toEqual(["A", "B"]));
+
+      model.release(0); // A (admission index 0) finishes
+      // FIFO: the next waiter is C — NOT D (a LIFO queue would have started D).
+      // B still holds its gate, so no extra admission can occur here.
+      await vi.waitFor(() => expect(starts).toEqual(["A", "B", "C"]));
+
+      model.release(1); // B finishes -> the remaining waiter D is admitted
+      await vi.waitFor(() => expect(starts).toEqual(["A", "B", "C", "D"]));
+
+      const settled = await drainGated(model, runs);
+      expect(settled.every((o) => o.status === "completed")).toBe(true);
+    } finally {
+      await settleGated(model, runs);
+    }
+  });
+
+  it("R3: option outranks env; two runners keep independent capacity", async () => {
+    process.env[ENV_SUBAGENT_CONCURRENCY] = "1";
+    const modelA = gatedChildModel();
+    const modelB = gatedChildModel();
+    const runnerA = createSubagentRunner(makeParent({ modelPort: modelA.port, mode: "yolo" }), {
+      maxConcurrent: 2,
+    });
+    const runnerB = createSubagentRunner(makeParent({ modelPort: modelB.port, mode: "yolo" }));
+    const runsA: Promise<SubagentOutcome>[] = [];
+    const runsB: Promise<SubagentOutcome>[] = [];
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        runsA.push(runnerA.run({ ...REQ, agentType: "explore", prompt: `A${i}` }, {}));
+      }
+      await vi.waitFor(() => expect(modelA.calls()).toBe(2)); // option 2 beats env 1
+      expect(modelA.calls()).toBe(2);
+
+      for (let i = 0; i < 2; i += 1) {
+        runsB.push(runnerB.run({ ...REQ, agentType: "explore", prompt: `B${i}` }, {}));
+      }
+      await vi.waitFor(() => expect(modelB.calls()).toBe(1)); // env 1 parks the second
+      // No gate freed, so the widths are stable — no sleep needed.
+      expect(modelB.calls()).toBe(1);
+      expect(modelA.calls()).toBe(2); // independent semaphores
+
+      modelA.drain();
+      modelB.drain();
+      const outcomesA = await Promise.all(runsA);
+      const outcomesB = await Promise.all(runsB);
+      expect(outcomesA.every((o) => o.status === "completed")).toBe(true);
+      expect(outcomesB.every((o) => o.status === "completed")).toBe(true);
+    } finally {
+      await settleGated(modelA, runsA);
+      await settleGated(modelB, runsB);
+    }
+  });
+
+  interface WidthCase {
+    label: string;
+    opts?: { maxConcurrent: number };
+    env?: string;
+    expected: number;
+    warns: boolean;
+  }
+
+  const widthCases: WidthCase[] = [
+    { label: "option 2.5 floors to 2", opts: { maxConcurrent: 2.5 }, expected: 2, warns: false },
+    { label: "option 0 clamps to 1", opts: { maxConcurrent: 0 }, expected: 1, warns: false },
+    { label: "option -3 clamps to 1", opts: { maxConcurrent: -3 }, expected: 1, warns: false },
+    { label: "env 0 clamps to 1", env: "0", expected: 1, warns: false },
+    { label: "env -2 clamps to 1", env: "-2", expected: 1, warns: false },
+    { label: "absent env -> default", expected: DEFAULT_TOOL_CONCURRENCY, warns: false },
+    { label: "empty env -> default", env: "", expected: DEFAULT_TOOL_CONCURRENCY, warns: false },
+    { label: "whitespace env -> default", env: "   ", expected: DEFAULT_TOOL_CONCURRENCY, warns: false },
+    { label: "env abc -> default (warn)", env: "abc", expected: DEFAULT_TOOL_CONCURRENCY, warns: true },
+    { label: "env 2.5 -> default (warn)", env: "2.5", expected: DEFAULT_TOOL_CONCURRENCY, warns: true },
+    { label: "env NaN -> default (warn)", env: "NaN", expected: DEFAULT_TOOL_CONCURRENCY, warns: true },
+    { label: "env Infinity -> default (warn)", env: "Infinity", expected: DEFAULT_TOOL_CONCURRENCY, warns: true },
+    { label: "env unsafe huge integer -> default (warn)", env: "9007199254740993", expected: DEFAULT_TOOL_CONCURRENCY, warns: true },
+    { label: "option NaN falls through to valid env 2", opts: { maxConcurrent: Number.NaN }, env: "2", expected: 2, warns: true },
+    { label: "option Infinity + no env -> default (warn)", opts: { maxConcurrent: Number.POSITIVE_INFINITY }, expected: DEFAULT_TOOL_CONCURRENCY, warns: true },
+    { label: "option -Infinity falls through to env 1", opts: { maxConcurrent: Number.NEGATIVE_INFINITY }, env: "1", expected: 1, warns: true },
+    { label: "option unsafe huge falls through to default (warn)", opts: { maxConcurrent: 1e300 }, expected: DEFAULT_TOOL_CONCURRENCY, warns: true },
+  ];
+
+  it.each(widthCases)("R4: $label", async ({ opts, env, expected, warns }) => {
+    if (env === undefined) {
+      delete process.env[ENV_SUBAGENT_CONCURRENCY];
+    } else {
+      process.env[ENV_SUBAGENT_CONCURRENCY] = env;
+    }
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const model = gatedChildModel();
+    const runner = createSubagentRunner(makeParent({ modelPort: model.port, mode: "yolo" }), opts);
+    const runs: Promise<SubagentOutcome>[] = [];
+    try {
+      for (let i = 0; i < expected + 2; i += 1) {
+        runs.push(runner.run({ ...REQ, agentType: "explore", prompt: `p${i}` }, {}));
+      }
+      // Admission happens before any gate is released, so waiting for exactly
+      // `expected` calls proves the width with no sleep AND fails a cap bypass
+      // (an over-admitting implementation never reaches `expected`).
+      await vi.waitFor(() => expect(model.calls()).toBe(expected));
+      expect(model.calls()).toBe(expected);
+      if (warns) {
+        expect(warn).toHaveBeenCalled();
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+      await drainGated(model, runs);
+    } finally {
+      await settleGated(model, runs);
+    }
+  });
+
+  it("R5: cancelling a waiting child never starts it and leaks no permit", async () => {
+    const model = gatedChildModel();
+    const runner = createSubagentRunner(makeParent({ modelPort: model.port, mode: "yolo" }), {
+      maxConcurrent: 1,
+    });
+    const starts: string[] = [];
+    const runs: Promise<SubagentOutcome>[] = [];
+    const onProgress = (progress: SubagentProgress): void => {
+      if (progress.kind === "start") starts.push(progress.description);
+    };
+    const start = (
+      description: string,
+      signal?: AbortSignal,
+    ): Promise<SubagentOutcome> => {
+      const run = runner.run(
+        { ...REQ, agentType: "explore", description, prompt: description },
+        { ...(signal ? { signal } : {}), onProgress },
+      );
+      runs.push(run);
+      return run;
+    };
+    try {
+      const first = start("first");
+      const controller = new AbortController();
+      const waiting = start("waiting", controller.signal);
+      await vi.waitFor(() => expect(model.calls()).toBe(1));
+
+      controller.abort();
+      expect((await waiting).status).toBe("cancelled");
+      expect(model.calls()).toBe(1); // the cancelled child never reached the model
+      expect(starts).toEqual(["first"]); // ...and never announced a start
+
+      model.release(0);
+      expect((await first).status).toBe("completed");
+
+      // The released permit is usable by a later live child — no leak.
+      const later = start("later");
+      await vi.waitFor(() => expect(model.calls()).toBe(2));
+      const outcomes = await drainGated(model, [later]);
+      expect(outcomes[0]?.status).toBe("completed");
+      expect(starts).toEqual(["first", "later"]); // "waiting" never started
+    } finally {
+      await settleGated(model, runs);
+    }
+  });
+
+  it("R6: a pre-aborted spawn never starts (inline branch)", async () => {
+    const model = gatedChildModel();
+    const runner = createSubagentRunner(makeParent({ modelPort: model.port, mode: "yolo" }));
+    const controller = new AbortController();
+    controller.abort();
+    const starts: string[] = [];
+    const outcome = await runner.run(
+      { ...REQ, agentType: "explore" },
+      {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (progress.kind === "start") starts.push(progress.description);
+        },
+      },
+    );
+    expect(outcome.status).toBe("cancelled");
+    expect(model.calls()).toBe(0);
+    expect(starts).toEqual([]); // no start progress either
+    await settleGated(model, []);
+  });
+
+  it("R6: a pre-aborted engine spawn never dispatches (engine fallback branch)", async () => {
+    const enginePersona: PersonaDefinition = {
+      name: "codex-worker",
+      description: "runs on the codex engine",
+      tools: ["Read"],
+      systemPrompt: "PERSONA BODY",
+      engine: "codex",
+    };
+    const runEngineChild = vi.fn(async (): Promise<SubagentOutcome> => ({
+      status: "completed",
+      finalText: "engine",
+      truncated: false,
+      turns: 1,
+      toolCalls: 0,
+      durationMs: 1,
+    }));
+    const runner = createSubagentRunner(makeParent({ mode: "yolo" }), {
+      profiles: [enginePersona],
+      runEngineChild,
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const outcome = await runner.run(
+      { agentType: "codex-worker", description: "d", prompt: "p" },
+      { signal: controller.signal },
+    );
+    expect(outcome.status).toBe("cancelled");
+    expect(runEngineChild).not.toHaveBeenCalled();
+  });
+
+  it("R6: an inline permit handed at the handoff then aborted is released, never started", async () => {
+    const model = gatedChildModel();
+    const runner = createSubagentRunner(makeParent({ modelPort: model.port, mode: "yolo" }), {
+      maxConcurrent: 1,
+    });
+    const starts: string[] = [];
+    const runs: Promise<SubagentOutcome>[] = [];
+    try {
+      const first = runner.run({ ...REQ, agentType: "explore", prompt: "first" }, {});
+      runs.push(first);
+      await vi.waitFor(() => expect(model.calls()).toBe(1));
+
+      const handoff = handoffAbortSignal();
+      const waiting = runner.run(
+        { ...REQ, agentType: "explore", prompt: "waiting" },
+        {
+          signal: handoff.signal,
+          onProgress: (progress) => {
+            if (progress.kind === "start") starts.push(progress.description);
+          },
+        },
+      );
+      runs.push(waiting);
+      await handoff.parked(); // observed: the waiter is queued before we release
+
+      model.release(0); // first finishes; the permit is handed to the waiter, which aborts at handoff
+      expect((await first).status).toBe("completed");
+      expect((await waiting).status).toBe("cancelled");
+      expect(model.calls()).toBe(1); // never reached the model
+      expect(starts).toEqual([]); // ...and never announced a start
+
+      const later = runner.run({ ...REQ, agentType: "explore", prompt: "later" }, {});
+      runs.push(later);
+      await vi.waitFor(() => expect(model.calls()).toBe(2));
+      const outcomes = await drainGated(model, [later]);
+      expect(outcomes[0]?.status).toBe("completed");
+    } finally {
+      await settleGated(model, runs);
+    }
+  });
+
+  it("R6: an engine permit handed at the handoff then aborted is released, never dispatched", async () => {
+    const enginePersona: PersonaDefinition = {
+      name: "codex-worker",
+      description: "runs on the codex engine",
+      tools: ["Read"],
+      systemPrompt: "PERSONA BODY",
+      engine: "codex",
+    };
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let dispatches = 0;
+    const runEngineChild = vi.fn(async (_spec: EngineChildSpec): Promise<SubagentOutcome> => {
+      dispatches += 1;
+      if (dispatches === 1) {
+        await firstGate;
+      }
+      return {
+        status: "completed",
+        finalText: "engine",
+        truncated: false,
+        turns: 1,
+        toolCalls: 0,
+        durationMs: 1,
+      };
+    });
+    const runner = createSubagentRunner(makeParent({ mode: "yolo" }), {
+      profiles: [enginePersona],
+      runEngineChild,
+      maxConcurrent: 1,
+    });
+    const first = runner.run(
+      { agentType: "codex-worker", description: "first", prompt: "first" },
+      {},
+    );
+    await vi.waitFor(() => expect(runEngineChild).toHaveBeenCalledTimes(1));
+
+    const handoff = handoffAbortSignal();
+    const waiting = runner.run(
+      { agentType: "codex-worker", description: "waiting", prompt: "waiting" },
+      { signal: handoff.signal },
+    );
+    await handoff.parked(); // observed: the engine waiter is queued before we release
+    expect(runEngineChild).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    expect((await first).status).toBe("completed");
+    expect((await waiting).status).toBe("cancelled");
+    expect(runEngineChild).toHaveBeenCalledTimes(1); // the aborted waiter never dispatched
+
+    const later = runner.run(
+      { agentType: "codex-worker", description: "later", prompt: "later" },
+      {},
+    );
+    expect((await later).status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inline Agent admission interplay (TASK.229 I1): toolConcurrency bounds the
+// active inline Agent HANDLERS in a parent step; the runner's maxConcurrent
+// separately bounds the active CHILD runs. An Agent handler parked on the child
+// semaphore still holds its tool slot, so effective inline admission is
+// min(toolConcurrency, child width). Session-tier/engine agents route through
+// the session tier and detached children outlive their handlers: neither is
+// bounded by these two ceilings.
+
+describe("inline Agent admission interplay (TASK.229 I1)", () => {
+  interface InterplayModel {
+    port: ModelPort;
+    childCalls: () => number;
+    releaseChildren: () => void;
+    /** Releases pending child gates AND unblocks future ones — cleanup-safe. */
+    drain: () => void;
+  }
+
+  /** Parent proposes three parallel-safe Agent calls on turn 1; every CHILD
+   *  call parks on its own gate so admission can be observed. */
+  function interplayModel(): InterplayModel {
+    let parentStep = 0;
+    let childCalls = 0;
+    let draining = false;
+    const gates: Array<() => void> = [];
+    const port: ModelPort = {
+      streamText(req: ModelRequest): AsyncIterable<ModelStreamEvent> {
+        const signal = req.abortSignal;
+        if (isChildRequest(req)) {
+          const index = childCalls;
+          childCalls += 1;
+          const gate = new Promise<void>((resolve) => {
+            gates[index] = resolve;
+            if (draining) resolve();
+          });
+          return (async function* () {
+            await gate;
+            if (signal?.aborted) {
+              throw new DOMException("Aborted", "AbortError");
+            }
+            yield { type: "start" };
+            yield { type: "text_delta", id: "t", text: `child-${index}` };
+            yield { type: "finish", finishReason: "stop", usage: {} };
+          })();
+        }
+        parentStep += 1;
+        if (parentStep === 1) {
+          return (async function* () {
+            yield { type: "start" };
+            const agentCalls = [
+              ["a1", "one"],
+              ["a2", "two"],
+              ["a3", "three"],
+            ] as const;
+            for (const [id, description] of agentCalls) {
+              yield {
+                type: "tool_call" as const,
+                toolCall: {
+                  id,
+                  name: "Agent",
+                  input: { description, prompt: `p-${id}`, agent_type: "general-purpose" },
+                },
+              };
+            }
+            yield { type: "finish", finishReason: "tool_calls", usage: {} };
+          })();
+        }
+        return (async function* () {
+          yield { type: "start" };
+          yield { type: "text_delta", id: "t", text: "parent done" };
+          yield { type: "finish", finishReason: "stop", usage: {} };
+        })();
+      },
+    };
+    return {
+      port,
+      childCalls: () => childCalls,
+      releaseChildren: () => {
+        for (const release of gates) release?.();
+      },
+      drain: () => {
+        draining = true;
+        for (const release of gates) release?.();
+      },
+    };
+  }
+
+  /** Drains every child gate and awaits the parent turn — cleanup-safe. */
+  async function drainInterplay(model: InterplayModel, consumed: Promise<void>): Promise<void> {
+    model.drain();
+    await Promise.allSettled([consumed]);
+  }
+
+  it("tool cap 2 + child cap 1: one child runs, the second handler waits, the third proposal waits", async () => {
+    const model = interplayModel();
+    const loop = new AgentLoop(
+      withSubagents(makeParent({ modelPort: model.port, mode: "yolo", toolConcurrency: 2 }), {
+        maxConcurrent: 1,
+      }),
+    );
+    const events: AgentEvent[] = [];
+    const consumed = (async () => {
+      for await (const event of loop.runTurn("delegate")) {
+        events.push(event);
+      }
+    })();
+
+    const startsFor = (id: string): number =>
+      events.filter((e) => e.type === "tool_execution_start" && e.toolCallId === id).length;
+    const subStarts = (): number => events.filter((e) => e.type === "subagent_start").length;
+
+    try {
+      await vi.waitFor(() => expect(model.childCalls()).toBe(1)); // one child running
+      await vi.waitFor(() => expect(startsFor("a1")).toBe(1));
+      await vi.waitFor(() => expect(startsFor("a2")).toBe(1)); // a2 admitted, parked on the child semaphore
+      expect(startsFor("a3")).toBe(0); // a3 waits for a tool slot
+      expect(subStarts()).toBe(1); // only the running child announced a start
+
+      // Completing the first child admits a2's child AND frees a1's tool slot for a3,
+      // without waiting for a2's handler to finish.
+      model.releaseChildren();
+      await vi.waitFor(() => expect(model.childCalls()).toBe(2));
+      await vi.waitFor(() => expect(startsFor("a3")).toBe(1));
+      expect(subStarts()).toBe(2); // a3's handler started; its child has not
+
+      await drainInterplay(model, consumed);
+
+      const agentResults = events.filter(
+        (e) => e.type === "tool_result" && e.outcome.toolName === "Agent",
+      );
+      expect(
+        agentResults.map((e) => e.type === "tool_result" && e.outcome.toolCallId).sort(),
+      ).toEqual(["a1", "a2", "a3"]);
+      expect(
+        agentResults.every((e) => e.type === "tool_result" && e.outcome.status === "success"),
+      ).toBe(true);
+      expect(loop.history.unansweredToolCallIds()).toEqual([]);
+    } finally {
+      await drainInterplay(model, consumed);
+    }
+  });
+
+  it("tool cap 1 + child cap 3: only one inline child starts from the step", async () => {
+    const model = interplayModel();
+    const loop = new AgentLoop(
+      withSubagents(makeParent({ modelPort: model.port, mode: "yolo", toolConcurrency: 1 }), {
+        maxConcurrent: 3,
+      }),
+    );
+    const events: AgentEvent[] = [];
+    const consumed = (async () => {
+      for await (const event of loop.runTurn("delegate")) {
+        events.push(event);
+      }
+    })();
+
+    try {
+      await vi.waitFor(() => expect(model.childCalls()).toBe(1));
+      // Tool width 1 gates the other children out; a1's handler holds the only
+      // slot until its child settles, so no further admission can occur here.
+      expect(model.childCalls()).toBe(1);
+      expect(
+        events.filter((e) => e.type === "tool_execution_start" && e.toolCallId === "a2").length,
+      ).toBe(0);
+
+      await drainInterplay(model, consumed);
+      expect(
+        events.filter((e) => e.type === "tool_result" && e.outcome.toolName === "Agent").length,
+      ).toBe(3);
+    } finally {
+      await drainInterplay(model, consumed);
+    }
   });
 });

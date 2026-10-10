@@ -10,15 +10,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSettings } from "../settings/files.js";
+import { loadSettings, saveSettings } from "../settings/files.js";
 import type { AnycodeSettings, CustomProviderRecord, SecretKey } from "../shared/settings.js";
 import {
   catalogModelsBaseUrl,
   connectionApiKeySecretKey,
+  CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL,
   customProviderSecretKey,
   fetchCustomProviderModels,
   handleCustomProviderCreate,
@@ -26,6 +27,9 @@ import {
   handleCustomProviderFetchModels,
   handleCustomProviderUpdate,
   isAllowedCustomProviderUrl,
+  registerProviderIpc,
+  settingsWatchEventMatchesTarget,
+  startSettingsFileWatcher,
   type FetchLike,
   type FetchModelsParams,
   type ProviderIpcDeps,
@@ -34,6 +38,20 @@ import {
 import type { SecretSetResult } from "./vault.js";
 import { createProxyChainFetch, type ProxyDispatchRequest } from "./provider-proxy-fetch.js";
 import { hostForkProxyChain } from "../shared/proxy.js";
+
+// Capture ipcMain.handle registrations so a test can drive the real
+// `registerProviderIpc` wiring without an Electron runtime. `mock`-prefixed so
+// the hoisted vi.mock factory may close over it.
+const { mockHandlers } = vi.hoisted(() => ({
+  mockHandlers: new Map<string, (event: unknown, raw: unknown) => unknown>(),
+}));
+vi.mock("electron", () => ({
+  ipcMain: {
+    handle: (channel: string, listener: (event: unknown, raw: unknown) => unknown): void => {
+      mockHandlers.set(channel, listener);
+    },
+  },
+}));
 
 /** `saveSettings` call counter (F-C zero-trace red-proofs — asserted by spy, not just by re-reading the file). */
 const saveSettingsSpy = vi.hoisted(() => ({ count: 0 }));
@@ -1342,5 +1360,526 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const { deps, calls } = makeCatalogDeps();
     await handleCustomProviderFetchModels(deps, { connectionId: "conn-12" });
     expect("fetchImpl" in (calls[0] as object)).toBe(false);
+  });
+});
+
+// ── 4244: complete-URL models seam (no real server, injected fetchImpl only) ──
+
+describe("fetchCustomProviderModels — modelsUrl complete-URL seam (4244)", () => {
+  /** Capturing fake fetch returning an OpenAI-style {object:"list",data:[{id}]} body. */
+  function makeCapturingFetch(models: { id: string }[]): {
+    fetchImpl: typeof globalThis.fetch;
+    calls: { url: string; init: RequestInit }[];
+  } {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ object: "list", data: models }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof globalThis.fetch;
+    return { fetchImpl, calls };
+  }
+
+  it("uses modelsUrl VERBATIM — no /v1 insertion, no double /models — with GET, redirect:error, and Bearer auth", async () => {
+    const { fetchImpl, calls } = makeCapturingFetch([{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }]);
+    const outcome = await fetchCustomProviderModels({
+      baseUrl: "https://api.deepseek.com/anthropic",
+      modelsUrl: "https://api.deepseek.com/models",
+      apiKey: "sk-ds",
+      kind: "anthropic",
+      fetchImpl,
+    });
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.url).toBe("https://api.deepseek.com/models");
+    expect(calls[0]!.init.method).toBe("GET");
+    expect(calls[0]!.init.redirect).toBe("error");
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer sk-ds");
+    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["anthropic-version"]).toBeUndefined();
+    expect(outcome).toEqual({ ok: true, models: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }] });
+  });
+
+  it("refuses a non-https/non-localhost modelsUrl as invalid_url without fetching", async () => {
+    const { fetchImpl, calls } = makeCapturingFetch([{ id: "m" }]);
+    const outcome = await fetchCustomProviderModels({
+      baseUrl: "https://api.deepseek.com/anthropic",
+      modelsUrl: "http://api.deepseek.com/models",
+      apiKey: "sk-ds",
+      kind: "anthropic",
+      fetchImpl,
+    });
+    expect(outcome).toEqual({ ok: false, reason: "invalid_url" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("trailing-slash modelsUrl is trimmed, not doubled", async () => {
+    const { fetchImpl, calls } = makeCapturingFetch([{ id: "m" }]);
+    await fetchCustomProviderModels({
+      baseUrl: "https://api.deepseek.com/anthropic",
+      modelsUrl: "https://api.deepseek.com/models/",
+      apiKey: "sk-ds",
+      kind: "anthropic",
+      fetchImpl,
+    });
+    expect(calls[0]!.url).toBe("https://api.deepseek.com/models");
+  });
+
+  it("absent modelsUrl keeps the derived path byte-identical", async () => {
+    const { fetchImpl, calls } = makeCapturingFetch([{ id: "m" }]);
+    await fetchCustomProviderModels({
+      baseUrl: catalogModelsBaseUrl("https://api.kimi.com/coding"),
+      apiKey: "sk-kimi",
+      kind: "anthropic",
+      fetchImpl,
+    });
+    expect(calls[0]!.url).toBe("https://api.kimi.com/coding/v1/models");
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers["x-api-key"]).toBe("sk-kimi");
+  });
+});
+
+describe("handleCustomProviderFetchModels — 4244 modelsUrl catalog wiring", () => {
+  async function seed4244(connection: Record<string, unknown>): Promise<void> {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 2,
+        provider: { connections: [connection], activeConnectionId: connection.id },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+  }
+
+  it("4244: a deepseek connection fetches https://api.deepseek.com/models with Bearer and persists the ids", async () => {
+    await seed4244({ id: "conn-ds", providerId: "deepseek" });
+    vault.store.set(connectionApiKeySecretKey("conn-ds"), "sk-ds-secret");
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ object: "list", data: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof globalThis.fetch;
+    const deps = makeDeps({
+      now: () => "2026-07-18T00:00:00.000Z",
+      catalogEntryById: (id) =>
+        id === "deepseek"
+          ? { id: "deepseek", baseUrl: "https://api.deepseek.com/anthropic", defaultTransport: "anthropic-messages" }
+          : undefined,
+      connectionFetch: () => fetchImpl,
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-ds" });
+    expect(res).toEqual({ ok: true, models: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }] });
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.url).toBe("https://api.deepseek.com/models");
+    expect(calls[0]!.init.method).toBe("GET");
+    expect(calls[0]!.init.redirect).toBe("error");
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer sk-ds-secret");
+    expect(headers["x-api-key"]).toBeUndefined();
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]).toMatchObject({
+      id: "conn-ds",
+      models: ["deepseek-flash", "deepseek-v4-pro"],
+      modelsFetchedAt: "2026-07-18T00:00:00.000Z",
+    });
+  });
+  it("4244: a deepseek connection with an overridden baseUrl uses the derived URL, not the catalog modelsUrl", async () => {
+    await seed4244({ id: "conn-gw", providerId: "deepseek", baseUrl: "https://gw.example/anthropic" });
+    vault.store.set(connectionApiKeySecretKey("conn-gw"), "sk-gw");
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ data: [{ id: "m" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof globalThis.fetch;
+    const deps = makeDeps({
+      catalogEntryById: (id) =>
+        id === "deepseek"
+          ? { id: "deepseek", baseUrl: "https://api.deepseek.com/anthropic", defaultTransport: "anthropic-messages" }
+          : undefined,
+      connectionFetch: () => fetchImpl,
+    });
+    await handleCustomProviderFetchModels(deps, { connectionId: "conn-gw" });
+    expect(calls).toEqual(["https://gw.example/anthropic/v1/models"]);
+  });
+});
+
+// ── TASK.183: durable manually entered connection models ──
+
+/** Minimal v2 settings fixture carrying an explicit `provider` object. */
+function v2Settings(provider: Record<string, unknown>): AnycodeSettings {
+  return {
+    version: 2,
+    provider,
+    tools: {},
+    permissions: { alwaysAllow: [] },
+    ui: { theme: "system" },
+    security: { allowWeakSecretStorage: false },
+  } as unknown as AnycodeSettings;
+}
+
+async function writeSettingsFixture(provider: Record<string, unknown>): Promise<void> {
+  await writeFile(settingsPath, JSON.stringify(v2Settings(provider)));
+}
+
+async function readConnections(): Promise<Record<string, unknown>[]> {
+  const reloaded = await loadSettings(settingsPath);
+  return reloaded.settings.provider.connections as unknown as Record<string, unknown>[];
+}
+
+describe("handleConnectionAddModels — manual ids ({connectionId, addModels})", () => {
+  /** A fetch that would THROW if the add path ever attempted the network. */
+  const noNetwork = (): Partial<ProviderIpcDeps> => ({
+    fetchModels: async () => {
+      throw new Error("addModels must never touch the network");
+    },
+  });
+
+  it("adds a valid id on a connection with no prior fetch; a fresh restart (reload) sees it", async () => {
+    await writeSettingsFixture({ connections: [{ id: "conn-1", providerId: "kimi" }] });
+    const res = await handleCustomProviderFetchModels(makeDeps(noNetwork()), {
+      connectionId: "conn-1",
+      addModels: ["my-manual-id"],
+    });
+    expect(res).toEqual({ ok: true, models: [{ id: "my-manual-id" }] });
+    const [conn] = await readConnections();
+    expect(conn).toMatchObject({ id: "conn-1", models: ["my-manual-id"] });
+  });
+
+  it("succeeds for every connection kind without a network or vault read", async () => {
+    const kinds = ["kimi", "openrouter", "vllm", "custom", "custom:my-record"];
+    await writeSettingsFixture({ connections: kinds.map((providerId, i) => ({ id: `conn-${i}`, providerId })) });
+    const deps = makeDeps(noNetwork());
+    for (let i = 0; i < kinds.length; i += 1) {
+      const res = await handleCustomProviderFetchModels(deps, { connectionId: `conn-${i}`, addModels: [`m-${i}`] });
+      expect(res).toEqual({ ok: true, models: [{ id: `m-${i}` }] });
+    }
+    expect(vault.store.size).toBe(0);
+    const conns = await readConnections();
+    expect(conns.map((c) => c.models)).toEqual(kinds.map((_, i) => [`m-${i}`]));
+  });
+
+  it("rejects invalid / blank / control-char / non-string / mixed valid+invalid requests with NO write", async () => {
+    await writeSettingsFixture({ connections: [{ id: "conn-1", providerId: "kimi" }] });
+    const deps = makeDeps();
+    saveSettingsSpy.count = 0;
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", addModels: ["good-id", "bad id"] })).toEqual({ ok: false, reason: "invalid_request" });
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", addModels: [""] })).toEqual({ ok: false, reason: "invalid_request" });
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", addModels: ["bad\nid"] })).toEqual({ ok: false, reason: "invalid_request" });
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", addModels: [7] })).toEqual({ ok: false, reason: "invalid_request" });
+    expect(saveSettingsSpy.count).toBe(0);
+    const [conn] = await readConnections();
+    expect(conn).not.toHaveProperty("models");
+  });
+
+  it("fails an unknown target and a read-only file (unchanged bytes)", async () => {
+    await writeSettingsFixture({ connections: [{ id: "conn-1", providerId: "kimi" }] });
+    expect(await handleCustomProviderFetchModels(makeDeps(), { connectionId: "nope", addModels: ["m"] })).toEqual({ ok: false, reason: "invalid_request" });
+    await writeFile(settingsPath, READ_ONLY_FIXTURE);
+    const before = await readFile(settingsPath, "utf8");
+    saveSettingsSpy.count = 0;
+    expect(await handleCustomProviderFetchModels(makeDeps(), { connectionId: "conn-1", addModels: ["m"] })).toEqual({ ok: false, reason: "read_only" });
+    expect(saveSettingsSpy.count).toBe(0);
+    expect(await readFile(settingsPath, "utf8")).toBe(before);
+  });
+
+  it("a duplicate existing entry is a no-op — no save, no callback, no reorder", async () => {
+    await writeSettingsFixture({ connections: [{ id: "conn-1", providerId: "kimi", models: ["a", "b"] }] });
+    const onMutation = vi.fn();
+    saveSettingsSpy.count = 0;
+    const res = await handleCustomProviderFetchModels(makeDeps({ onMutation }), { connectionId: "conn-1", addModels: ["b"] });
+    expect(res).toEqual({ ok: true, models: [{ id: "a" }, { id: "b" }] });
+    expect(saveSettingsSpy.count).toBe(0);
+    expect(onMutation).not.toHaveBeenCalled();
+    const [conn] = await readConnections();
+    expect(conn).toMatchObject({ models: ["a", "b"] });
+  });
+
+  it("appends to the existing stored order and normalizes surrounding spaces", async () => {
+    await writeSettingsFixture({ connections: [{ id: "conn-1", providerId: "kimi", models: ["a", "b"] }] });
+    const res = await handleCustomProviderFetchModels(makeDeps(), { connectionId: "conn-1", addModels: [" c "] });
+    expect(res).toEqual({ ok: true, models: [{ id: "a" }, { id: "b" }, { id: "c" }] });
+    const [conn] = await readConnections();
+    expect(conn).toMatchObject({ models: ["a", "b", "c"] });
+  });
+
+  it("leaves model, activeConnectionId, modelsFetchedAt, siblings and custom records untouched", async () => {
+    const custom = { id: "custom:rec", name: "Rec", baseUrl: "https://api.example.com", kind: "openai-compatible", models: ["rec-model"] };
+    await writeSettingsFixture({
+      activeConnectionId: "conn-1",
+      connections: [
+        { id: "conn-1", providerId: "kimi", model: "glm-4.6", modelsFetchedAt: "2026-01-02T00:00:00.000Z" },
+        { id: "conn-2", providerId: "kimi", models: ["sibling"] },
+      ],
+      custom: [custom],
+    });
+    const res = await handleCustomProviderFetchModels(makeDeps(), { connectionId: "conn-1", addModels: ["added"] });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.activeConnectionId).toBe("conn-1");
+    expect(reloaded.settings.provider.custom).toEqual([custom]);
+    expect(reloaded.settings.provider.connections).toMatchObject([
+      { id: "conn-1", providerId: "kimi", model: "glm-4.6", modelsFetchedAt: "2026-01-02T00:00:00.000Z", models: ["added"] },
+      { id: "conn-2", providerId: "kimi", models: ["sibling"] },
+    ]);
+  });
+
+  it("keeps two same-provider connections isolated", async () => {
+    await writeSettingsFixture({
+      connections: [
+        { id: "conn-a", providerId: "kimi" },
+        { id: "conn-b", providerId: "kimi" },
+      ],
+    });
+    await handleCustomProviderFetchModels(makeDeps(), { connectionId: "conn-a", addModels: ["manual-a"] });
+    const conns = await readConnections();
+    expect(conns[0]).toMatchObject({ id: "conn-a", models: ["manual-a"] });
+    expect(conns[1]).not.toHaveProperty("models");
+  });
+
+  it("a manual add made DURING an in-flight network fetch survives the fetch's final locked merge", async () => {
+    await writeSettingsFixture({ connections: [{ id: "conn-1", providerId: "kimi" }] });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deps = makeDeps({
+      catalogEntryById: () => ({ id: "kimi", baseUrl: "https://api.kimi.com/coding", defaultTransport: "anthropic-messages" }),
+      fetchModels: async () => {
+        await gate;
+        return { ok: true, models: [{ id: "live-a" }, { id: "live-b" }] };
+      },
+    });
+    const fetchPromise = handleCustomProviderFetchModels(deps, { connectionId: "conn-1" });
+    // The manual add lands while the fetch is still awaiting the network.
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", addModels: ["manual-x"] })).toEqual({ ok: true, models: [{ id: "manual-x" }] });
+    release?.();
+    expect(await fetchPromise).toEqual({ ok: true, models: [{ id: "live-a" }, { id: "live-b" }] });
+    const [conn] = await readConnections();
+    expect(conn).toMatchObject({ models: ["live-a", "live-b", "manual-x"] });
+  });
+
+  it("a fetch dedupes repeated ids and keeps fetched-first then stored-manual order", async () => {
+    await writeSettingsFixture({ connections: [{ id: "conn-1", providerId: "kimi", models: ["manual-1"] }] });
+    const deps = makeDeps({
+      now: () => "2026-07-18T00:00:00.000Z",
+      catalogEntryById: () => ({ id: "kimi", baseUrl: "https://api.kimi.com/coding", defaultTransport: "anthropic-messages" }),
+      fetchModels: async () => ({ ok: true, models: [{ id: "live-a" }, { id: "live-a" }, { id: "manual-1" }] }),
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1" });
+    expect(res).toEqual({ ok: true, models: [{ id: "live-a" }, { id: "live-a" }, { id: "manual-1" }] });
+    const [conn] = await readConnections();
+    expect(conn).toMatchObject({ models: ["live-a", "manual-1"] });
+  });
+
+  it("a failed or empty fetch leaves the stored manual list intact; a deleted-mid-fetch target is not resurrected", async () => {
+    await writeSettingsFixture({ connections: [{ id: "conn-1", providerId: "kimi", models: ["manual-1"] }] });
+    const failed = makeDeps({
+      catalogEntryById: () => ({ id: "kimi", baseUrl: "https://api.kimi.com/coding", defaultTransport: "anthropic-messages" }),
+      fetchModels: async () => ({ ok: false, reason: "http_error" }),
+    });
+    expect(await handleCustomProviderFetchModels(failed, { connectionId: "conn-1" })).toEqual({ ok: false, reason: "http_error" });
+    const empty = makeDeps({
+      catalogEntryById: () => ({ id: "kimi", baseUrl: "https://api.kimi.com/coding", defaultTransport: "anthropic-messages" }),
+      fetchModels: async () => ({ ok: true, models: [] }),
+    });
+    expect(await handleCustomProviderFetchModels(empty, { connectionId: "conn-1" })).toEqual({ ok: true, models: [] });
+    const [conn] = await readConnections();
+    expect(conn).toMatchObject({ models: ["manual-1"] });
+    // Deleted mid-fetch: the transient result returns, but nothing is written back.
+    const resurrect = makeDeps({
+      catalogEntryById: () => ({ id: "kimi", baseUrl: "https://api.kimi.com/coding", defaultTransport: "anthropic-messages" }),
+      fetchModels: async () => {
+        await writeSettingsFixture({ connections: [] });
+        return { ok: true, models: [{ id: "live-a" }] };
+      },
+    });
+    expect(await handleCustomProviderFetchModels(resurrect, { connectionId: "conn-1" })).toEqual({ ok: true, models: [{ id: "live-a" }] });
+    const conns = await readConnections();
+    expect(conns).toEqual([]);
+  });
+});
+
+describe("settingsWatchEventMatchesTarget", () => {
+  it("treats a null filename as a conservative match and decodes Buffer filenames", () => {
+    expect(settingsWatchEventMatchesTarget(null, "settings.json")).toBe(true);
+    expect(settingsWatchEventMatchesTarget("settings.json", "settings.json")).toBe(true);
+    expect(settingsWatchEventMatchesTarget("other.json", "settings.json")).toBe(false);
+    expect(settingsWatchEventMatchesTarget(Buffer.from("settings.json"), "settings.json")).toBe(true);
+    expect(settingsWatchEventMatchesTarget(Buffer.from("other.json"), "settings.json")).toBe(false);
+  });
+});
+
+describe("startSettingsFileWatcher — external settings edits (real temp dir, production saveSettings)", () => {
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function waitUntil(predicate: () => boolean, timeoutMs = 4000): Promise<void> {
+    const start = Date.now();
+    while (!predicate()) {
+      if (Date.now() - start > timeoutMs) {
+        throw new Error("waitUntil timed out");
+      }
+      await delay(20);
+    }
+  }
+
+  const handles: Array<() => void> = [];
+  afterEach(() => {
+    handles.splice(0).forEach((close) => close());
+  });
+  function watch(
+    logger: Parameters<typeof startSettingsFileWatcher>[1],
+    onChange: (settings: AnycodeSettings) => void | Promise<void>,
+  ): void {
+    handles.push(startSettingsFileWatcher(settingsPath, logger, onChange));
+  }
+
+  it("delivers two sequential external replacements as two serialized callbacks", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a"] }] });
+    const seen: string[] = [];
+    watch(undefined, (settings) => {
+      seen.push((settings.provider.connections[0]?.models ?? []).join(","));
+    });
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "b"] }] });
+    await waitUntil(() => seen.length === 1);
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "b", "c"] }] });
+    await waitUntil(() => seen.length === 2);
+    expect(seen).toEqual(["a,b", "a,b,c"]);
+  });
+
+  it("skips repeated identical bytes (no callback)", async () => {
+    const text = JSON.stringify(v2Settings({ connections: [{ id: "c1", providerId: "kimi" }] }));
+    await writeFile(settingsPath, text);
+    const seen: AnycodeSettings[] = [];
+    watch(undefined, (settings) => {
+      seen.push(settings);
+    });
+    await writeFile(settingsPath, text);
+    await delay(500);
+    expect(seen).toEqual([]);
+  });
+
+  it("ignores invalid JSON and schema-invalid content, never rewriting the file, and still catches a later valid edit", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi" }] });
+    const logger = { warn: vi.fn() };
+    const seen: string[] = [];
+    watch(logger, (settings) => {
+      seen.push((settings.provider.connections[0]?.models ?? []).join(","));
+    });
+    const invalidJson = "{ not json";
+    await writeFile(settingsPath, invalidJson);
+    await waitUntil(() => logger.warn.mock.calls.length >= 1);
+    expect(await readFile(settingsPath, "utf8")).toBe(invalidJson);
+    const schemaInvalid = JSON.stringify({ version: 2, provider: { connections: [{ id: 1 }] } });
+    await writeFile(settingsPath, schemaInvalid);
+    await waitUntil(() => logger.warn.mock.calls.length >= 2);
+    expect(await readFile(settingsPath, "utf8")).toBe(schemaInvalid);
+    expect(seen).toEqual([]);
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["recovered"] }] });
+    await waitUntil(() => seen.length === 1);
+    expect(seen).toEqual(["recovered"]);
+  });
+
+  it("ignores an unrelated filename in the directory", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi" }] });
+    const seen: AnycodeSettings[] = [];
+    watch(undefined, (settings) => {
+      seen.push(settings);
+    });
+    await writeFile(join(dir, "other.json"), JSON.stringify({ hello: "world" }));
+    await delay(500);
+    expect(seen).toEqual([]);
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["x"] }] });
+    await waitUntil(() => seen.length === 1);
+  });
+
+  it("handles delete then recreation", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a"] }] });
+    const seen: string[] = [];
+    watch(undefined, (settings) => {
+      seen.push((settings.provider.connections[0]?.models ?? []).join(","));
+    });
+    await rm(settingsPath, { force: true });
+    await delay(300);
+    expect(seen).toEqual([]);
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "recreated"] }] });
+    await waitUntil(() => seen.length === 1);
+    expect(seen).toEqual(["a,recreated"]);
+  });
+
+  it("close() cancels pending work", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi" }] });
+    const seen: AnycodeSettings[] = [];
+    const close = startSettingsFileWatcher(settingsPath, undefined, (settings) => {
+      seen.push(settings);
+    });
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["late"] }] });
+    close();
+    await delay(500);
+    expect(seen).toEqual([]);
+  });
+
+  it("logs a rejecting callback and keeps later changes operable", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a"] }] });
+    const logger = { warn: vi.fn() };
+    const seen: string[] = [];
+    let fail = true;
+    watch(logger, (settings) => {
+      if (fail) {
+        throw new Error("handler boom");
+      }
+      seen.push((settings.provider.connections[0]?.models ?? []).join(","));
+    });
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "b"] }] });
+    await waitUntil(() => logger.warn.mock.calls.length >= 1);
+    fail = false;
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "b", "c"] }] });
+    await waitUntil(() => seen.length === 1);
+    expect(seen).toEqual(["a,b,c"]);
+  });
+
+  it("bounds an own-write callback to a stable count (no mutation loop)", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["x"] }] });
+    let count = 0;
+    watch(undefined, async (settings) => {
+      count += 1;
+      await saveSettings(settingsPath, settings);
+    });
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["x", "y"] }] });
+    await waitUntil(() => count >= 1);
+    await delay(600);
+    const settled = count;
+    await delay(400);
+    expect(count).toBe(settled);
+    expect(count).toBeLessThanOrEqual(3);
+  });
+
+  it("registerProviderIpc wires the existing onMutation to external edits and returns a disposer", async () => {
+    mockHandlers.clear();
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi" }] });
+    const onMutation = vi.fn();
+    const handle = registerProviderIpc(makeDeps({ onMutation }));
+    expect(mockHandlers.has(CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL)).toBe(true);
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["m"] }] });
+    await waitUntil(() => onMutation.mock.calls.length === 1);
+    expect(onMutation.mock.calls[0]?.[0]).toMatchObject({ provider: { connections: [{ id: "c1", models: ["m"] }] } });
+    handle.dispose();
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["m2"] }] });
+    await delay(500);
+    expect(onMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it("without an onMutation hook, registerProviderIpc starts no watcher and returns a safe disposer", async () => {
+    mockHandlers.clear();
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi" }] });
+    const handle = registerProviderIpc(makeDeps());
+    expect(() => handle.dispose()).not.toThrow();
   });
 });

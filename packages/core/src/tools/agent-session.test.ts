@@ -1282,3 +1282,137 @@ describe("agentTool handler — engine-profile turn budget (TASK.180)", () => {
     expect(seen !== undefined && "maxTurns" in seen!).toBe(false);
   });
 });
+
+// Engine-profile effort: the profile's declared `effort:` frontmatter reaches
+// the captured SessionSubagentRequest verbatim (xhigh included); an absent
+// effort leaves the key off.
+describe("agentTool handler — engine-profile effort", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  it("profile effort rides the session request verbatim (xhigh)", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker" },
+      makeCtx({
+        toolCallId: "call-effort-1",
+        subagents: enginePort("claude-worker", { engine: "claude", systemPrompt: "PERSONA BODY", effort: "xhigh" }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen?.effort).toBe("xhigh");
+  });
+
+  it("profile without an effort puts no effort key on the request", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker" },
+      makeCtx({
+        toolCallId: "call-effort-2",
+        subagents: enginePort("claude-worker", { engine: "claude", systemPrompt: "PERSONA BODY" }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen !== undefined && "effort" in seen!).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Profile connection routing (Taskana 4269): BEFORE the tier branch, the handler
+// asks ctx.subagents.profileRouting(agentType). A routed md-profile's declared
+// connection is AUTHORITATIVE: an explicit `provider` argument is refused (the
+// argument winning would mask the declaration), a non-session tier is refused
+// (no session host to prepare a connection), and the resolved route rides the
+// CREATING spawn's request — a continuation sends neither key.
+
+function routingPort(
+  agentType: string,
+  routing: { provider?: string; connection?: string } | null,
+): SubagentPort {
+  return {
+    listAgentTypes: () => [agentType],
+    profileRouting: (t) => (t === agentType ? routing : null),
+    run: async () => {
+      throw new Error("inline subagents.run must not be reached for a routed profile");
+    },
+  };
+}
+
+describe("agentTool handler — profile routing (Taskana 4269)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  function capturingPort(subagents: SubagentPort): { port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
+    let seen: SessionSubagentRequest | undefined;
+    return {
+      seen: () => seen,
+      port: {
+        run: async (req) => {
+          seen = req;
+          return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+        },
+      },
+    };
+  }
+
+  it('routed profile + explicit provider => invalid_input with the declared-target message (§E.1)', async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "glm-planner", tier: "session", provider: "z-ai" },
+      makeCtx({ subagents: routingPort("glm-planner", { connection: "conn-glm" }), sessionSubagents: portReturning(BASE_SESSION_OUTCOME) }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok === false && result.error).toBe(
+      'Agent: "provider" cannot be combined with profile "glm-planner" — the profile selects its own connection; omit "provider".',
+    );
+  });
+
+  it('routed profile + inline tier => invalid_input naming tier "session"', async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "glm-planner" },
+      makeCtx({ subagents: routingPort("glm-planner", { connection: "conn-glm" }) }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok === false && result.error).toContain('tier "session"');
+  });
+
+  it('session tier with a connection route => request carries connectionId, no provider key', async () => {
+    const { port, seen } = capturingPort(routingPort("glm-planner", { connection: "conn-2" }));
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "glm-planner", tier: "session" },
+      makeCtx({ subagents: routingPort("glm-planner", { connection: "conn-2" }), sessionSubagents: port }),
+    );
+    expect(seen()?.connectionId).toBe("conn-2");
+    expect(seen() !== undefined && "provider" in seen()!).toBe(false);
+  });
+
+  it('session tier with a provider route => request carries provider, no connectionId key', async () => {
+    const { port, seen } = capturingPort(routingPort("ds-executor", { provider: "z-ai" }));
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "ds-executor", tier: "session" },
+      makeCtx({ subagents: routingPort("ds-executor", { provider: "z-ai" }), sessionSubagents: port }),
+    );
+    expect(seen()?.provider).toBe("z-ai");
+    expect(seen() !== undefined && "connectionId" in seen()!).toBe(false);
+  });
+
+  it("continue_session on a routed profile => neither routing key rides the resume", async () => {
+    const { port, seen } = capturingPort(routingPort("glm-planner", { connection: "conn-2" }));
+    await full.handler(
+      { description: "d", prompt: "follow-up", agent_type: "glm-planner", tier: "session", continue_session: "child-7" },
+      makeCtx({ subagents: routingPort("glm-planner", { connection: "conn-2" }), sessionSubagents: port }),
+    );
+    expect(seen()?.resumeChildSessionId).toBe("child-7");
+    expect(seen() !== undefined && "connectionId" in seen()!).toBe(false);
+    expect(seen() !== undefined && "provider" in seen()!).toBe(false);
+  });
+});

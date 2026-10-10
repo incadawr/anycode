@@ -36,6 +36,7 @@ import {
   type SubagentCardEvent,
 } from "./card-snapshot.js";
 import { linkAbortSignal } from "../util/abort.js";
+import type { AgentProfileEffort } from "./personas.js";
 
 // ---------------------------------------------------------------------------
 // §3.1 — the model-visible tool declaration.
@@ -59,12 +60,24 @@ export interface AgentBridgeCatalogEntry {
   engine?: "claude" | "codex";
   /** Default model id for this profile's children (frontmatter `model:`); absent = inherit the parent's/host's default. */
   model?: string;
-  /** Reasoning tier for this profile's children (frontmatter `effort:`); absent = the connection's default. */
-  effort?: ReasoningEffort;
+  /** Reasoning tier for this profile's children (frontmatter `effort` or `model_reasoning_effort`); absent = the connection's default. */
+  effort?: AgentProfileEffort;
   /** Child profile body — included in the initial task for both core and engine session children. */
   systemPrompt: string;
   /** Profile turn budget (TASK.180) for the creating spawn; absent = existing default. */
   maxTurns?: number;
+  /**
+   * Profile `connection:` frontmatter (Taskana 4269) — EXACT AnyCode connection
+   * id the creating spawn's child pins. Absent = inherit the parent's connection.
+   * Mutually exclusive with `provider` (parser-enforced) and with `engine`.
+   */
+  connection?: string;
+  /**
+   * Profile `provider:` frontmatter (Taskana 4269) — catalog provider id the
+   * creating spawn's child runs on; main resolves it to a configured connection.
+   * Absent = inherit the parent's connection. Mutually exclusive with `connection`.
+   */
+  provider?: string;
 }
 
 export interface AgentBridgeToolDecl {
@@ -82,7 +95,9 @@ function describeCatalogEntry(entry: AgentBridgeCatalogEntry): string {
   const engineLabel = entry.engine ?? "core";
   const modelLabel = entry.model ?? "inherited";
   const effortLabel = entry.effort !== undefined ? `, effort ${entry.effort}` : "";
-  return `- ${entry.name} (${engineLabel}, model ${modelLabel}${effortLabel}): ${entry.description}`;
+  const routeLabel =
+    entry.connection !== undefined ? ` [connection: ${entry.connection}]` : entry.provider !== undefined ? ` [provider: ${entry.provider}]` : "";
+  return `- ${entry.name} (${engineLabel}, model ${modelLabel}${effortLabel}${routeLabel}): ${entry.description}`;
 }
 
 /** Model-facing meaning of `detach` — the supervisor's whole wait discipline rides on this sentence. */
@@ -173,7 +188,7 @@ export interface BuildSessionSubagentRequestParams {
   spawnToolCallId: string;
   profile?: EngineProfileInfo;
   /** The profile's own `effort:` frontmatter, if any. */
-  effort?: ReasoningEffort;
+  effort?: AgentProfileEffort;
   /** The profile's own turn budget (TASK.180), if any — rides the creating spawn's request only. */
   maxTurns?: number;
 }
@@ -197,7 +212,11 @@ export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestP
     spawnToolCallId,
     ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
     ...(profile !== undefined ? { engine: profile.engine } : {}),
-    ...(effort !== undefined ? { effort } : {}),
+    // xhigh is preserved verbatim for engine children; a core consumer
+    // (profile?.engine undefined) receives the existing core "max" instead.
+    ...(effort !== undefined
+      ? { effort: profile?.engine === undefined && effort === "xhigh" ? ("max" as const) : effort }
+      : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
   };
 }
@@ -631,6 +650,10 @@ export async function runAgentBridgeCall(
   // the same shape the native Agent tool's detached call has.
   const request: SessionSubagentRequest = {
     ...built,
+    // Taskana 4269: a routed entry's declared target rides the CREATING spawn
+    // only; a continued child keeps the connection its session started on.
+    ...(continueSession === undefined && entry.connection !== undefined ? { connectionId: entry.connection } : {}),
+    ...(continueSession === undefined && entry.provider !== undefined ? { provider: entry.provider } : {}),
     ...(input.detach === true ? { detach: true } : {}),
     ...(continueSession !== undefined ? { resumeChildSessionId: continueSession } : {}),
   };

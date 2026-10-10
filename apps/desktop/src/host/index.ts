@@ -1036,6 +1036,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
             ...(childPresetId !== undefined ? { presetId: childPresetId } : {}),
+            ...(draft.effort !== undefined ? { effort: draft.effort } : {}),
             origin: "draft",
           },
         });
@@ -1507,6 +1508,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
             ...(childPresetId !== undefined ? { presetId: childPresetId } : {}),
+            ...(draft.effort !== undefined ? { effort: draft.effort } : {}),
             origin: "draft",
           },
         });
@@ -2287,7 +2289,7 @@ async function boot(): Promise<void> {
 
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
-    const bootContextWindow = resolveContextWindow(envConfig.model, catalogEntry, envConfig.contextWindowTokens);
+    const bootContextWindow = resolveContextWindow(envConfig.model, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
     // Taskana 4150: a detached child is a subagent too; the 100 KB finalText cap
     // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
     const clampChildOutput = (resolved: number | undefined): number | undefined =>
@@ -2313,6 +2315,7 @@ async function boot(): Promise<void> {
       catalogEntry,
       envMaxOutputTokens: envConfig.maxOutputTokens,
       envContextWindow: envConfig.contextWindowTokens,
+      envContextWindowModel: envConfig.contextWindowModel,
       onClamp: (requested, clamped, modelId) =>
         console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
       onStubFallback: (modelId, applied) =>
@@ -3118,10 +3121,12 @@ async function boot(): Promise<void> {
         // takes effect on the very next turn — the manager's compaction threshold
         // and the context_usage denominator follow (loop.setContextWindow), and
         // config.context flows to children spawned after the switch. The env
-        // override still wins inside resolveContextWindow; an unknown id falls
-        // back to the DEFAULT window (never a stale previous model's window).
+        // override still applies inside resolveContextWindow, but ONLY when its
+        // model binding is absent or names THIS id (TASK.142) — a pair saved for
+        // model A never leaks its window onto B, and an unknown id re-resolves
+        // the assumed fallback rather than a stale previous model's window.
         const contextWindow =
-          resolveContextWindow(id, catalogEntry, envConfig.contextWindowTokens) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+          resolveContextWindow(id, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
           id,
           catalogEntry,

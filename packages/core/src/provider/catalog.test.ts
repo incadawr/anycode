@@ -186,6 +186,34 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
   it("findCatalogEntry returns undefined for an unknown id", () => {
     expect(findCatalogEntry("nope")).toBeUndefined();
   });
+
+  // TASK 4241 (2026-10-10): rows refreshed from the supplied authoritative
+  // live GET /models facts. Default effort high is comment-only in the
+  // catalog (no default-effort field exists on CatalogModel).
+  it("declares the refreshed DeepSeek rows (live GET /models facts, 2026-10-10)", () => {
+    const deepseek = findCatalogEntry("deepseek");
+    expect(deepseek?.models.map((m) => m.id)).toEqual(["deepseek-flash", "deepseek-v4-pro"]);
+    const flash = deepseek?.models.find((m) => m.id === "deepseek-flash");
+    expect(flash).toEqual({
+      id: "deepseek-flash",
+      name: "DeepSeek-V4.1-Flash",
+      contextWindow: 1_048_576,
+      maxOutputTokens: 393_216,
+      imageInput: true,
+      reasoning: true,
+      effortLevels: ["low", "high", "max"],
+    });
+    const pro = deepseek?.models.find((m) => m.id === "deepseek-v4-pro");
+    expect(pro).toEqual({
+      id: "deepseek-v4-pro",
+      name: "DeepSeek-V4-Pro",
+      contextWindow: 1_048_576,
+      maxOutputTokens: 393_216,
+      reasoning: true,
+      effortLevels: ["low", "high", "max"],
+    });
+    expect("imageInput" in (pro ?? {})).toBe(false);
+  });
 });
 
 describe("resolveEndpoint (slice 2.5 §2.2)", () => {
@@ -309,6 +337,15 @@ describe("assertTransportContract (dev-time invariant, TASK.43 W5)", () => {
   it("every built-in entry already satisfies the invariant (exercised again explicitly, not just at module load)", () => {
     for (const entry of getBuiltinCatalog().providers) {
       expect(() => assertTransportContract(entry)).not.toThrow();
+    }
+  });
+});
+
+describe("modelsUrl (4244)", () => {
+  it("4244: deepseek declares modelsUrl at the bare origin; every other entry leaves it absent", () => {
+    expect(findCatalogEntry("deepseek")?.modelsUrl).toBe("https://api.deepseek.com/models");
+    for (const id of ["anthropic", "z-ai", "moonshot", "kimi", "openai", "openrouter", "vllm", "custom"]) {
+      expect(findCatalogEntry(id)?.modelsUrl).toBeUndefined();
     }
   });
 });

@@ -234,6 +234,18 @@ export interface ProviderConnection {
    */
   maxOutputTokens?: number;
   /**
+   * Per-model context-window override for this connection (TASK.142), paired
+   * with `contextWindowModel` — the model id it binds to. The pair travels to
+   * the host/CLI as ANYCODE_CONTEXT_WINDOW / ANYCODE_CONTEXT_WINDOW_MODEL and
+   * governs ONLY that model; a host or CLI switch to another model ignores it
+   * (this is a model-specific override, never a connection-global one). Resolve
+   * order: this override > the catalog usable window > the assumed 8192
+   * fallback for an unknown model. Absent = no override.
+   */
+  contextWindowTokens?: number;
+  /** Model id `contextWindowTokens` is bound to (see above). Main derives it server-side from the effective model; the renderer never supplies it. */
+  contextWindowModel?: string;
+  /**
    * User declaration that this endpoint authenticates nothing (dogfood 16.07:
    * local servers — LM Studio/ollama/llama.cpp). UI-level truth for the
    * drawer's "no API key" checkbox and the tile's health derivation (a keyless
@@ -254,14 +266,17 @@ export interface ProviderConnection {
   /** Advisory last-known health (TASK.45 §3); W11 writes it, never a runtime-readiness source. */
   lastHealth?: { status: ProviderHealthStatus; at: string; safeCode?: string };
   /**
-   * Live-fetched model ids for a CATALOG connection (the guarded
-   * connection-scoped `/v1/models` fetch, main/provider-ipc.ts). Advisory
-   * display data only: pickers show these INSTEAD of the catalog entry's
-   * static hints when present (static hints still decorate matching ids with
-   * display names/capabilities); absent = static hints, exactly the pre-fetch
-   * behavior. Never a runtime-readiness or endpoint-resolution source. A
-   * `custom:<slug>` connection never carries this — its live list lives on
-   * the custom record's own `models[]`.
+   * Connection-scoped model ids this connection offers its pickers (TASK.183):
+   * a stable union of the ids the user entered MANUALLY for this connection
+   * and the ids a connection-scoped `/v1/models` fetch surfaced (the guarded
+   * fetch in main/provider-ipc.ts). Both kinds belong to the CONNECTION, not
+   * to any provider-global list — a sibling connection sharing the same
+   * provider is unaffected, and pickers union these with the catalog entry's
+   * static hints (static hints decorate matching ids with display
+   * names/capabilities). Absent/empty = static hints alone, exactly the
+   * pre-TASK.183 behavior. Never a runtime-readiness or endpoint-resolution
+   * source. A `custom:<slug>` connection keeps its live curated list on the
+   * custom record's own `models[]`; manual additions still land here.
    */
   models?: string[];
   /** ISO timestamp of the last successful connection-scoped model-list fetch. */
@@ -312,6 +327,9 @@ export interface ActiveProviderView {
   reasoningEffort?: ReasoningEffort;
   /** The active connection's explicit output-token ceiling (TASK.150); absent = catalog/default. */
   maxOutputTokens?: number;
+  /** The active connection's per-model context-window override (TASK.142) and the model it binds to; absent = catalog/assumed fallback. */
+  contextWindowTokens?: number;
+  contextWindowModel?: string;
   /** The active connection's "no API key" declaration (TASK.152); only `true` is projected. */
   authOptional?: boolean;
 }
@@ -702,6 +720,15 @@ export interface CatalogSummaryEntry {
     reasoning?: boolean;
     effortLevels?: string[];
     maxOutputTokens?: number;
+    /**
+     * TASK.142: the two catalog window facts the drawer names in its
+     * "Context window (tokens)" hint — the model's full `contextWindow` and its
+     * `usableContextWindow` (when declared). Projected only when the catalog
+     * declares them (conditional spread), optional/additive so legacy fixtures
+     * stay byte-identical. The effective catalog window is their min.
+     */
+    contextWindow?: number;
+    usableContextWindow?: number;
     imageInput?: boolean;
   }[];
   needsBaseUrl?: boolean;
@@ -758,6 +785,15 @@ export interface SettingsSnapshot {
    * snapshot main builds; optional so older snapshots stay assignable.
    */
   defaultMaxOutputTokens?: number;
+  /**
+   * TASK.142: core's `DEFAULT_CONTEXT_WINDOW_TOKENS` and
+   * `UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS`, pinned main-side (settings-ipc.ts)
+   * and projected here for the same reason as `defaultMaxOutputTokens` above —
+   * the renderer cannot import core. The drawer names a blank/unknown field's
+   * effective window from these instead of hardcoding it.
+   */
+  defaultContextWindowTokens?: number;
+  unknownModelContextWindowTokens?: number;
   /**
    * The running app's version (TASK.49), sourced from `app.getVersion()` — in
    * dev that resolves to `apps/desktop/package.json`'s `version`, in a packaged
@@ -883,6 +919,13 @@ export interface ConnectionCreateRequest {
   reasoningEffort?: ReasoningEffort;
   /** Output-token ceiling (see `ProviderConnection.maxOutputTokens`); omitted = catalog/default. */
   maxOutputTokens?: number;
+  /**
+   * Per-model context-window override (see `ProviderConnection.contextWindowTokens`).
+   * Omitted = no override. The model binding is NOT carried here — main derives
+   * it server-side from the effective model, so the renderer can never attach a
+   * window to the wrong model.
+   */
+  contextWindowTokens?: number;
   /** "No API key" declaration (see `ProviderConnection.authOptional`); only `true` is persisted. */
   authOptional?: boolean;
   /** Make the new connection active (default for new sessions). */
@@ -933,6 +976,14 @@ export interface ConnectionUpdateRequest {
    * `""` is never persisted — the handler deletes the key.
    */
   maxOutputTokens?: number | "";
+  /**
+   * Per-model context-window override (TASK.142) with the same `""` clear
+   * sentinel as `maxOutputTokens` above: absent = keep the current pair, a
+   * positive integer = set tokens AND the binding (main derives the binding
+   * from the effective model), `""` = clear BOTH keys. The renderer never
+   * supplies the binding itself.
+   */
+  contextWindowTokens?: number | "";
   /**
    * "No API key" declaration: absent = keep the current value, `true` = set,
    * `false` = clear (the handler removes the key from disk rather than
@@ -1016,6 +1067,74 @@ export function connectionById(settings: AnycodeSettings, connectionId: string):
 }
 
 /**
+ * Normalizes a MANUALLY entered model id (TASK.183) — the ONE validator shared
+ * by the renderer's pre-flight and main's `addModels` handler, so a model the
+ * UI accepts can never be refused main-side and vice versa.
+ *
+ * Rules (frozen by TASK.183):
+ *  - must be a string;
+ *  - C0/C1 control characters (U+0000–U+001F, U+007F–U+009F) in the ORIGINAL
+ *    input are refused — a leading/trailing newline or tab must NOT be erased
+ *    by trimming and silently accepted;
+ *  - ordinary surrounding spaces are trimmed;
+ *  - the trimmed result must be non-empty and must contain NO interior
+ *    whitespace (an id is one opaque token, never a phrase);
+ *  - arbitrary vendor characters, case, Unicode, slash, colon, dash and dot
+ *    are preserved verbatim.
+ *
+ * There is deliberately NO length cap and NO catalog-membership requirement:
+ * membership in a catalog is never validation. Blank/space-only input is the
+ * FORM callers' implicit/default sentinel and is handled by them separately —
+ * a blank is never inserted into `models`.
+ *
+ * Renderer-safe (zero imports, pure) so both main/provider-ipc.ts and the
+ * renderer can call the exact same rule.
+ */
+export function normalizeModelId(input: unknown): string | null {
+  if (typeof input !== "string") {
+    return null;
+  }
+  // Controls checked on the ORIGINAL input, before any trimming.
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(input)) {
+    return null;
+  }
+  const trimmed = input.trim();
+  if (trimmed === "" || /\s/.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+/**
+ * Stable primary-first union of model id lists (TASK.183): trims every id,
+ * drops empties, dedupes by exact case-sensitive id, and keeps the first
+ * occurrence's order. Used by the renderer (`liveModelSuggestions`,
+ * `providerModelsFor`) and by main's `addModels`/fetch handlers so a manual
+ * addition and a live fetch can never replace each other.
+ *
+ * Deliberately lenient about its inputs: existing stored ids are NOT
+ * re-validated through `normalizeModelId`'s stricter manual-entry rules, so a
+ * legacy `models[]` entry is never silently dropped on the next merge — only
+ * empty/whitespace ids are removed.
+ */
+export function mergeModelIds(primary: readonly string[], secondary: readonly string[] = []): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [...primary, ...secondary]) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const id = raw.trim();
+    if (id === "" || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
  * The ONE proxy-URL predicate (TASK.132) — `http:`/`https:` only, because that
  * is the whole set node's `NODE_USE_ENV_PROXY` (undici's `EnvHttpProxyAgent`)
  * and both engine CLIs speak; `socks5:`/`ftp:`/scheme-less values are rejected
@@ -1069,6 +1188,8 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     proxyUrl: connection.proxyUrl,
     reasoningEffort: connection.reasoningEffort,
     maxOutputTokens: connection.maxOutputTokens,
+    contextWindowTokens: connection.contextWindowTokens,
+    contextWindowModel: connection.contextWindowModel,
     ...(connection.authOptional === true ? { authOptional: true } : {}),
   };
 }

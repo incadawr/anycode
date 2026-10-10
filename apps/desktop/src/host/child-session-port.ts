@@ -162,6 +162,13 @@ const MALFORMED_DESCRIPTION_MESSAGE = "Agent: the child session failed to start 
 const MALFORMED_PROMPT_MESSAGE = "Agent: the child session failed to start (malformed prompt).";
 const MALFORMED_MODEL_MESSAGE = "Agent: the child session failed to start (malformed model).";
 const MALFORMED_PROVIDER_MESSAGE = "Agent: the child session failed to start (malformed provider).";
+// Taskana 4269: a profile-declared exact connection id, and the refusal for
+// carrying both connection selectors on one spawn (two ways to name the same
+// connection — ambiguous, so refused before anything is posted; the caller
+// gets this message instead of hanging until the start deadline).
+const MALFORMED_CONNECTION_MESSAGE = "Agent: the child session failed to start (malformed connectionId).";
+const PROVIDER_CONNECTION_CONFLICT_MESSAGE =
+  "Agent: \"provider\" and \"connectionId\" are mutually exclusive on one spawn; the profile selects its own connection — omit \"provider\".";
 const MALFORMED_EFFORT_MESSAGE = "Agent: the child session failed to start (malformed reasoning effort).";
 const MALFORMED_RESUME_MESSAGE = "Agent: the child session failed to start (malformed child session id to continue).";
 const MALFORMED_MAX_TURNS_MESSAGE = "Agent: the child session failed to start (malformed turn budget).";
@@ -207,6 +214,14 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
   }
   if (req.provider !== undefined && !isValidFreeText(req.provider, CHILD_PROVIDER_MAX_CHARS)) {
     return MALFORMED_PROVIDER_MESSAGE;
+  }
+  // Taskana 4269: same shape cap as `provider`; both at once is refused with its
+  // own message (nothing is posted — see the caller).
+  if (req.connectionId !== undefined && !isValidFreeText(req.connectionId, CHILD_PROVIDER_MAX_CHARS)) {
+    return MALFORMED_CONNECTION_MESSAGE;
+  }
+  if (req.provider !== undefined && req.connectionId !== undefined) {
+    return PROVIDER_CONNECTION_CONFLICT_MESSAGE;
   }
   if (req.effort !== undefined && !isChildEffort(req.effort)) {
     return MALFORMED_EFFORT_MESSAGE;
@@ -739,6 +754,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         description: req.description,
         prompt: req.prompt,
         ...(req.provider !== undefined ? { provider: req.provider } : {}),
+        ...(req.connectionId !== undefined ? { connectionId: req.connectionId } : {}),
         ...(req.model !== undefined ? { model: req.model } : {}),
         ...(req.effort !== undefined ? { effort: req.effort } : {}),
         // TASK.102 CUT-S4 §3.1: verbatim passthrough, absent = core (the

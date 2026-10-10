@@ -265,15 +265,44 @@ describe("parseAgentProfileMd — effort frontmatter and unknown keys (TASK.127/
   });
 
   it("an effort outside the vocabulary is fatal, not silently dropped", () => {
-    const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "xhigh" }, "b"), "f");
-    expect(res).toEqual({ error: { kind: "bad_effort", name: "planner", effort: "xhigh" } });
+    const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "turbo" }, "b"), "f");
+    expect(res).toEqual({ error: { kind: "bad_effort", name: "planner", effort: "turbo" } });
   });
 
-  it("an unknown key is reported as a problem, the profile still loads", () => {
+  it("xhigh parses (carried verbatim for engine children, mapped to core max)", () => {
+    const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "xhigh" }, "b"), "f");
+    expect("ok" in res && res.ok.effort).toBe("xhigh");
+  });
+
+  it("the model_reasoning_effort alias parses with no unknown-key warning", () => {
     const res = parseAgentProfileMd(md({ name: "sol", description: "d", model_reasoning_effort: "xhigh" }, "b"), "f");
     expect("ok" in res).toBe(true);
     if (!("ok" in res)) return;
-    expect(res.ok.problems).toEqual([expect.stringContaining('unknown frontmatter key "model_reasoning_effort"')]);
+    expect(res.ok.effort).toBe("xhigh");
+    expect(res.ok.problems).toEqual([]);
+  });
+
+  it("canonical effort wins over the alias", () => {
+    const res = parseAgentProfileMd(
+      md({ name: "sol", description: "d", effort: "high", model_reasoning_effort: "low" }, "b"),
+      "f",
+    );
+    expect("ok" in res && res.ok.effort).toBe("high");
+  });
+
+  it("a blank canonical effort follows absent-effort semantics (alias suppressed)", () => {
+    const res = parseAgentProfileMd(
+      md({ name: "sol", description: "d", effort: " ", model_reasoning_effort: "low" }, "b"),
+      "f",
+    );
+    expect("ok" in res && "effort" in res.ok).toBe(false);
+  });
+
+  it("an unknown unrelated key is reported as a problem, the profile still loads", () => {
+    const res = parseAgentProfileMd(md({ name: "sol", description: "d", vibes: "xhigh" }, "b"), "f");
+    expect("ok" in res).toBe(true);
+    if (!("ok" in res)) return;
+    expect(res.ok.problems).toEqual([expect.stringContaining('unknown frontmatter key "vibes"')]);
   });
 
   it("discovery carries effort into the persona and words a bad one", async () => {
@@ -286,6 +315,115 @@ describe("parseAgentProfileMd — effort frontmatter and unknown keys (TASK.127/
     const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
     expect(profiles.find((p) => p.name === "planner")?.effort).toBe("low");
     expect(profiles.find((p) => p.name === "broken")).toBeUndefined();
-    expect(problems).toEqual([expect.stringContaining('effort "turbo" must be one of off, low, medium, high, max')]);
+    expect(problems).toEqual([expect.stringContaining('effort "turbo" must be one of off, low, medium, high, xhigh, max')]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4269: `connection:`/`provider:` frontmatter — a profile selects the
+// connection its child runs on. Fatal-on-invalid (mirrors `model:`): a profile
+// that asks for a connection and silently runs on the parent's is the exact
+// dishonesty this task forbids. The two keys are mutually exclusive and neither
+// combines with `engine:`.
+
+describe("parseAgentProfileMd — connection/provider frontmatter (Taskana 4269)", () => {
+  it("maps a valid connection: / provider: onto the parsed profile with no problems", () => {
+    const c = parseAgentProfileMd(md({ name: "planner", description: "d", connection: "z-ai-work" }, "b"), "f");
+    expect("ok" in c).toBe(true);
+    if (!("ok" in c)) return;
+    expect(c.ok.connection).toBe("z-ai-work");
+    expect(c.ok.provider).toBeUndefined();
+    expect(c.ok.problems).toEqual([]);
+
+    const p = parseAgentProfileMd(md({ name: "planner", description: "d", provider: "z-ai" }, "b"), "f");
+    expect("ok" in p).toBe(true);
+    if (!("ok" in p)) return;
+    expect(p.ok.provider).toBe("z-ai");
+    expect(p.ok.connection).toBeUndefined();
+  });
+
+  it("absent or blank leaves both undefined (default unrouted inheritance)", () => {
+    const variants: Array<Record<string, string>> = [
+      {},
+      { connection: "  " },
+      { provider: "" },
+      { connection: "", provider: "" },
+    ];
+    for (const fields of variants) {
+      const res = parseAgentProfileMd(md({ name: "planner", description: "d", ...fields }, "b"), "f");
+      expect("ok" in res).toBe(true);
+      if (!("ok" in res)) return;
+      expect(res.ok.connection).toBeUndefined();
+      expect(res.ok.provider).toBeUndefined();
+    }
+  });
+
+  it("a non-conforming connection / provider value is fatal", () => {
+    expect(parseAgentProfileMd(md({ name: "p", description: "d", connection: "a sentence here" }, "b"), "f")).toEqual({
+      error: { kind: "bad_connection", name: "p", connection: "a sentence here" },
+    });
+    expect(parseAgentProfileMd(md({ name: "p", description: "d", provider: "a sentence here" }, "b"), "f")).toEqual({
+      error: { kind: "bad_provider", name: "p", provider: "a sentence here" },
+    });
+  });
+
+  it("connection/provider combined with engine: is a fatal engine_connection_conflict (both engines)", () => {
+    for (const engine of ["codex", "claude"] as const) {
+      for (const key of ["connection", "provider"] as const) {
+        const res = parseAgentProfileMd(
+          md({ name: "p", description: "d", engine, [key]: "x-id" }, "b"),
+          "f",
+        );
+        expect(res, `${engine}+${key}`).toEqual({ error: { kind: "engine_connection_conflict", name: "p", engine } });
+      }
+    }
+  });
+
+  it("both routing keys set is a fatal connection_provider_conflict", () => {
+    expect(parseAgentProfileMd(md({ name: "p", description: "d", connection: "a", provider: "b" }, "b"), "f")).toEqual({
+      error: { kind: "connection_provider_conflict", name: "p" },
+    });
+  });
+
+  it("one blank key plus one valid key keeps just the valid route", () => {
+    const res = parseAgentProfileMd(md({ name: "p", description: "d", connection: "  ", provider: "z-ai" }, "b"), "f");
+    expect("ok" in res).toBe(true);
+    if (!("ok" in res)) return;
+    expect(res.ok.provider).toBe("z-ai");
+    expect(res.ok.connection).toBeUndefined();
+  });
+
+  it("accepts exactly 1 and 128 chars, refuses 129, and accepts a custom:example id", () => {
+    for (const key of ["connection", "provider"] as const) {
+      expect("ok" in parseAgentProfileMd(md({ name: "p", description: "d", [key]: "a" }, "b"), "f")).toBe(true);
+      const ok128 = "a".repeat(128);
+      expect("ok" in parseAgentProfileMd(md({ name: "p", description: "d", [key]: ok128 }, "b"), "f")).toBe(true);
+      const bad129 = "a".repeat(129);
+      const res = parseAgentProfileMd(md({ name: "p", description: "d", [key]: bad129 }, "b"), "f");
+      expect(res).toEqual(
+        key === "connection"
+          ? { error: { kind: "bad_connection", name: "p", connection: bad129 } }
+          : { error: { kind: "bad_provider", name: "p", provider: bad129 } },
+      );
+    }
+    const custom = parseAgentProfileMd(md({ name: "p", description: "d", provider: "custom:example" }, "b"), "f");
+    expect("ok" in custom && custom.ok.provider).toBe("custom:example");
+  });
+
+  it("refuses a leading punctuation / invalid-character value, trims surrounding space (both keys)", () => {
+    for (const key of ["connection", "provider"] as const) {
+      const badError =
+        key === "connection"
+          ? { error: { kind: "bad_connection", name: "p", connection: "-bad" } }
+          : { error: { kind: "bad_provider", name: "p", provider: "-bad" } };
+      expect(parseAgentProfileMd(md({ name: "p", description: "d", [key]: "-bad" }, "b"), "f"), `${key}: leading punct`).toEqual(badError);
+      const spaceError =
+        key === "connection"
+          ? { error: { kind: "bad_connection", name: "p", connection: "a b" } }
+          : { error: { kind: "bad_provider", name: "p", provider: "a b" } };
+      expect(parseAgentProfileMd(md({ name: "p", description: "d", [key]: "a b" }, "b"), "f"), `${key}: invalid char`).toEqual(spaceError);
+      const trimmed = parseAgentProfileMd(md({ name: "p", description: "d", [key]: " conn-1 " }, "b"), "f");
+      expect("ok" in trimmed && trimmed.ok[key], `${key}: trimmed`).toBe("conn-1");
+    }
   });
 });

@@ -33,6 +33,7 @@ import { useStore } from "zustand";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
+  ConnectionCreateRequest,
   ConnectionUpdateRequest,
   CustomProviderRecord,
   ProviderConnection,
@@ -40,6 +41,8 @@ import type {
   SecretStatus,
   SettingsMutationResult,
 } from "../../../shared/settings.js";
+import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
+import type { FetchModelsOutcome } from "../anycode-window.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { connectionSecretKey, customProviderSecretKey, isCustomRecordProviderId } from "./ConnectionTile.js";
 import { PROXY_REF_INHERIT, ProxyRefPicker, connectionCreateProxyRefField, proxyRefInitialValue } from "./ProxyRefPicker.js";
@@ -71,6 +74,177 @@ import { X } from "./icons.js";
  */
 export function resolveCreatedConnectionId(result: SettingsMutationResult): string | undefined {
   return result.ok ? result.createdConnectionId : undefined;
+}
+
+// ── TASK.183: durable manually entered connection models ──
+
+/**
+ * Pre-flight of a raw Model-field value before any create/update/secret/list
+ * call. `blank` keeps the existing implicit/default rules (a blank catalog
+ * model is refused later by `modelSaveBlocked`; a blank arbitrary endpoint is
+ * fine); `id` is the normalized, persistable id; `invalid` is a nonblank value
+ * that is not a valid model id. Validation reads the ORIGINAL string (via
+ * `normalizeModelId`) so a control character is not quietly erased by
+ * trimming. A valid but UNKNOWN id is `id` — catalog membership is never
+ * validation. Exported for direct testing (no jsdom in this package).
+ */
+export type ModelPreflight = { kind: "blank" } | { kind: "id"; id: string } | { kind: "invalid" };
+
+export function preflightModelId(input: string): ModelPreflight {
+  if (input.trim() === "") {
+    return { kind: "blank" };
+  }
+  const id = normalizeModelId(input);
+  return id === null ? { kind: "invalid" } : { kind: "id", id };
+}
+
+/** Actionable copy for a `preflightModelId` `invalid` result. */
+export const MODEL_ID_ERROR =
+  "That model ID isn't valid — a model id has no inner spaces and no control characters.";
+
+/** The one bridge call the model-persistence helpers need on top of the store. */
+export interface ModelAppendBridge {
+  fetchModels(req: { connectionId: string; addModels: string[] }): Promise<FetchModelsOutcome>;
+}
+
+export interface ModelAppendOutcome {
+  ok: boolean;
+  /** Present on failure: the fetch failure reason, or `threw`. */
+  reason?: string;
+}
+
+/**
+ * Appends normalized model ids to an existing connection's `models[]` via the
+ * general `{connectionId, addModels}` IPC branch, then refresh the snapshot.
+ * This is the ONE durable manual-entry path shared by create, save and the
+ * custom-record fetch — a failed/thrown append is reported honestly (the ids
+ * were NOT persisted) rather than swallowed. A `reload` failure is best-effort
+ * and never reads as a save failure. Exported for direct testing.
+ */
+export async function appendModelsToConnection(
+  bridge: ModelAppendBridge,
+  reload: () => Promise<void>,
+  connectionId: string,
+  modelIds: readonly string[],
+): Promise<ModelAppendOutcome> {
+  let outcome: FetchModelsOutcome;
+  try {
+    outcome = await bridge.fetchModels({ connectionId, addModels: [...modelIds] });
+  } catch {
+    return { ok: false, reason: "threw" };
+  }
+  if (!outcome.ok) {
+    return { ok: false, reason: outcome.reason };
+  }
+  try {
+    await reload();
+  } catch {
+    // The list IS persisted; a refresh failure must not read as a save failure.
+  }
+  return { ok: true };
+}
+
+/** Single-id convenience over `appendModelsToConnection`. Exported for tests. */
+export async function appendModelToConnection(
+  bridge: ModelAppendBridge,
+  reload: () => Promise<void>,
+  connectionId: string,
+  modelId: string,
+): Promise<ModelAppendOutcome> {
+  return appendModelsToConnection(bridge, reload, connectionId, [modelId]);
+}
+
+export interface CreateModelBridge<C> extends ModelAppendBridge {
+  connectionCreate(req: C): Promise<SettingsMutationResult>;
+}
+
+export interface CreateWithModelResult {
+  /** The connection was created (`createdConnectionId` set) — false only if creation itself failed. */
+  ok: boolean;
+  createdConnectionId?: string;
+  /** The connection exists but its model list could NOT be saved. */
+  partial?: boolean;
+  error?: string;
+}
+
+/**
+ * Create-then-persist sequencing shared by both create flows: mint the
+ * connection, resolve the just-minted LOCAL id from the result (never a stale
+ * state read), and — when a model was entered — append it to that same
+ * connection's `models[]` before refreshing. On an append failure the
+ * connection id is still returned with `partial: true`: the connection
+ * metadata exists, only the list is missing, and the caller reports that
+ * honestly for retry (no fake rollback). Exported for direct testing.
+ */
+export async function createConnectionAndPersistModel<C>(
+  bridge: CreateModelBridge<C>,
+  reload: () => Promise<void>,
+  createRequest: C,
+  modelId: string | null,
+): Promise<CreateWithModelResult> {
+  let result: SettingsMutationResult;
+  try {
+    result = await bridge.connectionCreate(createRequest);
+  } catch {
+    return { ok: false, error: "Couldn't create the connection." };
+  }
+  const createdId = resolveCreatedConnectionId(result);
+  if (createdId === undefined) {
+    return { ok: false, error: "Couldn't create the connection." };
+  }
+  if (modelId === null) {
+    return { ok: true, createdConnectionId: createdId };
+  }
+  const append = await appendModelToConnection(bridge, reload, createdId, modelId);
+  if (!append.ok) {
+    return {
+      ok: true,
+      createdConnectionId: createdId,
+      partial: true,
+      error: "Connection created, but its model list couldn't be saved — retry with Save.",
+    };
+  }
+  return { ok: true, createdConnectionId: createdId };
+}
+
+export interface UpdateModelBridge<U> extends ModelAppendBridge {
+  connectionUpdate(req: U): Promise<SettingsMutationResult>;
+}
+
+export interface UpdateWithModelResult {
+  /** The metadata update succeeded. */
+  metaOk: boolean;
+  /** Whether a requested model-list append succeeded (true when none was requested). */
+  appendOk: boolean;
+}
+
+/**
+ * Save-then-append sequencing: persist the metadata update first, and only
+ * after it succeeds append the normalized selected model to the same
+ * connection. A failed metadata update never appends (the update is the
+ * precondition). Exported for direct testing.
+ */
+export async function updateConnectionAndPersistModel<U>(
+  bridge: UpdateModelBridge<U>,
+  reload: () => Promise<void>,
+  connectionId: string,
+  updateRequest: U,
+  modelId: string | null,
+): Promise<UpdateWithModelResult> {
+  let result: SettingsMutationResult;
+  try {
+    result = await bridge.connectionUpdate(updateRequest);
+  } catch {
+    return { metaOk: false, appendOk: false };
+  }
+  if (!result.ok) {
+    return { metaOk: false, appendOk: false };
+  }
+  if (modelId === null) {
+    return { metaOk: true, appendOk: true };
+  }
+  const append = await appendModelToConnection(bridge, reload, connectionId, modelId);
+  return { metaOk: true, appendOk: append.ok };
 }
 
 /**
@@ -149,6 +323,7 @@ export function buildConnectionUpdatePayload(params: {
   proxyRef: string;
   authOptional: boolean;
   maxOutputTokens: number | "";
+  contextWindowTokens: number | "";
 }): ConnectionUpdateRequest {
   return {
     id: params.connectionId,
@@ -171,6 +346,11 @@ export function buildConnectionUpdatePayload(params: {
     // clearing the field back to blank must CLEAR the persisted cap, not leave
     // an old explicit value in force.
     maxOutputTokens: params.maxOutputTokens,
+    // Sent unconditionally (TASK.142), same rationale: an emptied field must
+    // CLEAR the saved pair. Only the numeric value (or `""`) travels — the
+    // model binding is derived SERVER-SIDE from the effective model, so the
+    // renderer can never attach a window to the wrong model.
+    contextWindowTokens: params.contextWindowTokens,
   };
 }
 
@@ -285,31 +465,215 @@ export function maxOutputTokensEffectiveHint(
 }
 
 /**
- * The model suggestions a catalog connection's drawer offers (datalist +
- * click-to-fill chips): the LIVE list when one exists — this session's fetch
- * result first, else the ids persisted on the connection by an earlier fetch
- * — decorated with the catalog entry's static display names where known; the
- * static hints alone before any fetch (exactly the pre-fetch behavior).
- * Mirrors `providerModelsFor`'s live-over-static precedence so the drawer and
- * the composer pickers can never disagree about WHAT the provider offers.
- * Exported for direct testing (no jsdom in this package's vitest config, see
- * file docstring).
+ * Validates the "Context window (tokens)" field's raw string (TASK.142): the
+ * same client-side pre-flight as `maxOutputTokensField` above, because main
+ * (`settings-ipc.ts`) accepts an integer in [1024, 1000000] or refuses the whole
+ * update with a bare `reason: "invalid"`. Blank is the channel's clear sentinel
+ * — `ok:true, value:""` — matching `maxOutputTokensField` (NOT zero and NOT
+ * invalid). Exported for direct testing (no jsdom in this package's vitest
+ * config, see file docstring).
+ */
+export function contextWindowTokensField(raw: string): { ok: true; value: number | "" } | { ok: false } {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return { ok: true, value: "" };
+  }
+  if (!/^-?\d+$/.test(trimmed)) {
+    return { ok: false };
+  }
+  const n = Number(trimmed);
+  if (!Number.isInteger(n) || n < 1024 || n > 1000000) {
+    return { ok: false };
+  }
+  return { ok: true, value: n };
+}
+
+/** Shared by both write paths so create and save refuse a bad window identically. */
+const CONTEXT_WINDOW_ERROR =
+  "Context window must be a whole number between 1024 and 1000000 — leave it empty to use the catalog window (or the 8192 assumed fallback for an unknown model).";
+
+/** Distinct from CONTEXT_WINDOW_ERROR: tells the user WHAT to fix (the model, not the number). */
+const CONTEXT_WINDOW_ERROR_MODEL =
+  "Enter a model before setting a context window — the window is saved for one model.";
+
+/** Local literal (TASK.142), same convention as host-env.ts's `ENV_CONTEXT_WINDOW` — renderer modules don't import main, let alone core. */
+const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
+
+/**
+ * Hint under the "Context window (tokens)" field while ANYCODE_CONTEXT_WINDOW is
+ * live (TASK.142): the env rung always beats what this field saves, so an edited
+ * window would silently do nothing — say so instead of letting the field pretend
+ * to work. `null` (no hint) when the variable isn't overriding. Exported for
+ * direct testing (no jsdom in this package's vitest config, see file docstring).
+ */
+export function contextWindowTokensEnvHint(envOverrides: readonly string[]): string | null {
+  return envOverrides.includes(ENV_CONTEXT_WINDOW)
+    ? `${ENV_CONTEXT_WINDOW} is set in the environment — it overrides this field for every new session.`
+    : null;
+}
+
+/**
+ * The number a BLANK "Context window (tokens)" field resolves to for the
+ * selected model (TASK.142): a catalog model answers `catalog: N` where N is
+ * `min(contextWindow, usableContextWindow ?? contextWindow)`; a model the
+ * catalog does not know answers the ASSUMED fallback
+ * (snapshot-projected `unknownModelContextWindowTokens`). Named `assumed` on
+ * purpose and NEVER "provider default": core does not know a server-side window
+ * for an unknown model — it deliberately assumes a conservative one so the
+ * budget compacts early rather than overstuffing the prompt. A non-blank field
+ * suppresses the hint (the field itself shows what wins). Exported for direct
+ * testing (no jsdom in this package's vitest config, see file docstring).
+ */
+export function contextWindowEffectiveHint(
+  entry: CatalogSummaryEntry | undefined,
+  modelId: string,
+  snapshot: { unknownModelContextWindowTokens?: number } | null | undefined,
+  raw: string,
+): string | null {
+  if (raw.trim() !== "") {
+    return null;
+  }
+  const matched = entry?.models.find((candidate) => candidate.id === modelId);
+  if (matched?.contextWindow !== undefined) {
+    const usable = matched.usableContextWindow;
+    const effective = usable !== undefined ? Math.min(matched.contextWindow, usable) : matched.contextWindow;
+    return `catalog: ${effective}`;
+  }
+  const assumed = snapshot?.unknownModelContextWindowTokens ?? 8_192;
+  return `assumed fallback: ${assumed} (unknown model — set a value to override)`;
+}
+
+/**
+ * TASK.142: the raw window value the drawer starts with for a saved connection.
+ * The saved window is ONE model's override (`contextWindowModel`), so it is
+ * prefilled ONLY when it binds to the model now shown — a window saved for
+ * another model must never appear to belong to this one. Exported for direct
+ * testing (no jsdom in this package's vitest config, see file docstring).
+ */
+export function contextWindowInitialRaw(connection: {
+  contextWindowTokens?: number;
+  contextWindowModel?: string;
+  model?: string;
+}): string {
+  return connection.contextWindowTokens !== undefined &&
+    connection.contextWindowModel !== undefined &&
+    connection.contextWindowModel === (connection.model ?? "")
+    ? String(connection.contextWindowTokens)
+    : "";
+}
+
+/**
+ * TASK.142: the "Context window (tokens)" field's full state. `model` is the
+ * NORMALIZED model id the raw value belongs to (undefined while the field is
+ * blank) — the reset decision compares against THIS, never against the original
+ * saved binding, so a whitespace-only Model edit ("B" -> " B ") is not a change
+ * and must not wipe a window the user just typed.
+ */
+export interface ContextWindowField {
+  raw: string;
+  /**
+   * The NORMALIZED model this field's content belongs to ("" while the form has
+   * no model). It tracks the model the field was last associated with, NOT
+   * whether a value is present: an explicitly CLEARED field keeps its owner, so a
+   * subsequent edit that does not change the normalized model preserves the clear
+   * instead of resurrecting the saved value. The reset decision compares against
+   * this, never against the original saved binding.
+   */
+  model: string;
+}
+
+/** The saved pair a Model edit may re-prefill from. */
+export interface ContextWindowSavedPair {
+  contextWindowTokens?: number;
+  contextWindowModel?: string;
+}
+
+/**
+ * Initial field state for the drawer (TASK.142): prefill from the saved pair
+ * only when it binds to the connection's own model — same rule as
+ * `contextWindowInitialRaw`.
+ */
+export function contextWindowInitialField(
+  connection: { contextWindowTokens?: number; contextWindowModel?: string; model?: string } | undefined,
+): ContextWindowField {
+  const raw = connection === undefined ? "" : contextWindowInitialRaw(connection);
+  return raw === ""
+    ? { raw: "", model: (connection?.model ?? "").trim() }
+    : { raw, model: (connection?.contextWindowModel ?? "").trim() };
+}
+
+/**
+ * TASK.142: the field state after a user route CHANGES the model. `nextModel` is
+ * the model the route will actually save (the catalog-prefilled id on the
+ * simplified create input, the raw input elsewhere); `saved` is the persisted
+ * pair, consulted only to re-prefill when the user navigates BACK to the model
+ * the saved window binds. Semantics:
+ *   - an UNCHANGED normalized model (field.model === next) returns the field
+ *     verbatim — a value, a whitespace-only edit, or an explicit CLEAR all
+ *     survive untouched. This is the "only a normalized model change resets
+ *     it" rule, and it is checked BEFORE anything that could re-prefill, so a
+ *     clear is never undone by a no-op model edit (or re-clicking the selected
+ *     chip);
+ *   - a GENUINE model change clears the value — or re-prefills from a saved pair
+ *     that binds the new model — so one model's number can never be rebound to
+ *     another.
+ * Exported for direct testing (no jsdom in this package's vitest config).
+ */
+export function contextWindowAfterModelInput(
+  field: ContextWindowField,
+  nextModel: string,
+  saved: ContextWindowSavedPair | undefined,
+): ContextWindowField {
+  const next = nextModel.trim();
+  if (field.model === next) {
+    return field;
+  }
+  const savedBinding = saved?.contextWindowModel?.trim();
+  const savedTokens = saved?.contextWindowTokens;
+  if (savedTokens !== undefined && savedBinding !== undefined && savedBinding !== "" && savedBinding === next) {
+    return { raw: String(savedTokens), model: next };
+  }
+  return { raw: "", model: next };
+}
+
+/**
+ * TASK.142: the field state after the user edits the WINDOW text itself. The
+ * value is owned by whichever model is current at that moment — including an
+ * EMPTY raw, which keeps the same owner so a later no-op Model edit preserves
+ * the clear. This is the only path that binds a freshly typed window, and it is
+ * never invoked from the Model input — hence "never reset repeatedly while
+ * typing the window". Exported for direct testing (no jsdom in this package's
+ * vitest config).
+ */
+export function contextWindowAfterRawInput(
+  field: ContextWindowField,
+  raw: string,
+  currentModel: string,
+): ContextWindowField {
+  return { raw, model: currentModel.trim() };
+}
+
+/**
+ * The Model field's offered list (datalist + click-to-fill chips): a stable
+ * UNION (TASK.183) of this session's fetched ids, the ids persisted on the
+ * connection (manual additions + earlier fetches), then the catalog/curated
+ * static hints not already present — decorated with the catalog entry's static
+ * display names where known. Fetched first, persisted second, hints last;
+ * exact case-sensitive dedupe via the shared `mergeModelIds`. An EMPTY fetch
+ * no longer wipes the list: persisted manual ids (and the hints) survive.
+ * Mirrors `providerModelsFor`'s union precedence, so the drawer and the
+ * composer pickers can never disagree about what the provider offers. Exported
+ * for direct testing (no jsdom in this package's vitest config, see file
+ * docstring).
  */
 export function liveModelSuggestions(
   fetched: readonly { id: string }[] | null,
   persisted: readonly string[] | undefined,
   hints: readonly { id: string; name?: string }[],
 ): { id: string; name?: string }[] {
-  const liveIds =
-    fetched !== null
-      ? fetched.map((m) => m.id)
-      : persisted !== undefined && persisted.length > 0
-        ? [...persisted]
-        : null;
-  if (liveIds === null) {
-    return [...hints];
-  }
-  return liveIds.map((id) => {
+  const fetchedIds = fetched !== null ? fetched.map((m) => m.id) : [];
+  const unionIds = mergeModelIds(fetchedIds, mergeModelIds(persisted ?? [], hints.map((h) => h.id)));
+  return unionIds.map((id) => {
     const hint = hints.find((h) => h.id === id);
     return hint?.name !== undefined ? { id, name: hint.name } : { id };
   });
@@ -428,6 +792,7 @@ export function ConnectionDrawerFields({
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
   const maxOutputTokensInputRef = useRef<HTMLInputElement>(null);
+  const contextWindowTokensInputRef = useRef<HTMLInputElement>(null);
   const secretInputRef = useRef<HTMLInputElement>(null);
   const oauthPendingProviderId = useStore(store, (s) => s.oauthPendingProviderId);
   // TASK.141: the settings document behind the proxy picker's seed. Read here
@@ -471,6 +836,13 @@ export function ConnectionDrawerFields({
   const [maxOutputTokens, setMaxOutputTokens] = useState(
     editConnection?.maxOutputTokens === undefined ? "" : String(editConnection.maxOutputTokens),
   );
+  // TASK.142: per-model context window, stored as {raw, model} for the same
+  // reason as `maxOutputTokens` below. Prefilled ONLY when the saved window is
+  // bound to the connection's own model — a window saved for a DIFFERENT model
+  // must not appear here. Every model-changing route goes through `changeModel`.
+  const [contextWindow, setContextWindow] = useState<ContextWindowField>(() =>
+    contextWindowInitialField(editConnection),
+  );
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
   const [customName, setCustomName] = useState("");
@@ -498,6 +870,20 @@ export function ConnectionDrawerFields({
 
   function resolvedCustomProvider(): CustomProviderBridge {
     return customProvider ?? window.anycode.customProvider;
+  }
+
+  /**
+   * The bridge the model-persistence helpers drive: connection metadata goes
+   * through the store (settings IPC), the model-list append goes through the
+   * custom-provider bridge's `{connectionId, addModels}` branch. One object so
+   * create/save/fetch all persist a manual model the same way.
+   */
+  function modelPersistenceBridge(): CreateModelBridge<ConnectionCreateRequest> & UpdateModelBridge<ConnectionUpdateRequest> {
+    return {
+      connectionCreate: (request) => store.getState().connectionCreate(request),
+      connectionUpdate: (request) => store.getState().connectionUpdate(request),
+      fetchModels: (request) => resolvedCustomProvider().fetchModels(request),
+    };
   }
 
   const targetConnection = connections.find((c) => c.id === createdConnectionId) ?? editConnection;
@@ -528,9 +914,9 @@ export function ConnectionDrawerFields({
   // `models` — the synthesized catalog entry mirrors it and re-derives after
   // each customProvider mutation reloads the snapshot.
   const curatedModelIds = selectedEntry?.models.map((m) => m.id) ?? [];
-  // What the Model field suggests (datalist + chips): live-fetched ids when
-  // available (this session's fetch, else the list persisted on the
-  // connection), static catalog hints otherwise.
+  // What the Model field suggests (datalist + chips): the UNION (TASK.183) of
+  // this session's fetched ids, the ids persisted on the connection (manual
+  // additions + earlier fetches), then the static catalog hints.
   const modelSuggestions = liveModelSuggestions(fetchedModels, targetConnection?.models, selectedEntry?.models ?? []);
   // Show the API-key field IN the create form (item 3): a NEW custom endpoint
   // (the record's own key) or a keyed catalog provider (the connection key).
@@ -552,6 +938,45 @@ export function ConnectionDrawerFields({
     proxySnapshot?.defaultMaxOutputTokens,
     maxOutputTokens,
   );
+  // TASK.142 hints for the Context-window field: same shape as the ceiling hints
+  // above — whether the env rung silences the field, and what window a blank
+  // field resolves to (catalog min, else the assumed unknown-model fallback).
+  const cwEnvHint = proxySnapshot === null ? null : contextWindowTokensEnvHint(proxySnapshot.envOverrides);
+  // TASK.142: the model id this form will actually SAVE. The simplified create
+  // input saves the catalog-prefilled id (`modelAfterCatalogPrefill`); every
+  // other route saves the raw text. Used both for the field's owner and for the
+  // create-time "a window needs a model to bind to" gate, so the two never
+  // disagree about which model the number belongs to.
+  const effectiveFormModel =
+    simplified && createdConnectionId === null
+      ? modelAfterCatalogPrefill(model, selectedEntry?.models ?? [])
+      : model;
+  const cwDefaultHint = contextWindowEffectiveHint(
+    selectedEntry,
+    effectiveFormModel.trim(),
+    proxySnapshot,
+    contextWindow.raw,
+  );
+
+  /**
+   * TASK.142: the ONE model-changing route. `next` is what goes into the Model
+   * input, `effective` is the id that will be saved, `saved` is the persisted
+   * pair (for re-prefill when the user navigates back to the bound model). Every
+   * user route — the simplified create input, the main Model input and the model
+   * suggestion chips — calls this, so no route can bypass the per-model reset and
+   * leave A's number on screen after choosing B.
+   */
+  function changeModel(
+    next: string,
+    effective: string,
+    saved: ContextWindowSavedPair | undefined,
+    force = false,
+  ): void {
+    setContextWindow((field) =>
+      force ? { raw: "", model: effective.trim() } : contextWindowAfterModelInput(field, effective, saved),
+    );
+    setModel(next);
+  }
 
   async function reloadSnapshot(): Promise<void> {
     await store.getState().load();
@@ -559,12 +984,22 @@ export function ConnectionDrawerFields({
 
   /** ADD: mint a NEW custom-provider record (key or keyless), then a connection pointing at it. */
   async function createNewCustomEndpoint(): Promise<void> {
+    // TASK.183: validate the raw model BEFORE the record, connection, secret or
+    // list call — a nonblank malformed id makes no writes at all.
+    const preflight = preflightModelId(model);
+    if (preflight.kind === "invalid") {
+      setError(MODEL_ID_ERROR);
+      return;
+    }
+    const createModel = preflight.kind === "id" ? preflight.id : undefined;
     const req = buildCustomProviderCreateRequest({
       name: customName,
       baseUrl: customBaseUrl,
       kind: customKind,
       apiKey: secretValue,
       noAuth,
+      // TASK.183: manual ids now live on the CONNECTION's own `models[]`, never
+      // on the shared custom record — the record's curated set stays separate.
       selectedModels: [],
     });
     if (req === undefined) {
@@ -588,19 +1023,23 @@ export function ConnectionDrawerFields({
         setError("Custom endpoint saved, but its id couldn't be resolved — reopen and select it to add a connection.");
         return;
       }
-      const connResult = await store.getState().connectionCreate({
-        providerId: newId,
-        ...(simplified && model.trim() ? { model: model.trim() } : {}),
-        ...(label.trim() ? { label: label.trim() } : {}),
-        ...(transport ? { transport } : {}),
-        // TASK.132/TASK.141: the proxy control is rendered in this pre-create
-        // state too, so its value has to travel on THIS create as well —
-        // omitting it here silently dropped the choice for every new custom
-        // endpoint.
-        ...connectionCreateProxyRefField(proxyRef),
-      });
-      const createdId = resolveCreatedConnectionId(connResult);
-      if (createdId === undefined) {
+      const outcome = await createConnectionAndPersistModel(
+        modelPersistenceBridge(),
+        reloadSnapshot,
+        {
+          providerId: newId,
+          ...(createModel !== undefined ? { model: createModel } : {}),
+          ...(label.trim() ? { label: label.trim() } : {}),
+          ...(transport ? { transport } : {}),
+          // TASK.132/TASK.141: the proxy control is rendered in this pre-create
+          // state too, so its value has to travel on THIS create as well —
+          // omitting it here silently dropped the choice for every new custom
+          // endpoint.
+          ...connectionCreateProxyRefField(proxyRef),
+        },
+        createModel ?? null,
+      );
+      if (outcome.createdConnectionId === undefined) {
         // Partial failure surfaced honestly: the record exists (Custom
         // providers list), but the connection does not.
         setProviderId(newId);
@@ -608,7 +1047,10 @@ export function ConnectionDrawerFields({
         return;
       }
       setProviderId(newId);
-      setCreatedConnectionId(createdId);
+      setCreatedConnectionId(outcome.createdConnectionId);
+      if (outcome.partial) {
+        setError(outcome.error ?? "Custom endpoint and connection created, but the model list couldn't be saved — retry with Save.");
+      }
     } finally {
       setCreating(false);
     }
@@ -637,41 +1079,83 @@ export function ConnectionDrawerFields({
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
+    // TASK.142: the same pre-flight for the context window. A BLANK field means
+    // "catalog/assumed window" and is simply left out; a MALFORMED one is
+    // refused rather than dropped. A numeric window additionally needs the model
+    // this create will actually SEND to bind to (TASK.183: EVERY create path now
+    // sends the catalog-prefilled/entered id, not only the simplified one) —
+    // main derives the binding from it and refuses the whole create otherwise,
+    // so say which field to fix instead of letting main reject it opaquely.
+    const cw = contextWindowTokensField(contextWindow.raw);
+    if (!cw.ok) {
+      setError(CONTEXT_WINDOW_ERROR);
+      return;
+    }
+    // TASK.183: ONE effective model for the create payload, the context-window
+    // binding and the model-list append. A nonblank malformed id makes no
+    // create, secret or list call; a blank keeps the pre-existing implicit
+    // rules (no model sent).
+    const preflight = preflightModelId(modelAfterCatalogPrefill(model, selectedEntry?.models ?? []));
+    if (preflight.kind === "invalid") {
+      setError(MODEL_ID_ERROR);
+      return;
+    }
+    const createModel = preflight.kind === "id" ? preflight.id : "";
+    if (cw.value !== "" && createModel === "") {
+      setError(CONTEXT_WINDOW_ERROR_MODEL);
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
-      const result = await store.getState().connectionCreate({
-        providerId,
-        ...(simplified ? { model: modelAfterCatalogPrefill(model, selectedEntry?.models ?? []).trim() } : {}),
-        ...(label.trim() ? { label: label.trim() } : {}),
-        ...(transport ? { transport } : {}),
-        ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
-        ...connectionCreateProxyRefField(proxyRef),
-        ...(noAuth ? { authOptional: true } : {}),
-        ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
-      });
-      const createdId = resolveCreatedConnectionId(result);
-      if (createdId === undefined) {
-        setError("Couldn't create the connection.");
+      const outcome = await createConnectionAndPersistModel(
+        modelPersistenceBridge(),
+        reloadSnapshot,
+        {
+          providerId,
+          ...(createModel !== "" ? { model: createModel } : {}),
+          ...(label.trim() ? { label: label.trim() } : {}),
+          ...(transport ? { transport } : {}),
+          ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+          ...connectionCreateProxyRefField(proxyRef),
+          ...(noAuth ? { authOptional: true } : {}),
+          ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
+          ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
+        },
+        createModel !== "" ? createModel : null,
+      );
+      if (outcome.createdConnectionId === undefined) {
+        setError(outcome.error ?? "Couldn't create the connection.");
         return;
       }
-      setCreatedConnectionId(createdId);
+      setCreatedConnectionId(outcome.createdConnectionId);
       // TASK.108-A: the just-revealed Model field opens on the catalog default
       // instead of blank, so the follow-up Save can't persist the empty-model
       // trap.
       if (!isCustomRecordProviderId(providerId)) {
         setModel((m) => modelAfterCatalogPrefill(m, selectedEntry?.models ?? []));
       }
+      // TASK.183: surface a partial failure (connection exists, list does not)
+      // WITHOUT losing a concurrent key error — compose one message.
+      let message = outcome.partial
+        ? (outcome.error ?? "Connection created, but its model list couldn't be saved — retry with Save.")
+        : null;
       // Item 3: fold the key's secret-set into Create for a keyed catalog
       // provider — a separate IPC channel, so custody stays intact and the
       // metadata schema never carries a credential.
       if (secretValue && authKind === "api_key" && !isCustomRecordProviderId(providerId)) {
         const value = secretValue;
         dispatchSecret({ type: "submitted" });
-        const secretResult = await store.getState().setSecret(connectionSecretKey(createdId, "api_key"), value);
+        const secretResult = await store.getState().setSecret(connectionSecretKey(outcome.createdConnectionId, "api_key"), value);
         if (!secretResult.ok && secretResult.reason !== "weak_storage_needs_consent") {
-          setError("Connection created, but the API key was refused — enter it again below.");
+          message =
+            message === null
+              ? "Connection created, but the API key was refused — enter it again below."
+              : "Connection created, but neither its model list nor the API key could be saved.";
         }
+      }
+      if (message !== null) {
+        setError(message);
       }
     } finally {
       setCreating(false);
@@ -687,6 +1171,15 @@ export function ConnectionDrawerFields({
     if (readOnly || createdConnectionId === null) {
       return;
     }
+    // TASK.183: a nonblank malformed model is refused before the metadata
+    // update, the secret write or any list call (a valid, unknown id passes —
+    // catalog membership is never validation).
+    const preflight = preflightModelId(model);
+    if (preflight.kind === "invalid") {
+      setError(MODEL_ID_ERROR);
+      return;
+    }
+    const selectedModelId = preflight.kind === "id" ? preflight.id : null;
     // TASK.108-A: refuse to persist the empty-model trap on a catalog
     // connection — an empty model fails readiness later with a toast that
     // blames the API key.
@@ -703,21 +1196,41 @@ export function ConnectionDrawerFields({
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
+    // TASK.142: same pre-flight for the context window; a numeric one also needs
+    // a nonblank model to bind to, since main derives the binding server-side
+    // from the model this update sends.
+    const cw = contextWindowTokensField(contextWindow.raw);
+    if (!cw.ok) {
+      setError(CONTEXT_WINDOW_ERROR);
+      return;
+    }
+    if (cw.value !== "" && model.trim() === "") {
+      setError(CONTEXT_WINDOW_ERROR_MODEL);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      const metaResult = await store.getState().connectionUpdate(
+      // TASK.183: metadata first (the selected model rides it), THEN append the
+      // same normalized model to this connection's list. A failed metadata
+      // update never appends.
+      const outcome = await updateConnectionAndPersistModel(
+        modelPersistenceBridge(),
+        reloadSnapshot,
+        createdConnectionId,
         buildConnectionUpdatePayload({
           connectionId: createdConnectionId,
           label,
-          model,
+          model: selectedModelId ?? model,
           transport,
           baseUrl,
           showBaseUrl,
           proxyRef,
           authOptional: noAuth,
           maxOutputTokens: mot.value,
+          contextWindowTokens: cw.value,
         }),
+        selectedModelId,
       );
       let keyRefused = false;
       if (secretValue && credentialKey !== undefined) {
@@ -726,12 +1239,18 @@ export function ConnectionDrawerFields({
         const secretResult = await store.getState().setSecret(credentialKey, value);
         keyRefused = !secretResult.ok && secretResult.reason !== "weak_storage_needs_consent";
       }
-      if (!metaResult.ok && keyRefused) {
+      // Compose ONE message so a concurrent key error is never overwritten by
+      // the list-persistence error (or vice versa).
+      if (!outcome.metaOk && keyRefused) {
         setError("Neither the changes nor the API key could be saved.");
-      } else if (!metaResult.ok) {
+      } else if (!outcome.metaOk) {
         setError("The changes couldn't be saved.");
+      } else if (keyRefused && !outcome.appendOk) {
+        setError("The changes were saved, but neither the model list nor the API key could be saved — retry Save.");
       } else if (keyRefused) {
         setError("The changes were saved, but the API key was refused.");
+      } else if (!outcome.appendOk) {
+        setError("The changes were saved, but the model list couldn't be saved — retry Save.");
       }
     } finally {
       setSaving(false);
@@ -753,10 +1272,12 @@ export function ConnectionDrawerFields({
   /**
    * Models fetch: the guarded /v1/models GET — `{id}` for a saved custom
    * record, `{connectionId}` for a catalog connection (main resolves
-   * baseUrl/key/kind itself either way; keyless supported). A catalog
-   * connection's successful fetch is persisted by main onto the connection
-   * (`models`), so the snapshot reload makes the composer pickers see the
-   * live list immediately.
+   * baseUrl/key/kind itself either way; keyless supported). TASK.183: a custom
+   * record's fetched ids are ALSO appended to its connection's own `models[]`
+   * through the general `{connectionId, addModels}` branch, so a fetch becomes
+   * durable and can never replace manual ids; a catalog connection's fetch is
+   * already merged onto the connection by main. Either way the snapshot reload
+   * makes the composer pickers see the union.
    */
   async function doFetchModels(): Promise<void> {
     if (createdConnectionId === null) {
@@ -773,9 +1294,32 @@ export function ConnectionDrawerFields({
         return;
       }
       setFetchedModels(outcome.models);
-      if (!isCustomRecordConnection) {
-        // TASK.108-A: a fetch landing on a still-blank field picks the default.
-        setModel((m) => modelAfterCatalogPrefill(m, outcome.models));
+      if (isCustomRecordConnection) {
+        // TASK.183: persist the fetched ids on the connection (fetched-first
+        // union), keeping any manual additions made before the fetch.
+        // A fetched id the manual-entry validator refuses (inner whitespace,
+        // controls) is skipped here: main rejects an addModels request
+        // all-or-nothing, so one odd vendor id must not block the rest.
+        const fetchedIds = outcome.models
+          .map((m) => normalizeModelId(m.id))
+          .filter((id): id is string => id !== null);
+        if (fetchedIds.length > 0) {
+          const append = await appendModelsToConnection(
+            modelPersistenceBridge(),
+            reloadSnapshot,
+            createdConnectionId,
+            fetchedIds,
+          );
+          if (!append.ok) {
+            setError("Fetched models, but the connection's model list couldn't be saved — retry Fetch or Save.");
+          }
+        }
+      } else {
+        // TASK.108-A: a fetch landing on a still-blank field picks the default
+        // from the MERGED offered list (fetched first, then any already-saved
+        // ids), so a saved manual model is never lost from the prefill.
+        const merged = mergeModelIds(outcome.models.map((m) => m.id), targetConnection?.models ?? []).map((id) => ({ id }));
+        setModel((m) => modelAfterCatalogPrefill(m, merged));
         await reloadSnapshot();
       }
     } finally {
@@ -811,7 +1355,13 @@ export function ConnectionDrawerFields({
           className="settings-field-select"
           value={selectDisplayValue}
           disabled={readOnly || templateLocked}
-          onChange={(e) => { setProviderId(e.target.value); setModel(""); }}
+          onChange={(e) => {
+            setProviderId(e.target.value);
+            // TASK.142: switching provider clears the model, so the per-model
+            // window must go with it. Forced: the new model is empty, and an
+            // already-empty owner must not make this look like a no-op.
+            changeModel("", "", undefined, true);
+          }}
         >
           <option value="" disabled>
             Choose a provider…
@@ -865,15 +1415,43 @@ export function ConnectionDrawerFields({
         </div>
       )}
 
-      {simplified && createdConnectionId === null && selectedEntry && (
+      {createdConnectionId === null && selectedEntry && (
         <label className="settings-field">
           <span className="settings-field-label">Model</span>
           <input className="settings-field-input" type="text" list="welcome-model-suggestions"
             value={modelAfterCatalogPrefill(model, selectedEntry.models)} disabled={readOnly}
-            placeholder="Enter a model ID" onChange={(e) => setModel(e.target.value)} />
+            placeholder="Enter a model ID"
+            onChange={(e) =>
+              // TASK.142: the pre-create Model input saves the catalog-prefilled
+              // id, so the per-model window is owned by THAT id — route through
+              // the shared change so A's number cannot ride onto B.
+              changeModel(
+                e.target.value,
+                modelAfterCatalogPrefill(e.target.value, selectedEntry.models),
+                undefined,
+              )
+            } />
           <datalist id="welcome-model-suggestions">
             {selectedEntry.models.map((m) => <option key={m.id} value={m.id}>{m.name ?? m.id}</option>)}
           </datalist>
+        </label>
+      )}
+
+      {/* TASK.183: a brand-new custom endpoint gets the same pre-create free-text
+          Model field even when the catalog carries no entry to synthesize
+          suggestions from (raw value, no datalist). No duplicate field when
+          `selectedEntry` exists — the block above already covers that case. */}
+      {createdConnectionId === null && isNewCustomEndpoint && !selectedEntry && (
+        <label className="settings-field">
+          <span className="settings-field-label">Model</span>
+          <input className="settings-field-input" type="text"
+            value={model} disabled={readOnly}
+            placeholder="Enter a model ID"
+            onChange={(e) =>
+              // TASK.142: same shared route — the entered id IS the effective id
+              // here, so the per-model window reset stays owned by it.
+              changeModel(e.target.value, e.target.value, undefined)
+            } />
         </label>
       )}
 
@@ -1002,6 +1580,46 @@ export function ConnectionDrawerFields({
             {motEnvHint}
           </div>
         )}
+
+        {/* TASK.142: per-model context window. Same field shape as "Max output
+            tokens" above (whole number in [1024, 1000000], blank = catalog/
+            assumed window); the value is saved for ONE model (the binding is
+            derived server-side), so a Model edit clears it. */}
+        <label className="settings-field">
+          <span className="settings-field-label">Context window (tokens)</span>
+          <input
+            ref={contextWindowTokensInputRef}
+            className="settings-field-input"
+            type="number"
+            min={1024}
+            max={1000000}
+            step={1}
+            value={contextWindow.raw}
+            disabled={readOnly}
+            placeholder="(catalog window)"
+            onChange={(e) =>
+              // TASK.142: editing the WINDOW binds the value to whichever model
+              // is effective right now — this is the route that must never reset
+              // on its own keystrokes.
+              setContextWindow((field) => contextWindowAfterRawInput(field, e.target.value, effectiveFormModel))
+            }
+          />
+        </label>
+        {/* One line naming what a blank field resolves to: the catalog window
+            (usable-min) or the ASSUMED 8192 fallback for an unknown model —
+            never "provider default", which core cannot know for an unknown id. */}
+        {cwDefaultHint !== null && <div className="settings-field-hint">{cwDefaultHint}</div>}
+        <div className="settings-field-hint" role="note">
+          Saved for the model above only — switching this connection to another model ignores it. Leave empty to use the
+          catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions
+          compact early instead of overstuffing the prompt.
+        </div>
+        {/* TASK.142: shown only while ANYCODE_CONTEXT_WINDOW overrides the rung — editing this field then does nothing. */}
+        {cwEnvHint !== null && (
+          <div className="settings-field-hint" role="note">
+            {cwEnvHint}
+          </div>
+        )}
         {/* TASK.141: one instance of the same picker the engine panes and the
             Network pane render — CONTROLLED here, because a connection's ref
             rides this drawer's own create/update payload rather than a channel of
@@ -1088,7 +1706,13 @@ export function ConnectionDrawerFields({
               value={model}
               disabled={readOnly}
               placeholder="e.g. claude-sonnet-5"
-              onChange={(e) => setModel(e.target.value)}
+              onChange={(e) =>
+                // TASK.142: the shared model-change route. A whitespace-only
+                // edit (same normalized id) keeps the field; a real change
+                // clears it, or re-prefills when the user returns to the saved
+                // model.
+                changeModel(e.target.value, e.target.value, targetConnection)
+              }
             />
             <datalist id="connection-drawer-model-suggestions">
               {modelSuggestions.map((m) => (
@@ -1110,7 +1734,7 @@ export function ConnectionDrawerFields({
                   type="button"
                   className={`connection-drawer-model-chip${model === m.id ? " connection-drawer-model-chip-selected" : ""}`}
                   disabled={readOnly}
-                  onClick={() => setModel(m.id)}
+                  onClick={() => changeModel(m.id, m.id, targetConnection)}
                 >
                   {m.name ?? m.id}
                 </button>

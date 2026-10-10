@@ -14,6 +14,7 @@ import { create } from "zustand";
 import type { PermissionMode } from "@anycode/core";
 import type { EngineId } from "../../shared/engines.js";
 import type { WorktreeProjection } from "../../shared/protocol.js";
+import type { EngineModelChoice } from "../../shared/protocol.js";
 import type { QueuedPromptImage } from "./store.js";
 
 /** One open tab's shell-level metadata (design §4.3: "id, workspace, sessionId?, title?, host-exited flag"). */
@@ -138,6 +139,8 @@ export interface TabsState {
   activeTabId: string | null;
   /** At most one parked New Session draft (§4.1) — never a `TabInfo` row, so the automation snapshot stays byte-identical. */
   draft: SessionDraft | null;
+  /** Codex draft model catalog (TASK.241): [] = unloaded/invalidated; submit refuses rather than guess. */
+  codexModels: readonly EngineModelChoice[];
   /** Invariant: `draftActive` implies `draft !== null`. Whether the start screen is the thing currently shown. */
   draftActive: boolean;
   /**
@@ -175,6 +178,8 @@ export interface TabsState {
   setDraftEngine(engine: EngineId): void;
   /** No-op while `draft === null`. `null` clears back to "provider default" (slice F5#1b, D3). */
   setDraftModel(model: string | null): void;
+  /** TASK.241: full replace of the codex draft model catalog ([] = unloaded/invalidated). */
+  setCodexModels(models: readonly EngineModelChoice[]): void;
   /** No-op while `draft === null`. The selected mode is applied before the first message. */
   setDraftMode(mode: PermissionMode): void;
   /** No-op while `draft === null`. Codex-only; a Core draft never calls this. */
@@ -306,6 +311,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
     tabs: [],
     activeTabId: null,
     draft: null,
+    codexModels: [],
     draftActive: false,
     hiddenWorkspaces: readHiddenWorkspaces(storage),
     availableEngines: ["core"],
@@ -409,6 +415,10 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
 
     setDraftModel(model): void {
       set((state) => (state.draft === null ? state : { draft: { ...state.draft, model } }));
+    },
+
+    setCodexModels(models): void {
+      set((state) => ({ ...state, codexModels: models }));
     },
 
     setDraftMode(mode): void {

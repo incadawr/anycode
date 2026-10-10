@@ -16,6 +16,7 @@
 import { handleCreateTabResult } from "./components/SessionPicker.js";
 import { tabRegistry, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
+import { decideCodexDraftModel } from "./codex-draft-model.js";
 import type { CreateTabRequest, CreateTabResult } from "../../shared/tabs.js";
 import type { SessionDraft } from "./tabs-store.js";
 
@@ -49,6 +50,7 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
  */
 export function createStartTabRequest(
   draft: Pick<SessionDraft, "workspace" | "engine" | "model" | "enginePreset" | "codexProfileId" | "connectionId">,
+  codexEngineModel: string | null,
 ): CreateTabRequest {
   if (draft.workspace === null) {
     throw new Error("A workspace is required to create a tab");
@@ -66,7 +68,11 @@ export function createStartTabRequest(
     kind: "new",
     workspace: draft.workspace,
     engine: draft.engine,
-    ...(draft.model !== null ? { engineModel: draft.model } : {}),
+    ...(draft.engine === "codex"
+      ? (codexEngineModel !== null ? { engineModel: codexEngineModel } : {})
+      : draft.model !== null
+        ? { engineModel: draft.model }
+        : {}),
     ...(draft.enginePreset !== undefined ? { enginePreset: draft.enginePreset } : {}),
     ...(draft.codexProfileId !== undefined ? { codexProfileId: draft.codexProfileId } : {}),
   };
@@ -86,10 +92,20 @@ export async function submitStartDraft(
   if (prompt.trim() === "") {
     return { ok: false, message: "Type a message to send." };
   }
+  // TASK.241: decide the Codex draft model BEFORE creating anything — a
+  // stale/unavailable pick refuses visibly through the same {ok:false}
+  // channel every other refusal uses (guardedSubmit toasts it; the
+  // automation facade returns it), never a silent server-default launch.
+  const codexDecision = engine === "codex"
+    ? decideCodexDraftModel(model, deps.tabsStore.getState().codexModels)
+    : undefined;
+  if (codexDecision !== undefined && codexDecision.kind === "refuse") {
+    return { ok: false, message: codexDecision.message };
+  }
 
   let result: CreateTabResult;
   try {
-    result = await deps.createTab(createStartTabRequest(draft));
+    result = await deps.createTab(createStartTabRequest(draft, codexDecision?.kind === "send" ? codexDecision.id : null));
   } catch (error: unknown) {
     console.warn("[start-session] createTab rejected", error);
     return { ok: false, message: "Failed to create the task." };

@@ -101,6 +101,7 @@ import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/
 import type { ToastKind } from "../toasts.js";
 import { openSettingsAddConnection, RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { createAsyncEpochGate, issueGuarded } from "./async-epoch-gate.js";
+import { createCodexDraftCatalogRefresh, resolveCodexDraftModel } from "../codex-draft-model.js";
 
 export interface StartScreenProps {
   onToast(kind: ToastKind, text: string): void;
@@ -478,21 +479,14 @@ export function resolveClaudeDraftModel(draftModel: string | null, available: re
 }
 
 /**
- * Resolves the Codex draft's displayed/selected model id. `draft.model` is a
- * single field shared with the Core engine's own model chip (tabs-store.ts,
- * outside this file's zone) and is NOT reset on an engine switch — a Core
- * model id left over from before switching to Codex must never be displayed
- * or submitted as if it were a valid Codex id, so this only trusts
- * `draftModel` when it is actually a member of the fetched Codex catalog,
- * falling back to the catalog's first entry otherwise. Exported for unit
- * testing.
+ * Resolves the Codex draft's displayed/selected model id. TASK.241: the
+ * implementation lives in `codex-draft-model.ts` (shared with
+ * start-session.ts's submit decision, no import cycle); this local binding
+ * + re-export keeps the historical import path and test surface stable.
+ * An explicit pick renders VERBATIM — a stale id stays visible (preserved
+ * intent), the refusal happens at submit.
  */
-export function resolveCodexDraftModel(draftModel: string | null, available: readonly EngineModelChoice[]): string {
-  if (draftModel !== null && available.some((m) => m.id === draftModel)) {
-    return draftModel;
-  }
-  return available[0]?.id ?? "";
-}
+export { resolveCodexDraftModel };
 
 /**
  * TASK.81: a non-core draft's effort vocabulary for the CURRENT model —
@@ -633,15 +627,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // after main returns its already-validated availability verdict.
   const [availableEngines, setAvailableEngines] = useState<readonly EngineId[]>(["core"]);
   // TASK.39 (cut §2(d)/§2(g)/§3.8): the doctor-provided Codex model catalog
-  // for the draft picker (see this component's own `codexEngineSelected`
-  // effect and the `CODEX_DRAFT_PRESETS` doc comment above for why the
-  // preset table itself needs no fetch). The preset PICK itself lives on
-  // the shared draft (`draft.enginePreset`, tabs-store.ts), not local
-  // component state (W3 join): `submitStartDraft` and the automation
-  // facade's `startScreenSubmit` both submit off the store alone, with no
-  // access to this component's state, so a local-only pick would never
-  // reach `createStartTabRequest`.
-  const [codexModels, setCodexModels] = useState<readonly EngineModelChoice[]>([]);
+  // for the draft picker. TASK.241: the catalog moved from local component
+  // state into the tabs store (`codexModels`/`setCodexModels`) so the Send
+  // button and the automation facade's `startScreenSubmit` — both funnelling
+  // through `submitStartDraft` — read ONE source of truth (see the refresh
+  // effect below).
+  const codexModels = useTabsStore((state) => state.codexModels);
   // codex-profiles cut §3.3/W3-F: the account-profile chip's own catalog,
   // fetched the same "once per codex-selected transition, live-refreshed via
   // engines-changed" way as `codexModels` above.
@@ -875,28 +866,27 @@ export function StartScreen({ onToast }: StartScreenProps) {
 
   // TASK.39 (cut §2(g)/§3.8/§8): the draft's native model catalog comes from
   // the same bounded "codex doctor" onboarding already uses
-  // (`window.anycode.codex.recheck()`) — fetched once per codex-selected
-  // transition (not on every render: cut §8 residual explicitly calls out
-  // not re-spawning the doctor per render), fail-soft on any error/non-ready
-  // status (the picker then just shows nothing until the next transition or
-  // an onboarding recheck elsewhere flips Codex ready).
+  // (`window.anycode.codex.recheck()`). TASK.241: the refresh lifecycle is
+  // the shared production helper (`createCodexDraftCatalogRefresh`) — every
+  // refresh CLEARS the store catalog before re-fetching (a submit racing a
+  // refresh/account switch is refused on the empty catalog, never validated
+  // against the previous account's list), replies apply last-issued-wins
+  // under an AsyncEpochGate, and a failed/non-ready reply leaves the catalog
+  // empty (picker hidden, submit refused visibly).
   useEffect(() => {
     if (!codexEngineSelected) {
       return;
     }
-    let cancelled = false;
-    window.anycode.codex
-      .recheck()
-      .then((snapshot) => {
-        if (!cancelled && snapshot.report.status === "ready" && snapshot.report.models) {
-          setCodexModels(snapshot.report.models);
-        }
-      })
-      .catch((error: unknown) => {
-        console.warn("[StartScreen] codex.recheck (draft catalog) failed", error);
-      });
+    const refreshLifecycle = createCodexDraftCatalogRefresh({
+      recheck: () => window.anycode.codex.recheck(),
+      setModels: (models) => useTabsStore.getState().setCodexModels(models),
+      onRecheckError: (error) => console.warn("[StartScreen] codex.recheck (draft catalog) failed", error),
+    });
+    refreshLifecycle.refresh();
+    const unsubscribe = window.anycode.onEnginesChanged(refreshLifecycle.refresh);
     return () => {
-      cancelled = true;
+      refreshLifecycle.dispose();
+      unsubscribe();
     };
   }, [codexEngineSelected]);
 

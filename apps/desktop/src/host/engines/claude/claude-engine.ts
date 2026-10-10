@@ -36,8 +36,9 @@ import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../session-engine.js";
 import type { IpcPermissionBroker } from "../../permission-broker.js";
+import { classifyEngineFailure } from "../../safe-failure.js";
 import { ClaudeApprovalBridge } from "./approval-bridge.js";
-import { ClaudeClient, type ClaudeClientOptions } from "./claude-client.js";
+import { ClaudeClient, ClaudeClientError, type ClaudeClientOptions } from "./claude-client.js";
 import { ClaudeTurnTranslator } from "./event-translator.js";
 import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
@@ -280,6 +281,52 @@ function userMessageContent(text: string, attachments?: ImageAttachment[]): stri
     })),
     { type: "text", text },
   ];
+}
+
+/**
+ * TASK.116: the trusted, host-authored death descriptor attached to EVERY
+ * terminal claude `error` event. Raw engine text is used only to select a
+ * constant (or to re-emit a narrowly validated host format), never disclosed:
+ * `ClaudeClientError` alone is NOT a trust boundary, because
+ * `onControlResponse` wraps CLI-supplied `response.error`, `bindStdioErrors` /
+ * `bindChild` wrap arbitrary error messages, and `onStdout` can embed
+ * `message.type` — so anything that is not one of the fixed host shapes below
+ * falls through to the classified constant. Keeping this redaction-proof is
+ * what lets Session latch "the engine is dead" without ever seeing (or
+ * leaking) provider text.
+ *
+ * `code:"engine_dead"` is the ONE value Session keys its liveness latch on;
+ * it is emitted for every terminal claude error path, including a redacted
+ * one, so a hostile failure can never disable the drain guard.
+ */
+function engineDeathSafe(error: Error): { code: "engine_dead"; message: string } {
+  // Two fixed host strings survive verbatim — they carry no provider text.
+  if (error.message === "Claude exited during a turn" || error.message === "Claude engine is closed") {
+    return { code: "engine_dead", message: error.message };
+  }
+  // The ONE ClaudeClientError shape that is a host-authored exit report:
+  // `claude exited unexpectedly (code=<int|null>, signal=<SIG…|null>)`. Anchored
+  // and full-matched — no substrings, no suffixes — so a provider message that
+  // merely starts with this prefix cannot smuggle text through.
+  if (error instanceof ClaudeClientError) {
+    const exit = /^claude exited unexpectedly \(code=(\d+|null), signal=(SIG[A-Z0-9]+|null)\)$/.exec(error.message);
+    if (exit !== null) {
+      return { code: "engine_dead", message: `claude exited unexpectedly (code=${exit[1]}, signal=${exit[2]})` };
+    }
+  }
+  // The two fixed host timeout templates from runTurn, reconstructed around the
+  // validated numeric bound and the fixed suffix only.
+  const timeout = /^Claude did not settle the interrupted turn within (\d+)ms(; the session was closed\. Start a new session to continue\.)?$/.exec(error.message);
+  if (timeout !== null) {
+    return {
+      code: "engine_dead",
+      message: `Claude did not settle the interrupted turn within ${timeout[1]}ms${timeout[2] ?? ""}`,
+    };
+  }
+  // Everything else — plain Error, a ClaudeClientError carrying provider text /
+  // an unknown frame name / stream or spawn details — is redacted to the
+  // classified constant. Raw text stays private.
+  return { code: "engine_dead", message: classifyEngineFailure(error).message };
 }
 
 /** Resolves once on abort and never rejects; the listener is always removed. */
@@ -969,15 +1016,20 @@ export class ClaudeEngine implements SessionEngine {
             }
             this.foreignTurn = null;
             if (stopped === "settle-timeout") {
-              this.terminalError = new Error(
+              const settledError = new Error(
                 `Claude did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms; the session was closed. Start a new session to continue.`,
               );
+              this.terminalError = settledError;
               void this.client.close().catch(() => {});
               yield {
                 type: "engine_notice",
                 level: "info",
                 message: "Stopped; the engine was still finishing a running command, so this session was closed. Start a new session to continue.",
               };
+              // TASK.116: the transport is closed and no live engine remains —
+              // signal actual death to Session (the cancelled loop status
+              // below is unchanged; this is additive, never an error terminal).
+              yield { type: "error", error: settledError, safe: engineDeathSafe(settledError) };
             }
             for (const event of translator.finishTerminal("cancelled")) yield event;
             return; // finally still runs: turnActive=false, reader restart guard, etc.
@@ -1045,15 +1097,18 @@ export class ClaudeEngine implements SessionEngine {
           // Close the unsettled transport so a late result cannot end a
           // subsequent turn; the terminal latch requires a new session.
           if (abortObserved) {
-            this.terminalError = new Error(
+            const settledError = new Error(
               `Claude did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms; the session was closed. Start a new session to continue.`,
             );
+            this.terminalError = settledError;
             void this.client.close().catch(() => {});
             yield {
               type: "engine_notice",
               level: "info",
               message: "Stopped; the engine was still finishing a running command, so this session was closed. Start a new session to continue.",
             };
+            // TASK.116: additive death signal — see the foreign-turn branch above.
+            yield { type: "error", error: settledError, safe: engineDeathSafe(settledError) };
             for (const event of translator.finishTerminal("cancelled")) yield event;
             return;
           }
@@ -1131,7 +1186,7 @@ export class ClaudeEngine implements SessionEngine {
       this.approvals?.denyAll("Claude transport failed", "turn_cancelled");
       // A turn that lost its transport releases the child.
       void this.client.close().catch(() => {});
-      yield { type: "error", error: terminalError };
+      yield { type: "error", error: terminalError, safe: engineDeathSafe(terminalError) };
       yield* this.terminalEvents(turn, terminalError, false);
     } finally {
       this.turnActive = false;
@@ -1552,7 +1607,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   private *terminalEvents(turn: number, error: Error, includeError = true): Generator<AgentEvent> {
-    if (includeError) yield { type: "error", error };
+    if (includeError) yield { type: "error", error, safe: engineDeathSafe(error) };
     yield { type: "turn_end", turn, finishReason: "error" };
     yield { type: "loop_end", reason: "error", turns: turn };
   }

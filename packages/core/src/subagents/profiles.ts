@@ -32,7 +32,7 @@ import {
   SUBAGENT_MAX_TURNS_CEILING,
   type ReasoningEffort,
 } from "../types/config.js";
-import { PERSONAS, isKnownPersona, type PersonaDefinition } from "./personas.js";
+import { PERSONAS, isKnownPersona, type AgentProfileEffort, type PersonaDefinition } from "./personas.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
 
 /** One directory to scan for `*.md` profiles, tagged with its provenance. */
@@ -63,6 +63,16 @@ export const AGENT_PROFILE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export const AGENT_PROFILE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 
 /**
+ * Frontmatter `connection:`/`provider:` shape — same FORM discipline as
+ * `model:`: an exact connection id (or catalog provider id) begins with an
+ * alphanumeric and is followed by up to 127 of `[A-Za-z0-9._:/-]`, so a stray
+ * sentence is refused at parse time. Deliberately permissive about the
+ * vocabulary: this module has no connection registry, so an unknown id
+ * surfaces at spawn time as main's honest not-ready refusal.
+ */
+export const AGENT_PROFILE_CONNECTION_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+
+/**
  * Frontmatter `maxTurns:` shape — plain decimal digits only. Deliberately
  * stricter than Number(): `0x20`, `1e1`, `+5` and `12.0` all parse to a number
  * a reader would not predict from the text, so they are refused at parse time
@@ -79,10 +89,14 @@ export const AGENT_PROFILE_MAX_TURNS_RE = /^[0-9]+$/;
 export type AgentProfileEngine = "codex" | "claude";
 
 /** Every frontmatter key a profile understands; any other key is reported as a problem. */
-export const AGENT_PROFILE_KEYS: readonly string[] = ["name", "description", "tools", "model", "engine", "maxTurns", "effort"];
+export const AGENT_PROFILE_KEYS: readonly string[] = ["name", "description", "tools", "model", "engine", "maxTurns", "effort", "model_reasoning_effort", "connection", "provider"];
 
-/** Frontmatter `effort:` vocabulary — the same tiers as ANYCODE_REASONING_EFFORT. */
-export const AGENT_PROFILE_EFFORT_LEVELS: readonly ReasoningEffort[] = ["off", "low", "medium", "high", "max"];
+/**
+ * Frontmatter `effort:` vocabulary — the global ReasoningEffort tiers plus
+ * "xhigh" (carried verbatim for engine children, mapped to core "max" at core
+ * consumption boundaries).
+ */
+export const AGENT_PROFILE_EFFORT_LEVELS: readonly AgentProfileEffort[] = ["off", "low", "medium", "high", "xhigh", "max"];
 
 /** One per-file parse of a profile `*.md`, ready for both discovery and admin. */
 export interface ParsedAgentProfile {
@@ -109,6 +123,22 @@ export interface ParsedAgentProfile {
    */
   model?: string;
   /**
+   * Frontmatter `connection:` — the EXACT AnyCode connection id (from
+   * Settings → Connections) children of this profile run on. Absent (or blank)
+   * leaves it undefined, i.e. inherit the parent session's connection. Mutually
+   * exclusive with `provider` and with `engine`. The id is NOT resolved here —
+   * this module has no connection registry — so an unknown id surfaces at spawn
+   * time as the host's honest not-ready refusal rather than a silent fallback.
+   */
+  connection?: string;
+  /**
+   * Frontmatter `provider:` — a catalog provider id (`z-ai`, `deepseek`, …)
+   * children of this profile run on; the host resolves it to a configured
+   * connection. Absent (or blank) leaves it undefined. Mutually exclusive with
+   * `connection` and with `engine`. Same no-catalogue rationale as `connection`.
+   */
+  provider?: string;
+  /**
    * Frontmatter `engine:` — when set, this profile's children run as a one-shot
    * foreign CLI run (Codex or Claude Code) instead of an in-process AgentLoop.
    * Absent (or blank) leaves it undefined, i.e. today's in-process child. The
@@ -133,8 +163,10 @@ export interface ParsedAgentProfile {
    * undefined, i.e. the child's connection default. Resolved against the
    * child model's own tiers by the host, like the composer's effort pick; a
    * word outside the vocabulary is FATAL (bad_effort), same rationale as `model`.
+   * `model_reasoning_effort` is accepted as an alias; a canonical `effort` key
+   * wins when both are present.
    */
-  effort?: ReasoningEffort;
+  effort?: AgentProfileEffort;
   /**
    * Non-fatal per-file problems (path-free suffixes) — currently only explicit
    * spawn-tool requests. The caller prefixes each with `Agent profile <path>: `.
@@ -157,7 +189,11 @@ export type AgentProfileParseError =
   | { kind: "bad_engine"; name: string; engine: string }
   | { kind: "bad_max_turns"; name: string; maxTurns: string }
   | { kind: "bad_effort"; name: string; effort: string }
-  | { kind: "engine_tools_conflict"; name: string; engine: AgentProfileEngine };
+  | { kind: "engine_tools_conflict"; name: string; engine: AgentProfileEngine }
+  | { kind: "bad_connection"; name: string; connection: string }
+  | { kind: "bad_provider"; name: string; provider: string }
+  | { kind: "engine_connection_conflict"; name: string; engine: AgentProfileEngine }
+  | { kind: "connection_provider_conflict"; name: string };
 
 export type ParseAgentProfileResult =
   | { ok: ParsedAgentProfile }
@@ -201,7 +237,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
   // non-spawn tools); a profile can never widen beyond the default registry.
   const problems: string[] = [];
   // An unknown key is surfaced, not swallowed (TASK.217): a profile that writes
-  // `model_reasoning_effort: high` must learn it ran at the default tier.
+  // a key this registry does not know must learn it was ignored.
   for (const key of Object.keys(parsed.fields)) {
     if (!AGENT_PROFILE_KEYS.includes(key)) {
       problems.push(`unknown frontmatter key "${key}" — ignored (known: ${AGENT_PROFILE_KEYS.join(", ")})`);
@@ -251,6 +287,28 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
     engine = normalized;
   }
 
+  // connection/provider: optional. Blank/absent leaves the child on the parent
+  // session's connection (today's behavior). A non-empty value must match the
+  // shared id/route shape; a malformed one is FATAL rather than dropped — same
+  // rationale as `model`: a profile that asks for a connection and silently
+  // runs on the parent's is the dishonesty the fatal branches exist to stop.
+  const rawConnection = (parsed.fields.connection ?? "").trim();
+  let connection: string | undefined;
+  if (rawConnection !== "") {
+    if (!AGENT_PROFILE_CONNECTION_RE.test(rawConnection)) {
+      return { error: { kind: "bad_connection", name, connection: rawConnection } };
+    }
+    connection = rawConnection;
+  }
+  const rawProvider = (parsed.fields.provider ?? "").trim();
+  let provider: string | undefined;
+  if (rawProvider !== "") {
+    if (!AGENT_PROFILE_CONNECTION_RE.test(rawProvider)) {
+      return { error: { kind: "bad_provider", name, provider: rawProvider } };
+    }
+    provider = rawProvider;
+  }
+
   // maxTurns: optional. Blank/absent means "inherit the default turn budget".
   // A non-empty value must be a plain integer within 1..SUBAGENT_MAX_TURNS_CEILING; a
   // malformed or out-of-range one is FATAL rather than clamped, mirroring
@@ -273,14 +331,19 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
   // value outside the closed vocabulary is FATAL, mirroring `engine` above — a
   // planner profile that asks for "high" and silently runs at the default is
   // the dishonesty the fatal branches exist to stop.
-  const rawEffort = (parsed.fields.effort ?? "").trim();
-  let effort: ReasoningEffort | undefined;
+  // Canonical `effort` wins even when blank (blank = absent-effort semantics,
+  // suppressing the alias); the `model_reasoning_effort` alias applies only when
+  // the canonical key is entirely absent.
+  const rawEffort = (
+    parsed.fields.effort !== undefined ? parsed.fields.effort : parsed.fields.model_reasoning_effort ?? ""
+  ).trim();
+  let effort: AgentProfileEffort | undefined;
   if (rawEffort !== "") {
     const normalizedEffort = rawEffort.toLowerCase();
     if (!(AGENT_PROFILE_EFFORT_LEVELS as readonly string[]).includes(normalizedEffort)) {
       return { error: { kind: "bad_effort", name, effort: rawEffort } };
     }
-    effort = normalizedEffort as ReasoningEffort;
+    effort = normalizedEffort as AgentProfileEffort;
   }
 
   // engine + tools: TASK.97 R4 (wave2-cut.md §1.3). ENFORCE was rejected — claude's
@@ -295,6 +358,21 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
   // lower-precedence same-named file stays shadowed).
   if (engine !== undefined && toolsExplicit) {
     return { error: { kind: "engine_tools_conflict", name, engine } };
+  }
+
+  // engine + connection routing: an engine child runs on its OWN CLI account,
+  // not an AnyCode provider connection, so combining the two is a contradiction
+  // (same "refuse, do not half-honor" stance as engine+tools). Claim semantics
+  // identical to bad_model/bad_engine.
+  if (engine !== undefined && (connection !== undefined || provider !== undefined)) {
+    return { error: { kind: "engine_connection_conflict", name, engine } };
+  }
+
+  // connection + provider: two different, mutually exclusive ways to select the
+  // SAME thing (the child's connection). Both at once is ambiguous — refuse
+  // rather than let one silently win. Claim semantics as above.
+  if (connection !== undefined && provider !== undefined) {
+    return { error: { kind: "connection_provider_conflict", name } };
   }
 
   // File body = child systemPrompt (user content, capped UTF-8-safe); an empty
@@ -313,6 +391,8 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
       problems,
       ...(model !== undefined ? { model } : {}),
       ...(engine !== undefined ? { engine } : {}),
+      ...(connection !== undefined ? { connection } : {}),
+      ...(provider !== undefined ? { provider } : {}),
       ...(turnBudget !== undefined ? { turnBudget } : {}),
       ...(effort !== undefined ? { effort } : {}),
     },
@@ -467,11 +547,53 @@ export async function discoverAgentProfiles(
               `Agent profile ${path}: "tools" cannot be combined with "engine: ${err.engine}" — an engine child's toolset belongs to that CLI; remove one of the two — ignored`,
             );
             break;
+          case "bad_connection":
+            // Same claim semantics as bad_model: the name IS claimed
+            // (validation happens after the name resolves), so a lower-precedence
+            // same-named file stays shadowed rather than silently taking over.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: connection "${err.connection}" must match ${AGENT_PROFILE_CONNECTION_RE.source} — ignored`,
+            );
+            break;
+          case "bad_provider":
+            // Same claim semantics as bad_model.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: provider "${err.provider}" must match ${AGENT_PROFILE_CONNECTION_RE.source} — ignored`,
+            );
+            break;
+          case "engine_connection_conflict":
+            // Same claim semantics as bad_model.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: "connection"/"provider" cannot be combined with "engine: ${err.engine}" — an engine child runs on its own CLI account — ignored`,
+            );
+            break;
+          case "connection_provider_conflict":
+            // Same claim semantics as bad_model.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: "connection" and "provider" are mutually exclusive — ignored`,
+            );
+            break;
         }
         continue;
       }
 
-      const { name, description, tools, body, model, engine, turnBudget, effort } = result.ok;
+      const { name, description, tools, body, model, engine, connection, provider, turnBudget, effort } = result.ok;
 
       // Precedence dedupe: a lower source's same-named file is shadowed silently.
       if (claimed.has(name)) {
@@ -501,6 +623,8 @@ export async function discoverAgentProfiles(
         systemPrompt: body,
         ...(model !== undefined ? { model } : {}),
         ...(engine !== undefined ? { engine } : {}),
+        ...(connection !== undefined ? { connection } : {}),
+        ...(provider !== undefined ? { provider } : {}),
         ...(turnBudget !== undefined ? { turnBudget } : {}),
         ...(effort !== undefined ? { effort } : {}),
       });

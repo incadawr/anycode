@@ -46,6 +46,7 @@ import {
   createDefaultToolRegistry,
   createInspectImageTool,
   createMediaProjectionPort,
+  buildChildModelSettingsResolver,
   buildSystemPrompt,
   MAX_QUESTIONS_PER_IMAGE,
   QUESTION_LIMIT_MESSAGE,
@@ -829,17 +830,20 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
     baseUrl: string,
     modelId: string,
     override: number | undefined,
+    overrideModel?: string,
   ): { context: { contextWindowTokens: number } } | Record<string, never> {
     const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), baseUrl);
-    const bootContextWindow = resolveContextWindow(modelId, catalogEntry, override);
+    const bootContextWindow = resolveContextWindow(modelId, catalogEntry, override, overrideModel);
     return bootContextWindow !== undefined ? { context: { contextWindowTokens: bootContextWindow } } : {};
   }
 
-  it("model absent from the matched entry (anthropic catalog + test-model) -> spread yields NO context field (default byte-identity)", () => {
+  // TASK.142 changed this: an unknown model no longer omits `context` — it
+  // resolves the explicit assumed fallback (8192), so the boot window is a real
+  // number and the degraded budget engages instead of the 200k default.
+  it("model absent from the matched entry (anthropic catalog + test-model) -> spread yields the ASSUMED 8192 window, never no context", () => {
     const spread = bootContextSpread("https://api.anthropic.com", "test-model", undefined);
 
-    expect(spread).toEqual({});
-    expect("context" in spread).toBe(false);
+    expect(spread).toEqual({ context: { contextWindowTokens: 8_192 } });
   });
 
   it("catalog hit (z-ai + glm-4.5) -> spread yields { context: { contextWindowTokens: 128000 } }", () => {
@@ -858,6 +862,22 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
     const spread = bootContextSpread("https://custom.example.com", "test-model", 50_000);
 
     expect(spread).toEqual({ context: { contextWindowTokens: 50_000 } });
+  });
+
+  // TASK.142: the override is model-bound, so booting on ANOTHER model must not
+  // inherit it — the host's 4th arg is what makes that hold at boot.
+  it("a matching bound override applies; a mismatched one does not (boot on B with A's pair)", () => {
+    expect(bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.5", 50_000, "glm-4.5")).toEqual({
+      context: { contextWindowTokens: 50_000 },
+    });
+    // A-bound pair, boot on B (catalogued): B resolves its own catalog window.
+    expect(bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.6", 50_000, "glm-4.5")).toEqual({
+      context: { contextWindowTokens: 200_000 },
+    });
+    // A-bound pair, boot on an UNKNOWN B: the assumed fallback, not A's 50000.
+    expect(bootContextSpread("https://api.anthropic.com", "test-model", 50_000, "glm-4.5")).toEqual({
+      context: { contextWindowTokens: 8_192 },
+    });
   });
 });
 
@@ -1159,7 +1179,7 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
    * setContextWindow spy and a mutable config/systemPromptEnv. No env override
    * (envContextWindow undefined) so the catalog window is authoritative.
    */
-  function makeSwitcher() {
+  function makeSwitcher(envContextWindow?: number, envContextWindowModel?: string) {
     const setContextWindowCalls: number[] = [];
     const loop = { setContextWindow: (n: number) => setContextWindowCalls.push(n) };
     const config: { maxOutputTokens?: number; reasoningEffort?: string; context?: { contextWindowTokens: number } } = {};
@@ -1167,7 +1187,7 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
     const switchModel = (id: string, selectedTier: "off" | "low" | "medium" | "high" | "max") => {
       systemPromptEnv.modelId = id;
       const contextWindow =
-        resolveContextWindow(id, zAiEntry, undefined) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+        resolveContextWindow(id, zAiEntry, envContextWindow, envContextWindowModel) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
       config.maxOutputTokens = resolveMaxOutputTokens(id, zAiEntry, undefined);
       const resolvedEffort = resolveReasoningEffort(id, zAiEntry, selectedTier);
       config.reasoningEffort = resolvedEffort;
@@ -1211,6 +1231,53 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
     expect(out.config.reasoningEffort).toBe("max");
     expect(out.result.reasoningEffort).toBe("max");
     expect(out.result.availableEffortLevels).toEqual(["off", "high", "max"]);
+  });
+
+  // TASK.142: the switch is where a connection-global window would have leaked
+  // A -> B. With the pair, A keeps its override, B ignores it, and switching back
+  // to A reuses the boot pair.
+  it("live A -> B -> A: only A's binding honours the override; B resolves its own catalog window", () => {
+    const switchModel = makeSwitcher(50_000, "glm-5.2");
+    const a1 = switchModel("glm-5.2", "high");
+    expect(a1.setContextWindowCalls).toEqual([50_000]);
+    expect(a1.config.context).toEqual({ contextWindowTokens: 50_000 });
+
+    const b = switchModel("glm-4.6", "high");
+    expect(b.setContextWindowCalls).toEqual([50_000, 200_000]);
+    expect(b.config.context).toEqual({ contextWindowTokens: 200_000 });
+
+    const a2 = switchModel("glm-5.2", "max");
+    expect(a2.setContextWindowCalls).toEqual([50_000, 200_000, 50_000]);
+    expect(a2.config.context).toEqual({ contextWindowTokens: 50_000 });
+  });
+
+  it("live switch to an UNKNOWN model resolves the assumed 8192, not a stale previous window", () => {
+    const out = makeSwitcher(50_000, "glm-5.2")("not-in-catalog", "high");
+    expect(out.setContextWindowCalls).toEqual([8_192]);
+    expect(out.config.context).toEqual({ contextWindowTokens: 8_192 });
+  });
+
+  it("a shell-global override (no binding) applies to every switched model", () => {
+    const switchModel = makeSwitcher(50_000, undefined);
+    expect(switchModel("glm-5.2", "high").setContextWindowCalls).toEqual([50_000]);
+    expect(switchModel("glm-4.6", "high").setContextWindowCalls).toEqual([50_000, 50_000]);
+  });
+
+  // TASK.142: the same pair must reach `Agent(model: B)` children — the child's
+  // window follows ITS model, so a parent bound to A cannot leak onto B.
+  it("child-settings wiring (Agent(model: B)) re-resolves B's window from the shared pair", () => {
+    const settingsForChild = buildChildModelSettingsResolver({
+      catalogEntry: zAiEntry,
+      envMaxOutputTokens: undefined,
+      envContextWindow: 50_000,
+      envContextWindowModel: "glm-5.2",
+    });
+    // Child on B (catalogued): B's own window.
+    expect(settingsForChild("glm-4.6", "high").contextWindowTokens).toBe(200_000);
+    // Child on A: the bound override applies.
+    expect(settingsForChild("glm-5.2", "high").contextWindowTokens).toBe(50_000);
+    // Child on an unknown model: the assumed fallback.
+    expect(settingsForChild("not-in-catalog", "high").contextWindowTokens).toBe(8_192);
   });
 });
 
@@ -2534,5 +2601,108 @@ describe("host degraded-mode port bind — immediate fatal (TASK.207, GitHub #4)
     run(outbound, wire, null);
 
     expect(sent).toEqual([]);
+  });
+});
+
+describe("per-model context window production wiring (TASK.142: pin the REAL call sites, not a copy)", () => {
+  /**
+   * The shape-mirroring idiom cannot catch a MISSING option — a hand-copied
+   * recipe (or a direct `buildChildModelSettingsResolver(...)` call written by
+   * the test) stays green when `index.ts` stops passing the model binding. So
+   * these read the real source, pin the arguments BY NAME, and then EVALUATE the
+   * production expression and run the real resolver with it: deleting the 4th
+   * argument or the `envContextWindowModel:` line turns them red.
+   */
+  const zAiEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), "https://api.z.ai/api/anthropic");
+
+  async function readIndexSource(): Promise<string> {
+    return readFile(new URL("./index.ts", import.meta.url), "utf8");
+  }
+
+  /** Text between the bracket at `openIndex` and its match (quote/escape aware enough for this source). */
+  function matchBracket(source: string, openIndex: number, open: string, close: string): string {
+    let depth = 0;
+    for (let i = openIndex; i < source.length; i += 1) {
+      const ch = source[i];
+      if (ch === open) depth += 1;
+      else if (ch === close) {
+        depth -= 1;
+        if (depth === 0) return source.slice(openIndex + 1, i);
+      }
+    }
+    throw new Error("unbalanced brackets in source");
+  }
+
+  function callArguments(source: string, name: string): string[] {
+    return [...source.matchAll(new RegExp(`${name}\\(`, "g"))]
+      .map((match) => matchBracket(source, match.index! + match[0].length - 1, "(", ")"))
+      // Every production call reads the runtime env config; a comment that merely
+      // spells the name (there is one) does not.
+      .filter((args) => args.includes("envConfig."));
+  }
+
+  it("boot and /model switch both pass the model binding as the 4th argument, and evaluated they resolve B through the catalog", async () => {
+    const source = await readIndexSource();
+    const calls = callArguments(source, "resolveContextWindow");
+
+    // Exactly the two production call sites (boot + mid-session switch).
+    expect(calls).toHaveLength(2);
+    for (const args of calls) {
+      expect(args).toContain("envConfig.contextWindowModel");
+    }
+
+    // Evaluate the PRODUCTION argument text against a mismatched pair: booting on
+    // B while the saved pair binds A. With the 4th argument this resolves B's
+    // catalog window; dropping it would let A's 50000 override govern B.
+    const envConfig = { model: "glm-4.6", contextWindowTokens: 50_000, contextWindowModel: "glm-5.2" };
+    for (const args of calls) {
+      // The switch call passes the live `id`; the boot call passes envConfig.model.
+      const [modelId, entry, tokens, bound] = new Function(
+        "envConfig",
+        "catalogEntry",
+        "id",
+        `return [${args}];`,
+      )(envConfig, zAiEntry, envConfig.model) as [string, typeof zAiEntry, number, string | undefined];
+      expect(resolveContextWindow(modelId, entry, tokens, bound)).toBe(200_000);
+      // ...and a matching pair DOES apply, so the assertion above is not vacuous.
+      const matched = new Function("envConfig", "catalogEntry", "id", `return [${args}];`)(
+        { ...envConfig, model: "glm-5.2" },
+        zAiEntry,
+        "glm-5.2",
+      ) as [string, typeof zAiEntry, number, string | undefined];
+      expect(resolveContextWindow(matched[0], matched[1], matched[2], matched[3])).toBe(50_000);
+    }
+  });
+
+  it("the child resolver is built from the SAME env pair, and the real resolver applies it per child model", async () => {
+    const source = await readIndexSource();
+    const blocks = [...source.matchAll(/buildChildModelSettingsResolver\(\{/g)].map((match) =>
+      matchBracket(source, match.index! + match[0].length - 1, "{", "}"),
+    );
+    const production = blocks.filter((block) => block.includes("envMaxOutputTokens") && block.includes("catalogEntry"));
+    expect(production).toHaveLength(1);
+
+    // Run the PRODUCTION deps object, not a re-typed copy: a missing
+    // `envContextWindowModel:` makes the child on B inherit A's override below.
+    const envConfig = {
+      model: "glm-5.2",
+      maxOutputTokens: 4_096,
+      contextWindowTokens: 50_000,
+      contextWindowModel: "glm-5.2",
+    };
+    const deps = new Function("envConfig", "catalogEntry", "console", `return ({${production[0]!}});`)(
+      envConfig,
+      zAiEntry,
+      console,
+    ) as Parameters<typeof buildChildModelSettingsResolver>[0];
+    expect(deps.envContextWindowModel).toBe("glm-5.2");
+
+    const resolve = buildChildModelSettingsResolver(deps);
+    // Child on the bound model A: the override applies.
+    expect(resolve("glm-5.2", "high").contextWindowTokens).toBe(50_000);
+    // Agent(model: B): B's OWN catalog window governs — A's pair must not leak.
+    expect(resolve("glm-4.6", "high").contextWindowTokens).toBe(200_000);
+    // Agent(model: unknown): the assumed fallback.
+    expect(resolve("not-in-catalog", "high").contextWindowTokens).toBe(8_192);
   });
 });

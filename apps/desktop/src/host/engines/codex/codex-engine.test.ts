@@ -1342,6 +1342,26 @@ describe("TASK.39 — model catalog + initial values", () => {
     expect(JSON.stringify(server.calls)).not.toContain('"sandbox":"danger-full-access"');
   });
 
+  // TASK.241 evidence chain: an explicit Sol pick present in the catalog rides
+  // thread/start, the server-confirmed echo, AND the first turn/start — the
+  // first actual turn is on the model the UI displayed and the wire sent.
+  it("TASK.241: an explicit gpt-5.6-sol present in the catalog reaches thread/start, connected.model, and the FIRST turn/start", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-5.6-sol",
+      origin: "draft",
+    });
+
+    expect(server.threadStartParams).toMatchObject({ model: "gpt-5.6-sol" });
+    // DoD-2: the value shown/persisted is the one the SERVER confirmed.
+    expect(connected.model).toBe("gpt-5.6-sol");
+
+    const events = await runTurn(server, connected.engine);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    expect(notices(events)).toEqual([]);
+    expect(server.turnStartParams()[0]).toMatchObject({ model: "gpt-5.6-sol" });
+  });
+
   it("projects the catalog for the UI: hidden models dropped, unknown wire fields ignored", async () => {
     const server = new FakeAppServer();
     server.modelPages = {
@@ -1469,6 +1489,41 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     });
     await runTurn(server, engine);
     expect(server.turnStartParams()[0]).toMatchObject({ model: "gpt-5.6-sol", effort: "high" });
+  });
+
+  // Profile `effort:` frontmatter rides the selection (draft `--engine-effort`):
+  // the requested tier wins when the model supports it, and the actual
+  // turn/start transport request carries the resolved tier — not just the
+  // settings observable. An unsupported tier degrades to the resolved default
+  // with a warning.
+  it("a requested selection effort that the model supports reaches the actual turn/start request", async () => {
+    const server = new FakeAppServer();
+    // gpt-5.6-sol advertises low/medium/high; request "high".
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-5.6-sol",
+      effort: "high",
+      origin: "draft",
+    });
+    expect(connected.engine.snapshot().effort).toBe("high");
+    await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({ effort: "high" });
+  });
+
+  it("a requested selection effort unsupported by the model warns and uses the resolved default", async () => {
+    const server = new FakeAppServer();
+    // gpt-5.4-mini advertises ONLY "medium"; request "high".
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-5.4-mini",
+      effort: "high",
+      origin: "draft",
+    });
+    expect(connected.engine.snapshot().effort).toBe("medium");
+    const events = await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({ model: "gpt-5.4-mini", effort: "medium" });
+    // The boot warning is flushed into the first turn's event stream.
+    expect(notices(events)).toContainEqual(
+      expect.stringContaining('Requested effort "high" is unavailable'),
+    );
   });
 
   it("acks a change only once a turn/start has actually carried it", async () => {
@@ -2961,4 +3016,95 @@ describe("CodexEngine — native session MCP thread config (TASK.182)", () => {
     }
     return notices;
   }
+});
+
+describe("TASK.95 — engine-owned collab correlation across parent turns", () => {
+  const spawnItem = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    type: "collabAgentToolCall",
+    id: "spawn-1",
+    tool: "spawnAgent",
+    senderThreadId: THREAD,
+    receiverThreadIds: ["child-1"],
+    status: "inProgress",
+    prompt: "do work",
+    model: "gpt-native",
+    agentsStates: { "child-1": { status: "running" } },
+    ...overrides,
+  });
+  const waitItem = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    type: "collabAgentToolCall",
+    id: "wait-1",
+    tool: "wait",
+    senderThreadId: THREAD,
+    receiverThreadIds: ["child-1"],
+    status: "completed",
+    agentsStates: { "child-1": { status: "completed", message: "done" } },
+    ...overrides,
+  });
+
+  it("one engine correlates a spawn in turn 1 with a terminal child observation in turn 2 (same card id), and leaks nothing to another engine", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+
+    const turn1 = drive(engine, "spawn someone", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    const t1 = server.turnId;
+    server.stream.push({ method: "item/started", params: { threadId: engine.threadId, turnId: t1, item: spawnItem() } });
+    server.stream.push({ method: "item/completed", params: { threadId: engine.threadId, turnId: t1, item: spawnItem({ status: "completed" }) } });
+    await tick();
+    // completeTurn() addresses the bare-test THREAD constant; this engine booted
+    // the fake's own thread id, so the terminal line is pushed directly.
+    server.stream.push({ method: "turn/completed", params: { threadId: engine.threadId, turn: { id: t1, status: "completed" } } });
+    await turn1.done;
+
+    expect((turn1.events.find((event) => event.type === "subagent_start") as { toolCallId?: string } | undefined)?.toolCallId).toBe("spawn-1");
+    // The call completed while the child was still running — no child terminal.
+    expect(turn1.events.some((event) => event.type === "subagent_end")).toBe(false);
+
+    const turn2 = drive(engine, "wait for it", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    const t2 = server.turnId;
+    server.stream.push({ method: "item/completed", params: { threadId: engine.threadId, turnId: t2, item: waitItem() } });
+    await tick();
+    server.stream.push({ method: "turn/completed", params: { threadId: engine.threadId, turn: { id: t2, status: "completed" } } });
+    await turn2.done;
+
+    // The ORIGINAL turn-1 card id is patched in turn 2 …
+    expect(turn2.events.some((event) => event.type === "subagent_activity" && (event as { toolCallId?: string }).toolCallId === "spawn-1")).toBe(true);
+    const end = turn2.events.find((event) => event.type === "subagent_end") as { toolCallId?: string; model?: string } | undefined;
+    expect(end?.toolCallId).toBe("spawn-1");
+    expect(end?.model).toBe("gpt-native");
+    // … and wait still has its OWN visible generic card.
+    expect(turn2.events.some((event) => event.type === "tool_call" && (event as { toolCall?: { name?: string } }).toolCall?.name === "codex:collab:wait")).toBe(true);
+
+    // A DIFFERENT engine has its own index: the same wait must not find spawn-1.
+    const otherServer = new FakeAppServer();
+    const { engine: other } = await createNativeCodexSession(otherServer, "/work");
+    const otherTurn = drive(other, "wait", new AbortController().signal);
+    await waitForParkedIterator(otherServer, other);
+    const ot = otherServer.turnId;
+    otherServer.stream.push({ method: "item/completed", params: { threadId: other.threadId, turnId: ot, item: waitItem() } });
+    await tick();
+    otherServer.stream.push({ method: "turn/completed", params: { threadId: other.threadId, turn: { id: ot, status: "completed" } } });
+    await otherTurn.done;
+    expect(otherTurn.events.some((event) => event.type === "subagent_activity" || event.type === "subagent_end")).toBe(false);
+  });
+
+  it("disposal clears the correlation index without manufacturing a child completion", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+    const turn1 = drive(engine, "spawn", new AbortController().signal);
+    await waitForParkedIterator(server, engine);
+    const t1 = server.turnId;
+    server.stream.push({ method: "item/started", params: { threadId: engine.threadId, turnId: t1, item: spawnItem() } });
+    await tick();
+    server.stream.push({ method: "turn/completed", params: { threadId: engine.threadId, turn: { id: t1, status: "completed" } } });
+    await turn1.done;
+
+    const index = (engine as unknown as { collabIndex: { get(id: string): unknown } }).collabIndex;
+    expect(index.get("spawn-1")).toBeDefined();
+    await engine.dispose("session-close");
+    expect(index.get("spawn-1")).toBeUndefined();
+    expect(turn1.events.some((event) => event.type === "subagent_end")).toBe(false);
+  });
 });

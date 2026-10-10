@@ -12,8 +12,10 @@ import {
   resolveImageInput,
   resolveMaxOutputTokens,
   resolveReasoningEffort,
+  UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
 } from "./capabilities.js";
 import { DEFAULT_MAX_OUTPUT_TOKENS } from "../types/config.js";
+import { compactThresholdTokens, effectiveWindowTokens, resolveContextBudgetConfig } from "../context/budget.js";
 
 const VISION_ENTRY: CatalogProviderEntry = {
   id: "anthropic",
@@ -201,15 +203,16 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
     }
   });
 
-  it("without override, an unknown model id resolves undefined", () => {
-    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined)).toBeUndefined();
+  it("without override, an unknown model id resolves the ASSUMED 8192 fallback (TASK.142)", () => {
+    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined)).toBe(8_192);
+    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined)).toBe(UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS);
   });
 
-  it("without override, a missing entry resolves undefined", () => {
-    expect(resolveContextWindow("glm-4.5", undefined, undefined)).toBeUndefined();
+  it("without override, a missing entry resolves the ASSUMED 8192 fallback (TASK.142)", () => {
+    expect(resolveContextWindow("glm-4.5", undefined, undefined)).toBe(8_192);
   });
 
-  it("an entry with no matching model resolves undefined (custom endpoint case)", () => {
+  it("an entry with no matching model resolves the ASSUMED 8192 fallback (custom endpoint case)", () => {
     const custom: CatalogProviderEntry = {
       id: "custom",
       name: "Custom",
@@ -219,12 +222,42 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
       auth: { kind: "api_key" },
       models: [],
     };
-    expect(resolveContextWindow("whatever-model", custom, undefined)).toBeUndefined();
+    expect(resolveContextWindow("whatever-model", custom, undefined)).toBe(8_192);
     expect(resolveContextWindow("whatever-model", custom, 50_000)).toBe(50_000);
   });
 
   it("an id from a different entry does not match (entry-scoped, R4)", () => {
-    expect(resolveContextWindow("claude-opus-4-20250514", Z_AI_ENTRY, undefined)).toBeUndefined();
+    expect(resolveContextWindow("claude-opus-4-20250514", Z_AI_ENTRY, undefined)).toBe(8_192);
+  });
+
+  it("a bound override applies to ITS model only; a mismatched binding falls through to the catalog, not the override (TASK.142)", () => {
+    // A-bound override on A: the override wins over the catalog.
+    expect(resolveContextWindow("glm-4.5", Z_AI_ENTRY, 50_000, "glm-4.5")).toBe(50_000);
+    // A-bound override on B: ignored; B resolves through the catalog.
+    expect(resolveContextWindow("glm-4.6", Z_AI_ENTRY, 50_000, "glm-4.5")).toBe(200_000);
+    // A-bound override on an unknown model: ignored; the assumed fallback applies.
+    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, 50_000, "glm-4.5")).toBe(8_192);
+  });
+
+  it("a shell-global override (no binding) still wins over the catalog and over the assumed fallback", () => {
+    expect(resolveContextWindow("glm-4.5", Z_AI_ENTRY, 50_000, undefined)).toBe(50_000);
+    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, 50_000, undefined)).toBe(50_000);
+  });
+
+  it("a mismatched binding WITH a catalog match uses the catalog window, not the override", () => {
+    expect(resolveContextWindow("glm-4.6", Z_AI_ENTRY, 50_000, "other-model")).toBe(200_000);
+  });
+
+  it("a binding with NO override changes nothing (inert binding)", () => {
+    expect(resolveContextWindow("glm-4.5", Z_AI_ENTRY, undefined, "glm-4.5")).toBe(128_000);
+    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined, "ghost-model")).toBe(8_192);
+  });
+
+  it("the 8192 assumed fallback produces the degraded-window budget the contract computes (TASK.142)", () => {
+    const applied = resolveContextWindow("on-prem-8b", undefined, undefined);
+    expect(applied).toBe(8_192);
+    expect(effectiveWindowTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(2_048);
+    expect(compactThresholdTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(1_884);
   });
 });
 

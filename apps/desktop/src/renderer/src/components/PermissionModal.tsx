@@ -53,7 +53,7 @@ import { useTabSend, useTabStore } from "../tab-context.js";
 import { Markdown } from "./Markdown.js";
 import { X } from "./icons.js";
 import { commandBinary, isCommandLineTool, sanitizeBashPattern } from "../permission-pattern.js";
-import { classifyBashCommandLine } from "@anycode/core/permissions/safe-command";
+import { classifyBashCommandLine, formatScopedRunnerPattern, recognizeScopedRunnerCommand } from "@anycode/core/permissions/safe-command";
 import "../settings.css";
 
 export interface PermissionModalProps {
@@ -65,6 +65,8 @@ export interface PermissionModalProps {
   onDeny(): void;
   /** External engines can ask once without ever accepting a core remember rule. */
   allowRemember?: boolean;
+  /** The active tab's canonical workspace (host's process cwd), or null before the host hello. */
+  workspace?: string | null;
 }
 
 const RISK_LABELS: Record<RiskLevel, string> = {
@@ -266,7 +268,7 @@ function capPreviewLines(text: string, maxLines: number): CappedPreview {
  * used to be picked as the binary, producing a garbage rule. The suggestion
  * seen by the user is therefore already clean.
  */
-export function suggestAlwaysAllowPattern(toolName: string, input: unknown): string | undefined {
+export function suggestAlwaysAllowPattern(toolName: string, input: unknown, workspace?: string | null): string | undefined {
   if (!isCommandLineTool(toolName)) {
     return undefined;
   }
@@ -274,8 +276,29 @@ export function suggestAlwaysAllowPattern(toolName: string, input: unknown): str
   if (typeof record.command !== "string") {
     return undefined;
   }
+  if (workspace) {
+    const scoped = recognizeScopedRunnerCommand(record.command, workspace);
+    const pattern = scoped && formatScopedRunnerPattern(scoped.workspace, scoped.runner, scoped.verb);
+    if (scoped && pattern) return pattern;
+  }
   const token = commandBinary(record.command);
   return token ? `${token} *` : undefined;
+}
+
+/** TASK.36: label tracks what will really be saved. Scoped text only while the
+ * pattern field still equals the scoped proposal; any hand edit (or a cleared
+ * field) falls back to the generic wording, so the label never lies. */
+export function alwaysAllowCheckboxText(
+  toolName: string, input: unknown, workspace: string | null | undefined, pattern: string,
+): string {
+  const record = input !== null && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  const command = typeof record.command === "string" ? record.command : undefined;
+  const scoped = isCommandLineTool(toolName) && command && workspace ? recognizeScopedRunnerCommand(command, workspace) : undefined;
+  const scopedPattern = scoped ? formatScopedRunnerPattern(scoped.workspace, scoped.runner, scoped.verb) : undefined;
+  if (scoped && scopedPattern !== undefined && pattern === scopedPattern) {
+    return `Always allow ${scoped.runner} ${scoped.verb} in this project`;
+  }
+  return `Always allow ${toolName}${pattern.trim() !== "" ? " matching" : ""}`;
 }
 
 /**
@@ -331,7 +354,7 @@ export function buildPermissionAllowMessage(
   };
 }
 
-export function PermissionModal({ request, onAllow, onDeny, allowRemember = true }: PermissionModalProps) {
+export function PermissionModal({ request, onAllow, onDeny, allowRemember = true, workspace = null }: PermissionModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const denyRef = useRef<HTMLButtonElement>(null);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
@@ -379,18 +402,19 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
   // hides the pattern input entirely below.
   useEffect(() => {
     setAlwaysAllow(false);
-    setPattern(request ? (suggestAlwaysAllowPattern(request.toolName, request.input) ?? "") : "");
+    setPattern(request ? (suggestAlwaysAllowPattern(request.toolName, request.input, workspace) ?? "") : "");
     // Keyed on requestId, not `request` itself or `suggestAlwaysAllowPattern`'s
     // inputs — intentionally re-runs only when the pending request actually
-    // changes, not on every render of the same one.
-  }, [request?.requestId]);
+    // changes, not on every render of the same one. A changed workspace (new
+    // host hello) re-seeds too, since the scoped proposal depends on it.
+  }, [request?.requestId, workspace]);
 
   if (!request) {
     return null;
   }
 
   const input = summarizeInput(request.toolName, request.input);
-  const suggestedPattern = suggestAlwaysAllowPattern(request.toolName, request.input);
+  const suggestedPattern = suggestAlwaysAllowPattern(request.toolName, request.input, workspace);
   const title = formatPermissionTitle(request.toolName);
   const platform = window.anycode?.platform ?? "darwin";
   // TASK.27: an ExitPlanMode ask is presented as a plan review — markdown body,
@@ -615,8 +639,7 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
               checked={alwaysAllow}
               onChange={(event) => setAlwaysAllow(event.target.checked)}
             />
-            Always allow {request.toolName}
-            {suggestedPattern !== undefined && " matching"}
+            {alwaysAllowCheckboxText(request.toolName, request.input, workspace, pattern)}
           </label>
           {alwaysAllow && suggestedPattern !== undefined && (
             <input
@@ -691,6 +714,7 @@ export function canRememberPermission(engine: EnginePresentation | null): boolea
 export function ConnectedPermissionModal() {
   const request = useTabStore((state) => state.permission);
   const engine = useTabStore((state) => state.engine);
+  const workspace = useTabStore((state) => state.workspace);
   const sendToHost = useTabSend();
   // D8 overlay wiring: the preview WebContentsView must hide while a
   // permission ask is up.
@@ -721,6 +745,7 @@ export function ConnectedPermissionModal() {
       onAllow={handleAllow}
       onDeny={() => sendToHost({ type: "permission_response", requestId: request.requestId, behavior: "deny" })}
       allowRemember={allowRemember}
+      workspace={workspace}
     />
   );
 }

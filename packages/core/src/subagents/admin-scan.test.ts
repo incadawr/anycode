@@ -607,3 +607,91 @@ describe("main === home keeps the project tier (TASK.214 fix 2)", () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4269: the admin scan mirrors discovery's switch for the four new
+// connection/provider error kinds (same fatal-on-invalid + claim semantics), and
+// deliberately does NOT extend the row with routing fields — routing is
+// spawn-time data, not pane metadata.
+
+describe("scanAgentProfilesAdmin — profile connection/provider problems (Taskana 4269)", () => {
+  it("surfaces each new fatal kind as an admin problem and never lists the profile", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    const wsRoot = join(ws, ".anycode/agents");
+    await seed(wsRoot, "badconn.md", md({ name: "badconn", description: "d", connection: "a sentence here" }, "b"));
+    await seed(wsRoot, "badprov.md", md({ name: "badprov", description: "d", provider: "a sentence here" }, "b"));
+    await seed(
+      wsRoot,
+      "engconn.md",
+      md({ name: "engconn", description: "d", engine: "codex", connection: "conn-x" }, "b"),
+    );
+    await seed(wsRoot, "both.md", md({ name: "both", description: "d", connection: "a", provider: "b" }, "b"));
+
+    const result = await scanAgentProfilesAdmin(fs, { workspace: ws, home });
+
+    for (const name of ["badconn", "badprov", "engconn", "both"]) {
+      expect(result.rows.find((r) => r.name === name), name).toBeUndefined();
+    }
+    expect(result.problems.some((p) => p.includes('connection "a sentence here"'))).toBe(true);
+    expect(result.problems.some((p) => p.includes('provider "a sentence here"'))).toBe(true);
+    expect(
+      result.problems.some((p) => p.includes('"connection"/"provider" cannot be combined with "engine: codex"')),
+    ).toBe(true);
+    expect(result.problems.some((p) => p.includes('"connection" and "provider" are mutually exclusive'))).toBe(true);
+  });
+
+  it("lists a routed profile WITHOUT extending its row with the routing fields", async () => {
+    const ws = await tmp();
+    const home = await tmp();
+    const wsRoot = join(ws, ".anycode/agents");
+    await seed(wsRoot, "glm.md", md({ name: "glm-planner", description: "Plans", connection: "conn-glm" }, "b"));
+
+    const result = await scanAgentProfilesAdmin(fs, { workspace: ws, home });
+
+    const row = result.rows.find((r) => r.name === "glm-planner");
+    expect(row).toMatchObject({ name: "glm-planner", description: "Plans" });
+    expect(row).not.toHaveProperty("connection");
+    expect(row).not.toHaveProperty("provider");
+    expect(result.problems).toEqual([]);
+  });
+
+  it("each new fatal routing kind claims the name: a higher-precedence invalid file shadows a valid lower same-named one", async () => {
+    const cases: Array<{ label: string; fields: Record<string, string>; text: string }> = [
+      {
+        label: "bad_connection",
+        fields: { name: "scout", description: "project — bad", connection: "a sentence here" },
+        text: 'connection "a sentence here"',
+      },
+      {
+        label: "bad_provider",
+        fields: { name: "scout", description: "project — bad", provider: "a sentence here" },
+        text: 'provider "a sentence here"',
+      },
+      {
+        label: "engine_connection_conflict",
+        fields: { name: "scout", description: "project — bad", engine: "codex", connection: "conn-x" },
+        text: '"connection"/"provider" cannot be combined with "engine: codex"',
+      },
+      {
+        label: "connection_provider_conflict",
+        fields: { name: "scout", description: "project — bad", connection: "a", provider: "b" },
+        text: '"connection" and "provider" are mutually exclusive',
+      },
+    ];
+    for (const c of cases) {
+      const ws = await tmp();
+      const home = await tmp();
+      await seed(join(ws, ".anycode/agents"), "scout.md", md(c.fields, "P"));
+      await seed(join(home, ".anycode/agents"), "scout.md", md({ name: "scout", description: "user — valid" }, "U"));
+
+      const result = await scanAgentProfilesAdmin(fs, { workspace: ws, home });
+
+      expect(result.rows.find((r) => r.name === "scout"), c.label).toBeUndefined();
+      expect(
+        result.problems.some((p) => p.includes("scout.md") && p.includes(c.text)),
+        c.label,
+      ).toBe(true);
+    }
+  });
+});

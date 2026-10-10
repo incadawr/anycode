@@ -49,13 +49,24 @@ export interface SessionSubagentRequest {
   spawnToolCallId: string;
   /** Provider connection id; defaults to the parent session's own connection. Invalid for the inline tier. */
   provider?: string;
+  /**
+   * EXACT provider connection id from a profile's `connection:` frontmatter (or a
+   * bridge catalog entry's `connection`); main resolves it to the live connection
+   * and stamps it as the child tab's pin. Never rides a resume request; a request
+   * carrying both `provider` and `connectionId` is refused by the host port and
+   * (defensively) by main — core never builds one.
+   */
+  connectionId?: string;
   /** Exact engine model id on that connection; defaults to the parent's model. */
   model?: string;
   /**
-   * Reasoning tier from the profile's `effort:` frontmatter; the child host
-   * resolves it against its own model's tiers. Absent = the connection's default.
+   * Reasoning tier from the profile's `effort:` (or `model_reasoning_effort`
+   * alias) frontmatter; the child host resolves it against its own model's
+   * tiers. Absent = the connection's default. "xhigh" is preserved verbatim
+   * for engine children (claude/codex) and mapped to the existing core "max"
+   * for core children.
    */
-  effort?: ReasoningEffort;
+  effort?: ReasoningEffort | "xhigh";
   /**
    * Set ONLY by the engine-profile route (tools/agent.ts, TASK.102 CUT-S4
    * §2.2): the child boots this engine instead of core. Never model-visible —

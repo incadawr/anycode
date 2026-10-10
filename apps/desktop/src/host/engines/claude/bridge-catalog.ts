@@ -28,5 +28,11 @@ export function catalogFromProfiles(profiles: readonly PersonaDefinition[]): Age
       // TASK.180: the profile's turn budget rides the creating spawn's
       // session-tier request (catalog maxTurns); omitted when absent.
       ...(profile.turnBudget !== undefined ? { maxTurns: profile.turnBudget } : {}),
+      // Taskana 4269: the profile's own connection selection rides the catalog
+      // (and thus the creating spawn) verbatim. An engine profile can never
+      // carry these (parser-fatal), so the two spreads below never co-exist
+      // with `engine` above.
+      ...(profile.provider !== undefined ? { provider: profile.provider } : {}),
+      ...(profile.connection !== undefined ? { connection: profile.connection } : {}),
     }));
 }

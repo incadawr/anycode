@@ -20,6 +20,7 @@ import type { FileSystemPort } from "../ports/file-system.js";
 import { discoverPlugins } from "../plugins/discovery.js";
 import { MAX_AGENT_PROFILES, SUBAGENT_MAX_TURNS_CEILING } from "../types/config.js";
 import {
+  AGENT_PROFILE_CONNECTION_RE,
   AGENT_PROFILE_MODEL_RE,
   AGENT_PROFILE_NAME_RE,
   parseAgentProfileMd,
@@ -503,6 +504,47 @@ export async function scanAgentProfilesAdmin(
             claimed.add(err.name);
             problems.push(
               `Agent profile ${path}: "tools" cannot be combined with "engine: ${err.engine}" — an engine child's toolset belongs to that CLI; remove one of the two — ignored`,
+            );
+            break;
+          case "bad_connection":
+            // Same claim semantics as bad_model (mirrors discovery's switch
+            // verbatim — parseAgentProfileMd is the single oracle).
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: connection "${err.connection}" must match ${AGENT_PROFILE_CONNECTION_RE.source} — ignored`,
+            );
+            break;
+          case "bad_provider":
+            // Same claim semantics as bad_model.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: provider "${err.provider}" must match ${AGENT_PROFILE_CONNECTION_RE.source} — ignored`,
+            );
+            break;
+          case "engine_connection_conflict":
+            // Same claim semantics as bad_model.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: "connection"/"provider" cannot be combined with "engine: ${err.engine}" — an engine child runs on its own CLI account — ignored`,
+            );
+            break;
+          case "connection_provider_conflict":
+            // Same claim semantics as bad_model.
+            if (claimed.has(err.name)) {
+              break;
+            }
+            claimed.add(err.name);
+            problems.push(
+              `Agent profile ${path}: "connection" and "provider" are mutually exclusive — ignored`,
             );
             break;
         }

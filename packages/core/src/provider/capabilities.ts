@@ -35,23 +35,34 @@ export function resolveImageInput(
 }
 
 /**
+ * Assumed context window for a model the catalog does not know (TASK.151 →
+ * TASK.142). This is NOT a provider fact: it is an explicit, conservative
+ * fallback that engages the degraded-window floor in the context budget rather
+ * than letting an unknown model inherit a 24×-overstuffed default prompt.
+ */
+export const UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 8_192;
+
+/**
  * Context-window resolution (Phase 6 slice 6.4, mirror of resolveImageInput):
- * an explicit override (env ANYCODE_CONTEXT_WINDOW) always wins; otherwise the
- * matched catalog model's contextWindow; otherwise undefined — the caller
- * omits the budget override and the DEFAULT_CONTEXT_WINDOW_TOKENS fallback
- * applies via DEFAULT_CONTEXT_BUDGET (an unknown model keeps today's bytes).
+ * an explicit override (env ANYCODE_CONTEXT_WINDOW) may carry a model binding
+ * (`ANYCODE_CONTEXT_WINDOW_MODEL`); it applies only when the binding is absent
+ * (a shell-global export, which wins everywhere) or equals the model being
+ * resolved. Otherwise the matched catalog model's
+ * `min(contextWindow, usableContextWindow ?? contextWindow)`; otherwise the
+ * explicit `UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS` assumed fallback.
  */
 export function resolveContextWindow(
   modelId: string,
   entry: CatalogProviderEntry | undefined,
   override: number | undefined,
-): number | undefined {
-  if (override !== undefined) {
+  overrideModel?: string,
+): number {
+  if (override !== undefined && (overrideModel === undefined || overrideModel === modelId)) {
     return override;
   }
   const model = entry?.models.find((candidate) => candidate.id === modelId);
   if (model === undefined) {
-    return undefined;
+    return UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS;
   }
   return Math.min(model.contextWindow, model.usableContextWindow ?? model.contextWindow);
 }

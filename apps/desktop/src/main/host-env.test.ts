@@ -7,9 +7,17 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { loadEnvConfig } from "@anycode/core";
+import {
+  compactThresholdTokens,
+  effectiveWindowTokens,
+  loadEnvConfig,
+  resolveContextBudgetConfig,
+  resolveContextWindow,
+} from "@anycode/core";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
+  ENV_CONTEXT_WINDOW,
+  ENV_CONTEXT_WINDOW_MODEL,
   ENV_INCLUDE_USAGE,
   ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
@@ -313,6 +321,163 @@ describe("buildHostEnv — ANYCODE_MAX_OUTPUT_TOKENS (TASK.150)", () => {
       getSecret: noSecret,
     });
     expect(env[ENV_MAX_OUTPUT_TOKENS]).toBe("8192");
+  });
+});
+
+describe("buildHostEnv — ANYCODE_CONTEXT_WINDOW + ANYCODE_CONTEXT_WINDOW_MODEL (TASK.142: one model's override per connection)", () => {
+  /** A connection whose saved window is bound to `boundModel`. */
+  function boundConn(connModel: string, boundModel: string, tokens: number | undefined = 8192) {
+    const conn = { ...connectionFixture({ id: "z-ai", model: connModel }) };
+    return {
+      ...conn,
+      ...(tokens === undefined ? {} : { contextWindowTokens: tokens }),
+      contextWindowModel: boundModel,
+    };
+  }
+
+  it("emits BOTH vars when the saved binding IS the model being launched", async () => {
+    const conn = boundConn("glm-4.6", "glm-4.6");
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_CONTEXT_WINDOW]).toBe("8192");
+    expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBe("glm-4.6");
+  });
+
+  it("emits NEITHER when the saved binding names a DIFFERENT model — A's window must not leak onto B", async () => {
+    const conn = boundConn("glm-5.3", "glm-4.6");
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_CONTEXT_WINDOW]).toBeUndefined();
+    expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBeUndefined();
+  });
+
+  it("a shell-global ANYCODE_CONTEXT_WINDOW wins and injects NO settings binding — even for another model", async () => {
+    const conn = boundConn("glm-5.3", "glm-4.6");
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_CONTEXT_WINDOW: "4096" },
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_CONTEXT_WINDOW]).toBe("4096");
+    // The shell value is global: it must NOT acquire a settings-derived binding,
+    // or it would silently become model-specific.
+    expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBeUndefined();
+  });
+
+  it("a shell PAIR is left exactly as the shell set it — settings never overwrites either half", async () => {
+    const conn = boundConn("glm-4.6", "glm-4.6", 65536);
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_CONTEXT_WINDOW: "4096", ANYCODE_CONTEXT_WINDOW_MODEL: "shell-model" },
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_CONTEXT_WINDOW]).toBe("4096");
+    expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBe("shell-model");
+  });
+
+  it("emits neither when the connection persists no window, and no orphan binding is injected", async () => {
+    const conn = { ...connectionFixture({ id: "z-ai", model: "glm-4.6" }) };
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_CONTEXT_WINDOW]).toBeUndefined();
+    expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBeUndefined();
+  });
+
+  it("strips an ORPHAN shell binding — a binding with no shell value must never attach to a settings value", async () => {
+    // The shell sets a binding that HAPPENS to match the launching model, but no
+    // value. Settings, meanwhile, cannot emit (its own binding is for another
+    // model). The orphan must not be reused as settings' binding.
+    const conn = boundConn("glm-4.6", "glm-5.3");
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_CONTEXT_WINDOW_MODEL: "glm-4.6" },
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_CONTEXT_WINDOW]).toBeUndefined();
+    expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBeUndefined();
+  });
+
+  it("replaces a stale orphan rather than pairing it with a settings value — the emitted binding is the settings pair's own", async () => {
+    const conn = boundConn("glm-4.6", "glm-4.6");
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_CONTEXT_WINDOW_MODEL: "glm-4.6" },
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env[ENV_CONTEXT_WINDOW]).toBe("8192");
+    expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBe("glm-4.6");
+  });
+
+  it("a missing or blank binding emits no settings override (a value with no binding is not emitted as a pair)", async () => {
+    for (const boundModel of [undefined, "", "   "]) {
+      const conn = { ...connectionFixture({ id: "z-ai", model: "glm-4.6" }), contextWindowTokens: 8192, contextWindowModel: boundModel };
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+        getSecret: noSecret,
+      });
+      expect(env[ENV_CONTEXT_WINDOW]).toBeUndefined();
+      expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBeUndefined();
+    }
+  });
+
+  it("non-finite and out-of-range token values emit nothing", async () => {
+    for (const tokens of [Number.NaN, Number.POSITIVE_INFINITY, 8.5, 0, -1, 1_023, 1_000_001]) {
+      const conn = boundConn("glm-4.6", "glm-4.6", tokens);
+      const env = await buildHostEnv({
+        bootEnv: {},
+        settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+        getSecret: noSecret,
+      });
+      expect(env[ENV_CONTEXT_WINDOW]).toBeUndefined();
+      expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBeUndefined();
+    }
+  });
+
+  it("a shell ANYCODE_MODEL that differs from the connection's model blocks settings emission (the env ladder wins)", async () => {
+    const conn = boundConn("glm-4.6", "glm-4.6");
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_MODEL: "other-model" },
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env.ANYCODE_MODEL).toBe("other-model");
+    expect(env[ENV_CONTEXT_WINDOW]).toBeUndefined();
+    expect(env[ENV_CONTEXT_WINDOW_MODEL]).toBeUndefined();
+  });
+
+  // The whole point of the pair: it survives the env channel and produces the
+  // degraded budget the contract computes, instead of a 24x-overstuffed prompt.
+  it("the emitted pair round-trips through loadEnvConfig into the 8192/2048 applied budget (TASK.142 chain)", async () => {
+    const conn = boundConn("on-prem-8b", "on-prem-8b", 8192);
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_API_KEY: "sk-test" },
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    const cfg = loadEnvConfig(env);
+    expect(cfg.contextWindowTokens).toBe(8192);
+    expect(cfg.contextWindowModel).toBe("on-prem-8b");
+    // No catalog entry for an on-prem model → the assumed fallback.
+    const applied = resolveContextWindow(cfg.model, undefined, cfg.contextWindowTokens, cfg.contextWindowModel);
+    expect(applied).toBe(8192);
+    expect(effectiveWindowTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(2_048);
+    expect(compactThresholdTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(1_884);
+  });
+
+  it("the name-bearing hint list includes both window vars so the GUI can explain an override", () => {
+    const overrides = envOverrides({ [ENV_CONTEXT_WINDOW]: "4096", [ENV_CONTEXT_WINDOW_MODEL]: "m" });
+    expect(overrides).toContain(ENV_CONTEXT_WINDOW);
+    expect(overrides).toContain(ENV_CONTEXT_WINDOW_MODEL);
   });
 });
 

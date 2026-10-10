@@ -1911,3 +1911,43 @@ describe("tab-registry — status mirror (slice-R10)", () => {
     expect(statusStore.getState().statuses.get("tab-b")?.attention).toBe(false);
   });
 });
+
+describe("tab-registry — provider-switch marker restore at the session_history boundary (Taskana 4234)", () => {
+  it("replays persisted switch markers at their recorded boundaries after host_ready and the hydrated history", () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    // Seed sess-a's renderer-local switch log: a switch after history item h1.
+    values.set(
+      "anycode.provider-switches.v1:sess-a",
+      JSON.stringify([{ id: "sw-1", fromLabel: "A", toLabel: "B", model: "m2", afterItemId: "h1" }]),
+    );
+
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    port.emit({
+      type: "session_history",
+      sessionId: "sess-a",
+      truncated: false,
+      items: [
+        { id: "h1", createdAt: 1, message: { role: "user", content: "hello" } },
+        { id: "h2", createdAt: 2, message: { role: "assistant", content: [{ type: "text", text: "hi" }] } },
+      ],
+    } as HostToUiMessage);
+
+    const transcript = registry.getStore("tab-a")!.getState().transcript;
+    expect(transcript.map((b) => b.id)).toEqual(["h1:0", "sw-1", "h2:0"]);
+    const marker = findBlock(transcript, "connection_changed");
+    expect(marker).toMatchObject({ fromLabel: "A", toLabel: "B", model: "m2" });
+
+    vi.unstubAllGlobals();
+  });
+});

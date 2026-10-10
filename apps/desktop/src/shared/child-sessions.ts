@@ -26,7 +26,9 @@
  *
  * Every `parseXxx` below is fail-closed: malformed input, wrong-typed fields,
  * missing required fields, or an object carrying EXTRA unknown keys all return
- * `null` — they never throw. Main and the hosts must never trust ambient
+ * `null` — they never throw. `ChildTerminal` is the TASK 4239 exception:
+ * unknown additive keys are stripped (forward-compat with newer child hosts);
+ * malformed known fields still fail closed. Main and the hosts must never trust ambient
  * identity-shaped payload fields (see the child-message correlation note
  * above); these parsers only prove the message is WELL-FORMED, not that its
  * sender is authorized to say it.
@@ -35,6 +37,13 @@
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 
 // ── parentPort message types (parent host <-> main, child host <-> main) ──
+
+/**
+ * Child effort vocabulary: the core ReasoningEffort tiers plus "xhigh",
+ * carried verbatim for engine children (claude/codex); core consumption
+ * boundaries map xhigh to the existing core "max".
+ */
+export type ChildEffort = ReasoningEffort | "xhigh";
 
 export const CHILD_SPAWN_REQUEST_TYPE = "anycode:child-spawn-request" as const; // parent host -> main
 export const CHILD_RUN_CANCEL_TYPE = "anycode:child-run-cancel" as const; // parent host -> main
@@ -61,14 +70,23 @@ export interface ChildSpawnRequest {
   description: string;
   prompt: string;
   provider?: string;
+  /**
+   * Taskana 4269: EXACT connection id from a profile's `connection:` frontmatter
+   * (relayed via `SessionSubagentRequest.connectionId`). Main resolves it against
+   * the live connections registry and pins the child's env to it. Mutually
+   * exclusive with `provider` — a request carrying both is refused. Rides the
+   * creating spawn only; never a resume.
+   */
+  connectionId?: string;
   model?: string;
   /**
-   * Reasoning tier from the profile's `effort:` frontmatter. Core children
-   * only: main stamps it as the child host's ANYCODE_REASONING_EFFORT, which
-   * the host resolves against the child model's own tiers. Absent = the
+   * Reasoning tier from the profile's `effort:` frontmatter. Core children:
+   * main stamps it as the child host's ANYCODE_REASONING_EFFORT (mapping
+   * "xhigh" to "max"), which the host resolves against the child model's own
+   * tiers; engine children carry it verbatim to the engine CLI. Absent = the
    * connection's default.
    */
-  effort?: ReasoningEffort;
+  effort?: ChildEffort;
   permissionMode: PermissionMode;
   /**
    * Child engine (TASK.102 CUT-S4 §3.1). Absent = core (byte-compatible with
@@ -404,6 +422,7 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "description",
   "prompt",
   "provider",
+  "connectionId",
   "model",
   "effort",
   "permissionMode",
@@ -415,9 +434,9 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "maxTurns",
 ] as const;
 
-const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "max"] satisfies readonly ReasoningEffort[];
+const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"] satisfies readonly ChildEffort[];
 
-export function isChildEffort(value: unknown): value is ReasoningEffort {
+export function isChildEffort(value: unknown): value is ChildEffort {
   return typeof value === "string" && CHILD_EFFORT_VALUES.includes(value);
 }
 
@@ -442,6 +461,14 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     return null;
   }
   if (msg.provider !== undefined && !isNonEmptyCappedString(msg.provider, CHILD_PROVIDER_MAX_CHARS)) {
+    return null;
+  }
+  // Taskana 4269: same shape cap as `provider`; both at once rejects the whole
+  // message (they are two ways to select the same connection).
+  if (msg.connectionId !== undefined && !isNonEmptyCappedString(msg.connectionId, CHILD_PROVIDER_MAX_CHARS)) {
+    return null;
+  }
+  if (msg.provider !== undefined && msg.connectionId !== undefined) {
     return null;
   }
   if (msg.model !== undefined && !isIdString(msg.model, CHILD_MODEL_MAX_CHARS)) {
@@ -479,6 +506,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     description: msg.description,
     prompt: msg.prompt,
     ...(msg.provider !== undefined ? { provider: msg.provider as string } : {}),
+    ...(msg.connectionId !== undefined ? { connectionId: msg.connectionId as string } : {}),
     ...(msg.model !== undefined ? { model: msg.model as string } : {}),
     ...(msg.effort !== undefined ? { effort: msg.effort } : {}),
     permissionMode: msg.permissionMode,
@@ -753,27 +781,8 @@ export function parseChildProgress(msg: unknown): ChildProgress | null {
   }
 }
 
-const CHILD_TERMINAL_KEYS = [
-  "type",
-  "status",
-  "finalText",
-  "truncated",
-  "turns",
-  "toolCalls",
-  "durationMs",
-  "activitySuppressed",
-  "finalTurnFinishReason",
-  "declaredDoneAtCeiling",
-  // TASK.219: additive child-fact model attribution keys.
-  "model",
-  "responseModel",
-] as const;
-
 export function parseChildTerminal(msg: unknown): ChildTerminal | null {
   if (!isRecord(msg) || msg.type !== CHILD_TERMINAL_TYPE) {
-    return null;
-  }
-  if (!hasOnlyKeys(msg, CHILD_TERMINAL_KEYS)) {
     return null;
   }
   if (!isString(msg.status) || !CHILD_RUN_STATUSES.includes(msg.status as ChildRunStatus)) {

@@ -27,6 +27,7 @@ import {
 } from "./claude-engine.js";
 import { ClaudeModelCatalog } from "./models.js";
 import { findClaudePreset } from "./presets.js";
+import { ClaudeClientError } from "./claude-client.js";
 import type { ClaudeStreamMessage } from "./protocol.js";
 
 const FIXTURES_DIR = fileURLToPath(new URL("./contract/fixtures/", import.meta.url));
@@ -78,6 +79,13 @@ interface FakeTransportOptions {
    * `deferredUsage()` to gate individual calls.
    */
   contextUsageSequence?: (call: number) => Record<string, unknown> | Promise<Record<string, unknown>>;
+  /**
+   * TASK.116: the error the parked notifications reader is rejected with when
+   * `releaseStreamReject()` is called. Models a transport death mid-turn whose
+   * rejection text is hostile — arbitrary text or a `ClaudeClientError` wrapping
+   * provider text — exercising `engineDeathSafe`'s redaction from the real path.
+   */
+  rejectStreamOnce?: Error;
 }
 
 /**
@@ -98,12 +106,17 @@ class FakeTransport implements ClaudeTransport {
   readonly sent: (string | unknown[])[] = [];
   /** Frames pushed after a `sendUserMessage`, so a turn always sees them in order. */
   private pending: ClaudeStreamMessage[];
-  private waiters: ((result: IteratorResult<ClaudeStreamMessage>) => void)[] = [];
+  private waiters: { resolve(result: IteratorResult<ClaudeStreamMessage>): void; reject(error: unknown): void }[] = [];
   private buffer: ClaudeStreamMessage[] = [];
   private done = false;
+  /** TASK.116: the one-shot rejection to hand the parked reader (undefined once spent). */
+  private streamReject: Error | undefined;
+  /** TASK.116: a rejection armed before any reader parked, delivered on the next next(). */
+  private armedStreamReject: Error | undefined;
 
   constructor(private readonly options: FakeTransportOptions = {}) {
     this.pending = [...(options.frames ?? [])];
+    this.streamReject = options.rejectStreamOnce;
   }
 
   async initialize(): Promise<{ commands: unknown[]; models: unknown[]; account: { tokenSource?: string; subscriptionType?: string } }> {
@@ -159,10 +172,15 @@ class FakeTransport implements ClaudeTransport {
       [Symbol.asyncIterator](): AsyncIterator<ClaudeStreamMessage> {
         return {
           next(): Promise<IteratorResult<ClaudeStreamMessage>> {
+            if (self.armedStreamReject !== undefined) {
+              const error = self.armedStreamReject;
+              self.armedStreamReject = undefined;
+              return Promise.reject(error);
+            }
             const value = self.buffer.shift();
             if (value !== undefined) return Promise.resolve({ value, done: false });
             if (self.done) return Promise.resolve({ value: undefined, done: true });
-            return new Promise((resolve) => self.waiters.push(resolve));
+            return new Promise((resolve, reject) => self.waiters.push({ resolve, reject }));
           },
         };
       },
@@ -173,7 +191,7 @@ class FakeTransport implements ClaudeTransport {
     this.closed += 1;
     this.order.push("close");
     this.done = true;
-    for (const waiter of this.waiters.splice(0)) waiter({ value: undefined, done: true });
+    for (const waiter of this.waiters.splice(0)) waiter.resolve({ value: undefined, done: true });
   }
 
   /** TASK.189: frames delivered on the NEXT sendUserMessage (a later turn's stream). */
@@ -185,10 +203,25 @@ class FakeTransport implements ClaudeTransport {
   push(frame: ClaudeStreamMessage): void {
     const waiter = this.waiters.shift();
     if (waiter !== undefined) {
-      waiter({ value: frame, done: false });
+      waiter.resolve({ value: frame, done: false });
       return;
     }
     this.buffer.push(frame);
+  }
+
+  /**
+   * TASK.116: reject the parked notifications reader with `rejectStreamOnce`.
+   * A reader is normally parked while the engine awaits a frame; if none is
+   * parked yet the rejection is armed for the next `next()` so the death lands
+   * on the CURRENT turn deterministically, never on a later call's timing.
+   */
+  releaseStreamReject(): void {
+    const error = this.streamReject;
+    if (error === undefined) throw new Error("releaseStreamReject() called without rejectStreamOnce");
+    this.streamReject = undefined;
+    const waiter = this.waiters.shift();
+    if (waiter !== undefined) waiter.reject(error);
+    else this.armedStreamReject = error;
   }
 }
 
@@ -670,6 +703,10 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     await turn;
 
     expect(transport.interrupts).toBe(1);
+    // TASK.116 healthy-cancellation control: a cancel that SETTLES is not a
+    // death — no transport close, no engine_dead signal, semantics unchanged.
+    expect(transport.closed).toBe(0);
+    expect(events.some((event) => event.type === "error")).toBe(false);
     expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "cancelled", turns: 1 });
   });
 
@@ -698,7 +735,15 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     expect(events.some((event) => event.type === "tool_call")).toBe(true);
     expect(transport.interrupts).toBe(1);
     expect(transport.closed).toBe(1);
-    expect(events.some((event) => event.type === "error")).toBe(false);
+    // TASK.116: the intentional-cancel settle timeout ALSO closes the engine and
+    // signals engine death — additively, WITHOUT turning the cancelled terminal
+    // into an error terminal (the loop status below is still "cancelled").
+    const errorEvent = events.find((event) => event.type === "error") as
+      | { type: "error"; error: Error; safe?: { code: string; message: string } }
+      | undefined;
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.safe?.code).toBe("engine_dead");
+    expect(errorEvent!.safe?.message).toContain("did not settle the interrupted turn");
     const notice = events.find((event) => event.type === "engine_notice") as
       | { level: string; message: string }
       | undefined;
@@ -714,9 +759,11 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     // The terminal latch: the next turn never reaches the dead transport.
     const next = await collect(engine.runTurn("again", { signal: new AbortController().signal }));
     expect(types(next)).toEqual(["error", "turn_end", "loop_end"]);
-    const nextError = next[0] as { type: "error"; error: Error };
+    const nextError = next[0] as { type: "error"; error: Error; safe?: { code: string; message: string } };
     expect(nextError.error.message).toContain("session was closed");
     expect(nextError.error.message).toContain("Start a new session");
+    expect(nextError.safe?.code).toBe("engine_dead");
+    expect(nextError.safe?.message).toContain("did not settle the interrupted turn");
     expect(transport.sent).toEqual(["long job"]);
   });
 
@@ -733,6 +780,126 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     await turn;
     expect(events.some((event) => event.type === "error")).toBe(true);
     expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "error", turns: 1 });
+  });
+
+  // ── TASK.116: trusted engine-death descriptor (safe.code "engine_dead") ─────
+
+  it("TASK.116: a mid-turn transport death carries safe.code engine_dead and the fixed reason, and the latch survives into the next turn", async () => {
+    const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const events: AgentEvent[] = [];
+    for await (const event of engine.runTurn("hi", { signal: new AbortController().signal })) {
+      events.push(event);
+      if (event.type === "turn_start") queueMicrotask(() => transport.close());
+    }
+    const error = events.find((event) => event.type === "error") as
+      | { type: "error"; error: Error; safe?: { code: string; message: string } }
+      | undefined;
+    expect(error).toBeDefined();
+    expect(error!.safe).toEqual({ code: "engine_dead", message: "Claude exited during a turn" });
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "error", turns: 1 }]);
+
+    // The latched death: the NEXT turn's error also carries the descriptor.
+    const next = await collect(engine.runTurn("again", { signal: new AbortController().signal }));
+    expect(types(next)).toEqual(["error", "turn_end", "loop_end"]);
+    const nextError = next[0] as { type: "error"; error: Error; safe?: { code: string; message: string } };
+    expect(nextError.safe?.code).toBe("engine_dead");
+    expect(nextError.safe?.message).toContain("Claude exited during a turn");
+    expect(next.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "error", turns: 2 }]);
+  });
+
+  it("TASK.116: hostile engine text never reaches safe.message — only a trusted descriptor does", async () => {
+    // Drive one turn whose parked reader rejects with `error` (the real death path).
+    const rejectedTurn = async (error: Error): Promise<AgentEvent[]> => {
+      const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 }, rejectStreamOnce: error });
+      const events: AgentEvent[] = [];
+      for await (const event of engineWith(transport).runTurn("hi", { signal: new AbortController().signal })) {
+        events.push(event);
+        if (event.type === "turn_start") queueMicrotask(() => transport.releaseStreamReject());
+      }
+      return events;
+    };
+    const safeOf = (events: AgentEvent[]) =>
+      (events.find((event) => event.type === "error") as { safe?: { code: string; message: string } } | undefined)?.safe;
+    const rawOf = (events: AgentEvent[]) =>
+      (events.find((event) => event.type === "error") as { error?: Error } | undefined)?.error;
+
+    // (a) Plain rejection text — only the classified constant is disclosed.
+    const poison = await rejectedTurn(new Error("Bearer secret-poison"));
+    expect(poison.filter((event) => event.type === "error")).toHaveLength(1);
+    expect(poison.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "error", turns: 1 }]);
+    expect(safeOf(poison)?.code).toBe("engine_dead");
+    expect(safeOf(poison)?.message).toBe("The agent request failed. Retry or recheck the selected connection in Settings.");
+    expect(safeOf(poison)?.message).not.toContain("secret-poison");
+    expect(rawOf(poison)?.message).toBe("Bearer secret-poison"); // raw stays private, carried as `error`
+
+    // (b) A ClaudeClientError is NOT a trust boundary — provider text is redacted.
+    const wrapped = await rejectedTurn(new ClaudeClientError("claude control request failed: Bearer secret-poison"));
+    expect(safeOf(wrapped)?.code).toBe("engine_dead");
+    expect(safeOf(wrapped)?.message).not.toContain("secret-poison");
+
+    // (c) Unknown frame text.
+    const unknownFrame = await rejectedTurn(new ClaudeClientError('unknown frame type "Bearer secret-poison"'));
+    expect(safeOf(unknownFrame)?.code).toBe("engine_dead");
+    expect(safeOf(unknownFrame)?.message).not.toContain("secret-poison");
+
+    // (d) Spawn-error text.
+    const spawn = await rejectedTurn(new Error("spawn claude EACCES"));
+    expect(safeOf(spawn)?.code).toBe("engine_dead");
+    expect(safeOf(spawn)?.message).not.toContain("EACCES");
+
+    // (e) The ONE trusted ClaudeClientError exit report reconstructs exactly, for
+    //     both numeric and null code/signal.
+    const exitNumeric = await rejectedTurn(new ClaudeClientError("claude exited unexpectedly (code=1, signal=SIGTERM)"));
+    expect(safeOf(exitNumeric)).toEqual({ code: "engine_dead", message: "claude exited unexpectedly (code=1, signal=SIGTERM)" });
+    const exitNull = await rejectedTurn(new ClaudeClientError("claude exited unexpectedly (code=null, signal=null)"));
+    expect(safeOf(exitNull)).toEqual({ code: "engine_dead", message: "claude exited unexpectedly (code=null, signal=null)" });
+
+    // (f) A suffix / malformed format is NOT trusted; nor is the same text on a
+    //     plain Error — the class is the trust gate, not the string shape.
+    const suffixed = await rejectedTurn(new ClaudeClientError("claude exited unexpectedly (code=1, signal=SIGTERM) trailing"));
+    expect(safeOf(suffixed)?.code).toBe("engine_dead");
+    expect(safeOf(suffixed)?.message).not.toContain("SIGTERM");
+    const malformed = await rejectedTurn(new ClaudeClientError("claude exited unexpectedly (code=abc, signal=sigterm)"));
+    expect(safeOf(malformed)?.message).not.toContain("sigterm");
+    const plainExit = await rejectedTurn(new Error("claude exited unexpectedly (code=1, signal=SIGTERM)"));
+    expect(safeOf(plainExit)?.message).not.toContain("SIGTERM");
+  });
+
+  it("TASK.116: a Stop that cannot settle a FOREIGN turn in time closes the session, signals engine death, and stays cancelled", async () => {
+    const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
+    const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { timeouts: { postInterruptSettleMs: 30 } });
+    await collect(engine.runTurn("first prompt", { signal: new AbortController().signal }));
+
+    transport.push(foreignAssistantFrame("m-fd", "FOREIGN DYING"));
+    const controller = new AbortController();
+    const events: AgentEvent[] = [];
+    const turn2 = (async () => {
+      for await (const event of engine.runTurn("stop me", { signal: controller.signal })) {
+        events.push(event);
+        if (event.type === "engine_notice" && String((event as { message?: string }).message).includes("finishing a turn")) {
+          // Stop the foreign wait and NEVER settle it: the settle deadline fires.
+          controller.abort();
+        }
+      }
+    })();
+    await turn2;
+
+    expect(transport.interrupts).toBe(1);
+    expect(transport.closed).toBe(1);
+    expect(transport.sent).toEqual(["first prompt"]); // the owner input was NEVER sent
+    const errorEvent = events.find((event) => event.type === "error") as
+      | { type: "error"; error: Error; safe?: { code: string; message: string } }
+      | undefined;
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.safe?.code).toBe("engine_dead");
+    expect(errorEvent!.safe?.message).toContain("did not settle the interrupted turn");
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "cancelled", turns: 2 }]);
+    const notice = events.find(
+      (event) => event.type === "engine_notice" && String((event as { message?: string }).message).includes("running command"),
+    );
+    expect(notice).toBeDefined();
   });
 
   it("dispose interrupts before closing the transport", async () => {

@@ -190,20 +190,87 @@ describe("providerModelsFor (F2 review lane FXH: custom providers must reach the
     expect(providerModelsFor("custom:my-endpoint", catalog, [])).toBeUndefined();
   });
 
-  it("a connection's live-fetched list takes precedence: live ids decide WHAT, static hints decorate names", () => {
+  it("a connection's own ids come first and catalog-only hints are appended (TASK.183 union)", () => {
     expect(providerModelsFor("z-ai", catalog, custom, ["glm-6", "glm-5.2"])).toEqual([
       { id: "glm-6" },
       { id: "glm-5.2", name: "GLM-5.2" },
     ]);
   });
 
-  it("an absent or EMPTY live list keeps every pre-fetch behavior byte-identical (static-hints fallback)", () => {
+  it("an absent or EMPTY connection list keeps every pre-fetch behavior byte-identical (static-hints fallback)", () => {
     expect(providerModelsFor("z-ai", catalog, custom, undefined)).toEqual(catalog[0]!.models);
     expect(providerModelsFor("z-ai", catalog, custom, [])).toEqual(catalog[0]!.models);
   });
 
-  it("a live list works even for a provider with no catalog entry (nothing to decorate with)", () => {
+  it("a connection list works even for a provider with no catalog entry (nothing to decorate with)", () => {
     expect(providerModelsFor("unknown-provider", catalog, custom, ["m1"])).toEqual([{ id: "m1" }]);
+  });
+});
+
+describe("providerModelsFor — TASK.183 union of connection ids + catalog/curated hints", () => {
+  const catalog: CatalogSummary = [
+    {
+      id: "z-ai",
+      name: "Z.ai",
+      authKind: "api_key",
+      models: [
+        { id: "glm-5.2", name: "GLM-5.2" },
+        { id: "glm-4.6", name: "GLM-4.6" },
+      ],
+    },
+  ];
+  const custom: CustomProviderRecord[] = [
+    {
+      id: "custom:my-endpoint",
+      name: "My Endpoint",
+      baseUrl: "https://example.com",
+      kind: "openai-compatible",
+      models: ["curated-a", "curated-b"],
+    },
+  ];
+
+  it("connection ids come first, catalog-only hints are appended, catalog names decorate matching ids", () => {
+    expect(providerModelsFor("z-ai", catalog, custom, ["manual-1", "glm-4.6"])).toEqual([
+      { id: "manual-1" },
+      { id: "glm-4.6", name: "GLM-4.6" },
+      { id: "glm-5.2", name: "GLM-5.2" },
+    ]);
+  });
+
+  it("dedupes a connection id that also appears in the catalog (no reorder, no duplicate)", () => {
+    expect(providerModelsFor("z-ai", catalog, custom, ["glm-5.2", "glm-5.2"])).toEqual([
+      { id: "glm-5.2", name: "GLM-5.2" },
+      { id: "glm-4.6", name: "GLM-4.6" },
+    ]);
+  });
+
+  it("unions a custom record's curated fallback even with connection ids present", () => {
+    expect(providerModelsFor("custom:my-endpoint", catalog, custom, ["manual-x"])).toEqual([
+      { id: "manual-x" },
+      { id: "curated-a" },
+      { id: "curated-b" },
+    ]);
+  });
+
+  it("keeps the custom-record-only fallback when there is no connection list", () => {
+    expect(providerModelsFor("custom:my-endpoint", catalog, custom)).toEqual([{ id: "curated-a" }, { id: "curated-b" }]);
+  });
+
+  it("an empty connection list keeps the catalog byte-for-byte", () => {
+    expect(providerModelsFor("z-ai", catalog, custom, [])).toEqual(catalog[0]!.models);
+  });
+
+  it("an undefined providerId with connection ids still returns the bare union", () => {
+    expect(providerModelsFor(undefined, catalog, custom, ["m1", "m2"])).toEqual([{ id: "m1" }, { id: "m2" }]);
+  });
+
+  it("keeps the explicit current model visible when it is only in the connection list (modelMenuItems)", () => {
+    const offered = providerModelsFor("z-ai", catalog, custom, ["manual-only"]);
+    expect(modelMenuItems("manual-only", offered)).toEqual([
+      { id: "manual-only", name: "manual-only" },
+      { id: "glm-5.2", name: "GLM-5.2" },
+      { id: "glm-4.6", name: "GLM-4.6" },
+    ]);
   });
 });
 

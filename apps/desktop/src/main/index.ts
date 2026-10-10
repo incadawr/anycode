@@ -90,6 +90,7 @@ import {
   resolveEffectiveTransport,
   resolveRecognizerConfig,
   scrubSecretEnv,
+  shellOwnsProxyFamily,
   shouldSkipConnectionHealthBinding,
   snapshotBootEnv,
   type ProxyMaterializationDeps,
@@ -154,6 +155,7 @@ import {
 } from "./settings-ipc.js";
 import type { ProviderHealthEvent } from "../shared/provider-health.js";
 import { TabHostManager, createPinReservations } from "./tabs.js";
+import { createChildConnectionPreparer } from "./child-connection-preparation.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { registerTabIpc, type ResolveCodexProfileResult } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
@@ -1975,6 +1977,27 @@ void app.whenReady().then(async () => {
     },
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
+    // Taskana 4269: a profile's EXACT `connection:` id, checked against the live
+    // registry (the same snapshot the other deps read). Identity on success so
+    // main/tabs.ts can keep the frozen resolved id; undefined ⇒ not_ready.
+    resolveChildConnection: (connectionId) =>
+      settings === null || connectionById(settings, connectionId) === undefined ? undefined : connectionId,
+    // Taskana 4269: prepares ONE already-resolved connection id for a child
+    // fork — resolveResumePin's exact protocol (extracted, see
+    // ./child-connection-preparation.ts): a SYNCHRONOUS existence check + pin
+    // reservation (one microtask, JS atomicity), then awaited env priming, then
+    // a post-await existence re-check. A concurrent delete after the
+    // reservation sees the pin and refuses `connection_in_use`; a delete before
+    // it leaves that to fail `{ ok: false }`. Reads `currentSettings()` (not
+    // the captured `settings`) so a mid-preparation edit is observed, mirroring
+    // resolveResumePin.
+    prepareChildConnection: createChildConnectionPreparer({
+      connectionExists: (connectionId) => connectionById(currentSettings(), connectionId) !== undefined,
+      reserve: (connectionId) => pinReservations.reserve(connectionId),
+      release: (connectionId) => pinReservations.release(connectionId),
+      ensurePinnedEnv: (connectionId) => ensurePinnedEnv(connectionId),
+      hostEnvAvailable: (connectionId) => hostEnvForConnection(connectionId) !== undefined,
+    }),
     providerReady: () => providerReady,
     // Codex has no dependency on AnyCode's provider settings. Its main-plane
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible
@@ -2328,6 +2351,12 @@ void app.whenReady().then(async () => {
       return env;
     },
     spawn: spawnProxyProbe,
+    // The canonical gate, not a copy: the probe's shell-wins answer must read
+    // the same predicate the fork's env materialisation (`applyConnectionProxy`)
+    // uses. NODE_USE_ENV_PROXY is left entirely to that path — a shell
+    // HTTPS_PROXY stays inert for the core fork unless the shell itself sets
+    // the flag, with no implicit activation here.
+    shellOwnsProxyFamily,
   });
 
   // TASK.198 срез E2: the Vision panel's "Probe" button. Same spawned-child
