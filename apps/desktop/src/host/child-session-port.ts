@@ -227,7 +227,8 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
 function detachAdmitMessage(childSessionId: string): string {
   return (
     `Agent: child session ${childSessionId} started in the background. ` +
-    "It is running independently of this turn; its report will arrive as a new message once it finishes."
+    "It is running independently of this turn; its report will arrive as a new message once it finishes. " +
+    "To send a follow-up to this same child later, pass this id as continue_session in the next agent call."
   );
 }
 
