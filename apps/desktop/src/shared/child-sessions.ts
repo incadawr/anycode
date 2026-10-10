@@ -148,6 +148,10 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       finalTurnFinishReason?: "length";
       /** Additive (TASK 4149): the child declared its work finished at its turn ceiling; present only when true. */
       declaredDoneAtCeiling?: boolean;
+      /** Additive (TASK.219): the child host's ACTIVE session model at terminal. Absent on legacy payloads. */
+      model?: string;
+      /** Additive (TASK.219): the child's dedicated-port provider claim at terminal, when attributable. Absent on legacy payloads. */
+      responseModel?: string;
     }
 );
 
@@ -189,6 +193,18 @@ export interface ChildTerminal {
   finalTurnFinishReason?: "length";
   /** Additive (TASK 4149): present only when true. */
   declaredDoneAtCeiling?: boolean;
+  /**
+   * Additive (TASK.219): the child host's ACTIVE session model at terminal —
+   * the literal configured/sent model, never the request's `model:` nor the
+   * parent's pre-boot accepted label. Absent on legacy payloads.
+   */
+  model?: string;
+  /**
+   * Additive (TASK.219): the child's dedicated model-port provider claim at
+   * terminal, when one is attributable. Absent on legacy payloads and when
+   * no claim exists.
+   */
+  responseModel?: string;
 }
 
 // ── admission/timing constants (§2.3) ──
@@ -480,6 +496,9 @@ const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   "activitySuppressed",
   "finalTurnFinishReason",
   "declaredDoneAtCeiling",
+  // TASK.219: additive child-fact model attribution keys.
+  "model",
+  "responseModel",
 ] as const;
 
 export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
@@ -590,6 +609,12 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         return null;
       }
       if (
+        (msg.model !== undefined && !isNonEmptyCappedString(msg.model, CHILD_MODEL_MAX_CHARS)) ||
+        (msg.responseModel !== undefined && !isNonEmptyCappedString(msg.responseModel, CHILD_MODEL_MAX_CHARS))
+      ) {
+        return null;
+      }
+      if (
         (msg.finalTurnFinishReason !== undefined && msg.finalTurnFinishReason !== "length") ||
         (msg.declaredDoneAtCeiling !== undefined && msg.declaredDoneAtCeiling !== true)
       ) {
@@ -606,6 +631,8 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         toolCalls: msg.toolCalls,
         durationMs: msg.durationMs,
         childSessionId: msg.childSessionId,
+        ...(msg.model !== undefined ? { model: msg.model as string } : {}),
+        ...(msg.responseModel !== undefined ? { responseModel: msg.responseModel as string } : {}),
         ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed as number } : {}),
         ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
         ...(msg.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true as const } : {}),
@@ -710,6 +737,9 @@ const CHILD_TERMINAL_KEYS = [
   "activitySuppressed",
   "finalTurnFinishReason",
   "declaredDoneAtCeiling",
+  // TASK.219: additive child-fact model attribution keys.
+  "model",
+  "responseModel",
 ] as const;
 
 export function parseChildTerminal(msg: unknown): ChildTerminal | null {
@@ -735,6 +765,12 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
     return null;
   }
   if (
+    (msg.model !== undefined && !isNonEmptyCappedString(msg.model, CHILD_MODEL_MAX_CHARS)) ||
+    (msg.responseModel !== undefined && !isNonEmptyCappedString(msg.responseModel, CHILD_MODEL_MAX_CHARS))
+  ) {
+    return null;
+  }
+  if (
     (msg.finalTurnFinishReason !== undefined && msg.finalTurnFinishReason !== "length") ||
     (msg.declaredDoneAtCeiling !== undefined && msg.declaredDoneAtCeiling !== true)
   ) {
@@ -748,6 +784,8 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
     turns: msg.turns,
     toolCalls: msg.toolCalls,
     durationMs: msg.durationMs,
+    ...(msg.model !== undefined ? { model: msg.model as string } : {}),
+    ...(msg.responseModel !== undefined ? { responseModel: msg.responseModel as string } : {}),
     ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed as number } : {}),
     ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
     ...(msg.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true as const } : {}),
