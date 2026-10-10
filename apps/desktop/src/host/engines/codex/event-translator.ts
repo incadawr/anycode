@@ -9,7 +9,7 @@ import type { JsonRpcNotification } from "./protocol.js";
 import type { TurnItemIndex } from "./turn-item-index.js";
 
 /** One sub-tool-call a single native item projects to — a `fileChange` with N files projects to N of these. */
-type ToolProjection = { toolCallId: string; toolName: "Bash" | "Write"; input: unknown };
+type ToolProjection = { toolCallId: string; toolName: string; input: unknown };
 
 /**
  * The engine-owned quota tracker's narrow face (quota.ts `CodexQuotaTracker`,
@@ -56,17 +56,39 @@ function statusFor(itemStatus: unknown): ToolCallStatus {
   return "error";
 }
 
-/** `commandExecution` -> one projection; `fileChange` -> one projection PER changed file (multi-file, cut §2(i)). */
+function isToolFamily(itemType: unknown): boolean {
+  return (
+    itemType === "commandExecution" || itemType === "command_execution" ||
+    itemType === "fileChange" || itemType === "file_change" ||
+    itemType === "mcpToolCall" || itemType === "mcp_tool_call" ||
+    itemType === "webSearch" || itemType === "web_search"
+  );
+}
+
+/**
+ * `commandExecution` -> one projection; `fileChange` -> one projection PER changed file (multi-file, cut §2(i)).
+ * camelCase types are the pinned-contract shapes; snake_case aliases are an
+ * explicit TASK.181 compatibility requirement, not shapes claimed observed in
+ * pinned fixtures.
+ */
 function projectTools(item: Record<string, unknown>): ToolProjection[] {
   const itemId = typeof item.id === "string" ? item.id : "";
-  if (item.type === "commandExecution" && typeof item.command === "string") {
+  if ((item.type === "commandExecution" || item.type === "command_execution") && typeof item.command === "string") {
     return [{
       toolCallId: itemId,
       toolName: "Bash",
       input: { command: item.command, ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}) },
     }];
   }
-  if (item.type === "fileChange" && Array.isArray(item.changes)) {
+  // Recognized command execution with a missing/empty payload: keep one
+  // fallback projection keyed by item id so an actual execution does not
+  // silently disappear. Never fabricate command contents.
+  if (item.type === "commandExecution" || item.type === "command_execution") {
+    const input: Record<string, unknown> = {};
+    if (typeof item.cwd === "string") input.cwd = item.cwd;
+    return [{ toolCallId: itemId, toolName: "Bash", input }];
+  }
+  if ((item.type === "fileChange" || item.type === "file_change") && Array.isArray(item.changes) && item.changes.length > 0) {
     const projections: ToolProjection[] = [];
     item.changes.forEach((raw, index) => {
       const change = record(raw);
@@ -79,6 +101,37 @@ function projectTools(item: Record<string, unknown>): ToolProjection[] {
     });
     return projections;
   }
+  // Recognized file change with a missing/empty payload: one fallback Write
+  // projection keyed by item id (available input fields only).
+  if (item.type === "fileChange" || item.type === "file_change") {
+    return [{ toolCallId: itemId, toolName: "Write", input: {} }];
+  }
+  if (item.type === "mcpToolCall" || item.type === "mcp_tool_call") {
+    const server = typeof item.server === "string" ? item.server : "unknown";
+    const tool = typeof item.tool === "string" ? item.tool : "unknown";
+    return [{
+      toolCallId: itemId,
+      toolName: `mcp__${server}__${tool}`,
+      input: item.arguments ?? item.input ?? {},
+    }];
+  }
+  if (item.type === "webSearch" || item.type === "web_search") {
+    return [{
+      toolCallId: itemId,
+      toolName: "WebSearch",
+      input: typeof item.query === "string" ? { query: item.query } : {},
+    }];
+  }
+  // Intentional exclusions (TASK.181): userMessage, hookPrompt, agentMessage
+  // (handled as text separately), reasoning, plan, enteredReviewMode,
+  // exitedReviewMode and contextCompaction are conversation/plan/review/
+  // bookkeeping surfaces, not tool executions. sleep, imageView and
+  // imageGeneration are intentionally outside this task's four execution
+  // families (not assertively classified as never tools).
+  // dynamicToolCall is intentionally excluded because dynamic-tool-bridge.ts
+  // already emits call/start/result for bridge-owned calls (projecting here
+  // would double-count). collabAgentToolCall and subAgentActivity are
+  // intentionally outside this change.
   return [];
 }
 
@@ -141,6 +194,24 @@ export class TurnTranslator {
   private readonly tools = new Map<string, ToolProjection>();
   /** One native item can own several sub-tool-calls (multi-file fileChange) — tracked to close them all together. */
   private readonly itemToolCallIds = new Map<string, string[]>();
+  /**
+   * TASK.181: sub toolCallIds that have already produced a real tool_result
+   * (paired OR completed-only recovered). Distinct from startedItemIds so a
+   * repeated completion or a late `item/started` after completion never
+   * creates an extra tool lifecycle or count.
+   */
+  private readonly completedToolCallIds = new Set<string>();
+  /**
+   * TASK.181: native item ids that have already produced a real tool_result
+   * (paired OR completed-only recovered). ITEM-level, not projection-level:
+   * a redelivered completion can carry a different payload shape than the
+   * first (e.g. populated start `fc:0`, sparse redelivery projecting bare
+   * `fc`), so deduplicating by projection id alone would let one completed
+   * native item recover a SECOND lifecycle under a different id. Distinct
+   * from startedItemIds so a late `item/started` after completion never
+   * resurrects a lifecycle either.
+   */
+  private readonly completedItemIds = new Set<string>();
   /** Accumulated `item/commandExecution/outputDelta` text per itemId (cut §2(i) live command-output deltas). */
   private readonly commandOutputBuffers = new Map<string, string>();
   private finished = false;
@@ -207,12 +278,17 @@ export class TurnTranslator {
     // started must create zero new blocks (see startedItemIds' own comment).
     if (this.startedItemIds.has(item.id)) return [];
     this.startedItemIds.add(item.id);
+    // TASK.181: a late item/started for an item id that already completed
+    // (paired or completed-only recovered) must never resurrect a lifecycle.
+    if (isToolFamily(item.type) && this.completedItemIds.has(item.id)) return [];
     if (item.type === "agentMessage") {
       this.openText.add(item.id);
       return [{ type: "text_start", id: item.id }];
     }
     const projections = projectTools(item);
     if (projections.length === 0) return [];
+    // Defensive: never reopen projections that already produced a tool_result.
+    if (projections.every((projection) => this.completedToolCallIds.has(projection.toolCallId))) return [];
     this.itemToolCallIds.set(item.id, projections.map((projection) => projection.toolCallId));
     const events: AgentEvent[] = [];
     for (const projection of projections) {
@@ -306,31 +382,71 @@ export class TurnTranslator {
     if (item.type === "agentMessage" && this.openText.delete(item.id)) {
       return [{ type: "text_end", id: item.id }];
     }
+    // TASK.181 ITEM-level dedup: a repeated completion — even with a
+    // different payload shape (sparse vs populated fileChange changes) —
+    // must never recover a second lifecycle under different projection ids.
+    if (isToolFamily(item.type) && this.completedItemIds.has(item.id)) return [];
     const toolCallIds = this.itemToolCallIds.get(item.id);
-    if (toolCallIds === undefined) return [];
+    if (toolCallIds === undefined) {
+      // TASK.181 completed-only recovery: a completion of a recognized tool
+      // family whose item/started never arrived (or produced no projection)
+      // must not silently disappear. Emit the full renderer-required
+      // lifecycle (tool_call -> tool_execution_start -> tool_result) here.
+      // A previously seen start with no projection must not block recovery.
+      if (!isToolFamily(item.type)) return [];
+      const projections = projectTools(item).filter((projection) => !this.completedToolCallIds.has(projection.toolCallId));
+      if (projections.length === 0) return [];
+      // Mark completion only once a real tool_result will actually be produced.
+      this.completedItemIds.add(item.id);
+      const events: AgentEvent[] = [];
+      for (const projection of projections) {
+        events.push({
+          type: "tool_call",
+          toolCall: { id: projection.toolCallId, name: projection.toolName, input: projection.input },
+        });
+        events.push({ type: "tool_execution_start", toolCallId: projection.toolCallId, toolName: projection.toolName, input: projection.input });
+        events.push({ type: "tool_result", outcome: this.toolOutcome(projection.toolCallId, projection, item) });
+        this.completedToolCallIds.add(projection.toolCallId);
+      }
+      // Synthetic completed-only tools must never linger in the maps for
+      // finish() to count again — itemToolCallIds was never set for them, and
+      // the tools map stays untouched.
+      return events;
+    }
     this.itemToolCallIds.delete(item.id);
+    this.completedItemIds.add(item.id);
     const events: AgentEvent[] = [];
     for (const toolCallId of toolCallIds) {
       const projection = this.tools.get(toolCallId);
       if (projection === undefined) continue;
       this.tools.delete(toolCallId);
+      if (this.completedToolCallIds.has(toolCallId)) continue;
+      this.completedToolCallIds.add(toolCallId);
       events.push({ type: "tool_result", outcome: this.toolOutcome(toolCallId, projection, item) });
     }
     return events;
   }
 
   private toolOutcome(toolCallId: string, projection: ToolProjection, item: Record<string, unknown>): ToolCallOutcome {
-    const status = statusFor(item.status);
-    const aggregated = typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : undefined;
+    // TASK.181: status-less webSearch/web_search completions are successes;
+    // every other status keeps the explicit completion/error/denial/
+    // cancellation mapping below. Counting depends on completion EVENTS, so
+    // failed/declined/interrupted/unfamiliar statuses still produce exactly
+    // one tool_result.
+    const webSearch = item.type === "webSearch" || item.type === "web_search";
+    const status = item.status === undefined && webSearch ? "success" : statusFor(item.status);
+    const aggregatedRaw = item.aggregatedOutput !== undefined ? item.aggregatedOutput : item.aggregated_output;
+    const aggregated = typeof aggregatedRaw === "string" ? aggregatedRaw : undefined;
     const buffered = this.commandOutputBuffers.get(toolCallId);
     this.commandOutputBuffers.delete(toolCallId);
     const modelText = aggregated ?? buffered ?? "";
+    const durationRaw = item.durationMs !== undefined ? item.durationMs : item.duration_ms;
     return {
       toolCallId,
       toolName: projection.toolName,
       status,
       modelText,
-      durationMs: typeof item.durationMs === "number" && item.durationMs >= 0 ? item.durationMs : 0,
+      durationMs: typeof durationRaw === "number" && durationRaw >= 0 ? durationRaw : 0,
       ...(status === "success" ? { result: { ok: true, output: modelText } } : { result: { ok: false, error: "Codex tool did not complete" } }),
     };
   }

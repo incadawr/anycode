@@ -677,3 +677,287 @@ it.each(["failed", "unexpected-status"])("terminal %s without turn.error still e
   expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
   expect(translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status } } })).toEqual([]);
 });
+
+/**
+ * TASK.181 regression coverage: four recognized tool families
+ * (commandExecution/command_execution, fileChange/file_change,
+ * mcpToolCall/mcp_tool_call, webSearch/web_search) in camelCase AND
+ * snake_case, both started+completed and completed-only arrival patterns.
+ */
+describe("TurnTranslator — TASK.181 tool families and completed-only recovery", () => {
+  type FamilyCase = {
+    label: string;
+    startedItem: Record<string, unknown>;
+    completedItem: Record<string, unknown>;
+    expectedName: string;
+    expectedInput: Record<string, unknown>;
+  };
+
+  const familyCases: FamilyCase[] = [
+    {
+      label: "commandExecution",
+      startedItem: { type: "commandExecution", id: "cmd", command: "echo ok", cwd: "/tmp" },
+      completedItem: { type: "commandExecution", id: "cmd", command: "echo ok", cwd: "/tmp", status: "completed", aggregatedOutput: "ok" },
+      expectedName: "Bash",
+      expectedInput: { command: "echo ok", cwd: "/tmp" },
+    },
+    {
+      label: "command_execution",
+      startedItem: { type: "command_execution", id: "cmd", command: "echo ok" },
+      completedItem: { type: "command_execution", id: "cmd", command: "echo ok", status: "completed" },
+      expectedName: "Bash",
+      expectedInput: { command: "echo ok" },
+    },
+    {
+      label: "fileChange",
+      startedItem: { type: "fileChange", id: "fc", changes: [{ path: "a.txt", diff: "+a" }] },
+      completedItem: { type: "fileChange", id: "fc", status: "completed", changes: [{ path: "a.txt", diff: "+a" }] },
+      expectedName: "Write",
+      expectedInput: { file_path: "a.txt", content: "+a" },
+    },
+    {
+      label: "file_change",
+      startedItem: { type: "file_change", id: "fc", changes: [{ path: "a.txt" }] },
+      completedItem: { type: "file_change", id: "fc", status: "completed", changes: [{ path: "a.txt" }] },
+      expectedName: "Write",
+      expectedInput: { file_path: "a.txt" },
+    },
+    {
+      label: "mcpToolCall",
+      startedItem: { type: "mcpToolCall", id: "mcp", server: "db", tool: "query", arguments: { sql: "SELECT 1" } },
+      completedItem: { type: "mcpToolCall", id: "mcp", server: "db", tool: "query", arguments: { sql: "SELECT 1" }, status: "completed" },
+      expectedName: "mcp__db__query",
+      expectedInput: { sql: "SELECT 1" },
+    },
+    {
+      label: "mcp_tool_call",
+      startedItem: { type: "mcp_tool_call", id: "mcp", server: "db", tool: "query", arguments: { sql: "SELECT 1" } },
+      completedItem: { type: "mcp_tool_call", id: "mcp", server: "db", tool: "query", arguments: { sql: "SELECT 1" }, status: "completed" },
+      expectedName: "mcp__db__query",
+      expectedInput: { sql: "SELECT 1" },
+    },
+    {
+      label: "webSearch",
+      startedItem: { type: "webSearch", id: "ws", query: "codex app-server" },
+      completedItem: { type: "webSearch", id: "ws", query: "codex app-server", status: "completed" },
+      expectedName: "WebSearch",
+      expectedInput: { query: "codex app-server" },
+    },
+    {
+      label: "web_search",
+      startedItem: { type: "web_search", id: "ws", query: "codex app-server" },
+      completedItem: { type: "web_search", id: "ws", query: "codex app-server", status: "completed" },
+      expectedName: "WebSearch",
+      expectedInput: { query: "codex app-server" },
+    },
+  ];
+
+  function startOf(item: Record<string, unknown>): JsonRpcNotification {
+    return { method: "item/started", params: { threadId: THREAD_ID, turnId: TURN_ID, item } };
+  }
+  function completeOf(item: Record<string, unknown>): JsonRpcNotification {
+    return { method: "item/completed", params: { threadId: THREAD_ID, turnId: TURN_ID, item } };
+  }
+
+  for (const family of familyCases) {
+    it(`${family.label}: started+completed emits exactly one tool_call/tool_execution_start/tool_result with matching ids`, () => {
+      const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+      const startEvents = translator.onNotification(startOf(family.startedItem));
+      const completeEvents = translator.onNotification(completeOf(family.completedItem));
+      const all = [...startEvents, ...completeEvents];
+      expect(all.filter((event) => event.type === "tool_call")).toHaveLength(1);
+      expect(all.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
+      expect(all.filter((event) => event.type === "tool_result")).toHaveLength(1);
+      const call = all.find((event) => event.type === "tool_call") as { toolCall: { id: string; name: string; input: unknown } };
+      const start = all.find((event) => event.type === "tool_execution_start") as { toolCallId: string; toolName: string };
+      const result = all.find((event) => event.type === "tool_result") as { outcome: { toolCallId: string; toolName: string; status: string } };
+      expect(call.toolCall.id).toBe(start.toolCallId);
+      expect(start.toolCallId).toBe(result.outcome.toolCallId);
+      expect(call.toolCall.name).toBe(family.expectedName);
+      expect(start.toolName).toBe(family.expectedName);
+      expect(result.outcome.toolName).toBe(family.expectedName);
+      expect(call.toolCall.input).toMatchObject(family.expectedInput);
+      expect(result.outcome.status).toBe("success");
+    });
+
+    it(`${family.label}: completed-only recovery emits the full lifecycle exactly once`, () => {
+      const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+      const events = translator.onNotification(completeOf(family.completedItem));
+      expect(types(events)).toEqual(["tool_call", "tool_execution_start", "tool_result"]);
+      const call = events[0] as { toolCall: { id: string; name: string; input: unknown } };
+      expect(call.toolCall.name).toBe(family.expectedName);
+      expect(call.toolCall.input).toMatchObject(family.expectedInput);
+      expect((events[2] as { outcome: { status: string } }).outcome.status).toBe("success");
+    });
+  }
+
+  it.each(["completed", "failed", "declined", "interrupted", "unexpected-status"] as const)(
+    "command status %s yields exactly one tool_result for started+completed",
+    (status) => {
+      const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+      translator.onNotification(startOf({ type: "commandExecution", id: "cmd", command: "x" }));
+      const events = translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", status }));
+      expect(events.filter((event) => event.type === "tool_result")).toHaveLength(1);
+    },
+  );
+
+  it.each(["completed", "failed", "declined", "interrupted", "unexpected-status"] as const)(
+    "command status %s yields exactly one tool_result for completed-only",
+    (status) => {
+      const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+      const events = translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", command: "x", status }));
+      expect(events.filter((event) => event.type === "tool_result")).toHaveLength(1);
+      expect((events[2] as { outcome: { toolCallId: string } }).outcome.toolCallId).toBe("cmd");
+    },
+  );
+
+  it("status-less webSearch completion is a success", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification(startOf({ type: "webSearch", id: "ws", query: "q" }));
+    const events = translator.onNotification(completeOf({ type: "webSearch", id: "ws" }));
+    expect((events[0] as { outcome: { status: string } }).outcome.status).toBe("success");
+  });
+
+  it("status-less web_search completed-only completion is a success", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification(completeOf({ type: "web_search", id: "ws", query: "q" }));
+    expect((events[2] as { outcome: { status: string } }).outcome.status).toBe("success");
+  });
+
+  it("duplicate completions after started+completed produce no extra lifecycle", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification(startOf({ type: "commandExecution", id: "cmd", command: "x" }));
+    translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", status: "completed" }));
+    expect(translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", status: "completed" }))).toEqual([]);
+  });
+
+  it("duplicate completions after completed-only recovery produce no extra lifecycle", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", command: "x", status: "completed" }));
+    expect(translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", command: "x", status: "completed" }))).toEqual([]);
+  });
+
+  it("a late start after completed-only recovery creates no extra tool lifecycle", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", command: "x", status: "completed" }));
+    expect(translator.onNotification(startOf({ type: "commandExecution", id: "cmd", command: "x" }))).toEqual([]);
+    // And a further completion still produces nothing extra.
+    expect(translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", status: "completed" }))).toEqual([]);
+  });
+
+  it("finish after completion produces no extra tool_result", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", command: "x", status: "completed" }));
+    const finishEvents = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "completed" } } });
+    expect(finishEvents.filter((event) => event.type === "tool_result")).toHaveLength(0);
+  });
+
+  it("sparse command start followed by complete command still counts once", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const startEvents = translator.onNotification(startOf({ type: "commandExecution", id: "cmd" }));
+    expect(startEvents.filter((event) => event.type === "tool_call")).toHaveLength(1);
+    const completeEvents = translator.onNotification(completeOf({ type: "commandExecution", id: "cmd", command: "x", status: "completed" }));
+    const all = [...startEvents, ...completeEvents];
+    expect(all.filter((event) => event.type === "tool_call")).toHaveLength(1);
+    expect(all.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
+    expect(all.filter((event) => event.type === "tool_result")).toHaveLength(1);
+  });
+
+  it("empty fileChange start followed by populated completion still counts once", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const startEvents = translator.onNotification(startOf({ type: "fileChange", id: "fc", changes: [] }));
+    expect(startEvents.filter((event) => event.type === "tool_call")).toHaveLength(1);
+    const completeEvents = translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed", changes: [{ path: "a.txt", diff: "+a" }] }));
+    const all = [...startEvents, ...completeEvents];
+    expect(all.filter((event) => event.type === "tool_result")).toHaveLength(1);
+  });
+
+  it("empty fileChange completed-only fallback counts once", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed" }));
+    expect(types(events)).toEqual(["tool_call", "tool_execution_start", "tool_result"]);
+    expect(translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed" }))).toEqual([]);
+  });
+
+  it("a reasoning non-tool item produces zero tool events, also on completion", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    expect(translator.onNotification(startOf({ type: "reasoning", id: "rs", summary: [] }))).toEqual([]);
+    expect(translator.onNotification(completeOf({ type: "reasoning", id: "rs", status: "completed" }))).toEqual([]);
+  });
+
+  it("dynamicToolCall remains intentionally excluded so bridge calls cannot double-count", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    expect(translator.onNotification(startOf({ type: "dynamicToolCall", id: "dyn", name: "custom" }))).toEqual([]);
+    expect(translator.onNotification(completeOf({ type: "dynamicToolCall", id: "dyn", status: "completed" }))).toEqual([]);
+  });
+});
+
+/**
+ * TASK.181 verification follow-up: ITEM-level completion dedup. A repeated
+ * completion of the same native item id must never recover a second tool
+ * lifecycle, even when the redelivery's payload projects DIFFERENT sub ids
+ * (populated start `fc:0` vs sparse redelivery `fc`).
+ */
+describe("TurnTranslator — repeated completions across projection shapes (TASK.181 dedup)", () => {
+  function startOf(item: Record<string, unknown>): JsonRpcNotification {
+    return { method: "item/started", params: { threadId: THREAD_ID, turnId: TURN_ID, item } };
+  }
+  function completeOf(item: Record<string, unknown>): JsonRpcNotification {
+    return { method: "item/completed", params: { threadId: THREAD_ID, turnId: TURN_ID, item } };
+  }
+  function countType(events: AgentEvent[], type: string): number {
+    return events.filter((event) => event.type === type).length;
+  }
+
+  it("sparse fileChange completion redelivered after a populated start produces no second tool_result", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const startEvents = translator.onNotification(startOf({ type: "fileChange", id: "fc", changes: [{ path: "a.txt" }] }));
+    const first = translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed" }));
+    expect((first[0] as { outcome: { toolCallId: string } }).outcome.toolCallId).toBe("fc:0");
+    // Sparse redelivery projects bare "fc" — a different id — yet must be a no-op.
+    const duplicate = translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed" }));
+    expect(duplicate).toEqual([]);
+    const all = [...startEvents, ...first, ...duplicate];
+    expect(countType(all, "tool_result")).toBe(1);
+    expect(countType(all, "tool_call")).toBe(1);
+  });
+
+  it("populated fileChange completion redelivered after a fallback (sparse) completion produces no second lifecycle", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const first = translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed" }));
+    expect((first[0] as { toolCall: { id: string } }).toolCall.id).toBe("fc");
+    // Populated redelivery would project "fc:0" — must not recover again.
+    const duplicate = translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed", changes: [{ path: "a.txt", diff: "+a" }] }));
+    expect(duplicate).toEqual([]);
+    const all = [...first, ...duplicate];
+    expect(countType(all, "tool_call")).toBe(1);
+    expect(countType(all, "tool_execution_start")).toBe(1);
+    expect(countType(all, "tool_result")).toBe(1);
+  });
+
+  it("a late start after a fallback completion whose first valid change index is nonzero creates no extra lifecycle", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const completion = translator.onNotification(completeOf({
+      type: "fileChange",
+      id: "fc",
+      status: "completed",
+      changes: [null, { path: "b.txt", diff: "+b" }],
+    }));
+    // Only the valid change projects: id "fc:1" (nonzero first valid index).
+    expect((completion[0] as { toolCall: { id: string } }).toolCall.id).toBe("fc:1");
+    const lateStart = translator.onNotification(startOf({ type: "fileChange", id: "fc", changes: [{ path: "c.txt", diff: "+c" }] }));
+    expect(lateStart).toEqual([]);
+    const all = [...completion, ...lateStart];
+    expect(countType(all, "tool_call")).toBe(1);
+    expect(countType(all, "tool_execution_start")).toBe(1);
+    expect(countType(all, "tool_result")).toBe(1);
+  });
+
+  it("a late start after a paired populated completion creates no extra lifecycle", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification(startOf({ type: "fileChange", id: "fc", changes: [{ path: "a.txt" }] }));
+    translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed" }));
+    expect(translator.onNotification(startOf({ type: "fileChange", id: "fc", changes: [{ path: "z.txt" }] }))).toEqual([]);
+    expect(translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed", changes: [{ path: "z.txt" }] }))).toEqual([]);
+  });
+});
