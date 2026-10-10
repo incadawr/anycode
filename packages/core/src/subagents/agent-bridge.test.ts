@@ -157,6 +157,33 @@ describe("buildSessionSubagentRequest (§3.2)", () => {
     expect(request.engine).toBeUndefined();
   });
 
+  it("core xhigh becomes max; engine xhigh stays xhigh", () => {
+    // Core consumer (no profile/engine): xhigh maps to the existing core "max".
+    const coreRequest = buildSessionSubagentRequest({
+      agentType: "planner",
+      description: "d",
+      prompt: "p",
+      spawnToolCallId: "toolu_x1",
+      effort: "xhigh",
+    });
+    expect(coreRequest.engine).toBeUndefined();
+    expect(coreRequest.effort).toBe("max");
+
+    // Engine profiles (claude/codex) carry xhigh verbatim.
+    for (const engine of ["claude", "codex"] as const) {
+      const profile: EngineProfileInfo = { engine, systemPrompt: "PERSONA BODY" };
+      const request = buildSessionSubagentRequest({
+        agentType: `${engine}-worker`,
+        description: "d",
+        prompt: "p",
+        spawnToolCallId: "toolu_x2",
+        profile,
+        effort: "xhigh",
+      });
+      expect(request.effort).toBe("xhigh");
+    }
+  });
+
   it("no model anywhere => the model key is entirely absent (no `undefined` riding the wire)", () => {
     const request = buildSessionSubagentRequest({
       agentType: "reviewer",

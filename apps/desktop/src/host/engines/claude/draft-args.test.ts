@@ -15,6 +15,14 @@ describe("parseClaudeEngineArgs", () => {
     });
   });
 
+  it("reads --engine-effort in both flag forms; absent/blank emits no key", () => {
+    expect(parseClaudeEngineArgs(["--engine-effort", "xhigh"])).toEqual({ effort: "xhigh" });
+    expect(parseClaudeEngineArgs(["--engine-effort=high"])).toEqual({ effort: "high" });
+    expect(parseClaudeEngineArgs(["--session", "s1"])).not.toHaveProperty("effort");
+    expect(parseClaudeEngineArgs(["--engine-effort", ""])).not.toHaveProperty("effort");
+    expect(parseClaudeEngineArgs(["--engine-effort", "   "])).not.toHaveProperty("effort");
+  });
+
   it("is absent when the flags are not passed (the core host argv is unchanged)", () => {
     expect(parseClaudeEngineArgs(["--resume", "s1"])).toEqual({});
     expect(parseClaudeEngineArgs([])).toEqual({});
