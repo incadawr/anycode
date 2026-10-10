@@ -1670,6 +1670,57 @@ describe("AgentCardBody (SSR component render)", () => {
     expect(html).not.toContain("subagent-activity-feed");
     expect(html).not.toContain("tool-call-agent-result");
   });
+
+  // TASK.148 live-presentation slice: a live stall report renders a quiet
+  // "stalled · silent 4m" note naming what the child last did when the
+  // detector supplied it — and fabricates nothing when it didn't.
+  it("a live stall with lastActivity renders 'stalled · silent 4m' plus the supplied lastActivity", () => {
+    const block = mkAgentBlock({
+      status: "running",
+      subagent: mkSubagent({
+        final: null,
+        stalled: { silentMs: 240_000, lastActivity: "Read", waitingForApproval: false },
+      }),
+    });
+    const html = renderAgentBody(block, false);
+    expect(html).toContain("subagent-stall-note");
+    expect(html).toContain("stalled · silent 4m");
+    expect(html).toContain("last Read");
+  });
+
+  it("a live stall without lastActivity renders the note but fabricates no activity", () => {
+    const block = mkAgentBlock({
+      status: "running",
+      subagent: mkSubagent({
+        final: null,
+        stalled: { silentMs: 240_000, waitingForApproval: false },
+      }),
+    });
+    const html = renderAgentBody(block, false);
+    expect(html).toContain("subagent-stall-note");
+    expect(html).toContain("stalled · silent 4m");
+    expect(html).not.toContain("last ");
+  });
+
+  it("silence on a pending permission ask reads as waiting for approval, not stalled", () => {
+    const block = mkAgentBlock({
+      status: "running",
+      subagent: mkSubagent({
+        final: null,
+        stalled: { silentMs: 240_000, waitingForApproval: true },
+      }),
+    });
+    const html = renderAgentBody(block, false);
+    expect(html).toContain("waiting for approval · silent 4m");
+    expect(html).not.toContain("stalled ·");
+  });
+
+  it("a card without a stalled state renders no stall note", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ final: null }) });
+    const html = renderAgentBody(block, false);
+    expect(html).not.toContain("subagent-stall-note");
+    expect(html).not.toContain("stalled ·");
+  });
 });
 
 describe("ToolCallCard (SSR component render) — generic non-Agent path stays untouched", () => {
@@ -1710,6 +1761,32 @@ describe("ToolCallCard (SSR component render) — generic non-Agent path stays u
     expect(html).not.toContain("subagent-activity-feed");
     expect(html).not.toContain("subagent-prompt-plaque");
     expect(html).not.toContain("tool-call-agent-result");
+  });
+
+  // TASK.148 live-presentation slice: the collapsed row carries the same
+  // quiet stall note as the expanded body (an Agent card defaults to
+  // collapsed in every status — the note must be visible without expanding).
+  it("a collapsed running Agent card with a live stall shows the stall note in the row", () => {
+    const block = mkAgentBlock({
+      status: "running",
+      subagent: mkSubagent({
+        final: null,
+        stalled: { silentMs: 240_000, lastActivity: "Read", waitingForApproval: false },
+      }),
+    });
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+    expect(html).toContain("subagent-collapsed-progress");
+    expect(html).toContain("subagent-stall-note");
+    expect(html).toContain("stalled · silent 4m");
+    expect(html).toContain("last Read");
+  });
+
+  it("a collapsed running Agent card without a stall carries no stall note", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ final: null }) });
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+    expect(html).toContain("subagent-collapsed-progress");
+    expect(html).not.toContain("subagent-stall-note");
+    expect(html).not.toContain("stalled ·");
   });
 });
 

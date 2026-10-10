@@ -2028,6 +2028,165 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
     expect(store.getState().transcript).toEqual(before);
   });
 
+  it("subagent_stalled sets the exact stall fields on a matching seeded live card; cleared by progress, activity, and end", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-1", agentType: "explore", description: "d" },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_stalled",
+        toolCallId: "call-1",
+        agentType: "explore",
+        description: "d",
+        silentMs: 240_000,
+        lastActivity: "Read",
+        waitingForApproval: false,
+      },
+    });
+    let block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({
+      subagent: {
+        final: null,
+        stalled: { silentMs: 240_000, lastActivity: "Read", waitingForApproval: false },
+      },
+    });
+
+    // progress clears the stall (confirmed sign of life) and refreshes counters
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-1", turns: 1, toolCalls: 1, lastTool: "Bash" },
+    });
+    block = findByToolCallId(store, "call-1");
+    expect(block?.kind === "tool_call" && block.subagent && "stalled" in block.subagent).toBe(false);
+
+    // stalled again, then an activity row clears it too
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_stalled",
+        toolCallId: "call-1",
+        agentType: "explore",
+        description: "d",
+        silentMs: 90_000,
+        waitingForApproval: true,
+      },
+    });
+    block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { stalled: { silentMs: 90_000, waitingForApproval: true } } });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_activity", toolCallId: "call-1", toolName: "Read", summary: "store.ts" },
+    });
+    block = findByToolCallId(store, "call-1");
+    expect(block?.kind === "tool_call" && block.subagent && "stalled" in block.subagent).toBe(false);
+
+    // stalled again, then end clears it as part of the settle
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_stalled",
+        toolCallId: "call-1",
+        agentType: "explore",
+        description: "d",
+        silentMs: 30_000,
+        waitingForApproval: false,
+      },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "completed", turns: 2, durationMs: 5_000 },
+    });
+    block = findByToolCallId(store, "call-1");
+    expect(block).toMatchObject({ subagent: { final: { status: "completed", durationMs: 5_000 } } });
+    expect(block?.kind === "tool_call" && block.subagent && "stalled" in block.subagent).toBe(false);
+  });
+
+  it("subagent_stalled is a no-op for a foreign toolCallId, an unseeded call, and after terminal completion", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-1", agentType: "explore", description: "d" },
+    });
+
+    // unseeded: stall on a second Agent call that never received subagent_start
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: "call-2", name: "Agent", input: { description: "x", prompt: "y" } },
+      },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_stalled",
+        toolCallId: "call-2",
+        agentType: "explore",
+        description: "x",
+        silentMs: 240_000,
+        waitingForApproval: false,
+      },
+    });
+    expect(findByToolCallId(store, "call-2")).toMatchObject({ subagent: null });
+
+    // foreign toolCallId: no matching block at all — full transcript unchanged
+    const before = store.getState().transcript;
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_stalled",
+        toolCallId: "foreign-call",
+        agentType: "explore",
+        description: "d",
+        silentMs: 240_000,
+        waitingForApproval: false,
+      },
+    });
+    expect(store.getState().transcript).toEqual(before);
+
+    // terminal: settle call-1, then a late stall is a no-op
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "completed", turns: 1, durationMs: 100 },
+    });
+    const settled = store.getState().transcript;
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_stalled",
+        toolCallId: "call-1",
+        agentType: "explore",
+        description: "d",
+        silentMs: 240_000,
+        waitingForApproval: false,
+      },
+    });
+    expect(store.getState().transcript).toEqual(settled);
+  });
+
   it("a genuinely unknown AgentEvent variant near a subagent-bearing tool_call still hits the exhaustiveness default no-op (regression guard, same tolerance as the general 'unrecognized event' case above)", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
