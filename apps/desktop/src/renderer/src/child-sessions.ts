@@ -226,3 +226,22 @@ export function spawnToolCallIdForChild(
   }
   return found;
 }
+
+/**
+ * TASK.218: predicate telling `openChild` whether an EXISTING split-row id
+ * belongs to the same logical child as the id being opened (a
+ * continue_session continuation registers a NEW spawn id for the SAME
+ * childSessionId). True for every spawn id this parent registered under that
+ * childSessionId — the Open-path fold then retargets that row in place
+ * instead of appending a second row for one logical child. Undefined parent
+ * or unknown child → a predicate that matches nothing (plain append).
+ */
+export function sameChildPredicate(
+  relations: ReadonlyMap<string, ChildRelation>,
+  parentSessionId: string | undefined,
+  childSessionId: string,
+): (spawnToolCallId: string) => boolean {
+  return (id) =>
+    parentSessionId !== undefined &&
+    relations.get(childRelationKey(parentSessionId, id))?.childSessionId === childSessionId;
+}

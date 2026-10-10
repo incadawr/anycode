@@ -38,7 +38,7 @@ import { TabContext } from "../tab-context.js";
 import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
 import { childBadgeKind, childLayoutStore, type ChildBadgeKind } from "../child-layout.js";
-import { childRelationStore, hasOpenableChild, type ChildRelation } from "../child-sessions.js";
+import { childRelationStore, hasOpenableChild, sameChildPredicate, type ChildRelation } from "../child-sessions.js";
 import { DiffView } from "./DiffView.js";
 import { Check, Chevron, Minus, Spinner, Warning, X } from "./icons.js";
 import { Markdown } from "./Markdown.js";
@@ -1094,13 +1094,29 @@ function useChildSessionAction(
       ? state.getRelation(parentSessionId, block.toolCallId)
       : undefined,
   );
+  // TASK.218: the raw relations map for the Open-path same-child fold —
+  // opening a continuation of a child already on the split stack retargets
+  // that row instead of appending a second one.
+  const relations = childRelationStore((state) => state.relations);
   const badge = isAgentCard && ctx !== null ? childActionBadge(block.subagent, relation) : undefined;
   if (badge === undefined || ctx === null) {
     return undefined;
   }
   const rootTabId = ctx.tabId;
   const spawnToolCallId = block.toolCallId;
-  return { badge, onOpen: () => childLayoutStore.getState().open(rootTabId, spawnToolCallId) };
+  return {
+    badge,
+    onOpen: () =>
+      childLayoutStore
+        .getState()
+        .open(
+          rootTabId,
+          spawnToolCallId,
+          relation !== undefined && parentSessionId !== null && parentSessionId !== undefined
+            ? sameChildPredicate(relations, parentSessionId, relation.childSessionId)
+            : undefined,
+        ),
+  };
 }
 
 /**

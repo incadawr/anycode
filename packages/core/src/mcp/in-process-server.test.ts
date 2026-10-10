@@ -21,6 +21,7 @@ import {
   type McpToolCallResult,
   type McpToolDecl,
 } from "./in-process-server.js";
+import { buildAgentBridgeToolDecl, decodeAgentBridgeCallInput, runAgentBridgeCall } from "../subagents/agent-bridge.js";
 
 const AGENT_DECL: McpToolDecl = {
   name: "agent",
@@ -254,5 +255,88 @@ describe("ControlChannelTransport (hand-driven control-channel envelopes, no SDK
 
     expect(capturedSignal!.aborted).toBe(true);
     await expect(pendingCall).resolves.toBeNull();
+  });
+});
+
+// TASK.218 (supervisor correction 6): the Claude MCP transport's result path —
+// a REAL runAgentBridgeCall delegation (mocked session port) projected through
+// createInProcessMcpServer and read back over a real SDK Client, proving the
+// child-session id + continue_session hint reach the wire verbatim.
+describe("createInProcessMcpServer — agent result id/hint through runAgentBridgeCall (TASK.218)", () => {
+  const CATALOG = [{ name: "glm-lead", description: "Leads", systemPrompt: "LEAD BODY" }] as const;
+
+  function portFor(outcome: {
+    finalText: string;
+    childSessionId: string;
+    withStart?: boolean;
+  }): import("../ports/session-subagent.js").SessionSubagentPort {
+    return {
+      run: async (req, opts) => {
+        if (outcome.withStart === true) {
+          opts.onProgress?.({ kind: "start", agentType: "glm-lead", description: "d" });
+        }
+        return {
+          status: "completed",
+          finalText: outcome.finalText,
+          truncated: false,
+          turns: 1,
+          toolCalls: 0,
+          durationMs: 2,
+          childSessionId: outcome.childSessionId,
+          parentSessionId: "parent-1",
+          spawnToolCallId: req.spawnToolCallId,
+        };
+      },
+    };
+  }
+
+  async function callAgentOverTransport(
+    port: import("../ports/session-subagent.js").SessionSubagentPort,
+    args: Record<string, unknown>,
+  ): Promise<{ isError: boolean | undefined; text: string }> {
+    const decl = buildAgentBridgeToolDecl([...CATALOG], { continueSession: true, detach: true });
+    if (decl === null) throw new Error("decl unexpectedly null");
+    const server = createInProcessMcpServer({
+      serverName: "anycode",
+      version: "0.0.1",
+      listTools: () => [decl],
+      callTool: (name, callArgs, signal) =>
+        runAgentBridgeCall(decodeAgentBridgeCallInput(callArgs)!, {
+          catalog: CATALOG,
+          port,
+          spawnToolCallId: `bridge-${name}`,
+          signal,
+        }),
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: "test-client", version: "0.0.1" }, { capabilities: {} });
+    await client.connect(clientTransport);
+    const result = (await client.callTool({ name: "agent", arguments: args })) as {
+      isError?: boolean;
+      content: { type: string; text: string }[];
+    };
+    return { isError: result.isError, text: result.content[0]!.text };
+  }
+
+  it("sync agent call: id + hint ride the MCP response text", async () => {
+    const out = await callAgentOverTransport(portFor({ finalText: "did the thing", childSessionId: "child-1", withStart: true }), {
+      agent_type: "glm-lead",
+      description: "d",
+      prompt: "p",
+    });
+    expect(out.isError).toBe(false);
+    expect(out.text).toContain("Child session id: child-1");
+    expect(out.text).toContain("continue_session");
+  });
+
+  it("detach: the admit text carries id + hint through the transport", async () => {
+    const out = await callAgentOverTransport(
+      portFor({ finalText: "Agent: child session child-1 started in the background.", childSessionId: "child-1" }),
+      { agent_type: "glm-lead", description: "d", prompt: "p", detach: true },
+    );
+    expect(out.isError).toBe(false);
+    expect(out.text).toContain("Child session id: child-1");
+    expect(out.text).toContain("continue_session");
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SUBAGENT_STALL_TIMEOUT_MS } from "@anycode/core";
+import { SUBAGENT_STALL_TIMEOUT_MS, formatChildTaskNotification } from "@anycode/core";
 import type {
   PermissionMode,
   SessionSubagentOutcome,
@@ -804,6 +804,47 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
       // background — the ONLY text the model ever sees for this call.
       expect(outcome.finalText).toContain("child-detach-1");
       expect(outcome.finalText.toLowerCase()).toContain("background");
+      // TASK.218: the admit text also tells the model how to follow up on
+      // this same child later.
+      expect(outcome.finalText).toContain("continue_session");
+    });
+
+    it("TASK.218: full detached lifecycle — onDetachedTerminal's childSessionId is the child's, and the delivered child_report composite carries the hint", async () => {
+      const { port, sent, emit, detachedTerminals } = detachHarness();
+      const pending = port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-detach-r", detach: true },
+        {},
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-9", childTabId: "t1", model: "m" });
+      await pending; // admit settles the run() promise
+
+      emit(
+        terminalEvent(requestId, {
+          status: "completed",
+          finalText: "the child's report",
+          turns: 2,
+          toolCalls: 4,
+          durationMs: 800,
+          childSessionId: "child-9",
+        }),
+      );
+
+      expect(detachedTerminals).toHaveLength(1);
+      const outcome = detachedTerminals[0]!.outcome as SessionSubagentOutcome;
+      expect(outcome.childSessionId).toBe("child-9");
+      // The exact composition deliverDetachedChildReport performs
+      // (host/index.ts ~511): the formatter keyed on the outcome's child id.
+      const report = formatChildTaskNotification({
+        taskId: "spawn-detach-r",
+        toolUseId: "spawn-detach-r",
+        agentId: outcome.childSessionId,
+        subagentType: "general-purpose",
+        status: "completed",
+        summary: "the child's report",
+      });
+      expect(report).toContain("<agent-id>child-9</agent-id>");
+      expect(report).toMatch(/pass its agent-id as continue_session/);
     });
 
     it("emits NO onProgress at all on accept (no live card for a call that already returned)", async () => {

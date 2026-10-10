@@ -154,7 +154,7 @@ export function formatChildTaskNotification(input: ChildTaskNotificationInput): 
     `  <summary>${escapeXmlText(summary)}</summary>`,
     "</task-notification>",
   ].join("\n");
-  return `${NOTIFICATION_HEADER}\n\n${body}`;
+  return `${NOTIFICATION_HEADER}\n\n${body}\n\nTo send a follow-up to this child session, pass its agent-id as continue_session in the next agent call.`;
 }
 
 /**

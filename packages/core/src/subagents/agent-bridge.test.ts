@@ -304,7 +304,11 @@ describe("runAgentBridgeCall (§3.4)", () => {
       },
     );
     expect(result.isError).toBe(false);
-    expect(result.text).toBe("child session done");
+    // TASK.218: successful session outcomes append the follow-up note —
+    // this BASE_OUTCOME carries a childSessionId, so the note rides along.
+    expect(result.text).toBe(
+      "child session done\n\n[Child session id: child-1. Pass it as continue_session in a later agent call to send a follow-up to this same child in its existing conversation.]",
+    );
   });
 
   it("engine entry: request carries the composed prompt/engine/model (proves runAgentBridgeCall routes through buildSessionSubagentRequest)", async () => {
@@ -476,7 +480,12 @@ describe("runAgentBridgeCall — detach", () => {
     );
     expect(seen?.detach).toBe(true);
     expect(seen?.prompt).toBe("LEAD BODY\n\n---\n\ndo it");
-    expect(result).toEqual({ text: "Agent: child session child-9 started in the background.", isError: false });
+    // TASK.218: the detached admit passthrough now also carries the
+    // follow-up note (off the OUTPUT childSessionId — no card is fabricated).
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("Agent: child session child-9 started in the background.");
+    expect(result.text).toContain("[Child session id: child-9");
+    expect(result.text).toContain("continue_session");
   });
 
   it("no detach => the request carries no detach key at all (sync join, unchanged)", async () => {
@@ -544,6 +553,91 @@ describe("runAgentBridgeCall — continue_session (follow-up to a finished child
     });
     expect(decodeAgentBridgeCallInput({ agent_type: "a", description: "d", prompt: "p", continue_session: "" })).toBeNull();
     expect(decodeAgentBridgeCallInput({ agent_type: "a", description: "d", prompt: "p", continue_session: 7 })).toBeNull();
+  });
+
+  it("TASK.218 decl copy: continue_session names where the id comes from; detach mentions continue_session", () => {
+    const opted = buildAgentBridgeToolDecl([ENTRY], { continueSession: true, detach: true })?.inputSchema as {
+      properties?: Record<string, { description?: string }>;
+    };
+    expect(opted?.properties?.continue_session?.description).toMatch(/stated in that call's result/);
+    expect(opted?.properties?.continue_session?.description).toMatch(/<agent-id>/);
+    expect(opted?.properties?.detach?.description).toContain("continue_session");
+  });
+});
+
+describe("runAgentBridgeCall — childSessionId discoverability (TASK.218)", () => {
+  const ENTRY: AgentBridgeCatalogEntry = { name: "glm-lead", description: "Leads", model: "glm-5.3", systemPrompt: "LEAD BODY" };
+
+  it("sync call: the result text carries the child session id and the continue_session hint (with progress)", async () => {
+    const port: SessionSubagentPort = {
+      run: async (_req, opts) => {
+        opts.onProgress?.({ kind: "start", agentType: "glm-lead", description: "d" });
+        return {
+          status: "completed",
+          finalText: "all done",
+          truncated: false,
+          turns: 1,
+          toolCalls: 2,
+          durationMs: 5,
+          childSessionId: "child-9",
+          parentSessionId: "parent-1",
+          spawnToolCallId: "call_x",
+        };
+      },
+    };
+    const result = await runAgentBridgeCall(
+      { agent_type: "glm-lead", description: "d", prompt: "p" },
+      { catalog: [ENTRY], port, spawnToolCallId: "call_x" },
+    );
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("all done");
+    expect(result.text).toContain("child-9");
+    expect(result.text).toContain("continue_session");
+  });
+
+  it("sync call with NO progress: the hint still rides (output-id seam, no card required)", async () => {
+    const port: SessionSubagentPort = {
+      run: async (req) => ({
+        status: "completed",
+        finalText: "done quietly",
+        truncated: false,
+        turns: 0,
+        toolCalls: 0,
+        durationMs: 1,
+        childSessionId: "child-9",
+        parentSessionId: "p",
+        spawnToolCallId: req.spawnToolCallId,
+      }),
+    };
+    const result = await runAgentBridgeCall(
+      { agent_type: "glm-lead", description: "d", prompt: "p" },
+      { catalog: [ENTRY], port, spawnToolCallId: "call_y" },
+    );
+    expect(result.text).toContain("[Child session id: child-9");
+    expect(result.text).toContain("continue_session");
+  });
+
+  it("detach: the admit passthrough carries id + hint", async () => {
+    const port: SessionSubagentPort = {
+      run: async (req) => ({
+        status: "completed",
+        finalText: "Agent: child session child-9 started in the background.",
+        truncated: false,
+        turns: 0,
+        toolCalls: 0,
+        durationMs: 3,
+        childSessionId: "child-9",
+        parentSessionId: "parent-1",
+        spawnToolCallId: req.spawnToolCallId,
+      }),
+    };
+    const result = await runAgentBridgeCall(
+      { agent_type: "glm-lead", description: "d", prompt: "p", detach: true },
+      { catalog: [ENTRY], port, spawnToolCallId: "call_z" },
+    );
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain("child-9");
+    expect(result.text).toContain("continue_session");
   });
 });
 

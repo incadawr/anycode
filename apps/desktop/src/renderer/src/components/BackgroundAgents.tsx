@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 import type { WireBackgroundChild } from "../../../shared/protocol.js";
 import { childLayoutStore } from "../child-layout.js";
-import { childRelationStore, spawnToolCallIdForChild } from "../child-sessions.js";
+import { childRelationStore, sameChildPredicate, spawnToolCallIdForChild } from "../child-sessions.js";
 import { useTabContextTabId, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import { formatElapsed } from "./WorkingRow.js";
@@ -61,7 +61,17 @@ export function BackgroundAgents() {
                 <button
                   type="button"
                   className="background-agents-action"
-                  onClick={() => childLayoutStore.getState().open(tabId, spawnToolCallId)}
+                  onClick={() =>
+                    childLayoutStore
+                      .getState()
+                      .open(
+                        tabId,
+                        spawnToolCallId,
+                        parentSessionId === null
+                          ? undefined
+                          : sameChildPredicate(relations, parentSessionId, child.childSessionId),
+                      )
+                  }
                 >
                   Open
                 </button>
