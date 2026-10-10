@@ -24,21 +24,34 @@ function envWith(ranges: string[], riskAcceptedVersions: string[] = []): NodeJS.
 
 describe("resolveHostCodexVersionPolicy", () => {
   it("judges by the DELIVERED range, not by the compiled wire pin", () => {
-    // 0.151.0 is inside the compiled pin but outside this manifest range, so
-    // a host still judging by the constant would allow it. The
-    // reverse direction is covered by the risk case below.
-    const policy = resolveHostCodexVersionPolicy(envWith([">=0.144.0 <0.146.0"]));
-    expect(isSupportedCodexVersion(version("0.151.0"))).toBe(true);
-    expect(policy.allows(version("0.151.0"))).toBe(false);
+    // 0.144.5 is inside the compiled pin but below this manifest range's
+    // floor, so a host still judging by the constant would allow it — the
+    // delivered-range refusal probe. 0.151.0 is above the delivered ceiling
+    // and now SOFT-ALLOWS (owner decision 10.10), so `allows` is true there.
+    const policy = resolveHostCodexVersionPolicy(envWith([">=0.145.0 <0.146.0"]));
+    expect(isSupportedCodexVersion(version("0.144.5"))).toBe(true);
+    expect(policy.allows(version("0.144.5"))).toBe(false);
+    expect(policy.allows(version("0.151.0"))).toBe(true);
     expect(policy.allows(version("0.145.9"))).toBe(true);
-    expect(policy.supportedRange).toBe(">=0.144.0 <0.146.0");
+    expect(policy.supportedRange).toBe(">=0.145.0 <0.146.0");
+  });
+
+  it("soft-allows above the delivered ceiling with a warning, null when verified", () => {
+    const policy = resolveHostCodexVersionPolicy(envWith([">=0.144.0 <0.146.0"]));
+    expect(policy.allows(version("0.150.0"))).toBe(true);
+    expect(policy.warningFor(version("0.150.0"))).toMatch(/not verified, running anyway/);
+    expect(policy.warningFor(version("0.145.9"))).toBeNull();
   });
 
   it("starts a version ABOVE the ceiling once it is in riskAcceptedVersions", () => {
     const policy = resolveHostCodexVersionPolicy(envWith([">=0.144.0 <0.152.0"], ["0.152.0"]));
     expect(policy.allows(version("0.152.0"))).toBe(true);
-    // Only the accepted version, and only exactly.
-    expect(policy.allows(version("0.152.1"))).toBe(false);
+    // Only the accepted version, and only exactly — the neighbour below is a
+    // gap now? No: it is ABOVE the ceiling, so it soft-allows; but a risk
+    // acceptance never adds a warning, which is what this asserts.
+    expect(policy.warningFor(version("0.152.0"))).toBeNull();
+    expect(policy.allows(version("0.153.0"))).toBe(true);
+    expect(policy.warningFor(version("0.153.0"))).toMatch(/not verified, running anyway/);
   });
 
   it("names the ACTIVE range, `||`-joined, for the refusal message", () => {
@@ -60,5 +73,8 @@ describe("resolveHostCodexVersionPolicy", () => {
     expect(policy.allows(version("0.163.0"))).toBe(false);
     expect(policy.allows(version("1.0.0"))).toBe(false);
     expect(policy.allows(version("0.100.0"))).toBe(true);
+    // The strict compiled fallback never soft-allows and never warns.
+    expect(policy.warningFor(version("0.163.0"))).toBeNull();
+    expect(policy.warningFor(version("0.154.0"))).toBeNull();
   });
 });
