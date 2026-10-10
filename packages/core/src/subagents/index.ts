@@ -2,9 +2,17 @@ export {
   SPAWN_TOOLS,
   buildChildConfig,
   createSubagentRunner,
+  runWrapUp,
   withSubagents,
 } from "./runner.js";
 export type { SubagentRunnerOptions } from "./runner.js";
+// TASK.196: shared turn-limit wrap-up notices, re-exported for the desktop
+// host (session.ts / index.ts) via the root barrel.
+export {
+  SUBAGENT_WRAPUP_DEGRADED_PREFIX,
+  SUBAGENT_WRAPUP_FAILED_NOTICE,
+  childTurnLimitNotice,
+} from "../prompts/subagent.js";
 export {
   PERSONAS,
   getPersona,

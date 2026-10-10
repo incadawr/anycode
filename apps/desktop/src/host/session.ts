@@ -64,7 +64,9 @@ import type {
 import {
   SESSION_TITLE_MAX_LENGTH,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
+  SUBAGENT_WRAPUP_FAILED_NOTICE,
   appendFinalText,
+  childTurnLimitNotice,
   createFinalTextAccumulator,
   deriveSessionTitle,
   finalizeFinalText,
@@ -423,6 +425,16 @@ export type ChildProgressReport =
  * child's one and only externally-triggered turn chain.
  */
 export interface ChildSessionOptions {
+  /**
+   * TASK.196 DI seam for the turn-limit wrap-up rescue. CORE-ONLY: a callback
+   * exists only when the child runs the core loop with an in-process ModelPort
+   * (host/index.ts wires it to core's runWrapUp). CLI-engine children
+   * (codex/claude) have no core loop/model to run the tool-free wrap-up call
+   * against, so they pass no callback and their empty max_turns terminal gets
+   * the explicit childTurnLimitNotice fallback instead. Returns the rescue
+   * report text; a blank/throwing result degrades to the failure notice.
+   */
+  wrapUpRescue?: () => Promise<string>;
   /**
    * Fires exactly once, on this session's FIRST `ui_ready` — never before
    * (the renderer/relay is not listening yet) and never again on a later
@@ -2885,8 +2897,7 @@ export class Session {
     const childResult = this.childLoopStatus === "error"
       ? { ...this.childFinalText, final: `${this.childSafeError ?? safeFailureMessage("unknown")}\n\n${this.childFinalText.final}` }
       : this.childFinalText;
-    const { text: finalText, truncated } = finalizeFinalText(childResult);
-    const durationMs = Date.now() - this.childStartedAt;
+    let { text: finalText, truncated } = finalizeFinalText(childResult);
     try {
       await this.child.flushHistory();
     } catch (error) {
@@ -2894,6 +2905,7 @@ export class Session {
       // running more steer turns against it is pointless — every message
       // parked during the flush is rejected honestly instead of silently
       // lost (the O7 bug), and the error terminal publishes as-is.
+      const flushDurationMs = Date.now() - this.childStartedAt;
       this.rejectQueuedSteerMessages();
       this.childTerminalFinalized = true;
       try {
@@ -2903,7 +2915,7 @@ export class Session {
           truncated: false,
           turns: this.childTurns,
           toolCalls: this.childToolCalls,
-          durationMs,
+          durationMs: flushDurationMs,
           ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
         });
       } catch (onTerminalError) {
@@ -2920,6 +2932,45 @@ export class Session {
       // must never be mistaken for a live hand-off (see docstring above).
       return "drained";
     }
+    // TASK.196 turn-limit rescue: a max_turns child with at least one
+    // completed turn and NO report text gets one bounded tool-free wrap-up
+    // BEFORE the terminal is latched/published — placed AFTER the steer
+    // drain above so a discarded terminal attempt never triggers a second
+    // rescue. Never runs when shutting down (no model call may outlive the
+    // host) and never revises status/counters.
+    //
+    // The rescue `await` OPENS a lifecycle gap: a user_message or shutdown
+    // can arrive while it is pending, exactly like during `flushHistory`
+    // above (§10.10.1 O7). The post-rescue re-check below closes that gap
+    // with the SAME drain-or-reject behavior — a queued steer drains into a
+    // live turn (returning "drained" discards the stale rescued report; the
+    // next settle re-runs this whole method, including a fresh rescue, from
+    // the top), and shutdown rejects the queue instead of starting anything.
+    if (
+      !this.shuttingDown &&
+      this.childLoopStatus === "max_turns" &&
+      this.childTurns > 0 &&
+      finalText.trim().length === 0
+    ) {
+      const rescued = await this.rescueTurnLimitReport();
+      if (rescued !== undefined) {
+        const cappedRescue = finalizeFinalText(
+          { ...this.childFinalText, final: rescued },
+        );
+        finalText = cappedRescue.text;
+        truncated = cappedRescue.truncated;
+      }
+      // Post-rescue re-check (TASK.196): mirror of the pre-rescue handling
+      // — never latch the terminal while the queue holds an undrained steer
+      // or shutdown has begun mid-rescue.
+      if (this.shuttingDown) {
+        this.rejectQueuedSteerMessages();
+      } else if (this.startNextQueuedSteerTurn()) {
+        return "drained";
+      }
+    }
+    // Measured AFTER the rescue so the reported duration includes it.
+    const durationMs = Date.now() - this.childStartedAt;
     this.childTerminalFinalized = true;
     try {
       this.child.onTerminal({
@@ -2937,6 +2988,30 @@ export class Session {
       console.error(`[host] child.onTerminal threw: ${describeError(error)}`);
     }
     return "terminal";
+  }
+
+  /**
+   * TASK.196: resolves the report text for a max_turns child that produced
+   * no final text. With a `wrapUpRescue` callback (core-engine children:
+   * host/index.ts wires it to core's runWrapUp), awaits it — non-whitespace
+   * text is the report; a throw or blank result degrades to the shared
+   * failure notice. Without a callback (CLI-engine children: no core loop,
+   * no in-process model to run the tool-free wrap-up against), returns the
+   * explicit turn-limit notice carrying the child's last activity.
+   * Returning undefined is not part of the contract — every caller gets a
+   * non-empty report.
+   */
+  private async rescueTurnLimitReport(): Promise<string> {
+    const rescue = this.child?.wrapUpRescue;
+    if (rescue === undefined) {
+      return childTurnLimitNotice(this.childLastTool);
+    }
+    try {
+      const text = await rescue();
+      return text.trim().length > 0 ? text : SUBAGENT_WRAPUP_FAILED_NOTICE;
+    } catch {
+      return SUBAGENT_WRAPUP_FAILED_NOTICE;
+    }
   }
 
   /**
