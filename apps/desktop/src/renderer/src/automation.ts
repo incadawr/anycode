@@ -532,6 +532,35 @@ export interface ModelPillDom {
   clickRootRow(row: "model" | "effort"): void;
   /** A real `.click()` on the Nth `.model-pill-item` in whichever sub-page is currently rendered (a no-op if out of range). */
   clickItemAt(index: number): void;
+  /**
+   * TASK.106 drill-down surface (optional — every member below is additive so
+   * the pre-drill fakes and legacy call sites stay valid): the popover now
+   * renders the SHARED drill-down (`ModelDrillMenu`, `.start-model-menu`)
+   * instead of the pill's own root/model/effort pages, so the driver reads
+   * and clicks THAT markup. All queries are scoped to this pill's
+   * `.model-pill-popover`; attribute values are matched as raw
+   * `getAttribute` strings, never interpolated into a selector.
+   */
+  /** Whether the drill-down menu (`.start-model-menu`) is currently rendered inside the popover. */
+  drillMenuVisible?(): boolean;
+  /** The menu's `data-level` (`"root" | "group" | "effort"`), or `null` when no menu is rendered. */
+  drillMenuLevel?(): string | null;
+  /** The visible `.start-model-group` rows, in render order, with their `data-connection-id` and `data-model-count`. */
+  drillMenuGroups?(): Array<{ connectionId: string; count: number }>;
+  /** The visible `.start-model-item[data-model-id]` rows (popular picks on root, a group's models on a group level), in render order. */
+  drillMenuModels?(): Array<{ connectionId: string; modelId: string }>;
+  /** Whether the root level's effort row (`.start-model-effort-row`) is currently rendered. */
+  drillEffortRowVisible?(): boolean;
+  /** A real `.click()` on the level's back button; `false` when no back button is rendered. */
+  clickDrillBack?(): boolean;
+  /** A real `.click()` on the root-level group row for this connection; `false` when no such row is rendered. */
+  clickDrillGroup?(connectionId: string): boolean;
+  /** A real `.click()` on the visible model item matching this connection+model pair; `false` when no such row is rendered. */
+  clickDrillModel?(connectionId: string, modelId: string): boolean;
+  /** A real `.click()` on the root level's effort row; `false` when it isn't rendered. */
+  clickDrillEffortRow?(): boolean;
+  /** A real `.click()` on the effort-level item with this exact `data-effort`; `false` when no such row is rendered. */
+  clickDrillEffort?(value: string): boolean;
 }
 
 /**
@@ -3081,9 +3110,12 @@ function realStartScreenDom(): StartScreenDom {
  * browser; tests always pass an explicit `modelPillDom` and never reach
  * this). `ModelPill` mounts at most once (only for the active tab,
  * `ActiveTabBody`), so this queries the document directly — same posture as
- * `realStartScreenDom` — rather than a `data-tab-id`-scoped query.
+ * `realStartScreenDom` — rather than a `data-tab-id`-scoped query. Exported
+ * for tests (the drill-down selector suite stubs `document` with a fake
+ * node tree and drives THIS accessor, so a stale class name in the real
+ * selector strings fails a test instead of a live smoke).
  */
-function realModelPillDom(): ModelPillDom {
+export function realModelPillDom(): ModelPillDom {
   function root(): HTMLDivElement | null {
     return document.querySelector<HTMLDivElement>(".model-pill");
   }
@@ -3096,6 +3128,21 @@ function realModelPillDom(): ModelPillDom {
     currentPage: () => {
       const pop = popover();
       if (!pop) {
+        return "root";
+      }
+      // TASK.106 drill-down: when the popover renders the SHARED menu, the
+      // level comes off its `data-level` attribute — group/effort mapped to
+      // the public model/effort shape. Legacy fallback below keeps the
+      // pre-drill popover pages working (and any popover without a menu).
+      const menu = pop.querySelector(".start-model-menu");
+      if (menu) {
+        const level = menu.getAttribute("data-level");
+        if (level === "group") {
+          return "model";
+        }
+        if (level === "effort") {
+          return "effort";
+        }
         return "root";
       }
       const back = pop.querySelector(".model-pill-back");
@@ -3126,6 +3173,75 @@ function realModelPillDom(): ModelPillDom {
       const pop = popover();
       const items = pop?.querySelectorAll<HTMLButtonElement>(".model-pill-item");
       items?.[index]?.click();
+    },
+    // TASK.106 drill-down surface: the real popover renders the SHARED
+    // `ModelDrillMenu` inside `.model-pill-popover`, so every query below is
+    // scoped to that popover and matches raw `data-*` attribute values —
+    // never an interpolated selector (a `"` in an id would break out).
+    // Normalized with an explicit comparison, not `!== null` alone: when the
+    // popover/root is absent the whole chain yields `undefined`, which a
+    // bare `!== null` would misread as true.
+    drillMenuVisible: () => (popover()?.querySelector(".start-model-menu") ?? null) !== null,
+    drillMenuLevel: () => popover()?.querySelector(".start-model-menu")?.getAttribute("data-level") ?? null,
+    drillMenuGroups: () =>
+      Array.from(popover()?.querySelectorAll<HTMLButtonElement>(".start-model-menu .start-model-group") ?? []).map((row) => ({
+        connectionId: row.getAttribute("data-connection-id") ?? "",
+        count: Number(row.getAttribute("data-model-count") ?? "0"),
+      })),
+    drillMenuModels: () =>
+      Array.from(
+        popover()?.querySelectorAll<HTMLButtonElement>(".start-model-menu .start-model-item[data-model-id]") ?? [],
+      ).map((item) => ({
+        connectionId: item.getAttribute("data-connection-id") ?? "",
+        modelId: item.getAttribute("data-model-id") ?? "",
+      })),
+    drillEffortRowVisible: () =>
+      (popover()?.querySelector(".start-model-menu .start-model-effort-row") ?? null) !== null,
+    clickDrillBack: () => {
+      const back = popover()?.querySelector<HTMLButtonElement>(".start-model-menu .start-model-back");
+      if (!back) {
+        return false;
+      }
+      back.click();
+      return true;
+    },
+    clickDrillGroup: (connectionId) => {
+      const row = Array.from(
+        popover()?.querySelectorAll<HTMLButtonElement>(".start-model-menu .start-model-group") ?? [],
+      ).find((candidate) => candidate.getAttribute("data-connection-id") === connectionId);
+      if (!row) {
+        return false;
+      }
+      row.click();
+      return true;
+    },
+    clickDrillModel: (connectionId, modelId) => {
+      const row = Array.from(
+        popover()?.querySelectorAll<HTMLButtonElement>(".start-model-menu .start-model-item[data-model-id]") ?? [],
+      ).find((candidate) => candidate.getAttribute("data-connection-id") === connectionId && candidate.getAttribute("data-model-id") === modelId);
+      if (!row) {
+        return false;
+      }
+      row.click();
+      return true;
+    },
+    clickDrillEffortRow: () => {
+      const row = popover()?.querySelector<HTMLButtonElement>(".start-model-menu .start-model-effort-row");
+      if (!row) {
+        return false;
+      }
+      row.click();
+      return true;
+    },
+    clickDrillEffort: (value) => {
+      const row = Array.from(
+        popover()?.querySelectorAll<HTMLButtonElement>(".start-model-menu .start-model-item[data-effort]") ?? [],
+      ).find((candidate) => candidate.getAttribute("data-effort") === value);
+      if (!row) {
+        return false;
+      }
+      row.click();
+      return true;
     },
   };
 }
@@ -5084,6 +5200,163 @@ async function waitUntil(predicate: () => boolean, deadlineMs: number): Promise<
 
 /** Deadline for `waitUntil` polls inside `modelPillPick` (design §2.6 W4 fix) — generous enough for a slow React commit under test/CI load, short enough to fail fast on a genuine no-op click. */
 const MODEL_PILL_COMMIT_DEADLINE_MS = 500;
+
+/**
+ * The pill's drill-down surface (`ModelPillDom`'s optional TASK.106 members),
+ * narrowed to the shape `modelPillDrillPick` actually drives. A DI without
+ * these members never reaches this helper — `modelPillPick` only takes the
+ * drill path when `drillMenuVisible?.()` reports the shared menu rendered,
+ * and a real popover always renders it once open.
+ */
+type DrillModelPillDom = ModelPillDom &
+  Required<
+    Pick<
+      ModelPillDom,
+      | "drillMenuVisible"
+      | "drillMenuLevel"
+      | "drillMenuGroups"
+      | "drillMenuModels"
+      | "drillEffortRowVisible"
+      | "clickDrillBack"
+      | "clickDrillGroup"
+      | "clickDrillModel"
+      | "clickDrillEffortRow"
+      | "clickDrillEffort"
+    >
+  >;
+
+/**
+ * Drives a model/effort pick over the SHARED drill-down menu the pill's
+ * popover now renders (TASK.106 cut-2 §D4): a root level (popular picks +
+ * one row per connection group + the effort row), a per-connection group
+ * level, and an effort level — all keyed by the `data-level`/
+ * `data-connection-id`/`data-model-id`/`data-effort` attributes the shared
+ * `ModelDrillMenu` markup stamps, never by position computed from a catalog
+ * (render order and catalog order can disagree; display names can collide).
+ *
+ * Same commit-race discipline as `modelPillPick`'s legacy half: every click
+ * that changes the level is followed by a bounded `waitUntil` poll for the
+ * DOM fact it should produce — a real React commit is not necessarily
+ * visible on the very next line. Bounded everywhere: a click that no-ops
+ * (row absent, guard drift) fails fast with `navigation_failed` /
+ * `effort_row_hidden`, never hangs.
+ *
+ * Selection semantics:
+ * - the CURRENT pinned connection wins when several root levels expose the
+ *   same model id (a popular pick plus its own group row); otherwise the
+ *   first group in rendered order;
+ * - a model must be found rendered (popular strip or an opened group) — a
+ *   DIFFERENT model is never clicked as a fallback;
+ * - a group whose rendered rows lack the model is backed out of and the
+ *   walk continues with the next group.
+ */
+async function modelPillDrillPick(dom: DrillModelPillDom, pick: ModelPillPick & { value: string }, store: DesktopStoreApi): Promise<FacadeResult> {
+  const deadline = MODEL_PILL_COMMIT_DEADLINE_MS;
+  /** The level currently on screen, per `data-level`. */
+  const level = (): string | null => dom.drillMenuLevel();
+
+  /** Clicks the back button and polls until the root level is showing. */
+  const backToRoot = async (): Promise<boolean> => {
+    if (!dom.clickDrillBack()) {
+      return false;
+    }
+    return waitUntil(() => level() === "root", deadline);
+  };
+
+  if (pick.kind === "effort") {
+    // The effort level is only reachable from the root (the root's effort
+    // row opens it) — back out of whatever level is showing first.
+    if (level() !== "root" && !(await backToRoot())) {
+      return { ok: false, reason: "navigation_failed" };
+    }
+    if (!dom.drillEffortRowVisible()) {
+      // A non-reasoning pair renders no effort row at all (design §2.2).
+      return { ok: false, reason: "effort_row_hidden" };
+    }
+    if (!dom.clickDrillEffortRow()) {
+      return { ok: false, reason: "effort_row_hidden" };
+    }
+    if (!(await waitUntil(() => level() === "effort", deadline))) {
+      return { ok: false, reason: "navigation_failed" };
+    }
+    if (!dom.clickDrillEffort(pick.value)) {
+      // The row exists only for a level the current pair's vocabulary
+      // declares — an off-vocabulary value renders no row to click.
+      return { ok: false, reason: "unknown_value" };
+    }
+    return { ok: true };
+  }
+
+  // ── kind:"model" ────────────────────────────────────────────────────────
+  // The pinned connection is the pair the session actually runs on — when
+  // its group also lists the model, prefer it over a same-id popular pick
+  // or another connection's row (the plan's determinism rule).
+  const pinnedConnectionId = store.getState().pinnedConnection?.connectionId ?? null;
+
+  /** Every visible model row matching this exact rendered id, in render order. */
+  const rowsFor = (modelId: string): Array<{ connectionId: string; modelId: string }> =>
+    dom.drillMenuModels().filter((row) => row.modelId === modelId);
+
+  /**
+   * Clicks the first rendered row for `modelId`, preferring the pinned
+   * connection; polls nothing afterwards — the click is terminal (the
+   * component closes the popover on pick).
+   */
+  const clickModelRow = (modelId: string): boolean => {
+    const candidates = rowsFor(modelId);
+    if (candidates.length === 0) {
+      return false;
+    }
+    const pinned = pinnedConnectionId !== null ? candidates.find((row) => row.connectionId === pinnedConnectionId) : undefined;
+    const target = pinned ?? candidates[0]!;
+    return dom.clickDrillModel(target.connectionId, target.modelId);
+  };
+
+  // Fast path: the model is visible right now (a popular pick on the root,
+  // or we are already sitting in its group's level).
+  if (clickModelRow(pick.value)) {
+    return { ok: true };
+  }
+
+  // General path: make sure we are at the root, then walk the rendered
+  // group rows in order, opening each and looking for the model inside.
+  if (level() !== "root" && !(await backToRoot())) {
+    return { ok: false, reason: "navigation_failed" };
+  }
+  const groups = dom.drillMenuGroups();
+  // The pinned connection's group goes FIRST — when several group levels
+  // expose the same model id, the pinned one must win, regardless of the
+  // order the root happened to render them in. The rest keep render order.
+  const orderedGroups =
+    pinnedConnectionId !== null
+      ? [...groups].sort((a, b) => Number(b.connectionId === pinnedConnectionId) - Number(a.connectionId === pinnedConnectionId))
+      : groups;
+  for (const group of orderedGroups) {
+    // A group whose level is ALREADY showing re-renders no group rows — its
+    // models were already checked by the fast path above; skip it.
+    if (level() !== "root") {
+      continue;
+    }
+    if (!dom.clickDrillGroup(group.connectionId)) {
+      // The row vanished between the enumeration and the click — a real
+      // required navigation failed, not a mere miss.
+      return { ok: false, reason: "navigation_failed" };
+    }
+    if (!(await waitUntil(() => level() === "group", deadline))) {
+      return { ok: false, reason: "navigation_failed" };
+    }
+    if (clickModelRow(pick.value)) {
+      return { ok: true };
+    }
+    // Not in this group: back out to the root and try the next one.
+    if (!(await backToRoot())) {
+      return { ok: false, reason: "navigation_failed" };
+    }
+  }
+  // Every reachable group was opened and none rendered the id — a genuine
+  // unknown value, and no item click ever fired.
+  return { ok: false, reason: "unknown_value" };
+}
 
 /** Deadline for `waitUntil` polls inside the Settings facade methods (design §5 W4) — same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const SETTINGS_COMMIT_DEADLINE_MS = 500;
@@ -7223,6 +7496,18 @@ export function createAutomationFacade(
       if (pick.kind === "open") {
         return { ok: true };
       }
+      // ── TASK.106 drill-down path ─────────────────────────────────────────
+      // When the popover renders the SHARED drill-down (`ModelDrillMenu`,
+      // `.start-model-menu`), the pill's own root/model/effort pages are
+      // gone — the driver reads and clicks THAT markup instead. Selection is
+      // by the rendered `data-model-id` identity (never a position computed
+      // from the pinned catalog, which can disagree with the rendered rows),
+      // and the level walk follows the DOM: back to root as needed, then
+      // group by group.
+      if (modelPillDom.drillMenuVisible?.()) {
+        return modelPillDrillPick(modelPillDom as DrillModelPillDom, pick, store);
+      }
+      // ── Legacy path (pre-drill popover pages) — unchanged semantics. ────
       if (modelPillDom.currentPage() !== pick.kind) {
         modelPillDom.clickRootRow(pick.kind);
       }
