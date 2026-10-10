@@ -172,6 +172,29 @@ function warning(message: string): AgentEvent {
 }
 
 /**
+ * TASK.182: defensively parses a `system/init.mcp_servers[]` array into plain
+ * names. Each entry may be `{name, status, source, …}` or a bare string
+ * (both shapes have been observed across CLI versions); anything else is
+ * skipped, never thrown — the init must never fail a turn over a field we
+ * only use for reconciliation warnings.
+ */
+export function parseClaudeInitMcpServerNames(mcpServers: unknown[] | undefined): string[] {
+  if (!Array.isArray(mcpServers)) return [];
+  const names: string[] = [];
+  for (const entry of mcpServers) {
+    if (typeof entry === "string") {
+      if (entry.length > 0) names.push(entry);
+      continue;
+    }
+    if (entry !== null && typeof entry === "object") {
+      const name = (entry as { name?: unknown }).name;
+      if (typeof name === "string" && name.length > 0) names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
  * Resolves the preset a session boots with. An unknown id can only come from a
  * stale renderer or an older session row — neither is a user-visible error, so
  * both quietly become the default. A DRAFT id the user actually picked is
@@ -314,6 +337,13 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    * reads it when it builds the paired top-level `tool_result`'s outcome.
    */
   takePresentation?(toolUseId: string): ToolResultPresentation | undefined;
+  /**
+   * TASK.182: controlled MCP-forwarding warnings (mcp-forward-diagnostic.ts
+   * templates only — no loader strings, no values) collected by the host boot
+   * from prepareEngineMcpForward. Appended into connect's notices for
+   * first-turn drain on BOTH fresh and resume boots.
+   */
+  bootNotices?: AgentEvent[];
 }
 
 /**
@@ -332,6 +362,8 @@ async function connectClaudeEngine(
   spawn: { sessionId: string } | { resume: string },
 ): Promise<ConnectedClaudeEngine> {
   const notices: AgentEvent[] = [];
+  // TASK.182: controlled MCP-forward warnings drain with the first turn.
+  if (options.bootNotices !== undefined) notices.push(...options.bootNotices);
   const resuming = !("sessionId" in spawn);
   const preset = resolvePreset(options.selection, notices);
   const requestedEffort = resolveEffort(options.selection, notices);
@@ -502,8 +534,10 @@ export class ClaudeEngine implements SessionEngine {
   /** Latch + one-shot observers for the FIRST turn-scoped `system/init` (`onFirstSystemInit`). */
   private firstInitSeen = false;
   private readonly firstInitListeners = new Set<
-    (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode }) => void
+    (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode; mcpServerNames: string[] }) => void
   >();
+  /** TASK.182: names from the first observed `system/init`'s mcp_servers[]. */
+  private liveMcpServerNames: string[] | null = null;
   private quota: ClaudeQuotaSnapshot | null = null;
   /** Cumulative `result.total_cost_usd` for this session (capability `costAccounting`). */
   private totalCostUsd = 0;
@@ -1222,12 +1256,13 @@ export class ClaudeEngine implements SessionEngine {
     this.sessionId = init.session_id;
     this.liveModel = init.model;
     this.livePermissionMode = init.permissionMode;
+    this.liveMcpServerNames = parseClaudeInitMcpServerNames(init.mcp_servers);
     this.reconcileFromInit(init);
     if (!this.firstInitSeen) {
       this.firstInitSeen = true;
       for (const listener of this.firstInitListeners) {
         try {
-          listener({ sessionId: init.session_id, model: init.model, permissionMode: init.permissionMode });
+          listener({ sessionId: init.session_id, model: init.model, permissionMode: init.permissionMode, mcpServerNames: this.liveMcpServerNames });
         } catch {
           // A first-init observer is a side-channel (row materialization,
           // resume settle); it can never fail a turn.
@@ -1273,10 +1308,10 @@ export class ClaudeEngine implements SessionEngine {
    * registered after the first init has already been seen is invoked
    * immediately with the latched values.
    */
-  onFirstSystemInit(listener: (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode }) => void): void {
+  onFirstSystemInit(listener: (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode; mcpServerNames: string[] }) => void): void {
     if (this.firstInitSeen) {
       if (this.sessionId !== null && this.liveModel !== null && this.livePermissionMode !== null) {
-        listener({ sessionId: this.sessionId, model: this.liveModel, permissionMode: this.livePermissionMode });
+        listener({ sessionId: this.sessionId, model: this.liveModel, permissionMode: this.livePermissionMode, mcpServerNames: this.liveMcpServerNames ?? [] });
       }
       return;
     }

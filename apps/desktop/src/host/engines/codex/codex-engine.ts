@@ -361,6 +361,20 @@ export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "
    * other boot notice. Never a Codex protocol field.
    */
   bootNotices?: AgentEvent[];
+  /**
+   * TASK.182: MCP servers forwarded to the app-server on thread/start /
+   * thread/resume via `config.mcp_servers` (built by codex/mcp-thread-config.ts
+   * from core-resolved specs). Native Codex still merges ambient per-name
+   * entries from its profile config.toml — OUR supplied map wins collisions;
+   * entries absent from the map keep whatever the profile provides. Each
+   * product boot uses a FRESH app-server, so an empty/absent map cannot
+   * resurrect a previously forwarded map; within-process reconfiguration is
+   * not a product path. Never written to config.toml, never on argv.
+   */
+  mcpForward?: {
+    servers?: Record<string, unknown>;
+    notices?: AgentEvent[];
+  };
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -477,11 +491,14 @@ export async function createNativeCodexSession(
   agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
   agentCardLog?: CodexAgentCardLogPort,
   bootNotices?: AgentEvent[],
+  mcpForward?: { servers?: Record<string, unknown>; notices?: AgentEvent[] },
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [...(bootNotices ?? [])];
+  // TASK.182: controlled forwarding notices drain independently of the map.
+  if (mcpForward?.notices !== undefined) notices.push(...mcpForward.notices);
   const preset = resolvePreset(selection, notices);
   const model = resolveModel(catalog, selection, notices);
   const result = await client.request<ThreadResult>("thread/start", {
@@ -491,6 +508,9 @@ export async function createNativeCodexSession(
     sandbox: preset.threadParams.sandbox,
     ...(agentBridge ? { dynamicTools: agentBridge.declarations() } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(mcpForward?.servers !== undefined && Object.keys(mcpForward.servers).length > 0
+      ? { config: { mcp_servers: mcpForward.servers } }
+      : {}),
   }, { timeoutMs: bounds.bootRpcMs });
   const native = nativeThread(result, "thread/start");
   const quota = await pullQuotaSnapshot(client, bounds.bootRpcMs);
@@ -523,15 +543,26 @@ export async function resumeNativeCodexSession(
   agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
   agentCardLog?: CodexAgentCardLogPort,
   bootNotices?: AgentEvent[],
+  mcpForward?: { servers?: Record<string, unknown>; notices?: AgentEvent[] },
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [...(bootNotices ?? [])];
+  // TASK.182: same controlled-notices drain as thread/start — independent of
+  // whether any server survived serialization.
+  if (mcpForward?.notices !== undefined) notices.push(...mcpForward.notices);
   const preset = resolvePreset(selection, notices);
   const resumed = await client.request<ThreadResult>("thread/resume", {
     threadId: externalSessionRef,
     cwd: workspace,
+    // TASK.182: the fresh app-server of THIS boot has no memory of a previous
+    // forward — config.mcp_servers must ride the resume too, or a resumed
+    // session silently loses every forwarded MCP server (cross-process resume
+    // respawns servers; probe xp-a/xp-b evidence).
+    ...(mcpForward?.servers !== undefined && Object.keys(mcpForward.servers).length > 0
+      ? { config: { mcp_servers: mcpForward.servers } }
+      : {}),
   }, { timeoutMs: bounds.bootRpcMs });
   const native = nativeThread(resumed, "thread/resume");
   if (native.threadId !== externalSessionRef) {
@@ -589,7 +620,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   } });
   try {
     await client.start();
-    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog, options.bootNotices);
+    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog, options.bootNotices, options.mcpForward);
     engine = connected.engine;
     return connected;
   } catch (error) {
@@ -625,6 +656,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       options.agentBridge,
       options.agentCardLog,
       options.bootNotices,
+      options.mcpForward,
     );
     engine = connected.engine;
     return connected;
