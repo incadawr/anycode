@@ -31,7 +31,7 @@
  * note) — the only real duration in this card is subagent.final.durationMs,
  * already rendered by formatSubagentCounters when expanded.
  */
-import { useContext, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import type { TokenUsage } from "@anycode/core";
 import type { SubagentSubStatus, ToolCallBlock, WorkflowStepStatus, WorkflowSubStatus } from "../store.js";
 import { TabContext } from "../tab-context.js";
@@ -166,6 +166,49 @@ export function formatSubagentCounters(subagent: SubagentSubStatus): string {
   }
   const turns = subagent.turns > 0 || subagent.toolCalls > 0 ? ` · ${subagent.turns} turn${subagent.turns === 1 ? "" : "s"}` : "";
   return `${label}${turns}${duration}`;
+}
+
+/** One identity slot (model or engine) resolved for display: the explicit
+ * child value wins; the known parent value is the fallback and is marked
+ * "(inherited)"; neither known renders no label at all. */
+export interface SubagentIdentitySlot {
+  /** Display label, or null when neither the child nor the parent value is known. */
+  label: string | null;
+  /** True when the label came from the parent (the child's own value is null). */
+  inherited: boolean;
+}
+
+/**
+ * Pure identity resolver for an Agent card's model/engine display: every
+ * explicit child value wins verbatim; a slot the child left null falls back
+ * to the KNOWN parent value and is marked with " (inherited)" so a fallback
+ * is never mistaken for the child's own choice; when neither side is known
+ * the slot renders nothing (no fabricated identity). The parent identity is
+ * whatever the card's own tab context reported — `model` from the tab store,
+ * `engine` as `engine.id`. A present context with `engine === null` IS the
+ * known core parent ("core"), which the inline child inherits like any other
+ * identity; only an ABSENT context (no provider — unknown parent) leaves the
+ * engine slot unknown, so no fallback fires.
+ */
+export function resolveSubagentIdentity(
+  childModel: string | null,
+  childEngine: "codex" | "claude" | null,
+  parentModel: string | null | undefined,
+  parentEngine: string | undefined,
+): { model: SubagentIdentitySlot; engine: SubagentIdentitySlot } {
+  const resolveSlot = (child: string | null, parent: string | null | undefined): SubagentIdentitySlot => {
+    if (child !== null) {
+      return { label: child, inherited: false };
+    }
+    if (parent !== null && parent !== undefined && parent.length > 0) {
+      return { label: `${parent} (inherited)`, inherited: true };
+    }
+    return { label: null, inherited: false };
+  };
+  return {
+    model: resolveSlot(childModel, parentModel),
+    engine: resolveSlot(childEngine, parentEngine),
+  };
 }
 
 const WORKFLOW_FINAL_LABELS: Record<NonNullable<WorkflowSubStatus["final"]>["status"], string> = {
@@ -1041,6 +1084,40 @@ function useChildSessionAction(
 }
 
 /**
+ * The parent session's identity (model + engine id) as seen from THIS card's
+ * own tab context — the tab the card is mounted under, never the globally
+ * active tab (a child surface mounts under its own provider; ModelPill's
+ * `useTabStore((state) => state.model)` is the same discipline). Each value
+ * is a scalar snapshot subscribed via `useSyncExternalStore` with a stable
+ * `subscribe`/`getSnapshot` pair, so: (a) the hooks are UNCONDITIONAL and
+ * SSR-safe — with no `TabContext.Provider` (this file's own static tests)
+ * the subscription is a no-op and the snapshot is "unknown"; (b) a parent
+ * model/engine change re-renders the card. A present context with
+ * `state.engine === null` means the CORE parent: the engine resolves to the
+ * literal "core", which an inline child inherits just like any other engine
+ * ("core (inherited)"). Only an absent context leaves the identity unknown.
+ */
+function useParentIdentity(): { model: string | null | undefined; engine: string | undefined } {
+  const ctx = useContext(TabContext);
+  const subscribe = useCallback(
+    (onChange: () => void) => (ctx === null ? () => {} : ctx.store.subscribe(onChange)),
+    [ctx],
+  );
+  const getModelSnapshot = useCallback(
+    () => (ctx === null ? undefined : ctx.store.getState().model),
+    [ctx],
+  );
+  const getEngineSnapshot = useCallback(
+    () => (ctx === null ? undefined : (ctx.store.getState().engine?.id ?? "core")),
+    [ctx],
+  );
+  return {
+    model: useSyncExternalStore(subscribe, getModelSnapshot, getModelSnapshot),
+    engine: useSyncExternalStore(subscribe, getEngineSnapshot, getEngineSnapshot),
+  };
+}
+
+/**
  * The child badge for an Agent card, or `undefined` when the card has no
  * openable child. An engine tab's Agent card (a Codex supervisor's
  * anycode_agent call) carries no subagent sub-status — its child session is
@@ -1095,8 +1172,8 @@ export function subagentResponseModelNote(sub: {
 
 /** Sub-status region mounted below the input summary when `block.subagent` is
  *  set (Agent tool only). A flat two-line panel sharing the row atoms: glyph ·
- *  persona (mono anchor) · model (only when the child ran on its own) ·
- *  description, then the frozen counters line. A THIRD line — the session-
+ *  persona (mono anchor) · model (the child's own, else the parent's marked
+ *  inherited) · description, then the frozen counters line. A THIRD line — the session-
  *  child badge (+ Open button, only when the child is still live) — mounts
  *  only when `child` is set (TASK.102 CUT-S2 §2.5 C3); every inline-subagent
  *  card (the default `child` prop, `undefined`) renders byte-identically to
@@ -1106,25 +1183,49 @@ export function subagentResponseModelNote(sub: {
 function SubagentStatus({
   subagent,
   child,
+  parentModel,
+  parentEngine,
 }: {
   subagent: SubagentSubStatus;
   child?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
+  /** Parent session identity, resolved by the card and passed as plain props (same static-render rationale as `child`). */
+  parentModel?: string | null | undefined;
+  parentEngine?: string | undefined;
 }) {
   const kind = substatusKind(subagent.final);
   const responseModelNote = subagentResponseModelNote(subagent);
+  const identity = resolveSubagentIdentity(subagent.model, subagent.engine, parentModel, parentEngine);
   return (
     <div className="tool-call-subagent">
       <div className={`tool-call-subagent-line substatus-${kind}`}>
         <StatusGlyph kind={kind} />
         <span className="tool-call-subagent-persona">{subagent.agentType}</span>
-        {/* Absent model = inherited the parent's, which the composer already
-            shows — a pill on every card would be noise, so only a genuinely
-            different child model is labelled. */}
-        {subagent.model !== null && (
-          <span className="tool-call-subagent-model" title={`Child model: ${subagent.model}`}>
-            {subagent.model}
+        {/* Explicit child identity wins; a null child slot falls back to the
+            parent's known value marked " (inherited)"; neither known renders
+            nothing. The provider response-model note below keeps its own
+            semantics untouched — it still compares the child's REQUESTED
+            model against the provider's claim, never the inherited label. */}
+        {identity.model.label !== null && (
+          <span
+            className={`tool-call-subagent-model${identity.model.inherited ? " tool-call-subagent-model-inherited" : ""}`}
+            title={identity.model.inherited ? `Inherited parent model: ${subagent.model === null ? identity.model.label.replace(/ \(inherited\)$/, "") : subagent.model}` : `Child model: ${subagent.model}`}
+          >
+            {identity.model.label}
           </span>
         )}
+        {/* Same dedup rule as the collapsed row: while running, the counters
+            line below already carries an explicit child engine as its
+            "<engine> · " prefix — don't duplicate it. Inherited engines and
+            settled explicit engines are labelled here. */}
+        {identity.engine.label !== null &&
+          !(subagent.final === null && subagent.engine !== null) && (
+            <span
+              className={`tool-call-subagent-engine${identity.engine.inherited ? " tool-call-subagent-engine-inherited" : ""}`}
+              title={identity.engine.inherited ? `Inherited parent engine: ${identity.engine.label.replace(/ \(inherited\)$/, "")}` : `Child engine: ${subagent.engine === null ? identity.engine.label : subagent.engine}`}
+            >
+              {identity.engine.label}
+            </span>
+          )}
         {responseModelNote !== null && (
           <span
             className={`tool-call-subagent-response-model${responseModelNote.mismatch ? " tool-call-subagent-response-model--mismatch" : ""}`}
@@ -1322,19 +1423,31 @@ export function AgentCardBody({
   promptExpanded,
   onTogglePrompt,
   child,
+  parentModel,
+  parentEngine,
 }: {
   block: ToolCallBlock;
   promptExpanded: boolean;
   onTogglePrompt: () => void;
   /** TASK.102 CUT-S2 §2.5 (C3): passed straight through to SubagentStatus — see its own doc comment. Omitted by ToolCallCard.test.ts's direct SSR renders, same as today. */
   child?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
+  /** Parent session identity, passed straight through to SubagentStatus as plain props (same static-render rationale as `child`). */
+  parentModel?: string | null | undefined;
+  parentEngine?: string | undefined;
 }) {
   const resultText = agentResultText(block);
   const prompt = agentPromptText(block.input);
   const strip = prompt !== null ? promptStripText(prompt) : null;
   return (
     <>
-      {block.subagent && <SubagentStatus subagent={block.subagent} child={child} />}
+      {block.subagent && (
+        <SubagentStatus
+          subagent={block.subagent}
+          child={child}
+          parentModel={parentModel}
+          parentEngine={parentEngine}
+        />
+      )}
       {resultText !== null && (
         <div className="tool-call-agent-result message-markdown">
           <Markdown text={resultText} />
@@ -1745,6 +1858,8 @@ export function ToolCallHeaderRow({
   onToggleExpanded,
   childAction,
   previewAction,
+  parentModel,
+  parentEngine,
 }: {
   block: ToolCallBlock;
   expanded: boolean;
@@ -1753,8 +1868,15 @@ export function ToolCallHeaderRow({
   childAction?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
   /** TASK.112: resolved by ToolCallCard, passed as a plain prop for the same reason `childAction` is — a static render can see a prop, never a hook. */
   previewAction?: ArtifactPreviewAction;
+  /** Parent session identity, resolved by ToolCallCard and passed as plain props (same static-render rationale as `childAction`). */
+  parentModel?: string | null | undefined;
+  parentEngine?: string | undefined;
 }) {
   const isAgent = block.toolName === "Agent";
+  const collapsedIdentity =
+    isAgent && block.subagent !== null
+      ? resolveSubagentIdentity(block.subagent.model, block.subagent.engine, parentModel, parentEngine)
+      : null;
   // TASK.120: an actionable badge (waiting for permission + onOpen) cannot
   // render inside the toggle <button> — nested buttons are invalid HTML — so
   // it is hoisted out into this row wrapper; every other kind keeps its
@@ -1779,10 +1901,27 @@ export function ToolCallHeaderRow({
             <span className="subagent-name">SubAgent</span>
             {block.subagent && <span className="subagent-persona">{block.subagent.agentType}</span>}
             {/* The collapsed row is the DEFAULT state, so a model that only
-                showed once expanded would be invisible in practice. */}
-            {block.subagent?.model != null && (
-              <span className="subagent-collapsed-model">{block.subagent.model}</span>
+                showed once expanded would be invisible in practice. Explicit
+                child identity wins; a null child slot falls back to the
+                parent's known value marked " (inherited)". */}
+            {collapsedIdentity?.model.label != null && (
+              <span
+                className={`subagent-collapsed-model${collapsedIdentity.model.inherited ? " subagent-collapsed-model-inherited" : ""}`}
+              >
+                {collapsedIdentity.model.label}
+              </span>
             )}
+            {/* The running counters line below already carries an explicit
+                child engine as its "<engine> · " prefix — don't duplicate it;
+                inherited and settled engines are only labelled here. */}
+            {collapsedIdentity?.engine.label != null &&
+              !(block.subagent?.final === null && block.subagent?.engine !== null) && (
+                <span
+                  className={`subagent-collapsed-engine${collapsedIdentity.engine.inherited ? " subagent-collapsed-engine-inherited" : ""}`}
+                >
+                  {collapsedIdentity.engine.label}
+                </span>
+              )}
             <span className="tool-call-summary">{flattenSummary(summarizeInput(block.toolName, block.input))}</span>
           </span>
         ) : (
@@ -1872,6 +2011,16 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
   // TASK.102 CUT-S2 §2.5 (C3): undefined for every card but a session-tier
   // child's — see the hook's own doc comment.
   const childAction = useChildSessionAction(block);
+  // Parent identity for Agent-card model/engine display: this card's OWN tab
+  // (never the globally active tab), subscribed unconditionally so a parent
+  // model/engine change re-renders, and "unknown" without a provider — the
+  // SSR/no-context render path is untouched.
+  const liveParentIdentity = useParentIdentity();
+  // Only an in-process child inherits the parent's port. A session-tier child
+  // is its own session (a GLM child of a Codex supervisor is not "codex"), so
+  // it shows only what it reported itself.
+  const parentIdentity =
+    block.subagent?.sessionChild === true ? { model: undefined, engine: undefined } : liveParentIdentity;
   const previewAction = useArtifactPreviewAction(previewablePathOf(block.toolName, block.input));
 
   const isDiffable = block.toolName === "Write" || block.toolName === "Edit";
@@ -1906,6 +2055,8 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
         onToggleExpanded={() => setUserExpanded(!expanded)}
         childAction={childAction}
         previewAction={previewAction ?? undefined}
+        parentModel={parentIdentity.model}
+        parentEngine={parentIdentity.engine}
       />
       {expanded && (
         // aria-live="off" (design §1.9): a user-driven expand must not dump
@@ -1925,6 +2076,8 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
               promptExpanded={promptExpanded}
               onTogglePrompt={() => setPromptExpanded((value) => !value)}
               child={childAction}
+              parentModel={parentIdentity.model}
+              parentEngine={parentIdentity.engine}
             />
           ) : (
             <>
