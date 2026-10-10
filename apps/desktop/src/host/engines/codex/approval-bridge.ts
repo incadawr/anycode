@@ -21,6 +21,7 @@
  * as a denial, and nothing is ever auto-approved.
  */
 
+import { classifyBashCommandLine } from "@anycode/core";
 import type { PermissionRequest, ToolMetadata } from "@anycode/core";
 import type { SettleOrigin } from "../../permission-broker.js";
 import type { IpcPermissionBroker } from "../../permission-broker.js";
@@ -68,6 +69,26 @@ const EXEC_METADATA: ToolMetadata = {
   needsApproval: true,
   timeoutMs: 120_000,
 };
+
+/**
+ * TASK.184: EXEC_METADATA, de-risked by the shared Bash classifier. A string
+ * command that is NOT a stdin write and classifies read-only with NO shell
+ * expression (`;`, `&&`, pipes, substitutions, unmatched quotes, ...) is
+ * presented as readOnly/low. Everything else — missing command, stdin write,
+ * unknown class, any shell expression, even a harmless compound like
+ * `ls; cat a.txt` — keeps the fail-closed high default. Classification changes
+ * METADATA ONLY: it never auto-allows a command; the decision still goes
+ * through the broker.
+ */
+function commandExecutionMetadata(command: string | null | undefined, stdinWrite: boolean): ToolMetadata {
+  if (typeof command === "string" && !stdinWrite) {
+    const result = classifyBashCommandLine(command);
+    if (result.class === "read-only" && result.shellExpression === false) {
+      return { ...EXEC_METADATA, readOnly: true, riskLevel: "low" };
+    }
+  }
+  return EXEC_METADATA;
+}
 
 const PATCH_METADATA: ToolMetadata = {
   name: "CodexApplyPatch",
@@ -145,7 +166,7 @@ function decode(request: JsonRpcServerRequest, items: TurnItemIndex | undefined)
           ...(availableDecisions === undefined ? {} : { availableDecisions }),
           ...(stdinWrite ? { kind: "writeStdin" } : {}),
         },
-        metadata: EXEC_METADATA,
+        metadata: commandExecutionMetadata(command, stdinWrite),
         mode: "build",
       },
     };

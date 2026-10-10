@@ -200,7 +200,7 @@ export class IpcPermissionBroker implements PermissionBroker {
     // latch arms, which is precisely the unattended run the rules exist to
     // serve. This mirrors the core path, where RuleAware sits upstream of
     // everything the broker does.
-    if (this.rules !== null && this.rules.matches(request.toolName, request.input)) {
+    if (this.ruleAllows(request)) {
       return Promise.resolve({ behavior: "allow" });
     }
     if (this.unattended) {
@@ -219,6 +219,31 @@ export class IpcPermissionBroker implements PermissionBroker {
         this.queue.push(requestId);
       }
     });
+  }
+
+  /**
+   * TASK.184: rule matching with a scoped CodexExec compatibility retry. The
+   * original toolName/raw input is tried FIRST so a CodexExec-specific rule
+   * keeps working; only when that misses, and only for a CodexExec request
+   * that carries a string `command` and is NOT a stdin write, is the matcher
+   * retried as ("Bash", {command}) — so a persisted `Bash: git *` rule can
+   * vouch for a codex `git status` approval. This is broker-side ONLY (engine
+   * boots): core matching semantics, upstream hooks, and the core path's
+   * rule-before-hook ordering are untouched. Pattern semantics stay the
+   * existing per-segment fail-closed matcher, so `git status && npm install`
+   * does not slip through a `git *` rule; a deliberate patternless owner rule
+   * retains its existing broad scope.
+   */
+  private ruleAllows(request: PermissionRequest): boolean {
+    if (this.rules === null) return false;
+    if (this.rules.matches(request.toolName, request.input)) return true;
+    if (request.toolName !== "CodexExec") return false;
+    const input = request.input;
+    if (input === null || typeof input !== "object") return false;
+    const command = (input as Record<string, unknown>).command;
+    if (typeof command !== "string") return false;
+    if ((input as Record<string, unknown>).kind === "writeStdin") return false;
+    return this.rules.matches("Bash", { command });
   }
 
   /**
