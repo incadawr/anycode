@@ -2325,6 +2325,50 @@ describe("TabHostManager — a profile's effort reaches a core child's host (TAS
     hosts[0]!.emit("message", spawnRequest({ requestId: "effort-2" }));
     expect(forkSpy.mock.calls[1]?.[2]?.env ?? {}).not.toHaveProperty("ANYCODE_REASONING_EFFORT");
   });
+
+  it("a core child's xhigh effort maps to max in the stamped env", () => {
+    const { hosts, forkSpy } = rig();
+    hosts[0]!.emit("message", spawnRequest({ requestId: "effort-xhigh-core", effort: "xhigh" }));
+    expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_REASONING_EFFORT: "max" });
+  });
+});
+
+describe("TabHostManager — a profile's effort reaches an engine child as --engine-effort", () => {
+  function rig() {
+    const { hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args, opts) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window, { engineReady: () => true });
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-engine-effort", resume: false, connectionId: "conn-parent" }).ok).toBe(true);
+    return { hosts, forkSpy };
+  }
+
+  it("a claude/codex engine child's xhigh effort rides argv as --engine-effort xhigh (verbatim)", () => {
+    for (const engine of ["claude", "codex"] as const) {
+      const { hosts, forkSpy } = rig();
+      hosts[0]!.emit("message", spawnRequest({ requestId: `engine-effort-${engine}`, engine, effort: "xhigh" }));
+      const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
+      expect(childArgs).toContain("--engine-effort");
+      expect(childArgs[childArgs.indexOf("--engine-effort") + 1]).toBe("xhigh");
+      // An engine child never stamps the core env var.
+      expect(forkSpy.mock.calls[1]?.[2]?.env ?? {}).not.toHaveProperty("ANYCODE_REASONING_EFFORT");
+    }
+  });
+
+  it("an engine child with no effort emits no --engine-effort flag", () => {
+    const { hosts, forkSpy } = rig();
+    hosts[0]!.emit("message", spawnRequest({ requestId: "engine-effort-none", engine: "claude" }));
+    const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(childArgs).not.toContain("--engine-effort");
+  });
 });
 
 describe("TabHostManager — non-recursion lock #3: a child cannot spawn its own child (TASK.102 CUT-S2 §0.2)", () => {

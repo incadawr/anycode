@@ -341,7 +341,7 @@ export interface TabHost {
    * `effort:` (stamped over the connection's own tier, resolved host-side
    * against the child model's tiers). Absent = the connection's default.
    */
-  effortOverride?: ReasoningEffort;
+  effortOverride?: ReasoningEffort | "xhigh";
   /** Engine choice is main-owned and retained across every host respawn. */
   engine: EngineId;
   /**
@@ -354,6 +354,13 @@ export interface TabHost {
    */
   engineModel: string | null;
   enginePreset: string | null;
+  /**
+   * The draft (pre-session) engine EFFORT choice for an engine child whose
+   * profile declares `effort:` — forwarded to the host as `--engine-effort`
+   * argv on the FIRST spawn of a NEW session only, exactly like
+   * `engineModel` above. null = core engine or no profile effort.
+   */
+  engineEffort: string | null;
   /**
    * The resolved Codex account-profile argv (codex-profiles cut §3.3,
    * TASK.50): READY values from main's profile registry (lane A resolves the
@@ -446,7 +453,7 @@ interface ResumableChild {
   parentSessionId: string;
   connectionId?: string;
   modelOverride?: string;
-  effortOverride?: ReasoningEffort;
+  effortOverride?: ReasoningEffort | "xhigh";
   /** Settles once the finished host has exited, i.e. its history is flushed. */
   reaped: Promise<void>;
   reapPending: boolean;
@@ -1065,6 +1072,7 @@ export class TabHostManager {
       engine,
       engineModel: argvId(params.engineModel),
       enginePreset: argvId(params.enginePreset),
+      engineEffort: null,
       codexProfile: params.codexProfile ?? null,
       proc: null,
       hostGeneration: 0,
@@ -1096,6 +1104,7 @@ export class TabHostManager {
     if (!resume) {
       if (tab.engineModel !== null) args.push("--engine-model", tab.engineModel);
       if (tab.enginePreset !== null) args.push("--engine-preset", tab.enginePreset);
+      if (tab.engineEffort !== null) args.push("--engine-effort", tab.engineEffort);
     }
     // Codex-profiles TASK.50 (cut §2.6.4): the profile rides EVERY spawn —
     // resume and respawn included — because CODEX_HOME is frozen into the
@@ -1185,7 +1194,11 @@ export class TabHostManager {
         // like ANYCODE_CONNECTION_ID above and rides every respawn (lives on the
         // tab). Absent for every non-import spawn ⇒ nothing stamped.
         ...(tab.modelOverride !== undefined ? { [ENV_MODEL]: tab.modelOverride } : {}),
-        ...(tab.effortOverride !== undefined ? { [ENV_REASONING_EFFORT]: tab.effortOverride } : {}),
+        // Core children: xhigh maps to the existing core "max"; absent keeps
+        // the absent-field behavior (nothing stamped).
+        ...(tab.effortOverride !== undefined
+          ? { [ENV_REASONING_EFFORT]: tab.effortOverride === "xhigh" ? "max" : tab.effortOverride }
+          : {}),
         ...engineEnvOverlay,
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
       },
@@ -1621,6 +1634,9 @@ export class TabHostManager {
       engine,
       engineModel: engine !== "core" ? (req.model ?? null) : null,
       enginePreset: null,
+      // Engine children carry the profile's declared effort VERBATIM (xhigh
+      // included); the core path keeps its existing effortOverride gate above.
+      engineEffort: engine !== "core" ? (req.effort ?? null) : null,
       codexProfile: null,
       proc: null,
       hostGeneration: 0,

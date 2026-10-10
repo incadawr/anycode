@@ -1471,6 +1471,41 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
     expect(server.turnStartParams()[0]).toMatchObject({ model: "gpt-5.6-sol", effort: "high" });
   });
 
+  // Profile `effort:` frontmatter rides the selection (draft `--engine-effort`):
+  // the requested tier wins when the model supports it, and the actual
+  // turn/start transport request carries the resolved tier — not just the
+  // settings observable. An unsupported tier degrades to the resolved default
+  // with a warning.
+  it("a requested selection effort that the model supports reaches the actual turn/start request", async () => {
+    const server = new FakeAppServer();
+    // gpt-5.6-sol advertises low/medium/high; request "high".
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-5.6-sol",
+      effort: "high",
+      origin: "draft",
+    });
+    expect(connected.engine.snapshot().effort).toBe("high");
+    await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({ effort: "high" });
+  });
+
+  it("a requested selection effort unsupported by the model warns and uses the resolved default", async () => {
+    const server = new FakeAppServer();
+    // gpt-5.4-mini advertises ONLY "medium"; request "high".
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-5.4-mini",
+      effort: "high",
+      origin: "draft",
+    });
+    expect(connected.engine.snapshot().effort).toBe("medium");
+    const events = await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({ model: "gpt-5.4-mini", effort: "medium" });
+    // The boot warning is flushed into the first turn's event stream.
+    expect(notices(events)).toContainEqual(
+      expect.stringContaining('Requested effort "high" is unavailable'),
+    );
+  });
+
   it("acks a change only once a turn/start has actually carried it", async () => {
     const server = new FakeAppServer();
     const { engine } = await createNativeCodexSession(server, "/work");

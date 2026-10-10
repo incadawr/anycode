@@ -52,10 +52,13 @@ export interface SessionSubagentRequest {
   /** Exact engine model id on that connection; defaults to the parent's model. */
   model?: string;
   /**
-   * Reasoning tier from the profile's `effort:` frontmatter; the child host
-   * resolves it against its own model's tiers. Absent = the connection's default.
+   * Reasoning tier from the profile's `effort:` (or `model_reasoning_effort`
+   * alias) frontmatter; the child host resolves it against its own model's
+   * tiers. Absent = the connection's default. "xhigh" is preserved verbatim
+   * for engine children (claude/codex) and mapped to the existing core "max"
+   * for core children.
    */
-  effort?: ReasoningEffort;
+  effort?: ReasoningEffort | "xhigh";
   /**
    * Set ONLY by the engine-profile route (tools/agent.ts, TASK.102 CUT-S4
    * §2.2): the child boots this engine instead of core. Never model-visible —

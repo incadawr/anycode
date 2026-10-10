@@ -201,6 +201,8 @@ export interface ConnectedCodexEngine {
 export interface CodexSessionSelection {
   model?: string;
   presetId?: string;
+  /** Draft effort tier (profile `effort:`), resolved against the live catalog; unrecognized degrades to the model default. */
+  effort?: string;
   /** A resumed session's stored ids predate this slice; an unrecognized one is a silent default, not a user error. */
   origin?: "draft" | "persisted";
 }
@@ -304,11 +306,20 @@ function buildSettings(
   result: ThreadResult,
   model: string,
   notices: AgentEvent[],
+  requestedEffort?: string,
 ): CodexEngineSettings {
   driftNotice(preset, result, notices);
   // The model is the SERVER-CONFIRMED one from the thread echo, so the effort is
   // resolved against what the thread actually runs, not against what was asked for.
-  const effort = catalog.resolveEffort(model, effectiveSettings(result).effort);
+  // A profile-declared requestedEffort (draft `--engine-effort`) outranks the
+  // thread echo; if the model cannot honor it, resolveEffort's fallback tier is
+  // used and a warning says so.
+  const effort = catalog.resolveEffort(model, requestedEffort ?? effectiveSettings(result).effort);
+  if (requestedEffort !== undefined && effort !== requestedEffort) {
+    notices.push(
+      warning(`Requested effort "${requestedEffort}" is unavailable for model "${model}"; the model default "${effort ?? "default"}" is used.`),
+    );
+  }
   const effortsByModel = new Map<string, string>();
   if (effort !== undefined) {
     effortsByModel.set(model, effort);
@@ -514,7 +525,7 @@ export async function createNativeCodexSession(
   }, { timeoutMs: bounds.bootRpcMs });
   const native = nativeThread(result, "thread/start");
   const quota = await pullQuotaSnapshot(client, bounds.bootRpcMs);
-  const settings = buildSettings(workspace, catalog, preset, result, native.model, notices);
+  const settings = buildSettings(workspace, catalog, preset, result, native.model, notices, selection?.effort);
   return {
     // A fresh thread has zero prior turns: no history to hydrate, and the
     // FIRST turn this launch runs is native turn ordinal 0 (cut §2(e)).
@@ -596,7 +607,7 @@ export async function resumeNativeCodexSession(
   // say so (recoverable, TASK.39 DoD-2), rather than burning the user's turn.
   const stored = resolveModel(catalog, selection, notices);
   const model = stored ?? native.model;
-  const settings = buildSettings(workspace, catalog, preset, resumed, model, notices);
+  const settings = buildSettings(workspace, catalog, preset, resumed, model, notices, selection?.effort);
   return {
     engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota, agentBridge, agentCardLog),
     threadId: native.threadId,

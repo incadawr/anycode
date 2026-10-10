@@ -36,6 +36,13 @@ import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 
 // ── parentPort message types (parent host <-> main, child host <-> main) ──
 
+/**
+ * Child effort vocabulary: the core ReasoningEffort tiers plus "xhigh",
+ * carried verbatim for engine children (claude/codex); core consumption
+ * boundaries map xhigh to the existing core "max".
+ */
+export type ChildEffort = ReasoningEffort | "xhigh";
+
 export const CHILD_SPAWN_REQUEST_TYPE = "anycode:child-spawn-request" as const; // parent host -> main
 export const CHILD_RUN_CANCEL_TYPE = "anycode:child-run-cancel" as const; // parent host -> main
 export const CHILD_RUN_EVENT_TYPE = "anycode:child-run-event" as const; // main -> parent host
@@ -63,12 +70,13 @@ export interface ChildSpawnRequest {
   provider?: string;
   model?: string;
   /**
-   * Reasoning tier from the profile's `effort:` frontmatter. Core children
-   * only: main stamps it as the child host's ANYCODE_REASONING_EFFORT, which
-   * the host resolves against the child model's own tiers. Absent = the
+   * Reasoning tier from the profile's `effort:` frontmatter. Core children:
+   * main stamps it as the child host's ANYCODE_REASONING_EFFORT (mapping
+   * "xhigh" to "max"), which the host resolves against the child model's own
+   * tiers; engine children carry it verbatim to the engine CLI. Absent = the
    * connection's default.
    */
-  effort?: ReasoningEffort;
+  effort?: ChildEffort;
   permissionMode: PermissionMode;
   /**
    * Child engine (TASK.102 CUT-S4 §3.1). Absent = core (byte-compatible with
@@ -415,9 +423,9 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "maxTurns",
 ] as const;
 
-const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "max"] satisfies readonly ReasoningEffort[];
+const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"] satisfies readonly ChildEffort[];
 
-export function isChildEffort(value: unknown): value is ReasoningEffort {
+export function isChildEffort(value: unknown): value is ChildEffort {
   return typeof value === "string" && CHILD_EFFORT_VALUES.includes(value);
 }
 

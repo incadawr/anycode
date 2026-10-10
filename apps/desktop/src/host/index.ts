@@ -1036,6 +1036,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
             ...(childPresetId !== undefined ? { presetId: childPresetId } : {}),
+            ...(draft.effort !== undefined ? { effort: draft.effort } : {}),
             origin: "draft",
           },
         });
@@ -1507,6 +1508,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
             ...(childPresetId !== undefined ? { presetId: childPresetId } : {}),
+            ...(draft.effort !== undefined ? { effort: draft.effort } : {}),
             origin: "draft",
           },
         });
