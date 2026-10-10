@@ -1071,6 +1071,16 @@ export interface DesktopState {
   pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null;
 
   /**
+   * TASK.118: steers sent directly to the host while a turn is running on a
+   * child surface (`user_message` already on the wire, its `turn_started`
+   * not yet seen). Shown outside stream order in the composer queue area;
+   * appended as a `user_text` block ONLY on a matching `turn_started`
+   * (delivery position), removed by a matching `turn_rejected` without
+   * appending. Part of the session slice — cleared by reset()/respawn.
+   */
+  pendingSteers: { requestId: string; text: string; sentMessage: LastSentMessage }[];
+
+  /**
    * Prompt queue (slice P7.14 · F15): FIFO of prompts the user entered while a
    * turn was running, head = index 0. NOT part of the session slice — survives
    * a host respawn (see the section comment above `QueuedPrompt`).
@@ -1107,6 +1117,14 @@ export interface DesktopState {
    * `QueuedPrompt.origin`; absent for every ordinary human-typed send.
    */
   appendUserText(id: string, text: string, origin?: "system"): void;
+  /**
+   * TASK.118: records a steer already sent on the wire while a turn was
+   * running (child surface). Pending only — NO transcript write; the block
+   * is appended by the matching `turn_started`. `text` is the display text
+   * (including image annotation); `sentMessage` keeps the ORIGINAL outgoing
+   * text+images for `lastSentMessage` restore at delivery.
+   */
+  recordPendingSteer(requestId: string, text: string, sentMessage: LastSentMessage): void;
   /** Appends a renderer-only persisted provider diagnostic; never sent to the host/model. */
   appendUsageLimitNotice(notice: UsageLimitNotice): void;
   /**
@@ -1269,6 +1287,8 @@ interface SessionSlice {
    * and by the session-slice reset.
    */
   pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null;
+  /** TASK.118: see DesktopState.pendingSteers. Part of the session slice. */
+  pendingSteers: { requestId: string; text: string; sentMessage: LastSentMessage }[];
 }
 
 function initialSessionSlice(): SessionSlice {
@@ -1301,6 +1321,7 @@ function initialSessionSlice(): SessionSlice {
     lastErrorRetry: null,
     retry: null,
     pendingPrompt: null,
+    pendingSteers: [],
   };
 }
 
@@ -3661,6 +3682,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               retry: null,
               ...(inFlight?.requestId === message.requestId ? { queueInFlight: null } : {}),
             });
+            // TASK.118: a steer sent while a turn was running delivers at the
+            // NEXT turn's start — append its user_text here (after everything
+            // the previous turn produced; appendBlock flushes buffered deltas
+            // first), retire ONLY the matching pending entry, and restore its
+            // original sent content as lastSentMessage. Unrelated/repeated
+            // starts match nothing and leave other entries pending.
+            const steer = get().pendingSteers.find((entry) => entry.requestId === message.requestId);
+            if (steer !== undefined) {
+              appendBlock({ kind: "user_text", id: steer.requestId, text: steer.text, at: Date.now() });
+              set((state) => ({
+                pendingSteers: state.pendingSteers.filter((entry) => entry.requestId !== steer.requestId),
+                lastSentMessage: steer.sentMessage,
+              }));
+            }
             return;
           }
           case "turn_rejected": {
@@ -3684,6 +3719,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                     : "Message rejected: the host is not ready yet.",
               },
               ...(restore ?? {}),
+              // TASK.118: a rejected steer never becomes transcript text —
+              // drop the matching pending entry, keep unrelated ones.
+              ...(get().pendingSteers.some((entry) => entry.requestId === message.requestId)
+                ? { pendingSteers: get().pendingSteers.filter((entry) => entry.requestId !== message.requestId) }
+                : {}),
             });
             return;
           }
@@ -4267,6 +4307,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
       appendUserText(id: string, text: string, origin?: "system"): void {
         appendBlock({ kind: "user_text", id, text, ...(origin !== undefined ? { origin } : {}), at: Date.now() });
+      },
+
+      recordPendingSteer(requestId: string, text: string, sentMessage: LastSentMessage): void {
+        // TASK.118: pending only — no transcript write. The user_text block is
+        // appended by the matching turn_started (delivery position), so the
+        // queued text never interleaves optimistically with the running turn's
+        // streamed output.
+        set((state) => ({ pendingSteers: [...state.pendingSteers, { requestId, text, sentMessage }] }));
       },
 
       appendUsageLimitNotice(notice: UsageLimitNotice): void {

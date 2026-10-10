@@ -1239,7 +1239,24 @@ export function Composer() {
       sizeBytes: image.sizeBytes,
       attachment: image.attachment,
     }));
-    if (shouldEnqueue(turn.status, queueInFlight, childSurface)) {
+    if (childSurface && turn.status !== "idle") {
+      // TASK.118 (child surface): the host's steer queue accepts this
+      // user_message immediately, so send it on the wire as usual — but the
+      // transcript write is DEFERRED to the matching turn_started (delivery
+      // position), recorded as a pending steer instead of an optimistic
+      // append that would interleave with the running turn's output.
+      const requestId = crypto.randomUUID();
+      tabStore.getState().recordPendingSteer(requestId, transcriptTextWithImages(outgoing, images.length), {
+        text: outgoing,
+        images,
+      });
+      sendToHost({
+        type: "user_message",
+        requestId,
+        text: outgoing,
+        ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
+      });
+    } else if (shouldEnqueue(turn.status, queueInFlight, childSurface)) {
       // NOT truly idle: either a turn is running, or a queued item was already
       // drained and is still in flight (turn momentarily "idle" but its
       // turn_started not yet acknowledged). Hold the message in the per-tab
@@ -1252,7 +1269,9 @@ export function Composer() {
       const requestId = crypto.randomUUID();
       // The wire protocol never echoes the user's own message back (§3 — only
       // turn_started{requestId,turnId} correlates it), so the composer is the
-      // one place that appends the user_text transcript block. Goes through
+      // one place that appends the user_text transcript block — here in the
+      // truly-idle path; a running-turn steer takes the pendingSteer path
+      // above (TASK.118). Goes through
 
       // owns all transcript writes, and appendBlock flushes pending deltas
       // first so ordering stays consistent.

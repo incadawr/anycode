@@ -17,21 +17,28 @@ export function queueImageBadge(count: number): string | null {
   return count === 0 ? null : `${count} img`;
 }
 
-/** The card renders once there is something to show (queued items) or hold (paused with an empty queue). */
-export function shouldShowPromptQueue(queueLength: number, queuePaused: boolean): boolean {
-  return queueLength > 0 || queuePaused;
+/** The card renders once there is something to show (queued/pending-steer items) or hold (paused with an empty queue). */
+export function shouldShowPromptQueue(
+  queueLength: number,
+  queuePaused: boolean,
+  pendingSteerCount = 0,
+): boolean {
+  return queueLength > 0 || queuePaused || pendingSteerCount > 0;
 }
 
 export function PromptQueue() {
   const promptQueue = useTabStore((state) => state.promptQueue);
   const queuePaused = useTabStore((state) => state.queuePaused);
+  // TASK.118: steers already on the wire to the host's steer queue, awaiting
+  // their turn_started. Host-owned — no renderer edit/delete controls.
+  const pendingSteers = useTabStore((state) => state.pendingSteers);
   const tabStore = useTabStoreApi();
   // At most one item is ever mid-edit — a second Edit click on another row
   // simply reassigns this id, discarding the first row's uncommitted draft.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
 
-  if (!shouldShowPromptQueue(promptQueue.length, queuePaused)) {
+  if (!shouldShowPromptQueue(promptQueue.length, queuePaused, pendingSteers.length)) {
     return null;
   }
 
@@ -83,6 +90,16 @@ export function PromptQueue() {
             </button>
           </div>
         </div>
+      )}
+      {pendingSteers.length > 0 && (
+        <ol className="steer-queue-list">
+          {pendingSteers.map((entry) => (
+            <li key={entry.requestId} className="steer-queue-item">
+              <span className="steer-queue-text">{entry.text}</span>
+              <span className="steer-queue-badge">Queued — delivered after this turn</span>
+            </li>
+          ))}
+        </ol>
       )}
       {promptQueue.length > 0 && (
         <ol className="prompt-queue-list">
