@@ -169,9 +169,12 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
     if (options.mode === "device") {
       const userCode = loginResponse.userCode;
       if (loginResponse.type !== "chatgptDeviceCode" || typeof userCode !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(userCode)) return { ok: false, reason: "failed" };
+      // Device-code flow never auto-opens the browser: the user sees the code
+      // and the link and opens the page (or copies the link) on purpose.
       options.onDeviceCode?.({ userCode, verificationUrl: authUrl });
+    } else {
+      await options.openExternal(authUrl);
     }
-    await options.openExternal(authUrl);
 
     const aborted = new Promise<CodexLoginOutcome>((resolve) => {
       if (options.signal === undefined) return;
