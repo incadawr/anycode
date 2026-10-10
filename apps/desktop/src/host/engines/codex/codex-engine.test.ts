@@ -1213,6 +1213,40 @@ function notices(events: AgentEvent[]): string[] {
   return events.filter((event) => event.type === "engine_notice").map((event) => (event as { message: string }).message);
 }
 
+/** The RAW engine_notice events — level assertions need the whole event, not just the message. */
+function noticeEvents(events: AgentEvent[]): Array<{ type: string; level: string; message: string }> {
+  return events.filter((event) => event.type === "engine_notice") as Array<{ type: string; level: string; message: string }>;
+}
+
+describe("CodexEngine — boot version warning (owner decision 10.10)", () => {
+  const BOOT_WARNING = "Codex 0.150.0 is newer than the verified range — not verified, running anyway.";
+
+  it("emits the boot warning exactly once as a warning engine_notice on the first turn (create), never repeated", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, undefined, undefined, [{ type: "engine_notice", level: "warning", message: BOOT_WARNING }]);
+    const first = noticeEvents(await runTurn(server, engine));
+    expect(first).toHaveLength(1);
+    expect(first[0]).toEqual({ type: "engine_notice", level: "warning", message: BOOT_WARNING });
+    // A subsequent turn must not repeat the boot warning (drained once).
+    expect(notices(await runTurn(server, engine, "second"))).toHaveLength(0);
+  });
+
+  it("emits the boot warning exactly once on resume too", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, undefined, undefined, undefined, [{ type: "engine_notice", level: "warning", message: BOOT_WARNING }]);
+    const first = noticeEvents(await runTurn(server, engine));
+    expect(first).toHaveLength(1);
+    expect(first[0]).toEqual({ type: "engine_notice", level: "warning", message: BOOT_WARNING });
+    expect(notices(await runTurn(server, engine, "second"))).toHaveLength(0);
+  });
+
+  it("emits no notice when no boot warning was supplied", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+    expect(notices(await runTurn(server, engine))).toHaveLength(0);
+  });
+});
+
 describe("TASK.39 — model catalog + initial values", () => {
   it("carries a validated draft model and the draft preset's policy into thread/start", async () => {
     const server = new FakeAppServer();

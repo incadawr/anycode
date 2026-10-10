@@ -606,6 +606,11 @@ export async function resumeNativeCodexSession(
 }
 
 /** Starts a new native thread before anything is persisted. */
+/** Soft-allow version warning (Taskana 4231) rides the boot notices to the session start. */
+function withVersionWarning(notices: AgentEvent[] | undefined, versionWarning: string | null): AgentEvent[] | undefined {
+  return versionWarning === null ? notices : [...(notices ?? []), warning(versionWarning)];
+}
+
 export async function startCodexEngine(options: CodexEngineCreateOptions): Promise<ConnectedCodexEngine> {
   let engine: CodexEngine | null = null;
   const approvals = new CodexApprovalBridge({
@@ -620,7 +625,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   } });
   try {
     await client.start();
-    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog, options.bootNotices, options.mcpForward);
+    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog, withVersionWarning(options.bootNotices, client.versionWarning), options.mcpForward);
     engine = connected.engine;
     return connected;
   } catch (error) {
@@ -655,7 +660,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       options.shadowLog,
       options.agentBridge,
       options.agentCardLog,
-      options.bootNotices,
+      withVersionWarning(options.bootNotices, client.versionWarning),
       options.mcpForward,
     );
     engine = connected.engine;

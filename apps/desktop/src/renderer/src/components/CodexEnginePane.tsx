@@ -362,6 +362,11 @@ export function deriveBinaryActions(report: CodexDoctorReport | undefined, suppo
   return { showInstall, showUpdate, showUseAnyway: showUpdate, untestedVersion };
 }
 
+/** Soft-allow warning text from the doctor report, or null (owner decision 10.10) — unit-tested like every other pure helper here. */
+export function codexVersionWarningNotice(report: CodexDoctorReport | undefined): string | null {
+  return report?.versionWarning ?? null;
+}
+
 // ── quota formatting (cut §6.2: labels are ALWAYS derived from `windowDurationMins`, never hardcoded) ──
 
 /** `windowDurationMins` -> display label (cut §6.2's table, verbatim). `null`/absent falls back to `limitName`, then the literal "Limit". */
@@ -945,6 +950,11 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
           Supported range: <code>{support.supportedRange}</code>
           {manifestSource ? ` (${manifestSource})` : ""}. Recommended: <code>{support.recommended}</code>.
         </p>
+      )}
+      {codexVersionWarningNotice(binarySnapshot?.report) && (
+        <div className="settings-notice" role="alert">
+          {codexVersionWarningNotice(binarySnapshot?.report)}
+        </div>
       )}
       {binaryActions.untestedVersion && (
         <div className="settings-notice" role="alert">
