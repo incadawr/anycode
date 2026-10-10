@@ -28,6 +28,10 @@ import {
   MAX_PREVIEWABLE_PATHS,
   NodeArtifactsFs,
   resolveContainedPath,
+  TAIL_INDEX_MAX_ENTRIES,
+  TAIL_INDEX_TTL_MS,
+  WorkspaceTailIndex,
+  type ArtifactsFs,
   type ArtifactsIpcDeps,
 } from "./artifacts-ipc.js";
 
@@ -60,6 +64,7 @@ interface Rig {
   confirmOpen: ReturnType<typeof vi.fn<(path: string) => Promise<boolean>>>;
   consent: ArtifactConsentStore;
   openPreview: ReturnType<typeof vi.fn<ArtifactsIpcDeps["openPreview"]>>;
+  tailIndex: WorkspaceTailIndex;
 }
 
 /** workspace/home/tmp are three DISJOINT tmpdirs — the tmp root passed to deps is ours, not the OS one. */
@@ -81,6 +86,7 @@ async function makeRig(opts?: {
     return opts?.confirm ?? true;
   });
   const consent = new ArtifactConsentStore();
+  const tailIndex = new WorkspaceTailIndex();
   const openPreview = vi.fn<ArtifactsIpcDeps["openPreview"]>().mockResolvedValue({
     ok: true,
     value: { previewId: "preview-1", url: "file:///stub", kind: "file" },
@@ -94,9 +100,10 @@ async function makeRig(opts?: {
     reveal,
     confirmOpen,
     consent,
+    tailIndex,
     openPreview,
   };
-  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen, consent, openPreview };
+  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen, consent, openPreview, tailIndex };
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +231,152 @@ describe("resolveContainedPath", () => {
     expect(await resolveContainedPath(noTab.deps, TAB_ID, join(workspace, "x.png"))).toEqual({ failure: "no_workspace" });
   });
 });
+
+describe("TASK.149 tail-match base", () => {
+  it("root hit is unchanged and does not consult the tail index", async () => {
+    const { deps, workspace, tailIndex } = await makeRig();
+    await seed(join(workspace, "plan.md"));
+    const findUnique = vi.spyOn(tailIndex, "findUnique");
+    expect(await resolveContainedPath(deps, TAB_ID, "plan.md")).toEqual({ realPath: await realpath(join(workspace, "plan.md")) });
+    expect(findUnique).not.toHaveBeenCalled();
+  });
+
+  it("links a unique tail match in a subdirectory", async () => {
+    const { deps, workspace } = await makeRig();
+    const target = join(workspace, "working-docs/brief-next-stage.md");
+    await seed(target);
+    // deeper tail also matches (seeded BEFORE the first resolve — the walk is cached per TTL)
+    const nested = join(workspace, "working-docs/reviews/stage2.md");
+    await seed(nested);
+    expect(await resolveContainedPath(deps, TAB_ID, "brief-next-stage.md")).toEqual({ realPath: await realpath(target) });
+    expect(await resolveContainedPath(deps, TAB_ID, "reviews/stage2.md")).toEqual({ realPath: await realpath(nested) });
+  });
+
+  it("does not link an ambiguous tail (two matches)", async () => {
+    const { deps, workspace } = await makeRig();
+    await seed(join(workspace, "a/README.md"));
+    await seed(join(workspace, "b/README.md"));
+    expect(await resolveContainedPath(deps, TAB_ID, "README.md")).toEqual({ failure: "not_found" });
+  });
+
+  it("respects the walk caps: depth cap and skipped directories", async () => {
+    const { deps, workspace } = await makeRig();
+    await seed(join(workspace, "a/b/c/d/e/f/g/deep.md"));
+    await seed(join(workspace, "a/b/c/d/e/shallow.md"));
+    await seed(join(workspace, "node_modules/pkg/hidden.md"));
+    await seed(join(workspace, ".secret-dir/dotted.md"));
+    expect(await resolveContainedPath(deps, TAB_ID, "deep.md")).toEqual({ failure: "not_found" }); // beyond TAIL_INDEX_MAX_DEPTH
+    expect(await resolveContainedPath(deps, TAB_ID, "shallow.md")).toHaveProperty("realPath");
+    expect(await resolveContainedPath(deps, TAB_ID, "hidden.md")).toEqual({ failure: "not_found" }); // node_modules skipped
+    expect(await resolveContainedPath(deps, TAB_ID, "dotted.md")).toEqual({ failure: "not_found" }); // dot-dir skipped
+  });
+
+  it("refuses when the entry cap truncates the walk, even with a sole visible hit (mocked readdir)", async () => {
+    // Regression: a duplicate beyond the budget must never be linked. The
+    // budget is the walk's own TAIL_INDEX_MAX_ENTRIES, so the mocked trees
+    // below are sized against it (filler entries are virtual — readdir is
+    // mocked, no physical files are created). A listing cut mid-way — or a
+    // queued directory never visited — cannot prove uniqueness, so the sole
+    // visible hit is refused; the truncated listing is cached, so the
+    // refusal is consistent until the TTL expires.
+    const { workspace, home, tmp } = await makeRig();
+    const makeMockFs = (tree: Record<string, string[]>, calls: string[]): ArtifactsFs => ({
+      async readdir(path) {
+        calls.push(path);
+        return tree[path] ?? [];
+      },
+      stat: fs.stat.bind(fs),
+      realpath: fs.realpath.bind(fs),
+      readFileNoFollow: fs.readFileNoFollow.bind(fs),
+    });
+    await seed(join(workspace, "docs/dup.md"));
+
+    // Budget-BOUNDARY variant: the whole tree consumes EXACTLY
+    // TAIL_INDEX_MAX_ENTRIES entries (one flat listing, no subdirs) —
+    // nothing truncated, so the sole tail hit links, and the walk stopped
+    // after one readdir. (No physical file needed — findUnique returns the
+    // raw path and does no realpath of its own.)
+    const filler = (n: number, from = 0): string[] => Array.from({ length: n }, (_, i) => `f${from + i}`);
+    const exactCalls: string[] = [];
+    const exactIndex = new WorkspaceTailIndex();
+    expect(
+      await exactIndex.findUnique(
+        makeMockFs({ [workspace]: ["dup.md", ...filler(TAIL_INDEX_MAX_ENTRIES - 1)] }, exactCalls),
+        workspace,
+        "dup.md",
+      ),
+    ).toEqual(join(workspace, "dup.md"));
+    expect(exactCalls).toEqual([workspace]);
+
+    // Truncation variant through the prose-link channel: docs/ is reached,
+    // but its listing exceeds the budget (dup.md + 20 000 fillers), so it is
+    // cut mid-way with `dup.md` among the listed survivors and unexamined
+    // entries beyond the cap. `dup.md` misses at the root (the only real
+    // file is docs/dup.md), the index's sole hit would realpath fine —
+    // yet the truncated listing cannot prove uniqueness ⇒ refused.
+    const docsDir = join(workspace, "docs");
+    const truncatedCalls: string[] = [];
+    const truncatedDeps: ArtifactsIpcDeps = {
+      home: () => home,
+      tmpdir: () => tmp,
+      workspaceForTab: (tabId) => (tabId === TAB_ID ? workspace : undefined),
+      fs: makeMockFs({ [workspace]: ["docs/"], [docsDir]: ["dup.md", ...filler(TAIL_INDEX_MAX_ENTRIES)] }, truncatedCalls),
+      openPath: async () => "",
+      reveal: () => {},
+      confirmOpen: async () => true,
+      consent: new ArtifactConsentStore(),
+      tailIndex: new WorkspaceTailIndex(),
+      openPreview: async () => ({ ok: false, error: "unused" }) as never,
+    };
+    expect(await resolveContainedPath(truncatedDeps, TAB_ID, "dup.md")).toEqual({ failure: "not_found" });
+    expect(truncatedCalls).toEqual([workspace, docsDir]); // bounded: no deeper readdir
+    // …and the refusal is cached within the TTL (no second walk).
+    await resolveContainedPath(truncatedDeps, TAB_ID, "dup.md");
+    expect(truncatedCalls).toEqual([workspace, docsDir]);
+  });
+
+  it("caches the walk per workspace (TTL): a second call reuses the listing", async () => {
+    const { deps, workspace } = await makeRig();
+    await seed(join(workspace, "working-docs/brief.md"));
+    const readdirSpy = vi.spyOn(deps.fs, "readdir");
+    expect(await resolveContainedPath(deps, TAB_ID, "brief.md")).toHaveProperty("realPath");
+    const afterFirst = readdirSpy.mock.calls.length;
+    expect(afterFirst).toBeGreaterThan(0);
+    expect(await resolveContainedPath(deps, TAB_ID, "brief.md")).toHaveProperty("realPath");
+    expect(readdirSpy.mock.calls.length).toBe(afterFirst); // no re-walk within the TTL
+    // TTL expiry forces a fresh walk
+    const later = Date.now() + TAIL_INDEX_TTL_MS + 1_000;
+    await deps.tailIndex.findUnique(deps.fs, workspace, "brief.md", later);
+    expect(readdirSpy.mock.calls.length).toBeGreaterThan(afterFirst);
+  });
+
+  it("concurrent lookups share one walk", async () => {
+    const { deps, workspace } = await makeRig();
+    await seed(join(workspace, "working-docs/brief.md"));
+    const readdirSpy = vi.spyOn(deps.fs, "readdir");
+    const index = new WorkspaceTailIndex();
+    await Promise.all([1, 2, 3].map(() => index.findUnique(deps.fs, workspace, "brief.md")));
+    const roots = readdirSpy.mock.calls.filter(([dir]) => dir === workspace).length;
+    expect(roots).toBe(1);
+  });
+
+  it("TASK.149 through handleArtifactPreviewable: a unique tail links only after stat confirms a regular file", async () => {
+    const { deps, workspace } = await makeRig();
+    const target = join(workspace, "working-docs/brief-next-stage.md");
+    await seed(target);
+    expect(await handleArtifactPreviewable(deps, { tabId: TAB_ID, paths: ["brief-next-stage.md"] })).toEqual({ paths: ["brief-next-stage.md"] });
+  });
+
+  it("TASK.149 through handleArtifactPreviewable: an outside-allowed-roots symlink tail is refused", async () => {
+    const { deps, workspace, home } = await makeRig();
+    await seed(join(home, "secret.md"));
+    await mkdir(join(workspace, "docs"), { recursive: true });
+    await symlink(join(home, "secret.md"), join(workspace, "docs/leak.md"));
+    // unique tail match exists, but realpath escapes every root ⇒ refused
+    expect(await handleArtifactPreviewable(deps, { tabId: TAB_ID, paths: ["leak.md"] })).toEqual({ paths: [] });
+  });
+});
+
 
 describe("handleArtifactReadImage", () => {
   it("reads an in-root PNG as base64 with its mime type", async () => {
