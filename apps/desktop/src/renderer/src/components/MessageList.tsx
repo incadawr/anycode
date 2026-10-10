@@ -271,10 +271,18 @@ export function compactionRowText(block: Extract<TranscriptBlock, { kind: "compa
  * being filmed — neither belongs on a transcript that is about to play itself
  * back. `replaying` is REQUIRED rather than defaulted: a default would be
  * fail-open, letting a future caller draw the onboarding over a replay by
- * forgetting the argument. Exported for unit testing.
+ * forgetting the argument. Read-only surfaces (`readOnly`, e.g. a finished
+ * child session's transcript viewed from its parent) are likewise suppressed:
+ * the onboarding is an invitation to compose, and a read-only feed has no
+ * composer to write into. Exported for unit testing.
  */
-export function shouldShowTranscriptEmpty(blockCount: number, running: boolean, replaying: boolean): boolean {
-  return blockCount === 0 && !running && !replaying;
+export function shouldShowTranscriptEmpty(
+  blockCount: number,
+  running: boolean,
+  replaying: boolean,
+  readOnly: boolean = false,
+): boolean {
+  return blockCount === 0 && !running && !replaying && !readOnly;
 }
 
 /** Sticky-follow (F17) distance-from-bottom threshold, px — within this band a scroll position still counts as "at bottom" (a streaming tail block growing by a few px per flush must not read as a manual scroll-up). */
@@ -391,6 +399,7 @@ export function MessageList({
   connection,
   retry,
   onTryAgain,
+  readOnly = false,
 }: {
   blocks: TranscriptBlock[];
   turn: TurnState;
@@ -401,6 +410,8 @@ export function MessageList({
   retry: RetryOffer | null;
   /** TASK.33 W8: consumes `retry` and re-sends its content through the normal send/queue/busy path. */
   onTryAgain: () => void;
+  /** Read-only transcript surface (e.g. child history): suppresses the transcript-empty onboarding. */
+  readOnly?: boolean;
 }) {
   // codex P7.3-F2 finding 2: the automation transcript-scroll probe
   // (automation.ts's transcriptScrollState/transcriptScrollTo) must be able to
@@ -639,7 +650,7 @@ export function MessageList({
       <div className="visually-hidden" role="status">
         {running ? "Assistant is working" : hasRunRef.current ? "Assistant finished" : ""}
       </div>
-      {shouldShowTranscriptEmpty(blocks.length, running, replaying) && (
+      {shouldShowTranscriptEmpty(blocks.length, running, replaying, readOnly) && (
         <div className="transcript-empty">
           {workspace && (
             <div className="transcript-empty-workspace" title={workspace}>
