@@ -7,11 +7,86 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.34] — 2026-10-10
+
+### Added
+
+- Tab and child-session limits are configurable in Settings (20 open tabs by
+  default); the header shows the session path and the engine glyph, and the
+  workspace path stays on one line.
+- A message sent to a running child is shown as queued ("Queued — delivered
+  after this turn") and enters the transcript when its turn starts.
+- A path in chat becomes a link when it is unique inside the workspace.
+- Transcript rows show when they happened: user messages, background-agent
+  reports and turn ends carry a time (the date too when not today).
+- A stalled subagent says so on its card ("stalled · silent 4m" or "waiting for
+  approval") until it shows a sign of life or ends.
+- An inline subagent card names the model and engine it inherited from its
+  parent, marked "(inherited)".
+- The Subagents panel names the workspace it scanned, and an empty project
+  scope says where it looked.
+- The MCP pane has Add server and Import text buttons, a clear empty state, and
+  a search that says when nothing matched; without an open project the form
+  defaults to user scope.
+- An empty model menu offers an Add connection button that opens Settings →
+  Provider.
+- Codex command approvals are risk-classified by the Bash classifier and honor
+  Bash allow rules.
+- A subagent that reaches its turn limit returns a wrap-up report; a failed
+  wrap-up is marked instead of passing silently.
+- A refused turn-ceiling extension leaves a telemetry record with its reason,
+  and the recognizer Probe button writes vision-probe telemetry when telemetry
+  is on.
+
+### Changed
+
+- Codex patch releases and versions above the supported range are allowed with
+  a visible warning instead of being refused.
+- The Codex version manifest refreshes periodically and before any version
+  refusal, and a cached ready verdict is re-checked when the binary changes.
+- Device-code sign-in offers Open page / Copy link instead of opening the
+  browser by itself, in one compact row.
+- The start screen says a project is needed to send, and Enter opens the
+  picker.
+- The sidebar session list shows 50 sessions by default, is ordered by last
+  activity and refreshes only when the set of sessions changes.
+- A connection tile no longer presents an old health reading as current; a
+  stale one reads Unchecked.
+- A child session rides out a network outage (up to 180 s of retries) instead
+  of dying after about 50 s.
+
 ### Fixed
 
-- Upgrading AnyCode now also upgrades a previously managed Codex CLI install
-  to the manifest-recommended version, so account model catalogs refresh
-  after an app update; explicitly chosen external Codex binaries are kept.
+- Upgrading AnyCode also upgrades a previously managed Codex CLI install to
+  the manifest-recommended version, so account model catalogs refresh after an
+  app update; explicitly chosen external Codex binaries are kept.
+- Opening a Codex tab that is not ready says why (signed out, update required,
+  not installed, or a refused binary path) instead of always asking to sign in.
+- Requests to providers made by the app itself now honor the connection's
+  proxy.
+- AnyCode MCP servers are forwarded to Claude and Codex engine sessions.
+- A profile's turn budget reaches engine session children.
+- A turn the Claude CLI starts on its own is absorbed, and your next prompt
+  waits for it instead of killing the session.
+- Stop during a long Claude CLI command ends as a cancellation with an
+  explanation, not a faceless error.
+- The Claude engine refreshes the context meter mid-turn, so long child turns
+  show it.
+- Codex tool items are counted once, including completed-only and snake_case
+  shapes.
+- Workflow steps with an engine profile run through the session tier instead of
+  failing instantly.
+- A linked-worktree session also loads project agent profiles from the main
+  checkout.
+- Subagent end records carry the model, response model and engine on session
+  and engine routes.
+- A live recognizer fallback picks up key rotation and custom base URL edits.
+- A keyless custom connection opens a tab, and readiness agrees with the host.
+- A workflow precheck no longer writes an uncapped payload.
+- A read-only child history no longer offers onboarding chips that type into
+  the parent's composer.
+- Continue-session hints name the child session id, and the panel shows one row
+  per child.
 
 ## [0.0.33] — 2026-10-09
 
