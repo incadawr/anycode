@@ -1344,3 +1344,151 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect("fetchImpl" in (calls[0] as object)).toBe(false);
   });
 });
+
+// ── 4244: complete-URL models seam (no real server, injected fetchImpl only) ──
+
+describe("fetchCustomProviderModels — modelsUrl complete-URL seam (4244)", () => {
+  /** Capturing fake fetch returning an OpenAI-style {object:"list",data:[{id}]} body. */
+  function makeCapturingFetch(models: { id: string }[]): {
+    fetchImpl: typeof globalThis.fetch;
+    calls: { url: string; init: RequestInit }[];
+  } {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ object: "list", data: models }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof globalThis.fetch;
+    return { fetchImpl, calls };
+  }
+
+  it("uses modelsUrl VERBATIM — no /v1 insertion, no double /models — with GET, redirect:error, and Bearer auth", async () => {
+    const { fetchImpl, calls } = makeCapturingFetch([{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }]);
+    const outcome = await fetchCustomProviderModels({
+      baseUrl: "https://api.deepseek.com/anthropic",
+      modelsUrl: "https://api.deepseek.com/models",
+      apiKey: "sk-ds",
+      kind: "anthropic",
+      fetchImpl,
+    });
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.url).toBe("https://api.deepseek.com/models");
+    expect(calls[0]!.init.method).toBe("GET");
+    expect(calls[0]!.init.redirect).toBe("error");
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer sk-ds");
+    expect(headers["x-api-key"]).toBeUndefined();
+    expect(headers["anthropic-version"]).toBeUndefined();
+    expect(outcome).toEqual({ ok: true, models: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }] });
+  });
+
+  it("refuses a non-https/non-localhost modelsUrl as invalid_url without fetching", async () => {
+    const { fetchImpl, calls } = makeCapturingFetch([{ id: "m" }]);
+    const outcome = await fetchCustomProviderModels({
+      baseUrl: "https://api.deepseek.com/anthropic",
+      modelsUrl: "http://api.deepseek.com/models",
+      apiKey: "sk-ds",
+      kind: "anthropic",
+      fetchImpl,
+    });
+    expect(outcome).toEqual({ ok: false, reason: "invalid_url" });
+    expect(calls.length).toBe(0);
+  });
+
+  it("trailing-slash modelsUrl is trimmed, not doubled", async () => {
+    const { fetchImpl, calls } = makeCapturingFetch([{ id: "m" }]);
+    await fetchCustomProviderModels({
+      baseUrl: "https://api.deepseek.com/anthropic",
+      modelsUrl: "https://api.deepseek.com/models/",
+      apiKey: "sk-ds",
+      kind: "anthropic",
+      fetchImpl,
+    });
+    expect(calls[0]!.url).toBe("https://api.deepseek.com/models");
+  });
+
+  it("absent modelsUrl keeps the derived path byte-identical", async () => {
+    const { fetchImpl, calls } = makeCapturingFetch([{ id: "m" }]);
+    await fetchCustomProviderModels({
+      baseUrl: catalogModelsBaseUrl("https://api.kimi.com/coding"),
+      apiKey: "sk-kimi",
+      kind: "anthropic",
+      fetchImpl,
+    });
+    expect(calls[0]!.url).toBe("https://api.kimi.com/coding/v1/models");
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers["x-api-key"]).toBe("sk-kimi");
+  });
+});
+
+describe("handleCustomProviderFetchModels — 4244 modelsUrl catalog wiring", () => {
+  async function seed4244(connection: Record<string, unknown>): Promise<void> {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 2,
+        provider: { connections: [connection], activeConnectionId: connection.id },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+  }
+
+  it("4244: a deepseek connection fetches https://api.deepseek.com/models with Bearer and persists the ids", async () => {
+    await seed4244({ id: "conn-ds", providerId: "deepseek" });
+    vault.store.set(connectionApiKeySecretKey("conn-ds"), "sk-ds-secret");
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ object: "list", data: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof globalThis.fetch;
+    const deps = makeDeps({
+      now: () => "2026-07-18T00:00:00.000Z",
+      catalogEntryById: (id) =>
+        id === "deepseek"
+          ? { id: "deepseek", baseUrl: "https://api.deepseek.com/anthropic", defaultTransport: "anthropic-messages" }
+          : undefined,
+      connectionFetch: () => fetchImpl,
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-ds" });
+    expect(res).toEqual({ ok: true, models: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }] });
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.url).toBe("https://api.deepseek.com/models");
+    expect(calls[0]!.init.method).toBe("GET");
+    expect(calls[0]!.init.redirect).toBe("error");
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer sk-ds-secret");
+    expect(headers["x-api-key"]).toBeUndefined();
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]).toMatchObject({
+      id: "conn-ds",
+      models: ["deepseek-flash", "deepseek-v4-pro"],
+      modelsFetchedAt: "2026-07-18T00:00:00.000Z",
+    });
+  });
+  it("4244: a deepseek connection with an overridden baseUrl uses the derived URL, not the catalog modelsUrl", async () => {
+    await seed4244({ id: "conn-gw", providerId: "deepseek", baseUrl: "https://gw.example/anthropic" });
+    vault.store.set(connectionApiKeySecretKey("conn-gw"), "sk-gw");
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ data: [{ id: "m" }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof globalThis.fetch;
+    const deps = makeDeps({
+      catalogEntryById: (id) =>
+        id === "deepseek"
+          ? { id: "deepseek", baseUrl: "https://api.deepseek.com/anthropic", defaultTransport: "anthropic-messages" }
+          : undefined,
+      connectionFetch: () => fetchImpl,
+    });
+    await handleCustomProviderFetchModels(deps, { connectionId: "conn-gw" });
+    expect(calls).toEqual(["https://gw.example/anthropic/v1/models"]);
+  });
+});

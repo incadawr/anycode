@@ -312,3 +312,12 @@ describe("assertTransportContract (dev-time invariant, TASK.43 W5)", () => {
     }
   });
 });
+
+describe("modelsUrl (4244)", () => {
+  it("4244: deepseek declares modelsUrl at the bare origin; every other entry leaves it absent", () => {
+    expect(findCatalogEntry("deepseek")?.modelsUrl).toBe("https://api.deepseek.com/models");
+    for (const id of ["anthropic", "z-ai", "moonshot", "kimi", "openai", "openrouter", "vllm", "custom"]) {
+      expect(findCatalogEntry(id)?.modelsUrl).toBeUndefined();
+    }
+  });
+});

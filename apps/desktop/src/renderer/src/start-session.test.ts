@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { createTabsStore } from "./tabs-store.js";
+import { resolveCodexDraftModel } from "./codex-draft-model.js";
 import { createSettingsStore } from "./settings-store.js";
 import { selectStartModelRow } from "./components/StartScreen.js";
 import type { CreateTabResult } from "../../shared/tabs.js";
@@ -78,6 +79,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setCodexModels([{ id: "gpt-5.6-mini" }, { id: "gpt-5.6-terra" }]);
     tabsStore.getState().setDraftModel("gpt-5.6-mini");
     tabsStore.getState().setDraftEnginePreset("workspace");
     tabsStore.getState().setDraftMode("plan");
@@ -99,6 +101,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setCodexModels([{ id: "gpt-5.6-sol" }]);
     tabsStore.getState().setDraftEngine("codex");
     tabsStore.getState().setDraftCodexProfileId("work");
 
@@ -108,6 +111,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
       kind: "new",
       workspace: "/ws/a",
       engine: "codex",
+      engineModel: "gpt-5.6-sol",
       codexProfileId: "work",
     });
   });
@@ -116,11 +120,12 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setCodexModels([{ id: "gpt-5.6-sol" }]);
     tabsStore.getState().setDraftEngine("codex");
 
     await submitStartDraft(deps);
 
-    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex" });
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex", engineModel: "gpt-5.6-sol" });
   });
 
   it("TASK.106 cut-1 stage A: forwards a Core draft's cross-connection pick as connectionId", async () => {
@@ -157,15 +162,16 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a" });
   });
 
-  it("a Codex draft with no explicit model/preset pick omits both from createTab, letting the host apply its own defaults", async () => {
+  it("a Codex draft with no explicit model/preset pick sends the catalog's first entry (TASK.241: displayed default == sent), preset omitted for the host default", async () => {
     const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setCodexModels([{ id: "gpt-5.6-mini" }]);
     tabsStore.getState().setDraftEngine("codex");
 
     await submitStartDraft(deps);
 
-    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex" });
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex", engineModel: "gpt-5.6-mini" });
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, undefined, undefined);
   });
 
@@ -237,6 +243,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("look at this");
+    tabsStore.getState().setCodexModels([{ id: "gpt-5.6-mini" }]);
     tabsStore.getState().setDraftEngine("codex");
     tabsStore.getState().setDraftImages([image]);
 
@@ -249,12 +256,13 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setCodexModels([{ id: "gpt-5.6-mini" }]);
     tabsStore.getState().setDraftEngine("codex");
     tabsStore.getState().setDraftEngineEffort("high");
 
     await submitStartDraft(deps);
 
-    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex" });
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex", engineModel: "gpt-5.6-mini" });
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, "high", undefined);
   });
 
@@ -406,5 +414,93 @@ describe("submitStartDraft — refusal keeps the draft (§3-D8)", () => {
     expect(tabsStore.getState().draft).toEqual({ workspace: "/ws/a", prompt: "keep me", engine: "core", model: null, mode: "build" });
     expect(tabsStore.getState().draftActive).toBe(true);
     expect(queueInitialPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe("submitStartDraft — TASK.241 codex draft-model agreement", () => {
+  const CODEX_CATALOG = [{ id: "gpt-5.6-sol" }, { id: "luna" }] as const;
+
+  it("TASK.241: null draft + ready catalog sends the SAME first entry the chip displays", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setCodexModels([...CODEX_CATALOG]);
+    tabsStore.getState().setDraftEngine("codex");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "new", engine: "codex", engineModel: "gpt-5.6-sol" }),
+    );
+    expect(resolveCodexDraftModel(null, [...CODEX_CATALOG])).toBe("gpt-5.6-sol");
+  });
+
+  it("TASK.241: an explicit Sol pick present in the catalog is forwarded verbatim", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setCodexModels([...CODEX_CATALOG]);
+    tabsStore.getState().setDraftModel("gpt-5.6-sol");
+    tabsStore.getState().setDraftEngine("codex");
+
+    await submitStartDraft(deps);
+
+    expect(createTab).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "new", engine: "codex", engineModel: "gpt-5.6-sol" }),
+    );
+  });
+
+  it("TASK.241: a STALE draft.model is visibly refused — createTab never called, pick preserved, message names the id", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftModel("claude-opus");
+    tabsStore.getState().setCodexModels([...CODEX_CATALOG]);
+    tabsStore.getState().setDraftEngine("codex");
+
+    const res = await submitStartDraft(deps);
+
+    expect(res).toEqual({ ok: false, message: expect.stringContaining("claude-opus") });
+    expect(createTab).not.toHaveBeenCalled();
+    expect(tabsStore.getState().draft?.model).toBe("claude-opus");
+  });
+
+  it("TASK.241: an empty/unloaded catalog refuses instead of silently launching the server default — for BOTH a null model and an explicit pick", async () => {
+    const nullModel = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    nullModel.tabsStore.getState().openDraft("/ws/a");
+    nullModel.tabsStore.getState().setDraftPrompt("hello");
+    nullModel.tabsStore.getState().setDraftEngine("codex");
+    const nullModelRes = await submitStartDraft(nullModel.deps);
+    expect(nullModelRes).toEqual({ ok: false, message: expect.any(String) });
+    expect(nullModel.createTab).not.toHaveBeenCalled();
+
+    const explicit = makeDeps({ ok: true, tabId: "t2", workspace: "/ws/a" });
+    explicit.tabsStore.getState().openDraft("/ws/a");
+    explicit.tabsStore.getState().setDraftPrompt("hello");
+    explicit.tabsStore.getState().setDraftModel("gpt-5.6-sol");
+    explicit.tabsStore.getState().setDraftEngine("codex");
+    const explicitRes = await submitStartDraft(explicit.deps);
+    expect(explicitRes).toEqual({ ok: false, message: expect.any(String) });
+    expect(explicit.createTab).not.toHaveBeenCalled();
+  });
+
+  it("TASK.241: the claude lane is unchanged — forwards draft.model raw when set, omits when null (no catalog consulted)", async () => {
+    const set = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    set.tabsStore.getState().openDraft("/ws/a");
+    set.tabsStore.getState().setDraftPrompt("hello");
+    set.tabsStore.getState().setDraftModel("opus[1m]");
+    set.tabsStore.getState().setDraftEngine("claude");
+    await submitStartDraft(set.deps);
+    expect(set.createTab).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "new", engine: "claude", engineModel: "opus[1m]" }),
+    );
+
+    const unset = makeDeps({ ok: true, tabId: "t2", workspace: "/ws/a" });
+    unset.tabsStore.getState().openDraft("/ws/a");
+    unset.tabsStore.getState().setDraftPrompt("hello");
+    unset.tabsStore.getState().setDraftEngine("claude");
+    await submitStartDraft(unset.deps);
+    const req = (unset.createTab.mock.calls as unknown as [Record<string, unknown>[]])[0]![0]!;
+    expect(req.engineModel).toBeUndefined();
   });
 });

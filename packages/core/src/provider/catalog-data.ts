@@ -128,6 +128,10 @@ const ENTRIES: CatalogProviderEntry[] = [
     id: "deepseek",
     name: "DeepSeek",
     baseUrl: "https://api.deepseek.com/anthropic",
+    // 4244: the models list lives at the bare origin, not under the anthropic
+    // transport prefix. GET https://api.deepseek.com/models, Bearer auth,
+    // OpenAI-style {object:"list",data:[{id}]} — hence modelsUrl's contract.
+    modelsUrl: "https://api.deepseek.com/models",
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
