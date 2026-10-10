@@ -21,6 +21,8 @@ export interface ClaudeEngineArgs {
   model?: string;
   /** Draft permission-preset id, unvalidated. */
   preset?: string;
+  /** Draft effort tier (profile `effort:`), unvalidated. */
+  effort?: string;
 }
 
 /** An id-shaped token: non-empty, bounded, no whitespace (an id never contains any). */
@@ -44,8 +46,10 @@ function readFlag(argv: readonly string[], flag: string): string | undefined {
 export function parseClaudeEngineArgs(argv: readonly string[]): ClaudeEngineArgs {
   const model = readFlag(argv, "--engine-model");
   const preset = readFlag(argv, "--engine-preset");
+  const effort = readFlag(argv, "--engine-effort");
   return {
     ...(model !== undefined ? { model } : {}),
     ...(preset !== undefined ? { preset } : {}),
+    ...(effort !== undefined ? { effort } : {}),
   };
 }
