@@ -45,12 +45,65 @@ account** links an existing `~/.codex/auth.json`. Details:
 ### 2. Z.AI connection (GLM models)
 
 In **Settings → Connections**, add a connection for the built-in **Z.AI (GLM)**
-provider (`https://api.z.ai/api/anthropic`) with your Z.AI API key, select
-`glm-5.3` as its model — and **set it as the active/default connection**
-before spawning children: a Native child resolves its model on the parent
-session's active connection, so Z.AI must be the active one for the profiles'
-`glm-5.3` / `glm-5.3-flash` ids to resolve. A wrong or unavailable id is
-refused, never silently substituted. Flash is optional.
+provider (`https://api.z.ai/api/anthropic`) with your Z.AI API key and select
+`glm-5.3` as its model. Only an **unrouted** profile inherits the parent
+session's active connection, so if every profile you dispatch declares its own
+`connection:`/`provider:` (below) the parent's active connection no longer has
+to be the Z.AI one.
+
+#### Per-profile connection routing
+
+A profile may select the connection its child runs on, so one supervisor
+session can drive, say, `glm-planner` on a GLM connection and `ds-executor` on
+a DeepSeek one:
+
+- `connection: <connection-id>` — an **exact** connection id as shown in
+  Settings → Connections. Use this to pin a specific account.
+- `provider: <catalog-provider-id>` — a provider id such as `z-ai` or
+  `deepseek`. The host picks a configured connection for that provider: the
+  active connection if its provider matches, otherwise the first matching
+  configured connection. Use `connection:` when you need one exact account.
+
+The two keys are **mutually exclusive**, and neither may be combined with
+`engine:` (an engine child runs on its own CLI account). Violating either is
+reported as a profile problem at load and the profile is ignored — it never
+silently runs unrouted.
+
+A routed child **pins its own connection** and validates its `model:` id
+against that connection's own model catalog (the parent's active connection is
+no longer relevant to it); an unrouted profile still resolves its model on the
+parent's active connection. Because the model id is validated against the
+**selected** connection, use the exact model id that connection is configured
+with — there is no universal DeepSeek id to rely on: check the connection you
+point at and copy the id it offers. Two complete examples (replace **every**
+placeholder — both the connection ids and the model ids — with the ids your
+setup actually offers; they are ids, not labels to be inferred):
+
+```markdown
+---
+name: glm-planner
+description: Read-only planner on GLM.
+model: glm-5.3
+effort: high
+connection: <your-GLM-connection-id>
+---
+```
+
+```markdown
+---
+name: ds-executor
+description: Executor on DeepSeek Flash.
+model: <the-model-id-your-DeepSeek-connection-offers>
+effort: low
+connection: <your-DeepSeek-connection-id>
+---
+```
+
+Error semantics: an unknown, deleted or unavailable target is **refused at
+spawn time naming that connection** — the child never falls back to the
+parent's connection. Both-keys and engine-combination profiles are ignored at
+load with a problem line. The `provider:` resolution policy above
+(`resolveProviderConnection`) is unchanged.
 
 The catalog lists `glm-5.3` and `glm-5.3-flash` (1M context advertised, 128K
 max output, reasoning-capable). AnyCode budgets GLM-5.x sessions at 300k
@@ -113,6 +166,14 @@ and ending that turn early cancels the child.
 
 The `model:` frontmatter is a default, not a guarantee: the tool call's
 `model` argument outranks it.
+
+Connection routing is honored on every **creating** spawn: a profile that
+declares `connection:`/`provider:` boots its child on that connection (the tool
+description marks the routed entries `[connection: …]` / `[provider: …]`). A
+`continue_session` call keeps the child's original connection — routing is read
+only when the child is first created. On a routed profile an explicit
+`Agent(provider: …)` argument is **refused**: the profile's declaration is
+authoritative, so an argument can never redirect a routed child.
 
 Without `continue_session` each call is a fresh child. With
 `continue_session` set to the session id of a finished child of the same
