@@ -41,7 +41,11 @@ import {
   sortSubagentRows,
   toggleSubagentToolChip,
   userRowSourceBadgeLabel,
+  workspaceEmptyNote,
+  workspaceRootSegment,
+  workspaceScopeBadgeLabel,
   utf8ByteLength,
+  userRowBadgeLabel,
 } from "./SubagentsPane.js";
 
 function row(overrides: Partial<SubagentRowView> = {}): SubagentRowView {
@@ -504,5 +508,60 @@ describe("resolveSubagentModelOptions", () => {
       models: [],
       inheritLabel: "Default",
     });
+  });
+});
+
+// ── TASK.128: workspace-root badge/label helpers (display-only; paths never leave the renderer) ──
+
+describe("workspaceRootSegment", () => {
+  it("returns the final forward-slash-separated segment", () => {
+    expect(workspaceRootSegment("/Users/x/proj/anycode")).toBe("anycode");
+  });
+
+  it("strips trailing forward slashes before taking the final segment", () => {
+    expect(workspaceRootSegment("/ws/task106-slice1/")).toBe("task106-slice1");
+    expect(workspaceRootSegment("/ws/a//")).toBe("a");
+  });
+
+  it("returns '' for absent/empty workspace", () => {
+    expect(workspaceRootSegment(undefined)).toBe("");
+    expect(workspaceRootSegment(null)).toBe("");
+    expect(workspaceRootSegment("")).toBe("");
+  });
+});
+
+describe("workspaceScopeBadgeLabel", () => {
+  it("suffixes the workspace segment when known", () => {
+    expect(workspaceScopeBadgeLabel("/ws/anycode")).toBe("Workspace · anycode");
+  });
+
+  it("falls back to the plain Workspace label when the workspace is unknown", () => {
+    expect(workspaceScopeBadgeLabel(undefined)).toBe("Workspace");
+  });
+});
+
+describe("userRowBadgeLabel", () => {
+  it("project rows surface the workspace segment", () => {
+    expect(userRowBadgeLabel("project", "/ws/anycode")).toBe("Workspace · anycode");
+  });
+
+  it("user rows stay Personal", () => {
+    expect(userRowBadgeLabel("user", "/ws/anycode")).toBe("Personal");
+  });
+});
+
+describe("workspaceEmptyNote", () => {
+  it("returns the emptiness note when a workspace is known and no project-scope row exists at all", () => {
+    const rows = [row({ name: "explore", sourceKind: "builtin" }), row({ name: "personal-one", sourceKind: "user" })];
+    expect(workspaceEmptyNote("/ws/anycode", rows)).toBe("No workspace subagents — none found in anycode.");
+  });
+
+  it("returns null when the workspace is unknown", () => {
+    expect(workspaceEmptyNote(undefined, [row()])).toBeNull();
+  });
+
+  it("returns null when any project-scope row exists (unfiltered rows)", () => {
+    const rows = [row({ name: "proj-one", sourceKind: "project", editable: true })];
+    expect(workspaceEmptyNote("/ws/anycode", rows)).toBeNull();
   });
 });
