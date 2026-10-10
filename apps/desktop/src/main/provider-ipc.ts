@@ -988,6 +988,10 @@ export function startSettingsFileWatcher(
   } catch {
     lastText = null;
   }
+  // The OS watch stream can take a moment to arm (FSEvents on macOS drops an
+  // edit landing in that window), so one deferred rescan after startup re-reads
+  // the file and dispatches only if it differs from the baseline just taken.
+  schedule();
 
   return () => {
     closed = true;
