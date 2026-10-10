@@ -7,6 +7,55 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.35] — 2026-10-10
+
+### Added
+
+- Agent profiles can pick their own connection with `connection:` (exact id) or
+  `provider:` in frontmatter; the child starts on it. A missing or unavailable
+  connection is a spawn error with no silent fallback to the parent's
+  connection, and combining either key with `engine:` (or with each other) is
+  rejected when the profile is parsed.
+- The permission modal proposes a trusted project-runner rule for
+  `cd <workspace> && pnpm test|typecheck|build|lint`; only that exact compound
+  form is auto-allowed, everything else still asks.
+- The number of subagents running at once is configurable; the rest wait in an
+  honest "Queued" state on their card and start as soon as a slot frees up.
+- A connection's context window can be set per model in the connection drawer
+  for models the catalog does not know; it applies only to that model.
+- Codex Agent/collab calls appear as subagent cards, and image view, sleep,
+  image generation, other collab actions and unrecognized Codex items get
+  generic cards instead of being dropped; Codex subagent counters no longer show
+  zero tool calls.
+
+### Changed
+
+- A model the catalog does not know now assumes an 8,192-token context window
+  (it previously inherited the larger default); set the real value in the
+  connection drawer. A known model still uses its catalog window.
+- Agent profile `effort` aliases and `xhigh` reach Codex and Claude children and
+  core subagents.
+- The worktree janitor looks at a bounded window of recent sessions (200), while
+  worktrees claimed by any live child stay protected.
+
+### Fixed
+
+- A compound Bash command now matches the per-run allow-list when every segment
+  of it does.
+- A model typed by hand is saved on its connection and shows up in every model
+  picker, including when it is entered before the connection exists; fetching
+  models merges instead of replacing, and edits to the settings file made
+  outside the app are picked up (including ones made during startup).
+- A Claude child that dies with a steer queued no longer starts a turn on a dead
+  engine; the queued message is rejected and the parent gets the real reason.
+- A child that ends with a malformed terminal state no longer hangs its parent.
+- Codex starts the model picked on the start screen instead of its default.
+- The DeepSeek model list uses the right URL and its catalog is refreshed.
+- The provider-switch marker sits at the point of the switch and survives a
+  restart.
+- Check Connection treats an empty `HTTPS_PROXY` in the shell like the rest of
+  the app does.
+
 ## [0.0.34] — 2026-10-10
 
 ### Added
