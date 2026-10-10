@@ -14,7 +14,7 @@
 
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { EngineBootstrap } from "../bootstrap.js";
@@ -82,6 +82,12 @@ export interface ClaudeSpawnArgsOptions {
   effort?: string;
   sessionId?: string;
   resume?: string;
+  /**
+   * TASK.182: absolute path of the private 0600 `--mcp-config` document
+   * materialized by the host boot (mcp-forward-boot.ts). Omitted entirely
+   * when undefined — the argv is byte-identical to the pre-TASK.182 spawn.
+   */
+  mcpConfigPath?: string;
 }
 
 /**
@@ -103,8 +109,13 @@ export const CLAUDE_GUI_SURFACE_PROMPT =
  * `-p` silently auto-denies every tool permission — probe #2) and
  * `--disable-slash-commands` (without it the CLI's own built-in slash-command
  * and skill catalog leaks into `system/init`/`initialize.commands[]` — probe
- * #6). `--mcp-config` is deliberately omitted: probe #6 proved
- * `--strict-mcp-config` alone yields `mcp_servers: []`. `--append-system-prompt
+ * #6). TASK.182: when the host materialized a private forward document, an
+ * optional `--mcp-config <path>` pair rides IMMEDIATELY BEFORE
+ * `--strict-mcp-config`, so only our configured servers (plus the in-band
+ * anycode bridge, announced via `sdkMcpServers`) apply; absent, the argv is
+ * unchanged (the pre-TASK.182 finding "strict-mcp-config alone yields
+ * `mcp_servers: []`" now carries our document instead of nothing).
+ * `--append-system-prompt
  * <CLAUDE_GUI_SURFACE_PROMPT>` (TASK.90) is mandatory-always-on for the same
  * reason as `effort`: no native truth exists for it, so it rides EVERY spawn,
  * unconditionally, including `--resume` — there is nothing a resumed native
@@ -125,6 +136,7 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     "--disable-slash-commands",
     "--setting-sources",
     "project,local",
+    ...(options.mcpConfigPath !== undefined ? ["--mcp-config", options.mcpConfigPath] : []),
     "--strict-mcp-config",
     "--append-system-prompt",
     CLAUDE_GUI_SURFACE_PROMPT,
@@ -330,6 +342,8 @@ export interface ClaudeClientOptions {
   effort?: string;
   sessionId?: string;
   resume?: string;
+  /** See `ClaudeSpawnArgsOptions.mcpConfigPath` — the CLIENT owns this file's lifetime until close. */
+  mcpConfigPath?: string;
   binaryArgs?: readonly string[];
   bootstrap?: EngineBootstrap;
   /**
@@ -439,6 +453,15 @@ export class ClaudeClient {
   private terminalError: Error | null = null;
   private stdoutPaused = false;
   private sawFirstSystemInit = false;
+  /**
+   * TASK.182: the private --mcp-config file this client owns from
+   * construction. Undefined when no forwarding happened. Cleaned on every
+   * terminal path (close before a child exists, start/preflight/spawn
+   * failure, unexpected child close/error, ordinary close) — idempotent, and
+   * the bootstrap-adopted disposer stays the single-slot `close()` seam.
+   */
+  private readonly ownedMcpConfigPath: string | undefined;
+  private mcpConfigCleaned = false;
 
   constructor(private readonly options: ClaudeClientOptions) {
     this.spawnImpl = options.spawnImpl ?? ((command, args, opts) => spawn(command, args, opts));
@@ -450,6 +473,7 @@ export class ClaudeClient {
     const highWater = options.notificationHighWater ?? CLAUDE_NOTIFICATION_HIGH_WATER;
     const lowWater = options.notificationLowWater ?? CLAUDE_NOTIFICATION_LOW_WATER;
     if (lowWater >= highWater) throw new ClaudeClientError("notification low-water must be below high-water");
+    this.ownedMcpConfigPath = options.mcpConfigPath;
     this.queue = new NotificationQueue(
       () => this.pauseStdout(),
       () => this.resumeStdout(),
@@ -484,31 +508,56 @@ export class ClaudeClient {
     if (!isAbsolute(this.options.binaryPath)) {
       throw new EngineVersionError("Claude binary path must be absolute");
     }
-    await this.preflightVersion();
-    // Re-validated HERE, immediately before THIS spawn — the preflight's own
-    // trust check is stale by a whole `--version` round trip (TOCTOU).
-    this.assertTrusted();
-    const args = buildClaudeSpawnArgs({
-      // An explicit flag always wins. Without one, a FRESH spawn falls back to
-      // the fail-closed `manual` (= wire `default`, the Ask preset), while a
-      // RESUME sends no `--permission-mode` at all so the native session's own
-      // surviving posture stands (cut §1.5 hazard (б)).
-      ...(this.options.permissionModeFlag !== undefined
-        ? { permissionModeFlag: this.options.permissionModeFlag }
-        : this.options.resume !== undefined
-          ? {}
-          : { permissionModeFlag: "manual" as const }),
-      model: this.options.model,
-      effort: this.options.effort,
-      sessionId: this.options.sessionId,
-      resume: this.options.resume,
-    });
-    const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], this.spawnOptions(true));
-    this.child = child;
-    this.options.bootstrap?.adopt(() => this.close());
-    this.bindChild(child);
-    await this.awaitSpawn(child);
-    this.reportOwnedProcess(child);
+    try {
+      await this.preflightVersion();
+      // Re-validated HERE, immediately before THIS spawn — the preflight's own
+      // trust check is stale by a whole `--version` round trip (TOCTOU).
+      this.assertTrusted();
+      const args = buildClaudeSpawnArgs({
+        // An explicit flag always wins. Without one, a FRESH spawn falls back to
+        // the fail-closed `manual` (= wire `default`, the Ask preset), while a
+        // RESUME sends no `--permission-mode` at all so the native session's own
+        // surviving posture stands (cut §1.5 hazard (б)).
+        ...(this.options.permissionModeFlag !== undefined
+          ? { permissionModeFlag: this.options.permissionModeFlag }
+          : this.options.resume !== undefined
+            ? {}
+            : { permissionModeFlag: "manual" as const }),
+        model: this.options.model,
+        effort: this.options.effort,
+        sessionId: this.options.sessionId,
+        resume: this.options.resume,
+        ...(this.options.mcpConfigPath !== undefined ? { mcpConfigPath: this.options.mcpConfigPath } : {}),
+      });
+      const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], this.spawnOptions(true));
+      this.child = child;
+      this.options.bootstrap?.adopt(() => this.close());
+      this.bindChild(child);
+      await this.awaitSpawn(child);
+      this.reportOwnedProcess(child);
+    } catch (error) {
+      // TASK.182: a failed start still owned the file — release it (and any
+      // child a late failure adopted) before propagating. The guard keeps
+      // connect's own failure path from double-terminating a child that was
+      // never adopted; close() itself is idempotent.
+      if (this.child !== null) {
+        await this.close();
+      } else {
+        this.cleanupOwnedMcpConfig();
+      }
+      throw error;
+    }
+  }
+
+  /** TASK.182: removes the owned --mcp-config file exactly once. */
+  private cleanupOwnedMcpConfig(): void {
+    if (this.mcpConfigCleaned || this.ownedMcpConfigPath === undefined) return;
+    this.mcpConfigCleaned = true;
+    try {
+      unlinkSync(this.ownedMcpConfigPath);
+    } catch {
+      // already gone (sweep raced us) — idempotent
+    }
   }
 
   /**
@@ -587,13 +636,19 @@ export class ClaudeClient {
    * actually closes. Idempotent AND awaitable.
    */
   close(): Promise<void> {
-    if (this.child === null) return Promise.resolve();
+    if (this.child === null) {
+      // TASK.182: a close before any child existed still owned the file.
+      this.cleanupOwnedMcpConfig();
+      return Promise.resolve();
+    }
     this.closePromise ??= this.teardown(this.child);
     return this.closePromise;
   }
 
   private async teardown(child: ChildProcess): Promise<void> {
     this.closing = true;
+    // TASK.182: the file dies with the child, whichever teardown stage runs.
+    this.cleanupOwnedMcpConfig();
     // `close` is emitted exactly ONCE, and a listener registered after it has
     // already fired never receives it. A child that died before close() was
     // called — the CLI crashing on startup, or a fixture that writes one line
@@ -980,6 +1035,10 @@ export class ClaudeClient {
   private failTerminal(error: Error): void {
     if (this.terminalError) return;
     this.terminalError = error;
+    // TASK.182: every terminal path (unexpected child close/error, stream
+    // failure, protocol failure) releases the owned file immediately — the
+    // private document must never outlive the process that reads it.
+    this.cleanupOwnedMcpConfig();
     this.queue.close();
     for (const pending of this.pending.values()) {
       if (pending.timer) clearTimeout(pending.timer);
