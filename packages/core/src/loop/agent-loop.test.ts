@@ -1229,6 +1229,11 @@ describe("AgentLoop.runTurn — ceiling decision ladder (TASK.124 cut-1)", () =>
   const grantEvents = (events: AgentEvent[]) =>
     events.filter((e): e is Extract<AgentEvent, { type: "ceiling_grant" }> => e.type === "ceiling_grant");
 
+  // TASK.208: every refused round emits exactly one ceiling_refused immediately
+  // before its paired loop_end.
+  const refusedEvents = (events: AgentEvent[]) =>
+    events.filter((e): e is Extract<AgentEvent, { type: "ceiling_refused" }> => e.type === "ceiling_refused");
+
   it("round 1: grants, is visible as one event, and the loop resumes with the SAME history — no trace of the decision call", async () => {
     const modelPort = new MockModelPort([
       toolTurnStep("c1"),
@@ -1542,6 +1547,214 @@ describe("AgentLoop.runTurn — ceiling decision ladder (TASK.124 cut-1)", () =>
     // 8 + 4 + 2 + 2 = 16 real turns + 3 decision calls = 19; the 4th attempt
     // never reaches the model (MAX_CEILING_ROUNDS gate is cheap).
     expect(modelPort.requests).toHaveLength(19);
+
+    // TASK.208: the refused 4th round announces itself exactly once, with the
+    // completed-turn count (16) and the would-be round number (MAX+1 = 4).
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "rounds_exhausted", turn: 16, round: 4 },
+    ]);
+    expect(events.at(-2)).toEqual(refusedEvents(events)[0]);
+  });
+});
+
+describe("AgentLoop.runTurn — ceiling_refused events (TASK.208)", () => {
+  /** One successful `Mock` tool-call turn — the loop's normal per-turn step. */
+  function toolTurnStep(id: string): ModelStreamEvent[] {
+    return [
+      { type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  /** One failing tool-call turn (status "error", never counted as progress). */
+  function failingTurnStep(id: string): ModelStreamEvent[] {
+    return [
+      { type: "tool_call", toolCall: { id, name: "Fail", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  /** One clean `ceiling_verdict` call — the ONLY way a grant can be produced. */
+  function verdictStep(
+    remaining: string[],
+    opts?: { done?: boolean; nextAction?: string },
+  ): ModelStreamEvent[] {
+    const input: Record<string, unknown> = { done: opts?.done ?? false, remaining };
+    if (opts?.nextAction !== undefined) input.next_action = opts.nextAction;
+    return [
+      { type: "tool_call", toolCall: { id: `v${Math.random()}`, name: "ceiling_verdict", input } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  const failTool = makeTool({ handler: async () => ({ ok: false, error: "boom" }) });
+  const registry = makeRegistry({ Mock: makeTool(), Fail: failTool });
+
+  const grantEvents = (events: AgentEvent[]) =>
+    events.filter((e): e is Extract<AgentEvent, { type: "ceiling_grant" }> => e.type === "ceiling_grant");
+  const refusedEvents = (events: AgentEvent[]) =>
+    events.filter((e): e is Extract<AgentEvent, { type: "ceiling_refused" }> => e.type === "ceiling_refused");
+
+  it("ladder_disabled: one refusal, one request, zero grants", async () => {
+    const modelPort = new MockModelPort([toolTurnStep("c1")]);
+    const loop = makeLoop({ modelPort, maxTurns: 1, registry, ceiling: { enabled: false } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "ladder_disabled", turn: 1, round: 1 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+    expect(events.at(-2)).toEqual(refusedEvents(events)[0]);
+    expect(modelPort.requests).toHaveLength(1);
+    expect(grantEvents(events)).toHaveLength(0);
+  });
+
+  it("no_successful_tool_calls: round 2 after a round-1 grant and only a failing turn refuses cheaply", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      verdictStep(["a", "b"]), // round 1 grants (no progress gate yet)
+      failingTurnStep("c3"), // consumes the grant but earns no "success"
+      // No 5th step: round 2 must refuse BEFORE ever calling the model.
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "no_successful_tool_calls", turn: 3, round: 2 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 3 });
+    expect(events.at(-2)).toEqual(refusedEvents(events)[0]);
+    // 2 real turns + 1 decision call + 1 failing turn = 4 requests; the round-2
+    // gate refused before spending a 5th.
+    expect(modelPort.requests).toHaveLength(4);
+    // Exactly one earlier grant (round 1), none in the refused round.
+    expect(grantEvents(events)).toHaveLength(1);
+  });
+
+  it("grant_budget_exhausted: maxGrantedTurns spent, the next round refuses before the decision call", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("t1"),
+      toolTurnStep("t2"),
+      toolTurnStep("t3"),
+      toolTurnStep("t4"),
+      toolTurnStep("t5"),
+      toolTurnStep("t6"),
+      toolTurnStep("t7"),
+      toolTurnStep("t8"),
+      verdictStep(["a", "b"]), // round 1 -> grants floor(8/2)=4, clamped to budget 1
+      toolTurnStep("t9"), // consumes the single granted turn
+      // No further step: round 2 must refuse before ever calling the model.
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 8, registry, ceiling: { maxGrantedTurns: 1 } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toEqual([
+      { type: "ceiling_grant", round: 1, granted: 1, totalGranted: 1, remaining: ["a", "b"] },
+    ]);
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "grant_budget_exhausted", turn: 9, round: 2 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 9 });
+    expect(events.at(-2)).toEqual(refusedEvents(events)[0]);
+    // 9 real turns + 1 decision call = 10; the refused round-2 gate is cheap.
+    expect(modelPort.requests).toHaveLength(10);
+  });
+
+  it("window_collapsed: the decision is skipped without a model call when the deadline leaves no window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const BASE = 1_700_000_000_000;
+    vi.setSystemTime(BASE);
+    try {
+      class ClockAdvancingOnFirstCallPort implements ModelPort {
+        calls = 0;
+        streamText(): AsyncIterable<ModelStreamEvent> {
+          this.calls += 1;
+          vi.setSystemTime(BASE + 3_000); // advances past the deadline during turn 1
+          const events = toolTurnStep("c1");
+          return (async function* () {
+            for (const e of events) yield e;
+          })();
+        }
+      }
+      const modelPort = new ClockAdvancingOnFirstCallPort();
+      // Turn 2 trips the cap with BASE+9000 left — below CEILING_MIN_WINDOW_MS
+      // (10_000), so ceilingWindowMs returns null and the call is never made.
+      const loop = makeLoop({
+        modelPort,
+        maxTurns: 1,
+        registry,
+        ceiling: { outcomeDeadlineAt: BASE + 12_000 },
+      });
+
+      const events = await collect(loop.runTurn("go"));
+
+      expect(refusedEvents(events)).toEqual([
+        { type: "ceiling_refused", reason: "window_collapsed", turn: 1, round: 1 },
+      ]);
+      expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+      expect(events.at(-2)).toEqual(refusedEvents(events)[0]);
+      expect(modelPort.calls).toBe(1); // only the real turn — no verdict call
+      expect(grantEvents(events)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("unreadable_verdict: a decision stream with no verdict tool call refuses", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 1, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "unreadable_verdict", turn: 1, round: 1 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+    expect(events.at(-2)).toEqual(refusedEvents(events)[0]);
+    expect(grantEvents(events)).toHaveLength(0);
+  });
+
+  it("verdict_rejected: a readable done:false verdict with an empty remaining list is refused", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      verdictStep([]), // readable, but nothing to grant turns for
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 1, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "verdict_rejected", turn: 1, round: 1 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 1 });
+    expect(events.at(-2)).toEqual(refusedEvents(events)[0]);
+    expect(grantEvents(events)).toHaveLength(0);
+  });
+
+  it("done guard: a readable done:true verdict emits no refusal at all", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      verdictStep([], { done: true }),
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 1, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(refusedEvents(events)).toHaveLength(0);
+    expect(grantEvents(events)).toHaveLength(0);
+    expect(events.at(-1)).toEqual({
+      type: "loop_end",
+      reason: "max_turns",
+      turns: 1,
+      declaredDoneAtCeiling: true,
+    });
   });
 });
 

@@ -214,6 +214,8 @@ const VALID_RECORD_TYPES: ReadonlySet<string> = new Set([
   "workflow_step_end",
   "stream_retry",
   "degeneration",
+  "ceiling_refused",
+  "ceiling_grant",
   "error",
   "checkpoint_created",
   "checkpoint_failed",
