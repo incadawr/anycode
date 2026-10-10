@@ -153,6 +153,34 @@ export function userRowSourceBadgeLabel(kind: SubagentSourceKind): string {
   }
 }
 
+/** Display-only workspace root path for the active tab (mirrors tabs-store `TabInfo.workspace`; main's manager.getTab(tabId).workspace is the source of truth). */
+export function workspaceRootSegment(workspace: string | null | undefined): string {
+  if (!workspace) return "";
+  return workspace.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+}
+
+/** Badge label for a project-scope row, suffixed with the workspace root segment when known. */
+export function workspaceScopeBadgeLabel(workspace: string | null | undefined): string {
+  const segment = workspaceRootSegment(workspace);
+  return segment ? `Workspace · ${segment}` : "Workspace";
+}
+
+/** Row badge label: project rows surface the workspace segment; user rows stay "Personal". */
+export function userRowBadgeLabel(kind: SubagentSourceKind, workspace: string | null | undefined): string {
+  return kind === "project" ? workspaceScopeBadgeLabel(workspace) : userRowSourceBadgeLabel(kind);
+}
+
+/** Empty-section note for the User subagents group — only when a workspace is known AND no project-scope row exists at all (unfiltered rows, so filters never manufacture/hide emptiness). */
+export function workspaceEmptyNote(
+  workspace: string | null | undefined,
+  rows: readonly SubagentRowView[],
+): string | null {
+  if (!workspace) return null;
+  if (rows.some((row) => row.sourceKind === "project")) return null;
+  const segment = workspaceRootSegment(workspace);
+  return `No workspace subagents — none found in ${segment}.`;
+}
+
 /** Built-in rows carry no mutation affordance (design §2-D2); `row.editable` (main-computed) is the actual gate, this is a thin readable wrapper. */
 export function canManageSubagentRow(row: SubagentRowView): boolean {
   return row.editable;
@@ -454,11 +482,13 @@ export function formatEffectiveToolsLine(tools: readonly string[]): string {
 export interface SubagentsPaneProps {
   /** Active tab id, so bridge calls resolve a project-scope workspace main-side; omit for the pre-tab case (user-scope only). */
   tabId?: string;
+  /** Display-only workspace root of the active tab (tabs-store mirror) — used for badge labels and tooltips; never sent anywhere. */
+  workspace?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.subagents` (same DI ethic as SkillsBridge/McpConfigBridge). */
   bridge?: SubagentsBridge;
 }
 
-export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: SubagentsPaneProps) {
+export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subagents }: SubagentsPaneProps) {
   const [snapshot, setSnapshot] = useState<SubagentsSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SubagentsSourceFilter>("all");
@@ -761,6 +791,11 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
               <span className="mcp-section-count">
                 {user.length} item{user.length === 1 ? "" : "s"}
               </span>
+              {workspaceEmptyNote(workspace, snapshot.rows) !== null && (
+                <span className="mcp-section-note" title={workspace}>
+                  {workspaceEmptyNote(workspace, snapshot.rows)}
+                </span>
+              )}
             </div>
             {user.length === 0 ? (
               <div className="settings-mcp-empty">No user subagents yet.</div>
@@ -775,7 +810,12 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
                         <div className="mcp-row-lines">
                           <div className="mcp-row-line1">
                             <span className="skills-row-name settings-mcp-name">{row.name}</span>
-                            <span className={`skills-badge skills-badge-${row.sourceKind}`}>{userRowSourceBadgeLabel(row.sourceKind)}</span>
+                            <span
+                              className={`skills-badge skills-badge-${row.sourceKind}`}
+                              title={row.sourceKind === "project" && workspace ? workspace : undefined}
+                            >
+                              {userRowBadgeLabel(row.sourceKind, workspace)}
+                            </span>
                             <span className="skills-badge subagents-badge-tools">{row.toolsBadge}</span>
                             {row.engine !== undefined && (
                               <span
@@ -885,6 +925,7 @@ export function SubagentsPane({ tabId, bridge = window.anycode.subagents }: Suba
           mode={editorMode}
           fields={fields}
           scope={editorScope}
+          workspace={workspace}
           editorTab={editorTab}
           previewResult={previewResult}
           previewLoading={previewLoading}
@@ -911,6 +952,8 @@ interface SubagentEditorDialogProps {
   mode: SubagentEditorMode;
   fields: SubagentEditorFields;
   scope: SubagentScope;
+  /** Display-only workspace root, shown in the project-scope radio label when known. */
+  workspace?: string;
   editorTab: "edit" | "preview";
   previewResult: SubagentsPreviewResult | null;
   previewLoading: boolean;
@@ -933,6 +976,7 @@ function SubagentEditorDialog({
   mode,
   fields,
   scope,
+  workspace,
   editorTab,
   previewResult,
   previewLoading,
@@ -1039,9 +1083,9 @@ function SubagentEditorDialog({
                 <input type="radio" name="subagent-scope" checked={scope === "user"} onChange={() => onScopeChange("user")} />
                 Personal
               </label>
-              <label>
+              <label title={workspace}>
                 <input type="radio" name="subagent-scope" checked={scope === "project"} onChange={() => onScopeChange("project")} />
-                Workspace
+                {workspaceScopeBadgeLabel(workspace)}
               </label>
             </div>
           </div>
