@@ -36,6 +36,23 @@ describe("shouldShowTranscriptEmpty (R11)", () => {
   });
 });
 
+describe("shouldShowTranscriptEmpty on a read-only surface (Taskana 4058)", () => {
+  it("(a) an empty idle read-only child feed suppresses the onboarding gate", () => {
+    expect(shouldShowTranscriptEmpty(0, false, false, true)).toBe(false);
+  });
+
+  it("(b) an empty idle editable feed retains it — explicit false and the default agree", () => {
+    expect(shouldShowTranscriptEmpty(0, false, false, false)).toBe(true);
+    expect(shouldShowTranscriptEmpty(0, false, false)).toBe(true);
+  });
+
+  it("(c) GUARD: running/nonempty/replay states stay hidden on a read-only feed too", () => {
+    expect(shouldShowTranscriptEmpty(0, true, false, true)).toBe(false);
+    expect(shouldShowTranscriptEmpty(1, false, false, true)).toBe(false);
+    expect(shouldShowTranscriptEmpty(0, false, true, true)).toBe(false);
+  });
+});
+
 describe("shouldShowTranscriptEmpty on a replay surface (TASK.188 S14, §11 N1)", () => {
   it("(a) the opening frame of a film is BLANK — zero blocks under a replay draw nothing", () => {
     expect(shouldShowTranscriptEmpty(0, false, true)).toBe(false);
