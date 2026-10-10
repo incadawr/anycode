@@ -16,12 +16,17 @@
  * is built from `SecretStatus` alone (structurally incapable of leaking a
  * plaintext value).
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Fragment } from "react";
 import type { McpServerStatus, TelemetryStatus } from "@anycode/core";
 import type { CatalogSummary, CatalogSummaryEntry, CustomProviderRecord, ProviderConnection, SecretStatus } from "../../../shared/settings.js";
 import type { UpdateStatus } from "../../../shared/updates.js";
 import type { WireRepoMapStatus } from "../../../shared/protocol.js";
+import type { SettingsStoreApi } from "../settings-store.js";
+import { SETTINGS_ADD_CONNECTION_EVENT } from "../slash-menu.js";
+import { ConnectionDrawer } from "./ConnectionDrawer.js";
 import {
+  applyAddConnectionRequest,
   buildCustomProviderCreateRequest,
   buildToolsPatch,
   buildSessionLimitsPatch,
@@ -39,10 +44,14 @@ import {
   isEnvOverridden,
   isOwnDialogCancel,
   parseOptionalInt,
+  ProviderSettings,
+  resolvePendingAddConnection,
   resolveReplaceKeyAction,
   secretFieldReducer,
   selectProviderEntry,
   SETTINGS_PANES,
+  SettingsDialog,
+  SettingsScreen,
   shouldShowBaseUrlField,
   shouldShowAppVersion,
   shouldShowUpdateBanner,
@@ -823,5 +832,483 @@ describe("isOwnDialogCancel (TASK.58 item 4: Escape closes only the popup)", () 
   it("false when target is null (no originating node)", () => {
     const dialog = {} as EventTarget;
     expect(isOwnDialogCancel({ target: null, currentTarget: dialog })).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Taskana 4237 — empty-model-popover "Add connection" → Settings adding flow
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("applyAddConnectionRequest (Taskana 4237)", () => {
+  it("lands on the Provider pane AND raises a request (the always-mounted dialog's reaction)", () => {
+    const setPane = vi.fn();
+    const requestAdd = vi.fn();
+    applyAddConnectionRequest(setPane, requestAdd);
+    expect(setPane).toHaveBeenCalledTimes(1);
+    expect(setPane).toHaveBeenCalledWith("provider");
+    expect(requestAdd).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolvePendingAddConnection (Taskana 4237: delivery + consumption)", () => {
+  it("does not open or consume when no request is pending (ordinary reopen / return to Provider)", () => {
+    expect(resolvePendingAddConnection(false, { readOnly: false })).toEqual({ openDrawer: false, consume: false });
+  });
+
+  it("WAITS (does not consume) while the snapshot has not arrived — the request survives the load", () => {
+    expect(resolvePendingAddConnection(true, null)).toEqual({ openDrawer: false, consume: false });
+  });
+
+  it("opens the add drawer and consumes once for a pending request on a writable snapshot", () => {
+    expect(resolvePendingAddConnection(true, { readOnly: false })).toEqual({ openDrawer: true, consume: true });
+  });
+
+  it("consumes WITHOUT opening for a pending request on a readOnly snapshot (no writable form to show)", () => {
+    expect(resolvePendingAddConnection(true, { readOnly: true })).toEqual({ openDrawer: false, consume: true });
+  });
+
+  it("does not replay after consumption, and a REPEATED explicit request still opens again", () => {
+    // Initial delivery.
+    expect(resolvePendingAddConnection(true, { readOnly: false })).toEqual({ openDrawer: true, consume: true });
+    // After consumption the dialog cleared the request — an ordinary re-render
+    // (returning to Provider, reopening Settings) must NOT reopen the drawer.
+    expect(resolvePendingAddConnection(false, { readOnly: false })).toEqual({ openDrawer: false, consume: false });
+    // A second explicit request flips it true again and works.
+    expect(resolvePendingAddConnection(true, { readOnly: false })).toEqual({ openDrawer: true, consume: true });
+  });
+});
+
+// ── the real wiring: dialog → screen → provider (Taskana 4237) ────────────
+//
+// The two helpers above are only the *decisions*. The defects these tests
+// pin are in the WIRING — which effect runs, with which deps, on which prop
+// change — so they drive the actual components. This package runs vitest in
+// a plain "node" environment (no jsdom, no react-test-renderer) and the
+// components under test are hook-heavy (zustand selectors, effects, refs), so
+// the hooks themselves are substituted with a tiny deterministic renderer:
+// state/refs/effects/callbacks are keyed per component, effects run when their
+// deps change, and a changed effect re-renders — enough to observe delivered
+// props and the resulting element tree without a DOM. Nothing about the
+// components' own logic is stubbed.
+
+interface HarnessState {
+  state: Record<string, unknown[]>;
+  refs: Record<string, Array<{ current: unknown }>>;
+  effects: Record<string, Array<{ fn: () => unknown; deps?: readonly unknown[] }>>;
+  callbacks: Record<string, Array<{ fn: unknown; deps?: readonly unknown[] }>>;
+  pending: Array<() => unknown>;
+  cursor: number;
+  refCursor: number;
+  effectCursor: number;
+  callbackCursor: number;
+  key: string;
+}
+
+const harness = vi.hoisted((): HarnessState => ({
+  state: {},
+  refs: {},
+  effects: {},
+  callbacks: {},
+  pending: [],
+  cursor: 0,
+  refCursor: 0,
+  effectCursor: 0,
+  callbackCursor: 0,
+  key: "",
+}));
+
+/** React's dep comparison, near enough: same length and all `Object.is`-equal. */
+function sameDeps(a: readonly unknown[] | undefined, b: readonly unknown[] | undefined): boolean {
+  if (a === undefined || b === undefined) {
+    return false;
+  }
+  return a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+}
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useState(initial: unknown) {
+      const slots = (harness.state[harness.key] ??= []);
+      const slot = harness.cursor++;
+      if (slots.length <= slot) {
+        slots[slot] = typeof initial === "function" ? (initial as () => unknown)() : initial;
+      }
+      const set = (next: unknown): void => {
+        slots[slot] = typeof next === "function" ? (next as (prev: unknown) => unknown)(slots[slot]) : next;
+      };
+      return [slots[slot], set];
+    },
+    useRef(initial: unknown) {
+      const slots = (harness.refs[harness.key] ??= []);
+      const slot = harness.refCursor++;
+      slots[slot] ??= { current: initial };
+      return slots[slot];
+    },
+    useEffect(fn: () => unknown, deps?: readonly unknown[]) {
+      const slots = (harness.effects[harness.key] ??= []);
+      const slot = harness.effectCursor++;
+      const prev = slots[slot];
+      if (prev !== undefined && sameDeps(prev.deps, deps)) {
+        return;
+      }
+      slots[slot] = { fn, deps };
+      harness.pending.push(fn);
+    },
+    useCallback(fn: unknown, deps?: readonly unknown[]) {
+      const slots = (harness.callbacks[harness.key] ??= []);
+      const slot = harness.callbackCursor++;
+      const prev = slots[slot];
+      if (prev !== undefined && sameDeps(prev.deps, deps)) {
+        return prev.fn;
+      }
+      slots[slot] = { fn, deps };
+      return fn;
+    },
+  };
+});
+
+// The store hook is a plain selector call against the injected fake store —
+// the components under test therefore read exactly the snapshot a test hands
+// them, with no subscription machinery in between.
+vi.mock("zustand", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("zustand")>()),
+  useStore: (store: { getState: () => unknown }, selector: (state: unknown) => unknown) =>
+    selector(store.getState()),
+}));
+
+type AnyElement = { type: unknown; props: Record<string, unknown> };
+
+function isElement(value: unknown): value is AnyElement {
+  return typeof value === "object" && value !== null && "type" in value && "props" in value;
+}
+
+/** Depth-first walk; descends through fragments/host elements (component children are lazy). */
+function walk(node: unknown, visit: (element: AnyElement) => void): void {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      walk(child, visit);
+    }
+    return;
+  }
+  if (!isElement(node)) {
+    return;
+  }
+  visit(node);
+  if (node.type === Fragment || typeof node.type === "string") {
+    walk(node.props.children, visit);
+  }
+}
+
+function findAll(node: unknown, type: unknown): AnyElement[] {
+  const found: AnyElement[] = [];
+  walk(node, (element) => {
+    if (element.type === type) {
+      found.push(element);
+    }
+  });
+  return found;
+}
+
+function findByProp(node: unknown, match: (props: Record<string, unknown>) => boolean): AnyElement | undefined {
+  let found: AnyElement | undefined;
+  walk(node, (element) => {
+    found ??= match(element.props) ? element : undefined;
+  });
+  return found;
+}
+
+interface Mounted {
+  tree: unknown;
+  rerender(next?: unknown): Mounted;
+}
+
+/**
+ * Renders one component, runs its changed effects, and re-renders while those
+ * effects keep changing state — the same order React gives (refs attach, then
+ * effects, then a fresh render from the new state).
+ */
+function mountUnit<P>(key: string, component: (props: P) => unknown, props: P, passes = 10): Mounted {
+  let tree: unknown = undefined;
+  for (let pass = 0; pass < passes; pass++) {
+    harness.key = key;
+    harness.cursor = 0;
+    harness.refCursor = 0;
+    harness.effectCursor = 0;
+    harness.callbackCursor = 0;
+    harness.pending = [];
+    tree = component(props);
+    const pending = harness.pending;
+    harness.pending = [];
+    if (pending.length === 0) {
+      break;
+    }
+    for (const fn of pending) {
+      fn();
+    }
+  }
+  return { tree, rerender: (next = props) => mountUnit(key, component, next as P, passes) };
+}
+
+function resetHarness(): void {
+  harness.state = {};
+  harness.refs = {};
+  harness.effects = {};
+  harness.callbacks = {};
+  harness.pending = [];
+}
+
+/** The slice of `SettingsSnapshot` the rendered panes actually read. */
+function makeSnapshot(overrides: Record<string, unknown> = {}): unknown {
+  return {
+    settings: {
+      version: 2,
+      provider: { connections: [], activeConnectionId: null, custom: [] },
+      tools: {},
+      permissions: { alwaysAllow: [] },
+      ui: { theme: "system" },
+      security: { allowWeakSecretStorage: false },
+    },
+    catalog: [],
+    secrets: [],
+    providerReady: false,
+    envOverrides: [],
+    readOnly: false,
+    ...overrides,
+  };
+}
+
+function makeStore(snapshot: unknown): SettingsStoreApi {
+  const state = {
+    snapshot,
+    notice: null,
+    updateStatus: null,
+    pendingConsent: null,
+    subscribeUpdates: () => () => {},
+    subscribeProviderHealth: () => () => {},
+  };
+  return { getState: () => state, subscribe: () => () => {}, setState: () => {} } as unknown as SettingsStoreApi;
+}
+
+/** A fake `window` whose listeners a test can fire, so the dialog's real event wiring is exercised. */
+function installWindow(): (type: string) => void {
+  const listeners = new Map<string, Set<(event: Event) => void>>();
+  const stub = {
+    addEventListener(type: string, fn: (event: Event) => void) {
+      const set = listeners.get(type) ?? new Set();
+      set.add(fn);
+      listeners.set(type, set);
+    },
+    removeEventListener(type: string, fn: (event: Event) => void) {
+      listeners.get(type)?.delete(fn);
+    },
+    dispatchEvent(event: Event) {
+      listeners.get(event.type)?.forEach((fn) => fn(event));
+      return true;
+    },
+  };
+  vi.stubGlobal("window", stub);
+  vi.stubGlobal("document", { activeElement: null });
+  return (type: string) => {
+    stub.dispatchEvent({ type } as Event);
+  };
+}
+
+describe("Taskana 4237 wiring: the empty-menu action reaches the add drawer", () => {
+  beforeEach(() => {
+    resetHarness();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("delivers a request from the always-mounted dialog through SettingsScreen into ProviderSettings' add drawer", () => {
+    const dispatch = installWindow();
+    const store = makeStore(makeSnapshot());
+    const onClose = () => {};
+
+    const idle = mountUnit("dialog", SettingsDialog, { open: true, onClose, store });
+    expect(findByProp(idle.tree, (props) => props.addConnectionRequest !== undefined)?.props.addConnectionRequest).toBe(0);
+
+    dispatch(SETTINGS_ADD_CONNECTION_EVENT);
+    const requested = mountUnit("dialog", SettingsDialog, { open: true, onClose, store });
+    const screenElement = findByProp(requested.tree, (props) => props.addConnectionRequest !== undefined);
+    expect(screenElement).toBeDefined();
+    expect(screenElement!.props.addConnectionRequest).toBe(1);
+
+    // The screen mounts with those props: the request must have moved it onto
+    // Provider — nothing else can, `initialPane` is the same "provider" value.
+    const screen = mountUnit("screen", SettingsScreen, screenElement!.props);
+    const providerElement = findAll(screen.tree, ProviderSettings)[0];
+    expect(providerElement).toBeDefined();
+    expect(providerElement!.props.addConnectionRequest).toBe(1);
+
+    // …and Provider opens the EXISTING drawer in add mode.
+    const provider = mountUnit("provider", ProviderSettings, providerElement!.props);
+    const drawer = findAll(provider.tree, ConnectionDrawer)[0];
+    expect(drawer).toBeDefined();
+    expect(drawer!.props.open).toBe(true);
+    expect(drawer!.props.mode).toBe("add");
+    expect(drawer!.props.initialFocus).toBe("label");
+  });
+
+  it("consumes after delivery, so an ordinary re-render/reopen does NOT reopen the drawer", () => {
+    const dispatch = installWindow();
+    const store = makeStore(makeSnapshot());
+    const onClose = () => {};
+
+    // The dialog is the always-mounted listener: it must be live BEFORE the
+    // event fires (its predecessor race — an event at a not-yet-mounted
+    // listener — is exactly what the always-mounted seam exists to avoid).
+    mountUnit("dialog", SettingsDialog, { open: true, onClose, store });
+    dispatch(SETTINGS_ADD_CONNECTION_EVENT);
+    const dialog = mountUnit("dialog", SettingsDialog, { open: true, onClose, store });
+    const screenElement = findByProp(dialog.tree, (props) => props.addConnectionRequest !== undefined)!;
+    const screen = mountUnit("screen", SettingsScreen, screenElement.props);
+    const providerElement = findAll(screen.tree, ProviderSettings)[0]!;
+    // Mounting Provider with the live consumption callback is what runs the
+    // real consume path (it forwards back into the dialog's own state).
+    mountUnit("provider", ProviderSettings, providerElement.props);
+
+    const after = mountUnit("dialog", SettingsDialog, { open: true, onClose, store });
+    const settled = findByProp(after.tree, (props) => props.addConnectionRequest !== undefined)!;
+    expect(settled.props.addConnectionRequest).toBe(0);
+
+    const resettled = mountUnit("screen", SettingsScreen, settled.props);
+    const reopened = findAll(resettled.tree, ProviderSettings)[0]!;
+    expect(reopened.props.addConnectionRequest).toBe(0);
+
+    // The drawer the request opened stays the user's to close — a consumed
+    // request must not reopen it on any later render.
+    const provider = mountUnit("provider", ProviderSettings, reopened.props);
+    const drawer = findAll(provider.tree, ConnectionDrawer)[0]!;
+    (drawer.props.onClose as () => void)();
+    const idle = provider.rerender(reopened.props);
+    expect(findAll(idle.tree, ConnectionDrawer)[0]!.props.open).toBe(false);
+  });
+
+  it("re-lands on Provider for a REPEAT request even when the pane value is unchanged and the user navigated away", () => {
+    const store = makeStore(makeSnapshot());
+    const consumed = () => {};
+
+    // A first request that already resolved: `initialPane` reads "provider".
+    const first = mountUnit("screen", SettingsScreen, {
+      store,
+      initialPane: "provider",
+      addConnectionRequest: 1,
+      onAddConnectionConsumed: consumed,
+    });
+    expect(findAll(first.tree, ProviderSettings)).toHaveLength(1);
+
+    // The user walks over to the Codex pane by hand.
+    const codexTab = findByProp(first.tree, (props) => props.id === "settings-tab-codex")!;
+    (codexTab.props.onClick as () => void)();
+    const away = first.rerender({
+      store,
+      initialPane: "provider",
+      addConnectionRequest: 1,
+      onAddConnectionConsumed: consumed,
+    });
+    expect(findAll(away.tree, ProviderSettings)).toHaveLength(0);
+
+    // A SECOND explicit request, `initialPane` still the very same "provider":
+    // the request token is the only thing that changed, and it must re-navigate.
+    const second = away.rerender({
+      store,
+      initialPane: "provider",
+      addConnectionRequest: 2,
+      onAddConnectionConsumed: consumed,
+    });
+    const providerElement = findAll(second.tree, ProviderSettings)[0];
+    expect(providerElement).toBeDefined();
+    expect(providerElement!.props.addConnectionRequest).toBe(2);
+    expect(findAll(mountUnit("provider", ProviderSettings, providerElement!.props).tree, ConnectionDrawer)[0]!.props.open).toBe(true);
+  });
+
+  it("clears an active rail search that hides Provider, so the request still lands", () => {
+    const store = makeStore(makeSnapshot());
+    const consumed = () => {};
+
+    const first = mountUnit("screen", SettingsScreen, {
+      store,
+      initialPane: "tools",
+      addConnectionRequest: 0,
+      onAddConnectionConsumed: consumed,
+    });
+    const search = findByProp(first.tree, (props) => props.className === "settings-search-input")!;
+    (search.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: "zzz-no-such-pane" } });
+    const filtered = first.rerender({
+      store,
+      initialPane: "tools",
+      addConnectionRequest: 0,
+      onAddConnectionConsumed: consumed,
+    });
+    expect(findAll(filtered.tree, ProviderSettings)).toHaveLength(0);
+
+    const requested = filtered.rerender({
+      store,
+      initialPane: "tools",
+      addConnectionRequest: 1,
+      onAddConnectionConsumed: consumed,
+    });
+    expect(findAll(requested.tree, ProviderSettings)).toHaveLength(1);
+  });
+
+  it("waits for the snapshot, opens on a writable one, and consumes WITHOUT opening on a readOnly one", () => {
+    const waiting = vi.fn();
+    const pending = mountUnit("provider", ProviderSettings, {
+      store: makeStore(null),
+      addConnectionRequest: 1,
+      onAddConnectionConsumed: waiting,
+    });
+    expect(findAll(pending.tree, ConnectionDrawer)).toHaveLength(0);
+    expect(waiting).not.toHaveBeenCalled();
+
+    const readOnlyConsumed = vi.fn();
+    const readOnlyStore = makeStore(makeSnapshot({ readOnly: true }));
+    const readOnly = mountUnit("provider", ProviderSettings, {
+      store: readOnlyStore,
+      addConnectionRequest: 1,
+      onAddConnectionConsumed: readOnlyConsumed,
+    });
+    expect(findAll(readOnly.tree, ConnectionDrawer)[0]!.props.open).toBe(false);
+    expect(readOnlyConsumed).toHaveBeenCalledTimes(1);
+
+    // Consumption resets the dialog's token; the follow-up render must stay closed.
+    const settled = readOnly.rerender({
+      store: readOnlyStore,
+      addConnectionRequest: 0,
+      onAddConnectionConsumed: readOnlyConsumed,
+    });
+    expect(findAll(settled.tree, ConnectionDrawer)[0]!.props.open).toBe(false);
+    expect(readOnlyConsumed).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the drawer shut after the user closes it for a consumed request, and reopens it for a repeat", () => {
+    const consumed = vi.fn();
+    const store = makeStore(makeSnapshot());
+    const first = mountUnit("provider", ProviderSettings, {
+      store,
+      addConnectionRequest: 1,
+      onAddConnectionConsumed: consumed,
+    });
+    const drawer = findAll(first.tree, ConnectionDrawer)[0]!;
+    expect(drawer.props.open).toBe(true);
+    expect(drawer.props.mode).toBe("add");
+    expect(consumed).toHaveBeenCalledTimes(1);
+
+    // The user closes the drawer; the dialog has already consumed the request
+    // (token back to 0). Ordinary renders at token 0 must NOT bring it back.
+    (drawer.props.onClose as () => void)();
+    const idle = first.rerender({ store, addConnectionRequest: 0, onAddConnectionConsumed: consumed });
+    expect(findAll(idle.tree, ConnectionDrawer)[0]!.props.open).toBe(false);
+    expect(consumed).toHaveBeenCalledTimes(1);
+
+    // …and a fresh explicit request (0 → 1 again) still opens it.
+    const again = idle.rerender({ store, addConnectionRequest: 1, onAddConnectionConsumed: consumed });
+    expect(findAll(again.tree, ConnectionDrawer)[0]!.props.open).toBe(true);
+    expect(consumed).toHaveBeenCalledTimes(2);
   });
 });

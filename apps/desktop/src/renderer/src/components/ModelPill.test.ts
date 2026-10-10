@@ -13,6 +13,7 @@ import {
   modelDisplayName,
   modelMenuItems,
   modelPickDisabled,
+  pillDisplayLabel,
   pillLabel,
   providerModelsFor,
   resolvePid,
@@ -97,6 +98,27 @@ describe("pillLabel", () => {
 
   it("omits the effort segment entirely for a non-reasoning model", () => {
     expect(pillLabel("GLM-4.6", "off", undefined)).toBe("GLM-4.6");
+  });
+});
+
+describe("pillDisplayLabel (Taskana 4237: blank-model chip placeholder)", () => {
+  const catalog = [{ id: "glm-5.2", name: "GLM-5.2" }];
+
+  it("shows 'No model' for an empty model, with NO effort suffix even for a reasoning-capable provider", () => {
+    expect(pillDisplayLabel("", catalog, "high", ["off", "high", "max"])).toBe("No model");
+  });
+
+  it("shows 'No model' for a whitespace-only model id", () => {
+    expect(pillDisplayLabel("   ", undefined, "off", ["off", "high"])).toBe("No model");
+  });
+
+  it("keeps the pre-existing named-model label (and its effort suffix) unchanged", () => {
+    expect(pillDisplayLabel("glm-5.2", catalog, "high", ["off", "high", "max"])).toBe("GLM-5.2 · High");
+    expect(pillDisplayLabel("glm-4.6", [{ id: "glm-4.6", name: "GLM-4.6" }], "off", undefined)).toBe("GLM-4.6");
+  });
+
+  it("still falls back to the raw id for an uncatalogued non-blank model", () => {
+    expect(pillDisplayLabel("some-custom-model", catalog, "off", undefined)).toBe("some-custom-model");
   });
 });
 
