@@ -234,6 +234,18 @@ export interface ProviderConnection {
    */
   maxOutputTokens?: number;
   /**
+   * Per-model context-window override for this connection (TASK.142), paired
+   * with `contextWindowModel` — the model id it binds to. The pair travels to
+   * the host/CLI as ANYCODE_CONTEXT_WINDOW / ANYCODE_CONTEXT_WINDOW_MODEL and
+   * governs ONLY that model; a host or CLI switch to another model ignores it
+   * (this is a model-specific override, never a connection-global one). Resolve
+   * order: this override > the catalog usable window > the assumed 8192
+   * fallback for an unknown model. Absent = no override.
+   */
+  contextWindowTokens?: number;
+  /** Model id `contextWindowTokens` is bound to (see above). Main derives it server-side from the effective model; the renderer never supplies it. */
+  contextWindowModel?: string;
+  /**
    * User declaration that this endpoint authenticates nothing (dogfood 16.07:
    * local servers — LM Studio/ollama/llama.cpp). UI-level truth for the
    * drawer's "no API key" checkbox and the tile's health derivation (a keyless
@@ -312,6 +324,9 @@ export interface ActiveProviderView {
   reasoningEffort?: ReasoningEffort;
   /** The active connection's explicit output-token ceiling (TASK.150); absent = catalog/default. */
   maxOutputTokens?: number;
+  /** The active connection's per-model context-window override (TASK.142) and the model it binds to; absent = catalog/assumed fallback. */
+  contextWindowTokens?: number;
+  contextWindowModel?: string;
   /** The active connection's "no API key" declaration (TASK.152); only `true` is projected. */
   authOptional?: boolean;
 }
@@ -702,6 +717,15 @@ export interface CatalogSummaryEntry {
     reasoning?: boolean;
     effortLevels?: string[];
     maxOutputTokens?: number;
+    /**
+     * TASK.142: the two catalog window facts the drawer names in its
+     * "Context window (tokens)" hint — the model's full `contextWindow` and its
+     * `usableContextWindow` (when declared). Projected only when the catalog
+     * declares them (conditional spread), optional/additive so legacy fixtures
+     * stay byte-identical. The effective catalog window is their min.
+     */
+    contextWindow?: number;
+    usableContextWindow?: number;
     imageInput?: boolean;
   }[];
   needsBaseUrl?: boolean;
@@ -758,6 +782,15 @@ export interface SettingsSnapshot {
    * snapshot main builds; optional so older snapshots stay assignable.
    */
   defaultMaxOutputTokens?: number;
+  /**
+   * TASK.142: core's `DEFAULT_CONTEXT_WINDOW_TOKENS` and
+   * `UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS`, pinned main-side (settings-ipc.ts)
+   * and projected here for the same reason as `defaultMaxOutputTokens` above —
+   * the renderer cannot import core. The drawer names a blank/unknown field's
+   * effective window from these instead of hardcoding it.
+   */
+  defaultContextWindowTokens?: number;
+  unknownModelContextWindowTokens?: number;
   /**
    * The running app's version (TASK.49), sourced from `app.getVersion()` — in
    * dev that resolves to `apps/desktop/package.json`'s `version`, in a packaged
@@ -883,6 +916,13 @@ export interface ConnectionCreateRequest {
   reasoningEffort?: ReasoningEffort;
   /** Output-token ceiling (see `ProviderConnection.maxOutputTokens`); omitted = catalog/default. */
   maxOutputTokens?: number;
+  /**
+   * Per-model context-window override (see `ProviderConnection.contextWindowTokens`).
+   * Omitted = no override. The model binding is NOT carried here — main derives
+   * it server-side from the effective model, so the renderer can never attach a
+   * window to the wrong model.
+   */
+  contextWindowTokens?: number;
   /** "No API key" declaration (see `ProviderConnection.authOptional`); only `true` is persisted. */
   authOptional?: boolean;
   /** Make the new connection active (default for new sessions). */
@@ -933,6 +973,14 @@ export interface ConnectionUpdateRequest {
    * `""` is never persisted — the handler deletes the key.
    */
   maxOutputTokens?: number | "";
+  /**
+   * Per-model context-window override (TASK.142) with the same `""` clear
+   * sentinel as `maxOutputTokens` above: absent = keep the current pair, a
+   * positive integer = set tokens AND the binding (main derives the binding
+   * from the effective model), `""` = clear BOTH keys. The renderer never
+   * supplies the binding itself.
+   */
+  contextWindowTokens?: number | "";
   /**
    * "No API key" declaration: absent = keep the current value, `true` = set,
    * `false` = clear (the handler removes the key from disk rather than
@@ -1069,6 +1117,8 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     proxyUrl: connection.proxyUrl,
     reasoningEffort: connection.reasoningEffort,
     maxOutputTokens: connection.maxOutputTokens,
+    contextWindowTokens: connection.contextWindowTokens,
+    contextWindowModel: connection.contextWindowModel,
     ...(connection.authOptional === true ? { authOptional: true } : {}),
   };
 }

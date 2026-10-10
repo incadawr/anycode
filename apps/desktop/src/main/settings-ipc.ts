@@ -361,6 +361,16 @@ const MAX_OUTPUT_TOKENS_MIN = 1_024;
 const MAX_OUTPUT_TOKENS_MAX = 1_000_000;
 const maxOutputTokensSchema = z.number().int().min(MAX_OUTPUT_TOKENS_MIN).max(MAX_OUTPUT_TOKENS_MAX);
 
+/**
+ * Per-model context window (TASK.142) at the trust boundary, bounded like the
+ * output ceiling above for the same reasons: 0/negative is meaningless and an
+ * absurd 1e12 is a request no provider will accept. The persisted schema stays
+ * lenient (`.catch(undefined)`); strictness belongs here.
+ */
+const CONTEXT_WINDOW_TOKENS_MIN = 1_024;
+const CONTEXT_WINDOW_TOKENS_MAX = 1_000_000;
+const contextWindowTokensSchema = z.number().int().min(CONTEXT_WINDOW_TOKENS_MIN).max(CONTEXT_WINDOW_TOKENS_MAX);
+
 const connectionCreateSchema = z
   .object({
     providerId: z.string().min(1),
@@ -379,6 +389,10 @@ const connectionCreateSchema = z
     proxyRef: z.string().min(1).optional(),
     reasoningEffort: reasoningEffortEnum.optional(),
     maxOutputTokens: maxOutputTokensSchema.optional(),
+    // Per-model context window (TASK.142). Only the numeric value is accepted
+    // from the renderer; the model binding is derived server-side from the
+    // effective model in the handler.
+    contextWindowTokens: contextWindowTokensSchema.optional(),
     authOptional: z.boolean().optional(),
     setActive: z.boolean().optional(),
   })
@@ -405,6 +419,9 @@ const connectionUpdateSchema = z
     // Output-token ceiling (TASK.150) with the same `""` clear sentinel as
     // `transport`/`proxyRef` above.
     maxOutputTokens: z.union([maxOutputTokensSchema, z.literal("")]).optional(),
+    // Per-model context window (TASK.142) with the same `""` clear sentinel as
+    // `maxOutputTokens` above; a number sets tokens AND the server-derived binding.
+    contextWindowTokens: z.union([contextWindowTokensSchema, z.literal("")]).optional(),
     // `false` clears (removed from disk), `true` sets — see ConnectionUpdateRequest.
     authOptional: z.boolean().optional(),
   })
@@ -528,6 +545,9 @@ export interface CatalogEntryShape {
     reasoning?: boolean;
     effortLevels?: readonly string[];
     maxOutputTokens?: number;
+    /** TASK.142: the two window facts the drawer names in its context-window hint; the effective catalog window is their min. */
+    contextWindow?: number;
+    usableContextWindow?: number;
     imageInput?: boolean;
   }[];
   /** True for the literal `custom` sentinel (TASK.43 W5-FIX); main supplies it from core's `isCustomProvider`. */
@@ -564,6 +584,11 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
       // TASK.159: same conditional-spread precedent — only when the catalog
       // declares a ceiling, so legacy fixtures stay byte-identical.
       ...(m.maxOutputTokens !== undefined ? { maxOutputTokens: m.maxOutputTokens } : {}),
+      // TASK.142: same conditional spread — the drawer's context-window hint
+      // needs both window facts, but a legacy fixture's plain `{id,name}` model
+      // must still project byte-identically.
+      ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+      ...(m.usableContextWindow !== undefined ? { usableContextWindow: m.usableContextWindow } : {}),
       // TASK.198: only the models the catalog MARKS as accepting image input,
       // matching core's own reading of the flag (absent = not marked, never
       // "unknown"): the Vision pane suggests these as recognizer models.
@@ -752,6 +777,16 @@ const sessionLimitsSchema = z.object({
  * renderer-facing field); the renderer never hardcodes the number.
  */
 const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
+/**
+ * TASK.142: pins of packages/core/src/types/config.ts's
+ * DEFAULT_CONTEXT_WINDOW_TOKENS (200_000) and provider/capabilities.ts's
+ * UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS (8_192). Same core-import-free rule as
+ * the ceiling pin above — the drawer needs both numbers to NAME a blank/unknown
+ * field's effective window, and it cannot import core. Move all pins together
+ * with their core sources.
+ */
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
+const UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 8_192;
 
 /**
  * Builds the SettingsSnapshot the renderer renders Settings/Welcome from without
@@ -802,6 +837,10 @@ async function snapshotFrom(
     // resolves to for a model no catalog entry knows — projected so the
     // renderer can NAME the effective number without importing core.
     defaultMaxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+    // TASK.142: the two window numbers a blank/unknown context-window field
+    // resolves to, projected for the same reason as the ceiling above.
+    defaultContextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+    unknownModelContextWindowTokens: UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
     ...(deps.getAppVersion !== undefined ? { appVersion: deps.getAppVersion() } : {}),
   };
 }
@@ -1580,6 +1619,17 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       return { ok: false, reason: "invalid" };
     }
     const id = (deps.genConnectionId ?? defaultConnectionId)();
+    // Per-model context window (TASK.142): a numeric window needs a nonblank
+    // effective model to bind to — rejected before saving rather than silently
+    // dropped. The binding is derived HERE from the effective model; the
+    // renderer never supplies it.
+    const createContextWindowModel = req.model?.trim();
+    if (
+      req.contextWindowTokens !== undefined &&
+      (createContextWindowModel === undefined || createContextWindowModel === "")
+    ) {
+      return { ok: false, reason: "invalid" };
+    }
     const connection: ProviderConnection = {
       id,
       providerId: req.providerId,
@@ -1591,6 +1641,9 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.proxyRef !== undefined ? { proxyRef: req.proxyRef } : {}),
       ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
       ...(req.maxOutputTokens !== undefined ? { maxOutputTokens: req.maxOutputTokens } : {}),
+      ...(req.contextWindowTokens !== undefined
+        ? { contextWindowTokens: req.contextWindowTokens, contextWindowModel: createContextWindowModel }
+        : {}),
       ...(req.authOptional === true ? { authOptional: true } : {}),
     };
     const shouldActivate = req.setActive === true || loaded.settings.provider.activeConnectionId === undefined;
@@ -1726,6 +1779,27 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         delete updatedConnection.maxOutputTokens;
       } else {
         updatedConnection.maxOutputTokens = req.maxOutputTokens;
+      }
+    }
+    // Per-model context window (TASK.142): `""` deletes BOTH keys (tokens and
+    // binding travel as a pair); a number sets tokens plus the binding derived
+    // server-side from the effective model AFTER the model update. The effective
+    // model is the request's model when the request carries one (an explicitly
+    // cleared `""` model must NOT fall back to the stored model) else the stored
+    // model. A numeric window with no nonblank effective model is rejected
+    // before saving — never silently discarded, including on a model-only edit.
+    // An absent field leaves both keys unchanged.
+    if (req.contextWindowTokens !== undefined) {
+      if (req.contextWindowTokens === "") {
+        delete updatedConnection.contextWindowTokens;
+        delete updatedConnection.contextWindowModel;
+      } else {
+        const effectiveModel = (req.model !== undefined ? req.model : existing.model)?.trim();
+        if (effectiveModel === undefined || effectiveModel === "") {
+          return { ok: false, reason: "invalid" };
+        }
+        updatedConnection.contextWindowTokens = req.contextWindowTokens;
+        updatedConnection.contextWindowModel = effectiveModel;
       }
     }
     // Proxy clear (`""`) must remove the key entirely (TASK.132) — identical

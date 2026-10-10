@@ -815,6 +815,19 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return rows.map(rowToSessionMeta);
   }
 
+  /**
+   * Metadata-only claim scan (TASK.142): every row bearing any of the three
+   * worktree claim sources `buildClaims` consumes, at ANY age. No filesystem
+   * access, no recency bound — the caller only needs the in-memory claim map.
+   */
+  async listWorktreeClaims(): Promise<SessionMeta[]> {
+    const db = this.open();
+    const rows = db.prepare(
+      "SELECT * FROM sessions WHERE worktree_path IS NOT NULL OR worktree_cleanup_path IS NOT NULL OR worktree_transition_json IS NOT NULL",
+    ).all() as unknown as SessionRow[];
+    return rows.map(rowToSessionMeta);
+  }
+
   async getSessionById(id: string): Promise<SessionMeta | null> {
     const db = this.open();
     const row = db.prepare("SELECT * FROM sessions WHERE id = ?").get(id) as SessionRow | undefined;

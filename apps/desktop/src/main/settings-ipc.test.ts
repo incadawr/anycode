@@ -21,7 +21,7 @@ import {
   PROXY_REF_LEGACY,
 } from "../shared/proxy.js";
 import type { ProxyPasswordProbe } from "./proxy-scopes.js";
-import { ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
+import { buildHostEnv, ENV_CONTEXT_WINDOW, ENV_CONTEXT_WINDOW_MODEL, ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
 import { handleCustomProviderCreate, type ProviderIpcDeps } from "./provider-ipc.js";
 import {
@@ -56,6 +56,14 @@ import {
 } from "./settings-ipc.js";
 import { readSessionLimits } from "../shared/session-limits.js";
 import type { SecretSetResult } from "./vault.js";
+import {
+  type CatalogProviderEntry,
+  compactThresholdTokens,
+  effectiveWindowTokens,
+  loadEnvConfig,
+  resolveContextBudgetConfig,
+  resolveContextWindow,
+} from "@anycode/core";
 
 /**
  * Controllable gate over the real settings/files IO (mutation-lock test, §2.3).
@@ -2366,6 +2374,327 @@ describe("connection maxOutputTokens CRUD (TASK.150) — bounded at the IPC boun
     const after = (await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth;
     expect(after).toEqual(before);
     expect(after?.status).toBe("ready");
+  });
+});
+
+describe("connection contextWindowTokens CRUD (TASK.142) — bounded pair at the IPC boundary, server-derived binding", () => {
+  it("create persists the numeric window AND the binding derived from the effective model", async () => {
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "on-prem-8b",
+      contextWindowTokens: 8192,
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(8192);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("on-prem-8b");
+  });
+
+  it("create with no contextWindowTokens leaves both keys off disk entirely", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" });
+
+    const loaded = await loadSettings(settingsPath);
+    const conn = loaded.settings.provider.connections[0] ?? {};
+    expect("contextWindowTokens" in conn).toBe(false);
+    expect("contextWindowModel" in conn).toBe(false);
+  });
+
+  // Strictness at the trust boundary (the persisted schema stays lenient).
+  it.each([[512], [1000001], [8.5], ["8192"]])(
+    "create refuses an out-of-bounds/non-integer/wrong-typed contextWindowTokens (%p) and persists nothing",
+    async (bad) => {
+      const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+        providerId: "z-ai",
+        model: "on-prem-8b",
+        contextWindowTokens: bad,
+      });
+      expect(res).toEqual({ ok: false, reason: "invalid" });
+
+      const loaded = await loadSettings(settingsPath);
+      expect(loaded.settings.provider.connections).toEqual([]);
+    },
+  );
+
+  // A numeric window with no model to bind to is refused BEFORE the write —
+  // never silently discarded, never written as a connection-global value.
+  it("create refuses a numeric window with no effective model and persists nothing", async () => {
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      contextWindowTokens: 8192,
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections).toEqual([]);
+  });
+
+  it("update sets the window and derives the binding from the STORED model when the request omits it", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "stored-model" }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      contextWindowTokens: 8192,
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(8192);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("stored-model");
+  });
+
+  it("update derives the binding from the request's model when the model changes in the same call", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "old-model" }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      model: "new-model",
+      contextWindowTokens: 16384,
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(16384);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("new-model");
+  });
+
+  it('update with the "" sentinel deletes BOTH keys from disk', async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "on-prem-8b",
+      contextWindowTokens: 8192,
+    }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", contextWindowTokens: "" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    const conn = loaded.settings.provider.connections[0] ?? {};
+    expect(Object.hasOwn(conn, "contextWindowTokens")).toBe(false);
+    expect(Object.hasOwn(conn, "contextWindowModel")).toBe(false);
+  });
+
+  it("update without the field leaves both saved keys untouched", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "on-prem-8b",
+      contextWindowTokens: 8192,
+    }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", label: "Work" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(8192);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("on-prem-8b");
+  });
+
+  // A model-only edit is not a window edit: the pair stays as saved, and it is
+  // the EMISSION gate that makes the now-stale binding inert (the next test).
+  it("a model-only update leaves the saved pair unchanged (the stale binding is made inert at emission, not here)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "model-a",
+      contextWindowTokens: 8192,
+    }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", model: "model-b" });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.contextWindowTokens).toBe(8192);
+    expect(loaded.settings.provider.connections[0]?.contextWindowModel).toBe("model-a");
+    // ...and the stale pair cannot govern model-b: host-env emits NEITHER half.
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_API_KEY: "sk-x" },
+      settings: loaded.settings,
+      getSecret: async () => undefined,
+    });
+    expect(env.ANYCODE_CONTEXT_WINDOW).toBeUndefined();
+    expect(env.ANYCODE_CONTEXT_WINDOW_MODEL).toBeUndefined();
+  });
+
+  it("update rejects a numeric window when the model is explicitly CLEARED — it must not fall back to the stored model", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "stored-model" }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      model: "",
+      contextWindowTokens: 8192,
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+
+    const loaded = await loadSettings(settingsPath);
+    expect("contextWindowTokens" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+
+  // The complete chain: a GUI-shaped payload -> persisted pair -> active view ->
+  // host env -> core env config -> resolved window -> applied budget. This is
+  // the "persistence actually affects applied limits" guarantee, run over the
+  // WHOLE chain after bootstrap, edit, clear and switch.
+  //
+  // The window assertions use a two-model CATALOG so that "clear" and "switch"
+  // are distinguishable from leakage: A's override (8192) and B's catalog window
+  // (300000) produce different applied budgets, and neither equals the assumed
+  // 8192 fallback.
+  const CATALOG: CatalogProviderEntry = {
+    id: "z-ai",
+    name: "Z.AI",
+    baseUrl: "https://api.z.ai/api/anthropic",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    models: [
+      { id: "model-a", name: "Model A", contextWindow: 100_000 },
+      { id: "model-b", name: "Model B", contextWindow: 300_000 },
+    ],
+  };
+
+  /** Disk -> activeProviderView -> buildHostEnv -> loadEnvConfig -> window -> applied budget. */
+  async function appliedChain() {
+    const loaded = await loadSettings(settingsPath);
+    const view = activeProviderView(loaded.settings);
+    const env = await buildHostEnv({
+      bootEnv: { ANYCODE_API_KEY: "sk-x" },
+      settings: loaded.settings,
+      getSecret: async () => undefined,
+    });
+    const cfg = loadEnvConfig(env);
+    const window = resolveContextWindow(cfg.model, CATALOG, cfg.contextWindowTokens, cfg.contextWindowModel);
+    return {
+      view,
+      env,
+      cfg,
+      window,
+      effective: effectiveWindowTokens(resolveContextBudgetConfig({ contextWindowTokens: window })),
+    };
+  }
+
+  it("the full chain: bootstrap 8192 -> edit 16384 -> clear -> switch to B, each producing its OWN applied limits", async () => {
+    // Bootstrap: A with its own override. The override beats A's catalog window.
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "model-a",
+      contextWindowTokens: 8192,
+    }); // conn-1
+
+    const boot = await appliedChain();
+    expect(boot.view?.contextWindowTokens).toBe(8192);
+    expect(boot.view?.contextWindowModel).toBe("model-a");
+    expect(boot.env.ANYCODE_CONTEXT_WINDOW).toBe("8192");
+    expect(boot.env.ANYCODE_CONTEXT_WINDOW_MODEL).toBe("model-a");
+    expect(boot.cfg.contextWindowTokens).toBe(8192);
+    expect(boot.cfg.contextWindowModel).toBe("model-a");
+    expect(boot.window).toBe(8192); // override, not A's 100000 catalog window
+    expect(boot.effective).toBe(2_048);
+    expect(compactThresholdTokens(resolveContextBudgetConfig({ contextWindowTokens: boot.window }))).toBe(1_884);
+
+    // Edit to 16384 (the GUI-shaped payload): the applied limit follows on disk,
+    // through the env channel, into the budget.
+    const payload = { id: "conn-1", label: "", model: "model-a", contextWindowTokens: 16384 as const };
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), payload);
+    expect(res.ok).toBe(true);
+
+    const edited = await appliedChain();
+    expect(edited.view?.contextWindowTokens).toBe(16384);
+    expect(edited.view?.contextWindowModel).toBe("model-a");
+    expect(edited.env.ANYCODE_CONTEXT_WINDOW).toBe("16384");
+    expect(edited.cfg.contextWindowTokens).toBe(16384);
+    expect(edited.window).toBe(16384);
+    expect(edited.effective).toBe(4_096); // max(0, ceil(16384*0.25))
+    expect(edited.effective).not.toBe(boot.effective);
+
+    // Clear: back to the CATALOG window (A's 100000 -> 76000 effective), not to
+    // the assumed fallback and not to the last override.
+    await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", contextWindowTokens: "" });
+    const cleared = await appliedChain();
+    expect(cleared.view?.contextWindowTokens).toBeUndefined();
+    expect(cleared.view?.contextWindowModel).toBeUndefined();
+    expect(cleared.env.ANYCODE_CONTEXT_WINDOW).toBeUndefined();
+    expect(cleared.env.ANYCODE_CONTEXT_WINDOW_MODEL).toBeUndefined();
+    expect(cleared.cfg.contextWindowTokens).toBeUndefined();
+    expect(cleared.window).toBe(100_000); // A's catalog window
+    expect(cleared.effective).toBe(76_000);
+
+    // Switch to B: A's pair is stale, so NOTHING is emitted and B resolves its
+    // OWN catalog window (300000), never A's 8192/16384 nor the 8192 fallback.
+    await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", model: "model-b" });
+    const switched = await appliedChain();
+    expect(switched.cfg.model).toBe("model-b");
+    expect(switched.env.ANYCODE_CONTEXT_WINDOW).toBeUndefined();
+    expect(switched.env.ANYCODE_CONTEXT_WINDOW_MODEL).toBeUndefined();
+    expect(switched.cfg.contextWindowTokens).toBeUndefined();
+    expect(switched.window).toBe(300_000);
+    expect(switched.effective).toBe(276_000);
+    expect(switched.effective).not.toBe(boot.effective);
+    expect(switched.effective).not.toBe(cleared.effective);
+  });
+
+  it("an A-bound override with NO catalog entry for A still governs A's applied budget, and switching to an UNKNOWN B drops to the assumed fallback", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "on-prem-8b",
+      contextWindowTokens: 8192,
+    }); // conn-1
+
+    const boot = await appliedChain();
+    // No catalog entry for on-prem-8b, but its own override governs.
+    expect(boot.window).toBe(8192);
+    expect(boot.effective).toBe(2_048);
+
+    // Switch to another model the catalog also does not know: A's override must
+    // NOT leak — the assumed 8192 fallback applies (same number here, but reached
+    // through the fallback branch, verified by the absent env pair below).
+    await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", model: "other-unknown" });
+    const switched = await appliedChain();
+    expect(switched.env.ANYCODE_CONTEXT_WINDOW).toBeUndefined();
+    expect(switched.env.ANYCODE_CONTEXT_WINDOW_MODEL).toBeUndefined();
+    expect(switched.cfg.contextWindowTokens).toBeUndefined();
+    expect(switched.window).toBe(8_192);
+    expect(switched.effective).toBe(2_048);
+  });
+
+  // The IPC rejection matrix for the UPDATE path (the accepted contract requires
+  // it here, not only on create): a rejected request must leave disk untouched.
+  it.each([
+    [512],
+    [1000001],
+    [8.5],
+    ["8192"],
+  ])("update refuses an out-of-bounds/non-integer/wrong-typed contextWindowTokens (%p) and leaves disk unchanged", async (bad) => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "model-a" }); // conn-1
+    const before = await readFile(settingsPath, "utf8");
+
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      contextWindowTokens: bad,
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(await readFile(settingsPath, "utf8")).toBe(before);
+  });
+
+  it("update refuses a numeric window when the stored connection has no model, leaving disk unchanged", async () => {
+    // A connection with no model at all (baseUrl only, no model field).
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const before = await readFile(settingsPath, "utf8");
+
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      contextWindowTokens: 8192,
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect(await readFile(settingsPath, "utf8")).toBe(before);
+  });
+
+  it('update with "" clears a previously saved pair (both keys removed), and a later model-only update cannot resurrect it', async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "model-a",
+      contextWindowTokens: 8192,
+    }); // conn-1
+    await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", contextWindowTokens: "" });
+    await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", model: "model-b" });
+
+    const conn = (await loadSettings(settingsPath)).settings.provider.connections[0] ?? {};
+    expect(Object.hasOwn(conn, "contextWindowTokens")).toBe(false);
+    expect(Object.hasOwn(conn, "contextWindowModel")).toBe(false);
+    const switched = await appliedChain();
+    expect(switched.env.ANYCODE_CONTEXT_WINDOW).toBeUndefined();
+    expect(switched.window).toBe(300_000);
   });
 });
 

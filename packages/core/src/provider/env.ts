@@ -19,6 +19,8 @@ export const ENV_SUBAGENT_STALL_MS = "ANYCODE_SUBAGENT_STALL_MS";
 export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
+/** Model binding for ANYCODE_CONTEXT_WINDOW (TASK.142): the pair is model-specific. */
+export const ENV_CONTEXT_WINDOW_MODEL = "ANYCODE_CONTEXT_WINDOW_MODEL";
 export const ENV_MAX_RETRIES = "ANYCODE_MAX_RETRIES";
 export const ENV_DB_PATH = "ANYCODE_DB_PATH";
 export const ENV_TOOL_CONCURRENCY = "ANYCODE_TOOL_CONCURRENCY";
@@ -36,12 +38,22 @@ const PROVIDER_TRANSPORT_VALUES: readonly ProviderTransport[] = [
 export const DEFAULT_BASE_URL = "https://api.anthropic.com";
 
 /**
+ * `CoreEnvConfig` plus the model binding for the context-window override
+ * (TASK.142). Declared here rather than in `types/config.ts` so the added field
+ * stays entirely inside `provider/**`.
+ */
+export type ModelBoundCoreEnvConfig = CoreEnvConfig & { contextWindowModel?: string };
+
+/**
  * Reads ANYCODE_API_KEY, ANYCODE_BASE_URL (default: native Anthropic),
  * ANYCODE_MODEL (required), and the optional integers ANYCODE_MAX_TURNS /
  * ANYCODE_MAX_OUTPUT_TOKENS / ANYCODE_CONTEXT_WINDOW / ANYCODE_MAX_RETRIES /
  * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS / ANYCODE_SUBAGENT_STALL_MS
  * (TASK.148 slice 1 — the subagent silence detector, distinct from the stream
  * watchdog) plus ANYCODE_DB_PATH.
+ * ANYCODE_CONTEXT_WINDOW_MODEL (TASK.142) is an optional nonblank model id that
+ * binds the ANYCODE_CONTEXT_WINDOW override to one model (the pair is emitted
+ * together by the host/CLI); a blank/absent value leaves the override global.
  * ANYCODE_REASONING_EFFORT is an optional off|low|medium|high|max selector
  * (per-model levels are gated downstream by the catalog; unsupported → off).
  * ANYCODE_PROVIDER_TRANSPORT selects the wire protocol (TASK.43 §0.4); an
@@ -54,7 +66,7 @@ export const DEFAULT_BASE_URL = "https://api.anthropic.com";
  * `resolveIncludeUsage`, not here, so unset stays undefined.
  * Throws a descriptive error naming the offending variable.
  */
-export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConfig {
+export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundCoreEnvConfig {
   const providerTransport = readProviderTransport(env);
 
   const apiKeyRequired = providerTransport === undefined || providerTransport === "anthropic-messages";
@@ -77,6 +89,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConf
   const subagentStallTimeoutMs = readOptionalInteger(env, ENV_SUBAGENT_STALL_MS);
   const maxOutputTokens = readOptionalInteger(env, ENV_MAX_OUTPUT_TOKENS);
   const contextWindowTokens = readOptionalInteger(env, ENV_CONTEXT_WINDOW);
+  const contextWindowModel = env[ENV_CONTEXT_WINDOW_MODEL]?.trim() || undefined;
   const maxRetries = readOptionalInteger(env, ENV_MAX_RETRIES);
   const toolConcurrency = readOptionalInteger(env, ENV_TOOL_CONCURRENCY);
   const stallTimeoutMs = readOptionalInteger(env, ENV_STALL_TIMEOUT_MS);
@@ -98,6 +111,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): CoreEnvConf
     maxOutputTokens,
     reasoningEffort,
     contextWindowTokens,
+    contextWindowModel,
     maxRetries,
     dbPath,
     toolConcurrency,

@@ -169,6 +169,10 @@ export interface PersistencePort {
    * read instead of paying for a full table scan (TASK.102 S2 review MINOR).
    */
   listSessionsForMaintenance(opts?: { limit?: number }): Promise<SessionMeta[]>;
+  /** Metadata-only claim scan (TASK.142): every session row bearing a worktree
+   * claim (worktree / cleanup / transition), unbounded by recency; feeds the
+   * janitor's in-memory claim map. No filesystem access implied. */
+  listWorktreeClaims(): Promise<SessionMeta[]>;
   /** Internal point read by id, no root/child filtering — host boot resolves by an id main already trusts (root or child). */
   getSessionById(id: string): Promise<SessionMeta | null>;
   /**

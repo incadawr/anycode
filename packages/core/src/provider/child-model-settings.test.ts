@@ -7,7 +7,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { CatalogProviderEntry } from "./catalog.js";
-import { DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS } from "../types/config.js";
+import { DEFAULT_MAX_OUTPUT_TOKENS } from "../types/config.js";
+import { UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS } from "./capabilities.js";
 import { buildChildModelSettingsResolver } from "./child-model-settings.js";
 
 // Fixture entry, model-agnostic on purpose (this module has no A2 dependency):
@@ -46,7 +47,7 @@ describe("buildChildModelSettingsResolver", () => {
     });
   });
 
-  it("catalog-unknown model id degrades honestly: DEFAULT ceiling, effort dropped, DEFAULT window", () => {
+  it("catalog-unknown model id degrades honestly: DEFAULT ceiling, effort dropped, assumed 8192 window (TASK.142)", () => {
     const resolve = buildChildModelSettingsResolver({
       catalogEntry: Z_AI_ENTRY,
       envMaxOutputTokens: undefined,
@@ -55,7 +56,7 @@ describe("buildChildModelSettingsResolver", () => {
     expect(resolve("glm-5.3-flash-nonexistent", "high")).toEqual({
       maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
       reasoningEffort: undefined,
-      contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+      contextWindowTokens: UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
     });
   });
 
@@ -117,8 +118,64 @@ describe("buildChildModelSettingsResolver", () => {
     expect(resolve("glm-5.3", "high")).toEqual({
       maxOutputTokens: 4_096,
       reasoningEffort: undefined,
-      contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+      contextWindowTokens: 999_999,
     });
+  });
+
+  it("the catch path preserves a MATCHING bound override, and yields 8192 for a mismatched one (TASK.142)", () => {
+    const poisoned = new Proxy({} as CatalogProviderEntry, {
+      get(_target, prop) {
+        if (prop === "models") throw new Error("catalog entry corrupted");
+        return undefined;
+      },
+    });
+    const matching = buildChildModelSettingsResolver({
+      catalogEntry: poisoned,
+      envMaxOutputTokens: undefined,
+      envContextWindow: 999_999,
+      envContextWindowModel: "glm-5.3",
+    });
+    expect(matching("glm-5.3", "high").contextWindowTokens).toBe(999_999);
+
+    const mismatched = buildChildModelSettingsResolver({
+      catalogEntry: poisoned,
+      envMaxOutputTokens: undefined,
+      envContextWindow: 999_999,
+      envContextWindowModel: "other-model",
+    });
+    expect(mismatched("glm-5.3", "high").contextWindowTokens).toBe(UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS);
+
+    // A shell-global override (no binding) survives the catch path too.
+    const global = buildChildModelSettingsResolver({
+      catalogEntry: poisoned,
+      envMaxOutputTokens: undefined,
+      envContextWindow: 999_999,
+    });
+    expect(global("glm-5.3", "high").contextWindowTokens).toBe(999_999);
+  });
+
+  // TASK.142: the child's window follows ITS model, not the parent's bound pair.
+
+  it("a bound override beats the catalog for the model it names, and is ignored for a different model", () => {
+    const resolve = buildChildModelSettingsResolver({
+      catalogEntry: Z_AI_ENTRY,
+      envMaxOutputTokens: undefined,
+      envContextWindow: 50_000,
+      envContextWindowModel: "glm-5.3",
+    });
+    expect(resolve("glm-5.3", "high").contextWindowTokens).toBe(50_000);
+    // Child on B: A's saved window must NOT govern B — B resolves its catalog window.
+    expect(resolve("glm-5.3-flash", "high").contextWindowTokens).toBe(1_000_000);
+  });
+
+  it("a catalog model with no override resolves its catalog window", () => {
+    const resolve = buildChildModelSettingsResolver({
+      catalogEntry: Z_AI_ENTRY,
+      envMaxOutputTokens: undefined,
+      envContextWindow: undefined,
+      envContextWindowModel: "glm-5.3",
+    });
+    expect(resolve("glm-5.3-flash", "high").contextWindowTokens).toBe(1_000_000);
   });
 
   // TASK.170: onStubFallback names the child spawned on a model the catalog

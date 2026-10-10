@@ -149,6 +149,7 @@ export function buildConnectionUpdatePayload(params: {
   proxyRef: string;
   authOptional: boolean;
   maxOutputTokens: number | "";
+  contextWindowTokens: number | "";
 }): ConnectionUpdateRequest {
   return {
     id: params.connectionId,
@@ -171,6 +172,11 @@ export function buildConnectionUpdatePayload(params: {
     // clearing the field back to blank must CLEAR the persisted cap, not leave
     // an old explicit value in force.
     maxOutputTokens: params.maxOutputTokens,
+    // Sent unconditionally (TASK.142), same rationale: an emptied field must
+    // CLEAR the saved pair. Only the numeric value (or `""`) travels — the
+    // model binding is derived SERVER-SIDE from the effective model, so the
+    // renderer can never attach a window to the wrong model.
+    contextWindowTokens: params.contextWindowTokens,
   };
 }
 
@@ -282,6 +288,195 @@ export function maxOutputTokensEffectiveHint(
     return null;
   }
   return `provider default: ${defaultMaxOutputTokens}`;
+}
+
+/**
+ * Validates the "Context window (tokens)" field's raw string (TASK.142): the
+ * same client-side pre-flight as `maxOutputTokensField` above, because main
+ * (`settings-ipc.ts`) accepts an integer in [1024, 1000000] or refuses the whole
+ * update with a bare `reason: "invalid"`. Blank is the channel's clear sentinel
+ * — `ok:true, value:""` — matching `maxOutputTokensField` (NOT zero and NOT
+ * invalid). Exported for direct testing (no jsdom in this package's vitest
+ * config, see file docstring).
+ */
+export function contextWindowTokensField(raw: string): { ok: true; value: number | "" } | { ok: false } {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return { ok: true, value: "" };
+  }
+  if (!/^-?\d+$/.test(trimmed)) {
+    return { ok: false };
+  }
+  const n = Number(trimmed);
+  if (!Number.isInteger(n) || n < 1024 || n > 1000000) {
+    return { ok: false };
+  }
+  return { ok: true, value: n };
+}
+
+/** Shared by both write paths so create and save refuse a bad window identically. */
+const CONTEXT_WINDOW_ERROR =
+  "Context window must be a whole number between 1024 and 1000000 — leave it empty to use the catalog window (or the 8192 assumed fallback for an unknown model).";
+
+/** Distinct from CONTEXT_WINDOW_ERROR: tells the user WHAT to fix (the model, not the number). */
+const CONTEXT_WINDOW_ERROR_MODEL =
+  "Enter a model before setting a context window — the window is saved for one model.";
+
+/** Local literal (TASK.142), same convention as host-env.ts's `ENV_CONTEXT_WINDOW` — renderer modules don't import main, let alone core. */
+const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
+
+/**
+ * Hint under the "Context window (tokens)" field while ANYCODE_CONTEXT_WINDOW is
+ * live (TASK.142): the env rung always beats what this field saves, so an edited
+ * window would silently do nothing — say so instead of letting the field pretend
+ * to work. `null` (no hint) when the variable isn't overriding. Exported for
+ * direct testing (no jsdom in this package's vitest config, see file docstring).
+ */
+export function contextWindowTokensEnvHint(envOverrides: readonly string[]): string | null {
+  return envOverrides.includes(ENV_CONTEXT_WINDOW)
+    ? `${ENV_CONTEXT_WINDOW} is set in the environment — it overrides this field for every new session.`
+    : null;
+}
+
+/**
+ * The number a BLANK "Context window (tokens)" field resolves to for the
+ * selected model (TASK.142): a catalog model answers `catalog: N` where N is
+ * `min(contextWindow, usableContextWindow ?? contextWindow)`; a model the
+ * catalog does not know answers the ASSUMED fallback
+ * (snapshot-projected `unknownModelContextWindowTokens`). Named `assumed` on
+ * purpose and NEVER "provider default": core does not know a server-side window
+ * for an unknown model — it deliberately assumes a conservative one so the
+ * budget compacts early rather than overstuffing the prompt. A non-blank field
+ * suppresses the hint (the field itself shows what wins). Exported for direct
+ * testing (no jsdom in this package's vitest config, see file docstring).
+ */
+export function contextWindowEffectiveHint(
+  entry: CatalogSummaryEntry | undefined,
+  modelId: string,
+  snapshot: { unknownModelContextWindowTokens?: number } | null | undefined,
+  raw: string,
+): string | null {
+  if (raw.trim() !== "") {
+    return null;
+  }
+  const matched = entry?.models.find((candidate) => candidate.id === modelId);
+  if (matched?.contextWindow !== undefined) {
+    const usable = matched.usableContextWindow;
+    const effective = usable !== undefined ? Math.min(matched.contextWindow, usable) : matched.contextWindow;
+    return `catalog: ${effective}`;
+  }
+  const assumed = snapshot?.unknownModelContextWindowTokens ?? 8_192;
+  return `assumed fallback: ${assumed} (unknown model — set a value to override)`;
+}
+
+/**
+ * TASK.142: the raw window value the drawer starts with for a saved connection.
+ * The saved window is ONE model's override (`contextWindowModel`), so it is
+ * prefilled ONLY when it binds to the model now shown — a window saved for
+ * another model must never appear to belong to this one. Exported for direct
+ * testing (no jsdom in this package's vitest config, see file docstring).
+ */
+export function contextWindowInitialRaw(connection: {
+  contextWindowTokens?: number;
+  contextWindowModel?: string;
+  model?: string;
+}): string {
+  return connection.contextWindowTokens !== undefined &&
+    connection.contextWindowModel !== undefined &&
+    connection.contextWindowModel === (connection.model ?? "")
+    ? String(connection.contextWindowTokens)
+    : "";
+}
+
+/**
+ * TASK.142: the "Context window (tokens)" field's full state. `model` is the
+ * NORMALIZED model id the raw value belongs to (undefined while the field is
+ * blank) — the reset decision compares against THIS, never against the original
+ * saved binding, so a whitespace-only Model edit ("B" -> " B ") is not a change
+ * and must not wipe a window the user just typed.
+ */
+export interface ContextWindowField {
+  raw: string;
+  /**
+   * The NORMALIZED model this field's content belongs to ("" while the form has
+   * no model). It tracks the model the field was last associated with, NOT
+   * whether a value is present: an explicitly CLEARED field keeps its owner, so a
+   * subsequent edit that does not change the normalized model preserves the clear
+   * instead of resurrecting the saved value. The reset decision compares against
+   * this, never against the original saved binding.
+   */
+  model: string;
+}
+
+/** The saved pair a Model edit may re-prefill from. */
+export interface ContextWindowSavedPair {
+  contextWindowTokens?: number;
+  contextWindowModel?: string;
+}
+
+/**
+ * Initial field state for the drawer (TASK.142): prefill from the saved pair
+ * only when it binds to the connection's own model — same rule as
+ * `contextWindowInitialRaw`.
+ */
+export function contextWindowInitialField(
+  connection: { contextWindowTokens?: number; contextWindowModel?: string; model?: string } | undefined,
+): ContextWindowField {
+  const raw = connection === undefined ? "" : contextWindowInitialRaw(connection);
+  return raw === ""
+    ? { raw: "", model: (connection?.model ?? "").trim() }
+    : { raw, model: (connection?.contextWindowModel ?? "").trim() };
+}
+
+/**
+ * TASK.142: the field state after a user route CHANGES the model. `nextModel` is
+ * the model the route will actually save (the catalog-prefilled id on the
+ * simplified create input, the raw input elsewhere); `saved` is the persisted
+ * pair, consulted only to re-prefill when the user navigates BACK to the model
+ * the saved window binds. Semantics:
+ *   - an UNCHANGED normalized model (field.model === next) returns the field
+ *     verbatim — a value, a whitespace-only edit, or an explicit CLEAR all
+ *     survive untouched. This is the "only a normalized model change resets
+ *     it" rule, and it is checked BEFORE anything that could re-prefill, so a
+ *     clear is never undone by a no-op model edit (or re-clicking the selected
+ *     chip);
+ *   - a GENUINE model change clears the value — or re-prefills from a saved pair
+ *     that binds the new model — so one model's number can never be rebound to
+ *     another.
+ * Exported for direct testing (no jsdom in this package's vitest config).
+ */
+export function contextWindowAfterModelInput(
+  field: ContextWindowField,
+  nextModel: string,
+  saved: ContextWindowSavedPair | undefined,
+): ContextWindowField {
+  const next = nextModel.trim();
+  if (field.model === next) {
+    return field;
+  }
+  const savedBinding = saved?.contextWindowModel?.trim();
+  const savedTokens = saved?.contextWindowTokens;
+  if (savedTokens !== undefined && savedBinding !== undefined && savedBinding !== "" && savedBinding === next) {
+    return { raw: String(savedTokens), model: next };
+  }
+  return { raw: "", model: next };
+}
+
+/**
+ * TASK.142: the field state after the user edits the WINDOW text itself. The
+ * value is owned by whichever model is current at that moment — including an
+ * EMPTY raw, which keeps the same owner so a later no-op Model edit preserves
+ * the clear. This is the only path that binds a freshly typed window, and it is
+ * never invoked from the Model input — hence "never reset repeatedly while
+ * typing the window". Exported for direct testing (no jsdom in this package's
+ * vitest config).
+ */
+export function contextWindowAfterRawInput(
+  field: ContextWindowField,
+  raw: string,
+  currentModel: string,
+): ContextWindowField {
+  return { raw, model: currentModel.trim() };
 }
 
 /**
@@ -428,6 +623,7 @@ export function ConnectionDrawerFields({
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
   const maxOutputTokensInputRef = useRef<HTMLInputElement>(null);
+  const contextWindowTokensInputRef = useRef<HTMLInputElement>(null);
   const secretInputRef = useRef<HTMLInputElement>(null);
   const oauthPendingProviderId = useStore(store, (s) => s.oauthPendingProviderId);
   // TASK.141: the settings document behind the proxy picker's seed. Read here
@@ -470,6 +666,13 @@ export function ConnectionDrawerFields({
   // does the actual parse/validate at save time.
   const [maxOutputTokens, setMaxOutputTokens] = useState(
     editConnection?.maxOutputTokens === undefined ? "" : String(editConnection.maxOutputTokens),
+  );
+  // TASK.142: per-model context window, stored as {raw, model} for the same
+  // reason as `maxOutputTokens` below. Prefilled ONLY when the saved window is
+  // bound to the connection's own model — a window saved for a DIFFERENT model
+  // must not appear here. Every model-changing route goes through `changeModel`.
+  const [contextWindow, setContextWindow] = useState<ContextWindowField>(() =>
+    contextWindowInitialField(editConnection),
   );
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
@@ -552,6 +755,45 @@ export function ConnectionDrawerFields({
     proxySnapshot?.defaultMaxOutputTokens,
     maxOutputTokens,
   );
+  // TASK.142 hints for the Context-window field: same shape as the ceiling hints
+  // above — whether the env rung silences the field, and what window a blank
+  // field resolves to (catalog min, else the assumed unknown-model fallback).
+  const cwEnvHint = proxySnapshot === null ? null : contextWindowTokensEnvHint(proxySnapshot.envOverrides);
+  // TASK.142: the model id this form will actually SAVE. The simplified create
+  // input saves the catalog-prefilled id (`modelAfterCatalogPrefill`); every
+  // other route saves the raw text. Used both for the field's owner and for the
+  // create-time "a window needs a model to bind to" gate, so the two never
+  // disagree about which model the number belongs to.
+  const effectiveFormModel =
+    simplified && createdConnectionId === null
+      ? modelAfterCatalogPrefill(model, selectedEntry?.models ?? [])
+      : model;
+  const cwDefaultHint = contextWindowEffectiveHint(
+    selectedEntry,
+    effectiveFormModel.trim(),
+    proxySnapshot,
+    contextWindow.raw,
+  );
+
+  /**
+   * TASK.142: the ONE model-changing route. `next` is what goes into the Model
+   * input, `effective` is the id that will be saved, `saved` is the persisted
+   * pair (for re-prefill when the user navigates back to the bound model). Every
+   * user route — the simplified create input, the main Model input and the model
+   * suggestion chips — calls this, so no route can bypass the per-model reset and
+   * leave A's number on screen after choosing B.
+   */
+  function changeModel(
+    next: string,
+    effective: string,
+    saved: ContextWindowSavedPair | undefined,
+    force = false,
+  ): void {
+    setContextWindow((field) =>
+      force ? { raw: "", model: effective.trim() } : contextWindowAfterModelInput(field, effective, saved),
+    );
+    setModel(next);
+  }
 
   async function reloadSnapshot(): Promise<void> {
     await store.getState().load();
@@ -637,6 +879,23 @@ export function ConnectionDrawerFields({
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
+    // TASK.142: the same pre-flight for the context window. A BLANK field means
+    // "catalog/assumed window" and is simply left out; a MALFORMED one is
+    // refused rather than dropped. A numeric window additionally needs the model
+    // this create will actually SEND to bind to (the simplified path sends the
+    // catalog-prefilled id; the other create paths send no model at all) — main
+    // derives the binding from it and refuses the whole create otherwise, so say
+    // which field to fix instead of letting main reject it opaquely.
+    const cw = contextWindowTokensField(contextWindow.raw);
+    if (!cw.ok) {
+      setError(CONTEXT_WINDOW_ERROR);
+      return;
+    }
+    const createModel = simplified ? modelAfterCatalogPrefill(model, selectedEntry?.models ?? []).trim() : "";
+    if (cw.value !== "" && createModel === "") {
+      setError(CONTEXT_WINDOW_ERROR_MODEL);
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
@@ -649,6 +908,7 @@ export function ConnectionDrawerFields({
         ...connectionCreateProxyRefField(proxyRef),
         ...(noAuth ? { authOptional: true } : {}),
         ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
+        ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
       });
       const createdId = resolveCreatedConnectionId(result);
       if (createdId === undefined) {
@@ -703,6 +963,18 @@ export function ConnectionDrawerFields({
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
+    // TASK.142: same pre-flight for the context window; a numeric one also needs
+    // a nonblank model to bind to, since main derives the binding server-side
+    // from the model this update sends.
+    const cw = contextWindowTokensField(contextWindow.raw);
+    if (!cw.ok) {
+      setError(CONTEXT_WINDOW_ERROR);
+      return;
+    }
+    if (cw.value !== "" && model.trim() === "") {
+      setError(CONTEXT_WINDOW_ERROR_MODEL);
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -717,6 +989,7 @@ export function ConnectionDrawerFields({
           proxyRef,
           authOptional: noAuth,
           maxOutputTokens: mot.value,
+          contextWindowTokens: cw.value,
         }),
       );
       let keyRefused = false;
@@ -811,7 +1084,13 @@ export function ConnectionDrawerFields({
           className="settings-field-select"
           value={selectDisplayValue}
           disabled={readOnly || templateLocked}
-          onChange={(e) => { setProviderId(e.target.value); setModel(""); }}
+          onChange={(e) => {
+            setProviderId(e.target.value);
+            // TASK.142: switching provider clears the model, so the per-model
+            // window must go with it. Forced: the new model is empty, and an
+            // already-empty owner must not make this look like a no-op.
+            changeModel("", "", undefined, true);
+          }}
         >
           <option value="" disabled>
             Choose a provider…
@@ -870,7 +1149,17 @@ export function ConnectionDrawerFields({
           <span className="settings-field-label">Model</span>
           <input className="settings-field-input" type="text" list="welcome-model-suggestions"
             value={modelAfterCatalogPrefill(model, selectedEntry.models)} disabled={readOnly}
-            placeholder="Enter a model ID" onChange={(e) => setModel(e.target.value)} />
+            placeholder="Enter a model ID"
+            onChange={(e) =>
+              // TASK.142: the pre-create Model input saves the catalog-prefilled
+              // id, so the per-model window is owned by THAT id — route through
+              // the shared change so A's number cannot ride onto B.
+              changeModel(
+                e.target.value,
+                modelAfterCatalogPrefill(e.target.value, selectedEntry.models),
+                undefined,
+              )
+            } />
           <datalist id="welcome-model-suggestions">
             {selectedEntry.models.map((m) => <option key={m.id} value={m.id}>{m.name ?? m.id}</option>)}
           </datalist>
@@ -1002,6 +1291,46 @@ export function ConnectionDrawerFields({
             {motEnvHint}
           </div>
         )}
+
+        {/* TASK.142: per-model context window. Same field shape as "Max output
+            tokens" above (whole number in [1024, 1000000], blank = catalog/
+            assumed window); the value is saved for ONE model (the binding is
+            derived server-side), so a Model edit clears it. */}
+        <label className="settings-field">
+          <span className="settings-field-label">Context window (tokens)</span>
+          <input
+            ref={contextWindowTokensInputRef}
+            className="settings-field-input"
+            type="number"
+            min={1024}
+            max={1000000}
+            step={1}
+            value={contextWindow.raw}
+            disabled={readOnly}
+            placeholder="(catalog window)"
+            onChange={(e) =>
+              // TASK.142: editing the WINDOW binds the value to whichever model
+              // is effective right now — this is the route that must never reset
+              // on its own keystrokes.
+              setContextWindow((field) => contextWindowAfterRawInput(field, e.target.value, effectiveFormModel))
+            }
+          />
+        </label>
+        {/* One line naming what a blank field resolves to: the catalog window
+            (usable-min) or the ASSUMED 8192 fallback for an unknown model —
+            never "provider default", which core cannot know for an unknown id. */}
+        {cwDefaultHint !== null && <div className="settings-field-hint">{cwDefaultHint}</div>}
+        <div className="settings-field-hint" role="note">
+          Saved for the model above only — switching this connection to another model ignores it. Leave empty to use the
+          catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions
+          compact early instead of overstuffing the prompt.
+        </div>
+        {/* TASK.142: shown only while ANYCODE_CONTEXT_WINDOW overrides the rung — editing this field then does nothing. */}
+        {cwEnvHint !== null && (
+          <div className="settings-field-hint" role="note">
+            {cwEnvHint}
+          </div>
+        )}
         {/* TASK.141: one instance of the same picker the engine panes and the
             Network pane render — CONTROLLED here, because a connection's ref
             rides this drawer's own create/update payload rather than a channel of
@@ -1088,7 +1417,13 @@ export function ConnectionDrawerFields({
               value={model}
               disabled={readOnly}
               placeholder="e.g. claude-sonnet-5"
-              onChange={(e) => setModel(e.target.value)}
+              onChange={(e) =>
+                // TASK.142: the shared model-change route. A whitespace-only
+                // edit (same normalized id) keeps the field; a real change
+                // clears it, or re-prefills when the user returns to the saved
+                // model.
+                changeModel(e.target.value, e.target.value, targetConnection)
+              }
             />
             <datalist id="connection-drawer-model-suggestions">
               {modelSuggestions.map((m) => (
@@ -1110,7 +1445,7 @@ export function ConnectionDrawerFields({
                   type="button"
                   className={`connection-drawer-model-chip${model === m.id ? " connection-drawer-model-chip-selected" : ""}`}
                   disabled={readOnly}
-                  onClick={() => setModel(m.id)}
+                  onClick={() => changeModel(m.id, m.id, targetConnection)}
                 >
                   {m.name ?? m.id}
                 </button>

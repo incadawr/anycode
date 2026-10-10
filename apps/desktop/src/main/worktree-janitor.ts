@@ -14,10 +14,13 @@ type JanitorGitPort = Pick<
   | "deleteBranch"
 >;
 
+export const WORKTREE_JANITOR_SESSION_LIMIT = 200;
+
 export interface WorktreeJanitorOptions {
-  persistence: Pick<PersistencePort, "listSessionsForMaintenance" | "touchSession">;
+  persistence: Pick<PersistencePort, "listSessionsForMaintenance" | "listWorktreeClaims" | "touchSession">;
   gitForWorkspace(workspace: string): JanitorGitPort;
   exists(target: string): Promise<boolean>;
+  sessionLimit?: number;
   log?: (message: string) => void;
 }
 
@@ -32,11 +35,16 @@ export interface WorktreeJanitorResult {
  * namespace/prefix discovery is never authority to remove a user resource.
  */
 export async function runWorktreeJanitor(options: WorktreeJanitorOptions): Promise<WorktreeJanitorResult> {
-  // Maintenance selection (TASK.102 S2a §2.4): MUST see child sessions too —
-  // a live child's worktree claim is a real claim, and omitting it here would
-  // let the janitor reap a resource still owned by a running child.
-  const sessions = await options.persistence.listSessionsForMaintenance();
-  const claimedPaths = buildClaims(sessions);
+  const requestedLimit = options.sessionLimit;
+  const limit = requestedLimit === undefined || !Number.isFinite(requestedLimit)
+    ? WORKTREE_JANITOR_SESSION_LIMIT
+    : Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, Math.floor(requestedLimit)));
+  const sessions = await options.persistence.listSessionsForMaintenance({ limit });
+  // Claim protection is NOT bounded by the cleanup window (TASK.142 review):
+  // an idle-but-live child outside the recent window still owns its worktree.
+  // Claims come from a metadata-only query; those rows are never iterated,
+  // so no filesystem probe can reach them.
+  const claimedPaths = buildClaims(await options.persistence.listWorktreeClaims());
   const result: WorktreeJanitorResult = { examined: 0, cleaned: 0, retained: 0 };
 
   for (const session of sessions) {

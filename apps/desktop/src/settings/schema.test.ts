@@ -731,6 +731,75 @@ describe("connection.proxyUrl (TASK.132) — persisted schema stays LENIENT on p
   });
 });
 
+describe("connection.contextWindowTokens / contextWindowModel (TASK.142) — persisted schema stays LENIENT on purpose", () => {
+  it("round-trips a valid pair verbatim", () => {
+    const settings = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [
+          { id: "c1", providerId: "z-ai", contextWindowTokens: 8192, contextWindowModel: "on-prem-8b" },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(settings)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.contextWindowTokens).toBe(8192);
+      expect(parsed.data.provider.connections[0]?.contextWindowModel).toBe("on-prem-8b");
+    }
+  });
+
+  it("a connection with no window round-trips with both keys absent", () => {
+    const parsed = settingsSchema.safeParse(
+      JSON.parse(JSON.stringify({ ...cloneDefaults(), provider: providerV2({ id: "z-ai" }) })),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect("contextWindowTokens" in (parsed.data.provider.connections[0] ?? {})).toBe(false);
+      expect("contextWindowModel" in (parsed.data.provider.connections[0] ?? {})).toBe(false);
+    }
+  });
+
+  // Same whole-document-corruption guard as `maxOutputTokens` above: a
+  // hand-edited bad value must read back as "no override" while the binding (if
+  // any) survives INERT — host-env requires both a valid value and a matching
+  // model before emitting, so a surviving binding alone changes nothing.
+  it.each([["lots"], [0], [-5], [12.5], [1023], [1_000_001]])(
+    "a garbage contextWindowTokens (%p) reads back as absent while its binding survives inert and siblings stay intact",
+    (garbage) => {
+      const before = {
+        version: 2,
+        provider: {
+          activeConnectionId: "c1",
+          connections: [
+            { id: "c1", providerId: "z-ai", label: "Work", contextWindowTokens: garbage, contextWindowModel: "on-prem-8b" },
+            { id: "c2", providerId: "openai", model: "gpt-5" },
+          ],
+        },
+        tools: { maxTurns: 7 },
+        permissions: { alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] },
+        ui: { theme: "dark" },
+        security: { allowWeakSecretStorage: false },
+      };
+      const parsed = settingsSchema.safeParse(before);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.provider.connections[0]?.contextWindowTokens).toBeUndefined();
+        expect(JSON.stringify(parsed.data.provider.connections[0])).not.toContain("contextWindowTokens");
+        // The binding is carried verbatim (a string is never validated against a
+        // window) — it is simply inert without a valid value.
+        expect(parsed.data.provider.connections[0]?.contextWindowModel).toBe("on-prem-8b");
+        expect(parsed.data.provider.connections[0]?.label).toBe("Work");
+        expect(parsed.data.provider.connections[1]).toEqual({ id: "c2", providerId: "openai", model: "gpt-5" });
+        expect(parsed.data.tools).toEqual({ maxTurns: 7 });
+        expect(parsed.data.permissions).toEqual({ alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] });
+        expect(parsed.data.ui).toEqual({ theme: "dark" });
+      }
+    },
+  );
+});
+
 describe("connection.maxOutputTokens (TASK.150) — persisted schema stays LENIENT on purpose", () => {
   it("round-trips a valid maxOutputTokens verbatim", () => {
     const settings = {
