@@ -109,6 +109,9 @@ const CHILD_RECURSION_MESSAGE = 'Agent: a child session cannot spawn its own chi
 const CHILD_CLOSING_MESSAGE = "Agent: the child session could not be started (host is closing).";
 const CHILD_SPAWN_FAILED_MESSAGE = "Agent: the child session failed to start.";
 const CHILD_HOST_EXITED_MESSAGE = "Agent: the child session host exited before completing.";
+/** TASK 4239: a ChildTerminal that failed fail-closed parsing — the run is finalized, never left running. */
+const CHILD_MALFORMED_TERMINAL_MESSAGE =
+  "Agent: the child session reported a malformed terminal message and was shut down; its result could not be trusted. Retry the task.";
 /**
  * §10.8.2 п.1 — ratified verbatim replacement for the builder's fact-only
  * draft: the model gets an explicit next step (only the EXPLICIT-`provider`
@@ -1304,6 +1307,8 @@ export class TabHostManager {
       const terminal = parseChildTerminal(message);
       if (terminal !== null) {
         this.handleChildTerminal(tab, child, terminal);
+      } else {
+        this.handleChildTerminalMalformed(tab, child);
       }
       return;
     }
@@ -2261,6 +2266,38 @@ export class TabHostManager {
       // TASK.219: verbatim passthrough of the child's own model facts.
       ...(msg.model !== undefined ? { model: msg.model } : {}),
       ...(msg.responseModel !== undefined ? { responseModel: msg.responseModel } : {}),
+    });
+  }
+
+  /**
+   * TASK 4239: a child tab's ChildTerminal failed fail-closed parsing
+   * (malformed KNOWN field — unknown additive keys are stripped by the
+   * parser and never land here). Leaving the run "running" on a terminal we
+   * cannot trust would leak the ledger slot until app quit; instead warn
+   * once, truthfully naming the outcome, and finalize through the same
+   * funnel handleChildExit uses. Sender-authority, stale- and duplicate-run
+   * guards mirror handleChildTerminal/handleChildExit.
+   */
+  private handleChildTerminalMalformed(tab: TabHost, sender: UtilityProcess): void {
+    if (tab.proc !== sender || tab.childOf === undefined) {
+      return;
+    }
+    const requestId = tab.childOf.requestId;
+    const entry = this.childRuns.get(requestId);
+    if (entry === undefined) {
+      return; // already finalized — a late/duplicate malformed terminal is a no-op
+    }
+    const cancelling = entry.state === "cancelling";
+    this.logger.warn(
+      `[main] malformed ChildTerminal from child tab ${tab.tabId}; finalizing run ${requestId} as ${cancelling ? "cancelled" : "error"}`,
+    );
+    this.finalizeChildRun(requestId, {
+      status: cancelling ? "cancelled" : "error",
+      finalText: cancelling ? CHILD_CANCELLED_MESSAGE : CHILD_MALFORMED_TERMINAL_MESSAGE,
+      truncated: false,
+      turns: 0,
+      toolCalls: 0,
+      durationMs: Math.max(0, this.now() - tab.spawnedAt),
     });
   }
 

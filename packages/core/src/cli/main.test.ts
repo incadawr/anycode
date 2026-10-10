@@ -4322,14 +4322,14 @@ describe("CLI boot clamp warning (TASK.159 onClamp wiring)", () => {
     const errorOutput = new PassThrough();
     const getText = collectOutput(output);
     const getErr = collectOutput(errorOutput);
-    // DeepSeek pins deepseek-chat to 8 192 — a 65 536 override must clamp and warn.
+    // DeepSeek pins deepseek-flash to 393 216 — a 500 000 override must clamp and warn.
     const exitCode = await runCli({
       argv: ["-p", "probe the clamp warning"],
       env: {
         ...makeTitleTestEnv(dbPath),
         ANYCODE_BASE_URL: "https://api.deepseek.com/anthropic",
-        ANYCODE_MODEL: "deepseek-chat",
-        ANYCODE_MAX_OUTPUT_TOKENS: "65536",
+        ANYCODE_MODEL: "deepseek-flash",
+        ANYCODE_MAX_OUTPUT_TOKENS: "500000",
       },
       input: new PassThrough(),
       output,
@@ -4339,7 +4339,7 @@ describe("CLI boot clamp warning (TASK.159 onClamp wiring)", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(getErr()).toContain("[warn] deepseek-chat max output tokens clamped: 65536 > provider catalog ceiling, using 8192");
+    expect(getErr()).toContain("[warn] deepseek-flash max output tokens clamped: 500000 > provider catalog ceiling, using 393216");
     // Exactly one line, on the diagnostics channel only.
     expect(getErr().match(/max output tokens clamped/g)).toHaveLength(1);
     expect(getText()).not.toContain("clamped");
