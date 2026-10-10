@@ -575,6 +575,60 @@ describe("aggregateProfileStats — sub tier: loop_end excluded from runs, tool 
   });
 });
 
+// TASK.203: a vision-probe sink file carries the SAME frozen record shapes
+// (session_start + usage) — the aggregator must fold it in with no special
+// casing, attributing tokens to the probe's own model like any other session.
+describe("aggregateProfileStats — vision-probe sink files (TASK.203)", () => {
+  it("a vision-probe file (session_start + usage) aggregates: lifetimeTokens, sessions, model attribution", () => {
+    const t0 = Date.UTC(2026, 0, 1, 10, 0, 0);
+    const f = file("vision-probe-1700000000000.jsonl", [
+      { v: 1, ts: t0, session: "vision-probe-1700000000000", t: "session_start", model: "vision-model", provider: "openai" },
+      {
+        v: 1,
+        ts: t0 + 1000,
+        session: "vision-probe-1700000000000",
+        t: "usage",
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+        cachedInputTokens: 4,
+      },
+    ]);
+    const stats = aggregateProfileStats([f], { now: t0, dayKey: utcDayKey });
+    expect(stats.lifetimeTokens).toBe(15);
+    expect(stats.totalSessions).toBe(1);
+    expect(stats.models).toEqual([{ model: "vision-model", tokens: 15, sessions: 1 }]);
+    // TASK.111 cache counters: the probe's usage reported a cache figure.
+    expect(stats.cache).toEqual({ reportedInputTokens: 10, cachedInputTokens: 4 });
+  });
+
+  it("an unfamiliar agentType 'vision-probe' on a usage record's sub aggregates without crashing (session-model fold, no override)", () => {
+    const t0 = Date.UTC(2026, 0, 1, 10, 0, 0);
+    const f = file("vision-probe-1700000000001.jsonl", [
+      // Optional top-level extra agentType on session_start — an unknown field
+      // the frozen record shape never reads; must be ignored harmlessly.
+      {
+        v: 1,
+        ts: t0,
+        session: "vp",
+        t: "session_start",
+        model: "vision-model",
+        provider: "openai",
+        agentType: "vision-probe",
+      },
+      // sub.agentType names the producer; with NO sub.model override the usage
+      // folds into the session's own model (the existing sub-branch rule).
+      { v: 1, ts: t0 + 1000, session: "vp", t: "usage", totalTokens: 15, sub: { agentType: "vision-probe" } },
+    ]);
+    expect(() => aggregateProfileStats([f], { now: t0, dayKey: utcDayKey })).not.toThrow();
+    const stats = aggregateProfileStats([f], { now: t0, dayKey: utcDayKey });
+    expect(stats.lifetimeTokens).toBe(15);
+    expect(stats.totalSessions).toBe(1);
+    expect(stats.models).toEqual([{ model: "vision-model", tokens: 15, sessions: 1 }]);
+    expect(stats.engineTokens).toEqual({ core: 15 });
+  });
+});
+
 describe("aggregateProfileStats — full models list, beyond 3, including zero-token models", () => {
   it("keeps a model with a session_start but zero usage tokens in the FULL list (S10: no top-N cut exists anywhere anymore)", () => {
     const t0 = Date.UTC(2026, 0, 1, 10, 0, 0);
