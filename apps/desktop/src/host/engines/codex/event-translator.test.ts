@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import { TurnTranslator } from "./event-translator.js";
+import { CollabAgentCardIndex } from "./collab-agent-index.js";
 import type { JsonRpcNotification } from "./protocol.js";
 import { TurnItemIndex, fileChangesOf } from "./turn-item-index.js";
 
@@ -961,3 +962,456 @@ describe("TurnTranslator — repeated completions across projection shapes (TASK
     expect(translator.onNotification(completeOf({ type: "fileChange", id: "fc", status: "completed", changes: [{ path: "z.txt" }] }))).toEqual([]);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// TASK.95 — collab (Agent) spawning, child correlation and generic fallback.
+// These are SCHEMA-SHAPED SYNTHETIC cases built from contract/pinned-contract.json
+// (there is no captured collab trace in the fixture set — none of these is
+// labelled as a real capture). Regression traffic/envelopes come from the
+// existing real fixtures replayed elsewhere in this file.
+// ───────────────────────────────────────────────────────────────────────────
+
+type AnyEvent = Record<string, unknown>;
+
+function evTypes(events: AgentEvent[]): string[] {
+  return types(events);
+}
+function evOf(events: AgentEvent[], type: string): AnyEvent | undefined {
+  return events.find((event) => event.type === type) as AnyEvent | undefined;
+}
+
+/** Schema-shaped collab tool-call item (required fields per pinned contract). */
+function collabItem(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    type: "collabAgentToolCall",
+    id: "spawn-1",
+    tool: "spawnAgent",
+    senderThreadId: THREAD_ID,
+    receiverThreadIds: ["child-1"],
+    status: "inProgress",
+    agentsStates: {},
+    ...overrides,
+  };
+}
+function activityItem(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { type: "subAgentActivity", id: "act-1", agentThreadId: "child-1", agentPath: "/root/child-1", kind: "interacted", ...overrides };
+}
+
+function collabTests(): void {
+  const startOf = (item: Record<string, unknown>): JsonRpcNotification => ({ method: "item/started", params: { threadId: THREAD_ID, turnId: TURN_ID, item } });
+  const completeOf = (item: Record<string, unknown>): JsonRpcNotification => ({ method: "item/completed", params: { threadId: THREAD_ID, turnId: TURN_ID, item } });
+  const fresh = (overrides: Record<string, unknown> = {}, index?: CollabAgentCardIndex): TurnTranslator =>
+    new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, ...(index !== undefined ? { collab: index } : {}), ...overrides });
+
+  describe("TASK.95 — collab spawn start/completed (call vs child)", () => {
+    it("spawn start emits a full Agent lifecycle with actual prompt/model/persona; running child activity has NO end", () => {
+      const events = fresh().onNotification(startOf(collabItem({ prompt: "survey the repo", model: "gpt-5.4-codex", agentsStates: { "child-1": { status: "running", message: "step 1" } } })));
+      expect(evTypes(events)).toEqual(["tool_call", "tool_execution_start", "subagent_start", "subagent_activity"]);
+      const call = evOf(events, "tool_call")!.toolCall as { id: string; name: string; input: unknown };
+      expect(call.name).toBe("Agent");
+      expect(call.input).toEqual({ prompt: "survey the repo", model: "gpt-5.4-codex" });
+      const start = evOf(events, "subagent_start")!;
+      expect(start).toMatchObject({ toolCallId: "spawn-1", agentType: "codex subagent", description: "survey the repo", model: "gpt-5.4-codex", engine: "codex" });
+      expect(events.some((event) => event.type === "subagent_end")).toBe(false);
+    });
+
+    it("a COMPLETED spawn CALL with a still-running child settles the outer call but emits no child end", () => {
+      const translator = fresh();
+      const started = translator.onNotification(startOf(collabItem({ prompt: "p", model: "m", agentsStates: { "child-1": { status: "running" } } })));
+      const completed = translator.onNotification(completeOf(collabItem({ prompt: "p", model: "m", status: "completed", agentsStates: { "child-1": { status: "running" } } })));
+      const all = [...started, ...completed];
+      expect(all.filter((event) => event.type === "tool_result")).toHaveLength(1);
+      expect((evOf(all, "tool_result")!.outcome as { status: string }).status).toBe("success");
+      expect(all.some((event) => event.type === "subagent_end")).toBe(false);
+      // The identical running observation is not repeated.
+      expect(completed.filter((event) => event.type === "subagent_activity")).toHaveLength(0);
+    });
+
+    it.each([
+      ["completed", "completed"],
+      ["errored", "error"],
+      ["shutdown", "cancelled"],
+    ] as const)("child %s observation yields activity then exactly one child end (%s) with unknown duration and requested model", (childStatus, terminal) => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem({ prompt: "p", model: "gpt-requested", agentsStates: { "child-1": { status: "running" } } })));
+      const events = translator.onNotification(completeOf(collabItem({ prompt: "p", model: "gpt-requested", status: "completed", agentsStates: { "child-1": { status: childStatus, message: "final message" } } })));
+      const activityIndex = events.findIndex((event) => event.type === "subagent_activity");
+      const endIndex = events.findIndex((event) => event.type === "subagent_end");
+      expect(activityIndex).toBeGreaterThanOrEqual(0);
+      expect(endIndex).toBeGreaterThan(activityIndex);
+      expect(evOf(events, "subagent_end")).toMatchObject({ toolCallId: "spawn-1", status: terminal, turns: 0, durationMs: -1, model: "gpt-requested" });
+      // Exactly one child end.
+      expect(events.filter((event) => event.type === "subagent_end")).toHaveLength(1);
+      // A later repeat cannot re-settle.
+      expect(translator.onNotification(completeOf(collabItem({ prompt: "p", status: "completed", agentsStates: { "child-1": { status: childStatus } } }))).filter((event) => event.type === "subagent_end")).toHaveLength(0);
+    });
+
+    it.each(["interrupted", "notFound", "pendingInit", "someFutureChildStatus"])("child %s remains a visible observation with no fabricated terminal", (childStatus) => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "running" } } })));
+      const events = translator.onNotification(completeOf(collabItem({ status: "completed", agentsStates: { "child-1": { status: childStatus } } })));
+      expect(events.some((event) => event.type === "subagent_activity")).toBe(true);
+      expect(events.some((event) => event.type === "subagent_end")).toBe(false);
+    });
+  });
+
+  describe("TASK.95 — cross-turn correlation through one shared index", () => {
+    it.each(["wait", "sendInput", "resumeAgent", "closeAgent"] as const)(
+      "%s in turn 2 patches the turn-1 card and gets its own complete generic lifecycle (call completion alone does not settle a running child)",
+      (verb) => {
+        const index = new CollabAgentCardIndex();
+        const turn1 = new TurnTranslator({ threadId: THREAD_ID, turnId: "turn-1", turn: 1, collab: index });
+        const started = turn1.onNotification({ method: "item/started", params: { threadId: THREAD_ID, turnId: "turn-1", item: collabItem({ prompt: "spawn work", model: "gpt-m", agentsStates: { "child-1": { status: "running" } } }) } });
+        // Turn 1's spawn CALL completes while the child is still running.
+        const turn1Done = turn1.onNotification({ method: "item/completed", params: { threadId: THREAD_ID, turnId: "turn-1", item: collabItem({ prompt: "spawn work", model: "gpt-m", status: "completed", agentsStates: { "child-1": { status: "running" } } }) } });
+        expect([...started, ...turn1Done].some((event) => event.type === "subagent_end" as string)).toBe(false);
+
+        const turn2 = new TurnTranslator({ threadId: THREAD_ID, turnId: "turn-2", turn: 2, collab: index });
+        const events = turn2.onNotification({
+          method: "item/completed",
+          params: { threadId: THREAD_ID, turnId: "turn-2", item: { type: "collabAgentToolCall", id: `${verb}-1`, tool: verb, senderThreadId: THREAD_ID, receiverThreadIds: ["child-1"], status: "completed", agentsStates: { "child-1": { status: "completed", message: "done" } } } },
+        });
+        // Its own generic operation card, exactly once.
+        expect(events.filter((event) => event.type === "tool_call")).toHaveLength(1);
+        expect((evOf(events, "tool_call")!.toolCall as { name: string }).name).toBe(`codex:collab:${verb}`);
+        expect(evTypes(events).filter((type) => type === "tool_execution_start")).toHaveLength(1);
+        expect(events.filter((event) => event.type === "tool_result")).toHaveLength(1);
+        // …and the ORIGINAL turn-1 card receives the child observation + terminal.
+        expect(evOf(events, "subagent_activity")).toMatchObject({ toolCallId: "spawn-1" });
+        expect(evOf(events, "subagent_end")).toMatchObject({ toolCallId: "spawn-1", status: "completed", model: "gpt-m" });
+        // No phantom Agent card ever came from the non-spawn verb.
+        expect(events.some((event) => event.type === "subagent_start")).toBe(false);
+      },
+    );
+
+    it("does not settle a running child when only the outer call completes", () => {
+      const index = new CollabAgentCardIndex();
+      const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, collab: index });
+      translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "running" } } })));
+      const completed = translator.onNotification(completeOf(collabItem({ status: "completed", agentsStates: { "child-1": { status: "running" } } })));
+      expect(completed.some((event) => event.type === "subagent_end")).toBe(false);
+      expect(index.cardFor("child-1")).toBe("spawn-1");
+    });
+  });
+
+  describe("TASK.95 — failed spawn and multi-receiver aggregation", () => {
+    it("a failed spawn with NO observed child emits an error call result plus one child error terminal (no eternal spinner)", () => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem()));
+      const events = translator.onNotification(completeOf(collabItem({ status: "failed" })));
+      expect(evTypes(events)).toEqual(["subagent_activity", "subagent_end", "tool_result"]);
+      expect(evOf(events, "subagent_activity")).toMatchObject({ toolCallId: "spawn-1" });
+      expect(evOf(events, "subagent_end")).toMatchObject({ status: "error" });
+      expect((evOf(events, "tool_result")!.outcome as { status: string }).status).toBe("error");
+    });
+
+    it("a failed call with an observed running child does not fabricate its cancellation", () => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "running" } } })));
+      const events = translator.onNotification(completeOf(collabItem({ status: "failed", agentsStates: { "child-1": { status: "running" } } })));
+      expect(events.some((event) => event.type === "subagent_end")).toBe(false);
+      expect((evOf(events, "tool_result")!.outcome as { status: string }).status).toBe("error");
+    });
+
+    it("empty/multiple receiver ids, duplicates and malformed states never throw and keep the card visible", () => {
+      const translator = fresh();
+      const started = translator.onNotification(startOf(collabItem({ receiverThreadIds: ["a", "a"], agentsStates: { a: { status: "bogus" }, malformed: null, other: { noStatus: true } } })));
+      expect(started.some((event) => event.type === "subagent_start")).toBe(true);
+      expect(started.some((event) => event.type === "subagent_end")).toBe(false);
+      // Absent data stays absent: no message field invented.
+      const activity = evOf(started, "subagent_activity");
+      expect(activity).toMatchObject({ toolCallId: "spawn-1" });
+      expect(String(activity!.summary)).toBe("bogus");
+    });
+
+    it("two receivers, one terminal one running, produce NO aggregate end; a later terminal (via a later operation) produces one aggregate end (error precedent)", () => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem({ receiverThreadIds: ["a", "b"], agentsStates: { a: { status: "running" } } })));
+      // The spawn CALL completes with a MIXED snapshot (a done, b still running).
+      const mixed = translator.onNotification(completeOf(collabItem({ status: "completed", receiverThreadIds: ["a", "b"], agentsStates: { a: { status: "completed" }, b: { status: "running" } } })));
+      expect(mixed.some((event) => event.type === "subagent_end")).toBe(false);
+      // A later `wait` operation delivers b's terminal state.
+      const settled = translator.onNotification(completeOf({ type: "collabAgentToolCall", id: "wait-1", tool: "wait", senderThreadId: THREAD_ID, receiverThreadIds: ["a", "b"], status: "completed", agentsStates: { a: { status: "completed" }, b: { status: "errored" } } }));
+      expect(settled.filter((event) => event.type === "subagent_end")).toHaveLength(1);
+      expect(evOf(settled, "subagent_end")).toMatchObject({ status: "error" });
+      // Later repeats produce none.
+      const repeat = translator.onNotification(completeOf({ type: "collabAgentToolCall", id: "wait-2", tool: "wait", senderThreadId: THREAD_ID, receiverThreadIds: ["a", "b"], status: "completed", agentsStates: { a: { status: "completed" }, b: { status: "completed" } } }));
+      expect(repeat.some((event) => event.type === "subagent_end")).toBe(false);
+    });
+  });
+
+  describe("TASK.95 — receiver recovery, sparse metadata and completed-only spawn", () => {
+    it("receiver ids empty at start and populated at completion still correlate a later activity", () => {
+      const index = new CollabAgentCardIndex();
+      const turn1 = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, collab: index });
+      turn1.onNotification(startOf(collabItem({ prompt: "keep prompt", model: "gpt-keep", receiverThreadIds: [] })));
+      turn1.onNotification(completeOf(collabItem({ prompt: null, model: null, status: "completed", receiverThreadIds: ["child-9"], agentsStates: { "child-9": { status: "running" } } })));
+      expect(index.cardFor("child-9")).toBe("spawn-1");
+      const card = index.get("spawn-1")!;
+      expect(card.prompt).toBe("keep prompt");
+      expect(card.model).toBe("gpt-keep");
+
+      const turn2 = new TurnTranslator({ threadId: THREAD_ID, turnId: "turn-2", turn: 2, collab: index });
+      const events = turn2.onNotification({ method: "item/completed", params: { threadId: THREAD_ID, turnId: "turn-2", item: activityItem({ id: "act-late", agentThreadId: "child-9" }) } });
+      expect(events.filter((event) => event.type === "subagent_activity")).toHaveLength(1);
+      expect(evOf(events, "subagent_activity")).toMatchObject({ toolCallId: "spawn-1" });
+    });
+
+    it("a completed-only spawn recovers the full lifecycle with available metadata, and invents nothing when absent", () => {
+      const translator = fresh();
+      const events = translator.onNotification(completeOf(collabItem({ status: "completed", prompt: "recovered", model: "gpt-rec", agentsStates: {} })));
+      expect(evTypes(events)).toEqual(["tool_call", "tool_execution_start", "subagent_start", "tool_result"]);
+      expect(evOf(events, "subagent_start")).toMatchObject({ description: "recovered", model: "gpt-rec" });
+
+      const bare = translator.onNotification(completeOf(collabItem({ id: "spawn-2", status: "completed", prompt: null, model: null, agentsStates: {} })));
+      const bareStart = evOf(bare, "subagent_start")!;
+      expect(bareStart.description).toBe("");
+      expect(bareStart).not.toHaveProperty("model");
+    });
+  });
+
+  describe("TASK.95 — dedup and late delivery for collab", () => {
+    it("duplicate starts/completions and a completion-then-late-start never reopen the lifecycle or the child region", () => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "running" } } })));
+      translator.onNotification(completeOf(collabItem({ status: "completed", agentsStates: { "child-1": { status: "completed" } } })));
+      expect(translator.onNotification(startOf(collabItem()))).toEqual([]);
+      const duplicate = translator.onNotification(completeOf(collabItem({ status: "completed", agentsStates: { "child-1": { status: "completed" } } })));
+      expect(duplicate).toEqual([]);
+      // finish cannot duplicate the outer result either.
+      const finish = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "completed" } } });
+      expect(finish.filter((event) => event.type === "tool_result")).toHaveLength(0);
+    });
+
+    it("a completed-only spawn followed by a late start produces exactly one lifecycle", () => {
+      const translator = fresh();
+      const recovered = translator.onNotification(completeOf(collabItem({ status: "completed" })));
+      expect(evTypes(recovered)).toEqual(["tool_call", "tool_execution_start", "subagent_start", "tool_result"]);
+      expect(translator.onNotification(startOf(collabItem()))).toEqual([]);
+    });
+  });
+
+  describe("TASK.95 — non-spawn operations", () => {
+    it("a non-spawn completed-only operation emits call/start/result and never creates a phantom Agent sub-status", () => {
+      const translator = fresh();
+      const events = translator.onNotification(completeOf({ type: "collabAgentToolCall", id: "wait-1", tool: "wait", senderThreadId: THREAD_ID, receiverThreadIds: ["child-1"], status: "completed", agentsStates: {} }));
+      expect(evTypes(events)).toEqual(["tool_call", "tool_execution_start", "tool_result"]);
+      expect((evOf(events, "tool_call")!.toolCall as { name: string }).name).toBe("codex:collab:wait");
+      expect(events.some((event) => event.type === "subagent_start")).toBe(false);
+    });
+
+    it("an unfamiliar verb still yields an honest codex:collab:<verb> card", () => {
+      const translator = fresh();
+      const events = translator.onNotification(completeOf({ type: "collabAgentToolCall", id: "x-1", tool: "futureVerb", senderThreadId: THREAD_ID, receiverThreadIds: [], status: "completed", agentsStates: {} }));
+      expect((evOf(events, "tool_call")!.toolCall as { name: string }).name).toBe("codex:collab:futureVerb");
+    });
+
+    it("a failed non-spawn operation maps to an error generic result", () => {
+      const translator = fresh();
+      const events = translator.onNotification(completeOf({ type: "collabAgentToolCall", id: "w-1", tool: "wait", senderThreadId: THREAD_ID, receiverThreadIds: [], status: "failed", agentsStates: {} }));
+      expect((evOf(events, "tool_result")!.outcome as { status: string }).status).toBe("error");
+    });
+  });
+
+  describe("TASK.95 — subAgentActivity correlation and markers", () => {
+    it("maps activity by agentThreadId (a different native item id) to the spawn card and shows it once for start+complete", () => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "running" } } })));
+      const started = translator.onNotification(startOf(activityItem({ id: "act-native-1" })));
+      expect(started.filter((event) => event.type === "subagent_activity")).toHaveLength(1);
+      expect(evOf(started, "subagent_activity")).toMatchObject({ toolCallId: "spawn-1" });
+      const completed = translator.onNotification(completeOf(activityItem({ id: "act-native-1" })));
+      expect(completed.filter((event) => event.type === "subagent_activity")).toHaveLength(0);
+    });
+
+    it("shows a completed-only mapped activity once", () => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "running" } } })));
+      const events = translator.onNotification(completeOf(activityItem({ id: "act-only" })));
+      expect(events.filter((event) => event.type === "subagent_activity")).toHaveLength(1);
+    });
+
+    it("renders an unmapped receiver as a visible generic marker (start+complete once, completed-only once, duplicate none)", () => {
+      const translator = fresh();
+      const startEvents = translator.onNotification(startOf(activityItem({ id: "mark-1", agentThreadId: "ghost" })));
+      expect(evTypes(startEvents)).toEqual(["tool_call", "tool_execution_start"]);
+      expect((evOf(startEvents, "tool_call")!.toolCall as { name: string }).name).toBe("codex:subAgentActivity");
+      const completeEvents = translator.onNotification(completeOf(activityItem({ id: "mark-1", agentThreadId: "ghost" })));
+      expect(completeEvents.filter((event) => event.type === "tool_result")).toHaveLength(1);
+      // Duplicate completion delivers nothing new.
+      expect(translator.onNotification(completeOf(activityItem({ id: "mark-1", agentThreadId: "ghost" })))).toEqual([]);
+
+      const onlyComplete = translator.onNotification(completeOf(activityItem({ id: "mark-2", agentThreadId: "ghost-2" })));
+      expect(evTypes(onlyComplete)).toEqual(["tool_call", "tool_execution_start", "tool_result"]);
+    });
+
+    it("renders a marker for a receiver whose card has already settled", () => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "completed" } } })));
+      const events = translator.onNotification(startOf(activityItem({ id: "mark-settled" })));
+      expect(evTypes(events)).toEqual(["tool_call", "tool_execution_start"]);
+      expect((evOf(events, "tool_call")!.toolCall as { name: string }).name).toBe("codex:subAgentActivity");
+    });
+  });
+
+  describe("TASK.95 — parent turn boundary vs live child", () => {
+    it("a parent turn ending with a live child emits no inferred subagent_end; the cancel sweep closes only the open outer call", () => {
+      const index = new CollabAgentCardIndex();
+      const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, collab: index });
+      translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "running" } } })));
+      const finish = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "interrupted" } } });
+      expect(finish.filter((event) => event.type === "subagent_end")).toHaveLength(0);
+      const cancelledResults = finish.filter((event) => event.type === "tool_result");
+      expect(cancelledResults).toHaveLength(1);
+      expect((evOf(cancelledResults, "tool_result")!.outcome as { status: string; toolCallId: string }).status).toBe("cancelled");
+      expect((evOf(cancelledResults, "tool_result")!.outcome as { toolCallId: string }).toolCallId).toBe("spawn-1");
+      // The child correlation survives the parent turn for a later observation.
+      expect(index.cardFor("child-1")).toBe("spawn-1");
+      const turn2 = new TurnTranslator({ threadId: THREAD_ID, turnId: "turn-2", turn: 2, collab: index });
+      const events = turn2.onNotification({ method: "item/completed", params: { threadId: THREAD_ID, turnId: "turn-2", item: collabItem({ status: "completed", agentsStates: { "child-1": { status: "completed" } } }) } });
+      expect(evOf(events, "subagent_end")).toMatchObject({ toolCallId: "spawn-1", status: "completed" });
+    });
+  });
+
+  describe("TASK.95 — unknown future item types surface as generic cards", () => {
+    const unknown = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({ type: "futureThing", id: "u1", text: "hello", ...overrides });
+
+    it("paired unknown emits one codex:futureThing card with real scalar fields", () => {
+      const translator = fresh();
+      const started = translator.onNotification(startOf(unknown()));
+      expect((evOf(started, "tool_call")!.toolCall as { name: string; input: unknown }).name).toBe("codex:futureThing");
+      expect((evOf(started, "tool_call")!.toolCall as { input: unknown }).input).toEqual({ text: "hello" });
+      const completed = translator.onNotification(completeOf(unknown({ status: "completed" })));
+      expect(completed.filter((event) => event.type === "tool_result")).toHaveLength(1);
+      expect(((evOf(completed, "tool_result")!.outcome as { toolName: string })).toolName).toBe("codex:futureThing");
+    });
+
+    it("completed-only unknown emits the full lifecycle and never a fabricated error for absent/unknown status", () => {
+      const translator = fresh();
+      const events = translator.onNotification(completeOf(unknown({ status: "weird-unfamiliar" })));
+      expect(evTypes(events)).toEqual(["tool_call", "tool_execution_start", "tool_result"]);
+      const outcome = evOf(events, "tool_result")!.outcome as { status: string; modelText: string };
+      expect(outcome.status).toBe("success");
+      expect(outcome.modelText).toContain("weird-unfamiliar");
+      expect(outcome.modelText).toContain("operation item completed");
+    });
+
+    it.each([
+      ["failed", "error"],
+      ["error", "error"],
+      ["declined", "denied"],
+      ["denied", "denied"],
+      ["interrupted", "cancelled"],
+      ["cancelled", "cancelled"],
+    ] as const)("explicit status %s maps to %s", (raw, expected) => {
+      const translator = fresh();
+      const events = translator.onNotification(completeOf(unknown({ status: raw })));
+      expect((evOf(events, "tool_result")!.outcome as { status: string }).status).toBe(expected);
+    });
+
+    it("bounds generic fields to eight actual scalars and truncates oversized strings", () => {
+      const fields: Record<string, unknown> = { text: "x".repeat(2500) };
+      for (let n = 1; n <= 12; n += 1) fields[`f${n}`] = n;
+      const translator = fresh();
+      const events = translator.onNotification(startOf(unknown(fields)));
+      const input = (evOf(events, "tool_call")!.toolCall as { input: Record<string, unknown> }).input;
+      expect(Object.keys(input)).toHaveLength(8);
+      const bounded = input.text as string;
+      expect(bounded.length).toBeLessThanOrEqual(2000 + " …[truncated]".length);
+      expect(bounded.endsWith("[truncated]")).toBe(true);
+    });
+
+    it("malformed id/type never throws and produced nothing", () => {
+      const translator = fresh();
+      expect(translator.onNotification(startOf({ type: "futureThing" }))).toEqual([]);
+      expect(translator.onNotification(startOf({ type: 42, id: "u1" }))).toEqual([]);
+      expect(translator.onNotification(startOf({ id: "u1" }))).toEqual([]);
+    });
+  });
+
+  describe("TASK.95 — imageView/sleep/imageGeneration", () => {
+    it("imageView/sleep/imageGeneration retain real path/duration/prompt/result/status", () => {
+      const translator = fresh();
+      const image = translator.onNotification(startOf({ type: "imageView", id: "img", path: "/tmp/a.png" }));
+      expect((evOf(image, "tool_call")!.toolCall as { name: string; input: unknown }).name).toBe("codex:imageView");
+      expect((evOf(image, "tool_call")!.toolCall as { input: unknown }).input).toEqual({ path: "/tmp/a.png" });
+
+      const sleep = translator.onNotification(completeOf({ type: "sleep", id: "s1", durationMs: 1500 }));
+      expect(evTypes(sleep)).toEqual(["tool_call", "tool_execution_start", "tool_result"]);
+      expect((evOf(sleep, "tool_call")!.toolCall as { input: unknown }).input).toEqual({ durationMs: 1500 });
+
+      const generation = translator.onNotification(completeOf({ type: "imageGeneration", id: "g1", status: "completed", result: "https://img/1.png", revisedPrompt: "a cat", savedPath: "/tmp/g.png" }));
+      const input = (evOf(generation, "tool_call")!.toolCall as { input: Record<string, unknown> }).input;
+      expect(input).toEqual({ savedPath: "/tmp/g.png", revisedPrompt: "a cat", status: "completed", result: "https://img/1.png" });
+      expect((evOf(generation, "tool_result")!.outcome as { status: string }).status).toBe("success");
+    });
+
+    it("does not treat a cancelled image generation as success and displays a free-form status without inventing output", () => {
+      const translator = fresh();
+      const cancelled = translator.onNotification(completeOf({ type: "imageGeneration", id: "g2", status: "cancelled", result: "https://img/2.png" }));
+      expect((evOf(cancelled, "tool_result")!.outcome as { status: string }).status).toBe("cancelled");
+
+      const odd = translator.onNotification(completeOf({ type: "imageGeneration", id: "g3", status: "queued-ish", result: "https://img/3.png" }));
+      const outcome = evOf(odd, "tool_result")!.outcome as { status: string; modelText: string };
+      expect(outcome.status).toBe("success");
+      expect(outcome.modelText).toContain("queued-ish");
+
+      const failed = translator.onNotification(completeOf({ type: "imageGeneration", id: "g4", status: "failed", result: "" }));
+      expect((evOf(failed, "tool_result")!.outcome as { status: string }).status).toBe("error");
+
+      // Absent result/status: no fabricated output, honest completion label.
+      const bare = translator.onNotification(completeOf({ type: "imageView", id: "img-2", path: "/tmp/b.png" }));
+      const bareOutcome = evOf(bare, "tool_result")!.outcome as { status: string; modelText: string };
+      expect(bareOutcome.status).toBe("success");
+      expect(bareOutcome.modelText).toBe("operation item completed");
+    });
+  });
+
+  describe("TASK.95 — discriminating bookkeeping", () => {
+    it.each(["reasoning", "contextCompaction", "plan", "userMessage", "enteredReviewMode", "exitedReviewMode"])("%s produces no generic tool card", (type) => {
+      const translator = fresh();
+      expect(translator.onNotification(startOf({ type, id: "b1" }))).toEqual([]);
+      expect(translator.onNotification(completeOf({ type, id: "b1", status: "completed" }))).toEqual([]);
+    });
+
+    it("agentMessage remains text and dynamic bridge calls are not double-projected", () => {
+      const translator = fresh();
+      expect(evTypes(translator.onNotification(startOf({ type: "agentMessage", id: "m1" })))).toEqual(["text_start"]);
+      expect(evTypes(translator.onNotification(completeOf({ type: "agentMessage", id: "m1" })))).toEqual(["text_end"]);
+      expect(translator.onNotification(startOf({ type: "dynamicToolCall", id: "d1", name: "custom" }))).toEqual([]);
+      expect(translator.onNotification(completeOf({ type: "dynamicToolCall", id: "d1", status: "completed" }))).toEqual([]);
+    });
+  });
+
+  describe("TASK.95 — pinned contract shape guard", () => {
+    type ContractVariant = { properties: Record<string, { enum?: string[] }>; required?: string[] };
+    const v2 = (JSON.parse(readFileSync(join(FIXTURES_DIR, "..", "pinned-contract.json"), "utf8")) as {
+      definitions: { v2: Record<string, unknown> };
+    }).definitions.v2;
+    const variants = (v2.ThreadItem as { oneOf: ContractVariant[] }).oneOf;
+    const variantOf = (name: string) => variants.find((variant) => variant.properties.type?.enum?.[0] === name)!;
+    const enumOf = (name: string): string[] => (v2[name] as { enum: string[] }).enum;
+
+    it("collabAgentToolCall carries the required fields and call-status enum the projection relies on", () => {
+      const variant = variantOf("collabAgentToolCall");
+      expect(variant.required).toEqual(expect.arrayContaining(["agentsStates", "id", "receiverThreadIds", "senderThreadId", "status", "tool", "type"]));
+      expect(enumOf("CollabAgentToolCallStatus")).toEqual(["inProgress", "completed", "failed"]);
+      expect(enumOf("CollabAgentTool")).toEqual(["spawnAgent", "sendInput", "resumeAgent", "wait", "closeAgent"]);
+    });
+
+    it("subAgentActivity and the child-status enum match the projection's correlation rules", () => {
+      const variant = variantOf("subAgentActivity");
+      expect(variant.required).toEqual(expect.arrayContaining(["agentPath", "agentThreadId", "id", "kind", "type"]));
+      expect(enumOf("SubAgentActivityKind")).toEqual(["started", "interacted", "interrupted"]);
+      expect(enumOf("CollabAgentStatus")).toEqual(["pendingInit", "running", "interrupted", "completed", "errored", "shutdown", "notFound"]);
+    });
+
+    it("imageView/sleep/imageGeneration required fields match the advertised generic cards", () => {
+      expect(variantOf("imageView").required).toEqual(expect.arrayContaining(["id", "path", "type"]));
+      expect(variantOf("sleep").required).toEqual(expect.arrayContaining(["durationMs", "id", "type"]));
+      expect(variantOf("imageGeneration").required).toEqual(expect.arrayContaining(["id", "result", "status", "type"]));
+    });
+  });
+}
+
+collabTests();

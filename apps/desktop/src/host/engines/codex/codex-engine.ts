@@ -45,6 +45,7 @@ import {
   isEffectivePostureWeaker,
   type CodexPermissionPresetDefinition,
 } from "./presets.js";
+import { CollabAgentCardIndex } from "./collab-agent-index.js";
 import { CodexQuotaTracker } from "./quota.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
 import { TurnItemIndex } from "./turn-item-index.js";
@@ -710,6 +711,13 @@ export class CodexEngine implements SessionEngine {
   private activeTurn: ActiveCodexTurn | null = null;
   /** Item index of the turn currently being started/run; written by the transport tap. */
   private activeItems: TurnItemIndex | null = null;
+  /**
+   * TASK.95: ONE session-lifetime collab correlation index per engine — a
+   * spawn card opened in an earlier turn must still be patchable by a child
+   * observation delivered in a later parent turn. Deliberately an instance
+   * field (never per-runTurn) and cleared only on disposal.
+   */
+  private readonly collabIndex = new CollabAgentCardIndex();
   /** Per-turn latch: exactly one `turn/interrupt` may ever be sent for one turn. */
   private interruptSent = false;
   private terminalError: Error | null = null;
@@ -1191,6 +1199,10 @@ export class CodexEngine implements SessionEngine {
         // sparse push merges onto everything already known (cut §6.3), not
         // onto a fresh per-turn blank.
         ...(this.quota !== undefined ? { quota: this.quota } : {}),
+        // TASK.95: the SESSION-lifetime collab correlation index rides every
+        // per-turn translator (same rationale as the quota tracker above) so
+        // later child observations patch the original spawn card.
+        collab: this.collabIndex,
       });
       let terminal = false;
       // Two independent per-turn counters, both reset to 0 for every turn
@@ -1367,6 +1379,9 @@ export class CodexEngine implements SessionEngine {
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
     this.agentBridge?.cancel();
+    // TASK.95: drop the session-lifetime collab correlation. This never
+    // manufactures a child completion — it only forgets the mapping.
+    this.collabIndex.clear();
     this.disposed = true;
     this.unobserve();
     this.appliedListeners.clear();

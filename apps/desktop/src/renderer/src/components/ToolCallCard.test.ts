@@ -250,6 +250,60 @@ describe("formatSubagentCounters — engine-aware (TASK.97 R5, wave2-cut §1.4)"
     expect(formatSubagentCounters(subagent)).not.toContain("turn");
   });
 
+  it("running, engine codex with NO measurements: bare 'codex' — no invented 0 tool calls / 0 turns (TASK.95)", () => {
+    const subagent: SubagentSubStatus = {
+      agentType: "codex subagent",
+      description: "d",
+      model: null,
+      engine: "codex",
+      turns: 0,
+      toolCalls: 0,
+      lastTool: null,
+      activity: [],
+      activityDropped: 0,
+      final: null,
+    };
+    expect(formatSubagentCounters(subagent)).toBe("codex");
+    expect(formatSubagentCounters(subagent)).not.toContain("tool call");
+    expect(formatSubagentCounters(subagent)).not.toContain("turn");
+  });
+
+  it("running, engine codex with a positive tool count keeps the real count and last tool", () => {
+    const subagent: SubagentSubStatus = {
+      agentType: "codex subagent",
+      description: "d",
+      model: null,
+      engine: "codex",
+      turns: 0,
+      toolCalls: 2,
+      lastTool: "Read",
+      activity: [],
+      activityDropped: 0,
+      final: null,
+    };
+    expect(formatSubagentCounters(subagent)).toBe("codex · 2 tool calls · Read");
+  });
+
+  it("settled, engine codex with unknown duration (-1): no time fragment and no fake turns/counts (TASK.95)", () => {
+    const subagent: SubagentSubStatus = {
+      agentType: "codex subagent",
+      description: "d",
+      model: "gpt-native",
+      engine: "codex",
+      turns: 0,
+      toolCalls: 0,
+      lastTool: null,
+      activity: [],
+      activityDropped: 0,
+      final: { status: "completed", durationMs: -1 },
+    };
+    const rendered = formatSubagentCounters(subagent);
+    expect(rendered).toContain("Completed");
+    expect(rendered).not.toContain("turn");
+    expect(rendered).not.toContain("tool call");
+    expect(rendered).not.toMatch(/\d+\.\d+s/);
+  });
+
   it("settled, engine null (in-process) and engine claude: BOTH byte-identical to the pre-R5 format — no prefix, ever", () => {
     const inProcess: SubagentSubStatus = {
       agentType: "explore",
