@@ -4892,6 +4892,8 @@ describe("TabHostManager — live session limits (TASK.119 / TASK.147 срез 2
     const raw = manager as unknown as { childSpawnQueue: string[]; childRuns: Map<string, unknown> };
     expect(raw.childRuns.size).toBe(2);
     expect(raw.childSpawnQueue).toEqual(["k3"]);
+  });
+});
 
 // TASK.180: the creating spawn's turn budget (req.maxTurns) rides the child's
 // argv as --child-max-turns <n> — only for a FRESH child, never a follow-up
