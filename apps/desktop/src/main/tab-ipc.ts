@@ -434,6 +434,23 @@ export async function handleSessionsDeleteOlder(
   return { ok: true, summary: { ...deleted, skippedActive } };
 }
 
+/** TASK.125: optional page size for the sidebar's default capped view. Fail-open:
+ *  an unparseable request degrades to the full list. Bounds mirror the CLI
+ *  picker's limit discipline (1..1000 whole numbers). */
+export const sessionsListRequestSchema = z.object({
+  limit: z.number().int().min(1).max(1000).optional(),
+});
+
+/** TASK.125: the sidebar list read, exported for tests (handleSessionsDeleteOlder
+ *  precedent). Root-only by construction (TASK.102 S2a §2.4). `limit ===
+ *  undefined` = full list (StartScreen/ModelPill/palette/automation keep it). */
+export async function handleSessionsList(deps: TabIpcDeps, raw?: unknown): Promise<SessionSummary[]> {
+  const parsed = sessionsListRequestSchema.safeParse(raw ?? {});
+  const limit = parsed.success ? parsed.data.limit : undefined;
+  const sessions = await deps.persistence.listRootSessions(limit !== undefined ? { limit } : undefined);
+  return sessions.map((meta) => toSummary(meta, deps.manager));
+}
+
 // TASK.102 CUT-S2 §2.5/§10.8.1: read-only completed-child transcript channel.
 // `CHILD_HISTORY_CHANNEL`/`ChildHistoryResult` are the source of truth this
 // slice owns — preload/index.ts and renderer/src/child-history.ts each carry
@@ -914,12 +931,9 @@ export function registerTabIpc(deps: TabIpcDeps): void {
     return handleTabRebind(deps, parsed.data);
   });
 
-  ipcMain.handle(SESSIONS_LIST_CHANNEL, async (): Promise<SessionSummary[]> => {
-    // Root-only by construction (TASK.102 S2a §2.4): a child session must
-    // never appear in the desktop Sidebar/StartScreen/CommandPalette list.
-    const sessions = await deps.persistence.listRootSessions();
-    return sessions.map((meta) => toSummary(meta, deps.manager));
-  });
+  ipcMain.handle(SESSIONS_LIST_CHANNEL, async (_event, raw: unknown): Promise<SessionSummary[]> =>
+    handleSessionsList(deps, raw),
+  );
 
   ipcMain.handle(SESSION_DELETE_CHANNEL, async (_event, raw: unknown): Promise<DeleteSessionResult> => {
     const parsed = sessionDeleteRequestSchema.safeParse(raw);

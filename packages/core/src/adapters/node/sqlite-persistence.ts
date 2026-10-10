@@ -360,6 +360,17 @@ function touchSessionActivity(db: DatabaseSync, sessionId: string, items: readon
 }
 
 /**
+ * TASK.125: the ONE activity-read rule, shared by listRootSessions (row order
+ * + the projected `updatedAt` the sidebar's age label reads) and
+ * listSessionsOlderThan (bulk-delete cutoff) — one rule, not two. Writes keep
+ * the shipped monotonic `updated_at` (touchSessionActivity + migration 17);
+ * this expression only narrows the read when a metadata touchSession stamped
+ * the row AFTER the last history record. `s` must alias the sessions table.
+ */
+const SESSION_LAST_ACTIVITY_SQL =
+  "COALESCE((SELECT MAX(json_extract(h.data, '$.createdAt')) FROM history_items h WHERE h.session_id = s.id), s.updated_at)";
+
+/**
  * Idempotent migration runner: tracks applied versions in schema_migrations
  * and runs each pending migration's statements inside its own BEGIN/COMMIT
  * (a failure rolls back that migration's DDL and rethrows).
@@ -757,22 +768,26 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * counting rows toward the limit. A post-query JS `.filter()` here would be
    * the exact anti-facade CUT-S2 §5.6 warns about — an old root session could
    * silently starve a `limit:1` page out from behind a pile of fresh children.
+   *
+   * TASK.125: row order and the returned `updatedAt` both follow the shared
+   * activity rule (SESSION_LAST_ACTIVITY_SQL) — a metadata edit after the
+   * last history record no longer floats the row.
    */
   async listRootSessions(opts?: { workspace?: string; limit?: number }): Promise<SessionMeta[]> {
     const db = this.open();
-    let sql = "SELECT * FROM sessions WHERE parent_session_id IS NULL";
+    let sql = `SELECT s.*, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity FROM sessions s WHERE s.parent_session_id IS NULL`;
     const params: (string | number)[] = [];
     if (opts?.workspace !== undefined) {
-      sql += " AND workspace = ?";
+      sql += " AND s.workspace = ?";
       params.push(opts.workspace);
     }
-    sql += " ORDER BY updated_at DESC";
+    sql += " ORDER BY last_activity DESC";
     if (opts?.limit !== undefined) {
       sql += " LIMIT ?";
       params.push(opts.limit);
     }
-    const rows = db.prepare(sql).all(...params) as unknown as SessionRow[];
-    return rows.map(rowToSessionMeta);
+    const rows = db.prepare(sql).all(...params) as unknown as (SessionRow & { last_activity: number })[];
+    return rows.map((row) => rowToSessionMeta({ ...row, updated_at: row.last_activity }));
   }
 
   async getRootSession(id: string): Promise<SessionMeta | null> {
@@ -1424,15 +1439,16 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // a week-fresh session under a "older than 7 days" filter for an
     // IRREVERSIBLE bulk delete. Fallback to `updated_at` for sessions with
     // no history (never resumed/flushed) — their only activity witness.
+    // TASK.125: the expression lives in SESSION_LAST_ACTIVITY_SQL, shared
+    // with listRootSessions.
     const rows = db
       .prepare(
         `SELECT s.*
            FROM sessions s
           WHERE COALESCE(s.project_root, s.workspace) = ?
             AND s.parent_session_id IS NULL
-            AND COALESCE((SELECT MAX(json_extract(h.data, '$.createdAt'))
-                            FROM history_items h WHERE h.session_id = s.id), s.updated_at) < ?
-          ORDER BY s.updated_at DESC`,
+            AND ${SESSION_LAST_ACTIVITY_SQL} < ?
+          ORDER BY ${SESSION_LAST_ACTIVITY_SQL} DESC`,
       )
       .all(workspace, cutoffMs) as unknown as SessionRow[];
     return rows.map(rowToSessionMeta);

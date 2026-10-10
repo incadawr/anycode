@@ -615,8 +615,8 @@ contextBridge.exposeInMainWorld("anycode", {
   // fail-closed and leaves the tab on its original connection.
   tabRebind: (request: TabRebindRequest): Promise<TabRebindResult> =>
     ipcRenderer.invoke(TAB_REBIND_CHANNEL, request) as Promise<TabRebindResult>,
-  listSessions: (): Promise<SessionSummary[]> =>
-    ipcRenderer.invoke(SESSIONS_LIST_CHANNEL) as Promise<SessionSummary[]>,
+  listSessions: (limit?: number): Promise<SessionSummary[]> =>
+    ipcRenderer.invoke(SESSIONS_LIST_CHANNEL, limit !== undefined ? { limit } : undefined) as Promise<SessionSummary[]>,
   // TASK.114: hard-delete one persisted session (its TASK.102 children ride
   // the cascade). Main refuses a session that is open in a tab / whose
   // project has a live tab (`reason:"active"`) — the renderer only offers
