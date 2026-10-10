@@ -314,6 +314,100 @@ export function limitGroupRows(
   return hidden < 2 ? { shown: rows, hidden: 0 } : { shown: rows.slice(0, cut), hidden };
 }
 
+/** TASK.125: sessions in the sidebar's default (unfiltered) wire page. */
+export const SIDEBAR_SESSIONS_LIMIT = 50;
+
+/** TASK.125: apply the default wire cap to a probe page fetched at LIMIT+1.
+ *  Over-limit ⇒ cut to the limit and flag `hasMore` — "Show all tasks" and
+ *  any search query both reach the full list. */
+export function capSessionPage(
+  list: readonly SessionSummary[],
+  limit: number = SIDEBAR_SESSIONS_LIMIT,
+): { page: readonly SessionSummary[]; hasMore: boolean } {
+  return list.length > limit
+    ? { page: list.slice(0, limit), hasMore: true }
+    : { page: list, hasMore: false };
+}
+
+/**
+ * TASK.125: refetch key = the SET of sessionIds bound to live tabs (sorted,
+ * deduped). The tabs store replaces its array on ANY mutation (title,
+ * hostExited, terminal flips); only a real membership change may refetch:
+ *  - a tab's sessionId null→id (host bound) ADDS a member;
+ *  - closing a BOUND tab REMOVES one (the session becomes a resumable row);
+ *  - a second tab bound to the SAME session changes nothing (set semantics);
+ *  - unbound-tab churn (create-before-handshake, close-without-bind) changes
+ *    nothing — deliberately: no session exists to list yet or anymore.
+ */
+export function tabsSessionKey(tabs: readonly TabInfo[]): string {
+  const bound = new Set<string>();
+  for (const t of tabs) {
+    if (t.sessionId !== null) {
+      bound.add(t.sessionId);
+    }
+  }
+  return JSON.stringify([...bound].sort());
+}
+
+/** The sidebar's fetch shape: a limit asks for a bounded page, no argument = full list. */
+export type SessionListFetch = (limit?: number) => Promise<readonly SessionSummary[]>;
+
+/**
+ * TASK.125: fetch discipline for the persisted-session index, as a plain
+ * controller the hook delegates to (node-testable — this package's vitest has
+ * no jsdom, same discipline as the exported pure functions above).
+ *  - `sync` is KEY-GUARDED: it fetches only when the membership key (or the
+ *    capped/full mode) actually changed; identity-only tab mutations return
+ *    without touching the wire.
+ *  - `load` is the unconditional path (delete flows, mode flips).
+ *  - A failed load clears the key so the next sync retries (fail-soft: error
+ *    flag set, sessions left null so open tabs still render).
+ *  - Monotonic request id: overlapping loads apply only the latest result.
+ */
+export class SessionIndexController {
+  sessions: SessionSummary[] | null = null;
+  error = false;
+  hasMore = false;
+  /** The hook bumps a version state here to re-render on controller changes. */
+  onChange?: () => void;
+  private latestReq = 0;
+  private lastKey: string | null = null;
+
+  constructor(private readonly fetchList: SessionListFetch) {}
+
+  async sync(tabs: readonly TabInfo[], full: boolean): Promise<void> {
+    const key = `${full ? "|full" : "|capped"}${tabsSessionKey(tabs)}`;
+    if (key === this.lastKey) {
+      return;
+    }
+    this.lastKey = key;
+    await this.load(full);
+  }
+
+  async load(full: boolean): Promise<void> {
+    const reqId = ++this.latestReq;
+    try {
+      const list = full ? await this.fetchList() : await this.fetchList(SIDEBAR_SESSIONS_LIMIT + 1);
+      if (reqId !== this.latestReq) {
+        return;
+      }
+      const { page, hasMore } = full ? { page: list, hasMore: false } : capSessionPage(list);
+      this.sessions = [...page];
+      this.hasMore = hasMore;
+      this.error = false;
+    } catch {
+      if (reqId !== this.latestReq) {
+        return;
+      }
+      this.sessions = null;
+      this.hasMore = false;
+      this.error = true;
+      this.lastKey = null; // retry on the next sync
+    }
+    this.onChange?.();
+  }
+}
+
 /**
  * Drops user-hidden projects from the sidebar groups (design slice-GUI-P1 §2F.2).
  * A group is removed iff its `workspace` is in `hidden` AND it has zero
@@ -441,55 +535,42 @@ const PROJECT_MENU_ITEM_COUNT = 3;
 const PROJECT_MENU_WIDTH = 224;
 
 /**
- * Fetches the persisted-session index for the sidebar (design §2.3):
- * `window.anycode.listSessions()` on mount, on window focus, and whenever the
- * `tabs` array identity changes (the simplest re-fetch trigger — App replaces
- * the tabs array on every create/close, so this covers post-`onTabCreated`/
- * `onCloseTab` refreshes). Fail-soft: a rejected list surfaces `error = true`
- * and leaves `sessions` null so open tabs still render.
+ * Fetches the persisted-session index for the sidebar (design §2.3).
+ * TASK.125: default view is a capped probe page (LIMIT+1 — one extra row says
+ * "more exist" without a count query); `full` (active search or Show-all)
+ * fetches uncapped, so the filter and old-session deletion always see every
+ * row. Refetch triggers: mount, a REAL session-set change (tabsSessionKey via
+ * the controller's key guard — NOT array identity), mode flips, and the
+ * delete paths via `refetch`. The window-focus listener is REMOVED: there is
+ * no local signal of an external change, and any focus probe is still a
+ * fetch; external writes surface on the next membership change, query, or
+ * Show-all. Fail-soft: a rejection surfaces `error = true` and leaves
+ * `sessions` null so open tabs still render.
  */
-function useSessionIndex(tabs: readonly TabInfo[]): { sessions: SessionSummary[] | null; error: boolean; refetch: () => Promise<void> } {
-  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
-  const [error, setError] = useState(false);
-  // Monotonic request id: focus + tabs-change refetches can overlap, and
-  // `listSessions()` gives no ordering guarantee — apply only the latest call's
-  // result so a slow earlier response can't clobber fresher data.
-  const latestReq = useRef(0);
-
+function useSessionIndex(tabs: readonly TabInfo[], full: boolean): {
+  sessions: SessionSummary[] | null;
+  error: boolean;
+  hasMore: boolean;
+  refetch: () => Promise<void>;
+} {
+  const [, setVersion] = useState(0);
+  const controllerRef = useRef<SessionIndexController | null>(null);
+  if (controllerRef.current === null) {
+    controllerRef.current = new SessionIndexController((limit) =>
+      limit !== undefined ? window.anycode.listSessions(limit) : window.anycode.listSessions(),
+    );
+    controllerRef.current.onChange = () => setVersion((v) => v + 1);
+  }
+  const controller = controllerRef.current;
+  // `tabs` IS the dep on purpose ( freshest key input ); the controller's key
+  // guard decides whether a fetch actually happens.
+  useEffect(() => {
+    void controller.sync(tabs, full);
+  }, [tabs, controller, full]);
   const refetch = useCallback(async () => {
-    const reqId = ++latestReq.current;
-    try {
-      const list = await window.anycode.listSessions();
-      if (reqId !== latestReq.current) return;
-      setSessions(list);
-      setError(false);
-    } catch {
-      if (reqId !== latestReq.current) return;
-      setSessions(null);
-      setError(true);
-    }
-  }, []);
-
-  // Mount + tabs-identity change. The tabs-store replaces the array on ANY tab
-  // mutation (create/close, but also title/sessionId/host-exit/terminal flips),
-  // so this refetches a bit more than strictly needed — harmless (result only
-  // feeds Sidebar-local state, never back into `tabs`, so no loop).
-  useEffect(() => {
-    void refetch();
-  }, [tabs, refetch]);
-
-  // Re-fetch when the window regains focus — sessions may have changed elsewhere.
-  useEffect(() => {
-    function onFocus(): void {
-      void refetch();
-    }
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [refetch]);
-
-  // TASK.114: `refetch` lets the delete paths refresh the persisted index
-  // immediately, without waiting for the next focus/tabs-change trigger.
-  return { sessions, error, refetch };
+    await controller.load(full);
+  }, [controller, full]);
+  return { sessions: controller.sessions, error: controller.error, hasMore: controller.hasMore, refetch };
 }
 
 export interface SidebarProps {
@@ -515,7 +596,10 @@ export function Sidebar({
   collapsed,
   onToggleCollapsed,
 }: SidebarProps) {
-  const { sessions, error, refetch: refetchSessions } = useSessionIndex(tabs);
+  const [query, setQuery] = useState("");
+  const [showAllTasks, setShowAllTasks] = useState(false); // TASK.125: not persisted — the cap is the default view every launch
+  const full = query !== "" || showAllTasks;
+  const { sessions, error, hasMore, refetch: refetchSessions } = useSessionIndex(tabs, full);
   // R10: one subscription to the whole mirror map. Its identity changes ONLY
   // on a real coarse flip (applyCoarse's storm guard), so this re-renders the
   // Sidebar at human cadence — never per transcript delta.
@@ -530,7 +614,6 @@ export function Sidebar({
   const activeConnectionId = useSettingsStore((state) => state.snapshot?.settings.provider.activeConnectionId);
   // R9 filter state. `query !== ""` = filter active: groups force-expand,
   // chevrons hide, zero-match empty state arms Enter-to-create.
-  const [query, setQuery] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(readCollapsedGroups);
   // TASK.125: groups the user expanded past the row limit. Deliberately NOT
   // persisted — the cut is the default view every launch; an expansion is a
@@ -1149,6 +1232,20 @@ export function Sidebar({
             </section>
           );
         })}
+
+        {/* TASK.125: escape hatch from the default capped page. Reuses
+            `.sidebar-group-more` styling — no CSS edit; carries no
+            `.sidebar-row` class, so R9 arrow navigation ignores it. After the
+            uncapped load `hasMore` is false, so the button disappears. */}
+        {!filtering && hasMore && (
+          <button
+            type="button"
+            className="sidebar-group-more sidebar-show-all"
+            onClick={() => setShowAllTasks(true)}
+          >
+            Show all tasks
+          </button>
+        )}
       </div>
 
       <div className="sidebar-footer">

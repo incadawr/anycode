@@ -69,7 +69,7 @@ export type TabRebindResult =
       reason: "unknown_tab" | "busy" | "connection_missing" | "not_ready" | "same_connection" | "non_core";
     };
 
-/** invoke channel: list persisted sessions for the picker. */
+/** Request: optional { limit?: number } — absent = full list (TASK.125). */
 export const SESSIONS_LIST_CHANNEL = "anycode:sessions-list";
 
 /** invoke channel: hard-delete one session and its cascade (TASK.114). */
