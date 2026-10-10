@@ -178,6 +178,14 @@ export interface SettingsIpcDeps {
    */
   refreshProxySecrets?: () => void | Promise<void>;
   /**
+   * Fired after a successful secret write/clear, BEFORE onMutation (TASK.202;
+   * same ordering discipline as refreshProxySecrets): receives the written key
+   * and the fresh settings so main can decide — without any vault read —
+   * whether the recognizer selection's credential just moved and force the
+   * next live push. Absent = no recognizer wiring (unit fixtures).
+   */
+  onSecretWritten?: (key: SecretKey, settings: AnycodeSettings) => void;
+  /**
    * True when a connection is pinned to a LIVE session (TASK.45 W10 delete-guard).
    * Main injects `(id) => manager.pinnedConnectionIds().has(id)`. Absent = no live
    * sessions to protect (unit fixtures) so delete behaves as before.
@@ -938,6 +946,10 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
     if (!result.ok) {
       return { ok: false, reason: result.reason };
     }
+    // TASK.202: fired after the successful write, BEFORE onMutation (the same
+    // ordering discipline as refreshProxySecrets) — main may force the next
+    // recognizer live push from pure settings+key arithmetic.
+    deps.onSecretWritten?.(key, loaded.settings);
     // TASK.45 W11: a stored/replaced credential has not yet been confirmed by a
     // real request or explicit check — reset health to `unchecked` (never leave
     // a stale auth_invalid/etc. from a NOW-superseded key).
@@ -1013,6 +1025,10 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
       return { ok: false, reason: "read_only" };
     }
     await deps.vault.clearSecret(key);
+    // TASK.202: a cleared connection-scoped key is also a "secret write" —
+    // fired right after the vault write, BEFORE onMutation, same as
+    // handleSetSecret.
+    deps.onSecretWritten?.(key, loaded.settings);
     // TASK.45 W11: a cleared credential resets health to `unchecked` too (cut
     // §W11: "replace/clear key -> unchecked") — never leave a stale
     // auth_invalid/etc. pinned to a now-empty credential slot.

@@ -17,7 +17,13 @@
  * headers) — it is itself value-import-free.
  */
 
-import type { AnycodeSettings, ProviderTransportId } from "./settings.js";
+import type {
+  AnycodeSettings,
+  CustomProviderRecord,
+  ProviderConnection,
+  ProviderTransportId,
+  SecretKey,
+} from "./settings.js";
 import { connectionById } from "./settings.js";
 
 // ── parentPort message type (main -> host, PUSH only) ──
@@ -59,24 +65,80 @@ export interface RecognizerConfigChanged {
 
 // ── fingerprint (finding #7 — a resolved secret must never ride an unrelated
 // mutation's wire) ──
+//
+// TASK.202: the fingerprint now mirrors the custom-record baseUrl the resolver
+// (main/host-env.ts `resolveRecognizerConfig`) follows for a `custom:<slug>`
+// connection — editing a CustomProviderRecord's address moves the fingerprint,
+// so the live push can no longer be swallowed by a stale comparison. The
+// remaining rotation blindness (an API-key change moves NO fingerprint field,
+// by the deliberate no-vault-read property below) is fixed push-side — see
+// `recognizerSecretTargetKey` + main's `onSecretWritten` force-push sentinel —
+// again without ever reading the vault from here.
 
 /**
  * The identity a live push compares against the last one sent (plan §1.2/§7):
  * `connectionId`+`modelId` are the user's OWN `settings.recognizer` selection;
- * `baseUrl`+`transport` are what that selection CURRENTLY resolves to (a
- * connection's baseUrl/transport can change out from under a stable
- * connectionId, e.g. the user edits the connection's endpoint). Comparing all
- * four — not just the settings pair — is what stops a live push firing on an
- * UNRELATED mutation that happens to touch a different field of an unrelated
- * connection, while still catching the ones that matter. Never carries the
- * decrypted API key: computing this fingerprint costs no vault read, which is
- * what lets "did anything change" be answered before any secret is resolved.
+ * `baseUrl`+`transport` are the address the selection CURRENTLY resolves to
+ * (TASK.202): for a `custom:<slug>` connection that is the backing
+ * CustomProviderRecord's baseUrl (the resolver's own route — the connection's
+ * own baseUrl is deliberately left out, it is always blank there); for every
+ * other connection it is the connection's own baseUrl (the resolver may
+ * catalog-fold it further; that fold stays out of the fingerprint — unchanged
+ * documented approximation). Comparing all four — not just the settings pair —
+ * is what stops a live push firing on an UNRELATED mutation that happens to
+ * touch a different field of an unrelated connection, while still catching the
+ * ones that matter. Never carries the decrypted API key: computing this
+ * fingerprint costs no vault read, which is what lets "did anything change" be
+ * answered before any secret is resolved.
  */
 export interface RecognizerFingerprint {
   connectionId: string;
   modelId: string;
   baseUrl?: string;
   transport?: ProviderTransportId;
+}
+
+/** Byte-mirror of main/host-env.ts's `CUSTOM_PROVIDER_PREFIX` (the module header's no-import discipline). */
+const CUSTOM_PROVIDER_PREFIX = "custom:";
+
+/**
+ * The address the resolver would follow for this connection — the record's
+ * baseUrl for a custom:* connection, else the connection's own. Byte-mirrors
+ * the route `resolveRecognizerConfig` takes (TASK.202); prefix check +
+ * `(settings.provider.custom ?? []).find(...)` only, no catalog fold.
+ */
+export function recognizerResolvedBaseUrl(
+  settings: AnycodeSettings,
+  connection: ProviderConnection,
+): string | undefined {
+  if (!connection.providerId.startsWith(CUSTOM_PROVIDER_PREFIX)) {
+    return connection.baseUrl;
+  }
+  return (settings.provider.custom ?? []).find((entry) => entry.id === connection.providerId)?.baseUrl;
+}
+
+/**
+ * `provider.connection.<id>.apiKey` — byte-mirror of host-env.ts's
+ * `connectionSecretKey(id, "api_key")` (TASK.202; host-env keeps its own copy
+ * rather than importing this value-only module's, the convention its own header
+ * documents).
+ */
+export function recognizerConnectionSecretKey(connectionId: string): SecretKey {
+  return `provider.connection.${connectionId}.apiKey`;
+}
+
+/**
+ * `provider.<custom-id>.apiKey` for a custom:* id, else undefined — byte-mirror
+ * of host-env.ts's `customProviderSecretKey` (TASK.202). Silent, not throwing,
+ * here: a non-custom providerId is an expected input on this read-only path
+ * (host-env's throwing belt exists for its vault-calling routes, not this
+ * pure arithmetic).
+ */
+export function recognizerCustomRecordSecretKey(customRecordId: string): SecretKey | undefined {
+  if (!customRecordId.startsWith(CUSTOM_PROVIDER_PREFIX)) {
+    return undefined;
+  }
+  return `provider.${customRecordId}.apiKey`;
 }
 
 /** The fingerprint of `settings.recognizer` right now, or undefined when the fallback names no connection / a dangling one. */
@@ -92,7 +154,7 @@ export function recognizerFingerprint(settings: AnycodeSettings): RecognizerFing
   return {
     connectionId: setting.connectionId,
     modelId: setting.modelId,
-    baseUrl: connection.baseUrl,
+    baseUrl: recognizerResolvedBaseUrl(settings, connection),
     transport: connection.transport,
   };
 }
@@ -111,6 +173,26 @@ export function recognizerFingerprintsEqual(
     a.baseUrl === b.baseUrl &&
     a.transport === b.transport
   );
+}
+
+/**
+ * True when a vault write to `key` changes the credential the recognizer
+ * selection resolves (TASK.202): for a `custom:<slug>` connection that is the
+ * backing record's key (the connection-scoped key is NOT its credential — a
+ * write there changes nothing the selection reads); for every other
+ * connection it is the connection's own api_key. Pure settings+key
+ * arithmetic; NEVER reads the vault.
+ */
+export function recognizerSecretTargetKey(settings: AnycodeSettings, key: SecretKey): boolean {
+  const setting = settings.recognizer;
+  if (setting === undefined) return false;
+  const connection = connectionById(settings, setting.connectionId);
+  if (connection === undefined) return false;
+  const customKey = recognizerCustomRecordSecretKey(connection.providerId);
+  if (customKey !== undefined) {
+    return customKey === key;
+  }
+  return recognizerConnectionSecretKey(connection.id) === key;
 }
 
 // ── the Vision panel's "Probe" button (TASK.198 E2) ──
