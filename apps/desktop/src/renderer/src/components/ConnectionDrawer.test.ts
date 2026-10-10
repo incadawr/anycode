@@ -5,21 +5,28 @@
  * runs in `environment: "node"` with no jsdom, so the actual add/edit form
  * behavior is proven live by `provider-connections-ui-smoke.mjs` instead.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CatalogSummaryEntry, ProviderConnection, SettingsMutationResult } from "../../../shared/settings.js";
+import type { FetchModelsOutcome } from "../anycode-window.js";
 import {
   MAX_OUTPUT_TOKEN_PRESETS,
+  MODEL_ID_ERROR,
+  appendModelToConnection,
+  appendModelsToConnection,
   buildConnectionUpdatePayload,
+  createConnectionAndPersistModel,
   liveModelSuggestions,
   maxOutputPresetSelection,
   maxOutputTokensField,
   modelAfterCatalogPrefill,
   modelSaveBlocked,
+  preflightModelId,
   providerSelectDisplayValue,
   resolveCreatedConnectionId,
   resolveCreatedCustomProviderId,
   resolveDrawerOAuthStartArgs,
   transportAfterNoAuthToggle,
+  updateConnectionAndPersistModel,
   maxOutputTokensEnvHint,
   maxOutputTokensEffectiveHint,
   contextWindowTokensField,
@@ -30,7 +37,20 @@ import {
   contextWindowAfterModelInput,
   contextWindowAfterRawInput,
 } from "./ConnectionDrawer.js";
+import { providerModelsFor, modelMenuItems } from "./ModelPill.js";
+import { buildStartModelGroups } from "./start-model-picker.js";
+import { importModelOptionsFor } from "./CodexRolloutImportDialog.js";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadSettings } from "../../../settings/files.js";
+import { handleCustomProviderFetchModels } from "../../../main/provider-ipc.js";
+
+// The whole-path restart test below drives PRODUCTION main-process code
+// (provider IPC + the settings file), so the electron module it imports needs
+// the same handler-capturing stub the main tests use.
+vi.mock("electron", () => ({ ipcMain: { handle: () => {} } }));
 
 function conn(id: string, providerId = "z-ai"): ProviderConnection {
   return { id, providerId };
@@ -306,7 +326,7 @@ describe("providerSelectDisplayValue (dogfood 16.07: add-mode must show the plac
   });
 });
 
-describe("liveModelSuggestions (live-over-static, mirrors providerModelsFor's precedence)", () => {
+describe("liveModelSuggestions (TASK.183: stable union of fetched + persisted + hints)", () => {
   const HINTS = [
     { id: "k3", name: "K3" },
     { id: "kimi-for-coding", name: "K2.7 Coding" },
@@ -317,22 +337,44 @@ describe("liveModelSuggestions (live-over-static, mirrors providerModelsFor's pr
     expect(liveModelSuggestions(null, [], HINTS)).toEqual(HINTS);
   });
 
-  it("this session's fetch result wins, decorated with matching static names", () => {
+  it("unions this session's fetch first, then persisted ids, then hints not already present", () => {
     expect(liveModelSuggestions([{ id: "k3" }, { id: "k4-new" }], ["stale-persisted"], HINTS)).toEqual([
       { id: "k3", name: "K3" },
       { id: "k4-new" },
+      { id: "stale-persisted" },
+      { id: "kimi-for-coding", name: "K2.7 Coding" },
     ]);
   });
 
-  it("falls back to the ids persisted on the connection when nothing was fetched this session", () => {
+  it("fetched and persisted ids are deduped case-sensitively, first occurrence wins", () => {
+    expect(liveModelSuggestions([{ id: "dup" }, { id: "kept" }], ["dup", "persisted-only"], HINTS)).toEqual([
+      { id: "dup" },
+      { id: "kept" },
+      { id: "persisted-only" },
+      { id: "k3", name: "K3" },
+      { id: "kimi-for-coding", name: "K2.7 Coding" },
+    ]);
+  });
+
+  it("retains the persisted ids when nothing was fetched this session", () => {
     expect(liveModelSuggestions(null, ["kimi-for-coding", "extra"], HINTS)).toEqual([
       { id: "kimi-for-coding", name: "K2.7 Coding" },
       { id: "extra" },
+      { id: "k3", name: "K3" },
     ]);
   });
 
-  it("an EMPTY fetch result yields an empty list (the endpoint's answer is authoritative once given)", () => {
-    expect(liveModelSuggestions([], ["persisted"], HINTS)).toEqual([]);
+  it("an EMPTY fetch result keeps persisted manual ids and hints (no longer wipes the list)", () => {
+    expect(liveModelSuggestions([], ["persisted"], HINTS)).toEqual([
+      { id: "persisted" },
+      { id: "k3", name: "K3" },
+      { id: "kimi-for-coding", name: "K2.7 Coding" },
+    ]);
+  });
+
+  it("handles null/undefined persisted and empty hints", () => {
+    expect(liveModelSuggestions(null, undefined, [])).toEqual([]);
+    expect(liveModelSuggestions([{ id: "a" }], undefined, [])).toEqual([{ id: "a" }]);
   });
 });
 
@@ -840,5 +882,456 @@ describe("ConnectionDrawer wiring (TASK.142: NO route may bypass the per-model r
     expect(source).not.toMatch(/setContextWindowTokens/);
     // The obsolete string-only helper is gone entirely.
     expect(source).not.toMatch(/contextWindowRawAfterModelChange/);
+  });
+});
+
+// ── TASK.183: durable manually entered connection models ──
+
+describe("preflightModelId (TASK.183: pre-flight before any write)", () => {
+  it("treats blank/space-only as the implicit/default sentinel", () => {
+    expect(preflightModelId("")).toEqual({ kind: "blank" });
+    expect(preflightModelId("   ")).toEqual({ kind: "blank" });
+  });
+
+  it("normalizes a valid id (an unknown id is valid — membership is never validation)", () => {
+    expect(preflightModelId("  deepseek-ai/DeepSeek-V3.1  ")).toEqual({ kind: "id", id: "deepseek-ai/DeepSeek-V3.1" });
+    expect(preflightModelId("some/unknown:v2-x")).toEqual({ kind: "id", id: "some/unknown:v2-x" });
+    expect(preflightModelId("模型-α")).toEqual({ kind: "id", id: "模型-α" });
+  });
+
+  it("rejects interior spaces and control characters in the ORIGINAL input", () => {
+    expect(preflightModelId("bad id")).toEqual({ kind: "invalid" });
+    expect(preflightModelId("bad\nid")).toEqual({ kind: "invalid" });
+    expect(preflightModelId("good\t")).toEqual({ kind: "invalid" });
+  });
+
+  it("exposes an actionable error message", () => {
+    expect(MODEL_ID_ERROR).toMatch(/model ID/i);
+  });
+});
+
+interface AppendCall {
+  connectionId: string;
+  addModels: string[];
+}
+
+function crateBridge(options?: {
+  createResult?: SettingsMutationResult;
+  appendResult?: FetchModelsOutcome;
+  appendThrows?: boolean;
+}) {
+  const createCalls: unknown[] = [];
+  const appendCalls: AppendCall[] = [];
+  let reloads = 0;
+  const bridge = {
+    connectionCreate: async (req: unknown): Promise<SettingsMutationResult> => {
+      createCalls.push(req);
+      return options?.createResult ?? okResult([conn("local-1")], "local-1");
+    },
+    fetchModels: async (req: AppendCall): Promise<FetchModelsOutcome> => {
+      appendCalls.push(req);
+      if (options?.appendThrows) {
+        throw new Error("append boom");
+      }
+      return options?.appendResult ?? { ok: true, models: req.addModels.map((id) => ({ id })) };
+    },
+  };
+  return {
+    bridge,
+    createCalls,
+    appendCalls,
+    get reloads() {
+      return reloads;
+    },
+    reload: async (): Promise<void> => {
+      reloads += 1;
+    },
+  };
+}
+
+describe("createConnectionAndPersistModel (TASK.183)", () => {
+  it("sends the create payload, then appends to the returned LOCAL id, then reloads", async () => {
+    const fake = crateBridge();
+    const result = await createConnectionAndPersistModel(fake.bridge, fake.reload, { providerId: "z-ai", model: "manual-1" }, "manual-1");
+    expect(result).toEqual({ ok: true, createdConnectionId: "local-1" });
+    expect(fake.createCalls).toEqual([{ providerId: "z-ai", model: "manual-1" }]);
+    expect(fake.appendCalls).toEqual([{ connectionId: "local-1", addModels: ["manual-1"] }]);
+    expect(fake.reloads).toBe(1);
+  });
+
+  it("skips the append for a blank sentinel (modelId null)", async () => {
+    const fake = crateBridge();
+    const result = await createConnectionAndPersistModel(fake.bridge, fake.reload, { providerId: "z-ai" }, null);
+    expect(result).toEqual({ ok: true, createdConnectionId: "local-1" });
+    expect(fake.appendCalls).toEqual([]);
+    expect(fake.reloads).toBe(0);
+  });
+
+  it("does not append when creation failed", async () => {
+    const fake = crateBridge({ createResult: { ok: false, reason: "invalid" } });
+    const result = await createConnectionAndPersistModel(fake.bridge, fake.reload, { providerId: "z-ai" }, "manual-1");
+    expect(result.ok).toBe(false);
+    expect(fake.appendCalls).toEqual([]);
+  });
+
+  it("reports a partial failure with the created id kept when the append outcome is an error", async () => {
+    const fake = crateBridge({ appendResult: { ok: false, reason: "http_error" } });
+    const result = await createConnectionAndPersistModel(fake.bridge, fake.reload, { providerId: "z-ai" }, "manual-1");
+    expect(result.ok).toBe(true);
+    expect(result.createdConnectionId).toBe("local-1");
+    expect(result.partial).toBe(true);
+    expect(result.error).toBeTruthy();
+  });
+
+  it("reports a partial failure when the append THROWS (connection kept for retry)", async () => {
+    const fake = crateBridge({ appendThrows: true });
+    const result = await createConnectionAndPersistModel(fake.bridge, fake.reload, { providerId: "z-ai" }, "manual-1");
+    expect(result).toEqual({
+      ok: true,
+      createdConnectionId: "local-1",
+      partial: true,
+      error: "Connection created, but its model list couldn't be saved — retry with Save.",
+    });
+  });
+
+  it("a retry appends successfully without creating another connection", async () => {
+    let appendAttempts = 0;
+    const createCalls: unknown[] = [];
+    const bridge = {
+      connectionCreate: async (req: unknown): Promise<SettingsMutationResult> => {
+        createCalls.push(req);
+        return okResult([conn("local-1")], "local-1");
+      },
+      fetchModels: async (req: AppendCall): Promise<FetchModelsOutcome> => {
+        appendAttempts += 1;
+        if (appendAttempts === 1) {
+          throw new Error("boom");
+        }
+        return { ok: true, models: req.addModels.map((id) => ({ id })) };
+      },
+    };
+    const reload = async (): Promise<void> => {};
+    const first = await createConnectionAndPersistModel(bridge, reload, { providerId: "z-ai", model: "manual-1" }, "manual-1");
+    expect(first.createdConnectionId).toBe("local-1");
+    expect(first.partial).toBe(true);
+    // Retry appends directly to the known id — no second create.
+    const retry = await appendModelToConnection(bridge, reload, first.createdConnectionId!, "manual-1");
+    expect(retry.ok).toBe(true);
+    expect(createCalls).toHaveLength(1);
+    expect(appendAttempts).toBe(2);
+  });
+});
+
+describe("updateConnectionAndPersistModel (TASK.183)", () => {
+  it("appends the normalized selected model after a successful metadata update", async () => {
+    const fake = crateBridge();
+    const bridge = {
+      ...fake.bridge,
+      connectionUpdate: async (req: unknown): Promise<SettingsMutationResult> => {
+        fake.createCalls.push(req);
+        return okResult([conn("c1")]);
+      },
+    };
+    const result = await updateConnectionAndPersistModel(bridge, fake.reload, "c1", { connectionId: "c1", model: "manual-1" }, "manual-1");
+    expect(result).toEqual({ metaOk: true, appendOk: true });
+    expect(fake.appendCalls).toEqual([{ connectionId: "c1", addModels: ["manual-1"] }]);
+    expect(fake.reloads).toBe(1);
+  });
+
+  it("never appends after a failed metadata update", async () => {
+    const fake = crateBridge();
+    const bridge = {
+      ...fake.bridge,
+      connectionUpdate: async () => ({ ok: false as const, reason: "invalid" }) as SettingsMutationResult,
+    };
+    const result = await updateConnectionAndPersistModel(bridge, fake.reload, "c1", { connectionId: "c1" }, "manual-1");
+    expect(result).toEqual({ metaOk: false, appendOk: false });
+    expect(fake.appendCalls).toEqual([]);
+  });
+
+  it("skips the append for a blank model", async () => {
+    const fake = crateBridge();
+    const bridge = { ...fake.bridge, connectionUpdate: async () => okResult([conn("c1")]) };
+    const result = await updateConnectionAndPersistModel(bridge, fake.reload, "c1", { connectionId: "c1" }, null);
+    expect(result).toEqual({ metaOk: true, appendOk: true });
+    expect(fake.appendCalls).toEqual([]);
+  });
+
+  it("reports appendOk false when the list append fails, metadata still saved", async () => {
+    const fake = crateBridge({ appendResult: { ok: false, reason: "read_only" } });
+    const bridge = { ...fake.bridge, connectionUpdate: async () => okResult([conn("c1")]) };
+    const result = await updateConnectionAndPersistModel(bridge, fake.reload, "c1", { connectionId: "c1" }, "manual-1");
+    expect(result).toEqual({ metaOk: true, appendOk: false });
+  });
+});
+
+describe("appendModelsToConnection (TASK.183)", () => {
+  it("sends the ids through the general {connectionId, addModels} branch then reloads", async () => {
+    const fake = crateBridge();
+    const result = await appendModelsToConnection(fake.bridge, fake.reload, "c1", ["a", "b"]);
+    expect(result).toEqual({ ok: true });
+    expect(fake.appendCalls).toEqual([{ connectionId: "c1", addModels: ["a", "b"] }]);
+    expect(fake.reloads).toBe(1);
+  });
+
+  it("reports a failure reason without reloading", async () => {
+    const fake = crateBridge({ appendResult: { ok: false, reason: "read_only" } });
+    const result = await appendModelsToConnection(fake.bridge, fake.reload, "c1", ["a"]);
+    expect(result).toEqual({ ok: false, reason: "read_only" });
+    expect(fake.reloads).toBe(0);
+  });
+
+  it("a thrown append is reported, not swallowed", async () => {
+    const fake = crateBridge({ appendThrows: true });
+    expect(await appendModelsToConnection(fake.bridge, fake.reload, "c1", ["a"])).toEqual({ ok: false, reason: "threw" });
+  });
+});
+
+describe("provider-list agreement (TASK.183): liveModelSuggestions and providerModelsFor keep the same effective ids", () => {
+  it("for equal inputs (connection.models = fetched ++ persisted) the raw id order matches", () => {
+    const fetched = [{ id: "live-a" }, { id: "live-b" }];
+    const persisted = ["manual-1"];
+    const hints = [
+      { id: "hint-x", name: "Hint X" },
+      { id: "live-a", name: "Live A" },
+    ];
+    const suggestions = liveModelSuggestions(fetched, persisted, hints).map((m) => m.id);
+    const connectionModels = [...fetched.map((m) => m.id), ...persisted];
+    const catalog = [{ id: "z-ai", name: "Z.ai", authKind: "api_key" as const, models: hints }];
+    const provider = providerModelsFor("z-ai", catalog, undefined, connectionModels)?.map((m) => m.id);
+    expect(provider).toEqual(suggestions);
+  });
+});
+
+describe("ConnectionDrawer wiring (TASK.183: pre-create Model field in BOTH create flows)", () => {
+  const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+
+  it("the pre-create field guard is widened from simplified-only to every uncreated connection", () => {
+    // The old first-run-only guard must be gone: any not-yet-created connection
+    // gets the field, not just the simplified flow.
+    expect(source).not.toMatch(/simplified && createdConnectionId === null && selectedEntry/);
+    expect(source).toMatch(/createdConnectionId === null && selectedEntry/);
+  });
+
+  it("a brand-new custom endpoint without a catalog entry gets its own free-text Model field", () => {
+    expect(source).toMatch(/createdConnectionId === null && isNewCustomEndpoint && !selectedEntry/);
+  });
+
+  it("both pre-create Model inputs route through changeModel (no direct setModel, TASK.142 intact)", () => {
+    expect(source).toMatch(
+      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, selectedEntry\.models\),\s*undefined,\s*\)/,
+    );
+    expect(source).toMatch(/changeModel\(e\.target\.value, e\.target\.value, undefined\)/);
+  });
+
+  it("all three actual handlers persist through the shared helpers (create/save/fetch)", () => {
+    expect(source).toMatch(/createConnectionAndPersistModel\(\s*modelPersistenceBridge\(\)/);
+    expect(source).toMatch(/updateConnectionAndPersistModel\(\s*modelPersistenceBridge\(\)/);
+    expect(source).toMatch(/appendModelsToConnection\(\s*modelPersistenceBridge\(\)/);
+    expect(source).not.toMatch(/selectedModels: \[\.\.\./);
+  });
+});
+
+// ── TASK.183 item 9: whole-path evidence against a REAL settings file ──
+// Restart simulation: a connection is created in a real temp settings file, the
+// model is appended by the PRODUCTION provider IPC, the file is re-read from
+// disk, and that snapshot is fed to every picker helper. No Electron process is
+// restarted — this is the snapshot-load simulation the plan allows.
+
+describe("whole-path: a manual model added through production IPC is discoverable everywhere", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    for (const dir of dirs.splice(0)) {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("survives a fresh load and reaches the drawer/composer/StartScreen/subagent/import lists with siblings intact", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-t183-"));
+    dirs.push(dir);
+    const settingsPath = join(dir, "settings.json");
+    const customRecord = {
+      id: "custom:rec",
+      name: "Rec",
+      baseUrl: "https://api.example.com",
+      kind: "openai-compatible",
+      models: ["rec-model"],
+    };
+    // The settings file a running host would have on disk.
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        version: 2,
+        provider: {
+          activeConnectionId: "conn-1",
+          connections: [
+            { id: "conn-1", providerId: "kimi", model: "glm-4.6", modelsFetchedAt: "2026-01-02T00:00:00.000Z" },
+            { id: "conn-2", providerId: "kimi", models: ["sibling"] },
+          ],
+          custom: [customRecord],
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+    // The same normalized id the drawer's pre-flight would send.
+    const preflight = preflightModelId("  manual-new  ");
+    expect(preflight).toEqual({ kind: "id", id: "manual-new" });
+    const sent = preflight.kind === "id" ? preflight.id : "";
+    // Production provider IPC performs the durable append.
+    const outcome = await handleCustomProviderFetchModels(
+      {
+        settingsPath,
+        // The manual-add path never touches the vault; the dependency is only
+        // required by the shared deps shape.
+        vault: {
+          setSecret: async () => ({ ok: true, backend: "keychain" }) as never,
+          clearSecret: async () => {},
+          getSecretValue: async () => undefined,
+        },
+      },
+      { connectionId: "conn-1", addModels: [sent] },
+    );
+    expect(outcome).toEqual({ ok: true, models: [{ id: "manual-new" }] });
+
+    // "Restart": read the file again from scratch.
+    const snapshot = (await loadSettings(settingsPath)).settings;
+    const [conn1, conn2] = snapshot.provider.connections;
+    expect(conn1).toMatchObject({
+      id: "conn-1",
+      model: "glm-4.6",
+      modelsFetchedAt: "2026-01-02T00:00:00.000Z",
+      models: ["manual-new"],
+    });
+    expect(conn2).toMatchObject({ id: "conn-2", models: ["sibling"] });
+    expect(snapshot.provider.activeConnectionId).toBe("conn-1");
+    expect(snapshot.provider.custom).toEqual([customRecord]);
+
+    const catalog = [{ id: "kimi", name: "Kimi", authKind: "api_key" as const, models: [{ id: "kimi-for-coding", name: "K2.7 Coding" }] }];
+    const hints = catalog[0]!.models;
+
+    // Drawer suggestions: the union keeps the manual id and the hints.
+    expect(liveModelSuggestions(null, conn1!.models, hints).map((m) => m.id)).toEqual(["manual-new", "kimi-for-coding"]);
+    // Composer / provider pill / subagent parent list.
+    for (const offered of [
+      providerModelsFor("kimi", catalog, snapshot.provider.custom, conn1!.models),
+      providerModelsFor("kimi", catalog, snapshot.provider.custom, conn2!.models),
+    ]) {
+      expect(offered?.map((m) => m.id)).toBeDefined();
+    }
+    expect(providerModelsFor("kimi", catalog, snapshot.provider.custom, conn1!.models)?.map((m) => m.id)).toEqual([
+      "manual-new",
+      "kimi-for-coding",
+    ]);
+    expect(providerModelsFor("kimi", catalog, snapshot.provider.custom, conn2!.models)?.map((m) => m.id)).toEqual([
+      "sibling",
+      "kimi-for-coding",
+    ]);
+    // StartScreen groups.
+    const groups = buildStartModelGroups(snapshot.provider.connections, catalog, snapshot.provider.custom, {
+      connectionId: "conn-1",
+      modelId: "manual-new",
+    });
+    expect(groups.find((g) => g.connectionId === "conn-1")!.items.map((i) => i.id)).toContain("manual-new");
+    expect(groups.find((g) => g.connectionId === "conn-2")!.items.map((i) => i.id)).not.toContain("manual-new");
+    // Import dialog, with the snapshot shaped like the store's.
+    const importOptions = importModelOptionsFor({
+      settings: snapshot,
+      catalog,
+      secrets: [],
+      providerReady: true,
+      envOverrides: [],
+      readOnly: false,
+    } as never);
+    expect(importOptions?.map((m) => m.id)).toEqual(["manual-new", "kimi-for-coding"]);
+    // The model menu still shows the explicit selection.
+    expect(modelMenuItems("manual-new", importOptions).map((m) => m.id)).toContain("manual-new");
+  });
+});
+
+describe("pre-create flow composition (TASK.183 items 1–2)", () => {
+  it("a typed id BEFORE any connection exists is sent to connectionCreate and then appended to the SAME local id", async () => {
+    const fake = crateBridge();
+    const typed = "  deepseek-ai/DeepSeek-V3.1  ";
+    const preflight = preflightModelId(typed);
+    expect(preflight).toEqual({ kind: "id", id: "deepseek-ai/DeepSeek-V3.1" });
+    const createModel = preflight.kind === "id" ? preflight.id : "";
+    const payload = { providerId: "z-ai", ...(createModel !== "" ? { model: createModel } : {}) };
+    const result = await createConnectionAndPersistModel(fake.bridge, fake.reload, payload, createModel !== "" ? createModel : null);
+    expect(result.createdConnectionId).toBe("local-1");
+    // Exactly the normalized id — same value in the create payload and the append.
+    expect(fake.createCalls).toEqual([{ providerId: "z-ai", model: "deepseek-ai/DeepSeek-V3.1" }]);
+    expect(fake.appendCalls).toEqual([{ connectionId: "local-1", addModels: ["deepseek-ai/DeepSeek-V3.1"] }]);
+  });
+
+  it("a catalog-default prefill is persisted the same way as a typed id", async () => {
+    const fake = crateBridge();
+    const hints = [{ id: "kimi-for-coding", name: "K2.7 Coding" }];
+    const effective = modelAfterCatalogPrefill("", hints);
+    const effectiveId = preflightModelId(effective);
+    expect(effectiveId).toEqual({ kind: "id", id: "kimi-for-coding" });
+    const id = effectiveId.kind === "id" ? effectiveId.id : "";
+    await createConnectionAndPersistModel(fake.bridge, fake.reload, { providerId: "kimi", model: id }, id);
+    expect(fake.createCalls).toEqual([{ providerId: "kimi", model: "kimi-for-coding" }]);
+    expect(fake.appendCalls).toEqual([{ connectionId: "local-1", addModels: ["kimi-for-coding"] }]);
+  });
+
+  it("a BLANK model keeps the implicit path: no model in the payload and no append", async () => {
+    const fake = crateBridge();
+    const preflight = preflightModelId("");
+    expect(preflight.kind).toBe("blank");
+    const id = preflight.kind === "id" ? preflight.id : "";
+    await createConnectionAndPersistModel(fake.bridge, fake.reload, { providerId: "z-ai", ...(id !== "" ? { model: id } : {}) }, id !== "" ? id : null);
+    expect(fake.createCalls).toEqual([{ providerId: "z-ai" }]);
+    expect(fake.appendCalls).toEqual([]);
+  });
+
+  it("an invalid original id is refused by the pre-flight before any create or append call", async () => {
+    const fake = crateBridge();
+    const preflight = preflightModelId("bad\nid");
+    expect(preflight).toEqual({ kind: "invalid" });
+    // The handlers return on `invalid`, so nothing is called — model the guard.
+    if (preflight.kind !== "invalid") {
+      throw new Error("expected invalid");
+    }
+    expect(fake.createCalls).toEqual([]);
+    expect(fake.appendCalls).toEqual([]);
+    expect(fake.reloads).toBe(0);
+  });
+
+  it("an UNKNOWN but valid id proceeds (membership in a catalog is never validation)", async () => {
+    const fake = crateBridge();
+    const preflight = preflightModelId("who/knows:v9-unlisted");
+    expect(preflight).toEqual({ kind: "id", id: "who/knows:v9-unlisted" });
+    const id = preflight.kind === "id" ? preflight.id : "";
+    const result = await createConnectionAndPersistModel(fake.bridge, fake.reload, { providerId: "z-ai", model: id }, id);
+    expect(result.ok).toBe(true);
+    expect(fake.appendCalls).toEqual([{ connectionId: "local-1", addModels: ["who/knows:v9-unlisted"] }]);
+  });
+
+  it("a brand-new custom endpoint sends selectedModels: [] (manual ids live on the connection, not the record)", () => {
+    const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+    const customBlock = source.slice(
+      source.indexOf("async function createNewCustomEndpoint"),
+      source.indexOf("async function createConnection()"),
+    );
+    expect(customBlock).toMatch(/selectedModels: \[\]/);
+    expect(customBlock).not.toMatch(/selectedModels: \[[^\]]+\]/);
+  });
+
+  it("all three handlers run the model pre-flight BEFORE their create/update/append bridge call", () => {
+    const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+    const createBlock = source.slice(source.indexOf("async function createConnection"), source.indexOf("async function save"));
+    const saveBlock = source.slice(source.indexOf("async function save"), source.indexOf("async function doFetchModels"));
+    expect(createBlock.indexOf("preflightModelId(")).toBeLessThan(createBlock.indexOf("createConnectionAndPersistModel("));
+    expect(saveBlock.indexOf("preflightModelId(")).toBeLessThan(saveBlock.indexOf("updateConnectionAndPersistModel("));
+  });
+
+  it("the pre-create model change still routes the context-window binding through the shared change", () => {
+    // TASK.142 ownership preserved: A's number must not ride onto a manually
+    // typed B of the same connection.
+    expect(contextWindowAfterModelInput({ raw: "900000", model: "manual-a" }, "manual-b", undefined)).toEqual({ raw: "", model: "manual-b" });
   });
 });

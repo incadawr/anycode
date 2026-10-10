@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AnycodeSettings } from "./settings.js";
-import { activeProviderView, resolveProviderConnection } from "./settings.js";
+import { activeProviderView, mergeModelIds, normalizeModelId, resolveProviderConnection } from "./settings.js";
 import { connectionFixture, providerV2Multi } from "./provider-v2-fixture.js";
 
 function settingsWith(activeConnectionId: string | undefined, connections: ReturnType<typeof connectionFixture>[]): AnycodeSettings {
@@ -92,5 +92,72 @@ describe("activeProviderView — connection-level authOptional projection (TASK.
     ]);
 
     expect("authOptional" in activeProviderView(settings)).toBe(false);
+  });
+});
+
+describe("normalizeModelId (TASK.183: durable manually entered models)", () => {
+  it("accepts an unknown id with slash/colon/dot/dash and arbitrary vendor characters, unchanged", () => {
+    expect(normalizeModelId("deepseek-ai/DeepSeek-V3.1")).toBe("deepseek-ai/DeepSeek-V3.1");
+    expect(normalizeModelId("openai/gpt-5:2026-01-01")).toBe("openai/gpt-5:2026-01-01");
+    expect(normalizeModelId("meta-llama/Llama-3.3-70B-Instruct")).toBe("meta-llama/Llama-3.3-70B-Instruct");
+  });
+
+  it("accepts Unicode and preserves case", () => {
+    expect(normalizeModelId("qwen3-Модель")).toBe("qwen3-Модель");
+    expect(normalizeModelId("模型-α")).toBe("模型-α");
+    expect(normalizeModelId("GLM-5.3")).toBe("GLM-5.3");
+  });
+
+  it("trims ordinary surrounding spaces only", () => {
+    expect(normalizeModelId("  glm-4.6  ")).toBe("glm-4.6");
+    expect(normalizeModelId("\tglm-4.6\t")).toBeNull();
+    expect(normalizeModelId("\nglm-4.6\n")).toBeNull();
+  });
+
+  it("has no arbitrary length cap", () => {
+    const long = "m".repeat(5000);
+    expect(normalizeModelId(long)).toBe(long);
+  });
+
+  it("rejects empty/space-only, non-strings, and interior whitespace", () => {
+    expect(normalizeModelId("")).toBeNull();
+    expect(normalizeModelId("   ")).toBeNull();
+    expect(normalizeModelId(null)).toBeNull();
+    expect(normalizeModelId(7)).toBeNull();
+    expect(normalizeModelId({ id: "x" })).toBeNull();
+    expect(normalizeModelId("glm 4.6")).toBeNull();
+    expect(normalizeModelId("glm\t4.6")).toBeNull();
+  });
+
+  it("rejects C0/C1 controls anywhere, including a leading/trailing newline or tab", () => {
+    expect(normalizeModelId("\n")).toBeNull();
+    expect(normalizeModelId("\t")).toBeNull();
+    expect(normalizeModelId("glm-\n4.6")).toBeNull();
+    expect(normalizeModelId("glm-4.6\u0000")).toBeNull();
+    expect(normalizeModelId("glm-4.6\u007f")).toBeNull();
+    expect(normalizeModelId("glm-4.6\u009f")).toBeNull();
+  });
+});
+
+describe("mergeModelIds (TASK.183: stable primary-first union)", () => {
+  it("dedupes case-sensitively, keeping the first occurrence's order", () => {
+    expect(mergeModelIds(["a", "b", "a"], ["b", "c"])).toEqual(["a", "b", "c"]);
+    expect(mergeModelIds(["GLM-5"], ["glm-5"])).toEqual(["GLM-5", "glm-5"]);
+  });
+
+  it("trims ids and drops empties", () => {
+    expect(mergeModelIds([" a ", "", "  "], [" b "])).toEqual(["a", "b"]);
+  });
+
+  it("is primary-first: existing stored order survives, manual additions append", () => {
+    expect(mergeModelIds(["fetched-1", "fetched-2"], ["manual-1"])).toEqual(["fetched-1", "fetched-2", "manual-1"]);
+  });
+
+  it("preserves legacy nonempty ids verbatim (no retrospective re-validation)", () => {
+    expect(mergeModelIds(["legacy id with spaces"])).toEqual(["legacy id with spaces"]);
+  });
+
+  it("defaults the secondary list to empty", () => {
+    expect(mergeModelIds(["a"])).toEqual(["a"]);
   });
 });

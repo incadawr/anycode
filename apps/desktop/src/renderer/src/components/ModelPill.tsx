@@ -49,7 +49,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { ReasoningEffort } from "@anycode/core";
 import type { CatalogSummary, ConnectionUpdateRequest, CustomProviderRecord } from "../../../shared/settings.js";
-import { activeProviderView, connectionById } from "../../../shared/settings.js";
+import { activeProviderView, connectionById, mergeModelIds } from "../../../shared/settings.js";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -275,19 +275,22 @@ export function pillDisplayLabel(
 
 /**
  * Resolves the model list a provider offers its pickers (F2, codex-profiles
- * cut lane FXH review): a builtin catalog hit returns its own `models`
- * byte-for-byte (the pre-existing path, untouched); a `custom:<slug>`
- * provider with no catalog entry falls back to its own curated `models[]`
- * (cut §9.2 — the user-picked subset a custom endpoint's fetch surfaced);
- * anything else (unknown id, or `providerId` itself `undefined` — the legacy
- * free-text config with no provider selected at all) yields `undefined`,
- * exactly like today's plain `catalog.find(...)?.models`.
+ * cut lane FXH review; union semantics from TASK.183). Base hints come from a
+ * builtin catalog hit; failing that, the `custom:<slug>` record's own curated
+ * `models[]` (cut §9.2 — the user-picked subset a custom endpoint's fetch
+ * surfaced); anything else (unknown id, or `providerId` itself `undefined` —
+ * the legacy free-text config with no provider selected at all) yields
+ * `undefined`, exactly like today's plain `catalog.find(...)?.models`.
  *
- * `connectionModels` — the target connection's LIVE-fetched ids
- * (`ProviderConnection.models`, the connection-scoped guarded fetch) — takes
- * precedence when non-empty: the live list decides WHAT is shown, the static
- * catalog hints only decorate matching ids with display names. Absent/empty
- * keeps every pre-fetch behavior byte-identical. Exported for unit testing.
+ * `connectionModels` — the target connection's OWN ids (`ProviderConnection.
+ * models`: manual additions plus connection-scoped fetched ids, TASK.183) —
+ * when non-empty is unioned with the base hints, connection ids FIRST and the
+ * catalog/curated hints after (stable primary-first, deduped by exact id via
+ * the shared `mergeModelIds`). The base hints only DECORATE matching ids with
+ * display names — a connection id with no catalog hint still appears (as a
+ * bare `{id}`), and a custom record's fallback is included even when no
+ * synthesized catalog entry exists. Absent/empty `connectionModels` keeps
+ * every pre-fetch behavior byte-identical. Exported for unit testing.
  */
 export function providerModelsFor(
   providerId: string | undefined,
@@ -296,16 +299,22 @@ export function providerModelsFor(
   connectionModels?: readonly string[],
 ): readonly { id: string; name?: string }[] | undefined {
   const catalogHit = catalog?.find((entry) => entry.id === providerId)?.models;
+  const customHit = custom?.find((entry) => entry.id === providerId);
+  const baseHints: readonly { id: string; name?: string }[] | undefined =
+    catalogHit ?? (customHit !== undefined ? customHit.models.map((id) => ({ id })) : undefined);
   if (connectionModels !== undefined && connectionModels.length > 0) {
-    return connectionModels.map((id) => {
-      const hint = catalogHit?.find((m) => m.id === id);
+    const union = mergeModelIds(
+      connectionModels,
+      (baseHints ?? []).map((hint) => hint.id),
+    );
+    return union.map((id) => {
+      const hint = baseHints?.find((m) => m.id === id);
       return hint?.name !== undefined ? { id, name: hint.name } : { id };
     });
   }
   if (catalogHit !== undefined) {
     return catalogHit;
   }
-  const customHit = custom?.find((entry) => entry.id === providerId);
   if (customHit !== undefined) {
     return customHit.models.map((id) => ({ id }));
   }
@@ -313,11 +322,12 @@ export function providerModelsFor(
 }
 
 /**
- * The Model page's flat list (design §2.2): the provider's catalog models,
- * plus the currently active model appended if it isn't already among them
- * (a free-text/env-boot model, or an empty catalog for a custom provider —
- * the list then holds just that one current entry). Exported for unit
- * testing.
+ * The Model page's flat list (design §2.2): the provider's offered models
+ * (a union of the connection's own ids and the catalog/curated hints, see
+ * `providerModelsFor`), plus the currently active model appended if it isn't
+ * already among them (a free-text/env-boot model, or an empty catalog for a
+ * custom provider — the list then holds just that one current entry).
+ * Exported for unit testing.
  */
 export function modelMenuItems(
   currentModel: string,

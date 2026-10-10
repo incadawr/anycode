@@ -8,7 +8,7 @@
  * not a rendered DOM.
  */
 import { describe, expect, it, vi } from "vitest";
-import type { CodexProfileRecord } from "../../../shared/settings.js";
+import type { AnycodeSettings, CatalogSummary, CodexProfileRecord, SettingsSnapshot } from "../../../shared/settings.js";
 import type { CreateTabResult } from "../../../shared/tabs.js";
 import {
   buildRolloutProfileOptions,
@@ -19,6 +19,7 @@ import {
   formatRolloutStatsLines,
   formatRolloutTimestamp,
   importDisabled,
+  importModelOptionsFor,
   openImportedSession,
   performImportAndOpen,
   resolveDefaultImportModel,
@@ -268,6 +269,91 @@ describe("resolveDefaultImportModel", () => {
 
   it("resolves to an empty string when there is neither an active model nor a catalog", () => {
     expect(resolveDefaultImportModel(undefined, undefined)).toBe("");
+  });
+});
+
+// ── importModelOptionsFor (TASK.183: the ACTIVE connection's manual ids reach
+// the Import picker) ──
+
+describe("importModelOptionsFor", () => {
+  function snapshot(provider: Record<string, unknown>, catalog: CatalogSummary = []): SettingsSnapshot {
+    return {
+      settings: {
+        version: 2,
+        provider,
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      } as unknown as AnycodeSettings,
+      secrets: [],
+      providerReady: true,
+      envOverrides: [],
+      readOnly: false,
+      catalog,
+    };
+  }
+
+  const catalog: CatalogSummary = [
+    { id: "z-ai", name: "Z.ai", authKind: "api_key", models: [{ id: "glm-5.2", name: "GLM-5.2" }] },
+  ];
+
+  it("offers the ACTIVE connection's manual id, but not a sibling connection's", () => {
+    const snap = snapshot(
+      {
+        activeConnectionId: "conn-a",
+        connections: [
+          { id: "conn-a", providerId: "z-ai", models: ["manual-a"] },
+          { id: "conn-b", providerId: "z-ai", models: ["manual-b"] },
+        ],
+      },
+      catalog,
+    );
+    const options = importModelOptionsFor(snap)?.map((entry) => entry.id);
+    expect(options).toEqual(["manual-a", "glm-5.2"]);
+    expect(options).not.toContain("manual-b");
+  });
+
+  it("switching the active connection changes the offered custom ids, and an explicit selection is retained", () => {
+    const snap = snapshot(
+      {
+        activeConnectionId: "conn-b",
+        connections: [
+          { id: "conn-a", providerId: "z-ai", models: ["manual-a"] },
+          { id: "conn-b", providerId: "z-ai", models: ["manual-b"] },
+        ],
+      },
+      catalog,
+    );
+    const offered = importModelOptionsFor(snap);
+    expect(offered?.map((entry) => entry.id)).toEqual(["manual-b", "glm-5.2"]);
+    expect(resolveDefaultImportModel("manual-b", offered)).toBe("manual-b");
+  });
+
+  it("a reloaded persisted snapshot still discovers the manual id", () => {
+    const provider = {
+      activeConnectionId: "conn-a",
+      connections: [{ id: "conn-a", providerId: "z-ai", models: ["manual-a"] }],
+    };
+    const reloaded = snapshot(JSON.parse(JSON.stringify(provider)) as Record<string, unknown>, catalog);
+    expect(importModelOptionsFor(reloaded)?.map((entry) => entry.id)).toEqual(["manual-a", "glm-5.2"]);
+  });
+
+  it("a missing snapshot is safe and yields undefined", () => {
+    expect(importModelOptionsFor(undefined)).toBeUndefined();
+    expect(importModelOptionsFor(null)).toBeUndefined();
+  });
+
+  it("does not silently replace a valid active manual model with the catalog default", () => {
+    const snap = snapshot(
+      {
+        activeConnectionId: "conn-a",
+        connections: [{ id: "conn-a", providerId: "z-ai", model: "manual-a", models: ["manual-a"] }],
+      },
+      catalog,
+    );
+    const offered = importModelOptionsFor(snap);
+    expect(resolveDefaultImportModel("manual-a", offered)).toBe("manual-a");
   });
 });
 

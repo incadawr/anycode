@@ -266,14 +266,17 @@ export interface ProviderConnection {
   /** Advisory last-known health (TASK.45 §3); W11 writes it, never a runtime-readiness source. */
   lastHealth?: { status: ProviderHealthStatus; at: string; safeCode?: string };
   /**
-   * Live-fetched model ids for a CATALOG connection (the guarded
-   * connection-scoped `/v1/models` fetch, main/provider-ipc.ts). Advisory
-   * display data only: pickers show these INSTEAD of the catalog entry's
-   * static hints when present (static hints still decorate matching ids with
-   * display names/capabilities); absent = static hints, exactly the pre-fetch
-   * behavior. Never a runtime-readiness or endpoint-resolution source. A
-   * `custom:<slug>` connection never carries this — its live list lives on
-   * the custom record's own `models[]`.
+   * Connection-scoped model ids this connection offers its pickers (TASK.183):
+   * a stable union of the ids the user entered MANUALLY for this connection
+   * and the ids a connection-scoped `/v1/models` fetch surfaced (the guarded
+   * fetch in main/provider-ipc.ts). Both kinds belong to the CONNECTION, not
+   * to any provider-global list — a sibling connection sharing the same
+   * provider is unaffected, and pickers union these with the catalog entry's
+   * static hints (static hints decorate matching ids with display
+   * names/capabilities). Absent/empty = static hints alone, exactly the
+   * pre-TASK.183 behavior. Never a runtime-readiness or endpoint-resolution
+   * source. A `custom:<slug>` connection keeps its live curated list on the
+   * custom record's own `models[]`; manual additions still land here.
    */
   models?: string[];
   /** ISO timestamp of the last successful connection-scoped model-list fetch. */
@@ -1061,6 +1064,74 @@ export function activeConnection(settings: AnycodeSettings): ProviderConnection 
  */
 export function connectionById(settings: AnycodeSettings, connectionId: string): ProviderConnection | undefined {
   return settings.provider.connections.find((connection) => connection.id === connectionId);
+}
+
+/**
+ * Normalizes a MANUALLY entered model id (TASK.183) — the ONE validator shared
+ * by the renderer's pre-flight and main's `addModels` handler, so a model the
+ * UI accepts can never be refused main-side and vice versa.
+ *
+ * Rules (frozen by TASK.183):
+ *  - must be a string;
+ *  - C0/C1 control characters (U+0000–U+001F, U+007F–U+009F) in the ORIGINAL
+ *    input are refused — a leading/trailing newline or tab must NOT be erased
+ *    by trimming and silently accepted;
+ *  - ordinary surrounding spaces are trimmed;
+ *  - the trimmed result must be non-empty and must contain NO interior
+ *    whitespace (an id is one opaque token, never a phrase);
+ *  - arbitrary vendor characters, case, Unicode, slash, colon, dash and dot
+ *    are preserved verbatim.
+ *
+ * There is deliberately NO length cap and NO catalog-membership requirement:
+ * membership in a catalog is never validation. Blank/space-only input is the
+ * FORM callers' implicit/default sentinel and is handled by them separately —
+ * a blank is never inserted into `models`.
+ *
+ * Renderer-safe (zero imports, pure) so both main/provider-ipc.ts and the
+ * renderer can call the exact same rule.
+ */
+export function normalizeModelId(input: unknown): string | null {
+  if (typeof input !== "string") {
+    return null;
+  }
+  // Controls checked on the ORIGINAL input, before any trimming.
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(input)) {
+    return null;
+  }
+  const trimmed = input.trim();
+  if (trimmed === "" || /\s/.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+/**
+ * Stable primary-first union of model id lists (TASK.183): trims every id,
+ * drops empties, dedupes by exact case-sensitive id, and keeps the first
+ * occurrence's order. Used by the renderer (`liveModelSuggestions`,
+ * `providerModelsFor`) and by main's `addModels`/fetch handlers so a manual
+ * addition and a live fetch can never replace each other.
+ *
+ * Deliberately lenient about its inputs: existing stored ids are NOT
+ * re-validated through `normalizeModelId`'s stricter manual-entry rules, so a
+ * legacy `models[]` entry is never silently dropped on the next merge — only
+ * empty/whitespace ids are removed.
+ */
+export function mergeModelIds(primary: readonly string[], secondary: readonly string[] = []): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [...primary, ...secondary]) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const id = raw.trim();
+    if (id === "" || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
 }
 
 /**
