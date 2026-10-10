@@ -89,13 +89,16 @@ function describeCatalogEntry(entry: AgentBridgeCatalogEntry): string {
 const AGENT_BRIDGE_DETACH_DESCRIPTION =
   "Run the subagent in the background: the call returns at once with the child session id, and the child's report " +
   "arrives later as a new message that starts your next turn. After a detached call, end your turn — do not wait, " +
-  "poll or re-check; nothing is lost while you are idle.";
+  "poll or re-check; nothing is lost while you are idle. The returned child session id can later be passed as " +
+  "continue_session.";
 
 /** Model-facing meaning of `continue_session` — a follow-up keeps the child's context instead of starting over. */
 const AGENT_BRIDGE_CONTINUE_DESCRIPTION =
-  "Child session id from an earlier finished call of this session: the same child resumes with its full history and " +
-  "receives `prompt` as its next message (use it to return defects for rework). Its profile and model stay as they " +
-  "were; `model` is ignored. The child must have finished and belong to this session.";
+  "Child session id of an earlier finished call of this session — it is stated in that call's result " +
+  "(\"Child session id: …\") and in the delivered child report's <agent-id>. " +
+  "The same child resumes with its full history and receives `prompt` as its next message (use it to return defects " +
+  "for rework). Its profile and model stay as they were; `model` is ignored. The child must have finished and " +
+  "belong to this session.";
 
 export interface AgentBridgeToolDeclOptions {
   /**
@@ -320,7 +323,11 @@ export function outcomeToResult(
  * SessionSubagentOutcome carries three extra id fields (childSessionId/
  * parentSessionId/spawnToolCallId) that belong on the presentation card's
  * `target` (CUT-S2 §2.1: "core их только копирует в target"), not on the
- * model-visible tool output.
+ * model-visible tool output — EXCEPT childSessionId (TASK.218), which now
+ * also rides the output itself so formatResultForModel's follow-up note
+ * never depends on a presentation card existing. The authoritative comment
+ * for "ids ride ONLY the presentation target" lives at tools/agent.ts's
+ * runSessionTier; this projection keeps parent/spawn ids off the output.
  */
 function toAgentOutput(outcome: SubagentOutcome): AgentOutput {
   return {
@@ -332,6 +339,16 @@ function toAgentOutput(outcome: SubagentOutcome): AgentOutput {
     durationMs: outcome.durationMs,
     ...(outcome.finalTurnFinishReason !== undefined
       ? { finalTurnFinishReason: outcome.finalTurnFinishReason }
+      : {}),
+    // TASK.218 (supervisor correction 1): ID discoverability must not depend
+    // on subagent_start or a presentation card — the nonempty childSessionId
+    // is copied onto the model-visible output whenever the outcome is
+    // actually session-shaped (a SessionSubagentOutcome), never invented for
+    // an inline one. (outcome as this wider shape is read structurally: only
+    // the presence of a nonempty string childSessionId counts.)
+    ...((outcome as Partial<SessionSubagentOutcome>).childSessionId !== undefined &&
+    (outcome as Partial<SessionSubagentOutcome>).childSessionId !== ""
+      ? { childSessionId: (outcome as Partial<SessionSubagentOutcome>).childSessionId }
       : {}),
   };
 }
@@ -364,7 +381,30 @@ export function formatResultForModel(result: ToolResult<AgentOutput>): string {
   if (result.output?.truncated === true) {
     prefix += `[TRUNCATED SUBAGENT RESULT — the report exceeded the ${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap; its tail was dropped.]\n\n`;
   }
-  return prefix + (result.output?.finalText ?? "");
+  return prefix + (result.output?.finalText ?? "") + childContinueNote(result);
+}
+
+/**
+ * TASK.218: the "[Child session id: …]" follow-up hint appended to every
+ * SUCCESSFUL session-tier result — output.childSessionId first (correction 1:
+ * discoverability must not depend on subagent_start or a presentation card),
+ * falling back to the presentation card's session target. Inline outcomes
+ * produce no note by construction (no output id, no session target); an
+ * ok:false result never reaches here (the early return above).
+ */
+function childContinueNote(result: ToolResult<AgentOutput>): string {
+  const childSessionId =
+    result.output?.childSessionId !== undefined && result.output.childSessionId !== ""
+      ? result.output.childSessionId
+      : result.presentation?.subagent?.target !== undefined &&
+          result.presentation.subagent.target.kind === "session" &&
+          result.presentation.subagent.target.childSessionId !== ""
+        ? result.presentation.subagent.target.childSessionId
+        : undefined;
+  if (childSessionId === undefined) {
+    return "";
+  }
+  return `\n\n[Child session id: ${childSessionId}. Pass it as continue_session in a later agent call to send a follow-up to this same child in its existing conversation.]`;
 }
 
 /**
