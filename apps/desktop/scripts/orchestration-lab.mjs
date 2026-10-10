@@ -113,7 +113,7 @@ async function start() {
         tools: {},
         // --no-allow: no blanket rules, so the permission guard and its modals
         // are live (permission smokes, OWNER-LIVESMOKE-permissions.md §0).
-        permissions: flag("--no-allow") ? {} : {
+        permissions: flag("--no-allow") ? { alwaysAllow: [] } : {
           alwaysAllow: ["Agent", "Read", "Glob", "Grep", "Bash", "Write", "Edit", "MultiEdit"].map((toolName) => ({ toolName })),
         },
         ui: { theme: "system" },
