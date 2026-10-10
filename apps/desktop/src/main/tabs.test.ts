@@ -1678,6 +1678,26 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     expect(manager.getTab(r4ChildTabId)).toBeUndefined();
   });
 
+  it("TASK.116: a child's real death reason reaches the parent verbatim through ONE terminal; a duplicate terminal cannot overwrite it or emit a second", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    manager.createTab({ workspace: "/ws", sessionId: "root-116", resume: false });
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "dead-1" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "dead-1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childTerminalMsg({ status: "error", finalText: "Claude exited during a turn" }));
+    childHost.emit("message", childTerminalMsg({ status: "completed", finalText: "overwritten?" }));
+
+    const terminals = childRunEvents(rootHost).filter((e) => e.requestId === "dead-1" && e.kind === "terminal");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ kind: "terminal", status: "error", finalText: "Claude exited during a turn" });
+    expect(manager.getTab(childTabId)).toBeUndefined();
+  });
+
   it("the 9th global spawn (spread across 3 parents, each under ITS OWN per-parent cap) PARKS on limit_global (TASK.147 срез 1) — and wakes when a DIFFERENT parent's slot frees, not just its own", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
