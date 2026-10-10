@@ -583,6 +583,12 @@
   color: var(--text-dim);
 }
 
+.settings-field-error {
+  color: var(--danger);
+  font-size: var(--fs-xs);
+  margin-top: var(--sp-1);
+}
+
 .settings-field-input,
 .settings-field-select {
   background: var(--bg-inset);

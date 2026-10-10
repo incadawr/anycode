@@ -657,7 +657,8 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // Guard capacity BEFORE prompting: never make the user pick a folder we
     // cannot open (UI also disables "+" at capacity, this is the backstop).
     if (deps.manager.atCapacity()) {
-      return { ok: false, reason: "max_tabs" };
+      const cap = typeof deps.manager.capacity === "function" ? deps.manager.capacity() : undefined;
+      return { ok: false, reason: "max_tabs", ...(cap !== undefined ? { openTabs: cap.open, maxTabs: cap.max } : {}) };
     }
 
     // DEV facade) is used verbatim, skipping the folder dialog. No existence

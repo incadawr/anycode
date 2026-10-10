@@ -782,7 +782,7 @@ describe("TabHostManager — session binding (F7) + MAX_TABS (F5)", () => {
     expect(manager.atCapacity()).toBe(true);
 
     const overflow = manager.createTab({ workspace: "/ws", sessionId: "s3", resume: false });
-    expect(overflow).toEqual({ ok: false, reason: "max_tabs" });
+    expect(overflow).toMatchObject({ ok: false, reason: "max_tabs", openTabs: 3, maxTabs: 3 });
     expect(manager.count()).toBe(3);
 
     // The binding annotation the picker uses (openInTabId).
@@ -4750,5 +4750,147 @@ describe("TabHostManager — follow-up card alias", () => {
     expect(manager.followUpChildSessionId("root-alias", "call-a2")).toBe(childSessionId);
     expect(manager.followUpChildSessionId("root-alias", "call-a1")).toBeUndefined();
     expect(manager.followUpChildSessionId("other-root", "call-a2")).toBeUndefined();
+  });
+});
+
+// ── TASK.119 / TASK.147 slice 2: LIVE session-capacity limits (settings readers) ──
+
+describe("TabHostManager — live session limits (TASK.119 / TASK.147 срез 2)", () => {
+  it("DEFAULT_BREAKER_LIMITS.maxTabs is 20 (TASK.119 п.1)", () => {
+    expect(DEFAULT_BREAKER_LIMITS.maxTabs).toBe(20);
+  });
+
+  it("createTab respects a LIVE maxTabs reader — change applies without restart (DoD)", () => {
+    const { fork } = liveForkRig();
+    const { window } = windowRig();
+    let cap = 5;
+    const manager = makeManager(fork, window, {});
+    // makeManager does not accept readers; construct via the same rig but a
+    // reader-injecting manager (mirrors makeManager's own wiring).
+    const readerManager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      logger: silentLogger,
+      limits: {},
+      maxTabs: () => cap,
+    });
+
+    for (let n = 0; n < 5; n++) {
+      const r = readerManager.createTab({ workspace: "/ws", sessionId: `s${n}`, resume: false });
+      expect(r.ok).toBe(true);
+    }
+    const sixth = readerManager.createTab({ workspace: "/ws", sessionId: "s5", resume: false });
+    expect(sixth).toMatchObject({ ok: false, reason: "max_tabs", openTabs: 5, maxTabs: 5 });
+
+    cap = 6;
+    const sixthRetry = readerManager.createTab({ workspace: "/ws", sessionId: "s5", resume: false });
+    expect(sixthRetry.ok).toBe(true);
+    expect(readerManager.capacity()).toEqual({ open: 6, max: 6 });
+  });
+
+  it("a below-range reader value clamps to the sanctioned min", () => {
+    const { fork } = liveForkRig();
+    const { window } = windowRig();
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      logger: silentLogger,
+      limits: {},
+      maxTabs: () => 2,
+    });
+    for (let n = 0; n < 4; n++) {
+      const r = manager.createTab({ workspace: "/ws", sessionId: `s${n}`, resume: false });
+      expect(r.ok).toBe(true);
+    }
+    const fifth = manager.createTab({ workspace: "/ws", sessionId: "s4", resume: false });
+    expect(fifth).toMatchObject({ ok: false, reason: "max_tabs", openTabs: 4, maxTabs: 4 });
+  });
+
+  it("a LIVE childRunsPerParentMax reader applies at each waiter's next wake", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    let pp = 1;
+    const manager = childManager(fork, window, { childRunsPerParentMax: () => pp });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-pp-live", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "r1" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1);
+
+    rootHost.emit("message", spawnRequest({ requestId: "r2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "r3" }));
+
+    const raw = manager as unknown as { childSpawnQueue: string[] };
+    expect(raw.childSpawnQueue).toEqual(["r2", "r3"]);
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "r2" || e.requestId === "r3")).toBe(false);
+
+    pp = 2;
+    hosts[1]!.emit("message", childTerminalMsg({ status: "completed" }));
+
+    const events = childRunEvents(rootHost);
+    expect(events.find((e) => e.requestId === "r2")?.kind).toBe("accepted");
+    expect(events.find((e) => e.requestId === "r3")?.kind).toBe("accepted");
+    expect(raw.childSpawnQueue).toEqual([]);
+  });
+
+  it("a LIVE childRunsGlobalMax reader applies at each waiter's next wake", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    let gg = 1;
+    const manager = childManager(fork, window, { childRunsGlobalMax: () => gg });
+    for (const sid of ["rootA", "rootB", "rootC"]) {
+      const r = manager.createTab({ workspace: "/ws", sessionId: sid, resume: false });
+      expect(r.ok).toBe(true);
+    }
+    const [hostA, hostB, hostC] = [hosts[0]!, hosts[1]!, hosts[2]!];
+
+    hostA.emit("message", spawnRequest({ requestId: "a1" }));
+    expect(childRunEvents(hostA).filter((e) => e.kind === "accepted")).toHaveLength(1);
+
+    hostB.emit("message", spawnRequest({ requestId: "b1" }));
+    hostC.emit("message", spawnRequest({ requestId: "c1" }));
+
+    const raw = manager as unknown as { childSpawnQueue: string[] };
+    expect(raw.childSpawnQueue).toEqual(["b1", "c1"]);
+
+    gg = 2;
+    hosts[3]!.emit("message", childTerminalMsg({ status: "completed" })); // A's child
+
+    const bEvents = childRunEvents(hostB);
+    const cEvents = childRunEvents(hostC);
+    expect(bEvents.find((e) => e.requestId === "b1")?.kind).toBe("accepted");
+    expect(cEvents.find((e) => e.requestId === "c1")?.kind).toBe("accepted");
+    expect(raw.childSpawnQueue).toEqual([]);
+  });
+
+  it("reducing a live cap never cancels admitted runs — a NEW spawn parks instead of rejecting", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    let gg = 2;
+    const manager = childManager(fork, window, { childRunsGlobalMax: () => gg });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-reduce", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "k1" }));
+    rootHost.emit("message", spawnRequest({ requestId: "k2" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(2);
+
+    gg = 1; // reduce below the two already running
+    rootHost.emit("message", spawnRequest({ requestId: "k3" }));
+
+    const events = childRunEvents(rootHost);
+    expect(events.some((e) => e.kind === "rejected")).toBe(false);
+    expect(events.filter((e) => e.kind === "terminal")).toHaveLength(0);
+    const raw = manager as unknown as { childSpawnQueue: string[]; childRuns: Map<string, unknown> };
+    expect(raw.childRuns.size).toBe(2);
+    expect(raw.childSpawnQueue).toEqual(["k3"]);
   });
 });
