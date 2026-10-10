@@ -400,6 +400,42 @@ describe("handleSetSecret — connection-scoped write only (TASK.45 W12: legacy 
     const res = await handleSetSecret(makeDeps(), { key: "other.key", value: "x" });
     expect(res).toEqual({ ok: false, reason: "invalid" });
   });
+
+  // TASK.202: the recognizer's force-push hook must fire between the vault
+  // write and the mutation broadcast — same ordering discipline the proxy
+  // password cache refresh already pins (see the H-01 "refreshes the plaintext
+  // cache BEFORE the mutation event" test).
+  it("TASK.202: fires onSecretWritten with the written key and fresh settings BEFORE onMutation", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    const order: string[] = [];
+    const res = await handleSetSecret(
+      makeDeps({
+        catalogIds: CATALOG_IDS,
+        onSecretWritten: (key, settings) => {
+          order.push(`secret:${key}`);
+          expect(settings.provider.connections.map((c) => c.id)).toContain("conn-1");
+        },
+        onMutation: () => void order.push("mutation"),
+      }),
+      { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE },
+    );
+    expect(res.ok).toBe(true);
+    expect(order).toEqual(["secret:provider.connection.conn-1.apiKey", "mutation"]);
+  });
+
+  it("TASK.202: a refused write (weak consent) fires neither hook", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
+    vault.setResult = { ok: false, reason: "weak_storage_needs_consent" };
+    const onSecretWritten = vi.fn();
+    const onMutation = vi.fn();
+    const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS, onSecretWritten, onMutation }), {
+      key: "provider.connection.conn-1.apiKey",
+      value: SECRET_VALUE,
+    });
+    expect(res).toEqual({ ok: false, reason: "weak_storage_needs_consent" });
+    expect(onSecretWritten).not.toHaveBeenCalled();
+    expect(onMutation).not.toHaveBeenCalled();
+  });
 });
 
 describe("handleClearSecret", () => {

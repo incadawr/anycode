@@ -36,6 +36,11 @@ import {
   RECOGNIZER_SET_CHANNEL,
   type RecognizerConfigChanged,
 } from "../shared/recognizer.js";
+// Local literal, not an import from provider-ipc.js: that module pulls in
+// `electron`, whose vi.mock factory (hoisted above the class declarations in
+// this file) would run before they initialize. Same pattern as the sibling
+// index.*-wiring tests' own local CUSTOM_PROVIDER_*_CHANNEL constants.
+const CUSTOM_PROVIDER_UPDATE_CHANNEL = "anycode:custom-provider-update";
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -312,5 +317,169 @@ describe("main/index.ts — recognizer live-push wiring (TASK.198 E1)", () => {
     // is refused, with the same reason a pinned-session connection gets.
     const deleteResult = (await handleConnectionDelete({}, { id: "conn-vision" })) as SettingsMutationResult;
     expect(deleteResult).toMatchObject({ ok: false, reason: "connection_in_use" });
+  });
+
+  // TASK.202: an API-key rotation moves NO fingerprint field (the deliberate
+  // no-vault-read property), so the push-side `onSecretWritten` sentinel is
+  // the only thing that can carry it — rotating the recognizer connection's
+  // OWN key must force a second push; rotating an UNRELATED key must not.
+  it("TASK.202: rotating the recognizer connection's key force-pushes; rotating an unrelated key stays silent", async () => {
+    await import("./index.js");
+
+    const handleTabCreate = await waitForHandler(TAB_CREATE_CHANNEL);
+    const handleSecretSet = await waitForHandler(SECRET_SET_CHANNEL);
+    const handleRecognizerSet = await waitForHandler(RECOGNIZER_SET_CHANNEL);
+
+    const tabResult = (await handleTabCreate({}, { kind: "new", workspace: dir })) as CreateTabResult;
+    expect(tabResult.ok).toBe(true);
+    const rootHost = hostProcesses[0]!;
+
+    // Seed the credential, then turn the recognizer on (one push).
+    const seed = (await handleSecretSet(
+      {},
+      { key: "provider.connection.conn-vision.apiKey", value: "sk-vision-real" },
+    )) as SettingsMutationResult;
+    expect(seed).toMatchObject({ ok: true });
+    expect(recognizerPushes(rootHost)).toHaveLength(0);
+
+    const turnOn = (await handleRecognizerSet(
+      {},
+      { recognizer: { connectionId: "conn-vision", modelId: "vision-model-x" } },
+    )) as SettingsMutationResult;
+    expect(turnOn).toMatchObject({ ok: true });
+    const pushesAfterOn = recognizerPushes(rootHost);
+    expect(pushesAfterOn).toHaveLength(1);
+    expect(pushesAfterOn[0]?.endpoint).toMatchObject({ apiKey: "sk-vision-real" });
+
+    // Rotate the recognizer's OWN key: fingerprint is still, but the sentinel
+    // forces the push — and the endpoint carries the ROTATED secret with the
+    // same baseUrl/transport/model.
+    const rotate = (await handleSecretSet(
+      {},
+      { key: "provider.connection.conn-vision.apiKey", value: "sk-vision-rotated" },
+    )) as SettingsMutationResult;
+    expect(rotate).toMatchObject({ ok: true });
+    const pushesAfterRotate = recognizerPushes(rootHost);
+    expect(pushesAfterRotate).toHaveLength(2);
+    expect(pushesAfterRotate[1]).toEqual({
+      type: RECOGNIZER_CONFIG_CHANGED_TYPE,
+      endpoint: {
+        transport: "openai-chat-completions",
+        baseUrl: "https://vision.example.com",
+        apiKey: "sk-vision-rotated",
+        model: "vision-model-x",
+      },
+    });
+
+    // Rotate an UNRELATED connection's key: no push — still exactly 2.
+    const unrelated = (await handleSecretSet(
+      {},
+      { key: "provider.connection.conn-primary.apiKey", value: "sk-other" },
+    )) as SettingsMutationResult;
+    expect(unrelated).toMatchObject({ ok: true });
+    expect(recognizerPushes(rootHost)).toHaveLength(2);
+  });
+
+  // TASK.202 second half: a custom-provider recognizer connection. Its
+  // credential and address both live on the CustomProviderRecord, so the
+  // fingerprint now mirrors the record's baseUrl (push fires on a baseUrl
+  // edit with no key change) and `onSecretWritten` covers a key rotation
+  // through the provider channel.
+  it("TASK.202: a custom-provider recognizer connection pushes when its record's key rotates and when its record's baseUrl is edited", async () => {
+    await writeFile(
+      join(dir, "settings.json"),
+      JSON.stringify({
+        version: 2,
+        provider: {
+          activeConnectionId: "conn-primary",
+          connections: [
+            { id: "conn-primary", providerId: "", model: "primary-model" },
+            { id: "conn-vision", providerId: "custom:vision-slug", model: "vision-model-x" },
+          ],
+          custom: [
+            {
+              id: "custom:vision-slug",
+              name: "Vision custom",
+              baseUrl: "https://vision-custom.example.com/v1",
+              kind: "openai-compatible",
+              models: ["vision-model-x"],
+            },
+          ],
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+
+    await import("./index.js");
+
+    const handleTabCreate = await waitForHandler(TAB_CREATE_CHANNEL);
+    const handleRecognizerSet = await waitForHandler(RECOGNIZER_SET_CHANNEL);
+    const handleCustomProviderUpdate = await waitForHandler(CUSTOM_PROVIDER_UPDATE_CHANNEL);
+
+    const tabResult = (await handleTabCreate({}, { kind: "new", workspace: dir })) as CreateTabResult;
+    expect(tabResult.ok).toBe(true);
+    const rootHost = hostProcesses[0]!;
+
+    // Seed the record's key through the provider channel's own create — but
+    // the record already exists in the fixture, so the key lands via update.
+    const seedKey = (await handleCustomProviderUpdate(
+      {},
+      { id: "custom:vision-slug", apiKey: "sk-custom-1" },
+    )) as { ok: boolean };
+    expect(seedKey.ok).toBe(true);
+    // The recognizer is not on yet — no push.
+    expect(recognizerPushes(rootHost)).toHaveLength(0);
+
+    const turnOn = (await handleRecognizerSet(
+      {},
+      { recognizer: { connectionId: "conn-vision", modelId: "vision-model-x" } },
+    )) as SettingsMutationResult;
+    expect(turnOn).toMatchObject({ ok: true });
+    const pushesAfterOn = recognizerPushes(rootHost);
+    expect(pushesAfterOn).toHaveLength(1);
+    expect(pushesAfterOn[0]?.endpoint).toMatchObject({
+      baseUrl: "https://vision-custom.example.com/v1",
+      apiKey: "sk-custom-1",
+    });
+
+    // Rotate the record's key through the provider channel (same-origin, no
+    // baseUrl change): fingerprint still, sentinel forces the push.
+    const rotate = (await handleCustomProviderUpdate(
+      {},
+      { id: "custom:vision-slug", apiKey: "sk-custom-2" },
+    )) as { ok: boolean };
+    expect(rotate.ok).toBe(true);
+    const pushesAfterRotate = recognizerPushes(rootHost);
+    expect(pushesAfterRotate).toHaveLength(2);
+    expect(pushesAfterRotate[1]?.endpoint).toMatchObject({
+      baseUrl: "https://vision-custom.example.com/v1",
+      apiKey: "sk-custom-2",
+    });
+
+    // Edit the record's baseUrl (with a fresh key, cross-origin): the
+    // fingerprint's own baseUrl mirror moves — push with the new address.
+    const move = (await handleCustomProviderUpdate(
+      {},
+      { id: "custom:vision-slug", baseUrl: "https://moved.example.com/v1", apiKey: "sk-custom-3" },
+    )) as { ok: boolean };
+    expect(move.ok).toBe(true);
+    const pushesAfterMove = recognizerPushes(rootHost);
+    expect(pushesAfterMove).toHaveLength(3);
+    expect(pushesAfterMove[2]?.endpoint).toMatchObject({
+      baseUrl: "https://moved.example.com/v1",
+      apiKey: "sk-custom-3",
+    });
+
+    // A models-only update writes no vault key and moves no fingerprint
+    // field — silence.
+    const modelsOnly = (await handleCustomProviderUpdate(
+      {},
+      { id: "custom:vision-slug", models: ["vision-model-x"] },
+    )) as { ok: boolean };
+    expect(modelsOnly.ok).toBe(true);
+    expect(recognizerPushes(rootHost)).toHaveLength(3);
   });
 });
