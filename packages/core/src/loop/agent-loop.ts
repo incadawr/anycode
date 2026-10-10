@@ -277,7 +277,22 @@ export interface AgentLoopConfig {
   tokenizer?: Tokenizer;
   /** Overrides over the default context budget (design §2.5). */
   context?: Partial<ContextBudgetConfig>;
-  /** Parallel cap for read-only tool batches; DEFAULT_TOOL_CONCURRENCY when omitted. */
+  /**
+   * Rolling width for a run of parallel-safe tool calls (DEFAULT_TOOL_CONCURRENCY
+   * when omitted). TASK.229: a batch is a bounded FIFO slot pool — as soon as ANY
+   * safe handler finishes, the next waiting call starts; it need not wait for the
+   * whole group. Solo barriers (destructive/unknown/non-concurrentSafe/terminal
+   * control) still drain completely before the next group. This is a SEPARATE
+   * ceiling from the inline subagent runner's own `maxConcurrent` option /
+   * `ANYCODE_SUBAGENT_CONCURRENCY` env: an inline Agent handler waiting on the
+   * child semaphore HOLDS this tool slot, so the effective inline admission width
+   * in one step is min(toolConcurrency, child width) — raising only the child
+   * width cannot exceed the tool width. Child loops inherit no `toolConcurrency`
+   * and keep their own, so this multiplies potential TOOL handlers, never model
+   * streams. Session-tier/engine agents route through the session tier (bypassing
+   * the inline semaphore) and detached children outlive their handlers, so neither
+   * ceiling bounds detached lifetimes or host session concurrency.
+   */
   toolConcurrency?: number;
   /**
    * In-process subagent entry (design §3.1). Placed into the DispatchContext so
@@ -558,6 +573,10 @@ export class AgentLoop {
       modelPort: config.modelPort,
       config: budget,
     });
+    // TASK.229: rolling admission width for a run of parallel-safe calls. The
+    // scheduler normalizes non-finite values to DEFAULT_TOOL_CONCURRENCY and
+    // floors/clamps finite ones >= 1; see AgentLoopConfig.toolConcurrency for
+    // how this interacts with the separate inline child semaphore.
     this.schedulerConfig = {
       maxConcurrency: config.toolConcurrency ?? DEFAULT_TOOL_CONCURRENCY,
     };

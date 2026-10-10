@@ -2687,3 +2687,70 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(childActionBadge(sub, { childTabId: "t", childSessionId: "c", live: true })).toBe("running");
   });
 });
+
+describe("Queued status display (TASK.229)", () => {
+  /** A freshly seeded `subagent_start` record (turns/toolCalls still 0) — the
+   *  exact shape store.patchSubagentStart writes. */
+  const seeded = (): SubagentSubStatus =>
+    mkSubagent({ turns: 0, toolCalls: 0, lastTool: null, activity: [] });
+
+  it("D1: an Agent proposal reads Queued, not Proposed", () => {
+    expect(statusLabel(mkAgentBlock({ status: "proposed", subagent: null }))).toBe("Queued");
+  });
+
+  it("D1: an Agent running with no subagent telemetry reads Queued", () => {
+    expect(statusLabel(mkAgentBlock({ status: "running", subagent: null }))).toBe("Queued");
+    // Omitted telemetry (the minimal/partial call shape) is also Queued.
+    expect(statusLabel({ toolName: "Agent", status: "running", input: {} })).toBe("Queued");
+  });
+
+  it("D1: a real subagent_start seed (turns/toolCalls 0) reads Running", () => {
+    expect(statusLabel(mkAgentBlock({ status: "running", subagent: seeded() }))).toBe("Running");
+  });
+
+  it("D1: an Agent is never Running without started-child telemetry", () => {
+    for (const subagent of [null, undefined] as const) {
+      expect(statusLabel({ toolName: "Agent", status: "running", input: {}, subagent })).not.toBe(
+        "Running",
+      );
+    }
+  });
+
+  it("D2: terminal Agent labels are untouched", () => {
+    expect(statusLabel(mkAgentBlock({ status: "cancelled", subagent: null }))).toBe("Cancelled");
+    expect(statusLabel(mkAgentBlock({ status: "error", subagent: null }))).toBe("Error");
+    expect(statusLabel(mkAgentBlock({ status: "success", subagent: null }))).toBe("Success");
+  });
+
+  it("D2: a detached success stays Dispatched even without telemetry", () => {
+    expect(
+      statusLabel(
+        mkAgentBlock({ status: "success", subagent: null, input: { prompt: "p", detach: true } }),
+      ),
+    ).toBe("Dispatched");
+  });
+
+  it("D2: non-Agent proposed/running labels are unchanged", () => {
+    expect(statusLabel({ toolName: "Bash", status: "proposed", input: {} })).toBe("Proposed");
+    expect(statusLabel({ toolName: "Bash", status: "running", input: {} })).toBe("Running");
+  });
+
+  it("D1: the rendered card badge transitions Queued -> Running once telemetry is seeded", () => {
+    const renderHeader = (block: ToolCallBlock): string =>
+      renderToStaticMarkup(
+        createElement(ToolCallHeaderRow, {
+          block,
+          expanded: false,
+          bodyId: "body-1",
+          onToggleExpanded: () => {},
+        }),
+      );
+    const queued = renderHeader(mkAgentBlock({ status: "proposed", subagent: null }));
+    expect(queued).toContain("tool-call-status-badge");
+    expect(queued).toContain(">Queued<");
+
+    const running = renderHeader(mkAgentBlock({ status: "running", subagent: seeded() }));
+    expect(running).toContain(">Running<");
+    expect(running).not.toContain(">Queued<");
+  });
+});

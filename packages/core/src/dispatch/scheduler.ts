@@ -1,12 +1,19 @@
 /**
- * ToolScheduler (design §2.7): groups one step's proposed calls into batches
+ * ToolScheduler (design §2.7). Groups one step's proposed calls into batches
  * (proposal order preserved, batches sequential, parallel inside a batch up to
  * maxConcurrency) and executes them through the dispatcher.
  *
- * Parallel-safe rule: destructive -> NEVER (solo batch); concurrentSafe ->
- * parallel; not concurrentSafe -> solo; unknown tool -> solo (fail-safe).
- * Adjacent parallel-safe calls merge into one batch. No dependsOn/toposort —
- * proposal order is the batch order.
+ * TASK.229 execution model: planning still produces cap-bounded SAFE batches and
+ * solo barriers, but execution merges adjacent safe batches (including a safe
+ * cap-remainder) into ONE run served by a rolling FIFO slot pool — as soon as
+ * any safe handler finishes, the next waiting call starts. Solo barriers
+ * (destructive/unknown/non-concurrentSafe/terminalControl) remain absolute: a
+ * barrier run drains completely before the next run begins.
+ *
+ * Parallel-safe rule: destructive -> NEVER (solo barrier); concurrentSafe ->
+ * parallel; not concurrentSafe -> solo barrier; unknown tool -> solo barrier
+ * (fail-safe); terminalControl -> solo barrier. No dependsOn/toposort —
+ * proposal order is the batch order. Every proposal receives exactly one outcome.
  */
 
 import type { ProposedToolCall } from "../types/events.js";
@@ -14,10 +21,28 @@ import type { ToolCallOutcome, ToolEmittedEvent } from "../types/tools.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { DispatchContext } from "./dispatcher.js";
 import { executeToolCall } from "./dispatcher.js";
+import { DEFAULT_TOOL_CONCURRENCY } from "../types/config.js";
 
 export interface ToolSchedulerConfig {
   /** DEFAULT_TOOL_CONCURRENCY = 4. */
   maxConcurrency: number;
+}
+
+/**
+ * Normalizes a concurrency width identically for planning and execution: a
+ * finite value is floored and clamped to >= 1; a non-finite (NaN/Infinity) or
+ * unsafe value falls back to DEFAULT_TOOL_CONCURRENCY. NaN/Infinity are never
+ * admitted into capacity logic.
+ */
+function normalizeConcurrency(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_TOOL_CONCURRENCY;
+  }
+  const floored = Math.floor(value);
+  if (!Number.isSafeInteger(floored)) {
+    return DEFAULT_TOOL_CONCURRENCY;
+  }
+  return Math.max(1, floored);
 }
 
 /**
@@ -64,7 +89,7 @@ export function planToolBatches(
   registry: ToolRegistry,
   config: ToolSchedulerConfig,
 ): ProposedToolCall[][] {
-  const cap = Math.max(1, Math.floor(config.maxConcurrency));
+  const cap = normalizeConcurrency(config.maxConcurrency);
   const batches: ProposedToolCall[][] = [];
   let current: ProposedToolCall[] | null = null;
 
@@ -85,9 +110,11 @@ export function planToolBatches(
 }
 
 /**
- * FIFO channel bridging the concurrent per-call tasks of a batch to the single
- * consuming generator: producers push events, the consumer drains them in
- * arrival order and stops once close() has been called and the buffer is empty.
+ * FIFO channel bridging the concurrent per-call tasks of a RUN (a rolling safe
+ * group, or one solo barrier) to the single consuming generator: producers push
+ * events, the consumer drains them in arrival order and stops once close() has
+ * been called and the buffer is empty. Every proposal pushes exactly one result
+ * through here — admittance never changes that, only whether a start precedes it.
  */
 class EventChannel<T> {
   private readonly buffer: T[] = [];
@@ -128,11 +155,80 @@ class EventChannel<T> {
 }
 
 /**
- * Executes the planned batches. Yields tool_execution_start/tool_result in
+ * Bounded FIFO slot pool (TASK.229) that makes a run of parallel-safe calls
+ * ROLLING: as soon as any admitted call releases, the next waiting call is
+ * admitted — it does not wait for the whole group to finish.
+ *
+ * `acquire(signal)` resolves `true` when a slot is handed over and `false` when
+ * the waiter was cancelled. Admission is FIFO. A pre-aborted signal yields
+ * `false` without ever consuming a free slot. A queued abort removes the waiter
+ * and resolves `false`. On handoff the abort listener is removed BEFORE the
+ * waiter is resolved `true`, so no stale listener survives. Settlement/removal
+ * is idempotent. An immediately-available slot still resolves on a microtask
+ * (never synchronously), so callers always yield before their continuation and
+ * FIFO admission order determines start order.
+ */
+class SlotPool {
+  private free: number;
+  private readonly waiters: Array<{
+    resolve: (admitted: boolean) => void;
+    cleanup: () => void;
+  }> = [];
+
+  constructor(width: number) {
+    this.free = width;
+  }
+
+  acquire(signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) {
+      return Promise.resolve(false);
+    }
+    if (this.free > 0) {
+      this.free -= 1;
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolve) => {
+      const waiter = { resolve, cleanup: () => {} };
+      if (signal) {
+        const onAbort = () => {
+          const index = this.waiters.indexOf(waiter);
+          if (index < 0) {
+            // Already settled by a handoff: idempotent, no double resolve.
+            return;
+          }
+          this.waiters.splice(index, 1);
+          waiter.cleanup();
+          resolve(false);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+        waiter.cleanup = () => signal.removeEventListener("abort", onAbort);
+      }
+      this.waiters.push(waiter);
+    });
+  }
+
+  release(): void {
+    const next = this.waiters.shift();
+    if (next) {
+      // Remove the abort listener BEFORE handing the slot over: once resolved
+      // true the waiter owns the slot, so a later abort must not also resolve
+      // it (idempotent settlement).
+      next.cleanup();
+      next.resolve(true);
+    } else {
+      this.free += 1;
+    }
+  }
+}
+
+/**
+ * Executes the planned runs. Yields tool_execution_start/tool_result in
  * completion order (live UI) while the returned outcomes are STRICTLY in
  * proposal order (deterministic history). Guarantees exactly one outcome per
- * call — including cancellation (post-abort calls flow through the dispatcher,
- * which returns an instant cancelled outcome). Never throws.
+ * call — including cancellation. A cancelled waiter (aborted before admission)
+ * gets a typed cancelled outcome with no start event and no handler; an
+ * admitted call re-checks the parent signal before dispatch and releases its
+ * slot in `finally`. Never throws.
  */
 export async function* runToolBatches(
   ctx: DispatchContext,
@@ -141,25 +237,22 @@ export async function* runToolBatches(
   parentSignal?: AbortSignal,
 ): AsyncGenerator<ToolBatchEvent, ToolCallOutcome[], unknown> {
   const batches = planToolBatches(calls, ctx.registry, config);
+  const width = normalizeConcurrency(config.maxConcurrency);
+  const runs = mergeIntoRuns(batches, ctx.registry);
   const outcomes: ToolCallOutcome[] = [];
 
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
-    const batch = batches[batchIndex]!;
-    // Slot per call, filled at its proposal position so the batch contributes
+  for (let runIndex = 0; runIndex < runs.length; runIndex += 1) {
+    const run = runs[runIndex]!;
+    // Slot per call, filled at its proposal position so the run contributes
     // outcomes in proposal order regardless of completion order.
-    const batchOutcomes: ToolCallOutcome[] = new Array(batch.length);
+    const runOutcomes: ToolCallOutcome[] = new Array(run.length);
     const channel = new EventChannel<ToolBatchEvent>();
-    let remaining = batch.length;
+    // Fresh rolling pool per run: safe calls roll through it; a barrier run is a
+    // singleton and never needs more than one slot.
+    const pool = new SlotPool(width);
+    let remaining = run.length;
 
-    batch.forEach((call, index) => {
-      // Start events are pushed synchronously as tasks launch (proposal order);
-      // result events land in completion order as each dispatch settles.
-      channel.push({
-        type: "tool_execution_start",
-        toolCallId: call.id,
-        toolName: call.name,
-        input: call.input,
-      });
+    run.forEach((call, index) => {
       // The handler's ctx.emit pushes coarse progress into the SAME FIFO channel
       // (design §3.2): each emitted event surfaces between this call's start and
       // its result, in emission order. No timers — determinism holds for tests.
@@ -167,12 +260,55 @@ export async function* runToolBatches(
         channel.push(event);
       };
       void (async () => {
-        const outcome = await runOne(ctx, call, parentSignal, emit);
-        batchOutcomes[index] = outcome;
-        channel.push({ type: "tool_result", outcome });
-        remaining -= 1;
-        if (remaining === 0) {
-          channel.close();
+        try {
+          const admitted = await pool.acquire(parentSignal);
+          if (!admitted) {
+            // Cancelled while queued: no start event and no handler ever runs.
+            const cancelled: ToolCallOutcome = {
+              toolCallId: call.id,
+              toolName: call.name,
+              status: "cancelled",
+              modelText: `Tool ${call.name} was cancelled before it started.`,
+              durationMs: 0,
+            };
+            runOutcomes[index] = cancelled;
+            channel.push({ type: "tool_result", outcome: cancelled });
+            return;
+          }
+          try {
+            if (parentSignal?.aborted) {
+              // Admitted at the same moment the parent aborted (handoff race):
+              // cancel before dispatch, then release the slot in the `finally`.
+              const cancelled: ToolCallOutcome = {
+                toolCallId: call.id,
+                toolName: call.name,
+                status: "cancelled",
+                modelText: `Tool ${call.name} was cancelled before it started.`,
+                durationMs: 0,
+              };
+              runOutcomes[index] = cancelled;
+              channel.push({ type: "tool_result", outcome: cancelled });
+              return;
+            }
+            // Start events are pushed in proposal order (admission is FIFO);
+            // result events land in completion order as each dispatch settles.
+            channel.push({
+              type: "tool_execution_start",
+              toolCallId: call.id,
+              toolName: call.name,
+              input: call.input,
+            });
+            const outcome = await runOne(ctx, call, parentSignal, emit);
+            runOutcomes[index] = outcome;
+            channel.push({ type: "tool_result", outcome });
+          } finally {
+            pool.release();
+          }
+        } finally {
+          remaining -= 1;
+          if (remaining === 0) {
+            channel.close();
+          }
         }
       })();
     });
@@ -181,21 +317,21 @@ export async function* runToolBatches(
       yield event;
     }
 
-    for (const outcome of batchOutcomes) {
+    for (const outcome of runOutcomes) {
       outcomes.push(outcome);
     }
 
-    const terminal = batchOutcomes.find(
+    const terminal = runOutcomes.find(
       (candidate) =>
         candidate.status === "success" &&
         candidate.result?.ok === true &&
         candidate.result.control?.type === "workspace_transition",
     );
     if (terminal !== undefined) {
-      // Terminal-control tools are planned solo, so nothing else in their batch
+      // Terminal-control tools are planned solo, so nothing else in their run
       // can race the transition. Every later proposal is paired with a typed
       // cancelled result without entering the dispatcher or handler.
-      const remainingCalls = batches.slice(batchIndex + 1).flat();
+      const remainingCalls = runs.slice(runIndex + 1).flat();
       for (const call of remainingCalls) {
         const cancelled: ToolCallOutcome = {
           toolCallId: call.id,
@@ -212,6 +348,32 @@ export async function* runToolBatches(
   }
 
   return outcomes;
+}
+
+/**
+ * Merges adjacent parallel-safe batches (a safe cap-remainder included) into one
+ * execution run. A non-parallel-safe batch is a barrier: it flushes any open run
+ * and occupies a run of its own, so it drains completely before the next run
+ * starts. Proposal order is preserved throughout.
+ */
+function mergeIntoRuns(
+  batches: readonly ProposedToolCall[][],
+  registry: ToolRegistry,
+): ProposedToolCall[][] {
+  const runs: ProposedToolCall[][] = [];
+  let current: ProposedToolCall[] | null = null;
+  let currentSafe = false;
+  for (const batch of batches) {
+    const safe = batch.every((call) => isParallelSafe(call, registry));
+    if (safe && currentSafe && current !== null) {
+      current.push(...batch);
+      continue;
+    }
+    current = [...batch];
+    currentSafe = safe;
+    runs.push(current);
+  }
+  return runs;
 }
 
 /**
