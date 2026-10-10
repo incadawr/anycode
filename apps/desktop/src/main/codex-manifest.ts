@@ -218,6 +218,17 @@ function readManifestCache(cacheFile: string): ManifestCacheFile | null {
   }
 }
 
+/** Races a promise against a hard wall-clock deadline — an injected fetch that IGNORES the abort signal must still fail closed (Taskana 4230). */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutTimer = setTimeout(() => reject(new Error(`codex manifest refresh timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+  });
+}
+
 /**
  * Refreshes the policy manifest from the raw URL. NEVER throws and never
  * returns garbage: every failure path (offline, non-200, oversized body,
@@ -244,41 +255,48 @@ export async function refreshCodexManifest(options: CodexManifestRefreshOptions)
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CODEX_MANIFEST_FETCH_TIMEOUT_MS);
-    let response: Response;
     try {
-      response = await fetchImpl(url, {
-        headers: {
-          accept: "application/json",
-          ...(cached?.etag !== undefined ? { "if-none-match": cached.etag } : {}),
-        },
-        // Policy travels on the pinned raw URL only — a redirect elsewhere is refused, not followed.
-        redirect: "error",
-        signal: controller.signal,
-      });
+      return await withTimeout(
+        (async (): Promise<CodexManifestRefreshResult> => {
+          const response = await fetchImpl(url, {
+            headers: {
+              accept: "application/json",
+              ...(cached?.etag !== undefined ? { "if-none-match": cached.etag } : {}),
+            },
+            // Policy travels on the pinned raw URL only — a redirect elsewhere is refused, not followed.
+            redirect: "error",
+            signal: controller.signal,
+          });
+          if (response.status === 304 && cached !== null) {
+            return { manifest: cached.manifest, source: "cache" };
+          }
+          if (response.status !== 200) return fallback();
+          const body = await response.text();
+          // Taskana 4230 (supervisor #2): a fetch/body that ignored the abort
+          // and settled after the deadline must never persist a late manifest.
+          if (controller.signal.aborted) return fallback();
+          if (Buffer.byteLength(body, "utf8") > CODEX_MANIFEST_MAX_BYTES) return fallback();
+          const manifest = validateCodexManifest(JSON.parse(body));
+          if (manifest === null) return fallback();
+          const etag = response.headers.get("etag");
+          const cachePayload: ManifestCacheFile = {
+            fetchedAt: new Date(now()).toISOString(),
+            ...(etag !== null ? { etag } : {}),
+            manifest,
+          };
+          try {
+            mkdirSync(dirname(options.cacheFile), { recursive: true });
+            writeFileSync(options.cacheFile, `${JSON.stringify(cachePayload, null, 2)}\n`);
+          } catch {
+            // Advisory cache: failing to persist never fails the refresh itself.
+          }
+          return { manifest, source: "network" };
+        })(),
+        CODEX_MANIFEST_FETCH_TIMEOUT_MS,
+      );
     } finally {
       clearTimeout(timer);
     }
-    if (response.status === 304 && cached !== null) {
-      return { manifest: cached.manifest, source: "cache" };
-    }
-    if (response.status !== 200) return fallback();
-    const body = await response.text();
-    if (Buffer.byteLength(body, "utf8") > CODEX_MANIFEST_MAX_BYTES) return fallback();
-    const manifest = validateCodexManifest(JSON.parse(body));
-    if (manifest === null) return fallback();
-    const etag = response.headers.get("etag");
-    const cachePayload: ManifestCacheFile = {
-      fetchedAt: new Date(now()).toISOString(),
-      ...(etag !== null ? { etag } : {}),
-      manifest,
-    };
-    try {
-      mkdirSync(dirname(options.cacheFile), { recursive: true });
-      writeFileSync(options.cacheFile, `${JSON.stringify(cachePayload, null, 2)}\n`);
-    } catch {
-      // Advisory cache: failing to persist never fails the refresh itself.
-    }
-    return { manifest, source: "network" };
   } catch {
     return fallback();
   }
@@ -287,4 +305,85 @@ export async function refreshCodexManifest(options: CodexManifestRefreshOptions)
 /** Explicit cache-drop (used by tests and the "Refresh" path when a cache is known-poisoned). */
 export function dropCodexManifestCache(cacheFile: string): void {
   rmSync(cacheFile, { force: true });
+}
+
+// ── Taskana 4230: periodic schedule + refresh-before-refuse ──
+
+/** Refresh-before-refuse rate limit (Taskana 4230): an unsupported version must not hammer GitHub per doctor pass. */
+export const CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS = 10 * 60_000;
+
+export interface CodexManifestScheduleTimer {
+  set(fn: () => void, ms: number): { unref(): void };
+  clear(handle: unknown): void;
+}
+
+const NODE_SCHEDULE_TIMER: CodexManifestScheduleTimer = {
+  set: (fn, ms) => setInterval(fn, ms),
+  clear: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
+};
+
+export interface CodexManifestRefreshScheduleHandle { stop(): void }
+
+/**
+ * Periodic advisory refresh (Taskana 4230): re-runs the NON-forced refresh on
+ * the cache-TTL interval. Applies the manifest to the ACTIVE policy exactly
+ * ONCE and hands the caller the BM4 `changed` flag — the caller triggers a
+ * doctor recheck iff changed. Timer is unref'd and stoppable; injectable
+ * timer/refresh for unit tests.
+ */
+export function startCodexManifestRefreshSchedule(options: {
+  cacheFile: string;
+  intervalMs?: number;
+  timer?: CodexManifestScheduleTimer;
+  refresh?: (options: CodexManifestRefreshOptions) => Promise<CodexManifestRefreshResult>;
+  onResult?: (result: CodexManifestRefreshResult, changed: boolean) => void;
+}): CodexManifestRefreshScheduleHandle {
+  const timer = options.timer ?? NODE_SCHEDULE_TIMER;
+  const refresh = options.refresh ?? refreshCodexManifest;
+  const handle = timer.set(() => {
+    void refresh({ cacheFile: options.cacheFile })
+      .then((result) => {
+        const changed = setActiveCodexVersionPolicy({ manifest: result.manifest });
+        options.onResult?.(result, changed);
+      })
+      .catch(() => {});
+  }, options.intervalMs ?? CODEX_MANIFEST_REFRESH_INTERVAL_MS);
+  handle.unref();
+  return { stop() { timer.clear(handle); } };
+}
+
+/**
+ * Rate-limited forced refresh for the refresh-before-refuse seam (Taskana
+ * 4230): coalesced when concurrent, at most one attempt per
+ * CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS, bounded end-to-end by the
+ * whole-operation timeout above. Resolves true only when a NETWORK manifest
+ * actually changed the active policy; every other outcome (non-200, timeout,
+ * garbage, 304, stale-cache fallback) resolves false and RETAINS the current
+ * active policy — a failed forced refresh must never overwrite a newer active
+ * manifest with the bundled fallback or a divergent cache.
+ */
+export function createCodexManifestRefusalRefresh(options: CodexManifestRefreshOptions & { minIntervalMs?: number }): {
+  refreshBeforeRefusal(): Promise<boolean>;
+} {
+  const now = options.now ?? Date.now;
+  const minIntervalMs = options.minIntervalMs ?? CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS;
+  let lastAttemptAt = Number.NEGATIVE_INFINITY;
+  let inFlight: Promise<boolean> | null = null;
+  const attempt = async (): Promise<boolean> => {
+    const result = await refreshCodexManifest({ ...options, force: true });
+    // Supervisor #1: ONLY a network-sourced manifest may change the active
+    // policy here. Cache/bundled/304 outcomes return false without applying.
+    if (result.source !== "network") return false;
+    return setActiveCodexVersionPolicy({ manifest: result.manifest });
+  };
+  return {
+    refreshBeforeRefusal(): Promise<boolean> {
+      if (inFlight !== null) return inFlight; // coalescence BEFORE the rate limit
+      const t = now();
+      if (t - lastAttemptAt < minIntervalMs) return Promise.resolve(false);
+      lastAttemptAt = t;
+      inFlight = attempt().catch(() => false).finally(() => { inFlight = null; });
+      return inFlight;
+    },
+  };
 }

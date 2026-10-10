@@ -176,8 +176,11 @@ import { registerCodexInstallIpc } from "./codex-install.js";
 import {
   activeCodexVersionPolicy,
   codexSupportPolicyFor,
+  createCodexManifestRefusalRefresh,
   refreshCodexManifest,
   setActiveCodexVersionPolicy,
+  startCodexManifestRefreshSchedule,
+  type CodexManifestRefreshScheduleHandle,
 } from "./codex-manifest.js";
 // TASK.206: the main->host carrier for the version-support policy; shared/ so
 // the host side can read it without importing main/**.
@@ -449,6 +452,8 @@ let previewHost: PreviewHostHandle | null = null;
  * Critical) — `before-quit`/`will-quit` below await `shutdown()`.
  */
 let codexOnboarding: CodexOnboardingController | null = null;
+/** Taskana 4230: the periodic manifest-refresh schedule handle (boot wires it; shutdown stops it). */
+let codexManifestRefreshSchedule: CodexManifestRefreshScheduleHandle | null = null;
 /**
  * Claude onboarding control plane (SLICE-CC A3, cut §1.2 mirror of
  * `codexOnboarding` above). Its doctor children are bounded, short-lived
@@ -1949,6 +1954,10 @@ void app.whenReady().then(async () => {
     // not_ready refusal can carry the exact status. Closure over the nullable
     // holder — registration happens before codex onboarding initialization.
     latestCodexReport: (codexProfileId) => codexOnboarding?.lastReportFor(codexProfileId),
+    // Taskana 4230 spawn-freshness guard: re-validate a KNOWN-READY codex
+    // verdict against the binary's current {size, mtimeMs} stamp before the
+    // spawn may proceed. Absent controller (pre-boot) = allow (legacy).
+    verifyCodexSpawn: async (codexProfileId) => codexOnboarding?.verifySpawnFreshness(codexProfileId) ?? true,
     validateWorktreeResume: async (meta) => {
       if (meta.worktree === undefined || meta.projectRoot === undefined) return false;
       try {
@@ -2176,6 +2185,10 @@ void app.whenReady().then(async () => {
   // override — leaves every consumer on its own real `homedir()` default,
   // byte-identical to before this lever existed; a malformed value under
   // automation never reaches here (module-top boot refusal).
+  const codexManifestCacheFile = join(codexProfilesRoot(codexProfilesHome), "manifest.json");
+  // Taskana 4230: self-check profiles get NO new automatic networking — not the
+  // periodic schedule, not the refusal-path forced refresh.
+  const codexRefusalRefresh = selfCheckProfile === undefined ? createCodexManifestRefusalRefresh({ cacheFile: codexManifestCacheFile }) : null;
   codexOnboarding = registerCodexIpc({
     bootEnv,
     ...(selfCheckProfile !== undefined ? { fs: selfCheckBinaryFs } : {}),
@@ -2207,6 +2220,10 @@ void app.whenReady().then(async () => {
     onProfilesChanged: () => {
       sendToMainWindow(win, ENGINES_CHANGED_CHANNEL);
     },
+    // Taskana 4230 (refresh-before-refuse): one rate-limited forced manifest
+    // refresh before an update_required refusal is cached. Absent (self-check)
+    // = legacy behavior.
+    ...(codexRefusalRefresh !== null ? { refreshPolicyBeforeRefusal: () => codexRefusalRefresh.refreshBeforeRefusal() } : {}),
   });
 
   // Kick off the first discovery+doctor pass in the background (TASK.41 п.1:
@@ -2314,22 +2331,28 @@ void app.whenReady().then(async () => {
     },
   });
   setActiveCodexVersionPolicy({ riskAcceptedVersions: settings?.codex?.riskAcceptedVersions ?? [] });
-  // `codexProfilesHome` (W4-F0 lever, undefined in production) rides into the
-  // root derivation — codexProfilesRoot's own homedir() default applies when
-  // the lever is refused/absent.
-  if (selfCheckProfile === undefined) void refreshCodexManifest({ cacheFile: join(codexProfilesRoot(codexProfilesHome), "manifest.json") })
-    .then((result) => {
-      // BM4: only an ACTUAL policy change re-spawns the doctor — an
-      // identical manifest (the common case: cache hit, no-op refresh)
-      // leaves whatever readiness the boot-time recheck already established.
-      const changed = setActiveCodexVersionPolicy({ manifest: result.manifest });
-      if (changed) {
-        // TASK.65: the supported-version policy moved, so a cached verdict may
-        // now be wrong (e.g. a version that just became unsupported) — force.
-        void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
-      }
-    })
-    .catch(() => {});
+  const recheckOnPolicyChange = (): void => {
+    // TASK.65: the supported-version policy moved, so a cached verdict may now
+    // be wrong — force. (Active profile only, same shape as onChanged above.)
+    void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
+  };
+  if (selfCheckProfile === undefined) {
+    void refreshCodexManifest({ cacheFile: codexManifestCacheFile })
+      .then((result) => {
+        // BM4: only an ACTUAL policy change re-spawns the doctor — an
+        // identical manifest (the common case: cache hit, no-op refresh)
+        // leaves whatever readiness the boot-time recheck already established.
+        if (setActiveCodexVersionPolicy({ manifest: result.manifest })) recheckOnPolicyChange();
+      })
+      .catch(() => {});
+    // Taskana 4230: periodic advisory refresh on the cache-TTL interval.
+    // The schedule applies the policy ONCE itself; `changed` arrives here —
+    // index only decides whether to re-trigger the doctor recheck.
+    codexManifestRefreshSchedule = startCodexManifestRefreshSchedule({
+      cacheFile: codexManifestCacheFile,
+      onResult: (_result, changed) => { if (changed) recheckOnPolicyChange(); },
+    });
+  }
 
   // Rollout import control plane (TASK.52, cut §8): list/preview/import a
   // profile's Codex rollouts into OUR history format. Sessions live inside
@@ -2547,6 +2570,10 @@ async function shutdownEverything(): Promise<void> {
   // TASK.47 W15: clear the armed auto-check timer, if any — synchronous,
   // ahead of the awaited teardown below (nothing here depends on it).
   updaterController?.stop();
+  // Taskana 4230: stop the periodic manifest-refresh schedule — synchronous,
+  // ahead of the awaited teardown below.
+  codexManifestRefreshSchedule?.stop();
+  codexManifestRefreshSchedule = null;
   // Preview windows (cut §2.5): synchronous destroy, no write-behind queue to
   // drain — closed ahead of the awaited teardown below, same as the updater.
   previewHost?.closeAll();
