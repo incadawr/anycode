@@ -568,6 +568,40 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
     ]);
   });
 
+  it("a scripted session port's end progress with model/responseModel/engine reaches the emitted subagent_end with all three intact", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SessionSubagentPort = {
+      run: async (_req, opts) => {
+        opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
+        opts.onProgress?.({
+          kind: "end",
+          status: "completed",
+          turns: 1,
+          durationMs: 10,
+          model: "booted-model",
+          responseModel: "glm-5.3",
+          engine: "codex",
+        });
+        return BASE_SESSION_OUTCOME;
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session" },
+      makeCtx({ toolCallId: "call-live", sessionSubagents: port, emit: (e) => emitted.push(e) }),
+    );
+    const end = emitted.find((e) => e.type === "subagent_end");
+    expect(end).toEqual({
+      type: "subagent_end",
+      toolCallId: "call-live",
+      status: "completed",
+      turns: 1,
+      durationMs: 10,
+      model: "booted-model",
+      responseModel: "glm-5.3",
+      engine: "codex",
+    });
+  });
+
   it("attention progress does NOT alter the persisted card snapshot (transient live-only, CUT-S1 §2.1 — proven end-to-end through the real session branch)", async () => {
     const withAttentionPort: SessionSubagentPort = {
       run: async (req, opts) => {

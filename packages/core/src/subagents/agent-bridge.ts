@@ -415,6 +415,7 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         // distinct, independently-optional fields — never conflated.
         ...(progress.model !== undefined ? { model: progress.model } : {}),
         ...(progress.responseModel !== undefined ? { responseModel: progress.responseModel } : {}),
+        ...(progress.engine !== undefined ? { engine: progress.engine } : {}),
         ...(progress.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: progress.finalTurnFinishReason } : {}),
       };
     case "attention":

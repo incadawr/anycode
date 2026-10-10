@@ -1903,6 +1903,25 @@ describe("engine persona (one-shot foreign CLI run)", () => {
     expect(specs[1]?.model).toBe("request-model");
   });
 
+  it("end progress carries engine alongside the requested model (req.model outranks the persona's own)", async () => {
+    const runEngineChild = vi.fn(async (): Promise<SubagentOutcome> => okOutcome());
+    const withModel: PersonaDefinition = { ...enginePersona, model: "persona-model" };
+    const runner = createSubagentRunner(makeParent(), {
+      profiles: [withModel],
+      runEngineChild,
+    });
+    const progress: SubagentProgress[] = [];
+
+    await runner.run(
+      { agentType: "codex-worker", description: "d", prompt: "p", model: "request-model" },
+      { onProgress: (p) => progress.push(p) },
+    );
+
+    const end = progress.find((p) => p.kind === "end");
+    expect(end).toMatchObject({ kind: "end", engine: "codex", model: "request-model" });
+    expect(end && "responseModel" in end).toBe(false);
+  });
+
   it("fires SubagentStop with the engine child's own outcome fields", async () => {
     const { hooks, calls } = recordingHooks();
     const runEngineChild = vi.fn(
