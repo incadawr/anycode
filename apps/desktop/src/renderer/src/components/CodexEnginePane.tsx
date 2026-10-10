@@ -545,9 +545,11 @@ function CodexProfileRow(props: CodexProfileRowProps) {
             <span className="settings-oauth-pending">Waiting for browser sign-in…</span>
             {props.deviceCode && <div role="status">
               Open {props.deviceCode.verificationUrl} and enter <code>{props.deviceCode.userCode}</code> there.
-              <button type="button" className="settings-button" onClick={props.onOpenDevicePage}>Open page</button>
-              <button type="button" className="settings-button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.verificationUrl, "link")}>Copy link</button>
-              <button type="button" className="settings-button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.userCode, "code")}>Copy code</button>
+              <span className="settings-field-row">
+                <button type="button" className="settings-button" onClick={props.onOpenDevicePage}>Open page</button>
+                <button type="button" className="settings-button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.verificationUrl, "link")}>Copy link</button>
+                <button type="button" className="settings-button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.userCode, "code")}>Copy code</button>
+              </span>
             </div>}
             <button type="button" className="settings-button" onClick={props.onCancelSignIn}>
               Cancel
@@ -909,9 +911,11 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       {signingInId && deviceCode?.profileId === signingInId && <div className="settings-section" role="status">
         <p>Open <strong>{deviceCode.verificationUrl}</strong> and enter this code on that page:</p>
         <code>{deviceCode.userCode}</code>
-        <button type="button" className="settings-button settings-button-primary" onClick={() => void bridge.loginOpenDevicePage?.()}>Open page</button>
-        <button type="button" className="settings-button" onClick={() => copyDeviceText(deviceCode.verificationUrl, "link")}>Copy link</button>
-        <button type="button" className="settings-button" onClick={() => copyDeviceText(deviceCode.userCode, "code")}>Copy code</button>
+        <div className="settings-field-row">
+          <button type="button" className="settings-button settings-button-primary" onClick={() => void bridge.loginOpenDevicePage?.()}>Open page</button>
+          <button type="button" className="settings-button" onClick={() => copyDeviceText(deviceCode.verificationUrl, "link")}>Copy link</button>
+          <button type="button" className="settings-button" onClick={() => copyDeviceText(deviceCode.userCode, "code")}>Copy code</button>
+        </div>
         <p className="settings-field-hint">Device-code login may need to be enabled in your ChatGPT security or workspace settings.</p>
       </div>}
       <details className="connection-drawer-advanced"><summary>Advanced troubleshooting</summary>
