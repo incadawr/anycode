@@ -1,10 +1,13 @@
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { makeTrustedScratchDir } from "../../../shared/test-scratch.js";
 import type { BinaryTrustConsent } from "../../../shared/codex-binary-trust.js";
+import {
+  materializeMcpForwardFile,
+} from "./mcp-forward-file.js";
 import {
   CLAUDE_GUI_SURFACE_PROMPT,
   ClaudeClient,
@@ -848,4 +851,95 @@ describe("ClaudeClient.start forwards options.maxTurns to the spawn argv (TASK.1
       await rig.client.close();
     }
   });
+});
+
+// ── TASK.182 / Taskana 4136: --mcp-config argv adjacency + file custody ──
+
+describe("buildClaudeSpawnArgs — mcpConfigPath (TASK.182)", () => {
+  it("places --mcp-config,path IMMEDIATELY BEFORE --strict-mcp-config on fresh spawns", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1", mcpConfigPath: "/tmp/anycode-claude-mcp-1-2.json" });
+    const strict = args.indexOf("--strict-mcp-config");
+    expect(strict).toBeGreaterThan(0);
+    expect(args[strict - 2]).toBe("--mcp-config");
+    expect(args[strict - 1]).toBe("/tmp/anycode-claude-mcp-1-2.json");
+  });
+
+  it("keeps the adjacency on resume spawns too", () => {
+    const args = buildClaudeSpawnArgs({ resume: "ref-1", mcpConfigPath: "/tmp/x.json" });
+    const strict = args.indexOf("--strict-mcp-config");
+    expect(args[strict - 2]).toBe("--mcp-config");
+    expect(args[strict - 1]).toBe("/tmp/x.json");
+  });
+
+  it("preserves the argv byte-for-byte when the option is absent", () => {
+    const withPath = buildClaudeSpawnArgs({ sessionId: "s-1" });
+    expect(withPath).not.toContain("--mcp-config");
+    expect(withPath.indexOf("--strict-mcp-config")).toBeGreaterThan(0);
+  });
+});
+
+describe("ClaudeClient — MCP forward file custody (TASK.182)", () => {
+  function materialize(dir: string): string {
+    return materializeMcpForwardFile(JSON.stringify({ mcpServers: { a: { command: "x", args: [], env: {} } } }), { tmpDir: dir, pid: process.pid }).path;
+  }
+
+  it("keeps the file present after start, removes it on close (idempotent)", async () => {
+    const dir = join(scratchDir, `custody-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const path = materialize(dir);
+    const client = makeClient([`--fixture=${fixture("w0-13-authprobe-signedin.jsonl")}`], { mcpConfigPath: path });
+    try {
+      await client.start();
+      expect(existsSync(path)).toBe(true); // retained while the client owns it
+      await client.initialize();
+      expect(existsSync(path)).toBe(true);
+    } finally {
+      await client.close();
+    }
+    expect(existsSync(path)).toBe(false);
+    await client.close(); // idempotent cleanup
+    expect(existsSync(path)).toBe(false);
+  }, 20_000);
+
+  it("removes the file when start fails at preflight (no child ever existed)", async () => {
+    const dir = join(scratchDir, `preflight-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const path = materialize(dir);
+    // --bad-version makes the --version preflight exit 0 with an unsupported
+    // version string -> EngineVersionError BEFORE any transport child exists.
+    const client = new ClaudeClient({
+      binaryPath: process.execPath,
+      binaryArgs: [childPath, "--bad-version"],
+      cwd: process.cwd(),
+      sourceEnv: { HOME: "/home/test", PATH: process.env.PATH },
+      binaryTrust: TRUSTED,
+      mcpConfigPath: path,
+    });
+    await expect(client.start()).rejects.toThrow(EngineVersionError);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("removes the file when close() is called before start()", async () => {
+    const dir = join(scratchDir, `closepre-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const path = materialize(dir);
+    const client = makeClient([], { mcpConfigPath: path });
+    await client.close();
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("removes the file when the child exits unexpectedly", async () => {
+    const dir = join(scratchDir, `crash-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const path = materialize(dir);
+    const client = makeClient(["--exit=0"], { mcpConfigPath: path });
+    await client.start();
+    expect(existsSync(path)).toBe(true);
+    // Wait for the terminal error caused by the unexpected child close.
+    const deadline = Date.now() + 5_000;
+    while (existsSync(path) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(path)).toBe(false);
+  }, 10_000);
 });

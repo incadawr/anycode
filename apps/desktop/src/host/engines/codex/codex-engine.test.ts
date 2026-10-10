@@ -2839,3 +2839,92 @@ describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding (TASK.18
     }
   });
 });
+
+// ── TASK.182 / Taskana 4136: config.mcp_servers on thread/start + thread/resume ──
+
+describe("CodexEngine — native session MCP thread config (TASK.182)", () => {
+  const SAMPLE_MAP: Record<string, unknown> = {
+    alpha: { command: "npx", args: ["-y", "alpha"], env: { TOKEN: "SECRET_SENTINEL_ABC" }, cwd: "/srv/alpha" },
+    remote: { url: "https://remote.example/mcp", http_headers: { Authorization: "Bearer SECRET_SENTINEL_ABC" } },
+  };
+
+  function threadParams(server: FakeAppServer, method: string): Record<string, unknown> {
+    return server.calls.find((call) => call.method === method)?.params as Record<string, unknown>;
+  }
+
+  it("sends config.mcp_servers on thread/start with the resolved map", async () => {
+    const server = new FakeAppServer();
+    const created = await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+      servers: SAMPLE_MAP,
+    });
+    expect(created.threadId).toBe("fresh-thread");
+    const params = threadParams(server, "thread/start");
+    expect(params.config).toEqual({ mcp_servers: SAMPLE_MAP });
+  });
+
+  it("sends config.mcp_servers on thread/resume too (fresh app-server has no memory)", async () => {
+    const server = new FakeAppServer();
+    await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+      servers: SAMPLE_MAP,
+    });
+    const params = threadParams(server, "thread/resume");
+    expect(params.config).toEqual({ mcp_servers: SAMPLE_MAP });
+    expect(params.threadId).toBe("persisted-thread");
+  });
+
+  it("OMITS config entirely when the map is empty (no resurrected forward)", async () => {
+    const server = new FakeAppServer();
+    await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+      servers: {},
+    });
+    expect(threadParams(server, "thread/start").config).toBeUndefined();
+
+    server.calls.length = 0;
+    await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+      servers: {},
+    });
+    expect(threadParams(server, "thread/resume").config).toBeUndefined();
+  });
+
+  it("keeps the map absent and byte-identical params when no mcpForward is given", async () => {
+    const server = new FakeAppServer();
+    await createNativeCodexSession(server, "/work");
+    expect(threadParams(server, "thread/start").config).toBeUndefined();
+  });
+
+  it("notices still drain on the first turn even with NO servers (all-skipped case)", async () => {
+    const server = new FakeAppServer();
+    const created = await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+      notices: [{ type: "engine_notice", level: "warning", message: "Some configured MCP servers could not be loaded and were skipped." }],
+    });
+    const notices = await drainEngineNotices(created.engine);
+    expect(notices.some((event) => event.type === "engine_notice" && event.message.includes("could not be loaded"))).toBe(true);
+    const params = threadParams(server, "thread/start");
+    expect(params.config).toBeUndefined();
+  });
+
+  it("boot notices and the sample map ride together without leaking env/header values into notices", async () => {
+    const server = new FakeAppServer();
+    const created = await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, undefined, undefined, undefined, {
+      servers: SAMPLE_MAP,
+      notices: [{ type: "engine_notice", level: "warning", message: "MCP server \"x\" sets a working directory, which this engine does not support for MCP servers; the server was skipped." }],
+    });
+    const notices = await drainEngineNotices(created.engine);
+    const joined = JSON.stringify(notices);
+    expect(joined).not.toContain("SECRET_SENTINEL_ABC");
+    expect(threadParams(server, "thread/start").config).toEqual({ mcp_servers: SAMPLE_MAP });
+  });
+
+  /** Drains the engine's boot notices — they ride the FIRST turn's stream (drainNotices seam). */
+  async function drainEngineNotices(engine: import("./codex-engine.js").CodexEngine): Promise<AgentEvent[]> {
+    const notices: AgentEvent[] = [];
+    for await (const event of engine.runTurn("first turn", { signal: new AbortController().signal })) {
+      if ((event as { type?: string }).type === "engine_notice") {
+        notices.push(event as AgentEvent);
+        // one notice is enough — ending mid-turn is fine for the drain seam
+        break;
+      }
+    }
+    return notices;
+  }
+});
