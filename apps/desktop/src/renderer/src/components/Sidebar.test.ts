@@ -7,13 +7,14 @@
  * dedupe / ordering / label logic, so they are covered directly instead of
  * DOM-rendering the component.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { TabInfo } from "../tabs-store.js";
 import {
   applyHiddenProjects,
   buildSidebarGroups,
   bulkDeleteConfirm,
+  capSessionPage,
   clampMenuLeft,
   deleteOlderNotice,
   filterSidebarGroups,
@@ -24,6 +25,9 @@ import {
   sidebarConfirmCopy,
   singleDeleteConfirm,
   SIDEBAR_GROUP_ROW_LIMIT,
+  SIDEBAR_SESSIONS_LIMIT,
+  SessionIndexController,
+  tabsSessionKey,
   type FilteredSidebarRow,
   type SidebarGroup,
   type SidebarRow,
@@ -40,6 +44,12 @@ function tab(overrides: Partial<TabInfo> & Pick<TabInfo, "tabId" | "workspace">)
     timelinePanelOpen: false,
     ...overrides,
   };
+}
+
+function summaries(count: number): SessionSummary[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `s${i}`, workspace: "/w", model: "m", mode: "build", createdAt: 1_000 + i, updatedAt: 2_000 + i,
+  }));
 }
 
 function session(overrides: Partial<SessionSummary> & Pick<SessionSummary, "id" | "workspace">): SessionSummary {
@@ -358,6 +368,124 @@ describe("limitGroupRows (TASK.125)", () => {
 
     expect(shown).toHaveLength(2);
     expect(hidden).toBe(8);
+  });
+});
+
+describe("tabsSessionKey (TASK.125 — real session-set membership)", () => {
+  it("identity-only mutations keep the key: title/flag flips", () => {
+    const base = tab({ tabId: "t1", workspace: "/w", sessionId: "s1" });
+    const flipped = { ...base, title: "B", hostExited: true, terminalOpen: true };
+    expect(tabsSessionKey([flipped])).toBe(tabsSessionKey([base]));
+  });
+  it("a second tab bound to the same session, and unbound-tab churn, keep the key; order never matters", () => {
+    const t1 = tab({ tabId: "t1", workspace: "/w", sessionId: "s1" });
+    const t2 = tab({ tabId: "t2", workspace: "/w", sessionId: "s1" });
+    const draft = tab({ tabId: "t3", workspace: "/w" }); // sessionId null
+    expect(tabsSessionKey([t1, t2])).toBe(tabsSessionKey([t1]));
+    expect(tabsSessionKey([t1, draft])).toBe(tabsSessionKey([t1]));
+    expect(tabsSessionKey([t1, draft])).toBe(tabsSessionKey([draft, t1]));
+  });
+  it("a bind (null→id) and a bound-tab close change the key", () => {
+    const bound = tab({ tabId: "t1", workspace: "/w", sessionId: "s1" });
+    const unbound = tab({ tabId: "t1", workspace: "/w" });
+    expect(tabsSessionKey([bound])).not.toBe(tabsSessionKey([unbound]));
+    expect(tabsSessionKey([bound])).not.toBe(tabsSessionKey([]));
+  });
+});
+
+describe("capSessionPage (TASK.125)", () => {
+  it("a probe page at or under the limit passes through whole, hasMore false", () => {
+    const page = summaries(SIDEBAR_SESSIONS_LIMIT);
+    expect(capSessionPage(page)).toEqual({ page, hasMore: false });
+  });
+  it("an over-limit probe page (LIMIT+1) is cut to the limit and flagged, order preserved", () => {
+    const { page, hasMore } = capSessionPage(summaries(SIDEBAR_SESSIONS_LIMIT + 1));
+    expect(page).toHaveLength(SIDEBAR_SESSIONS_LIMIT);
+    expect(page[0]?.id).toBe("s0");
+    expect(hasMore).toBe(true);
+  });
+});
+
+describe("SessionIndexController (TASK.125 — fetch discipline; the hook delegates here)", () => {
+  function rig(rows: readonly SessionSummary[]) {
+    const fetchList = vi.fn(async (limit?: number): Promise<readonly SessionSummary[]> => {
+      if (limit === undefined && rows.length > SIDEBAR_SESSIONS_LIMIT) {
+        return rows; // full list regardless of cap
+      }
+      return rows.slice(0, limit ?? rows.length);
+    });
+    return { controller: new SessionIndexController(fetchList), fetchList };
+  }
+  const bound = (id = "t1", session = "s1") => tab({ tabId: id, workspace: "/w", sessionId: session });
+
+  it("initial sync fetches the bounded probe page (LIMIT+1) and applies the cap", async () => {
+    const { controller, fetchList } = rig(summaries(SIDEBAR_SESSIONS_LIMIT + 1));
+    await controller.sync([bound()], false);
+    expect(fetchList).toHaveBeenCalledTimes(1);
+    expect(fetchList).toHaveBeenCalledWith(SIDEBAR_SESSIONS_LIMIT + 1);
+    expect(controller.sessions).toHaveLength(SIDEBAR_SESSIONS_LIMIT);
+    expect(controller.hasMore).toBe(true);
+    expect(controller.error).toBe(false);
+  });
+
+  it("identity-only tab mutations do NOT fetch (key guard, not array identity)", async () => {
+    const { controller, fetchList } = rig([]);
+    await controller.sync([bound()], false);
+    const before = fetchList.mock.calls.length;
+    await controller.sync([{ ...bound(), title: "B", hostExited: true, terminalOpen: true }], false);
+    expect(fetchList.mock.calls.length).toBe(before);
+  });
+
+  it("a second tab on the same session and unbound-tab churn do NOT fetch; a bind and a bound-tab close DO", async () => {
+    const { controller, fetchList } = rig([]);
+    await controller.sync([bound()], false);
+    let before = fetchList.mock.calls.length;
+    await controller.sync([bound(), bound("t2")], false); // same session set
+    await controller.sync([bound(), tab({ tabId: "t3", workspace: "/w" })], false); // unbound draft
+    expect(fetchList.mock.calls.length).toBe(before);
+    await controller.sync([bound(), tab({ tabId: "t3", workspace: "/w", sessionId: "s2" })], false); // bind
+    expect(fetchList.mock.calls.length).toBe(++before);
+    await controller.sync([tab({ tabId: "t3", workspace: "/w", sessionId: "s2" })], false); // bound close
+    expect(fetchList.mock.calls.length).toBe(++before);
+  });
+
+  it("switching to full (search/show-all) fetches UNcapped and keeps old sessions reachable", async () => {
+    const rows = summaries(SIDEBAR_SESSIONS_LIMIT + 30);
+    const { controller, fetchList } = rig(rows);
+    await controller.sync([bound()], false); // capped
+    await controller.sync([bound()], true); // full
+    expect(fetchList).toHaveBeenLastCalledWith(); // zero args — full list
+    expect(controller.sessions).toHaveLength(rows.length); // the old tail is present (deletion access)
+    expect(controller.hasMore).toBe(false);
+  });
+
+  it("load() is the unconditional path (delete flows) and respects the current mode", async () => {
+    const { controller, fetchList } = rig([]);
+    await controller.sync([bound()], true);
+    await controller.load(true);
+    expect(fetchList).toHaveBeenCalledTimes(2);
+    expect(fetchList).toHaveBeenLastCalledWith();
+  });
+
+  it("a rejected fetch fails soft AND retries on the next sync (key cleared on failure)", async () => {
+    const fetchList = vi.fn(async (): Promise<readonly SessionSummary[]> => {
+      throw new Error("ipc down");
+    });
+    const controller = new SessionIndexController(fetchList);
+    await controller.sync([bound()], false);
+    expect(controller.error).toBe(true);
+    expect(controller.sessions).toBeNull();
+    await controller.sync([{ ...bound(), title: "flip-only" }], false); // same key — but failure cleared it
+    expect(fetchList).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("focus refetch removal (TASK.125)", () => {
+  it("Sidebar.tsx no longer subscribes to window focus — no fetch path may hang off it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(__dirname, "Sidebar.tsx"), "utf8");
+    expect(src).not.toContain('addEventListener("focus"');
   });
 });
 

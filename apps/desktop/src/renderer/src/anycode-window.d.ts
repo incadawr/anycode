@@ -344,7 +344,7 @@ declare global {
       // connection (drill-down pick on the model chip). Fail-closed — every
       // refusal leaves the tab on its original connection.
       tabRebind(request: TabRebindRequest): Promise<TabRebindResult>;
-      listSessions(): Promise<SessionSummary[]>;
+      listSessions(limit?: number): Promise<SessionSummary[]>;
       // TASK.114: hard-delete one persisted session + its cascade; main's
       // active-session gate (`reason:"active"`) is the authority.
       deleteSession(sessionId: string): Promise<DeleteSessionResult>;

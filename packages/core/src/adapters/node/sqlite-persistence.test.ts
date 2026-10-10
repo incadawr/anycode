@@ -3069,6 +3069,68 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     });
   });
 
+  describe("TASK.125 — one activity rule shared by listRootSessions and listSessionsOlderThan", () => {
+    const dayMs = 24 * 60 * 60 * 1000;
+    const backdate = (adapter: SqlitePersistenceAdapter, id: string, ms: number): void => {
+      (adapter as unknown as { db: DatabaseSync }).db!
+        .prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")
+        .run(ms, id);
+    };
+
+    // Fixture: "hist" — last history record is FRESH, row stamp backdated.
+    // "meta" — last history record is OLD, then a metadata touchSession stamped
+    // the row NOW (the case where monotonic updated_at ≠ COALESCE(history)).
+    async function seed(adapter: SqlitePersistenceAdapter, now: number) {
+      await adapter.createSession({ id: "hist", workspace: "/w", model: "m", mode: "build" });
+      backdate(adapter, "hist", now - 40 * dayMs);
+      await adapter.appendHistory("hist", [makeItem({ id: "h1", createdAt: now - 1 * dayMs })]);
+      await adapter.createSession({ id: "meta", workspace: "/w", model: "m", mode: "build" });
+      backdate(adapter, "meta", now - 40 * dayMs);
+      await adapter.appendHistory("meta", [makeItem({ id: "m1", createdAt: now - 30 * dayMs })]);
+      await adapter.touchSession("meta", { title: "renamed later" }); // stamps updated_at = now
+    }
+
+    it("root list orders by last history record and projects it as updatedAt — a later metadata stamp does not float the row", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const now = Date.now();
+      await seed(adapter, now);
+      const list = await adapter.listRootSessions();
+      expect(list.map((s) => s.id)).toEqual(["hist", "meta"]);
+      expect(list[1]!.updatedAt).toBe(now - 30 * dayMs); // age label reads the history witness
+      await adapter.close();
+    });
+
+    it("a session with NO history falls back to updated_at — its only activity witness", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const now = Date.now();
+      await adapter.createSession({ id: "quiet", workspace: "/w", model: "m", mode: "build" });
+      backdate(adapter, "quiet", now - 10 * dayMs);
+      await seed(adapter, now); // hist is newer by history
+      const list = await adapter.listRootSessions();
+      expect(list.map((s) => s.id)).toEqual(["hist", "quiet", "meta"]);
+      expect(list[1]!.updatedAt).toBe(now - 10 * dayMs);
+      await adapter.close();
+    });
+
+    it("the cap lands AFTER the activity ordering — a metadata-newer row cannot starve the true-most-active out of a LIMIT page", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      await seed(adapter, Date.now());
+      expect((await adapter.listRootSessions({ limit: 1 })).map((s) => s.id)).toEqual(["hist"]);
+      await adapter.close();
+    });
+
+    it("the SAME rule governs the deletion cutoff: metadata-newer-than-history is still a candidate, history-fresh is not", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      const now = Date.now();
+      await seed(adapter, now);
+      const candidates = await adapter.listSessionsOlderThan("/w", now - 7 * dayMs);
+      expect(candidates.map((s) => s.id)).toEqual(["meta"]); // history witness, not the fresh touchSession stamp
+      // …and the sidebar read of the same row agrees (one rule, both directions):
+      expect((await adapter.listRootSessions()).find((s) => s.id === "meta")!.updatedAt).toBe(now - 30 * dayMs);
+      await adapter.close();
+    });
+  });
+
   it("deleteSessionTree engine parity: deleteSession's summary mirrors the reviewed cascade", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     await seedFullSession(adapter, "root", "ref-root");

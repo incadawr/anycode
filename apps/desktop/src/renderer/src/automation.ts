@@ -2385,7 +2385,7 @@ export interface SidebarDom {
 export interface AnycodeBridge {
   createTab(request: CreateTabRequest): Promise<CreateTabResult>;
   closeTab(tabId: string): Promise<CloseTabResult>;
-  listSessions(): Promise<SessionSummary[]>;
+  listSessions(limit?: number): Promise<SessionSummary[]>;
 }
 
 /** Frozen contract (design §3.2) that `window.__anycodeAutomation` exposes to the main-process HTTP server (S3). */

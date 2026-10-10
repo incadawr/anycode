@@ -17,8 +17,10 @@ import {
   handleCreate,
   handleSessionDelete,
   handleSessionsDeleteOlder,
+  handleSessionsList,
   handleTabRebind,
   handleWorkspacePick,
+  sessionsListRequestSchema,
   tabRebindRequestSchema,
   toSummary,
   type ChildHistoryResult,
@@ -1720,6 +1722,42 @@ describe("handleSessionsDeleteOlder (TASK.114)", () => {
     expect(listArgs[0]!.workspace).toBe("/proj");
     expect(listArgs[0]!.cutoff).toBeGreaterThanOrEqual(before - 30 * 24 * 60 * 60 * 1000);
     expect(listArgs[0]!.cutoff).toBeLessThanOrEqual(after - 30 * 24 * 60 * 60 * 1000);
+  });
+});
+
+describe("handleSessionsList (TASK.125)", () => {
+  const rootMeta = (id: string, updatedAt: number): SessionMeta => ({ id, workspace: "/w", model: "m", mode: "build", createdAt: 1, updatedAt });
+  function rig(listRootSessions: TabIpcDeps["persistence"]["listRootSessions"]) {
+    return {
+      manager: makeManager().manager,
+      persistence: { ...persistenceStub, listRootSessions },
+      dialog: makeDialog({ canceled: true, filePaths: [] }).dialog,
+    };
+  }
+  it("without a limit reads the full root list and projects summaries in order (updatedAt = activity witness)", async () => {
+    const metas = [rootMeta("newer", 30), rootMeta("older", 10)];
+    const listRootSessions = vi.fn(async () => metas);
+    const res = await handleSessionsList(rig(listRootSessions));
+    expect(listRootSessions).toHaveBeenCalledWith(undefined);
+    expect(res.map((s) => s.id)).toEqual(["newer", "older"]);
+    expect(res[0]!.updatedAt).toBe(30); // the sidebar age label's source
+  });
+  it("forwards a valid limit as { limit } — the sidebar's capped default page", async () => {
+    const listRootSessions = vi.fn(async () => []);
+    await handleSessionsList(rig(listRootSessions), { limit: 51 });
+    expect(listRootSessions).toHaveBeenCalledWith({ limit: 51 });
+  });
+  it("a malformed request fails open to the full list", async () => {
+    const listRootSessions = vi.fn(async () => []);
+    await handleSessionsList(rig(listRootSessions), { limit: "many" });
+    expect(listRootSessions).toHaveBeenCalledWith(undefined);
+  });
+  it("sessionsListRequestSchema bounds: 1..1000 whole numbers only; absent is valid", () => {
+    expect(sessionsListRequestSchema.safeParse({}).success).toBe(true);
+    expect(sessionsListRequestSchema.safeParse({ limit: 50 }).success).toBe(true);
+    expect(sessionsListRequestSchema.safeParse({ limit: 0 }).success).toBe(false);
+    expect(sessionsListRequestSchema.safeParse({ limit: 1001 }).success).toBe(false);
+    expect(sessionsListRequestSchema.safeParse({ limit: "50" }).success).toBe(false);
   });
 });
 
