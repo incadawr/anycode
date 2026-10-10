@@ -90,6 +90,11 @@ import type {
 import { CHILD_PROGRESS_TYPE, CHILD_STEER_QUEUE_MAX, parseChildProgress } from "../shared/child-sessions.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import { CoreEngine } from "./engines/core-engine.js";
+import { ClaudeEngine, type ClaudeEngineTimeouts, type ClaudeTransport } from "./engines/claude/claude-engine.js";
+import { ClaudeApprovalBridge } from "./engines/claude/approval-bridge.js";
+import { ClaudeModelCatalog } from "./engines/claude/models.js";
+import { findClaudePreset } from "./engines/claude/presets.js";
+import type { ClaudeStreamMessage } from "./engines/claude/protocol.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import {
   MANUAL_COMPACTION_TURN_ID,
@@ -6173,5 +6178,557 @@ describe("TASK.242 child inbox terminal race", () => {
       expect(h.session.agentMessageStatus("agent-in-finalize")?.state).toBe("acknowledged");
       expect(h.onTerminal.mock.calls[0]![0].finalText).toContain("clarified result");
     } finally { h.close(); }
+  });
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TASK.116: a claude child steered while a permission is pending / a tool runs
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** A ClaudeTransport the test drives frame by frame (buffered stream + parked reader). */
+class SeamTransport implements ClaudeTransport {
+  interrupts = 0;
+  closed = 0;
+  readonly sent: (string | unknown[])[] = [];
+  private waiters: ((result: IteratorResult<ClaudeStreamMessage>) => void)[] = [];
+  private buffer: ClaudeStreamMessage[] = [];
+  private done = false;
+
+  async initialize(): Promise<{ commands: unknown[]; models: unknown[]; account: { tokenSource?: string } }> {
+    return { commands: [], models: [], account: { tokenSource: "oauth" } };
+  }
+  async controlRequest<T>(): Promise<T> {
+    return {} as T;
+  }
+  async getContextUsage(): Promise<Record<string, unknown>> {
+    return { totalTokens: 1, maxTokens: 2 };
+  }
+  async interrupt(): Promise<{ stillQueued: string[] }> {
+    this.interrupts += 1;
+    return { stillQueued: [] };
+  }
+  sendUserMessage(content: string | unknown[]): void {
+    this.sent.push(content);
+  }
+  notifications(): AsyncIterable<ClaudeStreamMessage> {
+    const self = this;
+    return {
+      [Symbol.asyncIterator](): AsyncIterator<ClaudeStreamMessage> {
+        return {
+          next(): Promise<IteratorResult<ClaudeStreamMessage>> {
+            const value = self.buffer.shift();
+            if (value !== undefined) return Promise.resolve({ value, done: false });
+            if (self.done) return Promise.resolve({ value: undefined, done: true });
+            return new Promise((resolve) => self.waiters.push(resolve));
+          },
+        };
+      },
+    };
+  }
+  async close(): Promise<void> {
+    this.closed += 1;
+    this.done = true;
+    for (const waiter of this.waiters.splice(0)) waiter({ value: undefined, done: true });
+  }
+  push(frame: ClaudeStreamMessage): void {
+    const waiter = this.waiters.shift();
+    if (waiter !== undefined) waiter({ value: frame, done: false });
+    else this.buffer.push(frame);
+  }
+}
+
+const seamToolUse = (id: string, command: string): ClaudeStreamMessage =>
+  ({
+    type: "assistant",
+    message: { id: `m-${id}`, model: "m", content: [{ type: "tool_use", id, name: "Bash", input: { command } }] },
+  }) as unknown as ClaudeStreamMessage;
+const seamToolResult = (id: string): ClaudeStreamMessage =>
+  ({
+    type: "user",
+    uuid: `u-${id}`,
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] },
+  }) as unknown as ClaudeStreamMessage;
+const seamResult = (reason: "completed" | "aborted_streaming" = "completed"): ClaudeStreamMessage =>
+  ({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: "done",
+    num_turns: 1,
+    duration_ms: 1,
+    duration_api_ms: 1,
+    total_cost_usd: 0,
+    terminal_reason: reason,
+  }) as unknown as ClaudeStreamMessage;
+
+interface SeamChildHarness {
+  session: Session;
+  transport: SeamTransport;
+  received: HostToUiMessage[];
+  /** What the (fake) CLI got back for each can_use_tool it raised. */
+  responses: { kind: "success" | "error"; payload: unknown }[];
+  send(message: UiToHostMessage): void;
+  waitFor<T extends HostToUiMessage>(predicate: (message: HostToUiMessage) => message is T, timeoutMs?: number): Promise<T>;
+  waitUntil(predicate: () => boolean, timeoutMs?: number): Promise<void>;
+  /** Injects a can_use_tool control_request into the real approval bridge. */
+  raiseApproval(toolUseId: string, command: string): { signal: AbortController };
+  onTerminal: ReturnType<typeof vi.fn<(report: ChildTerminalReport) => void>>;
+  close(): void;
+}
+
+/** Generic child Session builder over any engine: `makeEngine` receives the child's real broker. */
+function createSeamChild(makeEngine: (broker: IpcPermissionBroker) => SessionEngine, opts: { flushHistoryImpl?: () => Promise<void> } = {}) {
+  const channel = new MessageChannel();
+  const uiPort = channel.port1;
+  const hostPort = channel.port2;
+  const received: HostToUiMessage[] = [];
+  uiPort.on("message", (value: unknown) => {
+    received.push(value as HostToUiMessage);
+  });
+  uiPort.start();
+  const outbound = new Outbound();
+  const emit = tapChildPermissions((message: HostToUiMessage): void => outbound.emit(message), () => {});
+  const broker = new IpcPermissionBroker(emit);
+  const toolFs = new MemFs();
+  const engine = makeEngine(broker);
+  const onReady = vi.fn<() => void>();
+  const onTerminal = vi.fn<(report: ChildTerminalReport) => void>();
+  const flushHistory = vi.fn<() => Promise<void>>(opts.flushHistoryImpl ?? (() => Promise.resolve()));
+  const onProgress = vi.fn<(report: ChildProgressReport) => void>();
+  let nowCalls = 0;
+  const session = new Session({
+    outbound,
+    engine,
+    broker,
+    fs: toolFs,
+    workspace: "/workspace",
+    projectRoot: "/workspace",
+    model: "m",
+    sessionId: "child-session",
+    rules: new SessionPermissionRules(),
+    persistence: { touch() {} },
+    child: { onReady, flushHistory, onTerminal, onProgress, now: (): number => (nowCalls++) * 2_000 },
+  });
+  session.bindPort(nodeWirePort(hostPort));
+  const waitUntil = (predicate: () => boolean, timeoutMs = 1_000): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      if (predicate()) return resolve();
+      const interval = setInterval(() => {
+        if (predicate()) {
+          cleanup();
+          resolve();
+        }
+      }, 5);
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("waitUntil timed out"));
+      }, timeoutMs);
+      const cleanup = (): void => {
+        clearInterval(interval);
+        clearTimeout(timer);
+      };
+    });
+  const waitFor = <T extends HostToUiMessage>(predicate: (message: HostToUiMessage) => message is T, timeoutMs = 1_000): Promise<T> =>
+    waitUntil(() => received.some(predicate), timeoutMs).then(() => received.find(predicate) as T);
+  return {
+    session,
+    received,
+    onTerminal,
+    flushHistory,
+    waitUntil,
+    waitFor,
+    broker,
+    send: (message: UiToHostMessage): void => uiPort.postMessage(message),
+    close(): void {
+      uiPort.close();
+      hostPort.close();
+    },
+  };
+}
+
+function createClaudeChildHarness(timeouts?: Partial<ClaudeEngineTimeouts>): SeamChildHarness {
+  const transport = new SeamTransport();
+  const responses: SeamChildHarness["responses"] = [];
+  let approvals: ClaudeApprovalBridge | undefined;
+  const base = createSeamChild((broker) => {
+    approvals = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+    const catalog = ClaudeModelCatalog.fromInitialize([{ value: "m", resolvedModel: "m", displayName: "m" }]);
+    return new ClaudeEngine(
+      transport,
+      "ref",
+      approvals,
+      { catalog, model: "m", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [] },
+      timeouts,
+    );
+  });
+  return {
+    ...base,
+    transport,
+    responses,
+    raiseApproval(toolUseId, command) {
+      const abort = new AbortController();
+      void approvals!.handle(
+        {
+          requestId: `req-${toolUseId}`,
+          subtype: "can_use_tool",
+          request: { tool_name: "Bash", tool_use_id: toolUseId, input: { command } },
+          signal: abort.signal,
+        },
+        {
+          success: (payload) => responses.push({ kind: "success", payload }),
+          error: (payload) => responses.push({ kind: "error", payload }),
+        },
+      );
+      return { signal: abort };
+    },
+  };
+}
+
+/** FIFO proof: a ui_ready round-trip means everything sent before it was already routed. */
+async function fifoMarker(h: { send(m: UiToHostMessage): void; received: HostToUiMessage[]; waitUntil(p: () => boolean): Promise<void> }): Promise<void> {
+  const before = h.received.filter(isHostReady).length;
+  h.send({ type: "ui_ready" });
+  await h.waitUntil(() => h.received.filter(isHostReady).length > before);
+}
+
+const startedTurns = (h: { received: HostToUiMessage[] }): number => new Set(h.received.filter(isTurnStarted).map((m) => m.turnId)).size;
+
+const steer = (h: { send(m: UiToHostMessage): void }, id: string): void =>
+  h.send({ type: "user_message", requestId: id, text: `steer ${id}` });
+const toolCallSeen = (h: SeamChildHarness): boolean => h.received.some(agentEventOf("tool_call"));
+
+describe("Session — child mode: claude engine steer seam (TASK.116)", () => {
+  it("a steer during a pending permission parks without touching the child; after the owner allows, it drains into turn 2 and ends in ONE terminal", async () => {
+    const h = createClaudeChildHarness();
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      expect(h.session.startProgrammaticTurn("run sleep")).toEqual({ ok: true });
+      await h.waitUntil(() => h.transport.sent.length === 1);
+      h.transport.push(seamToolUse("tu1", "sleep 60"));
+      await h.waitUntil(() => toolCallSeen(h));
+      h.raiseApproval("tu1", "sleep 60");
+      const req = await h.waitFor(isPermissionRequest);
+
+      steer(h, "steer-1");
+      await fifoMarker(h);
+
+      expect(h.transport.interrupts).toBe(0);
+      expect(h.transport.sent).toHaveLength(1);
+      expect(h.transport.closed).toBe(0);
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+      expect(startedTurns(h)).toBe(1);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+      expect(h.responses).toHaveLength(0); // steering neither answers nor withdraws the approval
+
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+      await h.waitUntil(() => h.responses.length === 1);
+      expect(h.responses[0]).toMatchObject({ kind: "success", payload: { behavior: "allow", toolUseID: "tu1" } });
+      h.transport.push(seamToolResult("tu1"));
+      h.transport.push(seamResult());
+      await h.waitUntil(() => h.transport.sent.length === 2);
+      await h.waitUntil(() => startedTurns(h) === 2);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+      h.transport.push(seamResult());
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1);
+      expect(h.onTerminal.mock.calls[0]![0].status).toBe("completed");
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+      expect(h.transport.interrupts).toBe(0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("an owner DENY of the pending permission settles it without moving the steer; after normal completion the steer drains", async () => {
+    const h = createClaudeChildHarness();
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("run sleep");
+      await h.waitUntil(() => h.transport.sent.length === 1);
+      h.transport.push(seamToolUse("tu1", "sleep 60"));
+      await h.waitUntil(() => toolCallSeen(h));
+      h.raiseApproval("tu1", "sleep 60");
+      const req = await h.waitFor(isPermissionRequest);
+      steer(h, "steer-1");
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitUntil(() => h.responses.length === 1);
+      expect(h.responses[0]).toMatchObject({ kind: "success", payload: { behavior: "deny", toolUseID: "tu1" } });
+      expect(h.transport.sent).toHaveLength(1);
+      h.transport.push(seamResult());
+      await h.waitUntil(() => h.transport.sent.length === 2);
+      h.transport.push(seamResult());
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1);
+      expect(h.onTerminal.mock.calls[0]![0].status).toBe("completed");
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+      expect(h.transport.closed).toBe(0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a steer during a RUNNING tool (no modal) parks until the tool result and the turn result arrive, then drains", async () => {
+    const h = createClaudeChildHarness();
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("run sleep");
+      await h.waitUntil(() => h.transport.sent.length === 1);
+      h.transport.push(seamToolUse("tu1", "sleep 60"));
+      await h.waitUntil(() => toolCallSeen(h));
+      steer(h, "steer-1");
+      await fifoMarker(h);
+      expect(h.transport.interrupts).toBe(0);
+      expect(h.transport.sent).toHaveLength(1);
+      expect(h.transport.closed).toBe(0);
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+
+      h.transport.push(seamToolResult("tu1"));
+      h.transport.push(seamResult());
+      await h.waitUntil(() => h.transport.sent.length === 2);
+      h.transport.push(seamResult());
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1);
+      expect(h.onTerminal.mock.calls[0]![0].status).toBe("completed");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("cancel vs steer: cancel interrupts exactly once and does not kill; a late response to the cancelled approval does not leak; the queued steer still drains into turn 2", async () => {
+    const h = createClaudeChildHarness();
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("run sleep");
+      await h.waitUntil(() => h.transport.sent.length === 1);
+      h.transport.push(seamToolUse("tu1", "sleep 60"));
+      await h.waitUntil(() => toolCallSeen(h));
+      h.raiseApproval("tu1", "sleep 60");
+      const req = await h.waitFor(isPermissionRequest);
+      steer(h, "steer-1");
+
+      h.send({ type: "cancel_turn" });
+      await h.waitUntil(() => h.transport.interrupts === 1);
+      await h.waitUntil(() => h.responses.length === 1); // the pending approval was settled (denied)
+      expect(h.responses[0]).toMatchObject({ kind: "success", payload: { behavior: "deny" } });
+      // A late owner answer to the cancelled approval is inert.
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+      await fifoMarker(h);
+      expect(h.responses).toHaveLength(1);
+      expect(h.transport.closed).toBe(0);
+
+      h.transport.push(seamResult("aborted_streaming"));
+      await h.waitUntil(() => h.transport.sent.length === 2);
+      expect(h.transport.interrupts).toBe(1);
+      expect(h.transport.closed).toBe(0);
+      h.transport.push(seamResult());
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1);
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("the CLI dying while an approval is pending and a steer is queued: the approval tears down, the steer is rejected not_ready, no second send, ONE error terminal with the real reason", async () => {
+    const h = createClaudeChildHarness();
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("run sleep");
+      await h.waitUntil(() => h.transport.sent.length === 1);
+      h.transport.push(seamToolUse("tu1", "sleep 60"));
+      await h.waitUntil(() => toolCallSeen(h));
+      h.raiseApproval("tu1", "sleep 60");
+      await h.waitFor(isPermissionRequest);
+      steer(h, "steer-1");
+
+      void h.transport.close(); // the CLI exits
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1);
+      const report = h.onTerminal.mock.calls[0]![0];
+      await h.waitUntil(() => h.received.filter(isTurnRejected).length >= 1);
+      expect(report.status).toBe("error");
+      expect(report.finalText).toContain("Claude exited during a turn");
+      expect(h.received.filter(isTurnRejected)).toEqual([expect.objectContaining({ requestId: "steer-1", reason: "not_ready" })]);
+      expect(h.transport.sent).toHaveLength(1);
+      expect(startedTurns(h)).toBe(1);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a Stop whose settle deadline passes with a steer queued: transport closes, engine death is signalled, the loop stays cancelled, the steer is rejected, no second send", async () => {
+    const h = createClaudeChildHarness({ postInterruptSettleMs: 30 });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("run sleep");
+      await h.waitUntil(() => h.transport.sent.length === 1);
+      h.transport.push(seamToolUse("tu1", "sleep 60"));
+      await h.waitUntil(() => toolCallSeen(h));
+      h.raiseApproval("tu1", "sleep 60");
+      await h.waitFor(isPermissionRequest);
+      steer(h, "steer-1");
+      h.send({ type: "cancel_turn" });
+      // No settling result is ever pushed.
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1, 3_000);
+      await h.waitUntil(() => h.received.filter(isTurnRejected).length >= 1);
+      expect(h.transport.closed).toBe(1);
+      expect(h.transport.sent).toHaveLength(1);
+      expect(h.onTerminal.mock.calls[0]![0].status).toBe("cancelled");
+      expect(h.received.filter(isTurnRejected)).toEqual([expect.objectContaining({ requestId: "steer-1", reason: "not_ready" })]);
+    } finally {
+      h.close();
+    }
+  });
+});
+
+/** A stub engine whose first turn waits on a gate, then yields `outcome`; later turns record `started`. */
+function createGatedStubEngine(outcome: AgentEvent[], gate: Promise<void>) {
+  const started: string[] = [];
+  const engine: SessionEngine = {
+    id: "claude",
+    capabilities: {
+      supportsCorePermissions: false,
+      supportsRewind: false,
+      supportsWorkflow: false,
+      supportsGitMutations: false,
+      supportsContextUsage: false,
+      supportsContextBreakdown: false,
+      supportsInteractiveApprovals: true,
+      costAccounting: false,
+      supportsModelSelection: false,
+      supportsReasoningEffort: false,
+      supportsImages: false,
+      supportsTasks: false,
+      supportsFileSnapshots: false,
+    },
+    mode: () => "build",
+    setMode: () => {},
+    reasoningEffort: () => undefined,
+    setReasoningEffort: () => {},
+    async *runTurn(text: string): AsyncIterable<AgentEvent> {
+      started.push(text);
+      if (started.length === 1) {
+        await gate;
+        yield { type: "turn_start", turn: 1 };
+        for (const event of outcome) yield event;
+        return;
+      }
+      yield { type: "turn_start", turn: started.length };
+      yield { type: "turn_end", turn: started.length, finishReason: "stop" } as AgentEvent;
+      yield { type: "loop_end", reason: "completed", turns: started.length } as AgentEvent;
+    },
+    historyItems: () => [],
+    dispose: async () => {},
+  };
+  return { engine, started };
+}
+
+describe("Session — child mode: engine-death latch vs recoverable errors (TASK.116)", () => {
+  it("a steer queued before the engine_dead error turn ends AND one queued while flushHistory is parked are both rejected not_ready; one turn ever started; ONE error terminal carrying the real reason", async () => {
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => (openGate = resolve));
+    const reason = "Claude exited during a turn";
+    const { engine, started } = createGatedStubEngine(
+      [
+        { type: "error", error: new Error(reason), safe: { code: "engine_dead", message: reason } } as AgentEvent,
+        { type: "turn_end", turn: 1, finishReason: "error" } as AgentEvent,
+        { type: "loop_end", reason: "error", turns: 1 } as AgentEvent,
+      ],
+      gate,
+    );
+    let openFlush!: () => void;
+    const flushGate = new Promise<void>((resolve) => (openFlush = resolve));
+    let flushCalls = 0;
+    const h = createSeamChild(() => engine, { flushHistoryImpl: () => (flushCalls++ === 0 ? flushGate : Promise.resolve()) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      expect(h.session.startProgrammaticTurn("go")).toEqual({ ok: true });
+      steer(h, "steer-1");
+      await fifoMarker(h);
+      openGate();
+      await h.waitUntil(() => flushCalls === 1); // parked in flushHistory
+      steer(h, "steer-2");
+      await fifoMarker(h);
+      openFlush();
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1);
+      expect(started).toEqual(["go"]);
+      expect(startedTurns(h)).toBe(1);
+      const rejected = h.received.filter(isTurnRejected);
+      // (a ui_ready marker re-asserts a still-pending rejection; compare the distinct set)
+      expect([...new Set(rejected.map((m) => `${m.requestId}:${m.reason}`))].sort()).toEqual([
+        "steer-1:not_ready",
+        "steer-2:not_ready",
+      ]);
+      const report = h.onTerminal.mock.calls[0]![0];
+      expect(report.status).toBe("error");
+      expect(report.finalText).toContain(reason);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("control: a recoverable error WITHOUT engine_dead keeps today's drain — the prequeued steer still runs and the chain ends in one terminal", async () => {
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => (openGate = resolve));
+    const { engine, started } = createGatedStubEngine(
+      [
+        { type: "error", error: new Error("rate limited") } as AgentEvent,
+        { type: "turn_end", turn: 1, finishReason: "error" } as AgentEvent,
+        { type: "loop_end", reason: "error", turns: 1 } as AgentEvent,
+      ],
+      gate,
+    );
+    const h = createSeamChild(() => engine);
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      steer(h, "steer-1");
+      await fifoMarker(h);
+      openGate();
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1);
+      expect(started).toHaveLength(2);
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("hostile claude error text never reaches the parent-visible finalText", async () => {
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => (openGate = resolve));
+    const { engine } = createGatedStubEngine(
+      [
+        {
+          type: "error",
+          error: new Error("Bearer secret-poison"),
+          safe: { code: "engine_dead", message: "The agent request failed. Retry or recheck the selected connection in Settings." },
+        } as AgentEvent,
+        { type: "turn_end", turn: 1, finishReason: "error" } as AgentEvent,
+        { type: "loop_end", reason: "error", turns: 1 } as AgentEvent,
+      ],
+      gate,
+    );
+    const h = createSeamChild(() => engine);
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      openGate();
+      await h.waitUntil(() => h.onTerminal.mock.calls.length === 1);
+      const report = h.onTerminal.mock.calls[0]![0];
+      expect(report.status).toBe("error");
+      expect(report.finalText).not.toContain("secret-poison");
+      expect(JSON.stringify(h.received)).not.toContain("secret-poison");
+    } finally {
+      h.close();
+    }
   });
 });
