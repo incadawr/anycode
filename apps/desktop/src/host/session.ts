@@ -401,6 +401,20 @@ export interface ChildTerminalReport {
   finalTurnFinishReason?: "length";
   /** TASK 4149: the last loop_end's ceiling verdict declared the work done. Present only when true. */
   declaredDoneAtCeiling?: boolean;
+  /**
+   * The child host's ACTIVE session model at terminal — the literal
+   * configured/sent model (this.model), not the request's `model:` nor the
+   * parent's pre-boot accepted label. Always present: a terminal is only
+   * reported for a session that actually ran.
+   */
+  model: string;
+  /**
+   * The provider's own model CLAIM, read off the child's dedicated model
+   * port at terminal (via `ChildSessionOptions.responseModel`). Optional:
+   * absent when no dedicated-port claim is available (engine children,
+   * inherited/shared ports, providers that expose no raw claim).
+   */
+  responseModel?: string;
 }
 
 /**
@@ -449,6 +463,13 @@ export interface ChildSessionOptions {
    * a "completed" card whose "Open" reads an empty transcript).
    */
   flushHistory: () => Promise<void>;
+  /**
+   * Reads the child's dedicated model port's last provider claim at
+   * terminal, for `ChildTerminalReport.responseModel`. Optional: absent on
+   * hosts with no attributable core claim (engine children, shared ports).
+   * Called at most once per terminal report, on the reporting path only.
+   */
+  responseModel?: () => string | undefined;
   /**
    * Invoked exactly once per host lifetime: after the steer queue has
    * fully drained (CUT-S2 §5.16 — a terminal published while the queue is
@@ -2908,6 +2929,8 @@ export class Session {
       const flushDurationMs = Date.now() - this.childStartedAt;
       this.rejectQueuedSteerMessages();
       this.childTerminalFinalized = true;
+      // Read the dedicated-port claim ONCE for the terminal being reported.
+      const responseModel = this.child.responseModel?.();
       try {
         this.child.onTerminal({
           status: "error",
@@ -2916,6 +2939,8 @@ export class Session {
           turns: this.childTurns,
           toolCalls: this.childToolCalls,
           durationMs: flushDurationMs,
+          model: this.model,
+          ...(responseModel !== undefined ? { responseModel } : {}),
           ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
         });
       } catch (onTerminalError) {
@@ -2972,6 +2997,8 @@ export class Session {
     // Measured AFTER the rescue so the reported duration includes it.
     const durationMs = Date.now() - this.childStartedAt;
     this.childTerminalFinalized = true;
+    // Read the dedicated-port claim ONCE for the terminal being reported.
+    const responseModel = this.child.responseModel?.();
     try {
       this.child.onTerminal({
         status: this.childLoopStatus ?? "error",
@@ -2980,6 +3007,8 @@ export class Session {
         turns: this.childTurns,
         toolCalls: this.childToolCalls,
         durationMs,
+        model: this.model,
+        ...(responseModel !== undefined ? { responseModel } : {}),
         ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
         ...(this.childFinalTurnFinishReason !== undefined ? { finalTurnFinishReason: this.childFinalTurnFinishReason } : {}),
         ...(this.childDeclaredDoneAtCeiling && this.childLoopStatus === "max_turns" ? { declaredDoneAtCeiling: true } : {}),

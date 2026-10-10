@@ -81,6 +81,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         durationMs: event.durationMs,
         ...(event.model !== undefined ? { model: event.model } : {}),
         ...(event.responseModel !== undefined ? { responseModel: event.responseModel } : {}),
+        ...(event.engine !== undefined ? { engine: event.engine } : {}),
       };
     case "workflow_end":
       return {
