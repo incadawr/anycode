@@ -115,6 +115,8 @@ export interface CodexVersionVerdict {
   risk: boolean;
   /** The range the verdict was judged against, for the report/UI/refusal text. */
   supportedRange: string;
+  /** Soft-allow (owner decision 10.10): allowed WITHOUT verification — patch of a verified minor, or above the verified ceiling. Absent when verified in-range or risk-accepted. */
+  warning?: string;
 }
 
 /** Display form of a policy's supported set — the `||` join every report/refusal message shows. */
@@ -123,12 +125,70 @@ export function supportedRangeText(ranges: readonly string[]): string {
 }
 
 /**
+ * Forward-patch check (owner decision 10.10, supervisor correction): is there
+ * an actually-satisfying witness version in the candidate's same major/minor
+ * that the candidate is strictly LATER than? Witnesses probed are X.Y.0 plus
+ * each comparator bound in that same major/minor (also bound.patch+1 for a
+ * strict `>` lower bound); a witness must satisfy the complete conjunction.
+ * Handles `=X.Y.Z` pins, lower bounds at nonzero patches, inclusive ceilings
+ * and contradictory bounds, and prevents allowing a patch below the active
+ * minimum just because it shares a minor with a verified version.
+ */
+function isVerifiedMinor(parsed: ParsedCodexVersion, comparators: readonly CodexRangeComparator[]): boolean {
+  const witnesses: ParsedCodexVersion[] = [{ major: parsed.major, minor: parsed.minor, patch: 0 }];
+  for (const { op, version: bound } of comparators) {
+    if (bound.major !== parsed.major || bound.minor !== parsed.minor) continue;
+    witnesses.push(bound);
+    if (op === ">") witnesses.push({ major: bound.major, minor: bound.minor, patch: bound.patch + 1 });
+  }
+  return witnesses.some(
+    (witness) => satisfiesCodexRange(witness, comparators) && compareCodexVersions(parsed, witness) > 0,
+  );
+}
+
+/**
+ * Effective ceiling of a union of ranges (supervisor correction): each valid
+ * range's ceiling is its tightest `<`, `<=` or `=` bound; the union ceiling is
+ * the highest of those, inclusive if any equally high ceiling is inclusive.
+ * Malformed ranges are skipped; an unbounded valid range makes the union
+ * unbounded (null). A version soft-allows above the union ceiling, or equal
+ * to an EXCLUSIVE union ceiling.
+ */
+function overallCeiling(ranges: readonly string[]): { version: ParsedCodexVersion; inclusive: boolean } | null {
+  let ceiling: { version: ParsedCodexVersion; inclusive: boolean } | null = null;
+  for (const range of ranges) {
+    const comparators = parseCodexRange(range);
+    if (comparators === null) continue;
+    const upper = comparators.filter(({ op }) => op === "<" || op === "<=" || op === "=");
+    if (upper.length === 0) return null; // an unbounded valid range ⇒ union unbounded
+    let tightest = upper[0]!;
+    for (const bound of upper) {
+      const cmp = compareCodexVersions(bound.version, tightest.version);
+      // Within one conjunction the LOWEST upper bound constrains; on equal
+      // versions the EXCLUSIVE bound wins (it admits strictly less).
+      if (cmp < 0 || (cmp === 0 && bound.op === "<")) tightest = bound;
+    }
+    const entry = { version: tightest.version, inclusive: tightest.op !== "<" };
+    if (ceiling === null) {
+      ceiling = entry;
+    } else {
+      const cmp = compareCodexVersions(entry.version, ceiling.version);
+      if (cmp > 0) ceiling = entry;
+      else if (cmp === 0 && entry.inclusive) ceiling = { version: ceiling.version, inclusive: true };
+    }
+  }
+  return ceiling;
+}
+
+/**
  * Judges one version string against a policy. Order matters:
  *  1. unparsable or below `CODEX_MIN_FLOOR` -> rejected ALWAYS (risk
  *     acceptance cannot override the compiled floor);
  *  2. inside any policy range -> allowed;
  *  3. explicitly risk-accepted (exact version match) -> allowed, flagged risk;
- *  4. otherwise rejected.
+ *  4. a patch of a verified minor, or above/equal-to-the-exclusive verified
+ *     ceiling -> allowed WITH a warning (soft-allow, owner decision 10.10);
+ *  5. otherwise rejected.
  */
 export function judgeCodexVersion(version: string, policy: CodexSupportPolicy): CodexVersionVerdict {
   const supportedRange = supportedRangeText(policy.ranges);
@@ -146,6 +206,20 @@ export function judgeCodexVersion(version: string, policy: CodexSupportPolicy): 
   }
   if (policy.riskAcceptedVersions.includes(version)) {
     return { allowed: true, risk: true, supportedRange };
+  }
+  // Owner decision 10.10 (option A): forward-compatibility soft-allows. The
+  // floor check above still refuses everything below CODEX_MIN_FLOOR, and
+  // versions in manifest gaps (an unverified minor below the ceiling) stay
+  // refused — only PATCHES of verified minors and ABOVE-CEILING versions pass.
+  for (const range of policy.ranges) {
+    const comparators = parseCodexRange(range);
+    if (comparators !== null && isVerifiedMinor(parsed, comparators)) {
+      return { allowed: true, risk: false, supportedRange, warning: `Codex ${version} is a patch of a verified release but is not verified itself (supported ${supportedRange}) — not verified, running anyway.` };
+    }
+  }
+  const ceiling = overallCeiling(policy.ranges);
+  if (ceiling !== null && (compareCodexVersions(parsed, ceiling.version) > 0 || (!ceiling.inclusive && compareCodexVersions(parsed, ceiling.version) === 0))) {
+    return { allowed: true, risk: false, supportedRange, warning: `Codex ${version} is newer than the verified range (${supportedRange}) — not verified, running anyway.` };
   }
   return { allowed: false, risk: false, supportedRange };
 }

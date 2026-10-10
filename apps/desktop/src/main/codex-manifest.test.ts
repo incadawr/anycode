@@ -75,14 +75,20 @@ describe("effectiveCodexManifest", () => {
   });
 
   it("falls back to BUNDLED on any invalid input — network garbage never widens the range (red-proof)", () => {
-    // The forged manifest claims a huge range; if validation were skipped the
-    // verdict below would flip to allowed — that flip is the red this test
-    // exists to catch.
+    // The forged manifest claims a huge range covering everything; if
+    // validation were skipped, a version ABOVE the bundled ceiling would be
+    // verified (allowed, no warning) under it. Under the real bundled
+    // fallback that same version is soft-ALLOWED (owner decision 10.10) but
+    // carries the not-verified warning — so the warning's presence is the red
+    // this test exists to catch: it proves the verdict was judged against the
+    // bundled range, never the forged one.
     const forged = { ...validManifest({ supported: [{ range: ">=0.1.0 <99.0.0", status: "tested" }], minimum: "0.1.0" }) };
     const effective = effectiveCodexManifest(forged);
     expect(effective).toEqual(BUNDLED_CODEX_MANIFEST);
     const verdict = codexVersionVerdict("0.999.0", { manifest: effective, riskAcceptedVersions: [] });
-    expect(verdict.allowed).toBe(false);
+    expect(verdict.allowed).toBe(true);
+    expect(verdict.risk).toBe(false);
+    expect(verdict.warning).toMatch(/not verified, running anyway/);
   });
 });
 
@@ -106,10 +112,11 @@ describe("codexVersionVerdict", () => {
     expect(codexVersionVerdict("0.144.1", policy(manifest)).supportedRange).toBe(">=0.144.0 <0.145.0 || >=0.146.0 <0.147.0");
   });
 
-  it("rejects a version outside every range when it is not risk-accepted", () => {
+  it("soft-allows a version outside every range (above the ceiling) with a warning", () => {
     const verdict = codexVersionVerdict("0.150.0", policy(validManifest()));
-    expect(verdict.allowed).toBe(false);
+    expect(verdict.allowed).toBe(true);
     expect(verdict.risk).toBe(false);
+    expect(verdict.warning).toBeDefined();
   });
 
   it("allows an out-of-range version the user explicitly risk-accepted (§7.4), flagged as risk", () => {
@@ -117,8 +124,17 @@ describe("codexVersionVerdict", () => {
     expect(verdict).toEqual({ allowed: true, risk: true, supportedRange: ">=0.144.0 <0.146.0" });
   });
 
-  it("risk acceptance is PER-VERSION, not blanket", () => {
-    expect(codexVersionVerdict("0.150.1", policy(validManifest(), ["0.150.0"])).allowed).toBe(false);
+  it("risk acceptance is PER-VERSION, not blanket (gap versions)", () => {
+    const manifest = validManifest({
+      supported: [
+        { range: ">=0.144.0 <0.145.0", status: "tested" },
+        { range: ">=0.146.0 <0.147.0", status: "tested" },
+      ],
+    });
+    const accepted = codexVersionVerdict("0.145.0", policy(manifest, ["0.145.0"]));
+    expect(accepted.allowed).toBe(true);
+    expect(accepted.risk).toBe(true);
+    expect(codexVersionVerdict("0.145.1", policy(manifest, ["0.145.0"])).allowed).toBe(false);
   });
 
   it(`rejects a version below the compile-time floor ${CODEX_MIN_FLOOR} ALWAYS — even when a manifest range admits it AND it is risk-accepted (red-proof)`, () => {
@@ -185,9 +201,17 @@ describe("active version policy (module seam the doctor defaults from)", () => {
   });
 
   it("BM4: only an ACTUAL policy change re-triggers a recheck — a widened manifest updates readiness for a cached version WITHOUT any user action", () => {
-    const narrow = validManifest({ supported: [{ range: ">=0.144.0 <0.146.0", status: "tested" }] });
+    const narrow = validManifest({
+      supported: [
+        { range: ">=0.144.0 <0.145.0", status: "tested" },
+        { range: ">=0.146.0 <0.147.0", status: "tested" },
+      ],
+    });
     setActiveCodexVersionPolicy({ manifest: narrow });
-    const cachedVersion = "0.148.0";
+    const cachedVersion = "0.145.3";
+    // 0.145.3 is a manifest-gap version under the narrow ranges — refused. The
+    // 10.10 soft-allow admits only patches of verified minors and
+    // above-ceiling versions, and a gap patch is neither.
     expect(codexVersionVerdict(cachedVersion, activeCodexVersionPolicy()).allowed).toBe(false);
 
     // The refresh `.then` pattern main/index.ts wires (BM4): recheck fires

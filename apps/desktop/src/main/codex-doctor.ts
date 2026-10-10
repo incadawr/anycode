@@ -733,6 +733,7 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
 
   const client = new CodexRpcClient(spawnImpl);
   const versionPolicy = options.versionPolicy ?? activeCodexVersionPolicy();
+  let versionWarning: string | undefined;
   const trust = options.trust ?? ((path: string) => classifyCodexBinaryPathTrust(path, undefined, platform, undefined, options.consents ?? []));
   /** RE-READ at every gate, never captured: an `AbortSignal` flips under a run in progress — that is its entire purpose, and a narrowed snapshot of it would be a lie. */
   const quitRequested = (): boolean => options.signal?.aborted === true;
@@ -783,9 +784,11 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     // Manifest verdict (cut §4.2 row 3): outside every supported range AND not
     // risk-accepted (§7.4) — and ALWAYS when below the compiled floor, which
     // no manifest and no acceptance can override.
-    if (!codexVersionVerdict(version, versionPolicy).allowed) {
+    const verdict = codexVersionVerdict(version, versionPolicy);
+    if (!verdict.allowed) {
       return { status: "update_required", version };
     }
+    versionWarning = verdict.warning;
 
     // An abort that landed during the (bounded) preflight must not go on to
     // spawn a child the caller has already stopped waiting for — that child
@@ -886,6 +889,7 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     ...report,
     ...(profileId !== undefined ? { profileId } : {}),
     ...(report.version !== undefined ? { supportedRange: manifestSupportedRange(versionPolicy.manifest) } : {}),
+    ...(versionWarning !== undefined ? { versionWarning } : {}),
   });
   try {
     return stamp(await Promise.race([run, aborted]));

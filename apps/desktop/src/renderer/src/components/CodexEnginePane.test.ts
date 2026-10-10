@@ -15,6 +15,7 @@ import {
   canRepairLink,
   canSignIn,
   codexQuotaLines,
+  codexVersionWarningNotice,
   deriveBinaryActions,
   deriveCodexQuotaWindowLabel,
   describeAccountEmailLine,
@@ -295,6 +296,18 @@ describe("loginFailureMessage", () => {
     expect(loginFailureMessage("timeout")).toMatch(/timed out/i);
     expect(loginFailureMessage("failed")).toMatch(/failed/i);
     expect(loginFailureMessage("cancelled")).toBeNull();
+  });
+});
+
+describe("codexVersionWarningNotice", () => {
+  it("returns the soft-allow warning text from the doctor report", () => {
+    const warning = "Codex 0.150.0 is newer than the verified range — not verified, running anyway.";
+    expect(codexVersionWarningNotice({ status: "ready", version: "0.150.0", versionWarning: warning })).toBe(warning);
+  });
+
+  it("returns null when the report has no warning or is absent", () => {
+    expect(codexVersionWarningNotice({ status: "ready", version: "0.150.0" })).toBeNull();
+    expect(codexVersionWarningNotice(undefined)).toBeNull();
   });
 });
 

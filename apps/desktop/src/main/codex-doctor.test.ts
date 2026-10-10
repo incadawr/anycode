@@ -312,6 +312,29 @@ describe("runCodexDoctor", () => {
   it("reports update_required for a version outside the supported range, without spawning app-server at all", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--bad-version"]) });
     expect(report).toEqual({ status: "update_required", version: "0.99.0", supportedRange: BUNDLED_SUPPORTED_RANGE });
+    expect(report.versionWarning).toBeUndefined();
+  });
+
+  it("soft-allows an above-ceiling version through the production status path, carrying the warning", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--report-version=0.150.0"]),
+      versionPolicy: { manifest: narrowManifest(">=0.144.0 <0.146.0"), riskAcceptedVersions: [] },
+    });
+    expect(report.status).toBe("ready");
+    expect(report.version).toBe("0.150.0");
+    expect(report.versionWarning).toMatch(/not verified, running anyway/);
+  });
+
+  it("soft-allows a patch of a verified minor, carrying the patch warning", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--report-version=0.145.1"]),
+      versionPolicy: { manifest: narrowManifest(">=0.145.0 <=0.145.0"), riskAcceptedVersions: [] },
+    });
+    expect(report.status).toBe("ready");
+    expect(report.version).toBe("0.145.1");
+    expect(report.versionWarning).toMatch(/patch of a verified release/);
   });
 
   it("reports error for unparseable version output", async () => {
@@ -342,6 +365,7 @@ describe("runCodexDoctor", () => {
     expect(report.status).toBe("ready");
     expect(report.version).toBe("0.144.3");
     expect(report.supportedRange).toBe(">=0.145.0 <0.146.0");
+    expect(report.versionWarning).toBeUndefined();
   });
 
   it("still refuses a version below the compiled floor even when risk-accepted AND admitted by the manifest (red-proof: floor holds at the doctor)", async () => {
