@@ -24,6 +24,7 @@ import type { WireRepoMapStatus } from "../../../shared/protocol.js";
 import {
   buildCustomProviderCreateRequest,
   buildToolsPatch,
+  buildSessionLimitsPatch,
   customProviderCatalogEntries,
   customProviderKindLabel,
   describeCustomProvider,
@@ -222,6 +223,33 @@ describe("buildToolsPatch", () => {
     expect(buildToolsPatch("", "30000")).toEqual({ tools: { stallTimeoutMs: 30000 } });
     expect(buildToolsPatch("4", "")).toEqual({ tools: { concurrency: 4 } });
     expect(buildToolsPatch("nope", "nope")).toEqual({ tools: {} });
+  });
+});
+
+describe("buildSessionLimitsPatch", () => {
+  it("all three valid -> patch carries all keys", () => {
+    expect(buildSessionLimitsPatch("12", "2", "10")).toEqual({
+      patch: { sessionLimits: { maxTabs: 12, childSessionsPerParentMax: 2, childSessionsGlobalMax: 10 } },
+    });
+  });
+
+  it("all blanks -> empty section (omitted)", () => {
+    expect(buildSessionLimitsPatch("", "", "")).toEqual({ patch: { sessionLimits: {} } });
+  });
+
+  it("out-of-range values refuse with a field-naming error and no patch", () => {
+    expect(buildSessionLimitsPatch("41", "", "")).toEqual({ error: expect.stringContaining("Maximum open tabs") });
+    expect(buildSessionLimitsPatch("", "0", "")).toEqual({ error: expect.stringContaining("Child sessions per parent") });
+    expect(buildSessionLimitsPatch("", "", "25")).toEqual({ error: expect.stringContaining("Child sessions app-wide") });
+  });
+
+  it("fractional values refuse with a field-naming error", () => {
+    expect(buildSessionLimitsPatch("2.5", "", "")).toEqual({ error: expect.stringContaining("Maximum open tabs") });
+  });
+
+  it("nonnumeric values refuse with a field-naming error", () => {
+    expect(buildSessionLimitsPatch("nope", "", "")).toEqual({ error: expect.stringContaining("Maximum open tabs") });
+    expect(buildSessionLimitsPatch("", "1e2", "")).toEqual({ error: expect.stringContaining("Child sessions per parent") });
   });
 });
 

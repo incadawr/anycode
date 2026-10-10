@@ -529,6 +529,17 @@ export interface AnycodeSettings {
     connectionId: string;
     modelId: string;
   };
+  /**
+   * Live session-capacity limits ( /  slice 2; additive-optional,
+   * version NOT bumped). Absent = built-in defaults (20 / 3 / 8). Survives load via
+   * the settings schema's top-level passthrough; main's settings-set validates the
+   * section strictly before persisting, and readers clamp defensively (shared/session-limits.ts).
+   */
+  sessionLimits?: {
+    maxTabs?: number;
+    childSessionsPerParentMax?: number;
+    childSessionsGlobalMax?: number;
+  };
 }
 
 /**
