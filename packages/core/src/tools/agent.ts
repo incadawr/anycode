@@ -348,6 +348,9 @@ async function runSessionTier(
       // TASK.180: the profile's own turn budget, when declared, rides the
       // creating spawn's request (the follow-up path never goes through here).
       ...(engineProfile?.turnBudget !== undefined ? { maxTurns: engineProfile.turnBudget } : {}),
+      // The profile's declared effort rides the creating spawn's request the
+      // same way; "xhigh" is preserved verbatim for engine children.
+      ...(engineProfile?.effort !== undefined ? { effort: engineProfile.effort } : {}),
     }),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     // TASK.145 срез 1: only ever `true` here — the validation check above

@@ -1175,3 +1175,48 @@ describe("agentTool handler — engine-profile turn budget (TASK.180)", () => {
     expect(seen !== undefined && "maxTurns" in seen!).toBe(false);
   });
 });
+
+// Engine-profile effort: the profile's declared `effort:` frontmatter reaches
+// the captured SessionSubagentRequest verbatim (xhigh included); an absent
+// effort leaves the key off.
+describe("agentTool handler — engine-profile effort", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  it("profile effort rides the session request verbatim (xhigh)", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker" },
+      makeCtx({
+        toolCallId: "call-effort-1",
+        subagents: enginePort("claude-worker", { engine: "claude", systemPrompt: "PERSONA BODY", effort: "xhigh" }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen?.effort).toBe("xhigh");
+  });
+
+  it("profile without an effort puts no effort key on the request", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker" },
+      makeCtx({
+        toolCallId: "call-effort-2",
+        subagents: enginePort("claude-worker", { engine: "claude", systemPrompt: "PERSONA BODY" }),
+        sessionSubagents: port,
+      }),
+    );
+    expect(seen !== undefined && "effort" in seen!).toBe(false);
+  });
+});

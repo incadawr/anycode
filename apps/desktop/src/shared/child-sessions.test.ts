@@ -77,8 +77,15 @@ describe("parseChildSpawnRequest", () => {
   it("accepts a known effort tier and drops the message for any other (TASK.127)", () => {
     const withEffort = { ...valid, effort: "low" };
     expect(parseChildSpawnRequest(withEffort)).toEqual(withEffort);
-    expect(parseChildSpawnRequest({ ...valid, effort: "xhigh" })).toBeNull();
     expect(parseChildSpawnRequest({ ...valid, effort: 3 })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, effort: "turbo" })).toBeNull();
+  });
+
+  it("accepts xhigh (engine children carry it verbatim) and round-trips it", () => {
+    const withXhigh = { ...valid, engine: "claude" as const, effort: "xhigh" };
+    const parsed = parseChildSpawnRequest(withXhigh);
+    expect(parsed).toEqual(withXhigh);
+    expect(parsed?.effort).toBe("xhigh");
   });
 
   it("accepts optional provider and model when present", () => {

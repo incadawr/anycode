@@ -2112,6 +2112,19 @@ describe("engineProfile() (TASK.102 CUT-S4 §2.1)", () => {
     const info = runner.engineProfile?.("codex-worker");
     expect(info && "model" in info).toBe(false);
   });
+
+  it("exposes the profile's declared effort verbatim (xhigh included), omitted when absent", () => {
+    const withEffort: PersonaDefinition = { ...codexPersona, effort: "xhigh" };
+    const runner = createSubagentRunner(makeParent(), { profiles: [withEffort] });
+    expect(runner.engineProfile?.("codex-worker")).toEqual({
+      engine: "codex",
+      systemPrompt: "PERSONA BODY",
+      effort: "xhigh",
+    });
+    const without = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
+    const info = without.engineProfile?.("codex-worker");
+    expect(info && "effort" in info).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3077,6 +3090,29 @@ describe("run() — child capabilities resolved for the child's own model (TASK.
     expect(outcome.status).toBe("completed");
     expect(seen).toEqual([["glm-5.3", "low"]]);
     expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("low");
+  });
+
+  it("an effort-only xhigh profile maps to core max at the resolver and the model request", async () => {
+    const parentPort = new ScriptedModelPort((req) => (isChildRequest(req) ? textStep("planned") : textStep("n/a")));
+    Object.assign(parentPort, { modelId: "glm-5.3" });
+    const seen: Array<[string, string | undefined]> = [];
+    const runner = createSubagentRunner(
+      makeParent({ modelPort: parentPort, reasoningEffort: "medium" }),
+      {
+        profiles: [{ ...(await makeProfile("planner", { body: "Plan." })), effort: "xhigh" }],
+        resolveChildModelSettings: (modelId, profileEffort) => {
+          seen.push([modelId, profileEffort]);
+          return { maxOutputTokens: 131_072, reasoningEffort: profileEffort, contextWindowTokens: 1_000_000 };
+        },
+      },
+    );
+
+    const outcome = await runner.run({ ...REQ, agentType: "planner" }, {});
+
+    expect(outcome.status).toBe("completed");
+    // xhigh is mapped to the existing core "max" at this core consumption boundary.
+    expect(seen).toEqual([["glm-5.3", "max"]]);
+    expect(parentPort.requests.at(-1)!.reasoningEffort).toBe("max");
   });
 
   it("the child's ModelRequest carries the CAPPED settings ceiling and effort, not the parent's", async () => {

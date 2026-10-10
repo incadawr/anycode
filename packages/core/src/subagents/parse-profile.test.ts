@@ -265,15 +265,44 @@ describe("parseAgentProfileMd — effort frontmatter and unknown keys (TASK.127/
   });
 
   it("an effort outside the vocabulary is fatal, not silently dropped", () => {
-    const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "xhigh" }, "b"), "f");
-    expect(res).toEqual({ error: { kind: "bad_effort", name: "planner", effort: "xhigh" } });
+    const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "turbo" }, "b"), "f");
+    expect(res).toEqual({ error: { kind: "bad_effort", name: "planner", effort: "turbo" } });
   });
 
-  it("an unknown key is reported as a problem, the profile still loads", () => {
+  it("xhigh parses (carried verbatim for engine children, mapped to core max)", () => {
+    const res = parseAgentProfileMd(md({ name: "planner", description: "d", effort: "xhigh" }, "b"), "f");
+    expect("ok" in res && res.ok.effort).toBe("xhigh");
+  });
+
+  it("the model_reasoning_effort alias parses with no unknown-key warning", () => {
     const res = parseAgentProfileMd(md({ name: "sol", description: "d", model_reasoning_effort: "xhigh" }, "b"), "f");
     expect("ok" in res).toBe(true);
     if (!("ok" in res)) return;
-    expect(res.ok.problems).toEqual([expect.stringContaining('unknown frontmatter key "model_reasoning_effort"')]);
+    expect(res.ok.effort).toBe("xhigh");
+    expect(res.ok.problems).toEqual([]);
+  });
+
+  it("canonical effort wins over the alias", () => {
+    const res = parseAgentProfileMd(
+      md({ name: "sol", description: "d", effort: "high", model_reasoning_effort: "low" }, "b"),
+      "f",
+    );
+    expect("ok" in res && res.ok.effort).toBe("high");
+  });
+
+  it("a blank canonical effort follows absent-effort semantics (alias suppressed)", () => {
+    const res = parseAgentProfileMd(
+      md({ name: "sol", description: "d", effort: " ", model_reasoning_effort: "low" }, "b"),
+      "f",
+    );
+    expect("ok" in res && "effort" in res.ok).toBe(false);
+  });
+
+  it("an unknown unrelated key is reported as a problem, the profile still loads", () => {
+    const res = parseAgentProfileMd(md({ name: "sol", description: "d", vibes: "xhigh" }, "b"), "f");
+    expect("ok" in res).toBe(true);
+    if (!("ok" in res)) return;
+    expect(res.ok.problems).toEqual([expect.stringContaining('unknown frontmatter key "vibes"')]);
   });
 
   it("discovery carries effort into the persona and words a bad one", async () => {
@@ -286,6 +315,6 @@ describe("parseAgentProfileMd — effort frontmatter and unknown keys (TASK.127/
     const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
     expect(profiles.find((p) => p.name === "planner")?.effort).toBe("low");
     expect(profiles.find((p) => p.name === "broken")).toBeUndefined();
-    expect(problems).toEqual([expect.stringContaining('effort "turbo" must be one of off, low, medium, high, max')]);
+    expect(problems).toEqual([expect.stringContaining('effort "turbo" must be one of off, low, medium, high, xhigh, max')]);
   });
 });

@@ -32,7 +32,7 @@ import {
   SUBAGENT_MAX_TURNS_CEILING,
   type ReasoningEffort,
 } from "../types/config.js";
-import { PERSONAS, isKnownPersona, type PersonaDefinition } from "./personas.js";
+import { PERSONAS, isKnownPersona, type AgentProfileEffort, type PersonaDefinition } from "./personas.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
 
 /** One directory to scan for `*.md` profiles, tagged with its provenance. */
@@ -79,10 +79,14 @@ export const AGENT_PROFILE_MAX_TURNS_RE = /^[0-9]+$/;
 export type AgentProfileEngine = "codex" | "claude";
 
 /** Every frontmatter key a profile understands; any other key is reported as a problem. */
-export const AGENT_PROFILE_KEYS: readonly string[] = ["name", "description", "tools", "model", "engine", "maxTurns", "effort"];
+export const AGENT_PROFILE_KEYS: readonly string[] = ["name", "description", "tools", "model", "engine", "maxTurns", "effort", "model_reasoning_effort"];
 
-/** Frontmatter `effort:` vocabulary — the same tiers as ANYCODE_REASONING_EFFORT. */
-export const AGENT_PROFILE_EFFORT_LEVELS: readonly ReasoningEffort[] = ["off", "low", "medium", "high", "max"];
+/**
+ * Frontmatter `effort:` vocabulary — the global ReasoningEffort tiers plus
+ * "xhigh" (carried verbatim for engine children, mapped to core "max" at core
+ * consumption boundaries).
+ */
+export const AGENT_PROFILE_EFFORT_LEVELS: readonly AgentProfileEffort[] = ["off", "low", "medium", "high", "xhigh", "max"];
 
 /** One per-file parse of a profile `*.md`, ready for both discovery and admin. */
 export interface ParsedAgentProfile {
@@ -133,8 +137,10 @@ export interface ParsedAgentProfile {
    * undefined, i.e. the child's connection default. Resolved against the
    * child model's own tiers by the host, like the composer's effort pick; a
    * word outside the vocabulary is FATAL (bad_effort), same rationale as `model`.
+   * `model_reasoning_effort` is accepted as an alias; a canonical `effort` key
+   * wins when both are present.
    */
-  effort?: ReasoningEffort;
+  effort?: AgentProfileEffort;
   /**
    * Non-fatal per-file problems (path-free suffixes) — currently only explicit
    * spawn-tool requests. The caller prefixes each with `Agent profile <path>: `.
@@ -201,7 +207,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
   // non-spawn tools); a profile can never widen beyond the default registry.
   const problems: string[] = [];
   // An unknown key is surfaced, not swallowed (TASK.217): a profile that writes
-  // `model_reasoning_effort: high` must learn it ran at the default tier.
+  // a key this registry does not know must learn it was ignored.
   for (const key of Object.keys(parsed.fields)) {
     if (!AGENT_PROFILE_KEYS.includes(key)) {
       problems.push(`unknown frontmatter key "${key}" — ignored (known: ${AGENT_PROFILE_KEYS.join(", ")})`);
@@ -273,14 +279,19 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
   // value outside the closed vocabulary is FATAL, mirroring `engine` above — a
   // planner profile that asks for "high" and silently runs at the default is
   // the dishonesty the fatal branches exist to stop.
-  const rawEffort = (parsed.fields.effort ?? "").trim();
-  let effort: ReasoningEffort | undefined;
+  // Canonical `effort` wins even when blank (blank = absent-effort semantics,
+  // suppressing the alias); the `model_reasoning_effort` alias applies only when
+  // the canonical key is entirely absent.
+  const rawEffort = (
+    parsed.fields.effort !== undefined ? parsed.fields.effort : parsed.fields.model_reasoning_effort ?? ""
+  ).trim();
+  let effort: AgentProfileEffort | undefined;
   if (rawEffort !== "") {
     const normalizedEffort = rawEffort.toLowerCase();
     if (!(AGENT_PROFILE_EFFORT_LEVELS as readonly string[]).includes(normalizedEffort)) {
       return { error: { kind: "bad_effort", name, effort: rawEffort } };
     }
-    effort = normalizedEffort as ReasoningEffort;
+    effort = normalizedEffort as AgentProfileEffort;
   }
 
   // engine + tools: TASK.97 R4 (wave2-cut.md §1.3). ENFORCE was rejected — claude's

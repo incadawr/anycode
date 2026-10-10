@@ -488,6 +488,10 @@ export function createSubagentRunner(
         // TASK.180: persona.turnBudget rides through the same as model —
         // omitted entirely when absent, never a present-but-undefined key.
         ...(persona.turnBudget !== undefined ? { turnBudget: persona.turnBudget } : {}),
+        // persona.effort rides through the same as model — omitted entirely
+        // when absent. "xhigh" is carried VERBATIM for engine children; core
+        // consumption boundaries map it to the existing "max".
+        ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
     async run(req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> {
@@ -659,7 +663,10 @@ export function createSubagentRunner(
         // right above: falling back to the parent's already-resolved values
         // would silently reinstate the very defect this resolver removes.
         try {
-          childSettings = opts?.resolveChildModelSettings?.(requestedModel, persona.effort);
+          childSettings = opts?.resolveChildModelSettings?.(
+            requestedModel,
+            persona.effort === undefined ? undefined : persona.effort === "xhigh" ? "max" : persona.effort,
+          );
         } catch (error) {
           return {
             status: "error",
@@ -674,7 +681,10 @@ export function createSubagentRunner(
         // A role that declares only `effort:` runs on the parent's model at
         // its own tier. Same throw-is-an-error posture as above.
         try {
-          childSettings = opts?.resolveChildModelSettings?.(parent.modelPort.modelId, persona.effort);
+          childSettings = opts?.resolveChildModelSettings?.(
+            parent.modelPort.modelId,
+            persona.effort === "xhigh" ? "max" : persona.effort,
+          );
         } catch (error) {
           return {
             status: "error",
