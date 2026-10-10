@@ -193,7 +193,18 @@ export interface SubagentRunOptions {
  * `req.model ?? persona.model`). Absent when the profile declares no model,
  * same as PersonaDefinition.model itself.
  */
-export type EngineProfileInfo = { engine: "claude" | "codex"; systemPrompt: string; model?: string };
+export type EngineProfileInfo = {
+  engine: "claude" | "codex";
+  systemPrompt: string;
+  model?: string;
+  /**
+   * TASK.180: the profile's own turn budget frontmatter (PersonaDefinition.
+   * turnBudget), relayed when defined so the session-tier request can carry
+   * it (SessionSubagentRequest.maxTurns). Omitted when absent — same
+   * discipline as `model`.
+   */
+  turnBudget?: number;
+};
 
 export interface SubagentPort {
   run(req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome>;

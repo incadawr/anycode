@@ -345,6 +345,9 @@ async function runSessionTier(
       model: input.model,
       spawnToolCallId: ctx.toolCallId,
       profile: engineProfile,
+      // TASK.180: the profile's own turn budget, when declared, rides the
+      // creating spawn's request (the follow-up path never goes through here).
+      ...(engineProfile?.turnBudget !== undefined ? { maxTurns: engineProfile.turnBudget } : {}),
     }),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     // TASK.145 срез 1: only ever `true` here — the validation check above

@@ -82,6 +82,30 @@ export interface ClaudeSpawnArgsOptions {
   effort?: string;
   sessionId?: string;
   resume?: string;
+  /**
+   * TASK.180: turn budget for a session child — mapped to the CLI's native
+   * `--max-turns <n>` flag. Omitted entirely when undefined (the CLI's own
+   * default). VERIFIED against the installed 2.1.296 binary (read-only
+   * evidence, no API turn): the option is yargs-registered as
+   * `--max-turns <turns>` "Maximum number of agentic turns in non-interactive
+   * mode. This will early exit the conversation after the specified number of
+   * turns" with hideHelp() — which is why W0-FINDINGS.md:50 correctly saw it
+   * ABSENT from `-p --help`; hidden ≠ unregistered. The binary's own embedded
+   * SDK harness spawns itself with `["-p","--output-format","stream-json",
+   * "--verbose","--max-turns",String(n),...]`, i.e. the flag is exercised in
+   * EXACTLY our spawn mode; and a non-authenticated parser probe
+   * (`claude --max-turns 5 --version`) parses cleanly while `abc`/missing
+   * values produce `error: option '--max-turns <turns>' argument ... is
+   * invalid. must be a number` — registered and actively validated. How a
+   * capped run terminalizes depends on the frame (event-translator.ts
+   * resultOutcome): with `terminal_reason:"max_turns"` it is a bounded-out
+   * `loop_end:"max_turns"`; a SUBTYPE-ONLY `error_max_turns` result (no
+   * terminal_reason) falls to the subtype fallback and stays an honest named
+   * ERROR terminal (cut §1.4: terminal_reason is canonical, subtype is only
+   * the fallback). `num_turns` reaches the child-runner outcome as `turns`
+   * (engine-children.ts).
+   */
+  maxTurns?: number;
 }
 
 /**
@@ -132,6 +156,7 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
   if (options.permissionModeFlag !== undefined) args.push("--permission-mode", options.permissionModeFlag);
   if (options.model !== undefined) args.push("--model", options.model);
   if (options.effort !== undefined) args.push("--effort", options.effort);
+  if (options.maxTurns !== undefined) args.push("--max-turns", String(options.maxTurns));
   if (options.sessionId !== undefined) args.push("--session-id", options.sessionId);
   else if (options.resume !== undefined) args.push("--resume", options.resume);
   return args;
@@ -328,6 +353,8 @@ export interface ClaudeClientOptions {
   model?: string;
   /** See `ClaudeSpawnArgsOptions.effort` — rides every spawn, fresh or resume. */
   effort?: string;
+  /** See `ClaudeSpawnArgsOptions.maxTurns` (TASK.180) — the native --max-turns cap for a session child. */
+  maxTurns?: number;
   sessionId?: string;
   resume?: string;
   binaryArgs?: readonly string[];
@@ -500,6 +527,7 @@ export class ClaudeClient {
           : { permissionModeFlag: "manual" as const }),
       model: this.options.model,
       effort: this.options.effort,
+      maxTurns: this.options.maxTurns,
       sessionId: this.options.sessionId,
       resume: this.options.resume,
     });

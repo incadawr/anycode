@@ -25,5 +25,8 @@ export function catalogFromProfiles(profiles: readonly PersonaDefinition[]): Age
       ...(profile.engine !== undefined ? { engine: profile.engine } : {}),
       ...(profile.model !== undefined ? { model: profile.model } : {}),
       ...(profile.effort !== undefined ? { effort: profile.effort } : {}),
+      // TASK.180: the profile's turn budget rides the creating spawn's
+      // session-tier request (catalog maxTurns); omitted when absent.
+      ...(profile.turnBudget !== undefined ? { maxTurns: profile.turnBudget } : {}),
     }));
 }
