@@ -376,7 +376,7 @@ describe("automation facade — sendPrompt", () => {
     if (!result.ok) throw new Error("unreachable");
 
     const transcript = registry.getStore(tabId)!.getState().transcript;
-    expect(transcript).toEqual([{ kind: "user_text", id: result.requestId, text: "hello there" }]);
+    expect(transcript).toEqual([{ kind: "user_text", id: result.requestId, text: "hello there", at: expect.any(Number) }]);
 
     const sentMessages = port.sent.filter((m) => (m as { type: string }).type !== "ui_ready");
     expect(sentMessages).toEqual([{ type: "user_message", requestId: result.requestId, text: "hello there" }]);
