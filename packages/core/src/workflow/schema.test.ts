@@ -160,6 +160,25 @@ describe("parseWorkflowDefinition — structural rejections", () => {
     expect(result.problem).toContain("duplicate");
   });
 
+  it("rejects an over-long agentType (128-char limit)", () => {
+    const raw = minimalRaw({
+      steps: [{ id: "a", agentType: "x".repeat(129), promptTemplate: "x" }],
+    });
+    const result = parseWorkflowDefinition(raw, ctx());
+    expect(result.definition).toBeUndefined();
+    expect(result.problem).toContain("agentType");
+    expect(result.problem).toContain("128");
+  });
+
+  it("accepts an agentType at the 128-char limit", () => {
+    const raw = minimalRaw({
+      steps: [{ id: "a", agentType: "x".repeat(128), promptTemplate: "x" }],
+    });
+    const result = parseWorkflowDefinition(raw, ctx());
+    expect(result.problem).toBeUndefined();
+    expect(result.definition?.steps[0]?.agentType).toBe("x".repeat(128));
+  });
+
   it("rejects a dependsOn target that does not exist", () => {
     const raw = minimalRaw({
       steps: [{ id: "a", agentType: "general-purpose", promptTemplate: "x", dependsOn: ["ghost"] }],
