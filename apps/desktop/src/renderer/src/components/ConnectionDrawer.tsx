@@ -33,6 +33,7 @@ import { useStore } from "zustand";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
+  ConnectionCreateRequest,
   ConnectionUpdateRequest,
   CustomProviderRecord,
   ProviderConnection,
@@ -40,6 +41,8 @@ import type {
   SecretStatus,
   SettingsMutationResult,
 } from "../../../shared/settings.js";
+import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
+import type { FetchModelsOutcome } from "../anycode-window.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { connectionSecretKey, customProviderSecretKey, isCustomRecordProviderId } from "./ConnectionTile.js";
 import { PROXY_REF_INHERIT, ProxyRefPicker, connectionCreateProxyRefField, proxyRefInitialValue } from "./ProxyRefPicker.js";
@@ -71,6 +74,177 @@ import { X } from "./icons.js";
  */
 export function resolveCreatedConnectionId(result: SettingsMutationResult): string | undefined {
   return result.ok ? result.createdConnectionId : undefined;
+}
+
+// ── TASK.183: durable manually entered connection models ──
+
+/**
+ * Pre-flight of a raw Model-field value before any create/update/secret/list
+ * call. `blank` keeps the existing implicit/default rules (a blank catalog
+ * model is refused later by `modelSaveBlocked`; a blank arbitrary endpoint is
+ * fine); `id` is the normalized, persistable id; `invalid` is a nonblank value
+ * that is not a valid model id. Validation reads the ORIGINAL string (via
+ * `normalizeModelId`) so a control character is not quietly erased by
+ * trimming. A valid but UNKNOWN id is `id` — catalog membership is never
+ * validation. Exported for direct testing (no jsdom in this package).
+ */
+export type ModelPreflight = { kind: "blank" } | { kind: "id"; id: string } | { kind: "invalid" };
+
+export function preflightModelId(input: string): ModelPreflight {
+  if (input.trim() === "") {
+    return { kind: "blank" };
+  }
+  const id = normalizeModelId(input);
+  return id === null ? { kind: "invalid" } : { kind: "id", id };
+}
+
+/** Actionable copy for a `preflightModelId` `invalid` result. */
+export const MODEL_ID_ERROR =
+  "That model ID isn't valid — a model id has no inner spaces and no control characters.";
+
+/** The one bridge call the model-persistence helpers need on top of the store. */
+export interface ModelAppendBridge {
+  fetchModels(req: { connectionId: string; addModels: string[] }): Promise<FetchModelsOutcome>;
+}
+
+export interface ModelAppendOutcome {
+  ok: boolean;
+  /** Present on failure: the fetch failure reason, or `threw`. */
+  reason?: string;
+}
+
+/**
+ * Appends normalized model ids to an existing connection's `models[]` via the
+ * general `{connectionId, addModels}` IPC branch, then refresh the snapshot.
+ * This is the ONE durable manual-entry path shared by create, save and the
+ * custom-record fetch — a failed/thrown append is reported honestly (the ids
+ * were NOT persisted) rather than swallowed. A `reload` failure is best-effort
+ * and never reads as a save failure. Exported for direct testing.
+ */
+export async function appendModelsToConnection(
+  bridge: ModelAppendBridge,
+  reload: () => Promise<void>,
+  connectionId: string,
+  modelIds: readonly string[],
+): Promise<ModelAppendOutcome> {
+  let outcome: FetchModelsOutcome;
+  try {
+    outcome = await bridge.fetchModels({ connectionId, addModels: [...modelIds] });
+  } catch {
+    return { ok: false, reason: "threw" };
+  }
+  if (!outcome.ok) {
+    return { ok: false, reason: outcome.reason };
+  }
+  try {
+    await reload();
+  } catch {
+    // The list IS persisted; a refresh failure must not read as a save failure.
+  }
+  return { ok: true };
+}
+
+/** Single-id convenience over `appendModelsToConnection`. Exported for tests. */
+export async function appendModelToConnection(
+  bridge: ModelAppendBridge,
+  reload: () => Promise<void>,
+  connectionId: string,
+  modelId: string,
+): Promise<ModelAppendOutcome> {
+  return appendModelsToConnection(bridge, reload, connectionId, [modelId]);
+}
+
+export interface CreateModelBridge<C> extends ModelAppendBridge {
+  connectionCreate(req: C): Promise<SettingsMutationResult>;
+}
+
+export interface CreateWithModelResult {
+  /** The connection was created (`createdConnectionId` set) — false only if creation itself failed. */
+  ok: boolean;
+  createdConnectionId?: string;
+  /** The connection exists but its model list could NOT be saved. */
+  partial?: boolean;
+  error?: string;
+}
+
+/**
+ * Create-then-persist sequencing shared by both create flows: mint the
+ * connection, resolve the just-minted LOCAL id from the result (never a stale
+ * state read), and — when a model was entered — append it to that same
+ * connection's `models[]` before refreshing. On an append failure the
+ * connection id is still returned with `partial: true`: the connection
+ * metadata exists, only the list is missing, and the caller reports that
+ * honestly for retry (no fake rollback). Exported for direct testing.
+ */
+export async function createConnectionAndPersistModel<C>(
+  bridge: CreateModelBridge<C>,
+  reload: () => Promise<void>,
+  createRequest: C,
+  modelId: string | null,
+): Promise<CreateWithModelResult> {
+  let result: SettingsMutationResult;
+  try {
+    result = await bridge.connectionCreate(createRequest);
+  } catch {
+    return { ok: false, error: "Couldn't create the connection." };
+  }
+  const createdId = resolveCreatedConnectionId(result);
+  if (createdId === undefined) {
+    return { ok: false, error: "Couldn't create the connection." };
+  }
+  if (modelId === null) {
+    return { ok: true, createdConnectionId: createdId };
+  }
+  const append = await appendModelToConnection(bridge, reload, createdId, modelId);
+  if (!append.ok) {
+    return {
+      ok: true,
+      createdConnectionId: createdId,
+      partial: true,
+      error: "Connection created, but its model list couldn't be saved — retry with Save.",
+    };
+  }
+  return { ok: true, createdConnectionId: createdId };
+}
+
+export interface UpdateModelBridge<U> extends ModelAppendBridge {
+  connectionUpdate(req: U): Promise<SettingsMutationResult>;
+}
+
+export interface UpdateWithModelResult {
+  /** The metadata update succeeded. */
+  metaOk: boolean;
+  /** Whether a requested model-list append succeeded (true when none was requested). */
+  appendOk: boolean;
+}
+
+/**
+ * Save-then-append sequencing: persist the metadata update first, and only
+ * after it succeeds append the normalized selected model to the same
+ * connection. A failed metadata update never appends (the update is the
+ * precondition). Exported for direct testing.
+ */
+export async function updateConnectionAndPersistModel<U>(
+  bridge: UpdateModelBridge<U>,
+  reload: () => Promise<void>,
+  connectionId: string,
+  updateRequest: U,
+  modelId: string | null,
+): Promise<UpdateWithModelResult> {
+  let result: SettingsMutationResult;
+  try {
+    result = await bridge.connectionUpdate(updateRequest);
+  } catch {
+    return { metaOk: false, appendOk: false };
+  }
+  if (!result.ok) {
+    return { metaOk: false, appendOk: false };
+  }
+  if (modelId === null) {
+    return { metaOk: true, appendOk: true };
+  }
+  const append = await appendModelToConnection(bridge, reload, connectionId, modelId);
+  return { metaOk: true, appendOk: append.ok };
 }
 
 /**
@@ -480,31 +654,26 @@ export function contextWindowAfterRawInput(
 }
 
 /**
- * The model suggestions a catalog connection's drawer offers (datalist +
- * click-to-fill chips): the LIVE list when one exists — this session's fetch
- * result first, else the ids persisted on the connection by an earlier fetch
- * — decorated with the catalog entry's static display names where known; the
- * static hints alone before any fetch (exactly the pre-fetch behavior).
- * Mirrors `providerModelsFor`'s live-over-static precedence so the drawer and
- * the composer pickers can never disagree about WHAT the provider offers.
- * Exported for direct testing (no jsdom in this package's vitest config, see
- * file docstring).
+ * The Model field's offered list (datalist + click-to-fill chips): a stable
+ * UNION (TASK.183) of this session's fetched ids, the ids persisted on the
+ * connection (manual additions + earlier fetches), then the catalog/curated
+ * static hints not already present — decorated with the catalog entry's static
+ * display names where known. Fetched first, persisted second, hints last;
+ * exact case-sensitive dedupe via the shared `mergeModelIds`. An EMPTY fetch
+ * no longer wipes the list: persisted manual ids (and the hints) survive.
+ * Mirrors `providerModelsFor`'s union precedence, so the drawer and the
+ * composer pickers can never disagree about what the provider offers. Exported
+ * for direct testing (no jsdom in this package's vitest config, see file
+ * docstring).
  */
 export function liveModelSuggestions(
   fetched: readonly { id: string }[] | null,
   persisted: readonly string[] | undefined,
   hints: readonly { id: string; name?: string }[],
 ): { id: string; name?: string }[] {
-  const liveIds =
-    fetched !== null
-      ? fetched.map((m) => m.id)
-      : persisted !== undefined && persisted.length > 0
-        ? [...persisted]
-        : null;
-  if (liveIds === null) {
-    return [...hints];
-  }
-  return liveIds.map((id) => {
+  const fetchedIds = fetched !== null ? fetched.map((m) => m.id) : [];
+  const unionIds = mergeModelIds(fetchedIds, mergeModelIds(persisted ?? [], hints.map((h) => h.id)));
+  return unionIds.map((id) => {
     const hint = hints.find((h) => h.id === id);
     return hint?.name !== undefined ? { id, name: hint.name } : { id };
   });
@@ -703,6 +872,20 @@ export function ConnectionDrawerFields({
     return customProvider ?? window.anycode.customProvider;
   }
 
+  /**
+   * The bridge the model-persistence helpers drive: connection metadata goes
+   * through the store (settings IPC), the model-list append goes through the
+   * custom-provider bridge's `{connectionId, addModels}` branch. One object so
+   * create/save/fetch all persist a manual model the same way.
+   */
+  function modelPersistenceBridge(): CreateModelBridge<ConnectionCreateRequest> & UpdateModelBridge<ConnectionUpdateRequest> {
+    return {
+      connectionCreate: (request) => store.getState().connectionCreate(request),
+      connectionUpdate: (request) => store.getState().connectionUpdate(request),
+      fetchModels: (request) => resolvedCustomProvider().fetchModels(request),
+    };
+  }
+
   const targetConnection = connections.find((c) => c.id === createdConnectionId) ?? editConnection;
   const effectiveProviderId = createdConnectionId !== null ? (targetConnection?.providerId ?? providerId) : providerId;
   const selectedEntry: CatalogSummaryEntry | undefined = selectProviderEntry(catalog, effectiveProviderId || undefined);
@@ -731,9 +914,9 @@ export function ConnectionDrawerFields({
   // `models` — the synthesized catalog entry mirrors it and re-derives after
   // each customProvider mutation reloads the snapshot.
   const curatedModelIds = selectedEntry?.models.map((m) => m.id) ?? [];
-  // What the Model field suggests (datalist + chips): live-fetched ids when
-  // available (this session's fetch, else the list persisted on the
-  // connection), static catalog hints otherwise.
+  // What the Model field suggests (datalist + chips): the UNION (TASK.183) of
+  // this session's fetched ids, the ids persisted on the connection (manual
+  // additions + earlier fetches), then the static catalog hints.
   const modelSuggestions = liveModelSuggestions(fetchedModels, targetConnection?.models, selectedEntry?.models ?? []);
   // Show the API-key field IN the create form (item 3): a NEW custom endpoint
   // (the record's own key) or a keyed catalog provider (the connection key).
@@ -801,12 +984,22 @@ export function ConnectionDrawerFields({
 
   /** ADD: mint a NEW custom-provider record (key or keyless), then a connection pointing at it. */
   async function createNewCustomEndpoint(): Promise<void> {
+    // TASK.183: validate the raw model BEFORE the record, connection, secret or
+    // list call — a nonblank malformed id makes no writes at all.
+    const preflight = preflightModelId(model);
+    if (preflight.kind === "invalid") {
+      setError(MODEL_ID_ERROR);
+      return;
+    }
+    const createModel = preflight.kind === "id" ? preflight.id : undefined;
     const req = buildCustomProviderCreateRequest({
       name: customName,
       baseUrl: customBaseUrl,
       kind: customKind,
       apiKey: secretValue,
       noAuth,
+      // TASK.183: manual ids now live on the CONNECTION's own `models[]`, never
+      // on the shared custom record — the record's curated set stays separate.
       selectedModels: [],
     });
     if (req === undefined) {
@@ -830,19 +1023,23 @@ export function ConnectionDrawerFields({
         setError("Custom endpoint saved, but its id couldn't be resolved — reopen and select it to add a connection.");
         return;
       }
-      const connResult = await store.getState().connectionCreate({
-        providerId: newId,
-        ...(simplified && model.trim() ? { model: model.trim() } : {}),
-        ...(label.trim() ? { label: label.trim() } : {}),
-        ...(transport ? { transport } : {}),
-        // TASK.132/TASK.141: the proxy control is rendered in this pre-create
-        // state too, so its value has to travel on THIS create as well —
-        // omitting it here silently dropped the choice for every new custom
-        // endpoint.
-        ...connectionCreateProxyRefField(proxyRef),
-      });
-      const createdId = resolveCreatedConnectionId(connResult);
-      if (createdId === undefined) {
+      const outcome = await createConnectionAndPersistModel(
+        modelPersistenceBridge(),
+        reloadSnapshot,
+        {
+          providerId: newId,
+          ...(createModel !== undefined ? { model: createModel } : {}),
+          ...(label.trim() ? { label: label.trim() } : {}),
+          ...(transport ? { transport } : {}),
+          // TASK.132/TASK.141: the proxy control is rendered in this pre-create
+          // state too, so its value has to travel on THIS create as well —
+          // omitting it here silently dropped the choice for every new custom
+          // endpoint.
+          ...connectionCreateProxyRefField(proxyRef),
+        },
+        createModel ?? null,
+      );
+      if (outcome.createdConnectionId === undefined) {
         // Partial failure surfaced honestly: the record exists (Custom
         // providers list), but the connection does not.
         setProviderId(newId);
@@ -850,7 +1047,10 @@ export function ConnectionDrawerFields({
         return;
       }
       setProviderId(newId);
-      setCreatedConnectionId(createdId);
+      setCreatedConnectionId(outcome.createdConnectionId);
+      if (outcome.partial) {
+        setError(outcome.error ?? "Custom endpoint and connection created, but the model list couldn't be saved — retry with Save.");
+      }
     } finally {
       setCreating(false);
     }
@@ -882,16 +1082,25 @@ export function ConnectionDrawerFields({
     // TASK.142: the same pre-flight for the context window. A BLANK field means
     // "catalog/assumed window" and is simply left out; a MALFORMED one is
     // refused rather than dropped. A numeric window additionally needs the model
-    // this create will actually SEND to bind to (the simplified path sends the
-    // catalog-prefilled id; the other create paths send no model at all) — main
-    // derives the binding from it and refuses the whole create otherwise, so say
-    // which field to fix instead of letting main reject it opaquely.
+    // this create will actually SEND to bind to (TASK.183: EVERY create path now
+    // sends the catalog-prefilled/entered id, not only the simplified one) —
+    // main derives the binding from it and refuses the whole create otherwise,
+    // so say which field to fix instead of letting main reject it opaquely.
     const cw = contextWindowTokensField(contextWindow.raw);
     if (!cw.ok) {
       setError(CONTEXT_WINDOW_ERROR);
       return;
     }
-    const createModel = simplified ? modelAfterCatalogPrefill(model, selectedEntry?.models ?? []).trim() : "";
+    // TASK.183: ONE effective model for the create payload, the context-window
+    // binding and the model-list append. A nonblank malformed id makes no
+    // create, secret or list call; a blank keeps the pre-existing implicit
+    // rules (no model sent).
+    const preflight = preflightModelId(modelAfterCatalogPrefill(model, selectedEntry?.models ?? []));
+    if (preflight.kind === "invalid") {
+      setError(MODEL_ID_ERROR);
+      return;
+    }
+    const createModel = preflight.kind === "id" ? preflight.id : "";
     if (cw.value !== "" && createModel === "") {
       setError(CONTEXT_WINDOW_ERROR_MODEL);
       return;
@@ -899,39 +1108,54 @@ export function ConnectionDrawerFields({
     setCreating(true);
     setError(null);
     try {
-      const result = await store.getState().connectionCreate({
-        providerId,
-        ...(simplified ? { model: modelAfterCatalogPrefill(model, selectedEntry?.models ?? []).trim() } : {}),
-        ...(label.trim() ? { label: label.trim() } : {}),
-        ...(transport ? { transport } : {}),
-        ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
-        ...connectionCreateProxyRefField(proxyRef),
-        ...(noAuth ? { authOptional: true } : {}),
-        ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
-        ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
-      });
-      const createdId = resolveCreatedConnectionId(result);
-      if (createdId === undefined) {
-        setError("Couldn't create the connection.");
+      const outcome = await createConnectionAndPersistModel(
+        modelPersistenceBridge(),
+        reloadSnapshot,
+        {
+          providerId,
+          ...(createModel !== "" ? { model: createModel } : {}),
+          ...(label.trim() ? { label: label.trim() } : {}),
+          ...(transport ? { transport } : {}),
+          ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+          ...connectionCreateProxyRefField(proxyRef),
+          ...(noAuth ? { authOptional: true } : {}),
+          ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
+          ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
+        },
+        createModel !== "" ? createModel : null,
+      );
+      if (outcome.createdConnectionId === undefined) {
+        setError(outcome.error ?? "Couldn't create the connection.");
         return;
       }
-      setCreatedConnectionId(createdId);
+      setCreatedConnectionId(outcome.createdConnectionId);
       // TASK.108-A: the just-revealed Model field opens on the catalog default
       // instead of blank, so the follow-up Save can't persist the empty-model
       // trap.
       if (!isCustomRecordProviderId(providerId)) {
         setModel((m) => modelAfterCatalogPrefill(m, selectedEntry?.models ?? []));
       }
+      // TASK.183: surface a partial failure (connection exists, list does not)
+      // WITHOUT losing a concurrent key error — compose one message.
+      let message = outcome.partial
+        ? (outcome.error ?? "Connection created, but its model list couldn't be saved — retry with Save.")
+        : null;
       // Item 3: fold the key's secret-set into Create for a keyed catalog
       // provider — a separate IPC channel, so custody stays intact and the
       // metadata schema never carries a credential.
       if (secretValue && authKind === "api_key" && !isCustomRecordProviderId(providerId)) {
         const value = secretValue;
         dispatchSecret({ type: "submitted" });
-        const secretResult = await store.getState().setSecret(connectionSecretKey(createdId, "api_key"), value);
+        const secretResult = await store.getState().setSecret(connectionSecretKey(outcome.createdConnectionId, "api_key"), value);
         if (!secretResult.ok && secretResult.reason !== "weak_storage_needs_consent") {
-          setError("Connection created, but the API key was refused — enter it again below.");
+          message =
+            message === null
+              ? "Connection created, but the API key was refused — enter it again below."
+              : "Connection created, but neither its model list nor the API key could be saved.";
         }
+      }
+      if (message !== null) {
+        setError(message);
       }
     } finally {
       setCreating(false);
@@ -947,6 +1171,15 @@ export function ConnectionDrawerFields({
     if (readOnly || createdConnectionId === null) {
       return;
     }
+    // TASK.183: a nonblank malformed model is refused before the metadata
+    // update, the secret write or any list call (a valid, unknown id passes —
+    // catalog membership is never validation).
+    const preflight = preflightModelId(model);
+    if (preflight.kind === "invalid") {
+      setError(MODEL_ID_ERROR);
+      return;
+    }
+    const selectedModelId = preflight.kind === "id" ? preflight.id : null;
     // TASK.108-A: refuse to persist the empty-model trap on a catalog
     // connection — an empty model fails readiness later with a toast that
     // blames the API key.
@@ -978,11 +1211,17 @@ export function ConnectionDrawerFields({
     setSaving(true);
     setError(null);
     try {
-      const metaResult = await store.getState().connectionUpdate(
+      // TASK.183: metadata first (the selected model rides it), THEN append the
+      // same normalized model to this connection's list. A failed metadata
+      // update never appends.
+      const outcome = await updateConnectionAndPersistModel(
+        modelPersistenceBridge(),
+        reloadSnapshot,
+        createdConnectionId,
         buildConnectionUpdatePayload({
           connectionId: createdConnectionId,
           label,
-          model,
+          model: selectedModelId ?? model,
           transport,
           baseUrl,
           showBaseUrl,
@@ -991,6 +1230,7 @@ export function ConnectionDrawerFields({
           maxOutputTokens: mot.value,
           contextWindowTokens: cw.value,
         }),
+        selectedModelId,
       );
       let keyRefused = false;
       if (secretValue && credentialKey !== undefined) {
@@ -999,12 +1239,18 @@ export function ConnectionDrawerFields({
         const secretResult = await store.getState().setSecret(credentialKey, value);
         keyRefused = !secretResult.ok && secretResult.reason !== "weak_storage_needs_consent";
       }
-      if (!metaResult.ok && keyRefused) {
+      // Compose ONE message so a concurrent key error is never overwritten by
+      // the list-persistence error (or vice versa).
+      if (!outcome.metaOk && keyRefused) {
         setError("Neither the changes nor the API key could be saved.");
-      } else if (!metaResult.ok) {
+      } else if (!outcome.metaOk) {
         setError("The changes couldn't be saved.");
+      } else if (keyRefused && !outcome.appendOk) {
+        setError("The changes were saved, but neither the model list nor the API key could be saved — retry Save.");
       } else if (keyRefused) {
         setError("The changes were saved, but the API key was refused.");
+      } else if (!outcome.appendOk) {
+        setError("The changes were saved, but the model list couldn't be saved — retry Save.");
       }
     } finally {
       setSaving(false);
@@ -1026,10 +1272,12 @@ export function ConnectionDrawerFields({
   /**
    * Models fetch: the guarded /v1/models GET — `{id}` for a saved custom
    * record, `{connectionId}` for a catalog connection (main resolves
-   * baseUrl/key/kind itself either way; keyless supported). A catalog
-   * connection's successful fetch is persisted by main onto the connection
-   * (`models`), so the snapshot reload makes the composer pickers see the
-   * live list immediately.
+   * baseUrl/key/kind itself either way; keyless supported). TASK.183: a custom
+   * record's fetched ids are ALSO appended to its connection's own `models[]`
+   * through the general `{connectionId, addModels}` branch, so a fetch becomes
+   * durable and can never replace manual ids; a catalog connection's fetch is
+   * already merged onto the connection by main. Either way the snapshot reload
+   * makes the composer pickers see the union.
    */
   async function doFetchModels(): Promise<void> {
     if (createdConnectionId === null) {
@@ -1046,9 +1294,32 @@ export function ConnectionDrawerFields({
         return;
       }
       setFetchedModels(outcome.models);
-      if (!isCustomRecordConnection) {
-        // TASK.108-A: a fetch landing on a still-blank field picks the default.
-        setModel((m) => modelAfterCatalogPrefill(m, outcome.models));
+      if (isCustomRecordConnection) {
+        // TASK.183: persist the fetched ids on the connection (fetched-first
+        // union), keeping any manual additions made before the fetch.
+        // A fetched id the manual-entry validator refuses (inner whitespace,
+        // controls) is skipped here: main rejects an addModels request
+        // all-or-nothing, so one odd vendor id must not block the rest.
+        const fetchedIds = outcome.models
+          .map((m) => normalizeModelId(m.id))
+          .filter((id): id is string => id !== null);
+        if (fetchedIds.length > 0) {
+          const append = await appendModelsToConnection(
+            modelPersistenceBridge(),
+            reloadSnapshot,
+            createdConnectionId,
+            fetchedIds,
+          );
+          if (!append.ok) {
+            setError("Fetched models, but the connection's model list couldn't be saved — retry Fetch or Save.");
+          }
+        }
+      } else {
+        // TASK.108-A: a fetch landing on a still-blank field picks the default
+        // from the MERGED offered list (fetched first, then any already-saved
+        // ids), so a saved manual model is never lost from the prefill.
+        const merged = mergeModelIds(outcome.models.map((m) => m.id), targetConnection?.models ?? []).map((id) => ({ id }));
+        setModel((m) => modelAfterCatalogPrefill(m, merged));
         await reloadSnapshot();
       }
     } finally {
@@ -1144,7 +1415,7 @@ export function ConnectionDrawerFields({
         </div>
       )}
 
-      {simplified && createdConnectionId === null && selectedEntry && (
+      {createdConnectionId === null && selectedEntry && (
         <label className="settings-field">
           <span className="settings-field-label">Model</span>
           <input className="settings-field-input" type="text" list="welcome-model-suggestions"
@@ -1163,6 +1434,24 @@ export function ConnectionDrawerFields({
           <datalist id="welcome-model-suggestions">
             {selectedEntry.models.map((m) => <option key={m.id} value={m.id}>{m.name ?? m.id}</option>)}
           </datalist>
+        </label>
+      )}
+
+      {/* TASK.183: a brand-new custom endpoint gets the same pre-create free-text
+          Model field even when the catalog carries no entry to synthesize
+          suggestions from (raw value, no datalist). No duplicate field when
+          `selectedEntry` exists — the block above already covers that case. */}
+      {createdConnectionId === null && isNewCustomEndpoint && !selectedEntry && (
+        <label className="settings-field">
+          <span className="settings-field-label">Model</span>
+          <input className="settings-field-input" type="text"
+            value={model} disabled={readOnly}
+            placeholder="Enter a model ID"
+            onChange={(e) =>
+              // TASK.142: same shared route — the entered id IS the effective id
+              // here, so the per-model window reset stays owned by it.
+              changeModel(e.target.value, e.target.value, undefined)
+            } />
         </label>
       )}
 

@@ -49,13 +49,17 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync, watch, type FSWatcher } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import { ipcMain } from "electron";
 import { z } from "zod";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
-import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
+import { loadSettings, normalizeActiveConnection, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderConnection, SecretKey } from "../shared/settings.js";
+import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
 import type { SecretSetResult } from "./vault.js";
 import { ProxyMisconfiguredError } from "./provider-proxy-fetch.js";
 
@@ -91,7 +95,10 @@ export type FetchModelsFailureReason =
   // answered and lists zero models (no key on plan, no access). Returning it as
   // a silent "success with nothing" hides the problem; flagging it as a generic
   // error overstates it. It gets its own reason so the copy can say both.
-  | "empty_models";
+  | "empty_models"
+  // TASK.183: the settings file (or a newer-version file this binary refuses to
+  // write) is read-only — a manual model addition cannot be persisted.
+  | "read_only";
 
 export type FetchModelsOutcome =
   | { ok: true; models: { id: string }[] }
@@ -614,10 +621,79 @@ export async function handleCustomProviderDelete(deps: ProviderIpcDeps, raw: unk
 }
 
 const fetchModelsSchema = z.union([
+  // TASK.183: manual addition of connection-scoped model ids. Listed BEFORE the
+  // plain `{connectionId}` member so a request carrying `addModels` is
+  // dispatched to `handleConnectionAddModels`, never to the network fetch.
+  z.object({ connectionId: z.string().min(1), addModels: z.array(z.string()).min(1) }).strict(),
   z.object({ id: z.string().min(1) }).strict(),
   z.object({ connectionId: z.string().min(1) }).strict(),
   z.object({ baseUrl: z.string().min(1), apiKey: z.string().optional(), kind: kindSchema.optional() }).strict(),
 ]);
+
+/**
+ * Connection-scoped MANUAL model addition (TASK.183, the `{connectionId,
+ * addModels}` request shape): appends user-entered model ids to the target
+ * connection's own `models[]`, so a manually typed id becomes a durable list
+ * entry rather than a single `connection.model` value that the next picker
+ * rebuild loses.
+ *
+ * Unlike the network fetch this needs no catalog entry, base URL or vault key
+ * — a manual id is valid for EVERY existing connection kind (catalog,
+ * openrouter, vllm, literal custom, `custom:<slug>`). There is deliberately NO
+ * catalog-membership check: membership is never validation.
+ *
+ * Every requested id is normalized through the shared `normalizeModelId`
+ * BEFORE any write; one invalid id rejects the whole request (all-or-nothing).
+ * The write is a single locked load→modify→save critical section that preserves
+ * every sibling field (model, activeConnectionId, modelsFetchedAt, sibling
+ * connections, provider.custom records). When the resulting list is identical
+ * to what was already stored, the call succeeds WITHOUT saving or firing
+ * `onMutation`.
+ */
+async function handleConnectionAddModels(
+  deps: ProviderIpcDeps,
+  connectionId: string,
+  requestedIds: readonly string[],
+): Promise<FetchModelsOutcome> {
+  const normalizedIds: string[] = [];
+  for (const raw of requestedIds) {
+    const id = normalizeModelId(raw);
+    if (id === null) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    normalizedIds.push(id);
+  }
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    const target = loaded.settings.provider.connections.find((c) => c.id === connectionId);
+    if (target === undefined) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    const storedModels = target.models ?? [];
+    const mergedModels = mergeModelIds(storedModels, normalizedIds);
+    if (mergedModels.length === storedModels.length && mergedModels.every((id, i) => id === storedModels[i])) {
+      // Identical list: succeed without a write or a mutation callback.
+      return { ok: true, models: mergedModels.map((id) => ({ id })) };
+    }
+    const updatedConnection: ProviderConnection = { ...target, models: mergedModels };
+    const updatedSettings: AnycodeSettings = {
+      ...loaded.settings,
+      provider: {
+        ...loaded.settings.provider,
+        connections: loaded.settings.provider.connections.map((c) => (c.id === connectionId ? updatedConnection : c)),
+      },
+    };
+    if (!settingsSchema.safeParse(updatedSettings).success) {
+      return { ok: false, reason: "invalid_request" };
+    }
+    await saveSettings(deps.settingsPath, updatedSettings);
+    await deps.onMutation?.(updatedSettings);
+    return { ok: true, models: mergedModels.map((id) => ({ id })) };
+  });
+}
 
 /** The vault key one catalog connection's API-key credential lives under (mirrors the renderer's `connectionSecretKey`). */
 export function connectionApiKeySecretKey(connectionId: string): SecretKey {
@@ -702,9 +778,13 @@ async function handleConnectionFetchModels(
       // nothing is resurrected on disk.
       return;
     }
+    const fetchedIds = outcome.models.map((m) => m.id);
     const updated: ProviderConnection = {
       ...target,
-      models: outcome.models.map((m) => m.id),
+      // TASK.183: fetched ids first, then the connection's previously stored
+      // ids (manual additions and earlier fetches), deduped case-sensitively —
+      // so the merge can never replace a manual addition.
+      models: mergeModelIds(fetchedIds, target.models ?? []),
       modelsFetchedAt: (deps.now ?? defaultNowIso)(),
     };
     const merged: AnycodeSettings = {
@@ -739,6 +819,9 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
     return { ok: false, reason: "invalid_request" };
   }
   const fetchModels = deps.fetchModels ?? fetchCustomProviderModels;
+  if ("addModels" in parsed.data) {
+    return handleConnectionAddModels(deps, parsed.data.connectionId, parsed.data.addModels);
+  }
   if ("connectionId" in parsed.data) {
     return handleConnectionFetchModels(deps, parsed.data.connectionId, fetchModels);
   }
@@ -768,6 +851,158 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
   return fetchModels({ baseUrl: parsed.data.baseUrl, apiKey: parsed.data.apiKey, kind: parsed.data.kind });
 }
 
+// ── external settings-file watcher (TASK.183) ──
+
+/** Debounce window (ms) coalescing a burst of directory events into one read. */
+export const SETTINGS_WATCH_DEBOUNCE_MS = 150;
+
+/**
+ * Does a directory event's `filename` concern our settings file? A `null`
+ * filename (some platforms omit it on a rescan) is treated CONSERVATIVELY as a
+ * match — the caller then re-reads and skips identical bytes, so a spurious
+ * rescan costs one read and never a false mutation. A Buffer filename is
+ * decoded rather than compared by reference.
+ */
+export function settingsWatchEventMatchesTarget(filename: string | Buffer | null, targetName: string): boolean {
+  if (filename === null) {
+    return true;
+  }
+  const name = Buffer.isBuffer(filename) ? filename.toString("utf8") : filename;
+  return name === targetName;
+}
+
+/**
+ * Watches the settings DIRECTORY (never the file's own inode — `atomicWrite`
+ * replaces the target by `rename`, so a file watch would be attached to a
+ * stale inode) for EXTERNAL edits — a hand-edit of `settings.json` while the
+ * host is running — and reports each schema-valid change through
+ * `onExternalChange`. This is TASK.183 work item 4's minimum permitted route:
+ * an in-boundary notification, NOT a new public CLI API, and no preload/main
+ * index change.
+ *
+ * Discipline:
+ *  - the directory watch is installed BEFORE the synchronous baseline read so
+ *    an edit racing startup still leaves a queued event;
+ *  - the baseline text is remembered WITHOUT dispatching (the unchanged
+ *    startup file is not a change); a missing initial file is permitted;
+ *  - events are debounced ~150 ms and the ENTIRE read/parse/dispatch operation
+ *    is serialized on one promise chain, so a slow read can never reorder
+ *    changes;
+ *  - only `JSON.parse` + `settingsSchema.safeParse`-valid content is dispatched
+ *    (`normalizeActiveConnection` repairs the active<->non-empty invariant the
+ *    normal loader repairs); invalid JSON/schema is logged and ignored, never
+ *    defaulted or written back;
+ *  - a temporary ENOENT (delete/recreate) is skipped — recreation fires its own
+ *    directory event;
+ *  - identical bytes are skipped, which bounds the redundant refresh an own
+ *    save causes without ever forming a mutation loop (`onMutation` reloads
+ *    settings, it does not write);
+ *  - read/watch/callback failures go to `logger.warn` and leave later changes
+ *    operable; credentials/content are never logged.
+ *
+ * Returns a `close()` that flags closed, clears any pending timer, closes the
+ * watch, and prevents queued-but-not-started callbacks. Unrefs the watcher and
+ * debounce timer.
+ */
+export function startSettingsFileWatcher(
+  settingsPath: string,
+  logger: FileIoLogger | undefined,
+  onExternalChange: (settings: AnycodeSettings) => void | Promise<void>,
+): () => void {
+  const directory = dirname(settingsPath);
+  const targetName = basename(settingsPath);
+  let closed = false;
+  let timer: NodeJS.Timeout | null = null;
+  let queue: Promise<void> = Promise.resolve();
+  let lastText: string | null = null;
+
+  async function run(): Promise<void> {
+    if (closed) {
+      return;
+    }
+    let text: string;
+    try {
+      text = await readFile(settingsPath, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+        logger?.warn(`settings watcher: read failed for ${settingsPath}`, err);
+      }
+      return;
+    }
+    if (text === lastText) {
+      return;
+    }
+    lastText = text;
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch (err) {
+      logger?.warn(`settings watcher: corrupt JSON at ${settingsPath}; ignoring`, err);
+      return;
+    }
+    const parsed = settingsSchema.safeParse(json);
+    if (!parsed.success) {
+      logger?.warn(`settings watcher: schema-invalid at ${settingsPath}; ignoring`);
+      return;
+    }
+    try {
+      await onExternalChange(normalizeActiveConnection(parsed.data));
+    } catch (err) {
+      logger?.warn(`settings watcher: change handler failed for ${settingsPath}`, err);
+    }
+  }
+
+  function schedule(): void {
+    if (closed) {
+      return;
+    }
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+    timer = setTimeout(() => {
+      timer = null;
+      queue = queue.then(run, run);
+    }, SETTINGS_WATCH_DEBOUNCE_MS);
+    timer.unref?.();
+  }
+
+  let watcher: FSWatcher | null = null;
+  try {
+    watcher = watch(directory, { persistent: false }, (_eventType, filename) => {
+      if (closed) {
+        return;
+      }
+      if (!settingsWatchEventMatchesTarget(filename, targetName)) {
+        return;
+      }
+      schedule();
+    });
+    watcher.unref?.();
+  } catch (err) {
+    logger?.warn(`settings watcher: cannot watch ${directory}`, err);
+    return () => {};
+  }
+
+  try {
+    lastText = readFileSync(settingsPath, "utf8");
+  } catch {
+    lastText = null;
+  }
+
+  return () => {
+    closed = true;
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    try {
+      watcher?.close();
+    } catch {
+      // already closed
+    }
+  };
+}
+
 // ── ipcMain wiring (called by main/index.ts — see the module doc's WIRING note) ──
 
 export const CUSTOM_PROVIDER_CREATE_CHANNEL = "anycode:custom-provider-create";
@@ -775,11 +1010,25 @@ export const CUSTOM_PROVIDER_UPDATE_CHANNEL = "anycode:custom-provider-update";
 export const CUSTOM_PROVIDER_DELETE_CHANNEL = "anycode:custom-provider-delete";
 export const CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL = "anycode:custom-provider-fetch-models";
 
-export function registerProviderIpc(deps: ProviderIpcDeps): void {
+/** Handle returned by `registerProviderIpc` so a caller can tear the file watcher down. */
+export interface ProviderIpcHandle {
+  dispose(): void;
+}
+
+export function registerProviderIpc(deps: ProviderIpcDeps): ProviderIpcHandle {
   ipcMain.handle(CUSTOM_PROVIDER_CREATE_CHANNEL, (_event, raw: unknown) => handleCustomProviderCreate(deps, raw));
   ipcMain.handle(CUSTOM_PROVIDER_UPDATE_CHANNEL, (_event, raw: unknown) => handleCustomProviderUpdate(deps, raw));
   ipcMain.handle(CUSTOM_PROVIDER_DELETE_CHANNEL, (_event, raw: unknown) => handleCustomProviderDelete(deps, raw));
   ipcMain.handle(CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL, (_event, raw: unknown) =>
     handleCustomProviderFetchModels(deps, raw),
   );
+  // TASK.183: notify the running host of schema-valid EXTERNAL settings edits
+  // through the existing `onMutation` hook. Only wired when a hook exists —
+  // without one there is nothing to notify. A failed startup degrades to a
+  // no-op close (see `startSettingsFileWatcher`) rather than crashing IPC.
+  const closeWatcher =
+    deps.onMutation === undefined
+      ? (): void => {}
+      : startSettingsFileWatcher(deps.settingsPath, deps.logger, deps.onMutation);
+  return { dispose: closeWatcher };
 }

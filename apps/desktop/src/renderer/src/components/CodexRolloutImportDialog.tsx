@@ -27,8 +27,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
-import type { CodexProfileRecord } from "../../../shared/settings.js";
-import { activeProviderView } from "../../../shared/settings.js";
+import type { CodexProfileRecord, SettingsSnapshot } from "../../../shared/settings.js";
+import { activeConnection, activeProviderView } from "../../../shared/settings.js";
 import type { CreateTabRequest, CreateTabResult } from "../../../shared/tabs.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { useTabsStore, type TabsState } from "../tabs-store.js";
@@ -258,6 +258,30 @@ export function resolveDefaultImportModel(activeModel: string | undefined, catal
 }
 
 /**
+ * The model options the Import picker offers for a snapshot (TASK.183): the
+ * ACTIVE connection's own `models[]` (manual additions + connection-scoped
+ * fetched ids) unioned ahead of the catalog/curated hints, so an id the user
+ * entered by hand on the active connection stays importable. Extracted so the
+ * active-connection selection is behaviour-testable without rendering the
+ * dialog. A missing snapshot yields `undefined` — the same "no provider
+ * configured" shape as before, and never a dereference of `undefined`.
+ */
+export function importModelOptionsFor(
+  snapshot: SettingsSnapshot | null | undefined,
+): readonly { id: string; name?: string }[] | undefined {
+  if (snapshot === null || snapshot === undefined) {
+    return undefined;
+  }
+  const activeProvider = activeProviderView(snapshot.settings);
+  return providerModelsFor(
+    activeProvider?.id,
+    snapshot.catalog,
+    snapshot.settings.provider.custom,
+    activeConnection(snapshot.settings)?.models,
+  );
+}
+
+/**
  * Honest Import-button gate (F2, codex-profiles cut lane FXH review):
  * the pre-existing `previewState.kind !== "loaded" || importing` check never
  * looked at `model`, so a custom-provider connection whose catalog resolves
@@ -447,7 +471,7 @@ export function CodexRolloutImportDialog({
   }
 
   const activeProvider = snapshot ? activeProviderView(snapshot.settings) : undefined;
-  const catalogModels = providerModelsFor(activeProvider?.id, snapshot?.catalog, snapshot?.settings.provider.custom);
+  const catalogModels = importModelOptionsFor(snapshot);
   const defaultModel = resolveDefaultImportModel(activeProvider?.model, catalogModels);
   const model = selectedModel ?? defaultModel;
   const modelItems = modelMenuItems(model, catalogModels);

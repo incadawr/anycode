@@ -10,6 +10,9 @@
  */
 import { describe, expect, it } from "vitest";
 import type { EngineModelChoice } from "../../../shared/protocol.js";
+import type { CatalogSummary, SettingsSnapshot } from "../../../shared/settings.js";
+import { connectionById } from "../../../shared/settings.js";
+import { providerModelsFor } from "./ModelPill.js";
 import type { SubagentProfileDraft, SubagentRowView, SubagentsRefusalReason } from "../../../shared/subagents-config.js";
 import {
   blankSubagentEditorFields,
@@ -563,5 +566,53 @@ describe("workspaceEmptyNote", () => {
   it("returns null when any project-scope row exists (unfiltered rows)", () => {
     const rows = [row({ name: "proj-one", sourceKind: "project", editable: true })];
     expect(workspaceEmptyNote("/ws/anycode", rows)).toBeNull();
+  });
+});
+
+// ── TASK.183: the subagent model list is the PARENT connection's union ──
+
+describe("resolveSubagentModelOptions with the parent connection's own model ids (TASK.183)", () => {
+  const catalog: CatalogSummary = [
+    { id: "z-ai", name: "Z.ai", authKind: "api_key", models: [{ id: "glm-5.3", name: "GLM-5.3" }] },
+  ];
+
+  it("offers the ACTIVE parent connection's manual id ahead of the catalog hints, not a sibling's", () => {
+    const snap = {
+      settings: {
+        version: 2,
+        provider: {
+          activeConnectionId: "parent-a",
+          connections: [
+            { id: "parent-a", providerId: "z-ai", models: ["manual-parent"] },
+            { id: "parent-b", providerId: "z-ai", models: ["manual-sibling"] },
+          ],
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      },
+      catalog,
+    } as unknown as SettingsSnapshot;
+    const parent = connectionById(snap.settings, snap.settings.provider.activeConnectionId!)!;
+    const parentModels = providerModelsFor("z-ai", snap.catalog, snap.settings.provider.custom, parent.models);
+    const { models, inheritLabel } = resolveSubagentModelOptions("", parentModels ?? [], {});
+    expect(inheritLabel).toBe("Same as parent");
+    expect(models.map((m) => m.id)).toEqual(["manual-parent", "glm-5.3"]);
+    expect(models.map((m) => m.id)).not.toContain("manual-sibling");
+  });
+
+  it("the option builder shows the manual id as its own selectable value", () => {
+    const options = buildModelSelectOptions([{ id: "manual-parent" }, { id: "glm-5.3", name: "GLM-5.3" }], "", "Same as parent");
+    expect(options).toEqual([
+      { value: "", label: "Same as parent" },
+      { value: "manual-parent", label: "manual-parent" },
+      { value: "glm-5.3", label: "GLM-5.3" },
+    ]);
+  });
+
+  it("an explicit subagent model already saved on the manual id is retained, not dropped", () => {
+    const options = buildModelSelectOptions([{ id: "manual-parent" }], "manual-parent", "Same as parent");
+    expect(options.filter((option) => option.value === "manual-parent")).toHaveLength(1);
   });
 });

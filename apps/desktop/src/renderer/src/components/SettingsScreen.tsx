@@ -452,6 +452,9 @@ const FETCH_MODELS_ERROR_TEXT: Record<FetchModelsFailureReason, string> = {
   // TASK.113: a well-formed empty list is its own honest outcome, not a silent
   // success: the endpoint answered but listed zero models.
   empty_models: "The endpoint returned an empty model list — check the API key or plan, or enter the model id manually.",
+  // TASK.183: a manually entered model id cannot be persisted because the
+  // settings file is (or a newer-version file leaves it) read-only.
+  read_only: "This settings file is read-only, so the model list can't be saved.",
 };
 
 /** User-facing text for a failed `/v1/models` fetch. */
