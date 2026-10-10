@@ -401,6 +401,13 @@ export interface TabHost {
     spawnToolCallId: string;
     requestId: string;
     permissionMode: PermissionMode;
+    /**
+     * : the CREATING spawn's turn budget (from the profile's
+     * frontmatter, req.maxTurns). Populated only for a FRESH child — a
+     * follow-up (resumed) child never carries one. Rides argv once, as
+     * `--child-max-turns <n>`, with the child linkage arguments.
+     */
+    maxTurns?: number;
   };
 }
 
@@ -1114,6 +1121,13 @@ export class TabHostManager {
         "--child-mode",
         tab.childOf.permissionMode,
       );
+      // : the creating spawn's turn budget rides argv only when the
+      // child has one (fresh child of a profile with a budget). Follow-up
+      // children and ordinary tabs never get it; children never respawn, so
+      // it is stamped exactly once.
+      if (tab.childOf.maxTurns !== undefined) {
+        args.push("--child-max-turns", String(tab.childOf.maxTurns));
+      }
     }
     //  W10-FIX F3 (layer c): resolve the pinned base env BEFORE forking. A
     // `undefined` here means the tab is pinned to a connection whose per-connection
@@ -1621,6 +1635,9 @@ export class TabHostManager {
         spawnToolCallId: req.spawnToolCallId,
         requestId: req.requestId,
         permissionMode: req.permissionMode,
+        // : only the CREATING spawn carries a budget; a follow-up
+        // (resumable) child keeps whatever its session started with.
+        ...(resumable === undefined && req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
       },
     };
 
