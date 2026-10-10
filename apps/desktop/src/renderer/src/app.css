@@ -919,6 +919,23 @@ body {
   color: var(--text-1);
 }
 
+/* TASK.119 п.4: conspicuous open-row treatment — inset accent bar + primary text. */
+.sidebar-row-open {
+  color: var(--text-1);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.sidebar-row-open .sidebar-row-title {
+  color: var(--text-1);
+}
+
+.sidebar-row-engine {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  color: var(--text-3);
+}
+
 .sidebar-row-title {
   flex: 1;
   min-width: 0;
@@ -1027,6 +1044,20 @@ body {
   /* Last-tab guard (design §2.3): affordance stays hidden and inert. */
   cursor: not-allowed;
   opacity: 0;
+}
+
+/* TASK.119 п.4: close affordance is ALWAYS visible on open rows (not hover-only). */
+.sidebar-row-wrap:has(> .sidebar-row-open) .sidebar-row-close:not(:disabled) {
+  opacity: 1;
+}
+
+/* TASK.119 п.4 fix: the now permanently visible close button occupies the
+   row's right edge — reserve its slot on OPEN rows (close + its right offset)
+   so the engine/worktree/status indicators never sit underneath the ×.
+   Resumable rows are untouched (their delete stays hover-revealed, swapping
+   with the age as before). */
+.sidebar-row-wrap:has(> .sidebar-row-open) .sidebar-row-open {
+  padding-right: calc(var(--sp-2) + 20px);
 }
 
 /* TASK.114: resumable-row hard-delete affordance — the close (×) pattern
@@ -1384,9 +1415,27 @@ body {
 }
 
 .environment-workspace {
-  max-width: 18ch;
+  /* TASK.119 п.6: room for the head-ellipsized session cwd; the preserved
+     worktree tail must not be re-clipped by an end-ellipsis — wrap instead. */
+  max-width: 44ch;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
   color: var(--text-1);
   font-weight: var(--w-medium);
+}
+
+/* Combined selector (0,2,0) — the base `.environment-menu-row-detail` rule
+   below (line ~1530) sets nowrap/hidden/ellipsis and would otherwise win the
+   equal-specificity cascade by source order; this must outrank it. */
+.environment-menu-row-detail.environment-menu-row-detail-wrap {
+  /* TASK.119 п.6: the full Workspace path in the menu row — override the base
+     detail's single-line clipping so the long cwd actually wraps, fully visible. */
+  word-break: break-all;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .environment-branch {

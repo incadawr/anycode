@@ -81,6 +81,7 @@ import type {
   SettingsSnapshot,
 } from "../../../shared/settings.js";
 import type { UpdateStatus } from "../../../shared/updates.js";
+import { SESSION_LIMIT_RANGES, type SessionLimitsSettings } from "../../../shared/session-limits.js";
 import type {
   CustomProviderCreateRequest,
   CustomProviderMutationReason,
@@ -189,7 +190,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   codex: ["codex", "agent", "engine", "sign in", "chatgpt", "cli", "binary", "install", "update", "proxy"],
   claude: ["claude", "agent", "engine", "sign in", "anthropic", "cli", "binary", "proxy"],
   permissions: ["always allow", "rules", "bash", "pattern", "tool", "trusted", "binary", "consent", "security"],
-  tools: ["concurrency", "stall timeout", "max turns", "tool"],
+  tools: ["concurrency", "stall timeout", "max turns", "tool", "tabs", "tab limit", "child sessions", "capacity"],
   vision: ["image", "images", "vision", "recognizer", "screenshot", "picture", "attachment", "inspect", "blind model"],
   network: ["proxy", "network", "system proxy", "no proxy", "authentication", "check connection"],
   mcp: ["mcp", "server", "status"],
@@ -305,6 +306,36 @@ export function buildToolsPatch(
   if (maxTurns !== undefined) tools.maxTurns = maxTurns;
   if (subagentMaxTurns !== undefined) tools.subagentMaxTurns = subagentMaxTurns;
   return { tools };
+}
+
+// ── sessionLimits (TASK.119 / TASK.147 slice 2) ──
+
+export type SessionLimitsPatchResult = { patch: { sessionLimits?: SessionLimitsSettings } } | { error: string };
+
+/**
+ * Strict: every NON-BLANK field must be a plain integer within range, or the
+ * whole save is refused with a field-naming error. Blank = omit (default).
+ */
+export function buildSessionLimitsPatch(
+  maxTabsText: string,
+  perParentText: string,
+  globalText: string,
+): SessionLimitsPatchResult {
+  const fields: Array<[keyof SessionLimitsSettings, string, string, { readonly min: number; readonly max: number }]> = [
+    ["maxTabs", "Maximum open tabs", maxTabsText, SESSION_LIMIT_RANGES.maxTabs],
+    ["childSessionsPerParentMax", "Child sessions per parent", perParentText, SESSION_LIMIT_RANGES.childSessionsPerParentMax],
+    ["childSessionsGlobalMax", "Child sessions app-wide", globalText, SESSION_LIMIT_RANGES.childSessionsGlobalMax],
+  ];
+  const out: SessionLimitsSettings = {};
+  for (const [key, label, text, range] of fields) {
+    const trimmed = text.trim();
+    if (trimmed === "") continue;
+    if (!/^-?\d+$/.test(trimmed)) return { error: `${label}: enter a whole number.` };
+    const n = Number(trimmed);
+    if (n < range.min || n > range.max) return { error: `${label}: must be between ${range.min} and ${range.max}.` };
+    out[key] = n;
+  }
+  return { patch: { sessionLimits: out } };
 }
 
 // ── provider-section v2 pure helpers (slice 2.5 §5; reused by ConnectionDrawer/ConnectionTile, TASK.45 W12) ──
@@ -1135,6 +1166,11 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
   const [stallTimeoutMs, setStallTimeoutMs] = useState("");
   const [maxTurns, setMaxTurns] = useState("");
   const [subagentMaxTurns, setSubagentMaxTurns] = useState("");
+  // TASK.119 / TASK.147 slice 2: live session-capacity limit fields.
+  const [sessionMaxTabs, setSessionMaxTabs] = useState("");
+  const [sessionPerParent, setSessionPerParent] = useState("");
+  const [sessionGlobal, setSessionGlobal] = useState("");
+  const [sessionLimitsError, setSessionLimitsError] = useState<string | null>(null);
   const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
   // 96-E (cut §1(e)/§2.7): the ONE real persisted field in this pane besides
   // theme — absent settings.preview.autoOpen reads as ON (owner default),
@@ -1211,6 +1247,9 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
       setStallTimeoutMs(snapshot.settings.tools.stallTimeoutMs?.toString() ?? "");
       setMaxTurns(snapshot.settings.tools.maxTurns?.toString() ?? "");
       setSubagentMaxTurns(snapshot.settings.tools.subagentMaxTurns?.toString() ?? "");
+      setSessionMaxTabs(snapshot.settings.sessionLimits?.maxTabs?.toString() ?? "");
+      setSessionPerParent(snapshot.settings.sessionLimits?.childSessionsPerParentMax?.toString() ?? "");
+      setSessionGlobal(snapshot.settings.sessionLimits?.childSessionsGlobalMax?.toString() ?? "");
       setTheme(snapshot.settings.ui.theme);
       setAutoOpenPreview(snapshot.settings.preview?.autoOpen ?? true);
       setPreviewDisplayMode(snapshot.settings.preview?.displayMode ?? "panel");
@@ -1243,7 +1282,22 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
   const readOnly = snapshot.readOnly;
 
   async function saveTools(): Promise<void> {
-    await store.getState().setPatch(buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns));
+    // TASK.119/TASK.147-с2: validate the sessionLimits fields FIRST — a bad
+    // value refuses the whole save (nothing written) with a field-naming error.
+    const limits = buildSessionLimitsPatch(sessionMaxTabs, sessionPerParent, sessionGlobal);
+    if ("error" in limits) {
+      setSessionLimitsError(limits.error);
+      return;
+    }
+    setSessionLimitsError(null);
+    const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns);
+    const hasLimits = limits.patch.sessionLimits !== undefined
+      && Object.keys(limits.patch.sessionLimits).length > 0;
+    await store.getState().setPatch(
+      hasLimits
+        ? { ...toolsPatch, sessionLimits: limits.patch.sessionLimits }
+        : toolsPatch,
+    );
   }
 
   function changeTheme(next: "system" | "light" | "dark"): void {
@@ -1444,6 +1498,27 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
                   <input className="settings-field-input" type="text" inputMode="numeric" value={subagentMaxTurns}
                     disabled={readOnly} placeholder="40" onChange={(e) => setSubagentMaxTurns(e.target.value)} />
                 </label>
+                <label className="settings-field">
+                  <span className="settings-field-label">Maximum open tabs</span>
+                  <input className="settings-field-input" type="text" inputMode="numeric" value={sessionMaxTabs}
+                    disabled={readOnly} placeholder="20" onChange={(e) => setSessionMaxTabs(e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field-label">Child sessions per parent</span>
+                  <input className="settings-field-input" type="text" inputMode="numeric" value={sessionPerParent}
+                    disabled={readOnly} placeholder="3" onChange={(e) => setSessionPerParent(e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field-label">Child sessions app-wide</span>
+                  <input className="settings-field-input" type="text" inputMode="numeric" value={sessionGlobal}
+                    disabled={readOnly} placeholder="8" onChange={(e) => setSessionGlobal(e.target.value)} />
+                </label>
+                <div className="settings-field-hint">
+                  Blank leaves the existing value unchanged; an unset setting uses the default (20 tabs, 3 per parent, 8 app-wide). Allowed ranges: tabs 4–40, per parent 1–8, app-wide 1–24. Changes apply without restart.
+                </div>
+                {sessionLimitsError !== null && (
+                  <div className="settings-field-error" role="alert">{sessionLimitsError}</div>
+                )}
                 <div className="settings-field-row">
                   <button type="button" className="settings-button settings-button-primary" disabled={readOnly} onClick={() => void saveTools()}>
                     Save tools settings
