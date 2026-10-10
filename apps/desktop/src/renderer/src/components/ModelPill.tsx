@@ -52,6 +52,7 @@ import type { CatalogSummary, ConnectionUpdateRequest, CustomProviderRecord } fr
 import { activeProviderView, connectionById } from "../../../shared/settings.js";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
+import { useTabsStore } from "../tabs-store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import type { DesktopState, TurnState } from "../store.js";
@@ -671,6 +672,12 @@ export function ModelPill() {
   // the `ready` edge — the ref deliberately keeps the PREVIOUS pin until then,
   // and a pin that moves while the tab is not ready is reported once it is,
   // never lost and never written into a transcript about to be cleared.
+  //
+  // Taskana 4234: the write also passes the tab's sessionId from the
+  // tabs-store so the store can stage the marker renderer-locally until the
+  // respawned host's `session_history` boundary, and persist it there — the
+  // marker never enters host/model history.
+  const markerSessionId = useTabsStore((state) => state.tabs.find((tab) => tab.tabId === tabId)?.sessionId ?? null);
   useEffect(() => {
     if (!ready) {
       return;
@@ -695,11 +702,13 @@ export function ModelPill() {
       toLabel: connectionLabel(next.connectionId),
       model: model ?? "",
       ...(effortResetTo !== undefined ? { effortResetTo } : {}),
+      ...(markerSessionId !== null ? { sessionId: markerSessionId } : {}),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the two
-    // axes the rule is about (the pin, and whether the new host is up); the
-    // labels/model are read at write time from the same render.
-  }, [pinnedConnection, ready, tabId]);
+    // axes the rule is about (the pin, and whether the new host is up), plus
+    // the session id the marker persists under; the labels/model are read at
+    // write time from the same render.
+  }, [pinnedConnection, ready, tabId, markerSessionId]);
 
   function pickModel(id: string): void {
     if (pickDisabled) {

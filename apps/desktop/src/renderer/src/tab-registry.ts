@@ -52,6 +52,7 @@ import type { UiToHostMessage } from "../../shared/protocol.js";
 import type { PortEnvelope } from "../../shared/envelopes.js";
 import { TERM_DEFAULT_COLS, TERM_DEFAULT_ROWS, type TermToHostMessage } from "../../shared/terminal.js";
 import { loadUsageLimitNotices, saveUsageLimitNotice } from "./provider-notices.js";
+import { loadConnectionSwitches } from "./provider-switch-log.js";
 import {
   classifyPortEnvelope,
   childRelationStore as defaultChildRelationStore,
@@ -442,6 +443,13 @@ export function createTabRegistry(
       // §3.3 respawn semantics) — dispatch AFTER that reset, or a queued
       // initial prompt appended before it would be wiped along with it (§4.2).
       entry.store.getState().applyHostMessage(message);
+      // Taskana 4234: renderer-local provider-switch markers are restored at
+      // their recorded history boundaries right after the hydrated history
+      // lands (chronological insert, ids already present skipped) — same
+      // renderer-only posture as the quota notices restored on host_ready.
+      if (message.type === "session_history") {
+        entry.store.getState().insertConnectionChangedAt(loadConnectionSwitches(message.sessionId));
+      }
       if (message.type === "child_report") {
         // TASK.145 срез 2: acks UNCONDITIONALLY — whether store.ts's
         // `child_report` case just enqueued a NEW item or recognized this as

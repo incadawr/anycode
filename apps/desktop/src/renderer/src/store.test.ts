@@ -33,6 +33,8 @@ import { createAutomationFacade, type AnycodeBridge } from "./automation.js";
 import { activityRows, childActionBadge, workflowStepKind } from "./components/ToolCallCard.js";
 import { createTabRegistry } from "./tab-registry.js";
 import { createTabsStore } from "./tabs-store.js";
+import { loadConnectionSwitches } from "./provider-switch-log.js";
+import type { ConnectionSwitchRecord } from "./provider-switch-log.js";
 import type {
   HostToUiMessage,
   WireCheckpointMeta,
@@ -6951,5 +6953,249 @@ describe("projectHistoryToBlocks createdAt -> at", () => {
   it("omits at when createdAt is not a positive number", () => {
     const blocks = projectHistoryToBlocks([{ id: "u2", createdAt: 0, message: { role: "user", content: "hi" } }]);
     expect(blocks[0]).not.toHaveProperty("at");
+  });
+});
+
+describe("desktop store — provider-switch marker staging/persistence/replay (Taskana 4234)", () => {
+  function historyItems(): WireHistoryItem[] {
+    return [
+      { id: "h1", createdAt: 1, message: { role: "user", content: "hello" } },
+      { id: "h2", createdAt: 2, message: { role: "assistant", content: [{ type: "text", text: "hi there" }] } },
+    ];
+  }
+  function markerBlock(store: ReturnType<typeof createDesktopStore>) {
+    return store.getState().transcript.find((b) => b.kind === "connection_changed");
+  }
+
+  it("host_ready -> staged marker -> session_history: no premature marker, then placed after the hydrated tail with preserved effort and supplied id", () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().appendConnectionChanged({ id: "sw-1", fromLabel: "A", toLabel: "B", model: "m2", effortResetTo: "high" });
+    // Staged — not rendered before the hydrated history boundary.
+    expect(store.getState().transcript).toEqual([]);
+    expect(store.getState().pendingConnectionChanges).toHaveLength(1);
+
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    expect(store.getState().transcript.map((b) => b.kind)).toEqual(["user_text", "assistant_text", "connection_changed"]);
+    const marker = markerBlock(store);
+    expect(marker).toMatchObject({ id: "sw-1", fromLabel: "A", toLabel: "B", model: "m2", effortResetTo: "high" });
+    // Persisted under the session with the tail anchor.
+    expect(loadConnectionSwitches("s1")).toEqual([
+      { id: "sw-1", fromLabel: "A", toLabel: "B", model: "m2", effortResetTo: "high", afterItemId: "h2" },
+    ]);
+    vi.unstubAllGlobals();
+  });
+
+  it("history already arrived -> append lands as last block, persists the h2 anchor and the same id", () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    store.getState().appendConnectionChanged({ id: "sw-2", fromLabel: "A", toLabel: "C", model: "m3" });
+    const transcript = store.getState().transcript;
+    expect(transcript[transcript.length - 1]).toMatchObject({ kind: "connection_changed", id: "sw-2" });
+    expect(loadConnectionSwitches("s1")).toEqual([{ id: "sw-2", fromLabel: "A", toLabel: "C", model: "m3", afterItemId: "h2" }]);
+    vi.unstubAllGlobals();
+  });
+
+  it("staged flush persists labels/model/effort/id and mints restart-safe ids when none supplied", () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().appendConnectionChanged({ id: "sw-a", fromLabel: "A", toLabel: "B", model: "m", effortResetTo: "low" });
+    store.getState().appendConnectionChanged({ fromLabel: "B", toLabel: "C", model: "m" });
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    const persisted = loadConnectionSwitches("s1");
+    expect(persisted).toHaveLength(2);
+    expect(persisted[0]).toMatchObject({ id: "sw-a", fromLabel: "A", toLabel: "B", model: "m", effortResetTo: "low", afterItemId: "h2" });
+    expect(persisted[1]!.id).not.toBe("sw-a");
+    expect(persisted[1]!.id).not.toMatch(/^connection-changed:/);
+    vi.unstubAllGlobals();
+  });
+
+  it("fresh-store replay places the h1-anchored marker between h1 and h2, and a null-anchor marker at the head; repeat is idempotent", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    const records: ConnectionSwitchRecord[] = [
+      { id: "r-null", fromLabel: "X", toLabel: "A", model: "m0", afterItemId: null },
+      { id: "r-h1", fromLabel: "A", toLabel: "B", model: "m1", afterItemId: "h1" },
+    ];
+    store.getState().insertConnectionChangedAt(records);
+    expect(store.getState().transcript.map((b) => b.id)).toEqual(["r-null", "h1:0", "r-h1", "h2:0"]);
+    // Idempotent replay (already-present ids skipped).
+    store.getState().insertConnectionChangedAt(records);
+    expect(store.getState().transcript.map((b) => b.id)).toEqual(["r-null", "h1:0", "r-h1", "h2:0"]);
+  });
+
+  it("public reset drops staging", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().appendConnectionChanged({ id: "sw-1", fromLabel: "A", toLabel: "B", model: "m" });
+    expect(store.getState().pendingConnectionChanges).toHaveLength(1);
+    store.getState().reset();
+    expect(store.getState().pendingConnectionChanges).toEqual([]);
+    expect(store.getState().transcript).toEqual([]);
+  });
+
+  it("restart then another switch: GENERATED distinct ids, both preserved after a third replay, each ordered at its actual anchor", () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    const { scheduler } = createManualScheduler();
+    // "First life": switch after h1 (no supplied id — the store mints one).
+    const first = createDesktopStore(scheduler);
+    first.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    const firstItems: WireHistoryItem[] = [historyItems()[0]!];
+    first.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: firstItems, truncated: false });
+    first.getState().appendConnectionChanged({ fromLabel: "A", toLabel: "B", model: "m1" });
+    const oldId = loadConnectionSwitches("s1")[0]!.id;
+    expect(oldId).not.toMatch(/^connection-changed:/);
+
+    // "Restart": fresh store replays, then a live switch (also no id).
+    const second = createDesktopStore(scheduler);
+    second.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    second.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    second.getState().insertConnectionChangedAt(loadConnectionSwitches("s1"));
+    second.getState().appendConnectionChanged({ fromLabel: "B", toLabel: "C", model: "m2" });
+    const persisted = loadConnectionSwitches("s1");
+    expect(persisted.map((r) => r.afterItemId)).toEqual(["h1", "h2"]);
+    const [persistedOld, persistedNew] = persisted.map((r) => r.id);
+    // Restart-minted ids are distinct (a collision would replay as one marker).
+    expect(persistedNew).not.toBe(persistedOld);
+
+    // A third replay restores both at their actual anchors without duplicating.
+    const third = createDesktopStore(scheduler);
+    third.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    third.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    third.getState().insertConnectionChangedAt(loadConnectionSwitches("s1"));
+    expect(third.getState().transcript.map((b) => b.id)).toEqual(["h1:0", persistedOld, "h2:0", persistedNew]);
+    vi.unstubAllGlobals();
+  });
+
+  it("multiple same-boundary records replay in chronological order, including the newest live marker already present; null and missing anchors order first", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    // The newest marker already live at replay time (post-hydration switch).
+    store.getState().appendConnectionChanged({ id: "live", fromLabel: "B", toLabel: "C", model: "m2" });
+    store.getState().insertConnectionChangedAt([
+      { id: "old-1", fromLabel: "X", toLabel: "A", model: "m0", afterItemId: null },
+      { id: "old-2", fromLabel: "A", toLabel: "B", model: "m1", afterItemId: "h2" },
+      { id: "old-3", fromLabel: "A", toLabel: "B", model: "m1b", afterItemId: "h2" },
+      { id: "old-4", fromLabel: "?", toLabel: "?", model: "m", afterItemId: "nope" },
+      { id: "live", fromLabel: "B", toLabel: "C", model: "m2", afterItemId: "h2" },
+    ]);
+    expect(store.getState().transcript.map((b) => b.id)).toEqual([
+      "old-1",
+      "old-4",
+      "h1:0",
+      "h2:0",
+      "old-2",
+      "old-3",
+      "live",
+    ]);
+  });
+
+  it("incremental same-boundary replay: a later replay's newer record lands AFTER an already-restored older record (h1 anchor)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    const a: ConnectionSwitchRecord = { id: "a", fromLabel: "X", toLabel: "A", model: "m", afterItemId: "h1" };
+    const b: ConnectionSwitchRecord = { id: "b", fromLabel: "A", toLabel: "B", model: "m", afterItemId: "h1" };
+    // First replay saw only the older record; the second learns about `b` too.
+    store.getState().insertConnectionChangedAt([a]);
+    expect(store.getState().transcript.map((r) => r.id)).toEqual(["h1:0", "a", "h2:0"]);
+    store.getState().insertConnectionChangedAt([a, b]);
+    expect(store.getState().transcript.map((r) => r.id)).toEqual(["h1:0", "a", "b", "h2:0"]);
+    // Idempotent repeat.
+    store.getState().insertConnectionChangedAt([a, b]);
+    expect(store.getState().transcript.map((r) => r.id)).toEqual(["h1:0", "a", "b", "h2:0"]);
+  });
+
+  it("incremental same-boundary replay at the null (head) boundary keeps chronological order", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    const a: ConnectionSwitchRecord = { id: "a", fromLabel: "X", toLabel: "A", model: "m", afterItemId: null };
+    const b: ConnectionSwitchRecord = { id: "b", fromLabel: "A", toLabel: "B", model: "m", afterItemId: null };
+    store.getState().insertConnectionChangedAt([a]);
+    store.getState().insertConnectionChangedAt([a, b]);
+    expect(store.getState().transcript.map((r) => r.id)).toEqual(["a", "b", "h1:0", "h2:0"]);
+  });
+
+  it("incremental same-boundary replay at a missing/truncated anchor (earliest visible boundary) keeps chronological order", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items: historyItems(), truncated: false });
+    const a: ConnectionSwitchRecord = { id: "a", fromLabel: "X", toLabel: "A", model: "m", afterItemId: "h-cut" };
+    const b: ConnectionSwitchRecord = { id: "b", fromLabel: "A", toLabel: "B", model: "m", afterItemId: "h-cut" };
+    store.getState().insertConnectionChangedAt([a]);
+    store.getState().insertConnectionChangedAt([a, b]);
+    expect(store.getState().transcript.map((r) => r.id)).toEqual(["a", "b", "h1:0", "h2:0"]);
+  });
+
+  it("a non-rendering tool-item anchor resolves to the preceding visible boundary; a truncated (cut) anchor resolves to the earliest visible boundary", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    const items: WireHistoryItem[] = [
+      { id: "h1", createdAt: 1, message: { role: "user", content: "hello" } },
+      { id: "h2", createdAt: 2, message: { role: "assistant", content: [{ type: "text", text: "hi" }] } },
+      {
+        id: "h3",
+        createdAt: 3,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "c1", toolName: "Bash", input: {} }],
+        },
+      },
+      {
+        id: "h4",
+        createdAt: 4,
+        message: { role: "tool", content: [{ type: "tool_result", toolCallId: "c1", toolName: "Bash", status: "success", text: "" }] },
+      },
+    ];
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: true });
+    // Anchored on the non-rendering tool item h4 -> after the nearest
+    // preceding rendered boundary (h3's tool_call block).
+    store.getState().insertConnectionChangedAt([{ id: "after-tool", fromLabel: "A", toLabel: "B", model: "m", afterItemId: "h4" }]);
+    // Anchored on an item the truncated snapshot no longer contains -> earliest visible boundary.
+    store.getState().insertConnectionChangedAt([{ id: "cut", fromLabel: "A", toLabel: "B", model: "m", afterItemId: "h-cut" }]);
+    const ids = store.getState().transcript.map((b) => b.id);
+    expect(ids[0]).toBe("cut");
+    expect(ids.indexOf("after-tool")).toBe(ids.length - 1);
   });
 });
