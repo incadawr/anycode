@@ -71,14 +71,15 @@ import { computePreviewPanelOpen, usePreviewStore } from "./preview/preview-stor
 import type { PreviewPanelInfo } from "../../shared/preview-panel.js";
 import {
   buildChildBreadcrumb,
-  childBadgeKind,
   childLayoutStore,
-  detachedOutcomeFromParent,
-  lastLiveChildCard,
-  rememberLiveChildCard,
-  withLiveChildCounters,
 } from "./child-layout.js";
-import { childRelationKey, childRelationStore, type ChildRelation } from "./child-sessions.js";
+import {
+  childRelationKey,
+  childRelationStore,
+  spawnToolCallIdForChild,
+  type ChildRelation,
+} from "./child-sessions.js";
+import { projectChildSplitRows } from "./child-split-projection.js";
 import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
 import { isSessionBusy, type SubagentSubStatus, type TranscriptBlock } from "./store.js";
@@ -136,86 +137,6 @@ const EMPTY_PREVIEWS: readonly PreviewPanelInfo[] = [];
 /** Stable empty identity for the split stack's row list when the layout isn't `split` at all (mirrors EMPTY_PREVIEWS above). */
 const EMPTY_CHILD_SPLIT_ROWS: readonly ChildSplitRow[] = [];
 const EMPTY_IDS: readonly string[] = [];
-
-/**
- * CUT-S3 §3.3's "отсутствующая карточка → фолбэк ..., как в B" fallback,
- * widened from B's breadcrumb-only `{agentType, description}` shape (used at
- * every existing `card ?? {...}` call site below) to a full `SubagentSubStatus`
- * — a split row's counters (`formatSubagentCounters`) need every field, not
- * just the two the breadcrumb reads. Zero-valued rather than omitted: the
- * card is genuinely unknown here (a stale/foreign spawnToolCallId), so "0
- * turns, 0 tool calls, no result yet" is the honest reading, not a guess.
- */
-const FALLBACK_SUBAGENT_CARD: SubagentSubStatus = {
-  agentType: "Subagent",
-  description: "",
-  model: null,
-  engine: null,
-  turns: 0,
-  toolCalls: 0,
-  lastTool: null,
-  activity: [],
-  activityDropped: 0,
-  final: null,
-};
-
-/**
- * A spawn block whose `subagent_start` never reached this renderer (F11: a
- * detached Agent call) still names its child in its own input — the row
- * keeps the requested agent type and description instead of "Subagent".
- */
-function fallbackCardFromInput(input: unknown): SubagentSubStatus {
-  if (typeof input !== "object" || input === null) {
-    return FALLBACK_SUBAGENT_CARD;
-  }
-  const { agent_type: agentType, description } = input as { agent_type?: unknown; description?: unknown };
-  return {
-    ...FALLBACK_SUBAGENT_CARD,
-    ...(typeof agentType === "string" && agentType !== "" ? { agentType } : {}),
-    ...(typeof description === "string" ? { description } : {}),
-  };
-}
-
-/**
- * One child row's card. The master's own Agent card first; for a detached
- * call that card never hears the child, so: the child's live store when its
- * host runs, else the last card this renderer saw live, else the outcome the
- * parent's `<task-notification>` reported — never "running" for a child that
- * has ended.
- */
-function resolveChildRowCard(
-  spawnToolCallId: string,
-  parentTranscript: readonly TranscriptBlock[],
-  childStore: DesktopStoreApi | undefined,
-): SubagentSubStatus {
-  const block = parentTranscript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === spawnToolCallId);
-  if (!block || block.kind !== "tool_call") {
-    return FALLBACK_SUBAGENT_CARD;
-  }
-  const baseCard = block.subagent ?? fallbackCardFromInput(block.input);
-  const detached = (block.input as { detach?: unknown } | null)?.detach === true;
-  if (childStore !== undefined) {
-    const state = childStore.getState();
-    const card = withLiveChildCounters(
-      baseCard,
-      { transcript: state.transcript, modelTurns: state.modelTurns, running: state.turn.status !== "idle" },
-      detached,
-    );
-    if (detached) rememberLiveChildCard(spawnToolCallId, card);
-    return card;
-  }
-  if (!detached || baseCard.final !== null) {
-    return baseCard;
-  }
-  const remembered = lastLiveChildCard(spawnToolCallId);
-  const outcome = detachedOutcomeFromParent(parentTranscript, spawnToolCallId);
-  const card = remembered ?? baseCard;
-  if (card.final !== null || outcome === null) {
-    return card;
-  }
-  // Ended before this renderer saw its last turn: the outcome is known, the duration is not.
-  return { ...card, final: { status: outcome, durationMs: -1 } };
-}
 
 /**
  * Welcome-gate decision (ruling §2 step 5/7): show Welcome only once the
@@ -540,12 +461,35 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   // CUT-S3 §3.1: `childSplitOpen` names the split layout; the resize handle
   // + `ChildSplitPane` mount off it below, alongside git/preview (`splitOpen`).
   const childSplitOpen = childView.kind === "split";
+  // TASK.218 (supervisor correction 3): the relations subscription moved
+  // BEFORE every child-id resolution below — the effective-id projection
+  // needs it, and each render must read it once, up front.
+  const relations = childRelationStore((state) => state.relations);
+  // TASK.218: the same LOGICAL child (one childSessionId) may be registered
+  // under several spawn ids (one per continue_session call). Every surface
+  // below resolves through the EFFECTIVE id — the LATEST spawn id registered
+  // for that childSessionId (spawnToolCallIdForChild: Map insertion order,
+  // last wins) — so the moment a continuation's port registers, the existing
+  // row follows it (live store, relation lookup) with no second Open click.
+  // The DISPLAYED row id stays the original view id (React key /
+  // data-spawn-id compatibility).
+  const childSessionIdOf = (id: string): string | undefined =>
+    parentSessionId ? relations.get(childRelationKey(parentSessionId, id))?.childSessionId : undefined;
+  const effectiveChildId = (id: string): string => {
+    const cs = childSessionIdOf(id);
+    return (cs !== undefined && parentSessionId ? spawnToolCallIdForChild(relations, parentSessionId, cs) : undefined) ?? id;
+  };
   // The one child id whose SURFACE (live or read-only) needs to be resolved
   // this render — layout B's single child, or split's currently-expanded
   // row (CUT-S3 §3.3: the collapsed rows only need their own Agent card, not
   // a relation lookup — resolved separately below, off the master transcript).
-  const focusedChildId =
-    childView.kind === "child" ? childView.spawnToolCallId : childView.kind === "split" ? childView.expandedId : undefined;
+  // Mapped through effectiveChildId: a dead old relation no longer freezes
+  // the row — the live continuation's store feeds it.
+  const focusedChildId = (() => {
+    if (childView.kind === "child") return effectiveChildId(childView.spawnToolCallId);
+    if (childView.kind === "split") return effectiveChildId(childView.expandedId);
+    return undefined;
+  })();
   const childRelation = childRelationStore((state) =>
     focusedChildId !== undefined && parentSessionId !== null && parentSessionId !== undefined
       ? state.getRelation(parentSessionId, focusedChildId)
@@ -554,9 +498,14 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   // F11: every split row's (and layout B's) live child store, so each row
   // counts its own child's progress — not only the expanded one. A row whose
   // child host is gone keeps the last card it showed (`lastLiveChildCard`).
-  const relations = childRelationStore((state) => state.relations);
+  // Keys are EFFECTIVE ids (TASK.218): a continuation's live store feeds the
+  // row whose original id went stale.
   const liveChildIds: readonly string[] =
-    childView.kind === "split" ? childView.order : focusedChildId !== undefined ? [focusedChildId] : EMPTY_IDS;
+    childView.kind === "split"
+      ? childView.order.map(effectiveChildId)
+      : focusedChildId !== undefined
+        ? [focusedChildId]
+        : EMPTY_IDS;
   const liveChildStores = useMemo(() => {
     const stores = new Map<string, DesktopStoreApi>();
     if (parentSessionId === null || parentSessionId === undefined) return stores;
@@ -728,9 +677,11 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   // FALLBACK_SUBAGENT_CARD, mirroring B's own breadcrumb fallback.
   const childSplitRows: readonly ChildSplitRow[] =
     childView.kind === "split"
-      ? childView.order.map((id) => {
-          const card = resolveChildRowCard(id, transcript, liveChildStores.get(id));
-          return { spawnToolCallId: id, card, badge: childBadgeKind(card) };
+      ? projectChildSplitRows(childView.order, {
+          parentSessionId,
+          relations,
+          transcript,
+          liveChildStores,
         })
       : EMPTY_CHILD_SPLIT_ROWS;
 

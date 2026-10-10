@@ -344,6 +344,15 @@ export const agentInputSchema = z.object({
         "The child runs in the background; its report arrives later as a new message in this conversation. " +
         "Invalid for inline tier.",
     ),
+  continue_session: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Session tier only: child session id of an earlier finished Agent call of this conversation " +
+        "(stated in that call's result and in the delivered child report) — the same child resumes with its full " +
+        "history and receives `prompt` as its next message. Invalid for inline tier; cannot be combined with provider.",
+    ),
 });
 
 export type AgentInput = z.output<typeof agentInputSchema>;
@@ -394,6 +403,14 @@ export interface AgentOutput {
    * reached turn_end.
    */
   finalTurnFinishReason?: FinishReason;
+  /**
+   * The child session's own id, present ONLY on session-tier outcomes the
+   * host actually identified (TASK.218): the model-facing discoverability
+   * seam — formatResultForModel appends the "[Child session id: …]" note
+   * from this field (falling back to the presentation card's session
+   * target). Inline outcomes never carry one.
+   */
+  childSessionId?: string;
 }
 
 // ---------------------------------------------------------------------------

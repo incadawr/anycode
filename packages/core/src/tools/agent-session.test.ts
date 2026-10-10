@@ -261,7 +261,11 @@ describe("agentTool handler — session-tier outcome mapping, all 4 terminal sta
     );
     expect(result.ok).toBe(true);
     expect(result.errorKind).toBeUndefined();
-    expect(full.formatResultForModel?.(result)).toBe("child session done");
+    // TASK.218: successful session outcomes now append the follow-up note
+    // (discoverability off the output id, not the presentation card).
+    expect(full.formatResultForModel?.(result)).toBe(
+      "child session done\n\n[Child session id: child-1. Pass it as continue_session in a later agent call to send a follow-up to this same child in its existing conversation.]",
+    );
   });
 
   it("max_turns => ok:false, errorKind max_turns, partial rides the error, matches inline wording exactly", async () => {
@@ -321,14 +325,117 @@ describe("agentTool handler — session-tier outcome mapping, all 4 terminal sta
     expect(result.error).toBe("Agent: the subagent failed.");
   });
 
-  it("the tool's OWN output field never leaks the three session ids (CUT-S2 §2.1: ids ride ONLY the presentation target)", async () => {
+  it("the tool's OWN output field never leaks parent/spawn ids; childSessionId now rides it (TASK.218 discoverability seam)", async () => {
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
       makeCtx({ sessionSubagents: portReturning(BASE_SESSION_OUTCOME) }),
     );
-    expect(result.output && "childSessionId" in result.output).toBe(false);
+    // TASK.218 (supervisor correction 1): childSessionId IS on the output now
+    // — discoverability must not depend on a presentation card. The other
+    // two ids still ride only the presentation target.
+    expect(result.output?.childSessionId).toBe("child-1");
     expect(result.output && "parentSessionId" in result.output).toBe(false);
     expect(result.output && "spawnToolCallId" in result.output).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.218: continue_session (native Agent tool) — the child-session id
+// follow-up. Model ignored (not rejected) on continuation, provider refused,
+// request built with neither model nor profile defaults.
+
+describe("agentTool handler — continue_session (TASK.218)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  function capturingPort(): { port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
+    let seen: SessionSubagentRequest | undefined;
+    return {
+      seen: () => seen,
+      port: {
+        run: async (req) => {
+          seen = req;
+          return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+        },
+      },
+    };
+  }
+
+  it("tier session + continue_session => resumeChildSessionId rides the request; NO model/provider keys", async () => {
+    const { port, seen } = capturingPort();
+    await full.handler(
+      { description: "d", prompt: "follow-up", tier: "session", continue_session: "child-9" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(seen()).toMatchObject({ resumeChildSessionId: "child-9", prompt: "follow-up" });
+    expect(seen() !== undefined && "model" in seen()!).toBe(false);
+    expect(seen() !== undefined && "provider" in seen()!).toBe(false);
+  });
+
+  it("a continuation supplying model ignores it: no model/provider/profile preamble on the emitted request", async () => {
+    const { port, seen } = capturingPort();
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", continue_session: "child-9", model: "glm-other" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(seen() !== undefined && "model" in seen()!).toBe(false);
+    expect(seen() !== undefined && "provider" in seen()!).toBe(false);
+    expect(seen() !== undefined && "engine" in seen()!).toBe(false);
+    expect(seen()?.prompt).toBe("p");
+  });
+
+  it("a FRESH session-tier spawn still carries the model override (unchanged request shape)", async () => {
+    const { port, seen } = capturingPort();
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", model: "glm-4.6" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(seen()?.model).toBe("glm-4.6");
+    expect(seen() !== undefined && "resumeChildSessionId" in seen()!).toBe(false);
+  });
+
+  it("continue_session + provider => invalid_input (the resumed child keeps its connection)", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", continue_session: "child-9", provider: "conn-2" },
+      makeCtx({ sessionSubagents: capturingPort().port }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok === false && result.error).toContain('cannot be combined with "provider"');
+  });
+
+  it("continue_session with default (inline) tier => invalid_input", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", continue_session: "child-9" },
+      makeCtx({ sessionSubagents: capturingPort().port }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok === false && result.error).toContain('only valid with tier "session"');
+  });
+
+  it("session-tier completed with a start progress => formatResultForModel carries the childSessionId + continue_session hint", async () => {
+    const port: SessionSubagentPort = {
+      run: async (_req, opts) => {
+        opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
+        return BASE_SESSION_OUTCOME;
+      },
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    const text = full.formatResultForModel?.(result) ?? "";
+    expect(text).toContain("child-1");
+    expect(text).toContain("continue_session");
+    expect(text).toContain("child session done");
+  });
+
+  it("NO-progress sync session outcome still carries the hint (discoverability needs no subagent_start/card)", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session" },
+      makeCtx({ sessionSubagents: portReturning(BASE_SESSION_OUTCOME) }),
+    );
+    const text = full.formatResultForModel?.(result) ?? "";
+    expect(text).toContain("[Child session id: child-1");
+    expect(text).toContain("continue_session");
   });
 });
 
@@ -1121,12 +1228,12 @@ describe("agentTool handler — detach admit outcome mapping (TASK.145 срез 
     expect(result.output).toMatchObject({ turns: 0, toolCalls: 0, durationMs: 0, truncated: false, status: "completed" });
   });
 
-  it("the tool's own output never leaks the three session ids — mirrors the sync-tier rule (CUT-S2 §2.1): ids ride ONLY the (absent-here) presentation target", async () => {
+  it("the tool's own output never leaks parent/spawn ids; childSessionId rides it (TASK.218) even for the card-less admit", async () => {
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "session", detach: true },
       makeCtx({ sessionSubagents: admitOnlyPort("started", "child-1") }),
     );
-    expect(result.output).not.toHaveProperty("childSessionId");
+    expect(result.output?.childSessionId).toBe("child-1");
     expect(result.output).not.toHaveProperty("parentSessionId");
     expect(result.output).not.toHaveProperty("spawnToolCallId");
   });

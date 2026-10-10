@@ -21,6 +21,24 @@ function setup() {
 }
 
 describe("Codex AnyCode dynamic tool", () => {
+  it("TASK.218: a completed child's result text carries the child session id + continue_session hint (response AND tool_result)", async () => {
+    const s = setup();
+    s.run.mockImplementation(async (_req, options) => {
+      options?.onProgress?.({ kind: "start", agentType: "glm-lead", description: "d" });
+      return { status: "completed", finalText: "done", turns: 1, toolCalls: 0, truncated: false, durationMs: 1,
+        childSessionId: "child-1", parentSessionId: "parent-1", spawnToolCallId: "call-1" };
+    });
+    await s.call();
+    expect(s.response.result).toHaveBeenCalledWith({ success: true,
+      contentItems: [{ type: "inputText", text: expect.stringContaining("Child session id: child-1") }] });
+    expect(s.response.result).toHaveBeenCalledWith({ success: true,
+      contentItems: [{ type: "inputText", text: expect.stringContaining("continue_session") }] });
+    const last = s.events.at(-1) as { type: string; outcome: { result?: { output?: string } } };
+    expect(last.type).toBe("tool_result");
+    expect(last.outcome.result?.output).toContain("Child session id: child-1");
+    expect(last.outcome.result?.output).toContain("continue_session");
+  });
+
   it("declares the exact profile catalog and invokes the native session port", async () => {
     const s = setup();
     expect(s.bridge.declarations()[0]).toMatchObject({ type: "function", name: ANYCODE_AGENT_TOOL });
@@ -89,7 +107,7 @@ describe("Codex bridge — detached (background) children", () => {
     await s.call({ ...params, arguments: { ...params.arguments, detach: true } });
     expect(s.run.mock.calls[0]![0]).toMatchObject({ detach: true, spawnToolCallId: "call-1" });
     expect(s.response.result).toHaveBeenCalledWith({ success: true,
-      contentItems: [{ type: "inputText", text: "Agent: child session child-2 started in the background." }] });
+      contentItems: [{ type: "inputText", text: "Agent: child session child-2 started in the background.\n\n[Child session id: child-2. Pass it as continue_session in a later agent call to send a follow-up to this same child in its existing conversation.]" }] });
     // The turn ends (or the user presses Stop) after the call returned: the
     // bridge holds nothing for this call any more, so nothing is aborted.
     const { cancelled } = s.bridge.cancelAwaiting();

@@ -129,9 +129,29 @@ export const MASTER_VIEW: ChildLayoutView = { kind: "master" };
  * `childLayoutStore.getState().open(rootTabId, id)` unconditionally, this
  * reducer alone makes Open mode-aware — no change needed at the call site.
  */
-export function openChild(view: ChildLayoutView, spawnToolCallId: string): ChildLayoutView {
+export function openChild(
+  view: ChildLayoutView,
+  spawnToolCallId: string,
+  isSameChild?: (existingId: string) => boolean,
+): ChildLayoutView {
   if (view.kind !== "split") {
     return { kind: "child", spawnToolCallId };
+  }
+  // TASK.218: same-logical-child fold — when the id being opened is a
+  // continuation of a child that already has a row (a new spawn id, same
+  // childSessionId), retarget that row's id IN PLACE (position preserved)
+  // and expand it, instead of appending a second row for one child. Open
+  // always expands the opened child — same "open means expand" behavior the
+  // unseen-id branches below already have.
+  if (isSameChild !== undefined) {
+    const alias = view.order.find((id) => id !== spawnToolCallId && isSameChild(id));
+    if (alias !== undefined) {
+      return {
+        kind: "split",
+        order: view.order.map((id) => (id === alias ? spawnToolCallId : id)),
+        expandedId: spawnToolCallId,
+      };
+    }
   }
   if (spawnToolCallId === view.expandedId) {
     return view;
@@ -377,6 +397,82 @@ export function detachedOutcomeFromParent(
   return null;
 }
 
+// ── continuation (same logical child) helpers — TASK.218 ──
+
+/**
+ * The transcript-order Agent `tool_call` block ids that all belong to the
+ * SAME logical child as `rowSpawnId` — the row's own id plus every earlier
+ * continuation spawn mapped to the same childSessionId. Always includes
+ * `rowSpawnId` itself; `[rowSpawnId]` alone when the mapping knows nothing
+ * (no relation for an id, or no parent session) — a row can never lose its
+ * own card. Feeds `mergeContinuationCards` so one logical child's row
+ * aggregates its per-call cards instead of showing only the latest call's.
+ */
+export function continuationSiblingSpawnIds(
+  transcript: readonly TranscriptBlock[],
+  rowSpawnId: string,
+  childSessionIdOf: (spawnId: string) => string | undefined,
+): string[] {
+  const rowChildId = childSessionIdOf(rowSpawnId);
+  if (rowChildId === undefined) {
+    return [rowSpawnId];
+  }
+  const ids: string[] = [];
+  for (const block of transcript) {
+    if (block.kind !== "tool_call") continue;
+    const childId = childSessionIdOf(block.toolCallId);
+    if (childId !== undefined && childId === rowChildId) {
+      ids.push(block.toolCallId);
+    }
+  }
+  // The row's own id always participates even if its own lookup went stale.
+  if (!ids.includes(rowSpawnId)) {
+    ids.push(rowSpawnId);
+  }
+  return ids;
+}
+
+/**
+ * Folds one logical child's per-call cards (chronological, continuations
+ * last) into the single card its row shows. Identity/model/engine/lastTool/
+ * activity come from the LAST card (the latest call); counters/STATUS obey
+ * the frozen continuation discipline:
+ *  - status is ALWAYS the last card's — a prior completed call can never
+ *    make a running continuation look settled (`final: null` stays null);
+ *  - settled path: `turns`/`toolCalls` SUM across calls (per-call terminal
+ *    counters are run-scoped);
+ *  - DURATION: the total is known ONLY when every needed run's duration is
+ *    known — a single unknown (`-1`) anywhere makes the total unknown
+ *    (`-1`). A partial sum is never fabricated as a whole-session total
+ *    (supervisor correction 5 / defect 2).
+ *  - running path: `turns`/`toolCalls` = last's + Σ prior's.
+ * A single card is returned unchanged.
+ */
+export function mergeContinuationCards(cards: readonly SubagentSubStatus[]): SubagentSubStatus {
+  if (cards.length === 0) {
+    throw new Error("mergeContinuationCards: at least one card is required");
+  }
+  if (cards.length === 1) {
+    return cards[0]!;
+  }
+  const last = cards[cards.length - 1]!;
+  const prior = cards.slice(0, -1);
+  const priorTurns = prior.reduce((sum, card) => sum + card.turns, 0);
+  const priorToolCalls = prior.reduce((sum, card) => sum + card.toolCalls, 0);
+  if (last.final === null) {
+    return { ...last, turns: last.turns + priorTurns, toolCalls: last.toolCalls + priorToolCalls };
+  }
+  const hasUnknownPrior = prior.some((card) => card.final === null || card.final.durationMs < 0);
+  const durationMs =
+    last.final.durationMs < 0 || hasUnknownPrior ? -1 : last.final.durationMs + prior.reduce((sum, card) => sum + card.final!.durationMs, 0);
+  return {
+    ...last,
+    turns: last.turns + priorTurns,
+    toolCalls: last.toolCalls + priorToolCalls,
+    final: { ...last.final, durationMs },
+  };
+}
+
 // ── split stack head VM ──
 
 /**
@@ -431,8 +527,8 @@ export interface ChildLayoutState {
   views: ReadonlyMap<string, ChildLayoutView>;
   /** The given root tab's current view; `MASTER_VIEW` for a tab this store has never heard from — every tab's implicit starting state, so `open`/`close` never need a seeding call first. */
   view(rootTabId: string): ChildLayoutView;
-  /** Applies the pure `openChild` reducer for one root tab (the Open button, ToolCallCard.tsx C3). */
-  open(rootTabId: string, spawnToolCallId: string): void;
+  /** Applies the pure `openChild` reducer for one root tab (the Open button, ToolCallCard.tsx C3). The optional predicate is `openChild`'s same-logical-child fold (TASK.218). */
+  open(rootTabId: string, spawnToolCallId: string, isSameChild?: (existingId: string) => boolean): void;
   /** Applies the pure `closeChild` reducer for one root tab (the breadcrumb's master segment, App.tsx C3, or the split stack head's "×"). */
   close(rootTabId: string): void;
   /** Applies the pure `enterSplit` reducer (the breadcrumb's new "Split" button, CUT-S3 §3.2). No-op write skipped when the reducer returns the same reference (§2.3). */
@@ -454,9 +550,9 @@ export function createChildLayoutStore() {
       return get().views.get(rootTabId) ?? MASTER_VIEW;
     },
 
-    open(rootTabId, spawnToolCallId): void {
+    open(rootTabId, spawnToolCallId, isSameChild): void {
       const views = new Map(get().views);
-      views.set(rootTabId, openChild(get().view(rootTabId), spawnToolCallId));
+      views.set(rootTabId, openChild(get().view(rootTabId), spawnToolCallId, isSameChild));
       set({ views });
     },
 

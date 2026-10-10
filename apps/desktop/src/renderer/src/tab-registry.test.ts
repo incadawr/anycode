@@ -30,7 +30,7 @@ import type { HostToUiMessage } from "../../shared/protocol.js";
 import type { TermToHostMessage, TermToUiMessage } from "../../shared/terminal.js";
 import type { TerminalDims, TerminalView } from "./terminal-view.js";
 import { MODEL_IMAGE_ATTACH_BLOCKED_TEXT } from "./components/Composer.js";
-import { createChildRelationStore } from "./child-sessions.js";
+import { childRelationKey, createChildRelationStore, spawnToolCallIdForChild } from "./child-sessions.js";
 import type { PortEnvelope } from "../../shared/envelopes.js";
 
 /** Typed lookup by transcript block kind (same helper as store.test.ts) so `.text`/etc. narrow correctly. */
@@ -472,6 +472,26 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
       childSessionId: "sess-child",
       live: true,
     });
+  });
+
+  // TASK.218: the registration-time seam the panel projection follows — a
+  // continue_session continuation registers a NEW spawn id for the SAME
+  // childSessionId, and `spawnToolCallIdForChild` (latest wins, Map
+  // insertion order) makes the continuation the effective id with no second
+  // Open click.
+  it("a continuation's port registration records BOTH relation keys; spawnToolCallIdForChild returns the latest spawn", () => {
+    const tabsStore = createTabsStore();
+    const { registry, childRelationStore } = createTestRegistry(tabsStore);
+
+    registry.registerPort("tab-c1", "/ws/root", asPort(new FakeMessagePort()), undefined,
+      childField({ spawnToolCallId: "spawn-1", childSessionId: "child-9", parentSessionId: "parent-1" }));
+    registry.registerPort("tab-c2", "/ws/root", asPort(new FakeMessagePort()), undefined,
+      childField({ spawnToolCallId: "spawn-2", childSessionId: "child-9", parentSessionId: "parent-1" }));
+
+    const relations = childRelationStore.getState().relations;
+    expect(relations.get(childRelationKey("parent-1", "spawn-1"))).toMatchObject({ childSessionId: "child-9" });
+    expect(relations.get(childRelationKey("parent-1", "spawn-2"))).toMatchObject({ childSessionId: "child-9" });
+    expect(spawnToolCallIdForChild(relations, "parent-1", "child-9")).toBe("spawn-2");
   });
 
   it("a root port delivery is unaffected by the new `child` parameter (omitted, as every existing call site does)", () => {
