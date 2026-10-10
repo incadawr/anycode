@@ -72,7 +72,8 @@ const GLM_MAX_TOKENS = 131_072;
 /** Return shape of `reasoningRequestOptions` on the anthropic-messages transport. */
 interface AnthropicReasoningOptions {
   maxOutputTokens?: number;
-  providerOptions?: { anthropic: { effort?: string; thinking: { type: "enabled"; budgetTokens: number } } };
+  // thinking optional since the DeepSeek branch (4241) sends the effort enum alone.
+  providerOptions?: { anthropic: { effort?: string; thinking?: { type: "enabled"; budgetTokens: number } } };
 }
 
 /**
@@ -240,6 +241,25 @@ export function reasoningRequestOptions(
     return {
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       providerOptions: { anthropic: { effort: glmEffort, thinking: { type: "enabled", budgetTokens: glmBudget } } },
+    };
+  }
+
+  // DeepSeek (TASK 4241): distinct low/high/max effort tiers, default high —
+  // SUPPLIED FACT from the live GET /models listing (2026-10-10). Mechanism is
+  // LOCAL SDK EVIDENCE: @ai-sdk/anthropic@4.0.7 serializes
+  // providerOptions.anthropic.effort to output_config.effort whether or not
+  // thinking is present, and adds thinkingBudget to max_tokens only when a
+  // budget exists — so this emits the enum verbatim, no thinking key, and
+  // max_tokens = maxOutputTokens unchanged. No thinking budget is sent
+  // because no DeepSeek budget fact exists; borrowing GLM's numbers would be
+  // an unsupported live-service inference. `medium` is not a declared tier
+  // (legacy stored override only) and collapses to "high" — same local
+  // precedent as the GLM branch, not a supplied fact.
+  if (providerName === "DeepSeek") {
+    const dsEffort = effort === "low" || effort === "max" ? effort : "high";
+    return {
+      ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+      providerOptions: { anthropic: { effort: dsEffort } },
     };
   }
 
