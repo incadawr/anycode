@@ -397,6 +397,18 @@ describe("aggregateProfileStats — malformed record hardening (W5-FIX finding 2
     const stats = aggregateProfileStats([f], { now, dayKey: utcDayKey });
     expect(stats.totalSessions).toBe(1);
   });
+
+  it("TASK.208: a ceiling_refused record is a VALID discriminant — a file carrying only one still counts as a session", () => {
+    const f = file("s.jsonl", [
+      { v: 1, ts: 0, session: "s", t: "ceiling_refused", reason: "ladder_disabled", turn: 1, round: 1 },
+    ]);
+    const stats = aggregateProfileStats([f], { now, dayKey: utcDayKey });
+    // If "ceiling_refused" were missing from VALID_RECORD_TYPES this file would
+    // be indistinguishable from PoC-1's "unknown" case above — 0 sessions, no
+    // day bucket — silently discarding a real refusal line.
+    expect(stats.totalSessions).toBe(1);
+    expect(stats.days).not.toEqual({});
+  });
 });
 
 describe("aggregateProfileStats — default dayKey (LOCAL calendar date)", () => {

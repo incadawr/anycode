@@ -118,6 +118,21 @@ export type ModelStreamEvent =
  */
 export type LoopEndReason = "completed" | "max_turns" | "cancelled" | "error" | "workspace_transition";
 
+/**
+ * Why the turn-ceiling ladder refused a round. Closed enum: telemetry and UI
+ * project this list verbatim, never the model's free text. One refusal reason
+ * per `ceiling_refused` event, emitted immediately before the paired
+ * `loop_end`.
+ */
+export type CeilingRefusalReason =
+  | "ladder_disabled"
+  | "rounds_exhausted"
+  | "no_successful_tool_calls"
+  | "grant_budget_exhausted"
+  | "window_collapsed"
+  | "unreadable_verdict"
+  | "verdict_rejected";
+
 /** Full event stream produced by the agent loop; superset of the model stream vocabulary. */
 export type AgentEvent =
   | ModelStreamEvent
@@ -155,8 +170,8 @@ export type AgentEvent =
    * rides the existing agent_event envelope on the desktop wire with no
    * protocol change (protocol.ts projects new AgentEvent variants
    * automatically), same precedent as `engine_notice` above. Emitted ONLY when
-   * a grant was actually issued — a refused round needs no event, the existing
-   * `loop_end`/`max_turns` already says the run stopped. `round` counts from 1
+   * a grant was actually issued — a refused round instead emits the paired
+   * `ceiling_refused` event below. `round` counts from 1
    * and never exceeds MAX_CEILING_ROUNDS; `totalGranted` is the running sum of
    * turns this session's ladder has handed out (bounded by the loop's
    * maxGrantedTurns); `remaining`/`nextAction` come verbatim from the model's
@@ -170,6 +185,18 @@ export type AgentEvent =
       remaining: string[];
       nextAction?: string;
     }
+  /**
+   * One refused round of the turn-ceiling ladder (TASK.208). Emitted exactly
+   * once per refusal, immediately before the paired `loop_end` (which still
+   * carries `reason: "max_turns"`), same additive precedent as `ceiling_grant`
+   * above. `turn` is the number of COMPLETED turns at the refusal — the same
+   * number the paired `loop_end.turns` reports (the caller passes turn-1 while
+   * the turn being attempted never started). `round` is ceilingRounds+1: it
+   * equals MAX_CEILING_ROUNDS+1 on the rounds_exhausted refusal, 1 when the
+   * ladder was disabled. A readable done:true verdict is event-free — the
+   * ladder accepted the finish, and only `loop_end` fires.
+   */
+  | { type: "ceiling_refused"; reason: CeilingRefusalReason; turn: number; round: number }
   /** Emitted after each finish (design §2.5): provider usage wins over the local estimate. */
   | {
       type: "context_usage";
