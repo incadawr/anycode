@@ -28,6 +28,12 @@ import {
   runCli,
   buildCliEndpointConfig,
 } from "./main.js";
+import {
+  buildChildModelSettingsResolver,
+  resolveContextWindow,
+} from "../index.js";
+import { getBuiltinCatalog } from "../provider/catalog-data.js";
+import { matchCatalogEntryByBaseUrl } from "./model.js";
 import { NodeFileSystemAdapter } from "../adapters/node/index.js";
 import { SqlitePersistenceAdapter } from "../adapters/node/sqlite-persistence.js";
 import { deriveSessionTitle, sanitizeTitleSource } from "../context/session-title.js";
@@ -2314,7 +2320,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     expect(findContextEventIndex(text, 176_000)).toBe(-1);
   });
 
-  it("scenario 4: default-boot byte-identity — a non-catalog model (test-model) omits loopConfig.context; /context still works off the DEFAULT window (200000/176000/161920)", async () => {
+  it("scenario 4: a non-catalog model resolves the ASSUMED 8192 window at boot (TASK.142) — loopConfig.context carries it and /context reflects the degraded budget (8192/2048/1884) instead of the DEFAULT 200000", async () => {
     const { workspace, dbPath } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -2335,8 +2341,224 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    expect(text).toContain("/176000 tokens");
-    expect(text).toContain("[context] window 200000 — output reserve 24000 — auto-compact at 161920");
+    // TASK.142 changed this: an unknown model no longer omits loopConfig.context
+    // and no longer boots at DEFAULT_CONTEXT_WINDOW_TOKENS. It resolves the
+    // explicit assumed fallback (8192), and the degraded-window budget engages:
+    // effectiveWindow = max(8192 - min(24000, 8192), ceil(8192*0.25)) = 2048,
+    // compactThreshold = 1884.
+    expect(text).toContain("/2048 tokens");
+    expect(text).toContain("[context] window 8192 — output reserve 24000 — auto-compact at 1884");
+    expect(text).not.toContain("[context] window 200000");
+    expect(text).not.toContain("/176000 tokens");
+  });
+
+  it("scenario 5: an A-bound override (TASK.142) governs A at boot but NOT an UNKNOWN model B after /model — B re-resolves the assumed 8192", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+
+    const runPromise = runCli({
+      argv: [],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        ANYCODE_MODEL: "glm-4.6",
+        ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
+        ANYCODE_CONTEXT_WINDOW: "50000",
+        ANYCODE_CONTEXT_WINDOW_MODEL: "glm-4.6",
+        ANYCODE_DB_PATH: dbPath,
+        ANYCODE_SETTINGS_PATH: join(dirname(dbPath), "settings.json"),
+      } as NodeJS.ProcessEnv,
+      input,
+      output,
+      modelPort: new CountingModelPort(),
+      modelPortFactory: (id: string) => new TextModelPort(`from-${id}`),
+      cwd: workspace,
+    });
+
+    input.write("hi\n");
+    input.write("/model ghost-model\n");
+    input.write("hello again\n");
+    input.write("/context\n");
+    input.write("/quit\n");
+
+    expect(await runPromise).toBe(0);
+    const text = getText();
+    // Boot on A: the A-bound override applies (50000 - 24000 = 26000 denominator).
+    const bootIdx = findContextEventIndex(text, 26_000);
+    expect(bootIdx).toBeGreaterThanOrEqual(0);
+    // After the switch to the unknown B the binding no longer matches, so the
+    // override is inert: B resolves the assumed 8192 (2048 effective).
+    const afterIdx = findContextEventIndex(text, 2_048);
+    expect(afterIdx).toBeGreaterThan(bootIdx);
+    expect(text).toContain("[context] window 8192 — output reserve 24000 — auto-compact at 1884");
+    expect(text).not.toContain("[context] window 50000");
+    expect(findContextEventIndex(text, 176_000)).toBe(-1);
+  });
+
+  it("scenario 6: the same A-bound override is also inert on a CATALOGUED model B after /model — B re-resolves its catalog window (128000)", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+
+    const runPromise = runCli({
+      argv: [],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        ANYCODE_MODEL: "glm-4.6",
+        ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
+        ANYCODE_CONTEXT_WINDOW: "50000",
+        ANYCODE_CONTEXT_WINDOW_MODEL: "glm-4.6",
+        ANYCODE_DB_PATH: dbPath,
+        ANYCODE_SETTINGS_PATH: join(dirname(dbPath), "settings.json"),
+      } as NodeJS.ProcessEnv,
+      input,
+      output,
+      modelPort: new CountingModelPort(),
+      modelPortFactory: (id: string) => new TextModelPort(`from-${id}`),
+      cwd: workspace,
+    });
+
+    input.write("hi\n");
+    input.write("/model glm-4.5\n");
+    input.write("hello again\n");
+    input.write("/context\n");
+    input.write("/quit\n");
+
+    expect(await runPromise).toBe(0);
+    const text = getText();
+    const bootIdx = findContextEventIndex(text, 26_000);
+    expect(bootIdx).toBeGreaterThanOrEqual(0);
+    // glm-4.5's catalog window is 128000 (104000 effective), NOT A's 50000.
+    const afterIdx = findContextEventIndex(text, 104_000);
+    expect(afterIdx).toBeGreaterThan(bootIdx);
+    expect(text).toContain("[context] window 128000 — output reserve 24000 — auto-compact at 91000");
+    expect(findContextEventIndex(text, 176_000)).toBe(-1);
+  });
+
+  it("scenario 7: /model A -> B -> A re-resolves each model's own window — switching back to A reuses the boot pair (TASK.142)", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+
+    const runPromise = runCli({
+      argv: [],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        ANYCODE_MODEL: "glm-4.6",
+        ANYCODE_BASE_URL: "https://api.z.ai/api/anthropic",
+        ANYCODE_CONTEXT_WINDOW: "50000",
+        ANYCODE_CONTEXT_WINDOW_MODEL: "glm-4.6",
+        ANYCODE_DB_PATH: dbPath,
+        ANYCODE_SETTINGS_PATH: join(dirname(dbPath), "settings.json"),
+      } as NodeJS.ProcessEnv,
+      input,
+      output,
+      modelPort: new CountingModelPort(),
+      modelPortFactory: (id: string) => new TextModelPort(`from-${id}`),
+      cwd: workspace,
+    });
+
+    input.write("hi\n");
+    input.write("/model glm-4.5\n");
+    input.write("after switch\n");
+    input.write("/model glm-4.6\n");
+    input.write("back to a\n");
+    input.write("/context\n");
+    input.write("/quit\n");
+
+    expect(await runPromise).toBe(0);
+    const text = getText();
+    // Boot on the bound model A: 50000 - 24000 = 26000.
+    const bootIdx = findContextEventIndex(text, 26_000);
+    expect(bootIdx).toBeGreaterThanOrEqual(0);
+    // Switch to the catalogued B: B's own 128000 window (104000 effective).
+    const bIdx = findContextEventIndex(text, 104_000);
+    expect(bIdx).toBeGreaterThan(bootIdx);
+    // Switch BACK to A: the boot pair applies again — observed as the same
+    // applied budget AFTER B's turn, which only holds if A's pair is reused and
+    // B's window did not stick.
+    expect(findContextEventIndex(text.slice(bIdx), 26_000)).toBeGreaterThanOrEqual(0);
+    // The final /context header names A's window, not B's.
+    expect(text).toContain("[context] window 50000 — output reserve 24000 — auto-compact at 13000");
+    expect(text).not.toContain("[context] window 128000");
+    expect(findContextEventIndex(text, 176_000)).toBe(-1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// TASK.142 production wiring: the CLI builds the child resolver from the SAME
+// catalog + env pair the boot/switch path uses. Pinned against the REAL source
+// (a hand-copied recipe stays green if main.ts stops passing the binding).
+// ─────────────────────────────────────────────────────────────────────────
+describe("per-model context window production wiring (TASK.142)", () => {
+  const zAiEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), "https://api.z.ai/api/anthropic");
+
+  function matchBracket(source: string, openIndex: number, open: string, close: string): string {
+    let depth = 0;
+    for (let i = openIndex; i < source.length; i += 1) {
+      if (source[i] === open) depth += 1;
+      else if (source[i] === close) {
+        depth -= 1;
+        if (depth === 0) return source.slice(openIndex + 1, i);
+      }
+    }
+    throw new Error("unbalanced brackets in source");
+  }
+
+  it("the child resolver is wired from the SAME env pair, and the real resolver applies it per child model", async () => {
+    const source = readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+    const blocks = [...source.matchAll(/buildChildModelSettingsResolver\(\{/g)].map((match) =>
+      matchBracket(source, match.index! + match[0].length - 1, "{", "}"),
+    );
+    const production = blocks.filter((block) => block.includes("envMaxOutputTokens") && block.includes("catalogEntry"));
+    expect(production).toHaveLength(1);
+    expect(production[0]).toContain("envContextWindowModel: envConfig.contextWindowModel");
+
+    // Run the PRODUCTION deps object, not a re-typed copy: dropping the
+    // `envContextWindowModel:` line makes the child on B inherit A's override.
+    const envConfig = {
+      model: "glm-5.2",
+      maxOutputTokens: undefined,
+      contextWindowTokens: 50_000,
+      contextWindowModel: "glm-5.2",
+    };
+    const deps = new Function("envConfig", "catalogEntry", "bootWrite", "console", `return ({${production[0]!}});`)(
+      envConfig,
+      zAiEntry,
+      () => {},
+      console,
+    ) as Parameters<typeof buildChildModelSettingsResolver>[0];
+    expect(deps.envContextWindowModel).toBe("glm-5.2");
+
+    const resolve = buildChildModelSettingsResolver(deps);
+    expect(resolve("glm-5.2", "high").contextWindowTokens).toBe(50_000);
+    expect(resolve("glm-4.6", "high").contextWindowTokens).toBe(200_000);
+    expect(resolve("not-in-catalog", "high").contextWindowTokens).toBe(8_192);
+  });
+
+  it("boot and the mid-session switch both pass the model binding as the 4th argument", async () => {
+    const source = readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+    const calls = [...source.matchAll(/resolveContextWindow\(/g)]
+      .map((match) => matchBracket(source, match.index! + match[0].length - 1, "(", ")"))
+      .filter((args) => args.includes("envConfig."));
+    expect(calls).toHaveLength(2);
+    for (const args of calls) {
+      expect(args).toContain("envConfig.contextWindowModel");
+    }
+    // Evaluated against a mismatched pair, the production args resolve B's
+    // catalog window — dropping the 4th argument would let A's override govern B.
+    const envConfig = { model: "glm-4.6", contextWindowTokens: 50_000, contextWindowModel: "glm-5.2" };
+    for (const args of calls) {
+      const [modelId, entry, tokens, bound] = new Function("envConfig", "catalogEntry", "id", `return [${args}];`)(
+        envConfig,
+        zAiEntry,
+        "glm-4.6",
+      ) as [string, typeof zAiEntry, number, string | undefined];
+      expect(resolveContextWindow(modelId, entry, tokens, bound)).toBe(200_000);
+    }
   });
 });
 

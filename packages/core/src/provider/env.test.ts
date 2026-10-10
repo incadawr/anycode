@@ -6,6 +6,7 @@ import {
   ENV_API_KEY,
   ENV_BASE_URL,
   ENV_CONTEXT_WINDOW,
+  ENV_CONTEXT_WINDOW_MODEL,
   ENV_DB_PATH,
   ENV_IMAGE_INPUT,
   ENV_MAX_RETRIES,
@@ -169,6 +170,34 @@ describe("loadEnvConfig", () => {
     expect(config.contextWindowTokens).toBe(8000);
     expect(config.maxRetries).toBe(0);
     expect(config.dbPath).toBe("/tmp/anycode-test.sqlite");
+  });
+
+  it("parses ANYCODE_CONTEXT_WINDOW_MODEL as an optional string, trimmed (TASK.142)", () => {
+    const config = loadEnvConfig(
+      envWith({
+        [ENV_API_KEY]: "key-123",
+        [ENV_MODEL]: "claude-x",
+        [ENV_CONTEXT_WINDOW]: "8000",
+        [ENV_CONTEXT_WINDOW_MODEL]: "  on-prem-8b  ",
+      }),
+    );
+    expect(config.contextWindowModel).toBe("on-prem-8b");
+  });
+
+  it("leaves contextWindowModel undefined when the binding is absent or blank, without throwing", () => {
+    expect(
+      loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m" })).contextWindowModel,
+    ).toBeUndefined();
+    expect(
+      loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_CONTEXT_WINDOW_MODEL]: "   " }))
+        .contextWindowModel,
+    ).toBeUndefined();
+    // A blank binding must not change the value's own parse either.
+    expect(
+      loadEnvConfig(
+        envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_CONTEXT_WINDOW]: "4096", [ENV_CONTEXT_WINDOW_MODEL]: "" }),
+      ).contextWindowTokens,
+    ).toBe(4096);
   });
 
   it("leaves imageInput undefined when ANYCODE_IMAGE_INPUT is unset (slice 6.2)", () => {

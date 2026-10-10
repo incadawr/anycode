@@ -71,6 +71,16 @@ export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
  */
 export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 /**
+ * Per-model context-window override (TASK.142) and its model binding. Literal
+ * mirrors of core's `provider/env.ts` ENV_CONTEXT_WINDOW /
+ * ENV_CONTEXT_WINDOW_MODEL — same local-literal convention as every var above
+ * (host-env stays core-free). The pair is emitted TOGETHER, only when the
+ * connection's window is bound to the model actually being launched; the core
+ * resolver then applies the override to that model alone.
+ */
+export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
+export const ENV_CONTEXT_WINDOW_MODEL = "ANYCODE_CONTEXT_WINDOW_MODEL";
+/**
  * Wire transport override (TASK.43 W5). Literal mirrors core's
  * `provider/env.ts` `ENV_PROVIDER_TRANSPORT` — same local-literal convention
  * as every other var above (host-env stays core-free, never value-imports the
@@ -375,6 +385,8 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_SUBAGENT_STALL_MS,
   ENV_REASONING_EFFORT,
   ENV_MAX_OUTPUT_TOKENS,
+  ENV_CONTEXT_WINDOW,
+  ENV_CONTEXT_WINDOW_MODEL,
   ENV_PROVIDER_TRANSPORT,
   ENV_INCLUDE_USAGE,
 ];
@@ -1091,6 +1103,39 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // property of the whole ladder (env > settings), not incidental to how
   // fillFromSettings happens to be implemented.
   fillFromSettings(env, ENV_MAX_OUTPUT_TOKENS, numToStr(view.maxOutputTokens));
+  // Per-model context window (TASK.142): the value and its binding travel as a
+  // PAIR and are written from ONE source — never two independent
+  // `fillFromSettings` calls, which could pair a settings value with a stale env
+  // binding. A launching shell's own ANYCODE_CONTEXT_WINDOW always wins, and its
+  // binding (present or absent) is left EXACTLY as the shell set it: a
+  // shell-global value must never inherit a settings-derived binding. Only when
+  // the persisted pair is bound to the model this fork actually launches — read
+  // from the fully merged env, because shell ANYCODE_MODEL may override
+  // `view.model` — is it emitted. Anything missing/invalid/mismatched emits
+  // NEITHER half.
+  if (envPresent(env, ENV_CONTEXT_WINDOW)) {
+    // Shell wins verbatim; binding (if any) is the shell's alone.
+  } else {
+    // A binding without its value is inert: strip any orphan before considering
+    // settings so it can never attach to a settings value.
+    delete env[ENV_CONTEXT_WINDOW_MODEL];
+    const effectiveModel = env[ENV_MODEL]?.trim();
+    const windowTokens = view.contextWindowTokens;
+    const windowBinding = view.contextWindowModel?.trim();
+    if (
+      windowTokens !== undefined &&
+      Number.isInteger(windowTokens) &&
+      windowTokens >= 1_024 &&
+      windowTokens <= 1_000_000 &&
+      windowBinding !== undefined &&
+      windowBinding !== "" &&
+      effectiveModel !== undefined &&
+      windowBinding === effectiveModel
+    ) {
+      env[ENV_CONTEXT_WINDOW] = numToStr(windowTokens);
+      env[ENV_CONTEXT_WINDOW_MODEL] = windowBinding;
+    }
+  }
   // The host fork's own network path (TASK.132, generalised by TASK.141 §2
   // ladder (a)/(b)): the ACTIVE connection's rung, then the app's. Keyed off
   // `activeConnectionId` — the same handle `activeProviderView` reads — so a

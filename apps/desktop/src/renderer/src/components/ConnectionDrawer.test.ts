@@ -22,7 +22,15 @@ import {
   transportAfterNoAuthToggle,
   maxOutputTokensEnvHint,
   maxOutputTokensEffectiveHint,
+  contextWindowTokensField,
+  contextWindowTokensEnvHint,
+  contextWindowEffectiveHint,
+  contextWindowInitialRaw,
+  contextWindowInitialField,
+  contextWindowAfterModelInput,
+  contextWindowAfterRawInput,
 } from "./ConnectionDrawer.js";
+import { readFileSync } from "node:fs";
 
 function conn(id: string, providerId = "z-ai"): ProviderConnection {
   return { id, providerId };
@@ -123,6 +131,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       proxyRef: "",
       authOptional: false,
       maxOutputTokens: "",
+      contextWindowTokens: "",
     });
     expect(payload).toEqual({
       id: "conn-1",
@@ -133,6 +142,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       proxyRef: "",
       authOptional: false,
       maxOutputTokens: "",
+      contextWindowTokens: "",
     });
   });
 
@@ -147,6 +157,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       proxyRef: "",
       authOptional: false,
       maxOutputTokens: "",
+      contextWindowTokens: "",
     });
     expect(payload.transport).toBe("openai-responses");
   });
@@ -162,6 +173,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       proxyRef: "",
       authOptional: false,
       maxOutputTokens: "",
+      contextWindowTokens: "",
     });
     expect(shown.baseUrl).toBe("https://x");
     const hidden = buildConnectionUpdatePayload({
@@ -174,6 +186,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       proxyRef: "",
       authOptional: false,
       maxOutputTokens: "",
+      contextWindowTokens: "",
     });
     expect(hidden.baseUrl).toBe("");
   });
@@ -192,6 +205,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       showBaseUrl: false,
       proxyRef: "",
       maxOutputTokens: "" as const,
+      contextWindowTokens: "" as const,
     };
     expect(buildConnectionUpdatePayload({ ...base, authOptional: true }).authOptional).toBe(true);
     expect(buildConnectionUpdatePayload({ ...base, authOptional: false }).authOptional).toBe(false);
@@ -208,6 +222,7 @@ describe("buildConnectionUpdatePayload — proxyRef (TASK.141, replacing TASK.13
     showBaseUrl: false,
     authOptional: false,
     maxOutputTokens: "" as const,
+    contextWindowTokens: "" as const,
   };
 
   it("sends the picked profile id", () => {
@@ -450,6 +465,7 @@ describe("buildConnectionUpdatePayload — maxOutputTokens (TASK.150, same uncon
     showBaseUrl: false,
     proxyRef: "",
     authOptional: false,
+    contextWindowTokens: "" as const,
   };
 
   it("a chosen number lands in the payload", () => {
@@ -529,5 +545,300 @@ describe("maxOutputTokensEffectiveHint (TASK.159: name the number a blank field 
   it("an older snapshot without defaultMaxOutputTokens degrades to no number, never an invented figure", () => {
     expect(maxOutputTokensEffectiveHint(GLM, "glm-4.6", undefined, "")).toBeNull();
     expect(maxOutputTokensEffectiveHint(undefined, "qwen3-selfhosted", undefined, "")).toBeNull();
+  });
+});
+
+describe("contextWindowTokensField (TASK.142: per-model context window, same range discipline as TASK.150)", () => {
+  it("blank (and whitespace-only) is the CLEAR sentinel, not zero and not invalid", () => {
+    expect(contextWindowTokensField("")).toEqual({ ok: true, value: "" });
+    expect(contextWindowTokensField("   ")).toEqual({ ok: true, value: "" });
+  });
+
+  it("accepts the inclusive bounds and a typical value", () => {
+    expect(contextWindowTokensField("1024")).toEqual({ ok: true, value: 1024 });
+    expect(contextWindowTokensField("8192")).toEqual({ ok: true, value: 8192 });
+    expect(contextWindowTokensField("1000000")).toEqual({ ok: true, value: 1000000 });
+    expect(contextWindowTokensField("200000")).toEqual({ ok: true, value: 200_000 });
+  });
+
+  it("rejects out-of-range, fractional, negative and non-numeric input", () => {
+    expect(contextWindowTokensField("1023")).toEqual({ ok: false });
+    expect(contextWindowTokensField("1000001")).toEqual({ ok: false });
+    expect(contextWindowTokensField("8.5")).toEqual({ ok: false });
+    expect(contextWindowTokensField("12.5")).toEqual({ ok: false });
+    expect(contextWindowTokensField("-1")).toEqual({ ok: false });
+    expect(contextWindowTokensField("abc")).toEqual({ ok: false });
+  });
+});
+
+describe("buildConnectionUpdatePayload — contextWindowTokens (TASK.142, same unconditional-send discipline as transport/proxyRef/maxOutputTokens)", () => {
+  const base = {
+    connectionId: "conn-1",
+    label: "",
+    model: "glm-4.6",
+    transport: "" as const,
+    baseUrl: "",
+    showBaseUrl: false,
+    proxyRef: "",
+    authOptional: false,
+    maxOutputTokens: "" as const,
+  };
+
+  it("a chosen number lands in the payload", () => {
+    expect(buildConnectionUpdatePayload({ ...base, contextWindowTokens: 8192 }).contextWindowTokens).toBe(8192);
+  });
+
+  // Clearing the field back to blank must CLEAR the persisted pair, so `""` is
+  // SENT (not omitted) — a `...(contextWindowTokens ? {...} : {})` spread would
+  // leave the old explicit window in force and turn this red.
+  it('sends contextWindowTokens:"" as the clear sentinel, never omits it', () => {
+    const payload = buildConnectionUpdatePayload({ ...base, contextWindowTokens: "" });
+    expect(payload.contextWindowTokens).toBe("");
+    expect("contextWindowTokens" in payload).toBe(true);
+  });
+
+  // The binding is derived SERVER-SIDE from the effective model; the renderer
+  // must never name a model in the payload, or it could attach a window to the
+  // wrong one.
+  it("never carries a contextWindowModel — the binding is main's to derive", () => {
+    const payload = buildConnectionUpdatePayload({ ...base, contextWindowTokens: 8192 });
+    expect("contextWindowModel" in payload).toBe(false);
+  });
+});
+
+describe("contextWindowTokensEnvHint (TASK.142: the env rung silences this field)", () => {
+  it("names the variable when it is live", () => {
+    expect(contextWindowTokensEnvHint(["ANYCODE_CONTEXT_WINDOW"])).toBe(
+      "ANYCODE_CONTEXT_WINDOW is set in the environment — it overrides this field for every new session.",
+    );
+  });
+
+  it("stays silent when it is not", () => {
+    expect(contextWindowTokensEnvHint([])).toBeNull();
+    expect(contextWindowTokensEnvHint(["ANYCODE_API_KEY", "ANYCODE_MODEL"])).toBeNull();
+  });
+
+  it("does not match a longer variable name that merely starts the same", () => {
+    expect(contextWindowTokensEnvHint(["ANYCODE_CONTEXT_WINDOW_MODEL"])).toBeNull();
+  });
+});
+
+describe("contextWindowEffectiveHint (TASK.142: name the window a blank field resolves to)", () => {
+  const CATALOG: CatalogSummaryEntry = {
+    id: "z-ai",
+    name: "Z.AI",
+    authKind: "api_key",
+    models: [
+      { id: "glm-5.3", name: "GLM-5.3", contextWindow: 200_000 },
+      { id: "glm-4.6", name: "GLM-4.6", contextWindow: 200_000, usableContextWindow: 128_000 },
+    ],
+  };
+
+  it("a catalog model answers catalog: min(contextWindow, usableContextWindow)", () => {
+    expect(contextWindowEffectiveHint(CATALOG, "glm-5.3", { unknownModelContextWindowTokens: 8_192 }, "")).toBe(
+      "catalog: 200000",
+    );
+    // The usable window caps it when declared.
+    expect(contextWindowEffectiveHint(CATALOG, "glm-4.6", { unknownModelContextWindowTokens: 8_192 }, "")).toBe(
+      "catalog: 128000",
+    );
+  });
+
+  // NOT "provider default": core does not know a server-side window for an
+  // unknown model, it deliberately ASSUMES a conservative one.
+  it("an unknown model answers the assumed fallback, never a provider default", () => {
+    expect(contextWindowEffectiveHint(undefined, "qwen3-selfhosted", { unknownModelContextWindowTokens: 8_192 }, "")).toBe(
+      "assumed fallback: 8192 (unknown model — set a value to override)",
+    );
+    expect(contextWindowEffectiveHint(CATALOG, "not-in-catalog", { unknownModelContextWindowTokens: 8_192 }, "")).toBe(
+      "assumed fallback: 8192 (unknown model — set a value to override)",
+    );
+  });
+
+  it("a non-blank field suppresses the hint (the field itself shows what wins)", () => {
+    expect(contextWindowEffectiveHint(CATALOG, "glm-5.3", { unknownModelContextWindowTokens: 8_192 }, "8192")).toBeNull();
+    expect(contextWindowEffectiveHint(CATALOG, "glm-5.3", { unknownModelContextWindowTokens: 8_192 }, "   ")).toBe(
+      "catalog: 200000",
+    );
+  });
+
+  it("an older snapshot without the projection degrades to the literal 8192, never a crash", () => {
+    expect(contextWindowEffectiveHint(undefined, "qwen3-selfhosted", undefined, "")).toBe(
+      "assumed fallback: 8192 (unknown model — set a value to override)",
+    );
+  });
+});
+
+describe("contextWindowInitialField / contextWindowAfterModelInput / contextWindowAfterRawInput (TASK.142: owner-aware reset)", () => {
+  const SAVED_A = { contextWindowTokens: 8192, contextWindowModel: "model-a" };
+
+  it("prefills the saved pair only when it binds to the connection's own model", () => {
+    expect(contextWindowInitialField({ ...SAVED_A, model: "model-a" })).toEqual({ raw: "8192", model: "model-a" });
+    expect(contextWindowInitialField({ ...SAVED_A, model: "model-b" })).toEqual({ raw: "", model: "model-b" });
+    expect(contextWindowInitialField({ model: "model-a" })).toEqual({ raw: "", model: "model-a" });
+    expect(contextWindowInitialField(undefined)).toEqual({ raw: "", model: "" });
+  });
+
+  // The reported defect: the reset compared against the ORIGINAL saved binding,
+  // so a whitespace-only edit of a freshly typed window wiped it.
+  it("a new connection's freshly typed window SURVIVES a whitespace-only Model edit", () => {
+    const typed = contextWindowAfterRawInput({ raw: "", model: "" }, "8192", "model-b");
+    expect(typed).toEqual({ raw: "8192", model: "model-b" });
+    expect(contextWindowAfterModelInput(typed, "  model-b  ", undefined)).toEqual(typed);
+  });
+
+  // ...and the same after editing saved A -> B and typing B's window.
+  it("after editing A -> B and typing B's window, a whitespace-only edit keeps it", () => {
+    const cleared = contextWindowAfterModelInput({ raw: "8192", model: "model-a" }, "model-b", SAVED_A);
+    expect(cleared).toEqual({ raw: "", model: "model-b" });
+    const typed = contextWindowAfterRawInput(cleared, "8192", "model-b");
+    expect(contextWindowAfterModelInput(typed, " model-b ", SAVED_A)).toEqual(typed);
+  });
+
+  // The regression this revision fixes: clearing an unchanged model's saved
+  // window must NOT be undone by a normalized-no-change edit (or by re-clicking
+  // the model's own chip) — otherwise save() sends the resurrected 8192 instead
+  // of the user's clear sentinel.
+  it("an explicit CLEAR survives a normalized-no-change Model edit (whitespace and re-selected chip)", () => {
+    const cleared = contextWindowAfterRawInput({ raw: "8192", model: "model-a" }, "", "model-a");
+    expect(cleared).toEqual({ raw: "", model: "model-a" });
+    // " A " is the SAME normalized model -> the whole field is preserved.
+    expect(contextWindowAfterModelInput(cleared, " model-a ", SAVED_A)).toEqual(cleared);
+    // Re-clicking A's own chip (the model did not change) -> preserved too.
+    expect(contextWindowAfterModelInput(cleared, "model-a", SAVED_A)).toEqual(cleared);
+    expect(contextWindowAfterModelInput(cleared, "model-a", SAVED_A).raw).toBe("");
+  });
+
+  it("a genuine model change CLEARS a window typed for the previous model", () => {
+    const typed = contextWindowAfterRawInput({ raw: "", model: "" }, "8192", "model-b");
+    expect(contextWindowAfterModelInput(typed, "model-c", SAVED_A)).toEqual({ raw: "", model: "model-c" });
+  });
+
+  it("a genuine model change RE-PREFILLS when the user returns to the saved model", () => {
+    const typed = contextWindowAfterRawInput({ raw: "", model: "" }, "4096", "model-b");
+    // model-b -> model-a (the saved pair's model): the boot pair comes back.
+    expect(contextWindowAfterModelInput(typed, "model-a", SAVED_A)).toEqual({ raw: "8192", model: "model-a" });
+    // and a field for another model re-prefills on returning to the saved model too.
+    expect(contextWindowAfterModelInput({ raw: "", model: "model-b" }, "model-a", SAVED_A)).toEqual({
+      raw: "8192",
+      model: "model-a",
+    });
+  });
+
+  it("never re-prefills from a saved pair whose binding does not match the next model", () => {
+    expect(contextWindowAfterModelInput({ raw: "4096", model: "model-b" }, "model-b", SAVED_A)).toEqual({
+      raw: "4096",
+      model: "model-b",
+    });
+  });
+
+  it("a blank field stays blank across a model change, whitespace-only or real", () => {
+    expect(contextWindowAfterModelInput({ raw: "", model: "" }, "model-b", undefined)).toEqual({
+      raw: "",
+      model: "model-b",
+    });
+    // A whitespace-only value is already blank: a genuine change normalizes it
+    // to the empty string and still stays blank.
+    expect(contextWindowAfterModelInput({ raw: "   ", model: "" }, "model-b", undefined)).toEqual({
+      raw: "",
+      model: "model-b",
+    });
+  });
+
+  it("clearing the window text keeps the owner; typing a new one rebinds to the current model", () => {
+    expect(contextWindowAfterRawInput({ raw: "8192", model: "model-a" }, "", "model-a")).toEqual({
+      raw: "",
+      model: "model-a",
+    });
+    expect(contextWindowAfterRawInput({ raw: "", model: "" }, "16384", "model-c")).toEqual({
+      raw: "16384",
+      model: "model-c",
+    });
+    // No model to own it yet: the value is kept with an empty owner.
+    expect(contextWindowAfterRawInput({ raw: "", model: "" }, "16384", "   ")).toEqual({
+      raw: "16384",
+      model: "",
+    });
+  });
+
+  // Typing a window never routes through the model handler, so consecutive
+  // keystrokes must keep the value (this is the "never reset repeatedly" guard).
+  it("consecutive window keystrokes keep the value (the window route never resets)", () => {
+    let field = { raw: "", model: "" };
+    for (const raw of ["8", "81", "819", "8192"]) {
+      field = contextWindowAfterRawInput(field, raw, "model-b");
+      expect(field.raw).toBe(raw);
+    }
+    expect(field).toEqual({ raw: "8192", model: "model-b" });
+  });
+
+  // The full user journey the reviewer reproduced, ending in the WIRE payload:
+  // saved A -> clear -> no-op model edit -> save must carry the clear sentinel.
+  it("clear -> same-model edit -> save carries the clear sentinel, not the resurrected value", () => {
+    // Boot: the drawer prefills A's saved pair.
+    const boot = contextWindowInitialField({ ...SAVED_A, model: "model-a" });
+    expect(boot).toEqual({ raw: "8192", model: "model-a" });
+
+    // The user clears the field.
+    const cleared = contextWindowAfterRawInput(boot, "", "model-a");
+    // ...then taps the Model input in a way that does NOT change it (adds a space).
+    const afterEdit = contextWindowAfterModelInput(cleared, " model-a ", SAVED_A);
+    expect(afterEdit.raw).toBe("");
+
+    const field = contextWindowTokensField(afterEdit.raw);
+    expect(field).toEqual({ ok: true, value: "" });
+    const payload = buildConnectionUpdatePayload({
+      connectionId: "conn-1",
+      label: "",
+      model: "model-a",
+      transport: "" as const,
+      baseUrl: "",
+      showBaseUrl: false,
+      proxyRef: "",
+      authOptional: false,
+      maxOutputTokens: "" as const,
+      contextWindowTokens: field.ok ? field.value : "",
+    });
+    // The clear sentinel travels on the wire: main deletes BOTH saved keys.
+    expect(payload.contextWindowTokens).toBe("");
+  });
+});
+
+describe("ConnectionDrawer wiring (TASK.142: NO route may bypass the per-model reset)", () => {
+  const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+
+  // There is no DOM harness in this package (see file docstring), so the wiring
+  // itself is pinned structurally: `changeModel` is the ONLY writer of the Model
+  // input, so the simplified create input, the model suggestion chips and the
+  // provider select cannot bypass the per-model reset. A route that calls
+  // `setModel` directly (the reported defect) makes this red.
+  it("`changeModel` is the only setModel caller, and all model-changing routes use it", () => {
+    const setModelCalls = source.match(/(?<![.\w])setModel\(/g) ?? [];
+    // One call inside `changeModel` plus the two catalog-normalization effects.
+    const effectCalls = source.match(/setModel\(\(m\) => modelAfterCatalogPrefill\(/g) ?? [];
+    expect(effectCalls).toHaveLength(2);
+    expect(setModelCalls).toHaveLength(1 + effectCalls.length);
+  });
+
+  it("the simplified input, the chips and the provider select all route through changeModel", () => {
+    // simplified pre-create Model input
+    expect(source).toMatch(
+      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, selectedEntry\.models\),\s*undefined,\s*\)/,
+    );
+    // main Model input
+    expect(source).toMatch(/changeModel\(e\.target\.value, e\.target\.value, targetConnection\)/);
+    // model suggestion chip
+    expect(source).toMatch(/onClick=\{\(\) => changeModel\(m\.id, m\.id, targetConnection\)\}/);
+    // provider select
+    expect(source).toMatch(/changeModel\("", "", undefined, true\)/);
+  });
+
+  it("the window input binds through the raw-input helper and never calls setModel", () => {
+    expect(source).toMatch(
+      /setContextWindow\(\(field\) => contextWindowAfterRawInput\(field, e\.target\.value, effectiveFormModel\)\)/,
+    );
+    expect(source).not.toMatch(/setContextWindowTokens/);
+    // The obsolete string-only helper is gone entirely.
+    expect(source).not.toMatch(/contextWindowRawAfterModelChange/);
   });
 });
