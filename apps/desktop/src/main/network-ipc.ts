@@ -49,6 +49,7 @@ import {
 } from "../shared/proxy.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import { maskProxyCredentials, runProxyProbe, type ProxyProbeSpawner } from "./proxy-probe.js";
+import { shellOwnsProxyFamily } from "./host-env.js";
 
 /**
  * The target probed when nothing else names one: no explicit target, no active
@@ -60,25 +61,20 @@ import { maskProxyCredentials, runProxyProbe, type ProxyProbeSpawner } from "./p
 export const DEFAULT_PROXY_CHECK_TARGET = "https://api.anthropic.com/";
 
 /**
- * The four variables that make the shell the owner of the proxy family.
- *
- * Duplicated from main/host-env.ts rather than imported: that module is not a
- * dependency of this one in either direction, and a four-string list is cheaper
- * to repeat than to couple to. The GATE itself stays injectable
- * (`shellOwnsProxyFamily`) so the wiring can hand over the same predicate the
- * env builder actually uses, and this local copy is only the default.
+ * The shell-wins gate is main/host-env.ts's canonical `shellOwnsProxyFamily`,
+ * imported rather than re-declared so the gate read here and the gate that
+ * materialises a real fork's env cannot drift (a declared HTTPS_PROXY counts,
+ * empty/whitespace included; `ALL_PROXY` is deliberately excluded). The GATE
+ * stays injectable (`shellOwnsProxyFamily` in the deps) so the wiring can hand
+ * over the same predicate the env builder actually uses.
  */
-const PROXY_FAMILY_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const;
 
-/** Mirrors host-env's `envPresent`: defined and not blank. */
-function envPresent(env: NodeJS.ProcessEnv, name: string): boolean {
-  const value = env[name];
-  return value !== undefined && value.trim() !== "";
-}
-
-/** Default shell-wins gate: any of the four proxy variables present in the boot env. */
+/**
+ * Back-compat alias for the canonical gate. Kept because callers still import
+ * it by this name; it delegates so the semantics match host-env exactly.
+ */
 export function bootEnvOwnsProxyFamily(bootEnv: NodeJS.ProcessEnv): boolean {
-  return PROXY_FAMILY_KEYS.some((name) => envPresent(bootEnv, name));
+  return shellOwnsProxyFamily(bootEnv);
 }
 
 // ── NO_PROXY matching ──
@@ -184,7 +180,7 @@ export interface NetworkIpcDeps {
   composeProbeEnv: (proxy: MaterializedProxy | undefined) => NodeJS.ProcessEnv;
   /** Runs the probe child. */
   spawn: ProxyProbeSpawner;
-  /** Overrides the shell-wins gate; defaults to the four-variable check over `bootEnv`. */
+  /** Overrides the shell-wins gate; defaults to host-env's canonical `shellOwnsProxyFamily` over `bootEnv`. */
   shellOwnsProxyFamily?: (bootEnv: NodeJS.ProcessEnv) => boolean;
   timeoutMs?: number;
 }
