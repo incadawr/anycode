@@ -1114,6 +1114,10 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
   // design §3 trust boundary). Read directly off the shell-level tabs-store,
   // same primitive `useActiveMcpServers` above already uses internally.
   const activeTabId = useStore(useTabsStore, (state) => state.activeTabId);
+  // TASK.128: display-only workspace root of the active tab (tabs-store mirror of
+  // main's manager.getTab(tabId).workspace) — shown in subagent badge labels/tooltips
+  // only; never sent to main (path custody stays tabId-only, design §3 trust boundary).
+  const activeTabWorkspace = useStore(useTabsStore, (state) => state.tabs.find((tab) => tab.tabId === state.activeTabId)?.workspace);
   // Slice P7.8 §3.5: same per-tab data source as mcpServers above, mirrored.
   const envStatus = useActiveEnvStatus();
 
@@ -1461,7 +1465,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
 
           {activePane === "skills" && <SkillsPane tabId={activeTabId ?? undefined} />}
 
-          {activePane === "subagents" && <SubagentsPane tabId={activeTabId ?? undefined} />}
+          {activePane === "subagents" && <SubagentsPane tabId={activeTabId ?? undefined} workspace={activeTabWorkspace ?? undefined} />}
 
           {activePane === "environment" && (
             <>
