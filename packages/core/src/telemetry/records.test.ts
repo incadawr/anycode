@@ -6,8 +6,12 @@
  * text-bearing carrier never survives into the serialized record.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildEngineTelemetryTap, buildSubagentTelemetryTap, buildTelemetryTap, telemetryRecordFor } from "./records.js";
+import { JsonlTelemetrySink } from "../adapters/node/node-telemetry.js";
 import type { AgentEvent } from "../types/events.js";
 import type { TelemetryPort, TelemetryRecord } from "../ports/telemetry.js";
 
@@ -312,6 +316,42 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
+  it("ceiling_refused (reason/turn/round copied exactly, TASK.208)", () => {
+    const event: AgentEvent = {
+      type: "ceiling_refused",
+      reason: "rounds_exhausted",
+      turn: 16,
+      round: 4,
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "ceiling_refused",
+      reason: "rounds_exhausted",
+      turn: 16,
+      round: 4,
+    });
+  });
+
+  it("ceiling_grant (numeric projection only — remaining/nextAction dropped, TASK.208)", () => {
+    const event: AgentEvent = {
+      type: "ceiling_grant",
+      round: 2,
+      granted: 2,
+      totalGranted: 6,
+      remaining: [SENTINEL],
+      nextAction: SENTINEL,
+    };
+    const rec = telemetryRecordFor(event);
+    expect(rec).toEqual({
+      t: "ceiling_grant",
+      round: 2,
+      granted: 2,
+      totalGranted: 6,
+    });
+    expect(rec && "remaining" in rec).toBe(false);
+    expect(rec && "nextAction" in rec).toBe(false);
+    expect(JSON.stringify(rec)).not.toContain(SENTINEL);
+  });
+
   it("error (value dropped, presence-only)", () => {
     const event: AgentEvent = { type: "error", error: SENTINEL };
     expect(telemetryRecordFor(event)).toEqual({ t: "error" });
@@ -464,6 +504,38 @@ describe("buildTelemetryTap", () => {
     const tap = buildTelemetryTap(port, "session-abc");
     tap({ type: "text_delta", id: "1", text: SENTINEL });
     expect(records).toHaveLength(0);
+  });
+
+  // TASK.208: the real writer boundary — a tap bound to a live JsonlTelemetrySink
+  // lands the refusal and its paired loop_end as adjacent parseable JSONL lines.
+  it("writes a ceiling_refused + paired loop_end to a real JsonlTelemetrySink file", async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "anycode-telemetry-refusal-"));
+    try {
+      const sink = new JsonlTelemetrySink({ dir: tmpDir, fileName: "refusal.jsonl" });
+      const tap = buildTelemetryTap(sink, "sess-1");
+      tap({ type: "ceiling_refused", reason: "no_successful_tool_calls", turn: 3, round: 2 });
+      tap({ type: "loop_end", reason: "max_turns", turns: 3 });
+      await sink.dispose();
+
+      const raw = await readFile(join(tmpDir, "refusal.jsonl"), "utf8");
+      const lines = raw.split("\n").filter((l) => l.length > 0);
+      expect(lines).toHaveLength(2);
+      const refusal = JSON.parse(lines[0]!);
+      const loopEnd = JSON.parse(lines[1]!);
+      expect(refusal).toEqual({
+        v: 1,
+        session: "sess-1",
+        t: "ceiling_refused",
+        reason: "no_successful_tool_calls",
+        turn: 3,
+        round: 2,
+        ts: expect.any(Number),
+      });
+      expect(typeof refusal.ts).toBe("number");
+      expect(loopEnd).toMatchObject({ v: 1, session: "sess-1", t: "loop_end", reason: "max_turns", turns: 3 });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 });
 

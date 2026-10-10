@@ -33,7 +33,7 @@
  * trusting the type.
  */
 
-import type { FinishReason, LoopEndReason } from "../types/events.js";
+import type { CeilingRefusalReason, FinishReason, LoopEndReason } from "../types/events.js";
 import type { ToolCallStatus } from "../types/tools.js";
 import type { PermissionMode } from "../types/permissions.js";
 
@@ -94,6 +94,17 @@ export type TelemetryEventRecord =
    * footing as `stream_retry`'s counters above, never the repeated text itself.
    */
   | { t: "degeneration"; channel: "text" | "reasoning"; period: number; repeats: number; turn: number }
+  /**
+   * TASK.208: the turn-ceiling ladder refused a round. `reason` is the closed
+   * CeilingRefusalReason enum (never free text), `turn`/`round` are plain
+   * numbers — the telemetry face of the `ceiling_refused` AgentEvent.
+   */
+  | { t: "ceiling_refused"; reason: CeilingRefusalReason; turn: number; round: number }
+  /**
+   * TASK.208: a granted ladder round, projected to numbers ONLY — `remaining`/
+   * `nextAction` (the model's free text) are deliberately NOT carried here.
+   */
+  | { t: "ceiling_grant"; round: number; granted: number; totalGranted: number }
   | { t: "error" }
   | { t: "checkpoint_created" }
   | { t: "checkpoint_failed" };
