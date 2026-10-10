@@ -237,9 +237,18 @@ export interface ProviderConnection {
    * User declaration that this endpoint authenticates nothing (dogfood 16.07:
    * local servers — LM Studio/ollama/llama.cpp). UI-level truth for the
    * drawer's "no API key" checkbox and the tile's health derivation (a keyless
-   * connection must not nag "Needs credential"). Runtime keylessness itself is
-   * transport-governed (core accepts a missing key only on OpenAI-family
-   * transports), so this flag never overrides `computeProviderReady`.
+   * connection must not nag "Needs credential"). Since TASK.152 it is also a
+   * runtime-readiness input — but runtime keylessness remains TRANSPORT-
+   * GOVERNED exactly like core's own rule: `loadEnvConfig` accepts a missing
+   * key only on the OpenAI-family transports, so the flag waives the key in
+   * `computeProviderReady` ONLY when the effective transport is OpenAI-family
+   * (a key is still mandatory on undefined or `anthropic-messages` — the gate
+   * must never say "ready" for a fork core would refuse to boot; the model is
+   * still required regardless). For the bare `custom` sentinel with this flag
+   * and no explicit transport, the transport ladder (host-env) resolves the
+   * OpenAI-compatible default `openai-chat-completions`, so the readiness gate
+   * and the spawned host agree — explicit transport choices still win by
+   * ladder construction.
    */
   authOptional?: boolean;
   /** Advisory last-known health (TASK.45 §3); W11 writes it, never a runtime-readiness source. */
@@ -303,6 +312,8 @@ export interface ActiveProviderView {
   reasoningEffort?: ReasoningEffort;
   /** The active connection's explicit output-token ceiling (TASK.150); absent = catalog/default. */
   maxOutputTokens?: number;
+  /** The active connection's "no API key" declaration (TASK.152); only `true` is projected. */
+  authOptional?: boolean;
 }
 
 /** Non-secret, human-editable settings persisted to ~/.anycode/settings.json (0644). */
@@ -1047,6 +1058,7 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     proxyUrl: connection.proxyUrl,
     reasoningEffort: connection.reasoningEffort,
     maxOutputTokens: connection.maxOutputTokens,
+    ...(connection.authOptional === true ? { authOptional: true } : {}),
   };
 }
 

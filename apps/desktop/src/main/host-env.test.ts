@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { loadEnvConfig } from "@anycode/core";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
   ENV_INCLUDE_USAGE,
@@ -1045,6 +1046,136 @@ describe("computeProviderReady — auth-policy + unsupported-transport (TASK.43 
       resolvedTransport: "openai-responses",
     });
     expect(ready).toBe(true);
+  });
+});
+
+describe("computeProviderReady — connection-level authOptional, transport-gated (TASK.152 review fix)", () => {
+  it("sentinel custom + authOptional + model + OpenAI-family resolvedTransport is ready without a key", async () => {
+    // The live incident shape AFTER the fix: providerId "custom", model,
+    // authOptional true, no key — and the transport the host will actually
+    // get is the keyless-sentinel default (openai-chat-completions, resolved
+    // by selectedTransportInfo/buildHostEnv). No transport-level authOptional
+    // is passed: only the connection's own declaration + the gate can waive.
+    const ready = await computeProviderReady({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m", authOptional: true } }),
+      getSecret: noSecret,
+      resolvedTransport: "openai-chat-completions",
+    });
+    expect(ready).toBe(true);
+  });
+
+  it("same shape with NO resolvedTransport is NOT ready — an undefined transport means core demands a key (the gate must not lie)", async () => {
+    // Pre-fix lie: the unconditional waiver said "ready" while the spawned
+    // host threw "Missing required environment variable: ANYCODE_API_KEY".
+    // With no transport variable the fork cannot run keyless, so the gate
+    // must refuse too.
+    const ready = await computeProviderReady({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m", authOptional: true } }),
+      getSecret: noSecret,
+    });
+    expect(ready).toBe(false);
+  });
+
+  it("same shape with resolvedTransport anthropic-messages is NOT ready", async () => {
+    const ready = await computeProviderReady({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m", authOptional: true } }),
+      getSecret: noSecret,
+      resolvedTransport: "anthropic-messages",
+    });
+    expect(ready).toBe(false);
+  });
+
+  it("authOptional + OpenAI-family transport but NO model is NOT ready (the model is still required)", async () => {
+    const ready = await computeProviderReady({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", authOptional: true } }),
+      getSecret: noSecret,
+      resolvedTransport: "openai-chat-completions",
+    });
+    expect(ready).toBe(false);
+  });
+
+  it("full matrix: a providerV2Multi custom connection with authOptional + model + the openai resolvedTransport is ready with no secret", async () => {
+    // The explicit-connections fixture (not the singleton sugar): the exact
+    // persisted shape from the live incident, fed straight through the gate
+    // with the transport selectedTransportInfo resolves for it.
+    const ready = await computeProviderReady({
+      bootEnv: {},
+      settings: {
+        ...settings(),
+        provider: providerV2Multi("conn-1", [{ id: "conn-1", providerId: "custom", model: "m", authOptional: true }]),
+      },
+      getSecret: noSecret,
+      resolvedTransport: "openai-chat-completions",
+    });
+    expect(ready).toBe(true);
+  });
+});
+
+describe("buildHostEnv — keyless bare custom sentinel (TASK.152: readiness AND fork env must agree)", () => {
+  // loadEnvConfig is imported from the core package HERE (tests may depend on
+  // core; host-env.ts itself must not) so the proof is against the REAL boot
+  // rule the spawned host runs, not a re-derivation of it.
+  it("the incident shape's fork env is loadEnvConfig-compatible: openai transport emitted, no key, model carried", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m", authOptional: true } }),
+      getSecret: noSecret,
+    });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-chat-completions");
+    expect(env.ANYCODE_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_MODEL).toBe("m");
+    expect(() => loadEnvConfig(env)).not.toThrow();
+    expect(loadEnvConfig(env).apiKey).toBeUndefined();
+  });
+
+  it("the keyless sentinel rung beats the catalog selection's anthropic default (production seam passes resolveSelection)", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m", authOptional: true } }),
+      getSecret: noSecret,
+      resolveSelection: async () => ({ baseUrl: "", model: "m", authKind: "api_key", defaultTransport: "anthropic-messages" }),
+    });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-chat-completions");
+    expect(() => loadEnvConfig(env)).not.toThrow();
+  });
+
+  it("byte-compat sibling: WITHOUT authOptional nothing is emitted (byte-identical to pre-TASK.152) and loadEnvConfig refuses", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m" } }),
+      getSecret: noSecret,
+    });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBeUndefined();
+    // The pre-fix lie, made concrete: with no transport and no key, core's
+    // own boot rule throws — exactly what the spawned host would have hit
+    // while the readiness gate claimed "ready".
+    expect(() => loadEnvConfig(env)).toThrow(/ANYCODE_API_KEY/);
+  });
+
+  it("explicit openai-responses transport beats the keyless default rung", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m", authOptional: true, transport: "openai-responses" } }),
+      getSecret: noSecret,
+    });
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("openai-responses");
+  });
+
+  it("explicit anthropic-messages transport is NOT overridden by the keyless default rung", async () => {
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "custom", model: "m", authOptional: true, transport: "anthropic-messages" } }),
+      getSecret: noSecret,
+    });
+    // Explicit anthropic stays anthropic (the emission rule suppresses the
+    // implicit-default emission, but a SETTINGS-source transport is emitted
+    // verbatim) — keyless boot then remains core's to refuse, not ours to
+    // paper over with a silent transport swap.
+    expect(env[ENV_PROVIDER_TRANSPORT]).toBe("anthropic-messages");
   });
 });
 
