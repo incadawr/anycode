@@ -199,6 +199,20 @@ describe("handleCreateTabResult", () => {
     expect(notice).toBe(describeCreateTabFailure(result));
   });
 
+  it("max_tabs with openTabs/maxTabs carries the N-of-M copy (TASK.119)", () => {
+    const result: CreateTabResult = { ok: false, reason: "max_tabs", openTabs: 20, maxTabs: 20 };
+    const text = describeCreateTabFailure(result);
+    expect(text).toContain("20 of 20 tabs");
+    expect(text).toContain("Close a tab");
+  });
+
+  it("bare max_tabs keeps the historical byte-identical text (TASK.119)", () => {
+    const result: CreateTabResult = { ok: false, reason: "max_tabs" };
+    expect(describeCreateTabFailure(result)).toBe(
+      "Cannot open another tab — the maximum number of tabs is already open.",
+    );
+  });
+
   describe("extra.engine forwarding (S1b-1)", () => {
     it("extra.engine:'codex' on a not_ready failure surfaces the codex-specific notice", () => {
       const onTabCreated = vi.fn();

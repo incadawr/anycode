@@ -63,8 +63,29 @@ function session(overrides: Partial<SessionSummary> & Pick<SessionSummary, "id" 
 }
 
 describe("buildSidebarGroups", () => {
-  it("groups by raw workspace with a basename label and full path as the workspace key", () => {
-    const groups = buildSidebarGroups([tab({ tabId: "t1", workspace: "/home/me/project-alpha" })], []);
+  it("marks engine rows via engineId: open tab from a codex session, claude resumable, absent/core get none (TASK.119 п.5)", () => {
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: "/ws" })],
+      [
+        session({ id: "s1", workspace: "/ws", openInTabId: "t1", engineId: "codex" }),
+        session({ id: "s2", workspace: "/ws", engineId: "claude" }),
+        session({ id: "s3", workspace: "/ws" }),
+        session({ id: "s4", workspace: "/ws", engineId: "core" }),
+      ],
+    );
+    expect(groups).toHaveLength(1);
+    const rows = groups[0]!.rows;
+    const open = rows.find((r) => r.kind === "open" && r.tabId === "t1");
+    const s2 = rows.find((r) => r.sessionId === "s2");
+    const s3 = rows.find((r) => r.sessionId === "s3");
+    const s4 = rows.find((r) => r.sessionId === "s4");
+    expect(open?.engineId).toBe("codex");
+    expect(s2?.engineId).toBe("claude");
+    expect(s3?.engineId).toBeUndefined();
+    expect(s4?.engineId).toBeUndefined();
+  });
+
+  it("groups by raw workspace with a basename label and full path as the workspace key", () => {    const groups = buildSidebarGroups([tab({ tabId: "t1", workspace: "/home/me/project-alpha" })], []);
 
     expect(groups).toHaveLength(1);
     expect(groups[0]!.workspace).toBe("/home/me/project-alpha");

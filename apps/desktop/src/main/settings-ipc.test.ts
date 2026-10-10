@@ -53,6 +53,7 @@ import {
   type SettingsIpcDeps,
   type VaultLike,
 } from "./settings-ipc.js";
+import { readSessionLimits } from "../shared/session-limits.js";
 import type { SecretSetResult } from "./vault.js";
 
 /**
@@ -490,6 +491,62 @@ describe("handleSet — merge + read-only", () => {
   it("rejects a non-object patch as invalid", async () => {
     const res = await handleSet(makeDeps(), 42);
     expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+});
+
+describe("handleSet — sessionLimits (TASK.119/TASK.147-с2)", () => {
+  it("persists a valid section and it survives a REAL reload", async () => {
+    const res = await handleSet(makeDeps(), {
+      sessionLimits: { maxTabs: 12, childSessionsPerParentMax: 2, childSessionsGlobalMax: 10 },
+    });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.sessionLimits).toEqual({
+      maxTabs: 12,
+      childSessionsPerParentMax: 2,
+      childSessionsGlobalMax: 10,
+    });
+    expect(loaded.corruptBackupPath).toBeUndefined();
+  });
+
+  it("refuses out-of-range values (maxTabs 41 / per-parent 0 / global 25) with the file byte-identical", async () => {
+    await handleSet(makeDeps(), { ui: { theme: "dark" } }); // seed a baseline file
+    const before = await readFile(settingsPath, "utf8");
+    for (const section of [
+      { maxTabs: 41 },
+      { childSessionsPerParentMax: 0 },
+      { childSessionsGlobalMax: 25 },
+    ]) {
+      const res = await handleSet(makeDeps(), { sessionLimits: section });
+      expect(res).toEqual({ ok: false, reason: "invalid" });
+    }
+    const after = await readFile(settingsPath, "utf8");
+    expect(after).toBe(before);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.corruptBackupPath).toBeUndefined();
+  });
+
+  it("refuses a fraction (2.5), a wrong type (\"8\"), and an unknown key (strict)", async () => {
+    await handleSet(makeDeps(), { ui: { theme: "dark" } }); // seed a baseline file
+    const before = await readFile(settingsPath, "utf8");
+    for (const section of [
+      { maxTabs: 2.5 },
+      { maxTabs: "8" },
+      { nope: 1 },
+    ]) {
+      const res = await handleSet(makeDeps(), { sessionLimits: section });
+      expect(res).toEqual({ ok: false, reason: "invalid" });
+    }
+    const after = await readFile(settingsPath, "utf8");
+    expect(after).toBe(before);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.corruptBackupPath).toBeUndefined();
+  });
+
+  it("a persisted maxTabs reaches the manager reader's exact value (readSessionLimits proof)", async () => {
+    await handleSet(makeDeps(), { sessionLimits: { maxTabs: 12 } });
+    const loaded = await loadSettings(settingsPath);
+    expect(readSessionLimits(loaded.settings.sessionLimits).maxTabs).toBe(12);
   });
 });
 

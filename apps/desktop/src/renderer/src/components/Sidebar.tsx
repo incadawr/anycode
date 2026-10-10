@@ -23,7 +23,7 @@ import { nextRovingIndex } from "./ModeMenu.js";
 import { handleCreateTabResult, resolveConnectionMissingAction } from "./SessionPicker.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
-import { ArrowUp, Chevron, Collapse, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
+import { ArrowUp, Chevron, Collapse, Cube, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
 
 /** Label fallback when a tab/session has no title (design §2.3). */
 const UNTITLED = "Untitled task";
@@ -111,6 +111,8 @@ export interface SidebarRow {
   sessionId?: string;
   /** Persistent non-color worktree state; full identity is exposed by tooltip. */
   worktree?: { id: string; branch: string; path: string };
+  /** TASK.119 п.5: "codex"/"claude" for engine-backed rows; absent on core rows. */
+  engineId?: string;
 }
 
 export interface SidebarGroup {
@@ -163,6 +165,15 @@ export function buildSidebarGroups(
 ): SidebarGroup[] {
   const liveTabIds = new Set(tabs.map((t) => t.tabId));
 
+  // TASK.119 п.5: derive open-tab engines from the deduped persisted sessions
+  // (no wire change — SessionSummary.engineId).
+  const engineByOpenTab = new Map<string, string>();
+  for (const s of sessions ?? []) {
+    if ((s.engineId === "codex" || s.engineId === "claude") && s.openInTabId !== undefined && liveTabIds.has(s.openInTabId)) {
+      engineByOpenTab.set(s.openInTabId, s.engineId);
+    }
+  }
+
   // First-seen workspace order: tabs first (open workspaces float up), then sessions.
   const order: string[] = [];
   const seen = new Set<string>();
@@ -191,6 +202,7 @@ export function buildSidebarGroups(
         hostExited: t.hostExited,
         tabId: t.tabId,
         ...(t.worktree !== undefined ? { worktree: t.worktree } : {}),
+        ...(engineByOpenTab.has(t.tabId) ? { engineId: engineByOpenTab.get(t.tabId) } : {}),
       }));
 
     const resumableRows: SidebarRow[] = (sessions ?? [])
@@ -207,6 +219,7 @@ export function buildSidebarGroups(
         age: formatAge(s.updatedAt, now),
         sessionId: s.id,
         ...(s.worktree !== undefined ? { worktree: s.worktree } : {}),
+        ...((s.engineId === "codex" || s.engineId === "claude") ? { engineId: s.engineId } : {}),
       }));
 
     const rows = [...openRows, ...resumableRows];
@@ -1154,6 +1167,7 @@ export function Sidebar({
                           onClick={() => onSelectTab(row.tabId!)}
                         >
                           <span className="sidebar-row-title">{highlight(row.title, ranges)}</span>
+                          {row.engineId !== undefined && <Cube className="sidebar-row-engine" aria-label={`Engine: ${row.engineId}`} />}
                           {row.worktree && (
                             <span
                               className="sidebar-row-worktree"
@@ -1185,6 +1199,7 @@ export function Sidebar({
                         onClick={() => void resumeSession(row.sessionId!)}
                       >
                         <span className="sidebar-row-title">{highlight(row.title, ranges)}</span>
+                        {row.engineId !== undefined && <Cube className="sidebar-row-engine" aria-label={`Engine: ${row.engineId}`} />}
                         {row.worktree && (
                           <span
                             className="sidebar-row-worktree"
