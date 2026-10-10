@@ -41,6 +41,7 @@ import {
   createMainCredentialProvider,
   createPreviewRpcClient,
   hostDiagnosticSink,
+  childRetryPolicy,
   isChildSessionBoot,
   parseHostArgs,
   resolveBootSession,
@@ -1024,5 +1025,21 @@ describe("isChildSessionBoot — second authority for non-recursion lock #2 (TAS
 
   it("argv-root + root-meta ⇒ false — the only combination that opens lock #2", () => {
     expect(isChildSessionBoot(rootArgs, meta())).toBe(false);
+  });
+});
+
+describe("childRetryPolicy (Taskana 4226)", () => {
+  it("gives child boots the network retry budget and leaves main sessions untouched", () => {
+    expect(childRetryPolicy(true)).toEqual({ networkRetryBudgetMs: 180_000 });
+    expect(childRetryPolicy(false)).toBeUndefined();
+    expect(childRetryPolicy(false, { maxRetries: 5 })).toEqual({ maxRetries: 5 });
+  });
+
+  it("keeps an explicit endpoint retry setting, only adding the budget", () => {
+    expect(childRetryPolicy(true, { maxRetries: 0, baseDelayMs: 7 })).toEqual({
+      maxRetries: 0,
+      baseDelayMs: 7,
+      networkRetryBudgetMs: 180_000,
+    });
   });
 });
