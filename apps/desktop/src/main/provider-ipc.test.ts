@@ -622,6 +622,29 @@ describe("handleCustomProviderCreate", () => {
     expect(res.providers[0]?.authOptional).toBeUndefined();
     expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("real-key");
   });
+
+  // TASK.202: only a keyed create writes a vault key, so only it may arm the
+  // recognizer force-push hook — and it fires BEFORE the mutation broadcast.
+  it("TASK.202: a keyed create fires onSecretWritten with the record's vault key before onMutation; a keyless create does not fire it", async () => {
+    const order: string[] = [];
+    const keyed = await handleCustomProviderCreate(
+      makeDeps({
+        onSecretWritten: (key) => void order.push(`secret:${key}`),
+        onMutation: () => void order.push("mutation"),
+      }),
+      { name: "Keyed", baseUrl: "https://api.example.com", kind: "openai-compatible", apiKey: "k" },
+    );
+    expect(keyed.ok).toBe(true);
+    expect(order).toEqual(["secret:provider.custom:fixed-id.apiKey", "mutation"]);
+
+    const onSecretWritten = vi.fn();
+    const keyless = await handleCustomProviderCreate(
+      makeDeps({ onSecretWritten, genId: () => "custom:keyless-id" }),
+      { name: "Keyless", baseUrl: "https://api.example.com", kind: "openai-compatible", authOptional: true },
+    );
+    expect(keyless.ok).toBe(true);
+    expect(onSecretWritten).not.toHaveBeenCalled();
+  });
 });
 
 describe("handleCustomProviderUpdate", () => {
@@ -653,6 +676,31 @@ describe("handleCustomProviderUpdate", () => {
     await seed();
     await handleCustomProviderUpdate(makeDeps(), { id: "custom:fixed-id", apiKey: "rotated-key" });
     expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("rotated-key");
+  });
+
+  // TASK.202: a rotation through update is the second channel that must arm
+  // the recognizer force-push; a models-only update writes no key, so it must
+  // stay silent.
+  it("TASK.202: a key rotation via update fires onSecretWritten; a models-only update does not", async () => {
+    await seed();
+    const order: string[] = [];
+    const rotation = await handleCustomProviderUpdate(
+      makeDeps({
+        onSecretWritten: (key) => void order.push(`secret:${key}`),
+        onMutation: () => void order.push("mutation"),
+      }),
+      { id: "custom:fixed-id", apiKey: "rotated-key" },
+    );
+    expect(rotation.ok).toBe(true);
+    expect(order).toEqual(["secret:provider.custom:fixed-id.apiKey", "mutation"]);
+
+    const onSecretWritten = vi.fn();
+    const modelsOnly = await handleCustomProviderUpdate(makeDeps({ onSecretWritten }), {
+      id: "custom:fixed-id",
+      models: ["m1", "m2"],
+    });
+    expect(modelsOnly.ok).toBe(true);
+    expect(onSecretWritten).not.toHaveBeenCalled();
   });
 
   it("refuses a non-localhost http baseUrl on update", async () => {

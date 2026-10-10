@@ -337,6 +337,12 @@ export interface ProviderIpcDeps {
    * settings-ipc.ts's `onMutation`. Optional so unit tests can omit it.
    */
   onMutation?: (settings: AnycodeSettings) => void | Promise<void>;
+  /**
+   * Fired after a successful custom-record key write, BEFORE onMutation
+   * (TASK.202) — same contract as settings-ipc.ts's `onSecretWritten` (see
+   * that dep's doc there).
+   */
+  onSecretWritten?: (key: SecretKey, settings: AnycodeSettings) => void;
 }
 
 function defaultGenId(): string {
@@ -435,6 +441,9 @@ export async function handleCustomProviderCreate(deps: ProviderIpcDeps, raw: unk
       if (!secretResult.ok) {
         return { ok: false, reason: secretResult.reason };
       }
+      // TASK.202: keyed create — a vault write landed; fired BEFORE onMutation
+      // (settings-ipc.ts's `onSecretWritten` ordering discipline).
+      deps.onSecretWritten?.(customProviderSecretKey(id), merged);
     }
     await saveSettings(deps.settingsPath, merged);
     await deps.onMutation?.(merged);
@@ -541,6 +550,10 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
       if (!secretResult.ok) {
         return { ok: false, reason: secretResult.reason };
       }
+      // TASK.202: a key rotation through update — fired BEFORE onMutation (the
+      // keyed→keyless `clearSecret` branch below needs nothing: that update
+      // also rewrites `merged`, and the record's baseUrl is in the fingerprint).
+      deps.onSecretWritten?.(customProviderSecretKey(req.id), merged);
     } else if (willBeKeyless && !existingKeyless) {
       // Keyed → keyless transition: drop the now-orphaned vault key so a
       // "keyless" record can never still boot a fork with a stale stored key

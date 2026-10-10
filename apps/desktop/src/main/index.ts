@@ -66,6 +66,7 @@ import {
   RECOGNIZER_CONFIG_CHANGED_TYPE,
   recognizerFingerprint,
   recognizerFingerprintsEqual,
+  recognizerSecretTargetKey,
   type RecognizerFingerprint,
 } from "../shared/recognizer.js";
 import {
@@ -879,6 +880,13 @@ function currentSettings(): AnycodeSettings {
 }
 
 /**
+ * Sentinel set by `noteRecognizerSecretWrite` when a secret write targets the
+ * recognizer's credential — the next `refreshRecognizerFallback` pushes
+ * unconditionally (TASK.202). Undefined still means never-pushed/off.
+ */
+const RECOGNIZER_FORCE_PUSH = Symbol("recognizer-force-push");
+
+/**
  * Last recognizer fingerprint pushed to hosts (TASK.198 E1 §1.2/§7) —
  * undefined means "never pushed yet" AND "fallback currently off", so the
  * first push after boot only fires once a recognizer is actually configured.
@@ -886,7 +894,19 @@ function currentSettings(): AnycodeSettings {
  * what makes an UNRELATED mutation a no-op: the decrypted secret is resolved
  * and the wire message built ONLY when the fingerprint actually moved.
  */
-let lastRecognizerFingerprint: RecognizerFingerprint | undefined;
+let lastRecognizerFingerprint: RecognizerFingerprint | typeof RECOGNIZER_FORCE_PUSH | undefined;
+
+/**
+ * Settings+key arithmetic only (recognizerSecretTargetKey) — never a vault
+ * read. Called from the `onSecretWritten` hooks both secret-write channels
+ * fire BEFORE their onMutation, so a credential rotation that no fingerprint
+ * field can see still forces the next live push.
+ */
+function noteRecognizerSecretWrite(key: SecretKey, fresh: AnycodeSettings): void {
+  if (recognizerSecretTargetKey(fresh, key)) {
+    lastRecognizerFingerprint = RECOGNIZER_FORCE_PUSH;
+  }
+}
 
 /**
  * Recomputes the vision-fallback recognizer's resolved endpoint after a
@@ -903,7 +923,10 @@ let lastRecognizerFingerprint: RecognizerFingerprint | undefined;
 async function refreshRecognizerFallback(): Promise<void> {
   const current = currentSettings();
   const fingerprint = recognizerFingerprint(current);
-  if (recognizerFingerprintsEqual(fingerprint, lastRecognizerFingerprint)) {
+  if (
+    lastRecognizerFingerprint !== RECOGNIZER_FORCE_PUSH &&
+    recognizerFingerprintsEqual(fingerprint, lastRecognizerFingerprint)
+  ) {
     return;
   }
   lastRecognizerFingerprint = fingerprint;
@@ -2039,6 +2062,9 @@ void app.whenReady().then(async () => {
     // TASK.141 §5 / design review H-01: refreshed after the vault write and
     // before the renderer hears about the mutation.
     refreshProxySecrets: refreshProxyPasswordCache,
+    // TASK.202: fired after a successful secret write/clear, BEFORE onMutation
+    // (same ordering discipline as refreshProxySecrets just above).
+    onSecretWritten: noteRecognizerSecretWrite,
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
       // TASK.54: `provider.custom` is schema-reachable through this generic
@@ -2124,24 +2150,18 @@ void app.whenReady().then(async () => {
         ? undefined
         : { id: entry.id, baseUrl: entry.baseUrl, defaultTransport: entry.defaultTransport };
     },
+    // TASK.202: same hook as settingsIpcDeps's — a custom-record key write
+    // must be able to force the recognizer push before onMutation runs.
+    onSecretWritten: noteRecognizerSecretWrite,
     onMutation: async (fresh) => {
       settings = fresh;
       settingsIpcDeps.catalogIds = catalogIdsFor(fresh);
       // TASK.198 E1 §1.2: wired here too (both mutation hooks).
       //
-      // KNOWN GAP (TASK.202, found by the closing review): the resolver DOES
-      // now follow a `custom:*` connection to its backing CustomProviderRecord
-      // for both address and credential (host-env.ts's `customRecord?.baseUrl`
-      // / `customProviderSecretKey`), but `recognizerFingerprint` still reads
-      // the CONNECTION's own baseUrl — empty for a custom connection. So
-      // editing the record's address changes what the selection resolves to
-      // while leaving the fingerprint still, and the early return in
-      // `refreshRecognizerFallback` swallows the push. Live sessions keep the
-      // stale endpoint until restart. The same shape hides an API-key
-      // rotation, which no field of the fingerprint covers at all by design
-      // (see shared/recognizer.ts: the fingerprint deliberately costs no vault
-      // read). Not fixed here because the cheap-fingerprint property is a
-      // deliberate one and trading it away needs its own measurement.
+      // TASK.202 fixed: the fingerprint now carries the custom record's
+      // baseUrl, and a secret write targeting the recognizer's key (either
+      // channel, via `onSecretWritten`) force-pushes past the comparison —
+      // still no vault read on the fingerprint path.
       await refreshRecognizerFallback();
       await refreshProviderState();
       if (
