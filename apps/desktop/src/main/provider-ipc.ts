@@ -51,6 +51,7 @@
 import { randomUUID } from "node:crypto";
 import { ipcMain } from "electron";
 import { z } from "zod";
+import { findCatalogEntry } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
@@ -106,6 +107,8 @@ export interface FetchModelsParams {
   apiKey?: string;
   /** Auth header shape (Anthropic's API wants `x-api-key`, not `Authorization: Bearer`). Defaults to "openai-compatible". */
   kind?: CustomProviderRecord["kind"];
+  /** Complete models-list URL (catalog `modelsUrl`); replaces the derived `<base>/models` URL and switches auth to Bearer per that field's contract. */
+  modelsUrl?: string;
   timeoutMs?: number;
   maxBodyBytes?: number;
   /** Injectable fetch (tests point this at a real local HTTP server). */
@@ -138,22 +141,24 @@ export function catalogModelsBaseUrl(baseUrl: string): string {
 
 /** Runs the guarded models-list GET described in the module doc's threat model. */
 export async function fetchCustomProviderModels(params: FetchModelsParams): Promise<FetchModelsOutcome> {
-  if (!isAllowedCustomProviderUrl(params.baseUrl)) {
+  const effectiveUrl = params.modelsUrl !== undefined
+    ? `${params.modelsUrl.replace(/\/+$/, "")}`
+    : `${params.baseUrl.replace(/\/+$/, "")}${MODELS_PATH}`;
+  if (!isAllowedCustomProviderUrl(effectiveUrl)) {
     return { ok: false, reason: "invalid_url" };
   }
   const fetchImpl = params.fetchImpl ?? defaultFetch;
-  const url = `${params.baseUrl.replace(/\/+$/, "")}${MODELS_PATH}`;
   const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxBodyBytes = params.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
   let response: Response;
   try {
-    response = await fetchImpl(url, {
+    response = await fetchImpl(effectiveUrl, {
       method: "GET",
       redirect: "error",
       headers: {
         Accept: "application/json",
-        ...authHeaders(params.kind, params.apiKey),
+        ...authHeaders(params.modelsUrl !== undefined ? "openai-compatible" : params.kind, params.apiKey),
       },
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -660,10 +665,14 @@ async function handleConnectionFetchModels(
     const baseUrl = connection.baseUrl?.trim() ? connection.baseUrl.trim() : entry.baseUrl;
     const transport = connection.transport ?? entry.defaultTransport;
     const apiKey = await deps.vault.getSecretValue(connectionApiKeySecretKey(connectionId));
+    // A user-overridden baseUrl (gateway/proxy) opts out of the catalog's
+    // models URL: the list must come from the origin the user pointed at.
+    const modelsUrl = connection.baseUrl?.trim() ? undefined : findCatalogEntry(connection.providerId)?.modelsUrl;
     return {
       baseUrl,
       apiKey,
       kind: (transport === "anthropic-messages" ? "anthropic" : "openai-compatible") as CustomProviderRecord["kind"],
+      ...(modelsUrl !== undefined ? { modelsUrl } : {}),
     };
   });
   if (resolved === undefined) {
@@ -676,6 +685,7 @@ async function handleConnectionFetchModels(
     baseUrl: catalogModelsBaseUrl(resolved.baseUrl),
     apiKey: resolved.apiKey,
     kind: resolved.kind,
+    ...(resolved.modelsUrl !== undefined ? { modelsUrl: resolved.modelsUrl } : {}),
     ...(deps.connectionFetch !== undefined ? { fetchImpl: deps.connectionFetch(connectionId) } : {}),
   });
   if (!outcome.ok || outcome.models.length === 0) {

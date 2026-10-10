@@ -35,6 +35,8 @@ import {
 } from "./StartScreen.js";
 import { providerModelsFor } from "./ModelPill.js";
 import { createTabsStore } from "../tabs-store.js";
+import { submitStartDraft } from "../start-session.js";
+import { createCodexDraftCatalogRefresh, decideCodexDraftModel } from "../codex-draft-model.js";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { StartSubmitResult } from "../start-session.js";
 import type { CatalogSummary, ProviderConnection } from "../../../shared/settings.js";
@@ -328,8 +330,8 @@ describe("resolveCodexDraftModel (TASK.39 — cross-engine draft.model leakage g
     expect(resolveCodexDraftModel(null, codexModels)).toBe("gpt-5.6-terra");
   });
 
-  it("falls back to the catalog's first entry when draft.model is a STALE id left over from a Core pick before switching engines", () => {
-    expect(resolveCodexDraftModel("claude-opus", codexModels)).toBe("gpt-5.6-terra");
+  it("TASK.241: a STALE id renders VERBATIM — preserved intent, the refusal happens at submit (no hidden fallback)", () => {
+    expect(resolveCodexDraftModel("claude-opus", codexModels)).toBe("claude-opus");
   });
 
   it("returns an empty string when the catalog itself hasn't loaded yet (defensive — caller gates rendering on a non-empty catalog)", () => {
@@ -727,5 +729,183 @@ describe("shouldShowClaudeEngineButton (SLICE-CC A4, cut §1.2 DoD-3)", () => {
     expect(shouldShowClaudeEngineButton(["core"])).toBe(false);
     expect(shouldShowClaudeEngineButton(["core", "codex"])).toBe(false);
     expect(shouldShowClaudeEngineButton([])).toBe(false);
+  });
+});
+
+describe("decideCodexDraftModel (TASK.241)", () => {
+  const catalog = [{ id: "gpt-5.6-sol" }, { id: "luna" }];
+
+  it("an explicit pick present in the catalog is sent verbatim", () => {
+    expect(decideCodexDraftModel("gpt-5.6-sol", catalog)).toEqual({ kind: "send", id: "gpt-5.6-sol" });
+  });
+
+  it("null + a non-empty catalog sends the FIRST entry (the same id the chip displays)", () => {
+    expect(decideCodexDraftModel(null, catalog)).toEqual({ kind: "send", id: "gpt-5.6-sol" });
+  });
+
+  it("a stale id REFUSES with the id named in the message — never substitutes", () => {
+    const decision = decideCodexDraftModel("claude-opus", catalog);
+    expect(decision.kind).toBe("refuse");
+    expect((decision as { message: string }).message).toContain("claude-opus");
+  });
+
+  it("null + an empty catalog refuses (model list unavailable)", () => {
+    expect(decideCodexDraftModel(null, []).kind).toBe("refuse");
+  });
+
+  it("an explicit id + an empty catalog refuses too — no silent server-default launch", () => {
+    expect(decideCodexDraftModel("gpt-5.6-sol", []).kind).toBe("refuse");
+  });
+});
+
+describe("TASK.241 — catalog refresh invalidation", () => {
+  /** Deferred recheck fixture: a controllable promise per refresh call. */
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  interface ReadySnapshot {
+    report: { status: string; models?: { id: string }[] };
+  }
+  function ready(models: { id: string }[]): ReadySnapshot {
+    return { report: { status: "ready", models } };
+  }
+  const NOT_READY: ReadySnapshot = { report: { status: "not_installed" } };
+
+  function makeStoreDraft(tabsStore: ReturnType<typeof createTabsStore>): void {
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftEngine("codex");
+  }
+
+  function makeSubmitDeps(tabsStore: ReturnType<typeof createTabsStore>) {
+    const createTab = vi.fn(async () => ({ ok: true as const, tabId: "t1", workspace: "/ws/a" }));
+    const queueInitialPrompt = vi.fn();
+    return {
+      createTab,
+      deps: { createTab, registry: { queueInitialPrompt }, tabsStore } as Parameters<typeof submitStartDraft>[0],
+    };
+  }
+
+  function makeLifecycle(tabsStore: ReturnType<typeof createTabsStore>) {
+    const pending: ReturnType<typeof deferred<ReadySnapshot>>[] = [];
+    const lifecycle = createCodexDraftCatalogRefresh({
+      recheck: () => {
+        const d = deferred<ReadySnapshot>();
+        pending.push(d);
+        return d.promise;
+      },
+      setModels: (models) => tabsStore.getState().setCodexModels(models),
+    });
+    return { lifecycle, pending };
+  }
+
+  async function flush(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it("an account refresh immediately refuses submission before resolving (clear-then-fetch)", async () => {
+    const tabsStore = createTabsStore();
+    tabsStore.getState().setCodexModels([{ id: "gpt-5.6-sol" }]);
+    makeStoreDraft(tabsStore);
+    const { createTab, deps } = makeSubmitDeps(tabsStore);
+    const { lifecycle, pending } = makeLifecycle(tabsStore);
+
+    lifecycle.refresh(); // clears the catalog, recheck in flight
+    expect(tabsStore.getState().codexModels).toEqual([]);
+    const res = await submitStartDraft(deps);
+    expect(res).toEqual({ ok: false, message: expect.any(String) });
+    expect(createTab).not.toHaveBeenCalled();
+
+    pending[0]!.resolve(ready([{ id: "gpt-5.6-sol" }]));
+    await flush();
+    expect(tabsStore.getState().codexModels).toEqual([{ id: "gpt-5.6-sol" }]);
+    const okRes = await submitStartDraft(deps);
+    expect(okRes).toEqual({ ok: true, tabId: "t1" });
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ engineModel: "gpt-5.6-sol" }));
+  });
+
+  it("the LATEST catalog wins — a Sol pick removed by it stays removed: display keeps Sol, submit refuses", async () => {
+    const tabsStore = createTabsStore();
+    makeStoreDraft(tabsStore);
+    const { createTab, deps } = makeSubmitDeps(tabsStore);
+    const { lifecycle, pending } = makeLifecycle(tabsStore);
+
+    lifecycle.refresh();
+    lifecycle.refresh();
+    // Older reply (Sol still present) settles AFTER the newer one (Sol removed).
+    pending[1]!.resolve(ready([{ id: "luna" }]));
+    await flush();
+    pending[0]!.resolve(ready([{ id: "gpt-5.6-sol" }, { id: "luna" }]));
+    await flush();
+    expect(tabsStore.getState().codexModels).toEqual([{ id: "luna" }]);
+
+    // A Sol pick preserved on the draft is now stale: display keeps Sol verbatim, submit refuses.
+    tabsStore.getState().setDraftModel("gpt-5.6-sol");
+    expect(resolveCodexDraftModel("gpt-5.6-sol", tabsStore.getState().codexModels)).toBe("gpt-5.6-sol");
+    const res = await submitStartDraft(deps);
+    expect(res).toEqual({ ok: false, message: expect.stringContaining("gpt-5.6-sol") });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("an older reply after a newer reply cannot restore the old account's models", async () => {
+    const tabsStore = createTabsStore();
+    const { lifecycle, pending } = makeLifecycle(tabsStore);
+
+    lifecycle.refresh();
+    lifecycle.refresh();
+    pending[1]!.resolve(ready([{ id: "luna" }]));
+    await flush();
+    pending[0]!.resolve(ready([{ id: "old-account-model" }]));
+    await flush();
+    expect(tabsStore.getState().codexModels).toEqual([{ id: "luna" }]);
+  });
+
+  it("a latest failure/non-ready followed by an older success stays empty", async () => {
+    const tabsStore = createTabsStore();
+    const { lifecycle, pending } = makeLifecycle(tabsStore);
+
+    lifecycle.refresh();
+    lifecycle.refresh();
+    // Newer reply fails (recheck rejection is caught -> null), older one succeeds.
+    pending[1]!.reject(new Error("account switch"));
+    await flush();
+    pending[0]!.resolve(ready([{ id: "old-model" }]));
+    await flush();
+    expect(tabsStore.getState().codexModels).toEqual([]);
+  });
+
+  it("a non-ready latest reply leaves the catalog empty (picker hidden, submit refused)", async () => {
+    const tabsStore = createTabsStore();
+    makeStoreDraft(tabsStore);
+    const { createTab, deps } = makeSubmitDeps(tabsStore);
+    const { lifecycle, pending } = makeLifecycle(tabsStore);
+
+    lifecycle.refresh();
+    pending[0]!.resolve(NOT_READY);
+    await flush();
+    expect(tabsStore.getState().codexModels).toEqual([]);
+    const res = await submitStartDraft(deps);
+    expect(res).toEqual({ ok: false, message: expect.any(String) });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("dispose() retires in-flight replies and clears the catalog", async () => {
+    const tabsStore = createTabsStore();
+    const { lifecycle, pending } = makeLifecycle(tabsStore);
+
+    lifecycle.refresh();
+    lifecycle.dispose();
+    pending[0]!.resolve(ready([{ id: "late-model" }]));
+    await flush();
+    expect(tabsStore.getState().codexModels).toEqual([]);
   });
 });

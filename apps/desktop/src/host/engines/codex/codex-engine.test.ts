@@ -1342,6 +1342,26 @@ describe("TASK.39 — model catalog + initial values", () => {
     expect(JSON.stringify(server.calls)).not.toContain('"sandbox":"danger-full-access"');
   });
 
+  // TASK.241 evidence chain: an explicit Sol pick present in the catalog rides
+  // thread/start, the server-confirmed echo, AND the first turn/start — the
+  // first actual turn is on the model the UI displayed and the wire sent.
+  it("TASK.241: an explicit gpt-5.6-sol present in the catalog reaches thread/start, connected.model, and the FIRST turn/start", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      model: "gpt-5.6-sol",
+      origin: "draft",
+    });
+
+    expect(server.threadStartParams).toMatchObject({ model: "gpt-5.6-sol" });
+    // DoD-2: the value shown/persisted is the one the SERVER confirmed.
+    expect(connected.model).toBe("gpt-5.6-sol");
+
+    const events = await runTurn(server, connected.engine);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    expect(notices(events)).toEqual([]);
+    expect(server.turnStartParams()[0]).toMatchObject({ model: "gpt-5.6-sol" });
+  });
+
   it("projects the catalog for the UI: hidden models dropped, unknown wire fields ignored", async () => {
     const server = new FakeAppServer();
     server.modelPages = {
