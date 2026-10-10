@@ -17,6 +17,14 @@ export interface RetryPolicy {
   retryAfterCapMs: number;
   /* */
   stallTimeoutMs: number;
+  /**
+   * Extra wall-clock budget (ms) for riding out a transient NETWORK outage:
+   * while a pre-content failure is `isTransientNetworkError` and less than
+   * this much time has passed since the step's first failure, retrying goes on
+   * past `maxRetries` (backoff still capped at `maxDelayMs`). HTTP-status
+   * failures never use it. 0 = off (default); ignored when `maxRetries` is 0.
+   */
+  networkRetryBudgetMs: number;
 }
 
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
@@ -25,6 +33,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxDelayMs: 30_000,
   retryAfterCapMs: DEFAULT_RETRY_AFTER_CAP_MS,
   stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
+  networkRetryBudgetMs: 0,
 };
 
 /** HTTP status codes worth retrying: request timeout, rate limit, and server-side 5xx (529 = Anthropic "overloaded"). */
@@ -38,7 +47,25 @@ const RETRYABLE_NETWORK_CODES = new Set([
   "ENOTFOUND",
   "EAI_AGAIN",
   "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
 ]);
+
+/**
+ * A transient connectivity failure (connect timeout, reset, refused, DNS,
+ * "fetch failed") as opposed to an HTTP-status failure: an APICallError with a
+ * statusCode (or any error carrying one) is never network-transient, so quota
+ * and auth errors cannot ride the network retry budget.
+ */
+export function isTransientNetworkError(error: unknown): boolean {
+  if (classifyNetworkConfigurationFailure(error) !== undefined) return false;
+  if (extractStatusCode(error) !== undefined) return false;
+  if (!(error instanceof Error)) return false;
+  if (isNetworkError(error)) return true;
+  if (error.name === "ConnectTimeoutError" || /connect[ _]?timeout/i.test(error.message)) return true;
+  const cause = (error as { cause?: unknown }).cause;
+  return cause instanceof Error && cause !== error && isTransientNetworkError(cause);
+}
 
 /**
  * Retryable: APICallError.isRetryable, HTTP 408/429/500/502/503/504/529, and

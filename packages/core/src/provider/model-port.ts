@@ -56,7 +56,7 @@ import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import { classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { createLanguageModel } from "./language-model.js";
-import { DEFAULT_RETRY_POLICY, isRetryableStreamError, retryDelayMs, type RetryPolicy } from "./retry.js";
+import { DEFAULT_RETRY_POLICY, isRetryableStreamError, isTransientNetworkError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
 import { describeStreamArtifact, isIgnorableStreamArtifact } from "./stream-artifacts.js";
 import { translateStreamPart } from "./stream-translator.js";
@@ -567,6 +567,17 @@ export class AiSdkModelPort implements ModelPort {
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     const policy = resolveRetryPolicy(this.config.retry);
     let attempt = 0;
+    // Time of this step's first retryable failure; anchors networkRetryBudgetMs.
+    let firstFailureAt: number | undefined;
+    // Count-bounded retry gate; past maxRetries only a transient NETWORK error
+    // may continue, and only inside the wall-clock budget (0 retries = off).
+    const mayRetry = (error: unknown): boolean => {
+      firstFailureAt ??= Date.now();
+      if (attempt < policy.maxRetries) return true;
+      if (policy.maxRetries <= 0 || policy.networkRetryBudgetMs <= 0) return false;
+      if (!isTransientNetworkError(error)) return false;
+      return Date.now() - firstFailureAt < policy.networkRetryBudgetMs;
+    };
     // TASK.168: the failure that STARTED the include_usage probe, carried
     // from that attempt to the very next one (the probe retry) — see
     // `ProbeFailure`'s docstring.
@@ -721,8 +732,8 @@ export class AiSdkModelPort implements ModelPort {
           if (
             event.type === "error" &&
             !hadModelOutput &&
-            attempt < policy.maxRetries &&
             isRetryableStreamError(event.error) &&
+            mayRetry(event.error) &&
             !request.abortSignal?.aborted
           ) {
             pendingRetryError = event.error;
@@ -760,8 +771,8 @@ export class AiSdkModelPort implements ModelPort {
           // `!request.abortSignal?.aborted` guard makes an external abort always
           // win over retry, even when the thrown abort reason looks retryable.
           !hadModelOutput &&
-          attempt < policy.maxRetries &&
           isRetryableStreamError(error) &&
+          mayRetry(error) &&
           !request.abortSignal?.aborted
         ) {
           pendingRetryError = error;
@@ -804,8 +815,8 @@ export class AiSdkModelPort implements ModelPort {
         includeUsageProbe = undefined;
         if (
           !hadModelOutput &&
-          attempt < policy.maxRetries &&
           isRetryableStreamError(failure.error) &&
+          mayRetry(failure.error) &&
           !request.abortSignal?.aborted
         ) {
           pendingRetryError = failure.error;

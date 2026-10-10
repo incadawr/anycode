@@ -1201,3 +1201,115 @@ it("does not retry a DNS proxy refusal whose cause carries only the resolved IP"
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   } finally { vi.unstubAllEnvs(); }
 });
+
+describe("AiSdkModelPort — networkRetryBudgetMs (transient network outage)", () => {
+  function connectTimeout(): TypeError {
+    return Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+    });
+  }
+  function statusError(statusCode: number): APICallError {
+    return new APICallError({
+      message: `http ${statusCode}`,
+      url: "https://api.example.com/v1/messages",
+      requestBodyValues: {},
+      statusCode,
+      isRetryable: statusCode === 429,
+    });
+  }
+  // 10 s fixed backoff (jitter pinned to its ceiling).
+  const slow = { baseDelayMs: 10_000, maxDelayMs: 10_000 };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(1);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function failThenSucceed(failures: number, makeError: () => unknown): void {
+    let calls = 0;
+    mockStreamText.mockImplementation(() => {
+      calls += 1;
+      return calls <= failures
+        ? fakeResult([part(startPart), throwsWith(makeError())])
+        : fakeResult([part(startPart), part(finishPart)]);
+    });
+  }
+
+  async function settle(promise: Promise<unknown>, ms: number): Promise<{ ok: boolean; value: unknown }> {
+    const outcome = promise.then(
+      (value) => ({ ok: true, value }),
+      (value) => ({ ok: false, value }),
+    );
+    await vi.advanceTimersByTimeAsync(ms);
+    return outcome;
+  }
+
+  it("with a 180 s budget survives ~90 s of connect timeouts and then succeeds", async () => {
+    failThenSucceed(9, connectTimeout);
+    const port = new AiSdkModelPort(baseConfig({ ...slow, networkRetryBudgetMs: 180_000 }));
+    const result = await settle(collect(port.streamText(baseRequest)), 200_000);
+    expect(result.ok).toBe(true);
+    const events = result.value as Array<{ type: string }>;
+    expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(9);
+    expect(events.at(-1)?.type).toBe("finish");
+  });
+
+  it("with the default policy the same outage fails after 3 retries", async () => {
+    failThenSucceed(9, connectTimeout);
+    const port = new AiSdkModelPort(baseConfig(slow));
+    const result = await settle(collect(port.streamText(baseRequest)), 200_000);
+    expect(result.ok).toBe(false);
+    expect(mockStreamText).toHaveBeenCalledTimes(4);
+  });
+
+  it("gives up once the budget is spent", async () => {
+    failThenSucceed(1_000, connectTimeout);
+    const port = new AiSdkModelPort(baseConfig({ ...slow, networkRetryBudgetMs: 60_000 }));
+    const result = await settle(collect(port.streamText(baseRequest)), 300_000);
+    expect(result.ok).toBe(false);
+    expect(mockStreamText.mock.calls.length).toBeLessThan(10);
+  });
+
+  it.each([429, 401, 403, 500])("never extends an HTTP %i beyond maxRetries", async (status) => {
+    failThenSucceed(9, () => statusError(status));
+    const port = new AiSdkModelPort(baseConfig({ ...slow, networkRetryBudgetMs: 180_000 }));
+    const result = await settle(collect(port.streamText(baseRequest)), 200_000);
+    expect(result.ok).toBe(false);
+    expect(mockStreamText.mock.calls.length).toBeLessThanOrEqual(4);
+  });
+
+  it("maxRetries 0 plus a budget does not retry", async () => {
+    failThenSucceed(9, connectTimeout);
+    const port = new AiSdkModelPort(baseConfig({ ...slow, maxRetries: 0, networkRetryBudgetMs: 180_000 }));
+    const result = await settle(collect(port.streamText(baseRequest)), 200_000);
+    expect(result.ok).toBe(false);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("an abort during a budget wait stops at once", async () => {
+    failThenSucceed(9, connectTimeout);
+    const controller = new AbortController();
+    const port = new AiSdkModelPort(baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 180_000 }));
+    const iterator = port.streamText({ ...baseRequest, abortSignal: controller.signal })[Symbol.asyncIterator]();
+    const step = async () => {
+      const next = iterator.next();
+      await vi.advanceTimersByTimeAsync(10_000);
+      return next;
+    };
+    await step(); // start
+    await step(); // retry 1 (count-bounded), then waits
+    await step(); // start of 2nd attempt
+    const retry = await iterator.next(); // budget retry announced (past maxRetries)
+    expect(retry.value).toMatchObject({ type: "stream_retry", attempt: 2 });
+    const pending = iterator.next();
+    const reason = new Error("stop");
+    const caught = pending.catch((e) => e);
+    controller.abort(reason);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await caught).toBe(reason);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+});
