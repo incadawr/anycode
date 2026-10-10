@@ -55,7 +55,10 @@
  */
 
 import { spawn as spawnChild } from "node:child_process";
-import type { ImageMediaType, ProviderTransport, RecognizerEndpoint } from "@anycode/core";
+import { access, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import type { FileStat, FileSystemPort, ImageMediaType, ProviderTransport, RecognizerEndpoint } from "@anycode/core";
+import { loadTelemetryConfig } from "@anycode/core/telemetry-admin";
 import { resolveRecognizerConfig, type RecognizerCatalogInfo, type SecretReader } from "./host-env.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import type {
@@ -176,6 +179,74 @@ export interface RecognizerProbeChildInput {
   image: { mediaType: ImageMediaType; data: string };
   question: string;
   timeoutMs: number;
+  /**
+   * TASK.203: present ONLY when telemetry resolved as enabled for this click —
+   * the child instantiates its sink from it and never sees telemetry at all
+   * otherwise. `dir` is the resolved absolute sink directory, `session` the
+   * vision-probe session id (the child's JSONL file name, minus `.jsonl`).
+   */
+  telemetry?: { dir: string; session: string };
+}
+
+// ── telemetry resolution (TASK.203: the SAME user-scope rule Profile uses) ──
+
+/**
+ * A minimal `FileSystemPort` over node:fs/promises — exactly the surface
+ * `loadTelemetryConfig` reads through (exists/readFile), no more. Built here
+ * rather than reusing `NodeFileSystemAdapter` because that class lives on the
+ * FULL `@anycode/core` barrel (the ai-SDK graph main must never load — see the
+ * module doc above); `loadTelemetryConfig` itself comes from the main-safe
+ * `@anycode/core/telemetry-admin` subpath. No unsafe casts: every node stat
+ * member maps onto the port's own fields.
+ */
+function nodeFileSystemPort(): FileSystemPort {
+  return {
+    readFile: (path) => readFile(path, "utf-8"),
+    writeFile: async (path, content) => {
+      await writeFile(path, content, "utf-8");
+    },
+    stat: async (path): Promise<FileStat> => {
+      const s = await stat(path);
+      return { size: s.size, mtimeMs: s.mtimeMs, isFile: s.isFile(), isDirectory: s.isDirectory() };
+    },
+    exists: async (path) => {
+      try {
+        await access(path);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    mkdir: async (path) => {
+      await mkdir(path, { recursive: true });
+    },
+    readdir: (path) => readdir(path),
+  };
+}
+
+/**
+ * The production telemetry resolution for a probe click — the SAME
+ * `loadTelemetryConfig(fs, home, home, env)` user-scope call the Profile pane
+ * uses (slice §2-D2), so a probe never writes where a profile would not.
+ * Returns the resolved directory when telemetry is enabled, undefined
+ * otherwise. `home` is an isolated-config seam for tests; production omits it
+ * and resolves against the real user home. Never throws (loadTelemetryConfig
+ * is fail-soft by construction) — callers still catch defensively, because a
+ * resolution failure must not fail the probe.
+ */
+export async function defaultResolveTelemetryDir(
+  env: NodeJS.ProcessEnv,
+  home: string = homedir(),
+): Promise<string | undefined> {
+  const loaded = await loadTelemetryConfig(nodeFileSystemPort(), home, home, env);
+  return loaded.telemetry?.dir;
+}
+
+/** Module-local monotonic millisecond clock: two clicks within the same real millisecond must still get distinct sessions (their files would otherwise merge). */
+let lastProbeTimestampMs = 0;
+function nextProbeTimestampMs(): number {
+  lastProbeTimestampMs = Math.max(Date.now(), lastProbeTimestampMs + 1);
+  return lastProbeTimestampMs;
 }
 
 export interface RecognizerProbeSpawnRequest {
@@ -376,6 +447,13 @@ export interface RecognizerProbeDeps {
   /** The env the child runs with, BEFORE `ELECTRON_RUN_AS_NODE` is added — main's boot env snapshot, so the child inherits the same ambient proxy the host process itself would use. */
   env: NodeJS.ProcessEnv;
   spawn: RecognizerProbeSpawner;
+  /**
+   * TASK.203: resolves the enabled telemetry sink directory for this click
+   * (the same user-scope rule Profile uses), or undefined when telemetry is
+   * disabled. Optional so existing wiring/tests without it keep compiling —
+   * the handler falls back to `defaultResolveTelemetryDir(deps.env)`.
+   */
+  resolveTelemetryDir?: () => Promise<string | undefined>;
   timeoutMs?: number;
 }
 
@@ -436,11 +514,27 @@ export async function handleRecognizerProbeRequest(deps: RecognizerProbeDeps, ra
     }
     secret = endpoint.apiKey;
     const timeoutMs = deps.timeoutMs ?? RECOGNIZER_PROBE_TIMEOUT_MS;
+    // TASK.203: telemetry resolves ONLY after a usable endpoint exists (a
+    // refused probe writes nothing), and a resolution failure must never fail
+    // the probe — omit telemetry and probe on.
+    let telemetry: { dir: string; session: string } | undefined;
+    try {
+      const dir =
+        deps.resolveTelemetryDir !== undefined
+          ? await deps.resolveTelemetryDir()
+          : await defaultResolveTelemetryDir(deps.env);
+      if (dir !== undefined) {
+        telemetry = { dir, session: `vision-probe-${String(nextProbeTimestampMs())}` };
+      }
+    } catch {
+      telemetry = undefined;
+    }
     const childInput: RecognizerProbeChildInput = {
       endpoint,
       image: { mediaType: RECOGNIZER_PROBE_IMAGE_MEDIA_TYPE, data: RECOGNIZER_PROBE_IMAGE_BASE64 },
       question: RECOGNIZER_PROBE_QUESTION,
       timeoutMs,
+      ...(telemetry !== undefined ? { telemetry } : {}),
     };
     const output = await deps.spawn({
       execPath: deps.execPath,

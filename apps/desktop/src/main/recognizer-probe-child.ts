@@ -21,10 +21,9 @@
  * WHOLE stream before doing anything else, exactly once.
  */
 
-import { ask } from "@anycode/core";
-import type { ImageAttachment, RecognizerEndpoint } from "@anycode/core";
 import type { RecognizerProbeChildInput } from "./recognizer-probe.js";
 import { RECOGNIZER_PROBE_MARKER } from "./recognizer-probe.js";
+import { runRecognizerProbe } from "./recognizer-probe-run.js";
 
 /** Reads `process.stdin` to completion as a single utf-8 string. */
 function readStdin(): Promise<string> {
@@ -50,14 +49,11 @@ function emit(payload: unknown, exitCode: number): void {
 async function main(): Promise<void> {
   const raw = await readStdin();
   const input = JSON.parse(raw) as RecognizerProbeChildInput;
-  const endpoint: RecognizerEndpoint = input.endpoint;
-  const image: ImageAttachment = { mediaType: input.image.mediaType, data: input.image.data };
-  const result = await ask({
-    endpoint,
-    image,
-    question: input.question,
-    signal: AbortSignal.timeout(input.timeoutMs),
-  });
+  // TASK.203: the ask itself (and, when the input carries a telemetry target,
+  // its session_start/usage records) lives in the shared execution helper —
+  // which disposes the sink BEFORE returning, so the records are flushed to
+  // disk before emit()'s process.exit below can end the process.
+  const result = await runRecognizerProbe(input);
   emit(result, 0);
 }
 

@@ -10,6 +10,9 @@
  * shared (shared/provider-v2-fixture.ts), so those two come from there.
  */
 
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { connectionFixture, providerV2Multi } from "../shared/provider-v2-fixture.js";
@@ -20,6 +23,7 @@ import {
   RECOGNIZER_PROBE_MARKER,
   RECOGNIZER_PROBE_QUESTION,
   classifyRecognizerProbeOutput,
+  defaultResolveTelemetryDir,
   handleRecognizerProbeRequest,
   type RecognizerProbeChildInput,
   type RecognizerProbeDeps,
@@ -77,6 +81,11 @@ function baseDeps(overrides: Partial<RecognizerProbeDeps>): RecognizerProbeDeps 
     childEntry: "/out/main/recognizer-probe-child.js",
     env: { PATH: "/usr/bin" },
     spawn: spawnerThatMustNotRun(),
+    // TASK.203: the production handler falls back to defaultResolveTelemetryDir
+    // (the real machine's ~/.anycode/config.json) — every pre-existing test
+    // here must stay isolated from that, so the default deps carry an explicit
+    // "telemetry disabled" resolver.
+    resolveTelemetryDir: async () => undefined,
     ...overrides,
   };
 }
@@ -391,5 +400,130 @@ describe("spawnRecognizerProbeChild — the real spawner's stream wiring", () =>
     expect(result.timedOut).toBe(false);
     expect(result.spawnError).toBeUndefined();
     expect(result.exitCode).toBe(0);
+  });
+});
+
+// ── TASK.203: telemetry rides the probe's stdin ──
+
+/** A deps bag with the vision connection resolved, for the telemetry describes below. */
+function depsWithVision(spawn: RecognizerProbeSpawner, overrides: Partial<RecognizerProbeDeps> = {}): RecognizerProbeDeps {
+  return baseDeps({
+    readSettings: () => ({ ...settings(), provider: providerV2Multi(undefined, [visionConnection]) }),
+    getSecret: noSecret,
+    spawn,
+    ...overrides,
+  });
+}
+
+describe("handleRecognizerProbeRequest — telemetry resolution (TASK.203)", () => {
+  it("attaches a vision-probe numeric session and resolved dir to the stdin when telemetry resolves", async () => {
+    const { spawn, calls } = spawnerFor(rawOutput({ ok: true, text: "red, blue" }));
+    const deps = depsWithVision(spawn, { resolveTelemetryDir: async () => "/tmp/telemetry-dir" });
+    await handleRecognizerProbeRequest(deps, { connectionId: "conn-vision", modelId: "vision-model" });
+    const childInput = JSON.parse(calls[0]!.stdin) as RecognizerProbeChildInput;
+    expect(childInput.telemetry).toBeDefined();
+    expect(childInput.telemetry!.dir).toBe("/tmp/telemetry-dir");
+    expect(childInput.telemetry!.session).toMatch(/^vision-probe-\d+$/);
+  });
+
+  it("omits telemetry entirely when resolution returns undefined (disabled), and still probes successfully", async () => {
+    const { spawn, calls } = spawnerFor(rawOutput({ ok: true, text: "red, blue" }));
+    const deps = depsWithVision(spawn, { resolveTelemetryDir: async () => undefined });
+    const result = await handleRecognizerProbeRequest(deps, { connectionId: "conn-vision", modelId: "vision-model" });
+    expect(result).toEqual({ ok: true, text: "red, blue" });
+    const childInput = JSON.parse(calls[0]!.stdin) as RecognizerProbeChildInput;
+    expect(childInput.telemetry).toBeUndefined();
+  });
+
+  it("omits telemetry when the resolver THROWS — a telemetry failure must not fail the probe", async () => {
+    const { spawn, calls } = spawnerFor(rawOutput({ ok: true, text: "red, blue" }));
+    const deps = depsWithVision(spawn, {
+      resolveTelemetryDir: async () => {
+        throw new Error("config read exploded");
+      },
+    });
+    const result = await handleRecognizerProbeRequest(deps, { connectionId: "conn-vision", modelId: "vision-model" });
+    expect(result).toEqual({ ok: true, text: "red, blue" });
+    const childInput = JSON.parse(calls[0]!.stdin) as RecognizerProbeChildInput;
+    expect(childInput.telemetry).toBeUndefined();
+  });
+
+  it("two clicks with a fixed clock still get distinct sessions (monotonic module-local timestamp)", async () => {
+    const { spawn, calls } = spawnerFor(rawOutput({ ok: true, text: "red, blue" }));
+    const deps = depsWithVision(spawn, { resolveTelemetryDir: async () => "/tmp/telemetry-dir" });
+    const realNow = Date.now;
+    try {
+      const fixed = 1_700_000_000_000;
+      Date.now = () => fixed;
+      await handleRecognizerProbeRequest(deps, { connectionId: "conn-vision", modelId: "vision-model" });
+      await handleRecognizerProbeRequest(deps, { connectionId: "conn-vision", modelId: "vision-model" });
+    } finally {
+      Date.now = realNow;
+    }
+    const first = JSON.parse(calls[0]!.stdin) as RecognizerProbeChildInput;
+    const second = JSON.parse(calls[1]!.stdin) as RecognizerProbeChildInput;
+    expect(first.telemetry!.session).toMatch(/^vision-probe-\d+$/);
+    expect(second.telemetry!.session).toMatch(/^vision-probe-\d+$/);
+    expect(second.telemetry!.session).not.toBe(first.telemetry!.session);
+  });
+});
+
+describe("defaultResolveTelemetryDir — isolated-home config resolution (TASK.203)", () => {
+  /** Writes `<home>/.anycode/config.json` with the given telemetry section (or removes the section key). */
+  async function writeHomeConfig(home: string, telemetry: unknown): Promise<void> {
+    await mkdir(join(home, ".anycode"), { recursive: true });
+    const body = telemetry === undefined ? {} : { telemetry };
+    await writeFile(join(home, ".anycode", "config.json"), JSON.stringify(body), "utf-8");
+  }
+
+  async function withTempHome(): Promise<{ home: string; dispose: () => Promise<void> }> {
+    const home = await mkdtemp(join(tmpdir(), "probe-home-"));
+    return { home, dispose: () => rm(home, { recursive: true, force: true }) };
+  }
+
+  it("enabled:true with an explicit dir returns that directory", async () => {
+    const { home, dispose } = await withTempHome();
+    try {
+      await writeHomeConfig(home, { enabled: true, dir: join(home, "sink") });
+      await expect(defaultResolveTelemetryDir({}, home)).resolves.toBe(join(home, "sink"));
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("enabled:false — and a missing telemetry section — both resolve to undefined", async () => {
+    const { home, dispose } = await withTempHome();
+    try {
+      await writeHomeConfig(home, { enabled: false, dir: join(home, "sink") });
+      await expect(defaultResolveTelemetryDir({}, home)).resolves.toBeUndefined();
+      await writeHomeConfig(home, undefined);
+      await expect(defaultResolveTelemetryDir({}, home)).resolves.toBeUndefined();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("ANYCODE_TELEMETRY=off disables even an enabled config", async () => {
+    const { home, dispose } = await withTempHome();
+    try {
+      await writeHomeConfig(home, { enabled: true, dir: join(home, "sink") });
+      await expect(defaultResolveTelemetryDir({ ANYCODE_TELEMETRY: "off" }, home)).resolves.toBeUndefined();
+    } finally {
+      await dispose();
+    }
+  });
+
+  it("ANYCODE_TELEMETRY_DIR redirects an enabled config; alone (no enabled section) it does NOT enable", async () => {
+    const { home, dispose } = await withTempHome();
+    try {
+      const redirect = join(home, "elsewhere");
+      await writeHomeConfig(home, { enabled: true, dir: join(home, "sink") });
+      await expect(defaultResolveTelemetryDir({ ANYCODE_TELEMETRY_DIR: redirect }, home)).resolves.toBe(redirect);
+      // Override alone, config not enabled — still disabled.
+      await writeHomeConfig(home, undefined);
+      await expect(defaultResolveTelemetryDir({ ANYCODE_TELEMETRY_DIR: redirect }, home)).resolves.toBeUndefined();
+    } finally {
+      await dispose();
+    }
   });
 });
