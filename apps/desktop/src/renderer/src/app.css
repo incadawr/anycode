@@ -2548,6 +2548,17 @@ body {
   color: var(--text-1);
 }
 
+/* Wall-clock time on a transcript row: muted, no case transform, sits inline
+   after the label so it adds no height. */
+.block-time {
+  margin-left: var(--sp-2);
+  font-weight: var(--w-regular, 400);
+  text-transform: none;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
 .message-images {
   display: flex;
   flex-wrap: wrap;
