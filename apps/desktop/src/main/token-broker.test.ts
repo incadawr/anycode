@@ -7,6 +7,8 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { createProxyChainFetch, type ProxyDispatchRequest } from "./provider-proxy-fetch.js";
+import { hostForkProxyChain } from "../shared/proxy.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import { providerV2, type SingletonFixture } from "../shared/provider-v2-fixture.js";
 import type { FetchLike, OAuthProviderConfig } from "./oauth.js";
@@ -342,5 +344,132 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
         authKind: "oauth",
       });
     });
+  });
+});
+
+// ── TASK.133: the production proxy helper inside the real refresh ──
+
+function proxiedSettings(connectionId: string, over: { proxyUrl?: string } = {}): AnycodeSettings {
+  return {
+    version: 2,
+    provider: {
+      connections: [
+        {
+          id: connectionId,
+          providerId: "acme",
+          ...(over.proxyUrl !== undefined ? { proxyUrl: over.proxyUrl } : { proxyRef: "proxy-1" }),
+        },
+      ],
+      activeConnectionId: connectionId,
+    },
+    tools: {},
+    permissions: { alwaysAllow: [] },
+    ui: { theme: "system" },
+    security: { allowWeakSecretStorage: false },
+    network: { proxyProfiles: [{ id: "proxy-1", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" }] },
+  } as AnycodeSettings;
+}
+
+describe("TokenBroker.getAccessToken — TASK.133 production proxy helper", () => {
+  it("refreshes through the proxied token endpoint and persists the rotation", async () => {
+    const vault = new FakeVault();
+    vault.store.set("acme", { accessToken: "at-old", refreshToken: "rt-old", expiresAt: 500 });
+    const dispatches: ProxyDispatchRequest[] = [];
+    const writtenByRequest: string[][] = [];
+    const requestFactory = (dispatch: ProxyDispatchRequest): unknown => {
+      dispatches.push(dispatch);
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      const written: string[] = [];
+      writtenByRequest.push(written);
+      const base: Record<string, unknown> = {
+        on(event: string, listener: (...args: never[]) => void) {
+          const arr = listeners.get(event) ?? [];
+          arr.push(listener as (...args: unknown[]) => void);
+          listeners.set(event, arr);
+          return base;
+        },
+        write: (chunk: string) => {
+          written.push(chunk);
+          return true;
+        },
+        end: () => undefined,
+        abort: () => undefined,
+      };
+      setTimeout(() => {
+        let dataFn: ((chunk: Buffer) => void) | undefined;
+        let endFn: (() => void) | undefined;
+        const incoming = {
+          statusCode: 200,
+          statusMessage: "",
+          headers: { "content-type": "application/json" },
+          on(event: "data" | "end" | "error", l: unknown) {
+            if (event === "data") dataFn = l as (chunk: Buffer) => void;
+            if (event === "end") endFn = l as () => void;
+            return incoming;
+          },
+        };
+        for (const l of listeners.get("response") ?? []) l(incoming);
+        setTimeout(() => {
+          dataFn?.(Buffer.from(JSON.stringify({ access_token: "at-new", refresh_token: "rt-new", expires_in: 3600 })));
+          endFn?.();
+        }, 2);
+      }, 2);
+      return base;
+    };
+    // The fetchFor seam receives the refresh's REAL connection id: build the
+    // chain FROM that id (as main does), so wrong-id routing cannot pass.
+    const broker = new TokenBroker({
+      vault,
+      resolveConfig: () => CONFIG,
+      allowWeak: () => false,
+      fetchFor: (cid) => {
+        expect(cid).toBe("acme");
+        return createProxyChainFetch({
+          readSettings: () => proxiedSettings(cid),
+          materializationFor: () => ({ proxyPassword: () => "pw" }),
+          requestFactory,
+          setProxyFor: async () => undefined,
+        })(hostForkProxyChain(cid)) as unknown as FetchLike;
+      },
+      now: () => 1_000_000,
+    });
+    const token = await broker.getAccessToken("acme", "acme");
+    expect(token).toBe("at-new");
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]?.url).toBe(CONFIG.tokenUrl);
+    expect(dispatches[0]?.method).toBe("POST");
+    expect(writtenByRequest[0]?.join("")).toContain("grant_type=refresh_token");
+    expect(vault.store.get("acme")).toMatchObject({ accessToken: "at-new", refreshToken: "rt-new" });
+  });
+
+  it("fail-closed: a malformed connection proxy resolves undefined with no dispatch and a fixed log line", async () => {
+    const vault = new FakeVault();
+    vault.store.set("acme", { accessToken: "at-old", refreshToken: "rt-old", expiresAt: 500 });
+    const dispatches: ProxyDispatchRequest[] = [];
+    const warn = vi.fn();
+    const productionChainFetch = createProxyChainFetch({
+      readSettings: () => proxiedSettings("acme", { proxyUrl: "nonsense" }),
+      materializationFor: () => ({}),
+      requestFactory: (dispatch) => {
+        dispatches.push(dispatch);
+        throw new Error("factory must not be called");
+      },
+      setProxyFor: async () => undefined,
+    })(hostForkProxyChain("acme"));
+    const broker = new TokenBroker({
+      vault,
+      resolveConfig: () => CONFIG,
+      allowWeak: () => false,
+      fetchFor: (cid) => productionChainFetch as unknown as FetchLike,
+      now: () => 1_000_000,
+      logger: { warn },
+    });
+    expect(await broker.getAccessToken("acme", "acme")).toBeUndefined();
+    expect(dispatches).toEqual([]);
+    // The message logged for a transient refresh failure includes the fixed
+    // misconfigured text the thrown ProxyMisconfiguredError carries.
+    const logged = warn.mock.calls.map((c) => String(c[1]?.constructor === Error ? (c[1] as Error).name : c[1])).join(" ");
+    expect(logged).toContain("ProxyMisconfiguredError");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("nonsense");
   });
 });
