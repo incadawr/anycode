@@ -45,9 +45,11 @@ import { linkAbortSignal } from "../util/abort.js";
  * projection of a discovered agent profile (subagents/profiles.ts
  * PersonaDefinition, F13) that both `buildAgentBridgeToolDecl` (the enum +
  * description text) and `runAgentBridgeCall` (agent_type resolution + request
- * building) consume. Deliberately narrower than PersonaDefinition —
- * `tools`/`turnBudget` are irrelevant to a session-tier child that boots its
- * own host (§2.2), so they are not carried here.
+ * building) consume. Deliberately narrower than PersonaDefinition — `tools`
+ * are irrelevant to a session-tier child that boots its own host (§2.2), so
+ * they are not carried here; `maxTurns` (TASK.180) IS carried: a session
+ * child's host consumes the profile's turn budget (core AgentLoopConfig /
+ * claude --max-turns).
  */
 export interface AgentBridgeCatalogEntry {
   /** Profile name — the value the model must pass as `agent_type` (also the one JSON-Schema enum member it names). */
@@ -61,6 +63,8 @@ export interface AgentBridgeCatalogEntry {
   effort?: ReasoningEffort;
   /** Child profile body — included in the initial task for both core and engine session children. */
   systemPrompt: string;
+  /** Profile turn budget (TASK.180) for the creating spawn; absent = existing default. */
+  maxTurns?: number;
 }
 
 export interface AgentBridgeToolDecl {
@@ -167,6 +171,8 @@ export interface BuildSessionSubagentRequestParams {
   profile?: EngineProfileInfo;
   /** The profile's own `effort:` frontmatter, if any. */
   effort?: ReasoningEffort;
+  /** The profile's own turn budget (TASK.180), if any — rides the creating spawn's request only. */
+  maxTurns?: number;
 }
 
 /**
@@ -177,7 +183,7 @@ export interface BuildSessionSubagentRequestParams {
  * added by each caller that honors it (agent.ts, `runAgentBridgeCall`).
  */
 export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestParams): SessionSubagentRequest {
-  const { agentType, description, prompt, model, spawnToolCallId, profile, effort } = params;
+  const { agentType, description, prompt, model, spawnToolCallId, profile, effort, maxTurns } = params;
   // Model precedence (model plumbing fix, unchanged by this extraction): an
   // explicit override always outranks the profile's own frontmatter default.
   const resolvedModel = model ?? profile?.model;
@@ -189,6 +195,7 @@ export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestP
     ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
     ...(profile !== undefined ? { engine: profile.engine } : {}),
     ...(effort !== undefined ? { effort } : {}),
+    ...(maxTurns !== undefined ? { maxTurns } : {}),
   };
 }
 
@@ -575,6 +582,9 @@ export async function runAgentBridgeCall(
     profile,
     // A continued child keeps the tier its session was started on.
     ...(continueSession === undefined && entry.effort !== undefined ? { effort: entry.effort } : {}),
+    // TASK.180: the profile's turn budget rides only the CREATING spawn —
+    // a continued child keeps whatever budget its session started with.
+    ...(continueSession === undefined && entry.maxTurns !== undefined ? { maxTurns: entry.maxTurns } : {}),
   });
   // A detached run settles at admit with the port's own "started in the
   // background" text and no `subagent_start`, so the card below is null —

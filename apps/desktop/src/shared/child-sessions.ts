@@ -85,6 +85,14 @@ export interface ChildSpawnRequest {
    * its next message. Main alone decides whether it is resumable.
    */
   resumeChildSessionId?: string;
+  /**
+   * Turn budget for the creating spawn (TASK.180): from a profile's turnBudget
+   * frontmatter. Validated as a safe integer within
+   * 1..CHILD_MAX_TURNS_CEILING (mirrors core's SUBAGENT_MAX_TURNS_CEILING,
+   * duplicated here to keep this module value-only). Absent = existing
+   * defaults; follow-up (resume) requests never carry it.
+   */
+  maxTurns?: number;
 }
 
 /** Aborts a running child (parent turn cancel/timeout, §0.5's ctx.abortSignal). */
@@ -265,6 +273,13 @@ export const CHILD_SUMMARY_MAX_CHARS = 160;
 export const CHILD_PROMPT_MAX_CHARS = 200_000;
 /** Mirrors `SUBAGENT_OUTPUT_MAX_BYTES` (config.ts) — the SAME cap §2.6.3 already applies at the child-host producer. This is the defense-in-depth copy at the parser: the producer's own discipline is not what this validator exists to prove, so an unbounded `finalText` must never silently pass through it regardless of which producer sent it. */
 export const CHILD_FINAL_TEXT_MAX_CHARS = 100_000;
+/**
+ * TASK.180: ceiling for `ChildSpawnRequest.maxTurns` — a local duplicate of
+ * core's `SUBAGENT_MAX_TURNS_CEILING` (packages/core/src/types/config.ts),
+ * same "verbatim value, duplicated to keep this module free of runtime
+ * imports" discipline as `PERMISSION_MODE_VALUES` above.
+ */
+export const CHILD_MAX_TURNS_CEILING = 200;
 
 // ── fail-closed shape validators ──
 // Style precedent: main/tabs.ts's registerEngineProcess (manual field-by-field
@@ -396,6 +411,8 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   // §2.6 п.4 amendment style already used for `activitySuppressed` below).
   "engine",
   "resumeChildSessionId",
+  // TASK.180: additive key (profile turn budget for the creating spawn).
+  "maxTurns",
 ] as const;
 
 const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "max"] satisfies readonly ReasoningEffort[];
@@ -445,6 +462,15 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.resumeChildSessionId !== undefined && !isIdString(msg.resumeChildSessionId, CHILD_ID_MAX_CHARS)) {
     return null;
   }
+  // TASK.180: absent stays valid; a defined budget must be a safe integer
+  // within 1..CHILD_MAX_TURNS_CEILING — anything else rejects the whole
+  // message (fail-closed, like every other invalid field above).
+  if (
+    msg.maxTurns !== undefined &&
+    !(typeof msg.maxTurns === "number" && Number.isSafeInteger(msg.maxTurns) && msg.maxTurns >= 1 && msg.maxTurns <= CHILD_MAX_TURNS_CEILING)
+  ) {
+    return null;
+  }
   return {
     type: CHILD_SPAWN_REQUEST_TYPE,
     requestId: msg.requestId,
@@ -458,6 +484,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     permissionMode: msg.permissionMode,
     ...(msg.engine !== undefined ? { engine: msg.engine } : {}),
     ...(msg.resumeChildSessionId !== undefined ? { resumeChildSessionId: msg.resumeChildSessionId as string } : {}),
+    ...(msg.maxTurns !== undefined ? { maxTurns: msg.maxTurns as number } : {}),
   };
 }
 

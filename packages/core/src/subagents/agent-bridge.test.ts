@@ -652,3 +652,76 @@ describe("runAgentBridgeCall — profile effort (TASK.127/TASK.217)", () => {
     expect(buildAgentBridgeToolDecl([PLANNER])?.description).toContain("- glm-planner (core, model glm-5.3, effort high): Plans");
   });
 });
+
+// ---------------------------------------------------------------------------
+// TASK.180 — profile turn budget (maxTurns) on the session-tier request.
+
+describe("buildSessionSubagentRequest — maxTurns (TASK.180)", () => {
+  it("forwards a defined maxTurns onto the request", () => {
+    const request = buildSessionSubagentRequest({
+      agentType: "reviewer",
+      description: "d",
+      prompt: "p",
+      spawnToolCallId: "toolu_mt_1",
+      maxTurns: 12,
+    });
+    expect(request.maxTurns).toBe(12);
+  });
+
+  it("omits the maxTurns key entirely when absent (no undefined riding the wire)", () => {
+    const request = buildSessionSubagentRequest({
+      agentType: "reviewer",
+      description: "d",
+      prompt: "p",
+      spawnToolCallId: "toolu_mt_2",
+    });
+    expect("maxTurns" in request).toBe(false);
+  });
+});
+
+describe("runAgentBridgeCall — catalog maxTurns (TASK.180)", () => {
+  it("a fresh bridge call forwards the catalog entry's budget onto the request", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await runAgentBridgeCall(
+      { agent_type: "budgeted", description: "d", prompt: "p" },
+      { catalog: [{ name: "budgeted", description: "B", systemPrompt: "S", maxTurns: 7 }], port, spawnToolCallId: "toolu_mt_3" },
+    );
+    expect(seen?.maxTurns).toBe(7);
+  });
+
+  it("a fresh bridge call without a catalog budget puts no maxTurns key on the request", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await runAgentBridgeCall(
+      { agent_type: "plain", description: "d", prompt: "p" },
+      { catalog: [{ name: "plain", description: "B", systemPrompt: "S" }], port, spawnToolCallId: "toolu_mt_4" },
+    );
+    expect(seen !== undefined && "maxTurns" in seen!).toBe(false);
+  });
+
+  it("continue_session omits the budget (a continued child keeps its session's own)", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await runAgentBridgeCall(
+      { agent_type: "budgeted", description: "d", prompt: "again", continue_session: "child-9" },
+      { catalog: [{ name: "budgeted", description: "B", systemPrompt: "S", maxTurns: 7 }], port, spawnToolCallId: "toolu_mt_5" },
+    );
+    expect(seen !== undefined && "maxTurns" in seen!).toBe(false);
+  });
+});

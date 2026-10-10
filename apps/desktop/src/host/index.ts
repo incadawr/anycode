@@ -313,6 +313,7 @@ import {
   hostDiagnosticSink,
   isChildSessionBoot,
   parseHostArgs,
+  resolveChildMaxTurns,
   repairDanglingToolCalls,
   resolveBootSession,
   routePreviewMessage,
@@ -913,6 +914,20 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     binaryPath,
     cwd: workspace,
     workspace,
+    // TASK.180: a codex child has no native turn cap — the profile budget is
+    // surfaced once as a visible engine_notice warning on the first turn,
+    // never enforced and never sent as a protocol field.
+    ...(args.child?.maxTurns !== undefined
+      ? {
+          bootNotices: [
+            {
+              type: "engine_notice" as const,
+              level: "warning" as const,
+              message: `Profile maxTurns (${args.child.maxTurns}) is not enforced for the codex engine; the child is bounded only by its time/stall limits.`,
+            },
+          ],
+        }
+      : {}),
     ...(codexAgentBridge ? { agentBridge: codexAgentBridge } : {}),
     agentCardLog,
     sourceEnv: process.env,
@@ -1362,6 +1377,9 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     broker,
     binaryPath,
     cwd: workspace,
+    // TASK.180: a claude child enforces the profile budget natively
+    // (--max-turns); absent = the CLI's own default.
+    ...(args.child?.maxTurns !== undefined ? { maxTurns: args.child.maxTurns } : {}),
     // Ambient by default (owner pivot): no override here, so ClaudeClient
     // sets no `CLAUDE_CONFIG_DIR` at all and the CLI resolves the SAME
     // `~/.claude` main's doctor diagnosed before it let this tab spawn.
@@ -2749,7 +2767,7 @@ async function boot(): Promise<void> {
       ...(worktreeAvailable ? { worktrees: worktreeControl } : {}),
       ...(previewAvailable ? { preview: previewPort } : {}),
       cwd: workspace,
-      maxTurns: envConfig.maxTurns,
+      maxTurns: resolveChildMaxTurns(args.child, envConfig.maxTurns),
       subagentMaxTurns: envConfig.subagentMaxTurns,
       // TASK.148 slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS
       // / settings tools.subagentStallTimeoutMs (main/host-env.ts fills the env var

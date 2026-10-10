@@ -67,6 +67,20 @@ if (args.includes("--version")) {
         process.stdout.write(`${JSON.stringify({ method: "test/stdin-closed" })}\n`);
         closeSync(0);
       }
+    } else if (request.method === "account/read") {
+      // TASK.180 wrapper tests: the minimum usable boot-RPC shapes so
+      // startCodexEngine/resumeCodexEngine can run end-to-end here.
+      process.stdout.write(`${JSON.stringify({ id: request.id, result: { account: { id: "acct" }, requiresOpenaiAuth: false } })}\n`);
+    } else if (request.method === "model/list") {
+      process.stdout.write(`${JSON.stringify({ id: request.id, result: { data: [], nextCursor: null } })}\n`);
+    } else if (request.method === "account/rateLimits/read") {
+      process.stdout.write(`${JSON.stringify({ id: request.id, result: {} })}\n`);
+    } else if (request.method === "thread/start") {
+      process.stdout.write(`${JSON.stringify({ id: request.id, result: { thread: { id: "thread-180", turns: [] }, model: "gpt-test" } })}\n`);
+    } else if (request.method === "thread/resume") {
+      process.stdout.write(`${JSON.stringify({ id: request.id, result: { thread: { id: "thread-180", turns: [] }, model: "gpt-test" } })}\n`);
+    } else if (request.method === "thread/read") {
+      process.stdout.write(`${JSON.stringify({ id: request.id, result: { thread: { id: "thread-180", turns: [] } } })}\n`);
     } else if (request.method === "echo") {
       process.stdout.write(`${JSON.stringify({ id: request.id, result: request.params })}\n`);
     } else if (request.id === 88 || request.id === "request-88") {

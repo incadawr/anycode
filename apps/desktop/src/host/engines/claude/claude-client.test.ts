@@ -762,3 +762,90 @@ describe("checkClaudeBinaryTrustOnDisk — consent threading (TASK.103) — BH2"
     },
   );
 });
+
+// TASK.180: the session child's turn budget maps to the CLI's native
+// --max-turns flag — present only when a budget was set.
+describe("buildClaudeSpawnArgs — max-turns flag (TASK.180)", () => {
+  it("includes --max-turns <decimal> when a budget is set", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1", maxTurns: 25 });
+    expect(args).toContain("--max-turns");
+    expect(args[args.indexOf("--max-turns") + 1]).toBe("25");
+  });
+
+  it("omits --max-turns entirely when no budget is set", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
+    expect(args).not.toContain("--max-turns");
+  });
+});
+
+describe("ClaudeClient.start forwards options.maxTurns to the spawn argv (TASK.180)", () => {
+  interface FakeStream extends EventEmitter {
+    write(chunk: unknown): boolean;
+    end(): void;
+    pause(): void;
+    resume(): void;
+  }
+  function makeFakeStream(): FakeStream {
+    const stream = new EventEmitter() as FakeStream;
+    stream.write = () => true;
+    stream.end = () => {};
+    stream.pause = () => {};
+    stream.resume = () => {};
+    return stream;
+  }
+  function spawnCapturingClient(options: Partial<ConstructorParameters<typeof ClaudeClient>[0]>): { client: ClaudeClient; args: () => string[] } {
+    let captured: string[] = [];
+    const client = new ClaudeClient({
+      binaryPath: "/fake/claude",
+      cwd: process.cwd(),
+      sourceEnv: { HOME: "/home/test", PATH: process.env.PATH },
+      profileDir: "/home/test/.anycode/claude/profile-default",
+      binaryTrust: TRUSTED,
+      ...options,
+      spawnImpl: (_command, args) => {
+        if (args.includes("--version")) {
+          const versionChild = new EventEmitter() as unknown as { stdout: FakeStream } & EventEmitter;
+          versionChild.stdout = makeFakeStream();
+          queueMicrotask(() => {
+            versionChild.stdout.emit("data", Buffer.from("2.1.212 (Claude Code)\n"));
+            versionChild.emit("close", 0, null);
+          });
+          return versionChild as unknown as ReturnType<NonNullable<ConstructorParameters<typeof ClaudeClient>[0]["spawnImpl"]>>;
+        }
+        captured = [...args];
+        const child = new EventEmitter() as unknown as { pid: number; stdin: FakeStream; stdout: FakeStream; stderr: FakeStream; kill: () => boolean } & EventEmitter;
+        child.pid = 4242;
+        child.stdin = makeFakeStream();
+        child.stdout = makeFakeStream();
+        child.stderr = makeFakeStream();
+        const emitClose = (): void => queueMicrotask(() => child.emit("close", 0, null));
+        child.stdin.end = emitClose;
+        child.kill = () => { emitClose(); return true; };
+        queueMicrotask(() => child.emit("spawn"));
+        return child as unknown as ReturnType<NonNullable<ConstructorParameters<typeof ClaudeClient>[0]["spawnImpl"]>>;
+      },
+    });
+    return { client, args: () => captured };
+  }
+
+  it("the client's spawn argv carries --max-turns when the option is set", async () => {
+    const rig = spawnCapturingClient({ sessionId: "s-9", maxTurns: 11 });
+    try {
+      await rig.client.start();
+      expect(rig.args()).toContain("--max-turns");
+      expect(rig.args()[rig.args().indexOf("--max-turns") + 1]).toBe("11");
+    } finally {
+      await rig.client.close();
+    }
+  });
+
+  it("the client's spawn argv has no --max-turns without the option", async () => {
+    const rig = spawnCapturingClient({ sessionId: "s-10" });
+    try {
+      await rig.client.start();
+      expect(rig.args()).not.toContain("--max-turns");
+    } finally {
+      await rig.client.close();
+    }
+  });
+});

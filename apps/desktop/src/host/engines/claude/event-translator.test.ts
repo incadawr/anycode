@@ -532,3 +532,53 @@ describe("ClaudeTurnTranslator — terminal reasons are exhaustively mapped, and
     ]);
   });
 });
+
+// TASK.180: the typed `error_max_turns` RESULT SUBTYPE (protocol.ts:199).
+// terminal_reason is canonical (cut §1.4): a capped result CARRYING
+// terminal_reason:"max_turns" terminalizes as bounded-out loop_end:"max_turns"
+// even though the frame's subtype is an error one; a SUBTYPE-ONLY
+// error_max_turns (no terminal_reason) hits the subtype fallback and stays an
+// honest named ERROR terminal — never a success. This complements the existing
+// terminal_reason:max_turns rows above and engine-children's child-runner
+// mapping (num_turns -> outcome.turns).
+describe("result subtype error_max_turns (TASK.180)", () => {
+  function cappedResult(fields: Record<string, unknown> = {}): ClaudeStreamMessage {
+    return {
+      type: "result",
+      subtype: "error_max_turns",
+      is_error: true,
+      num_turns: 8,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      total_cost_usd: 0,
+      ...fields,
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  function loopEndOf(frame: ClaudeStreamMessage): { reason: string; error?: string } {
+    const events = new ClaudeTurnTranslator({ turn: 1 }).onMessage(frame);
+    const loopEnd = events.find((event) => event.type === "loop_end") as Extract<AgentEvent, { type: "loop_end" }>;
+    const error = events.find((event) => event.type === "error") as { error: Error } | undefined;
+    return { reason: loopEnd?.reason ?? "", error: error?.error.message };
+  }
+
+  it("terminal_reason max_turns WINS over the error_max_turns subtype — bounded-out, not an error", () => {
+    // The canonical modern shape: terminal_reason is canonical (cut §1.4),
+    // the typed error_max_turns subtype rides alongside and must not
+    // downgrade the bounded-out loop_end into an error.
+    expect(loopEndOf(cappedResult({ terminal_reason: "max_turns" })).reason).toBe("max_turns");
+  });
+
+  it("a subtype-only error_max_turns (no terminal_reason) stays an honest named error terminal, never a success", () => {
+    const { reason, error } = loopEndOf(cappedResult());
+    expect(reason).toBe("error");
+    expect(error).toContain("error_max_turns");
+  });
+
+  it("num_turns on a capped result is consumed by the child-runner path (engine-children.test.ts maps it to outcome.turns); the stream translator's loop_end carries the translator turn ordinal, never misreading num_turns as a success", () => {
+    const events = new ClaudeTurnTranslator({ turn: 1 }).onMessage(cappedResult({ terminal_reason: "max_turns" }));
+    const loopEnd = events.find((event) => event.type === "loop_end") as Extract<AgentEvent, { type: "loop_end" }>;
+    expect(loopEnd?.turns).toBe(1);
+    expect(loopEnd?.reason).toBe("max_turns");
+  });
+});

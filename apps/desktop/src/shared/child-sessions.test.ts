@@ -922,3 +922,41 @@ describe("isValidChildId", () => {
     );
   });
 });
+
+// TASK.180: maxTurns — the creating spawn's turn budget. Absent stays valid;
+// a defined value must be a safe integer within 1..CHILD_MAX_TURNS_CEILING.
+describe("parseChildSpawnRequest — maxTurns (TASK.180)", () => {
+  const valid = {
+    type: CHILD_SPAWN_REQUEST_TYPE,
+    requestId: "req-mt",
+    spawnToolCallId: "call-mt",
+    agentType: "general-purpose",
+    description: "build the thing",
+    prompt: "please build the thing",
+    permissionMode: "build",
+  };
+
+  it("a payload without maxTurns still parses unchanged (pre-TASK.180 shape)", () => {
+    expect(parseChildSpawnRequest(valid)).toEqual(valid);
+  });
+
+  it("1 and 200 (the ceiling) are valid and returned verbatim", () => {
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: 1 })).toEqual({ ...valid, maxTurns: 1 });
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: 200 })).toEqual({ ...valid, maxTurns: 200 });
+  });
+
+  it("rejects 0, negatives, fractions, strings, NaN, Infinity, unsafe and over-ceiling numbers", () => {
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: 0 })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: -5 })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: 2.5 })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: "8" })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: NaN })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: Infinity })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: 2 ** 53 })).toBeNull();
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: 201 })).toBeNull();
+  });
+
+  it("the parser returns the budget for a mid-range value", () => {
+    expect(parseChildSpawnRequest({ ...valid, maxTurns: 42 })).toMatchObject({ maxTurns: 42 });
+  });
+});
