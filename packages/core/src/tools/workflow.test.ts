@@ -15,6 +15,7 @@ import {
   WORKFLOW_STEP_FAILURE_TEXT_MAX_BYTES,
   WORKFLOW_TOOL_TIMEOUT_MS,
 } from "../types/config.js";
+import { capUtf8Bytes } from "../util/bytes.js";
 import { applyResultBudget } from "../util/result-budget.js";
 import type { ToolContext, ToolEmittedEvent } from "../types/tools.js";
 import type { CorePorts } from "../ports/index.js";
@@ -174,6 +175,42 @@ describe("workflowTool", () => {
     expect(result.ok).toBe(true);
     expect(workflowTool.formatResultForModel?.(result)).toContain("partial");
     expect(workflowTool.formatResultForModel?.(result)).toContain("truncated");
+  });
+
+  // TASK.221: a precheck-failed outcome reaches the persisted payload with the
+  // SAME cap the normal run path applies — the engine caps its unknown-agentType
+  // summary via capUtf8Bytes(…, WORKFLOW_OUTPUT_MAX_BYTES) and reports
+  // truncated; the tool must render the existing truncation marker for it.
+  it("appends the truncation marker for a real oversized PRECHECK result (failed, capped output)", async () => {
+    const hugeType = "x".repeat(WORKFLOW_OUTPUT_MAX_BYTES + 100);
+    // Exactly what the engine's fail-fast precheck produces for this step.
+    const engineOutcome = capUtf8Bytes(
+      `step A: unknown agentType "${hugeType}"`,
+      WORKFLOW_OUTPUT_MAX_BYTES,
+    );
+    const port = fakePort(["big-precheck"], {
+      status: "failed",
+      output: engineOutcome.text,
+      truncated: engineOutcome.truncated,
+      steps: [step({ stepId: "A", status: "error", finalText: engineOutcome.text })],
+      durationMs: 1,
+    });
+
+    const result = await workflowTool.handler(
+      { name: "big-precheck" },
+      makeCtx({ workflows: port }),
+    );
+
+    expect(result.ok).toBe(false);
+    // The persisted output is capped at exactly WORKFLOW_OUTPUT_MAX_BYTES.
+    expect(result.output?.truncated).toBe(true);
+    expect(new TextEncoder().encode(result.output?.output ?? "").length).toBe(
+      WORKFLOW_OUTPUT_MAX_BYTES,
+    );
+    // The model text carries the existing marker convention.
+    expect(workflowTool.formatResultForModel?.(result)).toContain(
+      `[workflow output truncated at ${WORKFLOW_OUTPUT_MAX_BYTES} bytes]`,
+    );
   });
 
   it("maps a failed outcome onto an error-outcome naming the failed and skipped steps", async () => {
