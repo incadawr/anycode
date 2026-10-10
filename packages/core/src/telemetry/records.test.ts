@@ -226,6 +226,41 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect(rec && "responseModel" in rec).toBe(false);
   });
 
+  it("subagent_end with model+responseModel+engine — all three whitelisted field-by-field", () => {
+    const event: AgentEvent = {
+      type: "subagent_end",
+      toolCallId: "call-2",
+      status: "completed",
+      turns: 2,
+      durationMs: 300,
+      model: "request-model",
+      responseModel: "glm-5.3",
+      engine: "codex",
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "subagent_end",
+      status: "completed",
+      turns: 2,
+      durationMs: 300,
+      model: "request-model",
+      responseModel: "glm-5.3",
+      engine: "codex",
+    });
+  });
+
+  it("subagent_end without engine — engine key stays absent", () => {
+    const event: AgentEvent = {
+      type: "subagent_end",
+      toolCallId: "call-2",
+      status: "completed",
+      turns: 2,
+      durationMs: 300,
+      model: "glm-5.3-flash",
+    };
+    const rec = telemetryRecordFor(event);
+    expect(rec && "engine" in rec).toBe(false);
+  });
+
   it("workflow_end (toolCallId dropped)", () => {
     const event: AgentEvent = {
       type: "workflow_end",

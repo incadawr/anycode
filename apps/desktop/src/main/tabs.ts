@@ -1993,6 +1993,10 @@ export class TabHostManager {
       finalTurnFinishReason?: "length";
       /** Additive (TASK 4149); present only when true. */
       declaredDoneAtCeiling?: boolean;
+      /** Additive (TASK.219); the child host's active session model, relayed verbatim when present. */
+      model?: string;
+      /** Additive (TASK.219); the child's dedicated-port provider claim, relayed verbatim when present. */
+      responseModel?: string;
     },
   ): void {
     const entry = this.childRuns.get(requestId);
@@ -2194,6 +2198,9 @@ export class TabHostManager {
       ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason } : {}),
       // A cancel-race overrides status, so the "done at ceiling" claim no longer applies.
       ...(msg.declaredDoneAtCeiling === true && !cancelling ? { declaredDoneAtCeiling: true } : {}),
+      // TASK.219: verbatim passthrough of the child's own model facts.
+      ...(msg.model !== undefined ? { model: msg.model } : {}),
+      ...(msg.responseModel !== undefined ? { responseModel: msg.responseModel } : {}),
     });
   }
 
