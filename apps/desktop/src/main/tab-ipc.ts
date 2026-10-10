@@ -230,6 +230,15 @@ export interface TabIpcDeps {
    * wiring / unit fixtures: plain refusal, byte-identical to before.
    */
   latestCodexReport?(codexProfileId?: string): CodexDoctorReport | undefined;
+  /**
+   * Taskana 4230: async freshness guard for a KNOWN-READY codex verdict —
+   * detects an externally-changed binary (size+mtime stamp vs the cached
+   * doctor verdict) and force-rechecks (which itself runs the bounded
+   * refresh-before-refuse) before the spawn is allowed or refused. Called
+   * before the host fork, so a stale policy can never reach the host preflight
+   * without a refresh attempt first. Absent = legacy behavior.
+   */
+  verifyCodexSpawn?(codexProfileId?: string): Promise<boolean>;
 }
 
 async function notReady(
@@ -540,6 +549,14 @@ export function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSu
  */
 async function spawnableWhenKnown(deps: TabIpcDeps, engine: EngineId, codexProfileId?: string): Promise<boolean> {
   if (deps.manager.canSpawn(engine, codexProfileId)) {
+    // Taskana 4230: a KNOWN-READY codex verdict is only valid while the binary
+    // file it judged is unchanged; the guard force-rechecks (with the bounded
+    // refresh-before-refuse inside) before the spawn may proceed.
+    if (engine === "codex" && deps.verifyCodexSpawn !== undefined) {
+      let fresh = false;
+      try { fresh = await deps.verifyCodexSpawn(codexProfileId); } catch { fresh = false; }
+      if (!fresh) return false;
+    }
     return true;
   }
   const known = deps.engineReadyKnown?.(engine, codexProfileId) ?? true;
