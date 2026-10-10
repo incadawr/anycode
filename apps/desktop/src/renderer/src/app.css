@@ -4411,6 +4411,43 @@ body {
   list-style: none;
 }
 
+/* TASK.118: pending steers — sent to the host's steer queue, not yet part of
+   the transcript. Dashed border + italic text distinguish them from delivered
+   transcript user_text bubbles and from the ordinary prompt queue. */
+.steer-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steer-queue-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+  min-width: 0;
+}
+
+.steer-queue-text {
+  color: var(--text-2);
+  font-style: italic;
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.steer-queue-badge {
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
 .prompt-queue-item {
   display: flex;
   align-items: center;

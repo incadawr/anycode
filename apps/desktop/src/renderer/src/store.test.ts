@@ -6676,6 +6676,130 @@ describe("desktop store — session_checkpoint (TASK.117 control/accounting chec
   });
 });
 
+describe("desktop store — pendingSteers (TASK.118: steer delivery at turn_started, not optimistic append)", () => {
+  /** Synchronous-flush store (rAF deltas land immediately) like TASK.117's. */
+  function flushStore(): ReturnType<typeof createDesktopStore> {
+    return createDesktopStore({ schedule: (fn) => fn() });
+  }
+
+  function ready(store: ReturnType<typeof createDesktopStore>): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" } as HostToUiMessage);
+  }
+
+  /** kind/text outline of the transcript — user/assistant order only. */
+  function outline(store: ReturnType<typeof createDesktopStore>): string[] {
+    return store.getState().transcript.map((b) => (b.kind === "user_text" ? `user:${b.text}` : b.kind === "assistant_text" ? `assistant:${b.text}` : b.kind));
+  }
+
+  it("recordPendingSteer parks the entry and writes NOTHING to the transcript; an unrelated turn_started leaves all entries pending", () => {
+    const store = flushStore();
+    ready(store);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-old", turnId: "t-old" });
+    store.getState().recordPendingSteer("req-a", "STEER-A [1 img]", { text: "STEER-A", images: [{ name: "a.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "a" } }] });
+    store.getState().recordPendingSteer("req-b", "STEER-B", { text: "STEER-B", images: [] });
+
+    expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["req-a", "req-b"]);
+    expect(store.getState().transcript).toEqual([]);
+
+    // An unrelated turn's start (e.g. a retry re-asserting an older requestId
+    // or a different drain) must append nothing and retire nothing.
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-other", turnId: "t-other" });
+    expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["req-a", "req-b"]);
+    expect(store.getState().transcript).toEqual([]);
+  });
+
+  it("matching turn_started appends the queued user_text AFTER the old turn's output, clears ONLY the matching entry, never duplicates on a repeated start, and restores lastSentMessage at delivery (not during queueing)", () => {
+    const store = flushStore();
+    ready(store);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-old", turnId: "t-old" });
+    // Retry snapshot from the CURRENT turn lands first.
+    store.getState().recordSentMessage("current-turn", []);
+
+    store.getState().recordPendingSteer("req-a", "STEER-A", { text: "STEER-A", images: [{ name: "a.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "a" } }] });
+    store.getState().recordPendingSteer("req-b", "STEER-B", { text: "STEER-B", images: [] });
+    // Queueing must NOT overwrite the current turn's retry snapshot.
+    expect(store.getState().lastSentMessage?.text).toBe("current-turn");
+
+    // Old turn finishes its assistant output.
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t-old", event: { type: "text_start", id: "x1" } });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t-old", event: { type: "text_delta", id: "x1", text: "old output" } });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t-old", event: { type: "text_end", id: "x1" } });
+
+    // Delivery: the NEXT turn starts with the steer's requestId.
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-a", turnId: "t-new" });
+    const kinds = store.getState().transcript.map((b) => b.kind);
+    expect(kinds).toEqual(["assistant_text", "user_text"]);
+    expect(store.getState().transcript[1]).toMatchObject({ kind: "user_text", text: "STEER-A", id: "req-a" });
+    // Only the matching entry retired; lastSentMessage now the steer's ORIGINAL content.
+    expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["req-b"]);
+    expect(store.getState().lastSentMessage).toEqual({ text: "STEER-A", images: [{ name: "a.png", sizeBytes: 1, attachment: { mediaType: "image/png", data: "a" } }] });
+
+    // A repeated matching start (re-assert) must not duplicate.
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-a", turnId: "t-new" });
+    expect(store.getState().transcript.filter((b) => b.kind === "user_text")).toHaveLength(1);
+    // ...and req-b still delivers on its own turn.
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-b", turnId: "t-new2" });
+    expect(store.getState().transcript.map((b) => b.kind)).toEqual(["assistant_text", "user_text", "user_text"]);
+    expect(store.getState().pendingSteers).toEqual([]);
+  });
+
+  it("live sequence go→answer + queued STEERED-OK→done matches the same ordered history when hydrated into a fresh store", () => {
+    // ── Live store ──
+    const live = flushStore();
+    ready(live);
+    live.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
+    live.getState().recordPendingSteer("req-1", "go", { text: "go", images: [] });
+    live.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
+    live.getState().recordPendingSteer("req-2", "STEERED-OK", { text: "STEERED-OK", images: [] });
+    // Turn 1 output
+    live.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "text_start", id: "a1" } });
+    live.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "text_delta", id: "a1", text: "answer" } });
+    live.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "text_end", id: "a1" } });
+    // Turn 2 (the steer's turn) starts and delivers the queued text BEFORE its output.
+    live.getState().applyHostMessage({ type: "turn_started", requestId: "req-2", turnId: "t2" });
+    live.getState().applyHostMessage({ type: "agent_event", turnId: "t2", event: { type: "text_start", id: "a2" } });
+    live.getState().applyHostMessage({ type: "agent_event", turnId: "t2", event: { type: "text_delta", id: "a2", text: "done" } });
+    live.getState().applyHostMessage({ type: "agent_event", turnId: "t2", event: { type: "text_end", id: "a2" } });
+
+    // ── Hydrated store: the same history as persisted truth ──
+    const hydrated = flushStore();
+    ready(hydrated);
+    hydrated.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        { id: "h1", createdAt: 1, turnId: "t1", step: 0, message: { role: "user", content: "go" } },
+        { id: "h2", createdAt: 2, turnId: "t1", step: 1, message: { role: "assistant", content: [{ type: "text", text: "answer" }] } },
+        { id: "h3", createdAt: 3, turnId: "t2", step: 0, message: { role: "user", content: "STEERED-OK" } },
+        { id: "h4", createdAt: 4, turnId: "t2", step: 1, message: { role: "assistant", content: [{ type: "text", text: "done" }] } },
+      ],
+    } as HostToUiMessage);
+
+    const messages = (store: ReturnType<typeof createDesktopStore>): string[] =>
+      store.getState().transcript.filter((b) => b.kind === "user_text" || b.kind === "assistant_text").map((b) => `${b.kind}:${b.kind === "user_text" || b.kind === "assistant_text" ? b.text : ""}`);
+    expect(messages(live)).toEqual(messages(hydrated));
+    expect(messages(live)).toEqual(["user_text:go", "assistant_text:answer", "user_text:STEERED-OK", "assistant_text:done"]);
+  });
+
+  it("matching turn_rejected retires the pending entry WITHOUT appending user_text, keeps unrelated entries, and raises the notice; host_ready clears the session slice", () => {
+    const store = flushStore();
+    ready(store);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-old", turnId: "t-old" });
+    store.getState().recordPendingSteer("req-a", "STEER-A", { text: "STEER-A", images: [] });
+    store.getState().recordPendingSteer("req-b", "STEER-B", { text: "STEER-B", images: [] });
+
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "req-a", reason: "busy" });
+    expect(store.getState().notice?.kind).toBe("turn_rejected");
+    expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["req-b"]);
+    expect(store.getState().transcript).toEqual([]);
+
+    // A host respawn (host_ready) clears the whole session slice.
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" } as HostToUiMessage);
+    expect(store.getState().pendingSteers).toEqual([]);
+  });
+});
+
 describe("TASK.242 visible agent provenance", () => {
   it("does not infer authenticated provenance from a human's literal envelope-shaped text", () => {
     const store = createDesktopStore();
