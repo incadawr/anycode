@@ -1163,3 +1163,243 @@ it("device-code progress is routed to the profile that owns the login", async ()
   expect((await controller.loginStart("device-account", "device")).ok).toBe(true);
   expect(onDeviceCode).toHaveBeenCalledExactlyOnceWith({ profileId: "device-account", userCode: "ABCD-1234", verificationUrl: "https://example.invalid/device" });
 });
+
+// ── Taskana 4230: refresh-before-refuse + spawn-freshness guard ──
+
+describe("createCodexOnboardingController — refresh-before-refuse (Taskana 4230)", () => {
+  it("re-runs the doctor once when a policy refresh un-blocks the version, caching the FRESH report", async () => {
+    const runDoctor = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "update_required", version: "0.99.0" })
+      .mockResolvedValue({ status: "ready", version: "0.99.0", models: [] });
+    const refreshPolicyBeforeRefusal = vi.fn(async () => true);
+    const deps = makeDeps({ runDoctor, refreshPolicyBeforeRefusal });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect(refreshPolicyBeforeRefusal).toHaveBeenCalledTimes(1);
+    expect(runDoctor).toHaveBeenCalledTimes(2);
+    expect(snapshot.report.status).toBe("ready");
+    expect(controller.lastReportFor()?.status).toBe("ready");
+  });
+
+  it("keeps the refusal, one doctor run, when the policy did not change", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "update_required", version: "0.99.0" }) as CodexDoctorReport);
+    const refreshPolicyBeforeRefusal = vi.fn(async () => false);
+    const deps = makeDeps({ runDoctor, refreshPolicyBeforeRefusal });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect(refreshPolicyBeforeRefusal).toHaveBeenCalledTimes(1);
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(snapshot.report.status).toBe("update_required");
+    expect(controller.lastReportFor()?.status).toBe("update_required");
+  });
+
+  it("a rejecting hook degrades to the plain refusal", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "update_required", version: "0.99.0" }) as CodexDoctorReport);
+    const refreshPolicyBeforeRefusal = vi.fn(async () => { throw new Error("offline"); });
+    const deps = makeDeps({ runDoctor, refreshPolicyBeforeRefusal });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(snapshot.report.status).toBe("update_required");
+  });
+
+  it("absent hook is legacy: update_required passes through with a single doctor run", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "update_required", version: "0.99.0" }) as CodexDoctorReport);
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(snapshot.report.status).toBe("update_required");
+  });
+});
+
+describe("createCodexOnboardingController.verifySpawnFreshness (Taskana 4230)", () => {
+  it("known ready -> binary changed -> forced recheck whose refresh un-blocks the new version -> spawn allowed (the reviewer scenario)", async () => {
+    // Supervisor #4: prime with an initially SUPPORTED version (0.161.0), then
+    // the stamp changes, then the doctor says update_required for 0.162.1,
+    // and the refreshed policy yields ready 0.162.1 — three doctor calls, one
+    // refresh.
+    const runDoctor = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "ready", version: "0.161.0", models: [] })
+      .mockResolvedValueOnce({ status: "update_required", version: "0.162.1" })
+      .mockResolvedValue({ status: "ready", version: "0.162.1", models: [] });
+    const refreshPolicyBeforeRefusal = vi.fn(async () => true);
+    const statBinary = vi
+      .fn()
+      .mockReturnValueOnce({ size: 100, mtimeMs: 5 }) // stamps the prime (before doctor run 1)
+      .mockReturnValue({ size: 100, mtimeMs: 9 }); // the upgrade: observed by the guard, and re-stamped before each later doctor run
+    const deps = makeDeps({ runDoctor, refreshPolicyBeforeRefusal, statBinary });
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck(); // lands ready on stamp 100:5
+    await expect(controller.verifySpawnFreshness()).resolves.toBe(true);
+    expect(runDoctor).toHaveBeenCalledTimes(3);
+    expect(refreshPolicyBeforeRefusal).toHaveBeenCalledTimes(1);
+    expect(controller.lastReportFor()?.status).toBe("ready");
+  });
+
+  it("matching stamp: true with ZERO additional doctor runs", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "ready", version: "0.161.0", models: [] }) as CodexDoctorReport);
+    const statBinary = vi.fn(() => ({ size: 100, mtimeMs: 5 }));
+    const deps = makeDeps({ runDoctor, statBinary });
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck();
+    await expect(controller.verifySpawnFreshness()).resolves.toBe(true);
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+  });
+
+  it("unobservable stamp (stat null at either time) degrades to allow without a recheck", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "ready", version: "0.161.0", models: [] }) as CodexDoctorReport);
+    const statBinary = () => null;
+    const deps = makeDeps({ runDoctor, statBinary });
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck();
+    await expect(controller.verifySpawnFreshness()).resolves.toBe(true);
+    expect(runDoctor).toHaveBeenCalledTimes(1); // the prime only
+  });
+
+  it("recheck lands update_required after refresh failure: false (refusal surfaces after the attempt) — two doctor calls", async () => {
+    const runDoctor = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "ready", version: "0.161.0", models: [] })
+      .mockResolvedValue({ status: "update_required", version: "0.162.1" });
+    const refreshPolicyBeforeRefusal = vi.fn(async () => false);
+    const statBinary = vi
+      .fn()
+      .mockReturnValueOnce({ size: 100, mtimeMs: 5 })
+      .mockReturnValue({ size: 100, mtimeMs: 9 });
+    const deps = makeDeps({ runDoctor, refreshPolicyBeforeRefusal, statBinary });
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck();
+    await expect(controller.verifySpawnFreshness()).resolves.toBe(false);
+    expect(runDoctor).toHaveBeenCalledTimes(2);
+    expect(refreshPolicyBeforeRefusal).toHaveBeenCalledTimes(1);
+    expect(controller.lastReportFor()?.status).toBe("update_required");
+  });
+
+  it("non-ready or absent cached verdict: true, no recheck (existing gates own those)", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "signed_out" }) as CodexDoctorReport);
+    const statBinary = vi.fn(() => ({ size: 100, mtimeMs: 5 }));
+    const deps = makeDeps({ runDoctor, statBinary });
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck();
+    await expect(controller.verifySpawnFreshness()).resolves.toBe(true);
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    // Absent verdict entirely.
+    const deps2 = makeDeps({ runDoctor });
+    const controller2 = createCodexOnboardingController(deps2);
+    await expect(controller2.verifySpawnFreshness("never-diagnosed")).resolves.toBe(true);
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+  });
+
+  // Reject #3: an injected statBinary seam that THROWS must degrade to the
+  // documented null/unobservable behavior — never reject the recheck.
+  it("a THROWING injected statBinary during the initial stamp degrades to unobservable: recheck resolves, verdict cached with a null stamp", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "ready", version: "0.161.0", models: [] }) as CodexDoctorReport);
+    const statBinary = vi.fn(() => {
+      throw new Error("stat seam exploded");
+    });
+    const deps = makeDeps({ runDoctor, statBinary });
+    const controller = createCodexOnboardingController(deps);
+    await expect(controller.recheck()).resolves.toMatchObject({ report: { status: "ready" } });
+    expect(controller.lastReportFor()?.status).toBe("ready");
+    // Null stamp = unobservable = the guard degrades to allow without a recheck.
+    await expect(controller.verifySpawnFreshness()).resolves.toBe(true);
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+  });
+
+  it("a THROWING injected statBinary during the retry stamp (after the policy refresh) still resolves with the fresh verdict", async () => {
+    const runDoctor = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "update_required", version: "0.162.1" })
+      .mockResolvedValue({ status: "ready", version: "0.162.1", models: [] });
+    const refreshPolicyBeforeRefusal = vi.fn(async () => true);
+    // First call (initial stamp) succeeds; the retry stamp throws.
+    const statBinary = vi
+      .fn()
+      .mockImplementationOnce(() => ({ size: 100, mtimeMs: 5 }))
+      .mockImplementation(() => {
+        throw new Error("stat seam exploded on retry");
+      });
+    const deps = makeDeps({ runDoctor, refreshPolicyBeforeRefusal, statBinary });
+    const controller = createCodexOnboardingController(deps);
+    await expect(controller.recheck()).resolves.toMatchObject({ report: { status: "ready", version: "0.162.1" } });
+    expect(runDoctor).toHaveBeenCalledTimes(2);
+    expect(refreshPolicyBeforeRefusal).toHaveBeenCalledTimes(1);
+    expect(controller.lastReportFor()?.status).toBe("ready");
+  });
+});
+
+describe("spawn-freshness integration — real refusal refresh + active policy judgment (Taskana 4230, supervisor #5, reject #2)", () => {
+  it("ready 0.161.0 -> stamp change + 0.162.1 outside old range -> forced network manifest widens -> ready and policy admits 0.162.1", async () => {
+    const { mkdtempSync: mk, rmSync: rm, writeFileSync: wf } = await import("node:fs");
+    const manifestModule = await import("./codex-manifest.js");
+    const { setActiveCodexVersionPolicy, activeCodexVersionPolicy, codexVersionVerdict, createCodexManifestRefusalRefresh } = manifestModule;
+    const cacheFile = join(mk(join(tmpdir(), "anycode-freshness-")), "manifest.json");
+    try {
+      const oldManifest: import("../shared/codex-support.js").CodexSupportManifest = {
+        schemaVersion: "anycode.codex-support.v1",
+        updatedAt: "2026-07-16T00:00:00Z",
+        supported: [{ range: ">=0.160.0 <0.162.0", status: "tested" }],
+        recommended: "0.161.0",
+        minimum: "0.160.0",
+      };
+      const widenedManifest: import("../shared/codex-support.js").CodexSupportManifest = {
+        ...oldManifest,
+        updatedAt: "2026-07-17T00:00:00Z",
+        supported: [{ range: ">=0.160.0 <0.164.0", status: "tested" }],
+        recommended: "0.162.1",
+      };
+      manifestModule.resetActiveCodexVersionPolicy();
+      setActiveCodexVersionPolicy({ manifest: oldManifest });
+      wf(cacheFile, JSON.stringify({ fetchedAt: new Date(Date.now() - 7 * 3600_000).toISOString(), manifest: oldManifest }));
+      const fetchImpl = vi.fn(async () => new Response(JSON.stringify(widenedManifest), { status: 200 })) as unknown as typeof fetch;
+      // ONE limiter instance for the whole scenario, exactly as index.ts wires it.
+      const limiter = createCodexManifestRefusalRefresh({ cacheFile, fetchImpl });
+      const refreshSpies = { calls: 0 };
+      const refreshPolicyBeforeRefusal = async (): Promise<boolean> => {
+        refreshSpies.calls += 1;
+        return limiter.refreshBeforeRefusal();
+      };
+      // Reject #2: REAL active-policy judgment — the doctor computes the
+      // verdict from a MUTABLE installed version against the LIVE active
+      // policy, so the sequence ready -> update_required -> ready is derived,
+      // not hardcoded.
+      let installedVersion = "0.161.0";
+      const runDoctor = vi.fn(async (): Promise<CodexDoctorReport> => {
+        const verdict = codexVersionVerdict(installedVersion, activeCodexVersionPolicy());
+        return verdict.allowed
+          ? { status: "ready", version: installedVersion, models: [] }
+          : { status: "update_required", version: installedVersion };
+      });
+      // The upgrade: the binary file content changes (stat stamp moves).
+      const statBinary = vi
+        .fn()
+        .mockReturnValueOnce({ size: 100, mtimeMs: 5 })
+        .mockReturnValue({ size: 100, mtimeMs: 9 });
+      const deps = makeDeps({ runDoctor, statBinary, refreshPolicyBeforeRefusal });
+      const controller = createCodexOnboardingController(deps);
+
+      // BEFORE: 0.162.1 is refused by the old policy (the premise of the scenario).
+      expect(codexVersionVerdict("0.162.1", activeCodexVersionPolicy()).allowed).toBe(false);
+
+      await controller.recheck(); // 0.161.0 judged ready against the old policy
+      expect(controller.lastReportFor()?.status).toBe("ready");
+
+      installedVersion = "0.162.1"; // the external CLI upgrade
+      await expect(controller.verifySpawnFreshness()).resolves.toBe(true); // upgrade observed, gate re-checks
+      expect(runDoctor).toHaveBeenCalledTimes(3);
+      expect(refreshSpies.calls).toBe(1);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(controller.lastReportFor()?.status).toBe("ready");
+      expect(controller.lastReportFor()?.version).toBe("0.162.1");
+      // AFTER: the refreshed ACTIVE policy now admits 0.162.1 — this is the
+      // same state index.ts stamps per fork via encodeCodexSupportPolicy.
+      expect(codexVersionVerdict("0.162.1", activeCodexVersionPolicy()).allowed).toBe(true);
+    } finally {
+      manifestModule.resetActiveCodexVersionPolicy();
+      rm(join(cacheFile, ".."), { recursive: true, force: true });
+    }
+  });
+});

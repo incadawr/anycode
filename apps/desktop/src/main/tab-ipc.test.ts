@@ -2267,3 +2267,69 @@ function metaPersistenceResume(meta: ReturnType<typeof codexMetaResume>): TabIpc
     touchSession: async () => {},
   };
 }
+
+// ── Taskana 4230: codex spawn-freshness guard ──
+describe("spawnableWhenKnown — codex spawn-freshness guard (Taskana 4230)", () => {
+  const req = { kind: "new" as const, workspace: "/x", engine: "codex" as const };
+
+  it("a KNOWN-READY verdict is re-verified before the spawn: guard false -> not_ready carrying codex_update_required", async () => {
+    const { manager, createTab } = makeManager({ canSpawn: true });
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const verifyCodexSpawn = vi.fn(async () => false);
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: persistenceStub,
+      dialog,
+      verifyCodexSpawn,
+      latestCodexReport: () => ({ status: "update_required", version: "0.99.0" }),
+    };
+    expect(await handleCreate(deps, req)).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_update_required",
+      notReadyDetail: "0.99.0",
+    });
+    expect(createTab).not.toHaveBeenCalled();
+    expect(verifyCodexSpawn).toHaveBeenCalledWith(undefined); // active profile
+  });
+
+  it("guard true -> the spawn proceeds (createTab called)", async () => {
+    const { manager, createTab } = makeManager({ canSpawn: true });
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: persistenceStub,
+      dialog,
+      verifyCodexSpawn: async () => true,
+    };
+    expect((await handleCreate(deps, req)).ok).toBe(true);
+    expect(createTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("absent guard is legacy: known-ready spawns without any async check", async () => {
+    const { manager, createTab } = makeManager({ canSpawn: true });
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog };
+    expect((await handleCreate(deps, req)).ok).toBe(true);
+    expect(createTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("a throwing guard fails closed to not_ready", async () => {
+    const { manager, createTab } = makeManager({ canSpawn: true });
+    const { dialog } = makeDialog({ canceled: false, filePaths: ["/x"] });
+    const deps: TabIpcDeps = {
+      manager,
+      persistence: persistenceStub,
+      dialog,
+      verifyCodexSpawn: async () => { throw new Error("stat exploded"); },
+      latestCodexReport: () => ({ status: "update_required", version: "0.99.0" }),
+    };
+    expect(await handleCreate(deps, req)).toEqual({
+      ok: false,
+      reason: "not_ready",
+      notReadyReason: "codex_update_required",
+      notReadyDetail: "0.99.0",
+    });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+});
