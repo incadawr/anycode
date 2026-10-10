@@ -34,7 +34,9 @@ export function describeCreateTabFailure(
     case "cancelled":
       return "Cancelled.";
     case "max_tabs":
-      return "Cannot open another tab — the maximum number of tabs is already open.";
+      return result.openTabs !== undefined && result.maxTabs !== undefined
+        ? `Cannot open another tab — ${result.openTabs} of ${result.maxTabs} tabs are already open. Close a tab in the sidebar to free a slot.`
+        : "Cannot open another tab — the maximum number of tabs is already open.";
     case "session_not_found":
       return "That task no longer exists.";
     case "already_open":
