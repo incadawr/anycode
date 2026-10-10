@@ -48,6 +48,7 @@ import {
   promptStripText,
   PROMPT_STRIP_LINES,
   PROMPT_STRIP_MAX_CHARS,
+  resolveSubagentIdentity,
   shouldAutoCollapse,
   subagentResponseModelNote,
   substatusKind,
@@ -68,6 +69,8 @@ import {
 } from "./ToolCallCard.js";
 import type { TodoItemView } from "./ToolCallCard.js";
 import type { SubagentSubStatus, ToolCallBlock, WorkflowSubStatus, WorkflowStepStatus } from "../store.js";
+import { createDesktopStore } from "../store.js";
+import { TabContext, type TabContextValue } from "../tab-context.js";
 
 describe("formatSubagentCounters — running (final: null)", () => {
   it("pluralizes tool calls and includes lastTool when present", () => {
@@ -281,6 +284,47 @@ describe("formatSubagentCounters — engine-aware (TASK.97 R5, wave2-cut §1.4)"
     expect(formatSubagentCounters(subagent)).toBe("Completed · 4.2s");
     expect(formatSubagentCounters(subagent)).not.toContain("turn");
     expect(formatSubagentCounters(subagent)).not.toContain("codex");
+  });
+});
+
+describe("resolveSubagentIdentity — parent identity fallbacks", () => {
+  it("an explicit child model/engine overrides DIFFERENT parent values, uninherited", () => {
+    const identity = resolveSubagentIdentity("glm-5.3", "claude", "parent-model", "codex");
+    expect(identity.model).toEqual({ label: "glm-5.3", inherited: false });
+    expect(identity.engine).toEqual({ label: "claude", inherited: false });
+  });
+
+  it("a null child model falls back to the known parent model, marked inherited", () => {
+    const identity = resolveSubagentIdentity(null, "codex", "parent-model", "codex");
+    expect(identity.model).toEqual({ label: "parent-model (inherited)", inherited: true });
+    expect(identity.engine).toEqual({ label: "codex", inherited: false });
+  });
+
+  it("a null child engine falls back to the known parent engine, marked inherited", () => {
+    const identity = resolveSubagentIdentity("glm-5.3", null, "parent-model", "codex");
+    expect(identity.model).toEqual({ label: "glm-5.3", inherited: false });
+    expect(identity.engine).toEqual({ label: "codex (inherited)", inherited: true });
+  });
+
+  it("neither child nor parent known renders NO label for that slot", () => {
+    const identity = resolveSubagentIdentity(null, null, null, undefined);
+    expect(identity.model).toEqual({ label: null, inherited: false });
+    expect(identity.engine).toEqual({ label: null, inherited: false });
+  });
+
+  it("mixed: explicit model with inherited engine, and the reverse", () => {
+    const mixed = resolveSubagentIdentity("glm-5.3", null, "parent-model", "claude");
+    expect(mixed.model).toEqual({ label: "glm-5.3", inherited: false });
+    expect(mixed.engine).toEqual({ label: "claude (inherited)", inherited: true });
+    const reversed = resolveSubagentIdentity(null, "codex", "parent-model", "codex");
+    expect(reversed.model).toEqual({ label: "parent-model (inherited)", inherited: true });
+    expect(reversed.engine).toEqual({ label: "codex", inherited: false });
+  });
+
+  it("an unknown parent (undefined) never mints an inherited label", () => {
+    const identity = resolveSubagentIdentity(null, null, undefined, undefined);
+    expect(identity.model.label).toBeNull();
+    expect(identity.engine.label).toBeNull();
   });
 });
 
@@ -1464,9 +1508,13 @@ function renderAgentBody(
   block: ToolCallBlock,
   promptExpanded = false,
   child?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined },
+  parentModel?: string | null,
+  parentEngine?: string,
 ): string {
   const noop = () => {};
-  return renderToStaticMarkup(createElement(AgentCardBody, { block, promptExpanded, onTogglePrompt: noop, child }));
+  return renderToStaticMarkup(
+    createElement(AgentCardBody, { block, promptExpanded, onTogglePrompt: noop, child, parentModel, parentEngine }),
+  );
 }
 
 describe("AgentCardBody (SSR component render)", () => {
@@ -1822,6 +1870,173 @@ describe("ToolCallCard (SSR) — header-row badge (TASK.120)", () => {
     );
     expect(html).toContain('<span class="tool-call-child-badge tool-call-child-badge-waiting_permission"');
     expect(html).not.toContain("tool-call-child-badge-action");
+  });
+});
+
+describe("identity display — inherited parent model/engine (SSR static renders)", () => {
+  // Parent identity is passed as plain props here (same static-render
+  // rationale as childAction) AND read live from a real TabContext store in
+  // the provider-backed test below: useSyncExternalStore's SERVER snapshot
+  // is exactly what renderToStaticMarkup sees, so the real
+  // store -> hook -> card mapping IS reachable statically.
+
+  it("collapsed row shows the inherited parent model and engine, marked inherited", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent() });
+    const html = renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, {
+        block,
+        expanded: false,
+        bodyId: "body-1",
+        onToggleExpanded: () => {},
+        parentModel: "parent-model",
+        parentEngine: "codex",
+      }),
+    );
+    expect(html).toContain('class="subagent-collapsed-model subagent-collapsed-model-inherited"');
+    expect(html).toContain("parent-model (inherited)");
+    expect(html).toContain("codex (inherited)");
+  });
+
+  it("collapsed row keeps an explicit child model winning over a different parent", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ model: "glm-5.3", engine: "claude" }) });
+    const html = renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, {
+        block,
+        expanded: false,
+        bodyId: "body-1",
+        onToggleExpanded: () => {},
+        parentModel: "parent-model",
+        parentEngine: "codex",
+      }),
+    );
+    expect(html).toContain('class="subagent-collapsed-model"');
+    expect(html).toContain(">glm-5.3</span>");
+    // Explicit engine while RUNNING renders as the counters' "claude · " prefix
+    // (dedup rule), not as a collapsed engine pill.
+    expect(html).toContain(">claude · turn");
+    expect(html).not.toContain("subagent-collapsed-engine");
+    expect(html).not.toContain("(inherited)");
+  });
+
+  it("collapsed row shows a SETTLED explicit engine pill (counters drop the engine prefix once settled)", () => {
+    const block = mkAgentBlock({
+      status: "success",
+      subagent: mkSubagent({ model: "glm-5.3", engine: "claude", final: { status: "completed", durationMs: 4200 } }),
+    });
+    const html = renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, {
+        block,
+        expanded: false,
+        bodyId: "body-1",
+        onToggleExpanded: () => {},
+        parentModel: "parent-model",
+        parentEngine: "codex",
+      }),
+    );
+    expect(html).toContain('class="subagent-collapsed-engine"');
+    expect(html).toContain(">claude</span>");
+    expect(html).not.toContain("(inherited)");
+  });
+
+  it("a running card does NOT duplicate the explicit engine: counters prefix it, so no engine pill", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ engine: "codex" }) });
+    const html = renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, {
+        block,
+        expanded: false,
+        bodyId: "body-1",
+        onToggleExpanded: () => {},
+        parentModel: "parent-model",
+        parentEngine: "codex",
+      }),
+    );
+    // The running counters line carries "codex · " as its prefix...
+    expect(html).toContain("codex · ");
+    // ...so the collapsed engine pill is suppressed (no "codex (inherited)" either).
+    expect(html).not.toContain("subagent-collapsed-engine");
+  });
+
+  it("expanded body shows the inherited parent model and engine with the -inherited classes", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent() });
+    const html = renderAgentBody(block, false, undefined, "parent-model", "codex");
+    expect(html).toContain('class="tool-call-subagent-model tool-call-subagent-model-inherited"');
+    expect(html).toContain("parent-model (inherited)");
+    expect(html).toContain("codex (inherited)");
+    expect(html).toContain("tool-call-subagent-engine-inherited");
+  });
+
+  it("expanded body keeps explicit child identity winning, no inherited marks", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ model: "glm-5.3", engine: "claude" }) });
+    const html = renderAgentBody(block, false, undefined, "parent-model", "codex");
+    expect(html).toContain('class="tool-call-subagent-model"');
+    expect(html).toContain(">glm-5.3</span>");
+    // Explicit engine while RUNNING renders as the counters' "claude · " prefix
+    // (dedup rule), not as an engine pill.
+    expect(html).toContain(">claude · turn");
+    expect(html).not.toContain("subagent-collapsed-engine");
+    expect(html).not.toContain("(inherited)");
+  });
+
+  it("expanded body shows a SETTLED explicit engine pill (counters drop the engine prefix once settled)", () => {
+    const block = mkAgentBlock({
+      status: "success",
+      subagent: mkSubagent({ model: "glm-5.3", engine: "claude", final: { status: "completed", durationMs: 4200 } }),
+    });
+    const html = renderAgentBody(block, false, undefined, "parent-model", "codex");
+    expect(html).toContain('class="tool-call-subagent-engine"');
+    expect(html).toContain(">claude</span>");
+    expect(html).not.toContain("(inherited)");
+  });
+
+  it("no parent props (no TabContext path): neither identity renders — standalone rendering unchanged", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent() });
+    const html = renderAgentBody(block, false);
+    expect(html).not.toContain("tool-call-subagent-model");
+    expect(html).not.toContain("tool-call-subagent-engine");
+    expect(html).not.toContain("(inherited)");
+  });
+
+  it("provider-backed card (real store -> hook mapping): a core parent's model + 'core' engine are shown as inherited on an inline child", () => {
+    // The REAL store-to-card path, not plain props: ToolCallCard reads the
+    // TabContext store through useParentIdentity, and useSyncExternalStore's
+    // server snapshot (what renderToStaticMarkup sees) reflects this seeded
+    // state — model "glm-5.3", engine null (the core parent).
+    const store = createDesktopStore();
+    store.setState({ model: "glm-5.3", engine: null });
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ model: null, engine: null }) });
+    const html = renderToStaticMarkup(
+      createElement(
+        TabContext.Provider,
+        { value: { tabId: "tab-1", store } satisfies TabContextValue },
+        createElement(ToolCallCard, { block }),
+      ),
+    );
+    expect(html).toContain("glm-5.3 (inherited)");
+    expect(html).toContain("core (inherited)");
+    // A running Agent card renders collapsed by default, so the inherited
+    // identity surfaces in the COLLAPSED row's pills (the expanded body's
+    // own -inherited classes are covered by the direct AgentCardBody tests).
+    expect(html).toContain("subagent-collapsed-model-inherited");
+    expect(html).toContain("subagent-collapsed-engine-inherited");
+  });
+});
+
+describe("identity display — session-tier child does not inherit", () => {
+  it("a session child's card never borrows the parent tab's model/engine", () => {
+    const store = createDesktopStore();
+    store.setState({ model: "gpt-5.5", engine: { id: "codex" } as never });
+    const block = mkAgentBlock({
+      status: "running",
+      subagent: { ...mkSubagent({ model: null, engine: null }), sessionChild: true },
+    });
+    const html = renderToStaticMarkup(
+      createElement(
+        TabContext.Provider,
+        { value: { tabId: "tab-1", store } satisfies TabContextValue },
+        createElement(ToolCallCard, { block }),
+      ),
+    );
+    expect(html).not.toContain("(inherited)");
   });
 });
 
