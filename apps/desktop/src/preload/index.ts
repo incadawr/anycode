@@ -241,6 +241,7 @@ const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
 const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
 import { CODEX_LOGIN_PROGRESS_CHANNEL, type CodexDeviceCodeProgress, type CodexLoginMode } from "../shared/codex-login.js";
 const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
+const CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL = "anycode:codex-login-open-device-page";
 const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
 // TASK.50 (codex-profiles cut §2/§4, amended §A1): the profile control-plane
 // channels — main/codex-ipc.ts holds the byte-identical source of truth, same
@@ -688,6 +689,8 @@ contextBridge.exposeInMainWorld("anycode", {
     },
     loginCancel: (): Promise<void> =>
       ipcRenderer.invoke(CODEX_LOGIN_CANCEL_CHANNEL) as Promise<void>,
+    loginOpenDevicePage: (): Promise<void> =>
+      ipcRenderer.invoke(CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL) as Promise<void>,
     // TASK.50 (cut §2/§4): the profile control-plane — settings/fs mutations
     // only, no spawns. No credential value ever crosses this bridge in either
     // direction (custody, cut §4.4) — `listProfiles` carries only the

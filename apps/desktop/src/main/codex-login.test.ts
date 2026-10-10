@@ -148,7 +148,7 @@ describe("Codex device-code login", () => {
       spawnImpl: fakeSpawn(["--auto-complete-login"]), timeoutMs: 1000,
     })).toEqual({ ok: true });
     expect(onDeviceCode).toHaveBeenCalledExactlyOnceWith({ userCode: "ABCD-1234", verificationUrl: "https://example.invalid/device" });
-    expect(openExternal).toHaveBeenCalledExactlyOnceWith("https://example.invalid/device");
+    expect(openExternal).not.toHaveBeenCalled();
   });
   it.each(["--unsafe-login-url", "--invalid-device-code"])("rejects malformed device progress %s before exposing it", async (flag) => {
     const onDeviceCode = vi.fn();
@@ -164,7 +164,7 @@ describe("Codex device-code login", () => {
     const controller = new AbortController();
     expect(await runCodexLogin("/fake/codex", {
       mode: "device", trust: TRUSTED, signal: controller.signal,
-      openExternal: () => controller.abort(), spawnImpl: fakeSpawn(),
+      onDeviceCode: () => controller.abort(), openExternal: vi.fn(), spawnImpl: fakeSpawn(),
     })).toEqual({ ok: false, reason: "cancelled" });
   });
 });
