@@ -64,7 +64,7 @@
  * via `tabRegistry`, the same two primitives App.tsx itself already uses to
  * pick `activeStore` — no new prop/context plumbing needed.
  */
-import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent, type SVGProps } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentType, type KeyboardEvent, type SVGProps } from "react";
 import { useStore } from "zustand";
 import type { McpServerStatus, TelemetryStatus } from "@anycode/core";
 import type {
@@ -110,7 +110,7 @@ import { VisionPane } from "./VisionPane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
 import { BrandMark, Check, Chevron, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Person, Plus, Robot, Search, ServerStack, Sliders, Terminal, X } from "./icons.js";
 import { nextRovingIndex } from "./ModeMenu.js";
-import { SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
+import { SETTINGS_ADD_CONNECTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { readTurnNotifyEnabled, TURN_NOTIFY_KEY } from "../notifications.js";
 import { applyDensity, DENSITY_KEY, readDensity, type Density } from "../density.js";
 import "../settings.css";
@@ -868,6 +868,60 @@ function CustomProvidersSection({ providers, readOnly, onChanged, bridge }: Cust
 export interface ProviderSettingsProps {
   /** Injectable for tests / isolation; defaults to the app's singleton settings-store. */
   store?: SettingsStoreApi;
+  /**
+   * Taskana 4237: a request token (0 = none, N = the Nth outstanding request)
+   * forwarded down from `SettingsDialog` (the always-mounted listener) through
+   * `SettingsScreen`. Only `> 0` matters here — the DRAWER decision is a plain
+   * boolean, while the monotonically increasing token exists so a REPEAT is
+   * observable: `SettingsScreen`'s navigation effect and this component's
+   * consumption effect both depend on the token's identity, so a second
+   * explicit request (1 → 2) re-fires even when every value it maps to —
+   * the selected pane, the drawer's mode, the request flag — is unchanged.
+   */
+  addConnectionRequest?: number;
+  /** Called once a pending add request has been handled (or deliberately dropped, e.g. readOnly) so it is never replayed. */
+  onAddConnectionConsumed?: () => void;
+}
+
+/**
+ * Taskana 4237: the always-mounted `SettingsDialog`'s reaction to the
+ * dedicated add-connection event — land on the Provider pane and raise a
+ * pending request. `requestAdd` is the dialog's own token bump (see
+ * `SettingsDialog`'s `addConnectionRequest`), deliberately NOT a boolean flag:
+ * a REQUEST must be distinguishable from the STATE it resolves to. Selecting
+ * the pane is idempotent (setting "provider" while already on "provider" is a
+ * no-op React bails out of), so anything value-typed downstream would fail to
+ * re-trigger — a monotonically increasing token changes on every request and
+ * is what makes a repeat land. Exported for unit testing (a plain
+ * data-mapping, no DOM).
+ */
+export function applyAddConnectionRequest(
+  setPane: (pane: SettingsPaneId) => void,
+  requestAdd: () => void,
+): void {
+  setPane("provider");
+  requestAdd();
+}
+
+/**
+ * Taskana 4237: the pure decision behind `ProviderSettings`' pending-add
+ * effect. A request with NO snapshot yet is left unconsumed (the effect must
+ * survive until there is a snapshot to act on). A request WITH a snapshot is
+ * always consumed; the drawer opens only when that snapshot is writable —
+ * readOnly consumes silently, because there is no safe writable form to show.
+ * Consuming on every handled request is what stops an ordinary reopen or a
+ * return to the Provider pane from replaying the drawer, while a repeated
+ * explicit request (the flag going false→true again) still works. Exported for
+ * unit testing.
+ */
+export function resolvePendingAddConnection(
+  requested: boolean,
+  snapshot: { readOnly: boolean } | null,
+): { openDrawer: boolean; consume: boolean } {
+  if (!requested || snapshot === null) {
+    return { openDrawer: false, consume: false };
+  }
+  return { openDrawer: !snapshot.readOnly, consume: true };
 }
 
 /**
@@ -886,7 +940,7 @@ export interface ProviderSettingsProps {
  * first-run empty state") — WelcomeScreen conditionally narrows the grid to a
  * single first-connection prompt, see its own file.
  */
-export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsProps) {
+export function ProviderSettings({ store = useSettingsStore, addConnectionRequest = 0, onAddConnectionConsumed }: ProviderSettingsProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const pendingConsent = useStore(store, (s) => s.pendingConsent);
 
@@ -896,6 +950,27 @@ export function ProviderSettings({ store = useSettingsStore }: ProviderSettingsP
   const [drawerFocus, setDrawerFocus] = useState<"label" | "credential">("label");
   const [checkingIds, setCheckingIds] = useState<ReadonlySet<string>>(new Set());
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  // Taskana 4237: consume a pending "add connection" request forwarded from the
+  // always-mounted SettingsDialog. Declared BEFORE the snapshot early return so
+  // the hook order stays stable while the snapshot loads; `resolvePendingAddConnection`
+  // waits for a snapshot and then consumes exactly once. Keyed on the request
+  // TOKEN (not a boolean): a repeat request bumps the token, so this effect
+  // re-fires and reopens the drawer even though `openDrawer` had since been
+  // closed by the user. Because SettingsDialog is always alive, the request
+  // survives until this component mounts — no event is ever dispatched at a
+  // not-yet-mounted listener.
+  useEffect(() => {
+    const { openDrawer, consume } = resolvePendingAddConnection(addConnectionRequest > 0, snapshot);
+    if (openDrawer) {
+      openAdd();
+    }
+    if (consume) {
+      onAddConnectionConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openAdd is a
+    // stable-enough per-render closure; the token and snapshot are the inputs.
+  }, [addConnectionRequest, snapshot, onAddConnectionConsumed]);
 
   // Unreachable from both real mounts (SettingsScreen early-returns its own
   // loading row before this renders; App only mounts Welcome once the first
@@ -1129,9 +1204,21 @@ export interface SettingsScreenProps {
    * ALREADY open still switches panes).
    */
   initialPane?: SettingsPaneId;
+  /**
+   * Taskana 4237: an add-connection REQUEST TOKEN forwarded from
+   * `SettingsDialog`'s always-mounted listener (0 = none, N = the Nth
+   * outstanding request). A token rather than a flag or a pane value because
+   * the request must re-fire even when everything it maps to is unchanged:
+   * the selected pane may ALREADY be "provider" (the second request would
+   * otherwise be invisible), and this screen may already be mounted. Absent
+   * for the WelcomeScreen embed, which has no dialog to receive the event.
+   */
+  addConnectionRequest?: number;
+  /** Taskana 4237: reports that the pending add request has been handled, so `SettingsDialog` can clear it. */
+  onAddConnectionConsumed?: () => void;
 }
 
-export function SettingsScreen({ store = useSettingsStore, onClose, initialPane }: SettingsScreenProps) {
+export function SettingsScreen({ store = useSettingsStore, onClose, initialPane, addConnectionRequest = 0, onAddConnectionConsumed }: SettingsScreenProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const notice = useStore(store, (s) => s.notice);
   const updateStatus = useStore(store, (s) => s.updateStatus);
@@ -1206,6 +1293,29 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
       setRequestedPane(initialPane);
     }
   }, [initialPane]);
+
+  // Taskana 4237: the add-connection request drives its OWN navigation, keyed on
+  // the request TOKEN rather than on `initialPane`. Both parts matter:
+  //
+  //  - `setRequestedPane("provider")` — an EXPLICIT request must land on the
+  //    Provider pane even when Settings is already open. `initialPane` cannot
+  //    carry that: the dialog may select a pane it ALREADY selected (a second
+  //    request after the user wandered off to another pane re-selects the same
+  //    "provider" value), and a prop that does not change cannot re-fire an
+  //    effect whose only dependency is that prop — which is how the request
+  //    used to get stuck with ProviderSettings unmounted.
+  //  - `setSearchQuery("")` — an active rail filter that excludes Provider
+  //    would leave `activePane` fallen back to the first VISIBLE pane, so the
+  //    request would never reach a mounted ProviderSettings either.
+  // The token (0 → 1 → 2 …) makes both run on EVERY request, identical values
+  // included; consumption resets it to 0, so an ordinary reopen re-runs this
+  // effect as a no-op and does not re-navigate.
+  useEffect(() => {
+    if (addConnectionRequest > 0) {
+      setRequestedPane("provider");
+      setSearchQuery("");
+    }
+  }, [addConnectionRequest]);
 
   // Rail filter (design §3): `visiblePanes` narrows on `searchQuery`, and
   // `activePane` falls back to the first visible match whenever the user's
@@ -1442,7 +1552,13 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane 
             <div className="settings-pane-content">
             {activePane === "profile" && <ProfilePane />}
 
-            {activePane === "provider" && <ProviderSettings store={store} />}
+            {activePane === "provider" && (
+              <ProviderSettings
+                store={store}
+                addConnectionRequest={addConnectionRequest}
+                onAddConnectionConsumed={onAddConnectionConsumed}
+              />
+            )}
 
             {activePane === "codex" && <CodexEnginePane onRequestCloseSettings={onClose} />}
 
@@ -1916,6 +2032,17 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
   // its own not-yet-mounted effect and drop the pane. Anchoring the listener
   // here guarantees it's already registered before any such pair can fire.
   const [selectedPane, setSelectedPane] = useState<SettingsPaneId | null>(null);
+  // Taskana 4237: an outstanding "add connection" request, as a monotonic TOKEN
+  // (0 = none). Held HERE (like `selectedPane` above) because this component is
+  // unconditionally mounted while `ProviderSettings` only exists once the
+  // dialog is open on the Provider pane — so a request that lands before that
+  // listener exists is retained, not dropped. A counter, not a boolean: pane
+  // selection is idempotent, so a repeat request must still be VISIBLE
+  // downstream (see `applyAddConnectionRequest`). Cleared by
+  // `consumeAddConnection` once Provider has opened the drawer (or deliberately
+  // dropped it, e.g. readOnly).
+  const [addConnectionRequest, setAddConnectionRequest] = useState(0);
+  const consumeAddConnection = useCallback(() => setAddConnectionRequest(0), []);
 
   useEffect(() => {
     function onSelectPane(event: Event): void {
@@ -1926,6 +2053,20 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
     }
     window.addEventListener(SETTINGS_SELECT_PANE_EVENT, onSelectPane);
     return () => window.removeEventListener(SETTINGS_SELECT_PANE_EVENT, onSelectPane);
+  }, []);
+
+  // Taskana 4237: the dedicated add-connection seam. Same always-mounted
+  // lifetime as the pane-select listener above, so the request is captured
+  // before the dialog has had a chance to open. `applyAddConnectionRequest`
+  // selects the Provider pane AND bumps the token; the token — not the pane,
+  // which may already read "provider" — is what makes each request observable
+  // on an already-mounted `SettingsScreen`.
+  useEffect(() => {
+    function onAddConnection(): void {
+      applyAddConnectionRequest(setSelectedPane, () => setAddConnectionRequest((n) => n + 1));
+    }
+    window.addEventListener(SETTINGS_ADD_CONNECTION_EVENT, onAddConnection);
+    return () => window.removeEventListener(SETTINGS_ADD_CONNECTION_EVENT, onAddConnection);
   }, []);
 
   useEffect(() => {
@@ -1996,7 +2137,13 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
           onClose();
         }}
       >
-        <SettingsScreen store={store} onClose={onClose} initialPane={selectedPane ?? undefined} />
+        <SettingsScreen
+          store={store}
+          onClose={onClose}
+          initialPane={selectedPane ?? undefined}
+          addConnectionRequest={addConnectionRequest}
+          onAddConnectionConsumed={consumeAddConnection}
+        />
       </dialog>
     </>
   );

@@ -209,6 +209,31 @@ export const RUN_ACTION_EVENT = "anycode:run-action";
  */
 export const SETTINGS_SELECT_PANE_EVENT = "anycode:settings-select-pane";
 
+/**
+ * Settings add-connection seam (Taskana 4237): a bare `CustomEvent` (no
+ * detail) the always-mounted `SettingsDialog` listens for. Paired with the
+ * `"settings.open"` run-action, it asks Settings to land on the Provider pane
+ * AND open the ConnectionDrawer in add mode — the action behind the empty
+ * model popover's "Add connection" affordance. A DEDICATED event (not a
+ * `SETTINGS_SELECT_PANE_EVENT` reuse) lets the dialog retain the add request
+ * until `ProviderSettings` has mounted, rather than depending on a listener
+ * that may not exist yet. See `openSettingsAddConnection` below.
+ */
+export const SETTINGS_ADD_CONNECTION_EVENT = "anycode:settings-add-connection";
+
+/**
+ * Opens Settings on the Provider pane with the Add-connection drawer already
+ * open (Taskana 4237): dispatches the same `"settings.open"` +
+ * dedicated-event pair the empty model popover's "Add connection" button
+ * needs. Callers close their own popover first (the shared action both hosts
+ * invoke). Body references `window` only at call time, never at module load —
+ * this module stays DOM-free on import.
+ */
+export function openSettingsAddConnection(): void {
+  window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
+  window.dispatchEvent(new CustomEvent(SETTINGS_ADD_CONNECTION_EVENT));
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Registry (cut §2 — order, names, descriptions, dispatch, gating: LAW)
 // ─────────────────────────────────────────────────────────────────────────

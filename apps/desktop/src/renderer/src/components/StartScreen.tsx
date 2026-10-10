@@ -99,7 +99,7 @@ import { activeProviderView, connectionById } from "../../../shared/settings.js"
 import type { EngineId } from "../../../shared/engines.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
-import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
+import { openSettingsAddConnection, RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { createAsyncEpochGate, issueGuarded } from "./async-epoch-gate.js";
 
 export interface StartScreenProps {
@@ -279,7 +279,12 @@ export function computeModelChipDisplay(
 ): ModelChipDisplay {
   const isDefault = draftModel === null;
   const modelId = draftModel ?? resolvedDefault;
-  return { modelId, label: modelDisplayName(modelId, catalogModels), isDefault };
+  // Taskana 4237: no model resolved at all (no draft pick and no provider
+  // default) is not a name to fall back to the raw — often empty — id; it is a
+  // call to action, and the empty popover renders the matching "Add connection"
+  // button. `modelId`/`isDefault` are preserved untouched.
+  const label = modelId.trim() === "" ? "Add a model" : modelDisplayName(modelId, catalogModels);
+  return { modelId, label, isDefault };
 }
 
 export interface ModelPickDeps {
@@ -1748,6 +1753,10 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   onKeyDown={onModelMenuKeyDown}
                   onActivateRow={activateModelRow}
                   onBack={modelMenuBack}
+                  onAddConnection={() => {
+                    setModelMenuOpen(false);
+                    openSettingsAddConnection();
+                  }}
                   isCurrentConnection={(connectionId) => connectionId === chipConnectionId}
                 />
               )}
