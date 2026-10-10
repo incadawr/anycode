@@ -45,6 +45,7 @@ import {
   handleRecognizerSet,
   handleSet,
   handleSetSecret,
+  handleSwapCodexBinaryPath,
   mapProviderFailureCodeToHealthStatus,
   projectCatalogSummary,
   sanitizeProviderFailureCode,
@@ -547,6 +548,46 @@ describe("handleSet — sessionLimits (TASK.119/TASK.147-с2)", () => {
     await handleSet(makeDeps(), { sessionLimits: { maxTabs: 12 } });
     const loaded = await loadSettings(settingsPath);
     expect(readSessionLimits(loaded.settings.sessionLimits).maxTabs).toBe(12);
+  });
+});
+
+describe("handleSwapCodexBinaryPath — compare-and-set under the settings lock (TASK.237)", () => {
+  const OLD = "/home/u/.anycode/codex/bin/0.144.3/vendor/aarch64-apple-darwin/bin/codex";
+  const NEW = "/home/u/.anycode/codex/bin/0.160.0/vendor/aarch64-apple-darwin/bin/codex";
+
+  it("repoints the path while it still holds the expected value, and emits the mutation", async () => {
+    await handleSet(makeDeps(), { codex: { binaryPath: OLD } });
+    const onMutation = vi.fn();
+    const res = await handleSwapCodexBinaryPath(makeDeps({ onMutation }), OLD, NEW);
+    expect(res).toEqual({ ok: true });
+    expect((await loadSettings(settingsPath)).settings.codex?.binaryPath).toBe(NEW);
+    expect(onMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses `changed` and writes nothing when the user picked another CLI meanwhile", async () => {
+    await handleSet(makeDeps(), { codex: { binaryPath: "/opt/custom/codex" } });
+    const res = await handleSwapCodexBinaryPath(makeDeps(), OLD, NEW);
+    expect(res).toEqual({ ok: false, reason: "changed" });
+    expect((await loadSettings(settingsPath)).settings.codex?.binaryPath).toBe("/opt/custom/codex");
+  });
+
+  it("a swap queued behind a user's write sees that write, not the stale base", async () => {
+    await handleSet(makeDeps(), { codex: { binaryPath: OLD } });
+    const [userWrite, swap] = await Promise.all([
+      handleSet(makeDeps(), { codex: { binaryPath: "/opt/custom/codex" } }),
+      handleSwapCodexBinaryPath(makeDeps(), OLD, NEW),
+    ]);
+    expect(userWrite.ok).toBe(true);
+    expect(swap).toEqual({ ok: false, reason: "changed" });
+    expect((await loadSettings(settingsPath)).settings.codex?.binaryPath).toBe("/opt/custom/codex");
+  });
+
+  it("refuses read_only on a newer-than-CURRENT settings file", async () => {
+    await writeFile(
+      settingsPath,
+      JSON.stringify({ version: 3, provider: { connections: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false }, codex: { binaryPath: OLD } }),
+    );
+    expect(await handleSwapCodexBinaryPath(makeDeps(), OLD, NEW)).toEqual({ ok: false, reason: "read_only" });
   });
 });
 
