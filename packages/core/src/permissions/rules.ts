@@ -20,6 +20,25 @@
  * fail-closed cases. `Bash` and (TASK.144) the desktop Codex bridge's
  * `CodexExec` share that treatment because they share the subject SHAPE; every
  * path/URL tool keeps raw whole-string matching.
+ *
+ * TASK.36 — scoped project-runner rules. A pattern starting with the prefix
+ * `scoped-runner:` is a member of a separate family, never a glob (see
+ * `SCOPED_PATTERN_PREFIX`). A member is parsed strictly (parse-or-die): a
+ * malformed member matches NOTHING — it never falls back to picomatch, so a
+ * hand-mangled member cannot silently widen to a near-global allow the way the
+ * rejected brace-glob serialization could. A well-formed member describes the
+ * ONE form `cd <workspace> && <runner> <verb> [inert args]` and is matched by
+ * the SAME explicit command grammar the modal uses to propose it
+ * (`recognizeScopedRunnerCommand` on the create side, `matchScopedRunnerCommand`
+ * on the match side); both live here and the desktop reaches them through the
+ * existing `permissions/safe-command` subpath re-export, so there is no twin to
+ * drift. Matching is byte-exact: the `cd` argument must equal the workspace
+ * under one supported literal spelling (unquoted, or double/single quoted when
+ * the workspace does not itself contain that delimiter) — no path normalization,
+ * so a trailing slash, a `--` form or `~` all reject (fail-closed). Segment and
+ * token edges are trimmed of SHELL whitespace only (space, horizontal tab); JS
+ * `trim()`'s wider Unicode set (NBSP, U+2028, …) is deliberately not applied,
+ * because Bash treats those as ordinary characters — see `scopedTrimShell`.
  */
 
 import picomatch from "picomatch";
@@ -295,12 +314,127 @@ function bashMatchSubjects(command: string): string[] | undefined {
   return commands.length > 0 ? commands : [command];
 }
 
+// ── TASK.36: scoped project-runner rules (cd <workspace> && <runner> <verb>) ──
+
+/** Family prefix: a pattern starting with this is a scoped rule, parsed strictly or never matches. */
+export const SCOPED_PATTERN_PREFIX = "scoped-runner:";
+export const SCOPED_RUNNER_BINARIES: readonly string[] = ["pnpm", "npm", "yarn", "bun"];
+export const SCOPED_RUNNER_VERBS: readonly string[] = ["test", "typecheck", "build", "lint"];
+/** Any of these ANYWHERE in the raw command (quote-unaware, deliberately blunt — mirrors run-allow-bash's screen):
+ *  # comments, backticks/$ expansion, redirects, escapes and raw control characters except horizontal tab (including all newlines). */
+const SCOPED_RAW_REJECT_RE = /[#`$<>\\\x00-\x08\x0a-\x1f\x7f]/;
+/** One inert argv token in the runner segment: unquoted, no shell syntax. Same charset family as isInertAssignment's unquoted allowlist. */
+const SCOPED_ARG_RE = /^[A-Za-z0-9_@%+,:./=-]+$/;
+
+/** SHELL word-splitting whitespace only: space and horizontal tab — the two
+ * characters Bash's lexer treats as token separators. Deliberately NOT JS
+ * `String.prototype.trim()`, whose Unicode whitespace set (NBSP U+00A0,
+ * U+2000–U+200A, U+2028/9, U+3000, U+FEFF, …) Bash treats as ORDINARY
+ * characters: `cd /ws/proj\u00a0` is a different directory from `/ws/proj`, and
+ * `\u00a0pnpm` is a different command from `pnpm`. Trimming those away would
+ * accept a command whose real cd target or binary differs from the approved one
+ * — a silent scope widening. Leaving them in place makes the comparison fail
+ * (byte-exact, fail-closed) while keeping ordinary space/tab equivalence. */
+function scopedTrimShell(value: string): string {
+  return value.replace(/^[ \t]+/, "").replace(/[ \t]+$/, "");
+}
+
+export interface ScopedRunnerRule { workspace: string; runner: string; verb: string; }
+
+/** Host cwd is absolute POSIX on this target; unsupported spellings fail closed.
+ * Spaces, quotes and glob characters are permitted in a workspace value, but
+ * command recognition below requires a shell-literal quoting form for them.
+ */
+function isScopedWorkspace(workspace: string): boolean {
+  return workspace.startsWith("/") && !/[\x00-\x1f\x7f]/.test(workspace);
+}
+
+/** Canonical serialization; fixed key order workspace,runner,verb (tests pin the literal). */
+export function formatScopedRunnerPattern(workspace: string, runner: string, verb: string): string | undefined {
+  if (!isScopedWorkspace(workspace)) return undefined;
+  if (!SCOPED_RUNNER_BINARIES.includes(runner) || !SCOPED_RUNNER_VERBS.includes(verb)) return undefined;
+  return `${SCOPED_PATTERN_PREFIX}${JSON.stringify({ workspace, runner, verb })}`;
+}
+
+/** Strict inverse. Undefined for anything not canonically shaped — including every malformed family member. */
+export function parseScopedRunnerPattern(pattern: string): ScopedRunnerRule | undefined {
+  if (!pattern.startsWith(SCOPED_PATTERN_PREFIX)) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(pattern.slice(SCOPED_PATTERN_PREFIX.length)); } catch { return undefined; }
+  if (typeof parsed !== "object" || parsed === null || Object.keys(parsed).sort().join(",") !== "runner,verb,workspace") return undefined;
+  const { workspace, runner, verb } = parsed as Record<string, unknown>;
+  if (typeof workspace !== "string" || !isScopedWorkspace(workspace)) return undefined;
+  if (typeof runner !== "string" || !SCOPED_RUNNER_BINARIES.includes(runner)) return undefined;
+  if (typeof verb !== "string" || !SCOPED_RUNNER_VERBS.includes(verb)) return undefined;
+  // Reject duplicate JSON keys, extra whitespace, reordered keys and every
+  // non-canonical family encoding. The formatter produces exactly this form.
+  if (formatScopedRunnerPattern(workspace, runner, verb) !== pattern) return undefined;
+  return { workspace, runner, verb };
+}
+
+/** Exactly one literal cd argument, with horizontal spacing equivalence.
+ * Never treat unquoted glob/brace/paren/tilde syntax as a literal path.
+ * Never synthesize a quote form containing its own quote delimiter.
+ */
+function scopedCdSegmentMatches(segment: string, workspace: string): boolean {
+  if (!isScopedWorkspace(workspace)) return false;
+  const arg = /^cd[ \t]+(.+)$/.exec(scopedTrimShell(segment))?.[1];
+  if (arg === undefined) return false;
+  if (/^[A-Za-z0-9_@%+,:./=-]+$/.test(workspace) && arg === workspace) return true;
+  if (!workspace.includes('"') && arg === `"${workspace}"`) return true;
+  if (!workspace.includes("'") && arg === `'${workspace}'`) return true;
+  return false;
+}
+
+/** Runner segment: plain whitespace-split tokens (quotes in args fail SCOPED_ARG_RE by construction). */
+function scopedRunnerSegmentParse(segment: string): { runner: string; verb: string } | undefined {
+  const tokens = scopedTrimShell(segment).split(/[ \t]+/).filter((t) => t !== "");
+  const runner = tokens[0]; const verb = tokens[1];
+  if (runner === undefined || verb === undefined) return undefined;
+  if (!SCOPED_RUNNER_BINARIES.includes(runner) || !SCOPED_RUNNER_VERBS.includes(verb)) return undefined;
+  return tokens.slice(2).every((t) => SCOPED_ARG_RE.test(t)) ? { runner, verb } : undefined;
+}
+
+/** Shared walker: raw screen + exactly TWO segments joined by exactly ONE '&&', both non-blank. */
+function scopedSplit(command: string): [string, string] | undefined {
+  if (SCOPED_RAW_REJECT_RE.test(command)) return undefined;
+  const split = splitBashSegments(command);   // undefined => substitution / unterminated quote
+  if (split === undefined || split.segments.length !== 2 || split.separators.length !== 1 || split.separators[0] !== "&&") return undefined;
+  const seg1 = scopedTrimShell(split.segments[0] ?? ""); const seg2 = scopedTrimShell(split.segments[1] ?? "");
+  return seg1 !== "" && seg2 !== "" ? [seg1, seg2] : undefined;   // blank => leading/trailing separator or newline edge
+}
+
+/** MATCH time: strict structural match of a parsed rule against the raw command. */
+export function matchScopedRunnerCommand(rule: ScopedRunnerRule, command: string): boolean {
+  const segs = scopedSplit(command);
+  if (segs === undefined || !scopedCdSegmentMatches(segs[0]!, rule.workspace)) return false;
+  const parsed = scopedRunnerSegmentParse(segs[1]!);
+  return parsed !== undefined && parsed.runner === rule.runner && parsed.verb === rule.verb;
+}
+
+/** CREATE time: recognize the exact form against the tab's canonical workspace. Same grammar, no drift. */
+export function recognizeScopedRunnerCommand(command: string, workspace: string): ScopedRunnerRule | undefined {
+  if (!isScopedWorkspace(workspace)) return undefined;
+  const segs = scopedSplit(command);
+  if (segs === undefined || !scopedCdSegmentMatches(segs[0]!, workspace)) return undefined;
+  const parsed = scopedRunnerSegmentParse(segs[1]!);
+  return parsed === undefined ? undefined : { workspace, runner: parsed.runner, verb: parsed.verb };
+}
+
 function ruleMatches(rule: PermissionRule, toolName: string, input: unknown): boolean {
   if (rule.toolName !== toolName) {
     return false;
   }
   if (rule.pattern === undefined) {
     return true;
+  }
+  if (rule.pattern.startsWith(SCOPED_PATTERN_PREFIX)) {
+    const scoped = parseScopedRunnerPattern(rule.pattern);
+    if (scoped === undefined || !isCommandLineTool(toolName)) {
+      return false; // malformed family member / wrong tool shape: NEVER falls back to glob
+    }
+    const subject = extractSubject(toolName, input);
+    return subject !== undefined && matchScopedRunnerCommand(scoped, subject);
   }
   if (PAREN_RE.test(rule.pattern)) {
     return false;
