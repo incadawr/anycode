@@ -288,6 +288,41 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
     });
   });
 
+  // TASK.196: a max_turns terminal's report/notice text stays non-empty and
+  // its status is relayed unchanged — the parent-side mirror of the child
+  // host's turn-limit rescue/notice. Wire logic is NOT changed by TASK.196;
+  // this pins the relay of the (possibly rescued or noticed) finalText.
+  it("a max_turns terminal relays its (rescued/notice) finalText non-empty and the status unchanged (TASK.196)", async () => {
+    for (const text of ["RESCUE REPORT", "Agent: the child stopped at its turn limit without a final report; last activity: TodoRead."]) {
+      const { port, sent, emit } = harness();
+      const onProgress = vi.fn();
+      const pending = port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-maxturns" },
+        { onProgress },
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "c-mt", childTabId: "t-mt", model: "m" });
+      onProgress.mockClear();
+
+      emit(
+        terminalEvent(requestId, {
+          status: "max_turns",
+          finalText: text,
+          turns: 3,
+          toolCalls: 5,
+          durationMs: 999,
+          childSessionId: "c-mt",
+        }),
+      );
+
+      expect(onProgress).toHaveBeenCalledWith({ kind: "end", status: "max_turns", turns: 3, durationMs: 999 });
+      const outcome: SessionSubagentOutcome = await pending;
+      expect(outcome.status).toBe("max_turns");
+      expect(outcome.finalText).toBe(text);
+      expect(outcome.finalText.trim().length).toBeGreaterThan(0);
+    }
+  });
+
   // TASK.102 CUT-S2 §10.7 п.6c (B2-micro): a terminal event's `activitySuppressed`
   // is passed through onto the "end" progress report — mirrors the inline
   // runner's own `kind:"end"` SubagentProgress (runner.ts:573).
@@ -737,6 +772,40 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
       }).not.toThrow();
 
       expect(onProgress).not.toHaveBeenCalled();
+    });
+
+    it("detached terminal declaredDoneAtCeiling reaches onDetachedTerminal's outcome (TASK 4149)", async () => {
+      // TASK.196: a max_turns terminal's rescued report / turn-limit notice
+      // must reach the parent via onDetachedTerminal non-empty and with the
+      // status unchanged — detached delivery mirrors the attached relay
+      // pinned above; wire logic is NOT changed by TASK.196.
+      for (const text of ["RESCUE REPORT", "Agent: the child stopped at its turn limit without a final report; last activity: TodoRead."]) {
+        const { port, sent, emit, detachedTerminals } = detachHarness();
+        const pending = port.run(
+          { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-maxturns-detached", detach: true },
+          {},
+        );
+        const requestId = spawns(sent)[0]!.requestId;
+        emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "c-mt-d", childTabId: "t-mt-d", model: "m" });
+        await pending; // admit settles the run() promise
+
+        emit(
+          terminalEvent(requestId, {
+            status: "max_turns",
+            finalText: text,
+            turns: 3,
+            toolCalls: 5,
+            durationMs: 999,
+            childSessionId: "c-mt-d",
+          }),
+        );
+
+        expect(detachedTerminals).toHaveLength(1);
+        expect(detachedTerminals[0]!.outcome.status).toBe("max_turns");
+        expect(detachedTerminals[0]!.outcome.finalText).toBe(text);
+        expect(detachedTerminals[0]!.outcome.finalText.trim().length).toBeGreaterThan(0);
+        expect(detachedTerminals[0]!.outcome.turns).toBe(3);
+      }
     });
 
     it("detached terminal declaredDoneAtCeiling reaches onDetachedTerminal's outcome (TASK 4149)", async () => {

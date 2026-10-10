@@ -76,6 +76,7 @@ import type {
   RecognizerEndpoint,
   TelemetryStatus,
 } from "@anycode/core";
+import { SUBAGENT_WRAPUP_FAILED_NOTICE, childTurnLimitNotice } from "@anycode/core";
 import type { SessionEngine } from "./engines/session-engine.js";
 import type {
   HostToUiMessage,
@@ -3209,6 +3210,8 @@ function createChildHarness(opts: {
   envStatus?: SessionOptions["envStatus"];
   /** §10.11.1 N7 harness: a LIVE toggle, so a test can flip it BETWEEN a steer message's enqueue and its later drain. */
   imageInputEnabled?: () => boolean;
+  /** TASK.196: optional wrap-up rescue callback forwarded into child options. */
+  wrapUpRescue?: () => Promise<string>;
 }): ChildHarness {
   const channel = new MessageChannel();
   const uiPort = channel.port1;
@@ -3278,7 +3281,7 @@ function createChildHarness(opts: {
     bootHistory: opts.bootHistory,
     rules: new SessionPermissionRules(),
     persistence,
-    child: { onReady, flushHistory, onTerminal, onProgress, now },
+    child: { onReady, flushHistory, onTerminal, onProgress, now, ...(opts.wrapUpRescue !== undefined ? { wrapUpRescue: opts.wrapUpRescue } : {}) },
     ...(opts.envStatus ? { envStatus: opts.envStatus } : {}),
     ...(opts.imageInputEnabled ? { imageInputEnabled: opts.imageInputEnabled } : {}),
   });
@@ -3550,6 +3553,258 @@ describe("Session — child mode: declaredDoneAtCeiling reaches the terminal rep
     const report = await terminalFor({ type: "loop_end", reason: "max_turns", turns: 5 });
     expect(report?.status).toBe("max_turns");
     expect(report && "declaredDoneAtCeiling" in report).toBe(false);
+  });
+});
+
+describe("Session — child mode: turn-limit wrap-up rescue (TASK.196)", () => {
+  /** A max_turns loop_end fixture modeled on terminalFor above. */
+  async function terminalFor(
+    loopEnd: AgentEvent,
+    wrapUpRescue?: () => Promise<string>,
+  ): Promise<{ report: ChildTerminalReport | undefined; rescue: ReturnType<typeof vi.fn> }> {
+    const rescue = vi.fn(wrapUpRescue ?? (async () => "RESCUE REPORT"));
+    const h = createChildHarness({ steps: [], wrapUpRescue: rescue });
+    try {
+      vi.spyOn(h.engine, "runTurn").mockImplementation(async function* (): AsyncIterable<AgentEvent> {
+        yield loopEnd;
+      });
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      return { report: h.onTerminal.mock.calls[0]?.[0], rescue };
+    } finally {
+      h.close();
+    }
+  }
+
+  it("an empty max_turns final yields the injected rescue report; status/counters unchanged; callback once", async () => {
+    const { report, rescue } = await terminalFor({ type: "loop_end", reason: "max_turns", turns: 3 });
+    expect(rescue).toHaveBeenCalledTimes(1);
+    expect(report?.status).toBe("max_turns");
+    expect(report?.finalText).toBe("RESCUE REPORT");
+    expect(report?.truncated).toBe(false);
+    expect(report?.turns).toBe(3);
+  });
+
+  it("a whitespace rescue yields the failure notice", async () => {
+    const { report } = await terminalFor(
+      { type: "loop_end", reason: "max_turns", turns: 2 },
+      async () => "   \n  ",
+    );
+    expect(report?.status).toBe("max_turns");
+    expect(report?.finalText).toBe(SUBAGENT_WRAPUP_FAILED_NOTICE);
+  });
+
+  it("a throwing rescue yields the failure notice", async () => {
+    const { report } = await terminalFor(
+      { type: "loop_end", reason: "max_turns", turns: 2 },
+      async () => {
+        throw new Error("rescue boom");
+      },
+    );
+    expect(report?.status).toBe("max_turns");
+    expect(report?.finalText).toBe(SUBAGENT_WRAPUP_FAILED_NOTICE);
+  });
+
+  it("a max_turns loop_end with zero turns gets no rescue callback — nothing to summarize", async () => {
+    const { report, rescue } = await terminalFor({ type: "loop_end", reason: "max_turns", turns: 0 });
+    expect(rescue).not.toHaveBeenCalled();
+    // Zero turns => nothing to summarize => no rescue and no notice; the
+    // empty finalText is preserved exactly as before (plan: preserve the
+    // existing skip behavior for zero-turn runs).
+    expect(report?.finalText).toBe("");
+  });
+
+  it("callback ABSENT (CLI engine): explicit turn-limit notice, status unchanged", async () => {
+    const h = createChildHarness({ steps: [] });
+    try {
+      vi.spyOn(h.engine, "runTurn").mockImplementation(async function* (): AsyncIterable<AgentEvent> {
+        yield { type: "loop_end", reason: "max_turns", turns: 4 } as AgentEvent;
+      });
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.status).toBe("max_turns");
+      expect(report?.finalText).toBe(childTurnLimitNotice(undefined));
+      expect(report?.finalText).toContain("last activity: none.");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("callback ABSENT with observed last activity: the notice names the last tool", async () => {
+    const h = createChildHarness({ steps: [] });
+    try {
+      vi.spyOn(h.engine, "runTurn").mockImplementation(async function* (): AsyncIterable<AgentEvent> {
+        yield {
+          type: "tool_result",
+          toolCallId: "c1",
+          outcome: { toolCallId: "c1", toolName: "TodoRead", status: "ok", result: "listed" },
+        } as unknown as AgentEvent;
+        yield { type: "loop_end", reason: "max_turns", turns: 4 } as AgentEvent;
+      });
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.status).toBe("max_turns");
+      expect(report?.finalText).toBe(childTurnLimitNotice("TodoRead"));
+      expect(report?.finalText).toContain("last activity: TodoRead.");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a normal completed child with text is unchanged and the callback is not invoked", async () => {
+    const rescue = vi.fn(async () => "RESCUE REPORT");
+    const h = createChildHarness({ steps: [textStep("all done")], wrapUpRescue: rescue });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      expect(rescue).not.toHaveBeenCalled();
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.status).toBe("completed");
+      expect(report?.finalText).toBe("all done");
+      expect(report?.truncated).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a steer message queued DURING a pending rescue drains into a live turn; the stale rescued report is never published", async () => {
+    // TASK.196 verification defect 1: the rescue `await` opens the same
+    // lifecycle gap `flushHistory` does (§10.10.1 O7) — a steer message
+    // landing inside it must drain into a REAL second turn, not be lost to
+    // the terminal latch.
+    let releaseRescue: () => void = () => {};
+    const rescueGate = new Promise<void>((resolve) => {
+      releaseRescue = resolve;
+    });
+    let rescueCalls = 0;
+    const rescue = vi.fn(async (): Promise<string> => {
+      rescueCalls += 1;
+      if (rescueCalls === 1) {
+        await rescueGate; // park the FIRST rescue so the steer can land inside it
+        return "STALE REPORT";
+      }
+      return "FRESH REPORT";
+    });
+    const h = createChildHarness({
+      steps: [textStep("steer done")],
+      wrapUpRescue: rescue,
+    });
+    try {
+      vi.spyOn(h.engine, "runTurn").mockImplementation(async function* (): AsyncIterable<AgentEvent> {
+        yield { type: "loop_end", reason: "max_turns", turns: 2 } as AgentEvent;
+      });
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      // Turn 1 settles; the first rescue is now pending (gated).
+      await h.waitUntil(() => rescue.mock.calls.length === 1);
+
+      // A steer message lands INSIDE the rescue await — before the
+      // post-rescue re-check can see it.
+      h.send({ type: "user_message", requestId: "steer-1", text: "one more thing" });
+      // Let the message actually cross the MessageChannel before releasing.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(h.onTerminal).not.toHaveBeenCalled();
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+
+      releaseRescue();
+      // The queued steer drains into a REAL second turn — the stale rescued
+      // report from attempt 1 is discarded ("drained"), never published.
+      // The mocked turn 2 settles immediately, so the durable assertion is
+      // on the FINAL state (below), not the intermediate window.
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.status).toBe("max_turns");
+      // The FRESH attempt-2 rescue report is the terminal — the STALE
+      // attempt-1 text was never published.
+      expect(report?.finalText).toBe("FRESH REPORT");
+      expect(rescue).toHaveBeenCalledTimes(2);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("shutdown DURING a pending rescue rejects the queued steer and starts no new turn; the terminal publishes exactly once", async () => {
+    let releaseRescue: () => void = () => {};
+    const rescueGate = new Promise<void>((resolve) => {
+      releaseRescue = resolve;
+    });
+    const rescue = vi.fn(async (): Promise<string> => {
+      await rescueGate;
+      return "RESCUE REPORT";
+    });
+    const h = createChildHarness({ steps: [], wrapUpRescue: rescue });
+    try {
+      vi.spyOn(h.engine, "runTurn").mockImplementation(async function* (): AsyncIterable<AgentEvent> {
+        yield { type: "loop_end", reason: "max_turns", turns: 2 } as AgentEvent;
+      });
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => rescue.mock.calls.length === 1);
+
+      // A steer parks in the queue, then shutdown begins — both strictly
+      // inside the rescue await.
+      h.send({ type: "user_message", requestId: "steer-1", text: "too late" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      void h.session.shutdown();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      releaseRescue();
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      // Exactly one terminal; the queued steer was REJECTED (not started):
+      // one turn_started total, one turn_rejected for the steer.
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+      const rejected = h.received.filter(isTurnRejected);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]).toMatchObject({ requestId: "steer-1" });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("max_turns with existing text is unchanged and the callback is not invoked", async () => {
+    const rescue = vi.fn(async () => "RESCUE REPORT");
+    const h = createChildHarness({ steps: [], wrapUpRescue: rescue });
+    try {
+      vi.spyOn(h.engine, "runTurn").mockImplementation(async function* (): AsyncIterable<AgentEvent> {
+        yield { type: "text_delta", id: "t", text: "partial findings" } as AgentEvent;
+        yield { type: "turn_end", finishReason: "stop", usage: {} } as unknown as AgentEvent;
+        yield { type: "loop_end", reason: "max_turns", turns: 2 } as AgentEvent;
+      });
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(rescue).not.toHaveBeenCalled();
+      expect(report?.finalText).toContain("partial findings");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a rescued oversized output is capped with truncated:true", async () => {
+    const { report } = await terminalFor(
+      { type: "loop_end", reason: "max_turns", turns: 2 },
+      async () => "R".repeat(200_000),
+    );
+    expect(report?.truncated).toBe(true);
+    expect(report?.finalText.length).toBeLessThan(200_000);
+    expect(report?.finalText.length).toBeGreaterThan(0);
   });
 });
 

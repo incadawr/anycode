@@ -14,6 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AgentLoop, type AgentLoopConfig } from "../loop/agent-loop.js";
+import {
+  SUBAGENT_WRAPUP_DEGRADED_PREFIX,
+  SUBAGENT_WRAPUP_FAILED_NOTICE,
+} from "../prompts/subagent.js";
 import { formatResultForModel, outcomeToResult } from "./agent-bridge.js";
 import { ConversationHistory, type HistorySink } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
@@ -2372,7 +2376,7 @@ describe("wrap-up degrades without ever worsening the outcome (TASK.74 §7 F4, D
     const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
 
     expect(outcome.status).toBe("max_turns");
-    expect(outcome.finalText).toBe("turn-2");
+    expect(outcome.finalText).toBe(`${SUBAGENT_WRAPUP_DEGRADED_PREFIX}\n\nturn-2`);
     // 2 loop turns + 1 refused ceiling round-1 call (TASK.124; the script's
     // else-branch answers it with a plain "TodoRead" tool call) + 1 wrap-up.
     expect(calls()).toBe(4);
@@ -2389,7 +2393,7 @@ describe("wrap-up degrades without ever worsening the outcome (TASK.74 §7 F4, D
     const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
 
     expect(outcome.status).toBe("max_turns");
-    expect(outcome.finalText).toBe("turn-2");
+    expect(outcome.finalText).toBe(`${SUBAGENT_WRAPUP_DEGRADED_PREFIX}\n\nturn-2`);
   });
 
   it("(c) a non-empty wrap-up replaces the cut-off turn's preamble", async () => {
@@ -2419,6 +2423,59 @@ describe("wrap-up degrades without ever worsening the outcome (TASK.74 §7 F4, D
     const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
 
     expect(outcome.finalText).toBe("REPORT: the retried findings");
+  });
+
+  /** Like makePort, but ordinary turns emit ONLY the tool call — no text
+   * preamble — so the child's raw partial is empty. */
+  function makeToolOnlyPort(wrapUp: (yieldEvent: (e: ModelStreamEvent) => void) => Promise<void>): ModelPort {
+    let step = 0;
+    return {
+      streamText(req: ModelRequest): AsyncIterable<ModelStreamEvent> {
+        if (isWrapUpRequest(req)) {
+          return (async function* () {
+            const buffered: ModelStreamEvent[] = [];
+            await wrapUp((event) => buffered.push(event));
+            for (const event of buffered) {
+              yield event;
+            }
+          })();
+        }
+        step += 1;
+        const events = toolStep(`c${step}`, "TodoRead", {});
+        return (async function* () {
+          for (const event of events) {
+            yield event;
+          }
+        })();
+      },
+    };
+  }
+
+  it("(e TASK.196) tool-only turns + a throwing wrap-up with NO partial yields the distinct failure notice", async () => {
+    const port = makeToolOnlyPort(async () => {
+      throw new Error("wrapup boom");
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: port, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe(SUBAGENT_WRAPUP_FAILED_NOTICE);
+    expect(outcome.finalText.trim().length).toBeGreaterThan(0);
+  });
+
+  it("(f TASK.196) a tool/reasoning-only wrap-up reply (no text_delta) with no partial yields the failure notice", async () => {
+    const port = makeToolOnlyPort(async (emit) => {
+      emit({ type: "start" });
+      // No text_delta at all — only a finish (a reasoning-only reply).
+      emit({ type: "finish", finishReason: "stop", usage: {} });
+    });
+    const runner = createSubagentRunner(makeParent({ modelPort: port, mode: "yolo" }));
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+
+    expect(outcome.status).toBe("max_turns");
+    expect(outcome.finalText).toBe(SUBAGENT_WRAPUP_FAILED_NOTICE);
   });
 });
 
@@ -2596,7 +2653,7 @@ describe("wrap-up usage reporting (TASK.4157 — TASK.160 gap closed)", () => {
     const outcome = await runner.run({ ...REQ, maxTurns: 2 }, { signal: controller.signal });
 
     expect(outcome.status).toBe("max_turns");
-    expect(outcome.finalText).toBe("turn-1");
+    expect(outcome.finalText).toBe(`${SUBAGENT_WRAPUP_DEGRADED_PREFIX}\n\nturn-1`);
     // No finish was ever delivered -> no invented total.
     expect("usage" in outcome).toBe(false);
   });
@@ -2646,7 +2703,7 @@ describe("wrap-up usage reporting (TASK.4157 — TASK.160 gap closed)", () => {
     const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
 
     expect(outcome.status).toBe("max_turns");
-    expect(outcome.finalText).toBe("turn-2");
+    expect(outcome.finalText).toBe(`${SUBAGENT_WRAPUP_DEGRADED_PREFIX}\n\nturn-2`);
     const usageRecords = billedUsageRecords(records);
     expect(usageRecords).toHaveLength(1);
     expect(usageRecords[0]).toMatchObject({ inputTokens: 3, outputTokens: 2, totalTokens: 5 });
