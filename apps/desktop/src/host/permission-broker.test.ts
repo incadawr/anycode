@@ -7,6 +7,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeTool } from "@anycode/core";
+import { SessionPermissionRules } from "@anycode/core";
 import type { PermissionRequest } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
 import {
@@ -519,8 +520,11 @@ describe("IpcPermissionBroker always-allow rules (TASK.144)", () => {
     // have to reconcile against an ask it never saw.
     expect(emitted).toEqual([]);
     expect(broker.pendingCount).toBe(0);
-    // The store is consulted with the ask's own toolName and raw input, never a
-    // translated one: a stored `Bash` rule must not vouch for `CodexExec`.
+    // The store is consulted with the ask's own toolName and raw input FIRST,
+    // so a rule literally stored against the ask's own toolName always wins
+    // untranslated. (TASK.184 later added ONE scoped exception: an unmatched
+    // CodexExec command approval retries as Bash/{command} — see the TASK.184
+    // suite below. This Write-tool case remains untranslated.)
     expect(seen).toEqual([{ toolName: "Write", input: request.input }]);
   });
 
@@ -639,5 +643,95 @@ describe("always-allow rules vs the unattended latch", () => {
       input: { file_path: "/workspace/a.txt" },
     });
     expect(broker.isUnattended).toBe(true);
+  });
+});
+
+/**
+ * TASK.184: scoped broker-only translation. TASK.144 deliberately forbade any
+ * Bash/CodexExec translation; TASK.184 carves out exactly one exception — a
+ * CodexExec request that missed every rule under its own name and carries a
+ * string `command` (and is not a stdin write) is retried against the matcher
+ * as ("Bash", {command}). Core matching semantics, upstream hooks, and the
+ * core boot path are untouched: this seam only exists on engine-boot brokers.
+ * Real SessionPermissionRules are used so the per-segment fail-closed pattern
+ * semantics are the live ones, not a stub.
+ */
+describe("IpcPermissionBroker CodexExec->Bash rule translation (TASK.184)", () => {
+  const execMetadata = { ...writeTool.metadata, name: "CodexExec" };
+
+  function codexExec(command: string, input: Record<string, unknown> = {}): PermissionRequest {
+    return {
+      toolName: "CodexExec",
+      input: { command, ...input },
+      metadata: execMetadata,
+      mode: "build",
+    };
+  }
+
+  function makeRulesBroker(rules: { toolName: string; pattern?: string }[]) {
+    const emitted: HostToUiMessage[] = [];
+    const store = new SessionPermissionRules();
+    for (const rule of rules) store.add(rule);
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, store);
+    return { broker, emitted };
+  }
+
+  it("a Bash `git *` rule auto-allows a CodexExec git status, silently", async () => {
+    const { broker, emitted } = makeRulesBroker([{ toolName: "Bash", pattern: "git *" }]);
+    await expect(broker.requestPermission(codexExec("git status"))).resolves.toEqual({ behavior: "allow" });
+    expect(emitted).toEqual([]);
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it("a Bash `git *` rule does not match npm install; the ask is presented", async () => {
+    const { broker, emitted } = makeRulesBroker([{ toolName: "Bash", pattern: "git *" }]);
+    const decision = broker.requestPermission(codexExec("npm install"));
+    expect(broker.pendingCount).toBe(1);
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(1);
+    broker.handleResponse(requestId(emitted), "deny");
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("per-segment fail-closed: rm -rf x and compound git status && npm install stay asks", async () => {
+    const { broker, emitted } = makeRulesBroker([{ toolName: "Bash", pattern: "git *" }]);
+    const rmDecision = broker.requestPermission(codexExec("rm -rf x"));
+    broker.handleResponse(requestId(emitted), "deny");
+    await expect(rmDecision).resolves.toMatchObject({ behavior: "deny" });
+
+    const compoundDecision = broker.requestPermission(codexExec("git status && npm install"));
+    const presented = emitted.filter((m) => m.type === "permission_request");
+    const compoundId = presented.at(-1);
+    if (!compoundId || compoundId.type !== "permission_request") throw new Error("missing second ask");
+    broker.handleResponse(compoundId.requestId, "deny");
+    await expect(compoundDecision).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("a stdin write is never translated: kind writeStdin stays an ask even for git status", async () => {
+    const { broker, emitted } = makeRulesBroker([{ toolName: "Bash", pattern: "git *" }]);
+    const decision = broker.requestPermission(codexExec("git status", { kind: "writeStdin" }));
+    expect(broker.pendingCount).toBe(1);
+    broker.handleResponse(requestId(emitted), "deny");
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("a CodexExec-specific rule still matches first, without needing the Bash retry", async () => {
+    const { broker, emitted } = makeRulesBroker([{ toolName: "CodexExec", pattern: "ls *" }]);
+    await expect(broker.requestPermission(codexExec("ls -la"))).resolves.toEqual({ behavior: "allow" });
+    expect(emitted).toEqual([]);
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it("a CodexExec request with no command never falls back to the Bash retry", async () => {
+    const { broker, emitted } = makeRulesBroker([{ toolName: "Bash", pattern: "git *" }]);
+    const request: PermissionRequest = {
+      toolName: "CodexExec",
+      input: { cwd: "/workspace" },
+      metadata: execMetadata,
+      mode: "build",
+    };
+    const decision = broker.requestPermission(request);
+    expect(broker.pendingCount).toBe(1);
+    broker.handleResponse(requestId(emitted), "deny");
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
   });
 });
