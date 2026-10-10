@@ -515,6 +515,24 @@ describe("host subagent model-override wiring", () => {
     expect(calls[0]!).toContain("resolveChildModelPort");
   });
 
+  it("TASK.192: assigns config.sessionSubagents before the actual withWorkflows call", async () => {
+    const source = await readHostSource();
+
+    // Anchored on the REAL call — /const loop = new AgentLoop(\s*withWorkflows\(/
+    // — not the first textual occurrence of "withWorkflows(" (comments well
+    // above the call also spell the name).
+    const assignment = "config.sessionSubagents = childSessionPortHandle;";
+    const call = source.match(/const loop = new AgentLoop\(\s*withWorkflows\(/);
+
+    expect(source.includes(assignment)).toBe(true);
+    expect(call).not.toBeNull();
+    // Both anchors exist and the assignment precedes the actual call, so
+    // withWorkflows sees the session tier for engine-profile workflow steps.
+    expect(source.indexOf(assignment)).toBeLessThan(
+      source.indexOf("const loop = new AgentLoop("),
+    );
+  });
+
   it("resolves the child port through the same factory the mid-session model switch uses", async () => {
     const source = await readHostSource();
 
