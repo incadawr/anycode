@@ -26,7 +26,9 @@
  *
  * Every `parseXxx` below is fail-closed: malformed input, wrong-typed fields,
  * missing required fields, or an object carrying EXTRA unknown keys all return
- * `null` — they never throw. Main and the hosts must never trust ambient
+ * `null` — they never throw. `ChildTerminal` is the TASK 4239 exception:
+ * unknown additive keys are stripped (forward-compat with newer child hosts);
+ * malformed known fields still fail closed. Main and the hosts must never trust ambient
  * identity-shaped payload fields (see the child-message correlation note
  * above); these parsers only prove the message is WELL-FORMED, not that its
  * sender is authorized to say it.
@@ -753,27 +755,8 @@ export function parseChildProgress(msg: unknown): ChildProgress | null {
   }
 }
 
-const CHILD_TERMINAL_KEYS = [
-  "type",
-  "status",
-  "finalText",
-  "truncated",
-  "turns",
-  "toolCalls",
-  "durationMs",
-  "activitySuppressed",
-  "finalTurnFinishReason",
-  "declaredDoneAtCeiling",
-  // TASK.219: additive child-fact model attribution keys.
-  "model",
-  "responseModel",
-] as const;
-
 export function parseChildTerminal(msg: unknown): ChildTerminal | null {
   if (!isRecord(msg) || msg.type !== CHILD_TERMINAL_TYPE) {
-    return null;
-  }
-  if (!hasOnlyKeys(msg, CHILD_TERMINAL_KEYS)) {
     return null;
   }
   if (!isString(msg.status) || !CHILD_RUN_STATUSES.includes(msg.status as ChildRunStatus)) {

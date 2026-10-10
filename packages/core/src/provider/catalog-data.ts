@@ -132,8 +132,11 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: [
-      { id: "deepseek-chat", name: "DeepSeek Chat", contextWindow: 128_000, maxOutputTokens: 8_192 },
-      { id: "deepseek-reasoner", name: "DeepSeek Reasoner", contextWindow: 128_000, maxOutputTokens: 65_536, reasoning: true, effortLevels: ["off", "high"] },
+      // TASK 4241 (2026-10-10): rows replaced from the supplied authoritative
+      // live GET /models facts. Default effort is high — recorded here only;
+      // the catalog carries no default-effort field.
+      { id: "deepseek-flash", name: "DeepSeek-V4.1-Flash", contextWindow: 1_048_576, maxOutputTokens: 393_216, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
+      { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"] },
     ],
   },
   {

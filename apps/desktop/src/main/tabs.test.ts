@@ -2717,6 +2717,149 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     expect(legacy && "responseModel" in legacy).toBe(false);
   });
 
+  // ── TASK 4239: malformed ChildTerminal handling ──
+  // A ChildTerminal with a malformed KNOWN field fails fail-closed parsing
+  // (parseChildTerminal -> null); before 4239 the dispatch branch silently
+  // returned, leaving the ledger entry "running" forever (the slot leaked
+  // until app quit). The manager now finalizes it through the same
+  // finalizeChildRun funnel handleChildExit uses. These tests share one
+  // warn-spying logger (built per-test, local to this suite).
+  function malformedLogger(): { logger: TabLogger; warn: ReturnType<typeof vi.fn> } {
+    const warn = vi.fn();
+    const logger: TabLogger = { log() {}, warn, error() {} };
+    return { logger, warn };
+  }
+
+  it("a malformed ChildTerminal (bad known field) warns once naming tab+run+error, finalizes the run as error 'malformed terminal', reaps the tab, frees the quota; a later VALID duplicate terminal is a no-op (TASK 4239)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const { logger, warn } = malformedLogger();
+    const manager = childManager(fork, window, { logger });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-malformed-1", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "t1" }));
+    const childHost = hosts[1]!;
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "t1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+
+    childHost.emit("message", childTerminalMsg({ turns: "many" }));
+
+    const terminals = childRunEvents(rootHost).filter((e) => e.requestId === "t1" && e.kind === "terminal");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ status: "error" });
+    expect(String((terminals[0] as { finalText?: string }).finalText)).toContain("malformed terminal");
+    expect(warn).toHaveBeenCalledTimes(1);
+    const warnText = String(warn.mock.calls[0]?.[0]);
+    expect(warnText).toContain(childTabId);
+    expect(warnText).toContain("t1");
+    expect(warnText).toContain("as error");
+    expect(manager.getTab(childTabId)).toBeUndefined();
+
+    childHost.emit("message", childTerminalMsg({ status: "completed", finalText: "late" }));
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "t1" && e.kind === "terminal")).toHaveLength(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    // The quota was freed exactly once: the full per-parent cap succeeds now.
+    rootHost.emit("message", spawnRequest({ requestId: "t2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "t3" }));
+    rootHost.emit("message", spawnRequest({ requestId: "t4" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
+  });
+
+  it("a duplicate MALFORMED terminal after the finalize is a no-op — one warn, one terminal, no double free (TASK 4239)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const { logger, warn } = malformedLogger();
+    const manager = childManager(fork, window, { logger });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-malformed-2", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "t1" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit("message", childTerminalMsg({ turns: "many" }));
+    childHost.emit("message", childTerminalMsg({ turns: "many" }));
+
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "t1" && e.kind === "terminal")).toHaveLength(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    rootHost.emit("message", spawnRequest({ requestId: "t2" }));
+    rootHost.emit("message", spawnRequest({ requestId: "t3" }));
+    rootHost.emit("message", spawnRequest({ requestId: "t4" }));
+    expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
+  });
+
+  it("cancel precedence: a malformed terminal racing an in-flight cancel finalizes as cancelled with CHILD_CANCELLED_MESSAGE, warn names 'cancelled' (TASK 4239)", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const { logger, warn } = malformedLogger();
+    const manager = childManager(fork, window, { logger });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-malformed-3", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "t1" }));
+    const childHost = hosts[1]!;
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "t1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+
+    rootHost.emit("message", runCancel("t1"));
+    childHost.emit("message", childTerminalMsg({ turns: "many" }));
+    await flush();
+
+    const terminals = childRunEvents(rootHost).filter((e) => e.requestId === "t1" && e.kind === "terminal");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ status: "cancelled", finalText: "Agent: the child session was cancelled." });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("as cancelled");
+    expect(manager.getTab(childTabId)).toBeUndefined();
+  });
+
+  it("an unknown additive terminal key is accepted and stripped end-to-end: the run finalizes normally with no warning (TASK 4239)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const { logger, warn } = malformedLogger();
+    const manager = childManager(fork, window, { logger });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-additive", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "t1" }));
+    const childHost = hosts[1]!;
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "t1" && e.kind === "accepted");
+    const childTabId = accepted?.kind === "accepted" ? accepted.childTabId : "";
+
+    childHost.emit("message", childTerminalMsg({ status: "completed", finalText: "hi", futureAdditive: true }));
+
+    const terminals = childRunEvents(rootHost).filter((e) => e.requestId === "t1" && e.kind === "terminal");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ status: "completed", finalText: "hi" });
+    expect("futureAdditive" in (terminals[0] as unknown as Record<string, unknown>)).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    expect(manager.getTab(childTabId)).toBeUndefined();
+  });
+
+  it("stale/unauthorized sender: a malformed terminal emitted by the ROOT host (no childOf) neither warns nor finalizes anything (TASK 4239)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const { logger, warn } = malformedLogger();
+    const manager = childManager(fork, window, { logger });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-stale", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "t1" }));
+    const childHost = hosts[1]!;
+
+    rootHost.emit("message", childTerminalMsg({ turns: "many" }));
+
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "t1" && e.kind === "terminal")).toHaveLength(0);
+    expect(warn).not.toHaveBeenCalled();
+
+    // The live child run is untouched: its later valid terminal still relays once.
+    childHost.emit("message", childTerminalMsg({ status: "completed", finalText: "fine" }));
+    const terminals = childRunEvents(rootHost).filter((e) => e.requestId === "t1" && e.kind === "terminal");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ status: "completed", finalText: "fine" });
+  });
+
   it("an unexpected child crash (no ChildTerminal ever sent) finalizes terminal error EXACTLY once, frees the quota EXACTLY once, and NEVER respawns the child", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();

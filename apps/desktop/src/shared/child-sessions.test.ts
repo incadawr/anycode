@@ -809,8 +809,14 @@ describe("parseChildTerminal", () => {
     expect(parseChildTerminal(withoutDuration)).toBeNull();
   });
 
-  it("rejects an object with an extra unknown key", () => {
-    expect(parseChildTerminal({ ...valid, childSessionId: "sess-1" })).toBeNull();
+  it("strips unknown additive keys instead of rejecting, returning only known fields (TASK 4239)", () => {
+    expect(parseChildTerminal({ ...valid, futureAdditive: { nested: true } })).toEqual(valid);
+    expect(parseChildTerminal({ ...valid, childSessionId: "sess-1" })).toEqual(valid);
+  });
+
+  it("still fails closed on a malformed known field even when additive keys are present (TASK 4239)", () => {
+    expect(parseChildTerminal({ ...valid, turns: "many" })).toBeNull();
+    expect(parseChildTerminal({ ...valid, futureAdditive: 1, status: "done" })).toBeNull();
   });
 
   it("rejects a finalText one over CHILD_FINAL_TEXT_MAX_CHARS (review finding 1: this parser had no cap at all before)", () => {
