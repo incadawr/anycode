@@ -170,6 +170,13 @@ export function stallNoteText(subagent: SubagentSubStatus): string | null {
 export function formatSubagentCounters(subagent: SubagentSubStatus): string {
   const prefix = subagent.engine ? `${subagent.engine} · ` : "";
   if (subagent.final === null) {
+    // TASK.95: a Codex child reports no measurements at all (no turn marker,
+    // and no observed tool call yet). Rendering "0 tool calls" would invent a
+    // measured count — show the bare engine label instead. Genuine positive
+    // counters (and every non-codex engine) keep the current display.
+    if (subagent.engine === "codex" && subagent.toolCalls === 0 && !subagent.lastTool) {
+      return "codex";
+    }
     const toolCalls = `${subagent.toolCalls} tool call${subagent.toolCalls === 1 ? "" : "s"}`;
     const lastTool = subagent.lastTool ? ` · ${subagent.lastTool}` : "";
     const turnSegment = subagent.engine === "codex" ? "" : `turn ${subagent.turns} · `;

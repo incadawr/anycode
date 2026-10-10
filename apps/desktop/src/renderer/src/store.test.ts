@@ -1,4 +1,6 @@
 import { agentMessageText, type AgentEnvelope } from "../../shared/communication.js";
+import { TurnTranslator } from "../../host/engines/codex/event-translator.js";
+import { CollabAgentCardIndex } from "../../host/engines/codex/collab-agent-index.js";
 /**
  * Store reducer tests (design/phase-mvp.md §10, MVP.4 criterion): a fixture
  * sequence of HostToUiMessage -> expected transcript, fake-scheduler
@@ -7197,5 +7199,143 @@ describe("desktop store — provider-switch marker staging/persistence/replay (T
     const ids = store.getState().transcript.map((b) => b.id);
     expect(ids[0]).toBe("cut");
     expect(ids.indexOf("after-tool")).toBe(ids.length - 1);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// TASK.95 — notification-to-feed: real translator-produced events fed through
+// the production `agent_event` envelope. Proves the reducer accepts the new
+// collab/generic vocabulary without weakening the foreign-turn guard.
+// ───────────────────────────────────────────────────────────────────────────
+describe("desktop store — TASK.95 Codex collab feed", () => {
+  const THREAD = "codex-thread";
+  const spawnItem = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    type: "collabAgentToolCall",
+    id: "spawn-1",
+    tool: "spawnAgent",
+    senderThreadId: THREAD,
+    receiverThreadIds: ["child-1"],
+    status: "inProgress",
+    agentsStates: { "child-1": { status: "running" } },
+    prompt: "do work",
+    model: "gpt-native",
+    ...overrides,
+  });
+  const waitItem = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    type: "collabAgentToolCall",
+    id: "wait-1",
+    tool: "wait",
+    senderThreadId: THREAD,
+    receiverThreadIds: ["child-1"],
+    status: "completed",
+    agentsStates: { "child-1": { status: "completed", message: "done" } },
+    ...overrides,
+  });
+  const startedN = (turnId: string, item: Record<string, unknown>) => ({ method: "item/started", params: { threadId: THREAD, turnId, item } });
+  const completedN = (turnId: string, item: Record<string, unknown>) => ({ method: "item/completed", params: { threadId: THREAD, turnId, item } });
+
+  function boot(turnId: string) {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    return store;
+  }
+  function feed(store: ReturnType<typeof boot>, turnId: string, events: readonly unknown[]): void {
+    for (const event of events) store.getState().applyHostMessage({ type: "agent_event", turnId, event } as never);
+  }
+  const cardBlocks = (store: ReturnType<typeof boot>, toolCallId: string) =>
+    store.getState().transcript.filter((block) => block.kind === "tool_call" && block.toolCallId === toolCallId);
+  const card = (store: ReturnType<typeof boot>, toolCallId: string) => {
+    const block = cardBlocks(store, toolCallId)[0];
+    if (block === undefined || block.kind !== "tool_call") throw new Error(`no tool_call block for ${toolCallId}`);
+    return block;
+  };
+
+  it("reduces a spawn into ONE transcript Agent block with persona/description/requested model/engine and visible running activity; the outer tool_result leaves subagent.final null", () => {
+    const store = boot("turn-1");
+    const translator = new TurnTranslator({ threadId: THREAD, turnId: "turn-1", turn: 1 });
+    feed(store, "turn-1", translator.onNotification(startedN("turn-1", spawnItem())));
+    feed(store, "turn-1", translator.onNotification(completedN("turn-1", spawnItem({ status: "completed" }))));
+
+    const block = card(store, "spawn-1");
+    expect(block.toolName).toBe("Agent");
+    expect(block.input).toEqual({ prompt: "do work", model: "gpt-native" });
+    expect(block.subagent).toMatchObject({ agentType: "codex subagent", description: "do work", model: "gpt-native", engine: "codex", final: null });
+    expect(block.subagent!.activity.length).toBeGreaterThan(0);
+    expect(cardBlocks(store, "spawn-1")).toHaveLength(1);
+  });
+
+  it("patches the ORIGINAL turn-1 Agent block from turn-2 wait events without duplicating it, and gives wait its own card (no foreign-turn exception)", () => {
+    const index = new CollabAgentCardIndex();
+    const store = boot("turn-1");
+    const turn1 = new TurnTranslator({ threadId: THREAD, turnId: "turn-1", turn: 1, collab: index });
+    feed(store, "turn-1", turn1.onNotification(startedN("turn-1", spawnItem())));
+    feed(store, "turn-1", turn1.onNotification(completedN("turn-1", spawnItem({ status: "completed" }))));
+    expect(card(store, "spawn-1").subagent).toMatchObject({ final: null });
+
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-2", turnId: "turn-2" });
+    const turn2 = new TurnTranslator({ threadId: THREAD, turnId: "turn-2", turn: 2, collab: index });
+    feed(store, "turn-2", turn2.onNotification(completedN("turn-2", waitItem())));
+
+    const agentBlock = card(store, "spawn-1");
+    expect(agentBlock.subagent).toMatchObject({ final: { status: "completed" }, model: "gpt-native" });
+    expect(cardBlocks(store, "spawn-1")).toHaveLength(1);
+    expect(card(store, "wait-1").toolName).toBe("codex:collab:wait");
+  });
+
+  it("does not admit a turn-2 observation under a stale envelope (guard preserved)", () => {
+    const index = new CollabAgentCardIndex();
+    const store = boot("turn-1");
+    const turn1 = new TurnTranslator({ threadId: THREAD, turnId: "turn-1", turn: 1, collab: index });
+    feed(store, "turn-1", turn1.onNotification(startedN("turn-1", spawnItem())));
+    feed(store, "turn-1", turn1.onNotification(completedN("turn-1", spawnItem({ status: "completed" }))));
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-2", turnId: "turn-2" });
+    const turn2 = new TurnTranslator({ threadId: THREAD, turnId: "turn-2", turn: 2, collab: index });
+    // Wrong envelope: the events are named for turn-2 but carry the turn-1 id.
+    feed(store, "turn-1", turn2.onNotification(completedN("turn-2", waitItem())));
+    expect(card(store, "spawn-1").subagent).toMatchObject({ final: null });
+    expect(cardBlocks(store, "wait-1")).toHaveLength(0);
+  });
+
+  it("a failed spawn with no observed child ends the region honestly and a missing model stays absent", () => {
+    const store = boot("turn-1");
+    const translator = new TurnTranslator({ threadId: THREAD, turnId: "turn-1", turn: 1 });
+    feed(store, "turn-1", translator.onNotification(startedN("turn-1", spawnItem({ prompt: "x", model: null, agentsStates: {} }))));
+    feed(store, "turn-1", translator.onNotification(completedN("turn-1", spawnItem({ prompt: "x", model: null, status: "failed", agentsStates: {} }))));
+    const block = card(store, "spawn-1");
+    expect(block.subagent).toMatchObject({ final: { status: "error" }, model: null });
+  });
+
+  it("multi-receiver mixed states do not settle early in the feed", () => {
+    const store = boot("turn-1");
+    const translator = new TurnTranslator({ threadId: THREAD, turnId: "turn-1", turn: 1 });
+    feed(store, "turn-1", translator.onNotification(startedN("turn-1", spawnItem({ receiverThreadIds: ["a", "b"], agentsStates: { a: { status: "running" } } }))));
+    feed(store, "turn-1", translator.onNotification(completedN("turn-1", spawnItem({ receiverThreadIds: ["a", "b"], status: "completed", agentsStates: { a: { status: "completed" }, b: { status: "running" } } }))));
+    expect(card(store, "spawn-1").subagent).toMatchObject({ final: null });
+  });
+
+  it("projected generic/unknown/image/sleep/unmapped events reach real blocks with actual input and completion text; bookkeeping does not", () => {
+    const store = boot("turn-1");
+    const translator = new TurnTranslator({ threadId: THREAD, turnId: "turn-1", turn: 1 });
+
+    feed(store, "turn-1", translator.onNotification(completedN("turn-1", { type: "futureThing", id: "u1", text: "hello", status: "weird" })));
+    const unknown = card(store, "u1");
+    expect(unknown.toolName).toBe("codex:futureThing");
+    expect(unknown.input).toEqual({ text: "hello", status: "weird" });
+    expect(unknown.modelText).toContain("weird");
+
+    feed(store, "turn-1", translator.onNotification(completedN("turn-1", { type: "sleep", id: "s1", durationMs: 1500 })));
+    expect(card(store, "s1").input).toEqual({ durationMs: 1500 });
+
+    feed(store, "turn-1", translator.onNotification(completedN("turn-1", { type: "imageView", id: "img-1", path: "/tmp/a.png" })));
+    expect(card(store, "img-1").input).toEqual({ path: "/tmp/a.png" });
+
+    feed(store, "turn-1", translator.onNotification(startedN("turn-1", { type: "subAgentActivity", id: "mark-1", agentThreadId: "ghost", agentPath: "/g", kind: "interacted" })));
+    expect(card(store, "mark-1").toolName).toBe("codex:subAgentActivity");
+
+    feed(store, "turn-1", translator.onNotification(startedN("turn-1", { type: "reasoning", id: "r1" })));
+    feed(store, "turn-1", translator.onNotification(completedN("turn-1", { type: "reasoning", id: "r1", status: "completed" })));
+    expect(cardBlocks(store, "r1")).toHaveLength(0);
   });
 });
