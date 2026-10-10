@@ -253,6 +253,20 @@ export interface SubagentSubStatus {
    * inline cards and legacy hydrations never have the key.
    */
   sessionChild?: true;
+  /**
+   * Live stall report (TASK.148 follow-up slice): set ONLY by the
+   * `subagent_stalled` AgentEvent while the child is unsettled; carries the
+   * detector's own fields verbatim — never inferred. Cleared (key removed)
+   * by the next `subagent_progress`, `subagent_activity`, or `subagent_end`
+   * update on the same card: any confirmed sign of life ends the stall.
+   * Absent on settled cards — a stall after `final` is a no-op (terminal
+   * replay guard).
+   */
+  stalled?: {
+    silentMs: number;
+    lastActivity?: string;
+    waitingForApproval: boolean;
+  };
 }
 
 /** Ring cap for `SubagentSubStatus.activity` (design slice-P7.18-cut.md §4 W2): oldest row drops, `activityDropped` increments. Renderer-side bound independent of the core's own per-run emission cap. */
@@ -2009,11 +2023,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
     function patchSubagentProgress(toolCallId: string, turns: number, toolCalls: number, lastTool: string | null): void {
       flushDeltas();
       set((state) => ({
-        transcript: state.transcript.map((block) =>
-          block.kind === "tool_call" && block.toolCallId === toolCallId && block.subagent && block.subagent.final === null
-            ? { ...block, subagent: { ...block.subagent, turns, toolCalls, lastTool } }
-            : block,
-        ),
+        transcript: state.transcript.map((block) => {
+          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
+            return block;
+          }
+          // Progress is a confirmed sign of life: any prior stall report is
+          // stale the moment it lands (TASK.148 follow-up slice).
+          const subagent = { ...block.subagent, turns, toolCalls, lastTool };
+          delete subagent.stalled;
+          return { ...block, subagent };
+        }),
       }));
     }
 
@@ -2041,7 +2060,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           const overflow = activity.length - SUBAGENT_ACTIVITY_RING;
           const ringed = overflow > 0 ? activity.slice(overflow) : activity;
           const activityDropped = block.subagent.activityDropped + Math.max(overflow, 0);
-          return { ...block, subagent: { ...block.subagent, activity: ringed, activityDropped } };
+          // Activity is a confirmed sign of life: the stall report is stale
+          // the moment a row lands (TASK.148 follow-up slice).
+          const subagent = { ...block.subagent, activity: ringed, activityDropped };
+          delete subagent.stalled;
+          return { ...block, subagent };
         }),
       }));
     }
@@ -2103,6 +2126,35 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
     }
 
     /**
+     * Records a stall report on `subagent_stalled` (TASK.148 live-presentation
+     * slice). Same existing-subagent + matching-toolCallId + terminal guard as
+     * `patchSubagentProgress`: a foreign/unseeded toolCallId, or a card
+     * already settled (`final` set), is a no-op — no state is invented for an
+     * unmatched or terminal card. Stores the detector's fields verbatim and
+     * never changes run status (the detector reports, it never kills).
+     */
+    function patchSubagentStalled(toolCallId: string, silentMs: number, lastActivity: string | undefined, waitingForApproval: boolean): void {
+      flushDeltas();
+      set((state) => ({
+        transcript: state.transcript.map((block) =>
+          block.kind === "tool_call" && block.toolCallId === toolCallId && block.subagent && block.subagent.final === null
+            ? {
+                ...block,
+                subagent: {
+                  ...block.subagent,
+                  stalled: {
+                    silentMs,
+                    ...(lastActivity !== undefined ? { lastActivity } : {}),
+                    waitingForApproval,
+                  },
+                },
+              }
+            : block,
+        ),
+      }));
+    }
+
+    /**
      * Records the terminal outcome on `subagent_end`: fills `final`, which
      * flips the card from spinner to a settled status label. Same
      * existing-subagent + matching-toolCallId guard as `patchSubagentProgress`,
@@ -2159,6 +2211,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // claiming to wait (`waiting` outranks the terminal badge in the
           // §2.5 priority order, so leaving it set would mask the outcome).
           delete settled.waiting;
+          delete settled.stalled;
           return { ...block, subagent: settled };
         });
         if (!matched) {
@@ -3331,13 +3384,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         case "subagent_attention":
           patchSubagentAttention(event.toolCallId, event.waiting);
           return;
-        // Stall report (TASK.148 slice 1): additive AgentEvent variant — the
-        // detector REPORTS only, it never kills, so there is no run-ending
-        // state for the transcript to reflect. A live presentation (a badge,
-        // a toast) is a follow-up desktop slice; this no-op keeps
-        // exhaustiveness satisfied without fabricating UI ahead of that
-        // slice's own design.
+        // Stall report (TASK.148 slice 1 + live-presentation slice): the
+        // detector REPORTS only — the store records the report verbatim on
+        // the matching live card (`stalled` under the same
+        // matching-toolCallId + existing-subagent + final === null guards as
+        // `patchSubagentProgress`), never touching run status. Cleared by the
+        // next progress/activity/end update (confirmed sign of life).
         case "subagent_stalled":
+          patchSubagentStalled(event.toolCallId, event.silentMs, event.lastActivity, event.waitingForApproval);
           return;
 
         // ── Phase 3 workflow coarse-progress (design §2.3/§6, task 3.4.5):

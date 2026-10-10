@@ -147,6 +147,26 @@ function formatCardDuration(durationMs: number): string {
   return durationMs < 60_000 ? `${(durationMs / 1000).toFixed(1)}s` : formatElapsed(Math.floor(durationMs / 1000));
 }
 
+/**
+ * Quiet stall note (TASK.148 live-presentation slice): "stalled · silent 4m"
+ * plus, when the detector supplied one, " · last <lastActivity>" naming what
+ * the child last did. Mirrors `formatCardDuration`'s duration conventions —
+ * tenths under a minute, whole minutes above (the stall threshold is minutes,
+ * not seconds, so "4m" beats "4m 00s" for the common case). Returns null when
+ * the card carries no live stall report — nothing is fabricated.
+ */
+export function stallNoteText(subagent: SubagentSubStatus): string | null {
+  if (subagent.stalled === undefined) {
+    return null;
+  }
+  const seconds = Math.floor(subagent.stalled.silentMs / 1000);
+  const silent = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m`;
+  const last = subagent.stalled.lastActivity !== undefined ? ` · last ${subagent.stalled.lastActivity}` : "";
+  // Silence spent on a pending permission ask is the human's, not a hang.
+  const head = subagent.stalled.waitingForApproval ? "waiting for approval" : "stalled";
+  return `${head} · silent ${silent}${last}`;
+}
+
 export function formatSubagentCounters(subagent: SubagentSubStatus): string {
   const prefix = subagent.engine ? `${subagent.engine} · ` : "";
   if (subagent.final === null) {
@@ -1170,6 +1190,21 @@ export function subagentResponseModelNote(sub: {
   return { text: `provider reported: ${responseModel}`, mismatch: sub.model !== null && sub.model !== responseModel };
 }
 
+/**
+ * Quiet stall note (TASK.148 live-presentation slice): a subdued inline span
+ * rendered in BOTH the collapsed Agent row and the expanded Agent body while
+ * the live subagent carries `stalled`. Reuses the activity feed's muted row
+ * styling; leaves run status, spinner, permission actions, and terminal
+ * labels untouched — the note reports, it never mutates them.
+ */
+function StallNote({ subagent }: { subagent: SubagentSubStatus }) {
+  const note = stallNoteText(subagent);
+  if (note === null) {
+    return null;
+  }
+  return <span className="subagent-stall-note subagent-activity-row">{note}</span>;
+}
+
 /** Sub-status region mounted below the input summary when `block.subagent` is
  *  set (Agent tool only). A flat two-line panel sharing the row atoms: glyph ·
  *  persona (mono anchor) · model (the child's own, else the parent's marked
@@ -1241,6 +1276,7 @@ function SubagentStatus({
         <span className="tool-call-subagent-desc">{subagent.description}</span>
       </div>
       <div className="tool-call-subagent-counters">{formatSubagentCounters(subagent)}</div>
+      <StallNote subagent={subagent} />
       {child !== undefined && (
         <div className="tool-call-subagent-child-row">
           <ChildBadge badge={child.badge} onOpen={child.onOpen} />
@@ -1955,6 +1991,7 @@ export function ToolCallHeaderRow({
           <span className="subagent-collapsed-progress">
             <Spinner className="icon-spin" />
             {formatSubagentCounters(block.subagent)}
+            <StallNote subagent={block.subagent} />
           </span>
         )}
       </button>
