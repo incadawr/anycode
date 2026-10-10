@@ -46,6 +46,34 @@ export const SUBAGENT_WRAPUP_PROMPT = [
 ].join(" ");
 
 /**
+ * TASK.196: what the parent sees when a turn-limited child's wrap-up rescue
+ * could not produce any report text (the model call failed or returned only
+ * whitespace AND there was no raw last-turn partial worth keeping).
+ */
+export const SUBAGENT_WRAPUP_FAILED_NOTICE =
+  "Agent: the child hit its turn limit and no wrap-up report could be produced (the wrap-up model call failed or returned no text). No final report is available; consult the child's activity feed.";
+
+/**
+ * TASK.196: prefixes a surviving raw last-turn partial when the wrap-up
+ * rescue failed but the child had produced non-whitespace text — so the
+ * parent knows the fragment is raw output, not a final report.
+ */
+export const SUBAGENT_WRAPUP_DEGRADED_PREFIX =
+  "[wrap-up failed — the text below is the child's raw last-turn output, not a final report]";
+
+/**
+ * TASK.196: the notice a CLI-engine child (codex/claude — no core loop, no
+ * ModelPort, hence no wrap-up rescue) ends with when it stops at its turn
+ * limit with no final report. CLI engines expose no in-process model call we
+ * could run the tool-free wrap-up against, so their empty max_turns terminal
+ * gets this explicit notice instead (see apps/desktop/src/host/session.ts
+ * and host/index.ts wiring).
+ */
+export function childTurnLimitNotice(lastTool: string | undefined): string {
+  return `Agent: the child stopped at its turn limit without a final report; last activity: ${lastTool ?? "none"}.`;
+}
+
+/**
  * Assembles the child's full system prompt from the harness prelude, the persona
  * body, and the finality note. Only `toolNames` is required, so the runner's
  * legacy 3-arg `buildChildConfig` path (no env/memory) still yields a valid

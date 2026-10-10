@@ -245,6 +245,8 @@ import {
   resolveMaxOutputTokens,
   clampSubagentMaxOutputTokens,
   resolveReasoningEffort,
+  runWrapUp,
+  SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
   REPO_MAP_MAX_TOKENS,
   REPO_MAP_MIN_TOKENS,
@@ -777,8 +779,16 @@ function buildChildBrokerEmit(emitFn: (message: HostToUiMessage) => void): (mess
  * own `process.parentPort` — the child side of the wire — identically for
  * every engine.
  */
-function buildChildSessionOptions(flushHistory: () => Promise<void>): ChildSessionOptions {
+function buildChildSessionOptions(
+  flushHistory: () => Promise<void>,
+  wrapUpRescue?: () => Promise<string>,
+): ChildSessionOptions {
   return {
+    // TASK.196: present ONLY for core-engine children — codex/claude have no
+    // core loop/ModelPort to run the tool-free wrap-up call against, so
+    // their empty max_turns terminal falls back to the explicit
+    // childTurnLimitNotice in Session.rescueTurnLimitReport.
+    ...(wrapUpRescue !== undefined ? { wrapUpRescue } : {}),
     onReady: () => {
       process.parentPort.postMessage({ type: CHILD_READY_TYPE } satisfies ChildReady);
     },
@@ -3321,7 +3331,19 @@ async function boot(): Promise<void> {
       // child's transcript is durably on disk). CUT-S4 §4.1: `buildChildSessionOptions`
       // is the exact same onReady/onTerminal/onProgress bodies, extracted so
       // codex/claude share them too — only `flushHistory` differs per engine.
-      ...(args.child !== undefined ? { child: buildChildSessionOptions(() => historySink!.flushChecked()) } : {}),
+      // TASK.196: core-engine children get the wrap-up rescue — one bounded
+      // tool-free model call via core's runWrapUp against THIS loop/config
+      // (config.eventTap already accounts model stream telemetry, and the
+      // Session helper converts a degraded empty return into the failure
+      // notice). Codex/claude boots above deliberately pass no callback.
+      ...(args.child !== undefined
+        ? {
+            child: buildChildSessionOptions(
+              () => historySink!.flushChecked(),
+              () => runWrapUp(config, loop, "", SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS).then((r) => r.text),
+            ),
+          }
+        : {}),
     });
 
     console.log(
