@@ -220,6 +220,13 @@
   font-style: italic;
 }
 
+/* Quiet stall note (TASK.148 live-presentation slice): rides inline in both
+   the collapsed Agent row and the expanded Agent body; reuses the muted
+   activity-row text tone via the shared class list. */
+.subagent-stall-note {
+  color: var(--text-ghost);
+}
+
 /* The same well inside a Workflow card (TASK.191 slice S1). It sits at the
    BOTTOM of the workflow block rather than above a result, so the separator
    moves to the top edge — otherwise the lane draws a rule against nothing. */
