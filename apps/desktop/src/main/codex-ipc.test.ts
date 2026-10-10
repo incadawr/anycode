@@ -1164,6 +1164,25 @@ it("device-code progress is routed to the profile that owns the login", async ()
   expect(onDeviceCode).toHaveBeenCalledExactlyOnceWith({ profileId: "device-account", userCode: "ABCD-1234", verificationUrl: "https://example.invalid/device" });
 });
 
+it("loginOpenDevicePage opens only the pending device URL held by main, and nothing once the login ended", async () => {
+  const openExternal = vi.fn(async () => {});
+  let controllerRef: ReturnType<typeof createCodexOnboardingController> | undefined;
+  const runLogin = vi.fn(async (_path: string, opts: import("./codex-login.js").RunCodexLoginOptions) => {
+    opts.onDeviceCode?.({ userCode: "ABCD-1234", verificationUrl: "https://example.invalid/device" });
+    await controllerRef!.loginOpenDevicePage();
+    return { ok: true as const };
+  });
+  const controller = createCodexOnboardingController(makeDeps({ runLogin, openExternal }));
+  controllerRef = controller;
+  await controller.loginOpenDevicePage();
+  expect(openExternal).not.toHaveBeenCalled();
+  expect((await controller.createProfile({ label: "device-account" })).ok).toBe(true);
+  expect((await controller.loginStart("device-account", "device")).ok).toBe(true);
+  expect(openExternal).toHaveBeenCalledExactlyOnceWith("https://example.invalid/device");
+  await controller.loginOpenDevicePage();
+  expect(openExternal).toHaveBeenCalledTimes(1);
+});
+
 // ── Taskana 4230: refresh-before-refuse + spawn-freshness guard ──
 
 describe("createCodexOnboardingController — refresh-before-refuse (Taskana 4230)", () => {

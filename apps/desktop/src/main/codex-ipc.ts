@@ -55,6 +55,7 @@ export const CODEX_RECHECK_CHANNEL = "anycode:codex-recheck";
 export const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
 export const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
 export const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
+export const CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL = "anycode:codex-login-open-device-page";
 // Profile control plane (TASK.50, cut §2/§4) — same duplicated-literal
 // convention as the four above.
 export const CODEX_PROFILE_LIST_CHANNEL = "anycode:codex-profile-list";
@@ -197,6 +198,8 @@ export interface CodexOnboardingController {
   /** Runs the native login INTO a profile's home (TASK.50 п.2); an authLink profile refuses `unsupported` (amended §A1). */
   loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
   loginCancel(): void;
+  /** Opens the verification URL of the device-code login currently pending in main (never a renderer-supplied URL). */
+  loginOpenDevicePage(): Promise<void>;
   // ── profile control plane (TASK.50) ──
   listProfiles(): Promise<CodexProfilesSnapshot>;
   createProfile(request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult>;
@@ -415,6 +418,8 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
    */
   let inFlightTail: Promise<unknown> = Promise.resolve();
   let activeLoginAbort: AbortController | null = null;
+  /** Verification URL of the pending device-code login; set by main from the validated codex response only. */
+  let pendingDeviceUrl: string | null = null;
   /** Aborted once, at quit: every doctor run started by this controller carries this signal. */
   const lifetime = new AbortController();
   let shuttingDown = false;
@@ -854,7 +859,10 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         const outcome = await track(
           runLogin(binaryPath, {
             mode,
-            onDeviceCode: (code) => deps.onDeviceCode?.({ profileId: profile.id, ...code }),
+            onDeviceCode: (code) => {
+              pendingDeviceUrl = code.verificationUrl;
+              deps.onDeviceCode?.({ profileId: profile.id, ...code });
+            },
             openExternal: deps.openExternal,
             signal: controller.signal,
             env: doctorSourceEnv(),
@@ -889,11 +897,18 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       } finally {
         releaseSeam();
         activeLoginAbort = null;
+        pendingDeviceUrl = null;
       }
     },
 
     loginCancel(): void {
       activeLoginAbort?.abort();
+    },
+
+    async loginOpenDevicePage(): Promise<void> {
+      const url = pendingDeviceUrl;
+      if (url === null || activeLoginAbort === null) return;
+      await deps.openExternal(url);
     },
 
     // ── profile control plane (TASK.50) — settings/fs mutations only, no spawns ──
@@ -1016,6 +1031,7 @@ export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController 
     return controller.loginStart(profileIdArg(args), mode);
   });
   ipcMain.handle(CODEX_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());
+  ipcMain.handle(CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL, () => controller.loginOpenDevicePage());
   ipcMain.handle(CODEX_PROFILE_LIST_CHANNEL, () => controller.listProfiles());
   ipcMain.handle(CODEX_PROFILE_CREATE_CHANNEL, (_event, request: unknown) => {
     const label = (request as { label?: unknown } | undefined)?.label;
