@@ -11,6 +11,10 @@ import {
   filterSlashItems,
   FOCUS_MODE_MENU_EVENT,
   FOCUS_MODEL_PILL_EVENT,
+  openSettingsAddConnection,
+  RUN_ACTION_EVENT,
+  SETTINGS_ADD_CONNECTION_EVENT,
+  SETTINGS_SELECT_PANE_EVENT,
   skillsToSlashSkills,
   slashMenuReduce,
   slashQueryAt,
@@ -540,5 +544,40 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
     expect(onlyGitReadOnlyOff).not.toContain("Git changes");
     expect(onlyGitReadOnlyOff).toContain("Terminal");
     expect(onlyGitReadOnlyOff).toContain("Model");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// openSettingsAddConnection — the shared empty-menu action (Taskana 4237)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("openSettingsAddConnection", () => {
+  /** Capture the CustomEvents the helper dispatches, without a DOM: node's vitest env has no `window`, so the helper's call-time `window` is stubbed. */
+  function capture(): Array<{ type: string; detail: unknown }> {
+    const events: Array<{ type: string; detail: unknown }> = [];
+    const original = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = {
+      dispatchEvent: (event: Event) => {
+        events.push({ type: event.type, detail: (event as CustomEvent).detail });
+        return true;
+      },
+    };
+    try {
+      openSettingsAddConnection();
+    } finally {
+      (globalThis as { window?: unknown }).window = original;
+    }
+    return events;
+  }
+
+  it("dispatches the run-action 'settings.open' FIRST, then the dedicated add-connection event", () => {
+    expect(capture()).toEqual([
+      { type: RUN_ACTION_EVENT, detail: "settings.open" },
+      { type: SETTINGS_ADD_CONNECTION_EVENT, detail: null },
+    ]);
+  });
+
+  it("is a DISTINCT event from the pane-select seam (so the dialog can retain the request)", () => {
+    expect(SETTINGS_ADD_CONNECTION_EVENT).not.toBe(SETTINGS_SELECT_PANE_EVENT);
   });
 });

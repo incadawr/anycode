@@ -81,7 +81,7 @@ import { deriveRecentModelIds, startModelMenuMaxHeightPx } from "./start-model-p
 // P7.23/F24 W2 seam (cut §2 row 3): byte-for-byte mirror of ModeMenu's own
 // FOCUS_MODE_MENU_EVENT listener below — the slash menu's "Model" row
 // summons this popover the same way ⇧⌘M summons ModeMenu's.
-import { FOCUS_MODEL_PILL_EVENT } from "../slash-menu.js";
+import { FOCUS_MODEL_PILL_EVENT, openSettingsAddConnection } from "../slash-menu.js";
 // Reuse, not re-derive: the same fixed-position viewport-clamp Sidebar's
 // project-menu popover uses to escape an ancestor `overflow:hidden` (design
 
@@ -251,6 +251,25 @@ export function pillLabel(
   availableEffortLevels: readonly ReasoningEffort[] | undefined,
 ): string {
   return availableEffortLevels === undefined ? displayName : `${displayName} · ${EFFORT_LABELS[reasoningEffort]}`;
+}
+
+/**
+ * The chip's own display label (Taskana 4237): an empty/whitespace model id
+ * shows the "No model" placeholder with NO effort suffix — there is no model
+ * to qualify, so appending ` · <effort>` there would be misleading. Every
+ * real (non-blank) model keeps the pre-existing `modelDisplayName` /
+ * `pillLabel` composition byte-for-byte. Exported for unit testing.
+ */
+export function pillDisplayLabel(
+  model: string,
+  catalogModels: readonly { id: string; name?: string }[] | undefined,
+  reasoningEffort: ReasoningEffort,
+  availableEffortLevels: readonly ReasoningEffort[] | undefined,
+): string {
+  if (model.trim() === "") {
+    return "No model";
+  }
+  return pillLabel(modelDisplayName(model, catalogModels), reasoningEffort, availableEffortLevels);
 }
 
 /**
@@ -943,8 +962,7 @@ export function ModelPill() {
     return null;
   }
 
-  const displayName = modelDisplayName(model, catalogModels);
-  const label = pillLabel(displayName, reasoningEffort, availableEffortLevels);
+  const label = pillDisplayLabel(model, catalogModels, reasoningEffort, availableEffortLevels);
 
   return (
     <div className="model-pill" ref={rootRef}>
@@ -1001,6 +1019,10 @@ export function ModelPill() {
             onKeyDown={onMenuKeyDown}
             onActivateRow={activateRow}
             onBack={drillBack}
+            onAddConnection={() => {
+              close(false);
+              openSettingsAddConnection();
+            }}
             isCurrentConnection={(connectionId) => !isForeignPick(connectionId, writeTargetConnectionId)}
           />
         </div>
