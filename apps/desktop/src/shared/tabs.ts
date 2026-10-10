@@ -207,6 +207,8 @@ export type CreateTabResult =
         | "connection_missing";
       focusTabId?: string; // already_open -> renderer focuses this tab
       worktreePath?: string; // actionable recovery detail for worktree_unavailable
+      openTabs?: number;  // max_tabs -> live root-tab count at refusal (TASK.119)
+      maxTabs?: number;   // max_tabs -> the effective ceiling at refusal
       connectionId?: string; // connection_missing -> the deleted pin
       notReadyReason?:
         | "credential_missing"

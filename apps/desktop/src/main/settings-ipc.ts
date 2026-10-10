@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { ipcMain } from "electron";
 import { z } from "zod";
+import { SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { keybindingsSchema, mergeSettings, settingsSchema } from "../settings/schema.js";
@@ -731,6 +732,14 @@ function selectedTransportInfo(
  */
 const patchSchema = z.record(z.string(), z.unknown());
 
+// TASK.119/TASK.147-с2: strict shape/range gate for the `sessionLimits` section.
+// Persistence works because `mergeSettings`/`deepMerge` sets a key absent from base wholesale, and the whole-document `settingsSchema.safeParse(merged)` gate is `.passthrough()` at the top level — `sessionLimits` survives both write and reload.
+const sessionLimitsSchema = z.object({
+  maxTabs: z.number().int().min(SESSION_LIMIT_RANGES.maxTabs.min).max(SESSION_LIMIT_RANGES.maxTabs.max).optional(),
+  childSessionsPerParentMax: z.number().int().min(SESSION_LIMIT_RANGES.childSessionsPerParentMax.min).max(SESSION_LIMIT_RANGES.childSessionsPerParentMax.max).optional(),
+  childSessionsGlobalMax: z.number().int().min(SESSION_LIMIT_RANGES.childSessionsGlobalMax.min).max(SESSION_LIMIT_RANGES.childSessionsGlobalMax.max).optional(),
+}).strict();
+
 // ── snapshot projection ──
 
 /**
@@ -861,6 +870,15 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   // only ever move it one direction.
   if ("recognizer" in rawPatch) {
     return { ok: false, reason: "invalid" };
+  }
+
+  // TASK.119/TASK.147-с2: `sessionLimits` rides the generic patch channel, but a
+  // wrong-shaped or out-of-range section is refused loudly, never persisted (a
+  // hand-edited file is tolerated fail-soft at READ time via readSessionLimits).
+  if ("sessionLimits" in rawPatch) {
+    if (!sessionLimitsSchema.safeParse((rawPatch as Record<string, unknown>).sessionLimits).success) {
+      return { ok: false, reason: "invalid" };
+    }
   }
 
   return withSettingsFileLock(deps.settingsPath, async () => {

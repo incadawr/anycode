@@ -19,6 +19,28 @@ function basename(path: string): string {
   return segments[segments.length - 1] || path;
 }
 
+/**
+ * TASK.119 п.6: display form of the session's actual cwd. Full path when it
+ * fits; otherwise "…/<last segments>" — the HEAD is sacrificed, never the
+ * tail, so `proj/.anycode/worktrees/orch-1` never collapses into `proj/…`.
+ * Handles both separators; "/" and "C:\" roots survive. */
+export function workspaceLabel(path: string, maxChars = 44): string {
+  const trimmed = path.replace(/[/\\]+$/, "");
+  if (trimmed.length <= maxChars) return path;
+  const segments = trimmed.split(/[/\\]/).filter(Boolean);
+  const tail: string[] = [];
+  let used = 1; // the leading ellipsis
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const seg = segments[i]!;
+    const cost = seg.length + (tail.length > 0 ? 1 : 0);
+    if (used + cost > maxChars) break;
+    used += cost;
+    tail.unshift(seg);
+  }
+  if (tail.length === 0) return `…${path.slice(-maxChars + 1)}`;
+  return `…/${tail.join("/")}`;
+}
+
 function changesLabel(count: number): string {
   return count === 0 ? "Working tree clean" : `${count} change${count === 1 ? "" : "s"}`;
 }
@@ -133,7 +155,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         onClick={toggle}
       >
         <Folder />
-        <span className="environment-workspace" title={workspacePath}>{basename(workspacePath)}</span>
+        <span className="environment-workspace" title={workspacePath}>{workspaceLabel(workspacePath)}</span>
         {branch && (
           <>
             <span className="environment-separator" aria-hidden="true">/</span>
@@ -160,7 +182,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             <Folder />
             <span className="environment-menu-row-main">
               <span>Workspace</span>
-              <span className="environment-menu-row-detail">{copied ? "Copied" : basename(workspacePath)}</span>
+              <span className="environment-menu-row-detail environment-menu-row-detail-wrap">{copied ? "Copied" : workspacePath}</span>
             </span>
           </button>
 

@@ -59,6 +59,7 @@ import {
   type PreviewRequestMessage,
 } from "../shared/preview.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
+import { clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
 import { ENV_CONNECTION_ID, ENV_MODEL, ENV_REASONING_EFFORT } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
@@ -222,7 +223,7 @@ export const DEFAULT_BREAKER_LIMITS: BreakerLimits = {
   minHealthyUptimeMs: 2000,
   maxRapidRespawns: 5,
   globalMaxRapidRespawns: 12,
-  maxTabs: 8,
+  maxTabs: SESSION_LIMIT_RANGES.maxTabs.default,
   exitDeadlineMs: 2000,
 };
 
@@ -664,12 +665,16 @@ export interface TabHostManagerDeps {
   now?: () => number;
   genId?: () => string;
   limits?: Partial<BreakerLimits>;
+  /** TASK.119/TASK.147-с2: LIVE limit values read from settings. `undefined` (unset/unreadable) falls back to `limits`/constants VERBATIM — the explicit-injection path is never clamped. */
+  maxTabs?: () => number | undefined;
+  childRunsPerParentMax?: () => number | undefined;
+  childRunsGlobalMax?: () => number | undefined;
   logger?: TabLogger;
 }
 
 export type CreateTabResult =
   | { ok: true; tab: TabHost }
-  | { ok: false; reason: "max_tabs" | "already_open" | "not_ready"; focusTabId?: string };
+  | { ok: false; reason: "max_tabs" | "already_open" | "not_ready"; focusTabId?: string; openTabs?: number; maxTabs?: number };
 
 export type { CloseTabResult };
 
@@ -816,6 +821,9 @@ export class TabHostManager {
    */
   private readonly forceKilledExits = new Map<UtilityProcess, EngineProcessRegistration | null>();
   private readonly limits: BreakerLimits;
+  private readonly maxTabsReader?: () => number | undefined;
+  private readonly childPerParentReader?: () => number | undefined;
+  private readonly childGlobalReader?: () => number | undefined;
   private readonly env: (connectionId?: string) => NodeJS.ProcessEnv | undefined;
   private readonly isReady: () => boolean;
   private readonly isEngineReady: (engine: EngineId, codexProfileId?: string) => boolean;
@@ -829,6 +837,9 @@ export class TabHostManager {
 
   constructor(private readonly deps: TabHostManagerDeps) {
     this.limits = { ...DEFAULT_BREAKER_LIMITS, ...deps.limits };
+    this.maxTabsReader = deps.maxTabs;
+    this.childPerParentReader = deps.childRunsPerParentMax;
+    this.childGlobalReader = deps.childRunsGlobalMax;
     this.env = deps.env ?? (() => process.env);
     this.isReady = deps.providerReady ?? (() => true);
     this.isEngineReady = deps.engineReady ?? ((engine) => engine === "core" && this.isReady());
@@ -927,7 +938,20 @@ export class TabHostManager {
   }
 
   atCapacity(): boolean {
-    return this.rootCount() >= this.limits.maxTabs;
+    return this.rootCount() >= this.effectiveMaxTabs();
+  }
+
+  /** Settings value -> clamped; NO reader value -> `limits.maxTabs` verbatim (test injection of 1/3 must survive). */
+  private effectiveMaxTabs(): number {
+    const configured = this.maxTabsReader?.();
+    return configured === undefined
+      ? this.limits.maxTabs
+      : clampSessionLimit("maxTabs", configured) ?? this.limits.maxTabs;
+  }
+
+  /** TASK.119: capacity facts for the refusal copy. */
+  capacity(): { open: number; max: number } {
+    return { open: this.rootCount(), max: this.effectiveMaxTabs() };
   }
 
   /**
@@ -1016,7 +1040,7 @@ export class TabHostManager {
       return { ok: false, reason: "already_open", focusTabId: existing };
     }
     if (this.atCapacity()) {
-      return { ok: false, reason: "max_tabs" };
+      return { ok: false, reason: "max_tabs", openTabs: this.rootCount(), maxTabs: this.effectiveMaxTabs() };
     }
     const workspace = canonicalWorkspace(params.workspace);
     const projectRoot = canonicalWorkspace(params.projectRoot ?? params.workspace);
@@ -1431,10 +1455,12 @@ export class TabHostManager {
     parentTabId: string,
   ): { reason: "limit_parent" | "limit_global"; message: string } | undefined {
     const perParent = this.childrenByParentTab.get(parentTabId)?.size ?? 0;
-    if (perParent >= CHILD_RUNS_PER_PARENT_MAX) {
+    const perParentMax = clampSessionLimit("childSessionsPerParentMax", this.childPerParentReader?.()) ?? CHILD_RUNS_PER_PARENT_MAX;
+    if (perParent >= perParentMax) {
       return { reason: "limit_parent", message: CHILD_LIMIT_PARENT_MESSAGE };
     }
-    if (this.childRuns.size >= CHILD_RUNS_GLOBAL_MAX) {
+    const globalMax = clampSessionLimit("childSessionsGlobalMax", this.childGlobalReader?.()) ?? CHILD_RUNS_GLOBAL_MAX;
+    if (this.childRuns.size >= globalMax) {
       return { reason: "limit_global", message: CHILD_LIMIT_GLOBAL_MESSAGE };
     }
     return undefined;
@@ -1657,7 +1683,8 @@ export class TabHostManager {
    * admission consumes exactly the capacity it needed, updating the very
    * maps `childSpawnCapBlock` reads, so a later waiter's check in the SAME
    * pass automatically reflects it — no separate "how many slots freed"
-   * bookkeeping is needed.
+   * bookkeeping is needed. Caps are read live (TASK.147 с2) at each waiter's
+   * check; lowering one never cancels admitted runs.
    */
   private pumpChildSpawnQueue(): void {
     if (this.quitting) {

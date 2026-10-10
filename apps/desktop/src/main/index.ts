@@ -150,6 +150,7 @@ import { registerTabIpc, type ResolveCodexProfileResult } from "./tab-ipc.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 // SLICE-CC A1 (cut §1.2): new import line — ENV_CLAUDE_BIN mirrors ENV_CODEX_BIN above.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
+import { readSessionLimits } from "../shared/session-limits.js";
 // TASK.139 F1: `stripEngineProxyCarriers` keeps an AMBIENT carrier out of main's
 // own live env, so main stays the sole author of that namespace. The carrier
 // NAMES are no longer needed here — the doctor/login deps below read their value
@@ -1769,6 +1770,13 @@ void app.whenReady().then(async () => {
     hostEntry: resolveHostEntry(),
     createChannel: () => new MessageChannelMain(),
     getWindow: () => win,
+
+    // Live ceilings (TASK.119/TASK.147-с2): read off the module-scope `settings`
+    // that settingsIpcDeps.onMutation reloads after every mutation — undefined
+    // (section absent / settings not yet loaded) falls back to the defaults.
+    maxTabs: () => readSessionLimits(settings?.sessionLimits).maxTabs,
+    childRunsPerParentMax: () => readSessionLimits(settings?.sessionLimits).childSessionsPerParentMax,
+    childRunsGlobalMax: () => readSessionLimits(settings?.sessionLimits).childSessionsGlobalMax,
 
 
     // TASK.45 W10: fork env resolved for the tab's PINNED connection (session
