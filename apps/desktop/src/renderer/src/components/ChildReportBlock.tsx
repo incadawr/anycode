@@ -14,6 +14,7 @@
 import { useId, useState } from "react";
 import type { TranscriptBlock } from "../store.js";
 import { Chevron } from "./icons.js";
+import { formatBlockTime } from "../block-time.js";
 import { parseChildReportText, childReportCardLabel } from "../child-report-format.js";
 
 type UserTextBlock = Extract<TranscriptBlock, { kind: "user_text" }>;
@@ -22,6 +23,7 @@ export function ChildReportBlock({ block, enter = false }: { block: UserTextBloc
   const [expanded, setExpanded] = useState(false);
   const textId = useId();
   const parsed = parseChildReportText(block.text);
+  const time = formatBlockTime(block.at, Date.now());
   const isAgentMessage = block.text.startsWith("[AnyCode authenticated agent message ");
 
   return (
@@ -38,6 +40,11 @@ export function ChildReportBlock({ block, enter = false }: { block: UserTextBloc
         </span>
         <span className={`child-report-status child-report-status-${parsed.status}`} aria-hidden="true" />
         {isAgentMessage ? `Agent message · ${block.text.match(/Delivery: ([a-z]+)/)?.[1] ?? "received"}` : childReportCardLabel(parsed)}
+        {time && (
+          <time className="block-time" title={time.title}>
+            {time.label}
+          </time>
+        )}
       </button>
       {expanded && (
         <pre id={textId} className="child-report-text" aria-live="off">
