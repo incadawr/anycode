@@ -163,15 +163,29 @@ describe("AppServerClient", () => {
   // still decides.)
 
   it("refuses a version the delivered policy excludes even though the compiled pin allows it", async () => {
-    // The child reports 0.144.1 — inside `SUPPORTED_CODEX_VERSION`.
-    // A host still judging by the constant would start; this one must not.
-    const failure = await makeClient([], { sourceEnv: policyEnv([">=0.144.0 <0.144.1"]) })
+    // The child reports 0.144.1 — inside `SUPPORTED_CODEX_VERSION` but below
+    // the delivered range's floor. A host still judging by the constant would
+    // start; this one must not.
+    const failure = await makeClient([], { sourceEnv: policyEnv([">=0.145.0 <0.146.0"]) })
       .start()
       .then(() => null, (error: unknown) => error);
     expect(failure).toBeInstanceOf(EngineVersionError);
-    expect((failure as Error).message).toContain(">=0.144.0 <0.144.1");
+    expect((failure as Error).message).toContain(">=0.145.0 <0.146.0");
     // The refusal names the range that was applied, never the constant that was not.
     expect((failure as Error).message).not.toContain(SUPPORTED_CODEX_VERSION);
+  });
+
+  it("starts on an above-ceiling version and records the warning", async () => {
+    // `--bad-version` reports 1.0.0, far above the delivered ceiling: the
+    // soft-allow admits it WITHOUT verification, and the preflight records why.
+    const client = makeClient(["--bad-version"], { sourceEnv: policyEnv([">=0.144.0 <0.152.0"]) });
+    try {
+      await client.start();
+      await expect(client.request("echo", { value: 3 })).resolves.toEqual({ value: 3 });
+      expect(client.versionWarning).toMatch(/not verified, running anyway/);
+    } finally {
+      await client.close();
+    }
   });
 
   it("starts on a version the delivered policy includes", async () => {
@@ -194,6 +208,8 @@ describe("AppServerClient", () => {
     try {
       await client.start();
       await expect(client.request("echo", { value: 2 })).resolves.toEqual({ value: 2 });
+      // Risk acceptance keeps today's marking: allowed WITHOUT a new warning.
+      expect(client.versionWarning).toBeNull();
     } finally {
       await client.close();
     }

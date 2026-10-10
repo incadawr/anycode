@@ -85,4 +85,6 @@ export interface CodexDoctorReport {
    * lastCheck projections carry status/version/at only.
    */
   trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
+  /** Soft-allow warning (owner decision 10.10): the version ran without verification (patch-of-verified-minor or above the verified ceiling). In-memory report only — never persisted (lastCheckOf copies status/version/at only). */
+  versionWarning?: string;
 }

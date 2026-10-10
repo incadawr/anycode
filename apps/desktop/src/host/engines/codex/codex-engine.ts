@@ -469,11 +469,13 @@ export async function createNativeCodexSession(
   shadowLog?: CodexShadowLogPort,
   agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
   agentCardLog?: CodexAgentCardLogPort,
+  bootWarning?: string,
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [];
+  if (bootWarning !== undefined) notices.push(warning(bootWarning));
   const preset = resolvePreset(selection, notices);
   const model = resolveModel(catalog, selection, notices);
   const result = await client.request<ThreadResult>("thread/start", {
@@ -514,11 +516,13 @@ export async function resumeNativeCodexSession(
   shadowLog?: CodexShadowLogPort,
   agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
   agentCardLog?: CodexAgentCardLogPort,
+  bootWarning?: string,
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [];
+  if (bootWarning !== undefined) notices.push(warning(bootWarning));
   const preset = resolvePreset(selection, notices);
   const resumed = await client.request<ThreadResult>("thread/resume", {
     threadId: externalSessionRef,
@@ -580,7 +584,8 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   } });
   try {
     await client.start();
-    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog);
+    const bootWarning = client.versionWarning ?? undefined;
+    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog, bootWarning);
     engine = connected.engine;
     return connected;
   } catch (error) {
@@ -605,6 +610,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
   } });
   try {
     await client.start();
+    const bootWarning = client.versionWarning ?? undefined;
     const connected = await resumeNativeCodexSession(
       client,
       options.workspace,
@@ -615,6 +621,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       options.shadowLog,
       options.agentBridge,
       options.agentCardLog,
+      bootWarning,
     );
     engine = connected.engine;
     return connected;
