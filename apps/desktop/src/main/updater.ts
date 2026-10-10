@@ -121,6 +121,13 @@ export interface UpdaterDeps {
    * fixed `UPDATE_RELEASES_URL` constant (never a renderer-supplied value).
    */
   openExternal?: (url: string) => unknown;
+  /**
+   * TASK.133: awaited before EVERY autoUpdater network call; a rejection
+   * (e.g. misconfigured app proxy) fails the check/download honestly — the
+   * same throw path transport errors already take. Covers manual check,
+   * download, and the armed schedule (which routes through `check()`).
+   */
+  beforeNetwork?: () => Promise<void>;
   /** Auto-check schedule overrides (TASK.47 defect 3); see `UpdaterScheduleDeps`. */
   schedule?: UpdaterScheduleDeps;
 }
@@ -181,6 +188,7 @@ export function createUpdaterController(deps: UpdaterDeps): UpdaterController {
     if (!deps.isPackaged) {
       return { ok: false, reason: "not_packaged" };
     }
+    await deps.beforeNetwork?.();
     try {
       await deps.autoUpdater.checkForUpdates();
     } catch (err) {
@@ -200,6 +208,7 @@ export function createUpdaterController(deps: UpdaterDeps): UpdaterController {
     if (status.kind !== "available") {
       return { ok: false, reason: "invalid_state" };
     }
+    await deps.beforeNetwork?.();
     try {
       await deps.autoUpdater.downloadUpdate();
     } catch (err) {

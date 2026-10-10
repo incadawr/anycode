@@ -9,8 +9,11 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OAuthEngine, oauthConfigFromEntry, type OAuthProviderConfig, type OAuthTokenStore } from "./oauth.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OAuthEngine, oauthConfigFromEntry, type FetchLike, type OAuthProviderConfig, type OAuthTokenStore } from "./oauth.js";
+import { createProxyChainFetch, type ProxyDispatchRequest } from "./provider-proxy-fetch.js";
+import { hostForkProxyChain } from "../shared/proxy.js";
+import type { AnycodeSettings } from "../shared/settings.js";
 import type { OAuthTokenBlob } from "./vault.js";
 
 /** In-memory OAuthTokenStore: records what the engine persists (keyed by CONNECTION id, TASK.45 §4.3). */
@@ -475,5 +478,136 @@ describe("oauthConfigFromEntry", () => {
   it("returns undefined for an api_key or absent entry", () => {
     expect(oauthConfigFromEntry({ id: "x", auth: { kind: "api_key" } })).toBeUndefined();
     expect(oauthConfigFromEntry(undefined)).toBeUndefined();
+  });
+});
+
+// ── TASK.133: the production proxy helper inside the real flow (only the
+// Electron net boundary is faked) ──
+
+function proxiedSettings(connectionId: string, over: { proxyUrl?: string } = {}): AnycodeSettings {
+  return {
+    version: 2,
+    provider: {
+      connections: [
+        {
+          id: connectionId,
+          providerId: "acme",
+          ...(over.proxyUrl !== undefined ? { proxyUrl: over.proxyUrl } : { proxyRef: "proxy-1" }),
+        },
+      ],
+      activeConnectionId: connectionId,
+    },
+    tools: {},
+    permissions: { alwaysAllow: [] },
+    ui: { theme: "system" },
+    security: { allowWeakSecretStorage: false },
+    network: { proxyProfiles: [{ id: "proxy-1", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" }] },
+  } as AnycodeSettings;
+}
+
+describe("OAuthEngine.startFlow — TASK.133 production proxy helper", () => {
+  it("exchanges the code through the proxied token endpoint", async () => {
+    const store = new FakeStore();
+    const dispatches: ProxyDispatchRequest[] = [];
+    const writtenByRequest: string[][] = [];
+    const requestFactory = (dispatch: ProxyDispatchRequest): unknown => {
+      dispatches.push(dispatch);
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      const written: string[] = [];
+      writtenByRequest.push(written);
+      const base: Record<string, unknown> = {
+        on(event: string, listener: (...args: never[]) => void) {
+          const arr = listeners.get(event) ?? [];
+          arr.push(listener as (...args: unknown[]) => void);
+          listeners.set(event, arr);
+          return base;
+        },
+        write: (chunk: string) => {
+          written.push(chunk);
+          return true;
+        },
+        end: () => undefined,
+        abort: () => undefined,
+      };
+      // Drive the wire asynchronously once the adapter has subscribed.
+      setTimeout(() => {
+        let dataFn: ((chunk: Buffer) => void) | undefined;
+        let endFn: (() => void) | undefined;
+        const incoming = {
+          statusCode: 200,
+          statusMessage: "",
+          headers: { "content-type": "application/json" },
+          on(event: "data" | "end" | "error", l: unknown) {
+            if (event === "data") dataFn = l as (chunk: Buffer) => void;
+            if (event === "end") endFn = l as () => void;
+            return incoming;
+          },
+        };
+        for (const l of listeners.get("response") ?? []) l(incoming);
+        setTimeout(() => {
+          dataFn?.(Buffer.from(JSON.stringify({ access_token: "at-1", refresh_token: "rt-1", expires_in: 3600 })));
+          endFn?.();
+        }, 2);
+      }, 2);
+      return base;
+    };
+    // The fetchFor seam receives the flow's REAL connection id: build the
+    // chain FROM that id (as main does), so a wrong-id wiring cannot pass.
+    const chainFetchFor = (cid: string) =>
+      createProxyChainFetch({
+        readSettings: () => proxiedSettings(cid),
+        materializationFor: () => ({ proxyPassword: () => "pw" }),
+        requestFactory,
+        setProxyFor: async () => undefined,
+      })(hostForkProxyChain(cid));
+
+    const engine = new OAuthEngine({
+      vault: store,
+      openExternal: (url) => void hitCallback(url),
+      now: () => 1_000_000,
+      fetchFor: (cid) => {
+        // The engine must ask for THIS flow's connection — a wrong id routes
+        // through a chain whose settings have no such connection (nothing
+        // configured => fallback), so the proxied dispatch below would fail.
+        expect(cid).toBe("conn-acme");
+        return chainFetchFor(cid) as unknown as FetchLike;
+      },
+    });
+    const outcome = await engine.startFlow(config(), "conn-acme", { allowWeak: false });
+    expect(outcome).toEqual({ ok: true });
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]?.url).toBe(idp.tokenUrl);
+    expect(dispatches[0]?.method).toBe("POST");
+    expect(dispatches[0]?.headers["content-type"]).toBe("application/x-www-form-urlencoded");
+    expect(writtenByRequest[0]?.join("")).toContain("grant_type=authorization_code");
+    expect(store.saved[0]?.connectionId).toBe("conn-acme");
+  });
+
+  it("fail-closed: a malformed connection proxy fails the flow without any dispatch", async () => {
+    const store = new FakeStore();
+    const dispatches: ProxyDispatchRequest[] = [];
+    const warn = vi.fn();
+    const productionChainFetch = createProxyChainFetch({
+      readSettings: () => proxiedSettings("conn-acme", { proxyUrl: "nonsense" }),
+      materializationFor: () => ({}),
+      requestFactory: (dispatch) => {
+        dispatches.push(dispatch);
+        throw new Error("factory must not be called");
+      },
+      setProxyFor: async () => undefined,
+    })(hostForkProxyChain("conn-acme"));
+    const engine = new OAuthEngine({
+      vault: store,
+      openExternal: (url) => void hitCallback(url),
+      logger: { warn },
+      fetchFor: (cid) => productionChainFetch as unknown as FetchLike,
+    });
+    const outcome = await engine.startFlow(config(), "conn-acme", { allowWeak: false });
+    expect(outcome).toEqual({ ok: false, reason: "failed" });
+    expect(dispatches).toEqual([]);
+    expect(store.saved).toEqual([]);
+    // The logger's text carries no credentials and no proxy URL.
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("conn-acme");
+    expect(warn.mock.calls.length).toBeGreaterThan(0);
   });
 });
