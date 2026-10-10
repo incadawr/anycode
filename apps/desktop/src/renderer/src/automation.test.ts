@@ -71,6 +71,7 @@ import {
   type ReplayKeyEvent,
   type ChildCloseDom,
   type ChildSplitDom,
+  realModelPillDom,
 } from "./automation.js";
 import {
   createReplayStore,
@@ -10677,5 +10678,1171 @@ describe("automation facade — replay* (TASK.188 S2)", () => {
 
     expect(facade.replaySeek("tab-a", 99, { child: "tc-1" })).toEqual({ ok: true });
     expect(clock.delays()).toEqual([500]);
+  });
+});
+
+// ── TASK.106 drill-down: modelPillPick over the shared `.start-model-menu` ──
+//
+// Two complementary layers, per plan §3:
+// 1. INJECTABLE — a fake `ModelPillDom` carrying the optional drill members,
+//    with deferred React-commit semantics (clicks flip level state on a later
+//    tick), covering the navigation semantics (popular hits, cross-group
+//    walks, duplicates, backtracking, bounded failures).
+// 2. REAL SELECTORS — a lightweight fake `document` stubbed over the global,
+//    against which the exported `realModelPillDom()` accessor runs its actual
+//    querySelector/querySelectorAll calls, so a stale class name
+//    (`.start-model-menu` → something else) fails HERE rather than in a live
+//    smoke.
+describe("automation facade — modelPillPick drill-down menu (TASK.106 shared picker)", () => {
+  const noTranscriptDomD: TranscriptDom = { container: () => null, jumpButtonVisible: () => false };
+  const noTodoPanelDomD: TodoPanelDom = { panel: () => null };
+  const noStartScreenDomD: StartScreenDom = {
+    rendered: () => false,
+    recentCount: () => 0,
+    projectMenuOpen: () => false,
+    clickProjectChip: () => {},
+    modelMenuOpen: () => false,
+    clickModelChip: () => {},
+    modelMenuLevel: () => null,
+    modelMenuGroups: () => [],
+    clickModelGroup: () => false,
+    clickModelItem: () => false,
+  };
+
+  function settingsSnapshotWithCatalogD(providerId: string, models: { id: string; name?: string }[]): SettingsSnapshot {
+    return {
+      settings: {
+        version: 2,
+        provider: providerV2({ id: providerId }),
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      },
+      secrets: [],
+      providerReady: true,
+      envOverrides: [],
+      readOnly: false,
+      catalog: [{ id: providerId, name: providerId, authKind: "api_key", models }],
+    };
+  }
+
+  function settingsStoreWithD(snapshot: SettingsSnapshot | null): SettingsStoreApi {
+    const store = createSettingsStore();
+    store.setState({ snapshot });
+    return store;
+  }
+
+  /**
+   * A lightweight fake DOM node carrying the few facets the real accessor's
+   * selectors and code paths touch: class list, attributes, text, children,
+   * and a real `.click()` side effect.
+   */
+  interface FakeEl {
+    tag: string;
+    classes: Set<string>;
+    attrs: Record<string, string>;
+    textContent: string;
+    children: FakeEl[];
+    parent: FakeEl | null;
+    click(): void;
+    getAttribute(name: string): string | null;
+    querySelector(sel: string): FakeEl | null;
+    querySelectorAll(sel: string): FakeEl[];
+  }
+
+  function el(tag: string, className: string, attrs: Record<string, string> = {}, textContent = ""): FakeEl {
+    const node: Partial<FakeEl> = {
+      tag,
+      classes: new Set(className.split(/\s+/).filter(Boolean)),
+      attrs,
+      textContent,
+      children: [],
+      parent: null,
+      click: () => {},
+    };
+    // The REAL accessor chains queries on returned nodes
+    // (`root()?.querySelector(...)`), so every fake node carries the scoped
+    // query methods itself — hoisted `fakeQuery` makes this safe.
+    node.getAttribute = (name: string) => node.attrs?.[name] ?? null;
+    node.querySelector = (sel: string) => fakeQuery(node as FakeEl, sel).querySelector(sel);
+    node.querySelectorAll = (sel: string) => fakeQuery(node as FakeEl, sel).querySelectorAll(sel);
+    return node as FakeEl;
+  }
+
+  function append(parent: FakeEl, ...kids: FakeEl[]): FakeEl[] {
+    for (const kid of kids) {
+      kid.parent = parent;
+      parent.children.push(kid);
+    }
+    return kids;
+  }
+
+  function matches(node: FakeEl, selector: string): boolean {
+    // Supports exactly the selector grammar the real accessor uses:
+    // `.a.b`, `.a[attr="value"]`, `.a[attr]`, and comma-separated groups.
+    return selector.split(",").some((part) => matchesSimple(node, part.trim()));
+  }
+
+  function matchesSimple(node: FakeEl, simple: string): boolean {
+    const attrRe = /\[([a-zA-Z-]+)(?:="((?:[^"\\]|\\.)*)")?\]/g;
+    const attrs: Array<{ name: string; value: string | null }> = [];
+    let rest = simple.replace(attrRe, (_m, name: string, value?: string) => {
+      attrs.push({ name, value: value === undefined ? null : value.replace(/\\"/g, '"') });
+      return "";
+    });
+    rest = rest.trim();
+    if (!rest.startsWith(".")) {
+      return false;
+    }
+    for (const cls of rest.slice(1).split(".")) {
+      if (!node.classes.has(cls)) {
+        return false;
+      }
+    }
+    for (const attr of attrs) {
+      const actual = node.attrs[attr.name];
+      if (attr.value === null) {
+        if (actual === undefined) {
+          return false;
+        }
+      } else if (actual !== attr.value) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function walk(node: FakeEl, out: FakeEl[]): void {
+    for (const child of node.children) {
+      out.push(child);
+      walk(child, out);
+    }
+  }
+
+  /** Scoped querySelector/querySelectorAll over a FakeEl subtree, mirroring the DOM methods' contracts (descendant combinators match ANY ancestor, as in CSS). */
+  function fakeQuery(node: FakeEl, selector: string): { querySelector: (sel: string) => FakeEl | null; querySelectorAll: (sel: string) => FakeEl[] } {
+    const all = (sel: string): FakeEl[] => {
+      const out: FakeEl[] = [];
+      walk(node, out);
+      return out.filter((candidate) => {
+        const simple = sel.trim().split(/\s+/).pop() ?? "";
+        return matches(candidate, simple) && ancestorsMatch(candidate, node, sel.trim());
+      });
+    };
+    return {
+      querySelector: (sel: string) => all(sel)[0] ?? null,
+      querySelectorAll: (sel: string) => all(sel),
+    };
+  }
+
+  /** True when `candidate`'s ancestor chain (up to and INCLUDING `scope` — the DOM scopes a query at the element it starts from, so the scope itself may satisfy an ancestor compound) satisfies every compound in a `.a .b .c`-style selector. */
+  function ancestorsMatch(candidate: FakeEl, scope: FakeEl, selector: string): boolean {
+    const compounds = selector.split(/\s+/).filter(Boolean);
+    if (compounds.length <= 1) {
+      return true;
+    }
+    const rest = compounds.slice(0, -1);
+    let current: FakeEl | null = candidate.parent;
+    for (let i = rest.length - 1; i >= 0; i -= 1) {
+      while (current !== null && !matches(current, rest[i]!)) {
+        if (current === scope) {
+          // Reached the scope without a match — the scope bounds the walk.
+          return false;
+        }
+        current = current.parent;
+      }
+      if (current === null) {
+        return false;
+      }
+      current = current.parent;
+    }
+    return true;
+  }
+
+  /**
+   * Drives clicks: mutates level state one tick later, exactly like a real
+   * React commit. `state.openedGroup` tracks WHICH connection's group page a
+   * committed group navigation opened (so a test's renderer can show only
+   * that group's items); `state.terminal` records the identity of the last
+   * model/effort item actually clicked. When given, `rerender` re-renders
+   * the menu after the level flip (a committed React update replaces rows).
+   */
+  function wireDrillClicks(
+    doc: FakeEl,
+    state: { level: string; openedGroup?: string | null; terminal?: { kind: "model" | "effort"; connectionId?: string; id: string } | null },
+    rerender?: () => void,
+  ): void {
+    const all: FakeEl[] = [];
+    walk(doc, all);
+    for (const node of all) {
+      node.click = () => {
+        setTimeout(() => {
+          if (node.classes.has("start-model-back")) {
+            state.level = "root";
+            if (state.openedGroup !== undefined) {
+              state.openedGroup = null;
+            }
+          } else if (node.classes.has("start-model-group")) {
+            state.level = "group";
+            if (state.openedGroup !== undefined) {
+              state.openedGroup = node.attrs["data-connection-id"] ?? null;
+            }
+          } else if (node.classes.has("start-model-effort-row")) {
+            state.level = "effort";
+          } else if (node.classes.has("start-model-item")) {
+            // A terminal pick: record the exact identity clicked.
+            if (state.terminal) {
+              state.terminal =
+                node.attrs["data-model-id"] !== undefined
+                  ? { kind: "model", connectionId: node.attrs["data-connection-id"], id: node.attrs["data-model-id"] }
+                  : { kind: "effort", id: node.attrs["data-effort"] ?? "" };
+            }
+            // The real component closes the popover; no level flip to poll.
+            return;
+          } else {
+            return;
+          }
+          // A committed React update re-renders the level's rows.
+          if (rerender) {
+            rerender();
+          }
+        }, 0);
+      };
+    }
+  }
+
+  /**
+   * Builds the REAL `realModelPillDom()` against a stubbed `document` global
+   * holding a drill-down tree for the given level. Returns the facade driver
+   * pieces the tests use. Restores the global afterwards.
+   */
+  function buildRealAccessorHarness(
+    level: "root" | "group" | "effort",
+    tree: { popular: Array<{ connectionId: string; modelId: string }>; groups: Array<{ connectionId: string; count: number; items: Array<{ connectionId: string; modelId: string }> }>; efforts: string[] },
+  ) {
+    const popover = el("div", "model-pill-popover");
+    const menu = el("div", "start-model-menu", { "data-level": level });
+    append(popover, menu);
+    const state = { level };
+    if (level !== "root") {
+      append(menu, el("button", "start-model-back", {}, level === "effort" ? "Effort" : "Models"));
+    }
+    if (level === "root") {
+      for (const pop of tree.popular) {
+        append(
+          menu,
+          el("button", "start-model-item", { "data-connection-id": pop.connectionId, "data-model-id": pop.modelId }),
+        );
+      }
+      for (const group of tree.groups) {
+        append(
+          menu,
+          el("button", "start-model-row start-model-group", {
+            "data-connection-id": group.connectionId,
+            "data-model-count": String(group.count),
+          }),
+        );
+      }
+      if (tree.efforts.length > 0) {
+        append(menu, el("button", "start-model-row start-model-effort-row", { "data-effort": tree.efforts[0]! }));
+      }
+    } else if (level === "group") {
+      for (const item of tree.groups[0]?.items ?? []) {
+        append(menu, el("button", "start-model-item", { "data-connection-id": item.connectionId, "data-model-id": item.modelId }));
+      }
+    } else {
+      for (const value of tree.efforts) {
+        append(menu, el("button", "start-model-item", { "data-effort": value }, value));
+      }
+    }
+    const root = el("div", "model-pill");
+    append(root, popover);
+    const doc = el("html", "", {}, "");
+    append(doc, root);
+    wireDrillClicks(doc, state);
+
+    const real = realModelPillDom();
+    // Re-stub on every accessor CALL: the real accessor's helpers read the
+    // global lazily, so stubbing once per test is enough — but the click
+    // handlers must see the CURRENT tree, which never mutates here.
+    vi.stubGlobal("document", {
+      querySelector: (sel: string) => (fakeQuery(doc, sel).querySelector(sel) ?? null) as unknown as HTMLDivElement | null,
+      querySelectorAll: (sel: string) => fakeQuery(doc, sel).querySelectorAll(sel) as unknown as NodeListOf<HTMLButtonElement>,
+    });
+    return { real, doc, root, popover, menu, state, restore: () => vi.unstubAllGlobals() };
+  }
+
+  function readyFacade(dom: ModelPillDom, pinned?: { connectionId: string; providerId: string }) {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port), pinned);
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "high", availableEffortLevels: ["off", "high", "max"] });
+    tabsStore.getState().setActiveTab("tab-a");
+    const facade = createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      noTranscriptDomD,
+      noTodoPanelDomD,
+      noStartScreenDomD,
+      dom,
+      settingsStoreWithD(null),
+    );
+    return { facade, tabsStore, registry, port, tabId: "tab-a" };
+  }
+
+  // ── Layer 1: injectable fake with deferred commits ─────────────────────
+
+  interface DrillWorld {
+    level: "root" | "group" | "effort";
+    groups: Array<{ connectionId: string; count: number }>;
+    /** Visible model rows per level — recomputed by the fake on each read. */
+    visibleModels: () => Array<{ connectionId: string; modelId: string }>;
+    effortRowVisible: boolean;
+    efforts: string[];
+  }
+
+  /**
+   * A fake `ModelPillDom` carrying the optional drill members with DEFERRED
+   * React-commit semantics: every level-changing click flips the world's
+   * level on a later tick, so the facade's commit polls are genuinely
+   * exercised (not just tolerated).
+   */
+  function fakeDrillDom(world: DrillWorld, clicks?: { back: number[]; groups: string[]; models: string[]; effortRow: number; efforts: string[] }) {
+    const spy = clicks ?? { back: [], groups: [], models: [], effortRow: 0, efforts: [] };
+    return {
+      mounted: () => true,
+      popoverOpen: () => true,
+      currentPage: () => "root" as const,
+      manageDisabled: () => true,
+      clickChip: vi.fn(),
+      clickRootRow: vi.fn(),
+      clickItemAt: vi.fn(),
+      drillMenuVisible: () => true,
+      drillMenuLevel: () => world.level,
+      drillMenuGroups: () => (world.level === "root" ? world.groups : []),
+      drillMenuModels: () => world.visibleModels(),
+      drillEffortRowVisible: () => world.level === "root" && world.effortRowVisible,
+      clickDrillBack: vi.fn(() => {
+        spy.back.push(1);
+        setTimeout(() => {
+          world.level = "root";
+        }, 0);
+        return true;
+      }),
+      clickDrillGroup: vi.fn((connectionId: string) => {
+        spy.groups.push(connectionId);
+        setTimeout(() => {
+          world.level = "group";
+        }, 0);
+        return true;
+      }),
+      clickDrillModel: vi.fn((connectionId: string, modelId: string) => {
+        const hit = world.visibleModels().some((row) => row.connectionId === connectionId && row.modelId === modelId);
+        if (!hit) {
+          return false;
+        }
+        spy.models.push(`${connectionId}:${modelId}`);
+        return true;
+      }),
+      clickDrillEffortRow: vi.fn(() => {
+        spy.effortRow += 1;
+        setTimeout(() => {
+          world.level = "effort";
+        }, 0);
+        return true;
+      }),
+      clickDrillEffort: vi.fn((value: string) => {
+        if (!world.efforts.includes(value)) {
+          return false;
+        }
+        spy.efforts.push(value);
+        return true;
+      }),
+    } satisfies ModelPillDom & { clickDrillModel: ReturnType<typeof vi.fn> };
+  }
+
+  // A two-connection world: pinned "conn-a" (glm-5.2, glm-4.6) and foreign
+  // "conn-b" (mistral-large ONLY — not in the pinned catalog at all).
+  const TWO_GROUPS: Array<{ connectionId: string; count: number }> = [
+    { connectionId: "conn-a", count: 2 },
+    { connectionId: "conn-b", count: 1 },
+  ];
+
+  it("popular direct hit: a model on the root's popular strip is clicked without opening any group", async () => {
+    const world: DrillWorld = {
+      level: "root",
+      groups: TWO_GROUPS,
+      visibleModels: () => [{ connectionId: "conn-b", modelId: "mistral-large" }],
+      effortRowVisible: true,
+      efforts: ["off", "high", "max"],
+    };
+    const dom = fakeDrillDom(world);
+    const { facade, tabId } = readyFacade(dom);
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "mistral-large" })).resolves.toEqual({ ok: true });
+    expect(dom.clickDrillBack).not.toHaveBeenCalled();
+    expect(dom.clickDrillGroup).not.toHaveBeenCalled();
+    expect(dom.clickDrillModel).toHaveBeenCalledWith("conn-b", "mistral-large");
+  });
+
+  it("pinned-group hit: a model absent from Popular but present in the pinned connection's group opens THAT group and clicks by id", async () => {
+    let level: DrillWorld["level"] = "root";
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      groups: TWO_GROUPS,
+      // Popular strip shows glm-4.6 only; glm-5.2 lives in its group level.
+      visibleModels: () => (level === "root" ? [{ connectionId: "conn-a", modelId: "glm-4.6" }] : [{ connectionId: "conn-a", modelId: "glm-5.2" }]),
+      effortRowVisible: true,
+      efforts: ["off", "high", "max"],
+    };
+    const dom = fakeDrillDom(world);
+    const { facade, tabId } = readyFacade(dom, { connectionId: "conn-a", providerId: "z-ai" });
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "glm-5.2" })).resolves.toEqual({ ok: true });
+    expect(dom.clickDrillGroup).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillGroup).toHaveBeenCalledWith("conn-a");
+    expect(dom.clickDrillModel).toHaveBeenCalledWith("conn-a", "glm-5.2");
+    expect(dom.clickDrillBack).not.toHaveBeenCalled();
+  });
+
+  it("cross-connection walk: a model only in ANOTHER connection's group (absent from the pinned catalog) is reached by opening that group", async () => {
+    let level: DrillWorld["level"] = "root";
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      groups: TWO_GROUPS,
+      visibleModels: () => (level === "root" ? [] : level === "group" ? [] : []),
+      effortRowVisible: false,
+      efforts: [],
+    };
+    // The group levels render their OWN models once opened: conn-a's models
+    // never include mistral-large; conn-b's do.
+    world.visibleModels = () => {
+      if (world.level === "group" && lastOpened === "conn-b") {
+        return [{ connectionId: "conn-b", modelId: "mistral-large" }];
+      }
+      return [];
+    };
+    let lastOpened: string | null = null;
+    const dom = fakeDrillDom(world);
+    // Track which group was opened so visibleModels can answer per group.
+    (dom.clickDrillGroup as ReturnType<typeof vi.fn>).mockImplementation((connectionId: string) => {
+      lastOpened = connectionId;
+      setTimeout(() => {
+        world.level = "group";
+      }, 0);
+      return true;
+    });
+    const { facade, tabId } = readyFacade(dom, { connectionId: "conn-a", providerId: "z-ai" });
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "mistral-large" })).resolves.toEqual({ ok: true });
+    // conn-a (first, pinned) was opened, missed, backed out of; then conn-b hit.
+    expect(dom.clickDrillGroup).toHaveBeenNthCalledWith(1, "conn-a");
+    expect(dom.clickDrillGroup).toHaveBeenNthCalledWith(2, "conn-b");
+    expect(dom.clickDrillBack).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillModel).toHaveBeenCalledWith("conn-b", "mistral-large");
+  });
+
+  it("duplicate display names and differing render/catalog order select by RENDERED ID — the current pinned connection wins when several groups expose the same id", async () => {
+    let level: DrillWorld["level"] = "root";
+    let lastOpened: string | null = null;
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      // Render order deliberately differs from any catalog order; the same
+      // display name "Big Model" appears under BOTH connections with
+      // DIFFERENT ids — only the id disambiguates.
+      groups: [
+        { connectionId: "conn-b", count: 1 },
+        { connectionId: "conn-a", count: 2 },
+      ],
+      visibleModels: () =>
+        level === "group" && lastOpened !== null ? [{ connectionId: lastOpened, modelId: "shared-id" }] : [],
+      effortRowVisible: false,
+      efforts: [],
+    };
+    const dom = fakeDrillDom(world);
+    (dom.clickDrillGroup as ReturnType<typeof vi.fn>).mockImplementation((connectionId: string) => {
+      lastOpened = connectionId;
+      setTimeout(() => {
+        world.level = "group";
+      }, 0);
+      return true;
+    });
+    const { facade, tabId } = readyFacade(dom, { connectionId: "conn-a", providerId: "z-ai" });
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "shared-id" })).resolves.toEqual({ ok: true });
+    // BOTH group levels render the same id and conn-b renders first, but the
+    // PINNED conn-a must be opened FIRST — the pick lands there without any
+    // backtrack, never on the foreign conn-b row.
+    expect(dom.clickDrillGroup).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillGroup).toHaveBeenCalledWith("conn-a");
+    expect(dom.clickDrillBack).not.toHaveBeenCalled();
+    expect(dom.clickDrillModel).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillModel).toHaveBeenCalledWith("conn-a", "shared-id");
+  });
+
+  it("rendered-order walk: without a pin (or when the pinned group lacks the id) remaining groups keep rendered order — foreign-first then pinned", async () => {
+    // No pin at all: the walk is pure rendered order (conn-b first). conn-b
+    // lacks the id; conn-a renders it.
+    let level: DrillWorld["level"] = "root";
+    let lastOpened: string | null = null;
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      groups: [
+        { connectionId: "conn-b", count: 1 },
+        { connectionId: "conn-a", count: 1 },
+      ],
+      visibleModels: () =>
+        level === "group" && lastOpened === "conn-a" ? [{ connectionId: "conn-a", modelId: "wanted-id" }] : [],
+      effortRowVisible: false,
+      efforts: [],
+    };
+    const dom = fakeDrillDom(world);
+    (dom.clickDrillGroup as ReturnType<typeof vi.fn>).mockImplementation((connectionId: string) => {
+      lastOpened = connectionId;
+      setTimeout(() => {
+        world.level = "group";
+      }, 0);
+      return true;
+    });
+    const { facade, tabId } = readyFacade(dom);
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "wanted-id" })).resolves.toEqual({ ok: true });
+    expect(dom.clickDrillGroup).toHaveBeenNthCalledWith(1, "conn-b");
+    expect(dom.clickDrillGroup).toHaveBeenNthCalledWith(2, "conn-a");
+    expect(dom.clickDrillBack).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillModel).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillModel).toHaveBeenCalledWith("conn-a", "wanted-id");
+  });
+
+  it("missing model: every reachable group is opened and none renders the id — unknown_value, and NO item click ever fires", async () => {
+    let level: DrillWorld["level"] = "root";
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      groups: TWO_GROUPS,
+      visibleModels: () => [],
+      effortRowVisible: false,
+      efforts: [],
+    };
+    const dom = fakeDrillDom(world);
+    const { facade, tabId } = readyFacade(dom, { connectionId: "conn-a", providerId: "z-ai" });
+    const start = Date.now();
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "no-such-model" })).resolves.toEqual({ ok: false, reason: "unknown_value" });
+    // Bounded: two groups × (open-commit + back-commit), each poll capped.
+    expect(Date.now() - start).toBeLessThan(5000);
+    expect(dom.clickDrillGroup).toHaveBeenCalledTimes(2);
+    expect(dom.clickDrillBack).toHaveBeenCalledTimes(2);
+    expect(dom.clickDrillModel).not.toHaveBeenCalled();
+  });
+
+  it("effort success: from a group level it backs out to root, clicks the effort row, awaits the effort level, and clicks the exact data-effort item", async () => {
+    let level: DrillWorld["level"] = "group";
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      groups: TWO_GROUPS,
+      visibleModels: () => [],
+      effortRowVisible: true,
+      efforts: ["off", "high", "max"],
+    };
+    const dom = fakeDrillDom(world);
+    const { facade, tabId } = readyFacade(dom);
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "max" })).resolves.toEqual({ ok: true });
+    expect(dom.clickDrillBack).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillEffortRow).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillEffort).toHaveBeenCalledWith("max");
+  });
+
+  it("model pick starting in a WRONG group: backs out to root with a deferred commit, then opens the right group and clicks the exact id", async () => {
+    let level: DrillWorld["level"] = "group";
+    let opened: string | null = "conn-b";
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      groups: [
+        { connectionId: "conn-a", count: 1 },
+        { connectionId: "conn-b", count: 1 },
+      ],
+      // Only the OPENED group's models exist on a group level — starting in
+      // conn-b's page, the target simply is not there.
+      visibleModels: () => (level === "group" && opened === "conn-a" ? [{ connectionId: "conn-a", modelId: "glm-5.2" }] : []),
+      effortRowVisible: false,
+      efforts: [],
+    };
+    const dom = fakeDrillDom(world);
+    (dom.clickDrillGroup as ReturnType<typeof vi.fn>).mockImplementation((connectionId: string) => {
+      opened = connectionId;
+      setTimeout(() => {
+        world.level = "group";
+      }, 0);
+      return true;
+    });
+    const { facade, tabId } = readyFacade(dom);
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "glm-5.2" })).resolves.toEqual({ ok: true });
+    // Exactly one back (out of the wrong group) + exactly one group open.
+    expect(dom.clickDrillBack).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillGroup).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillGroup).toHaveBeenCalledWith("conn-a");
+    expect(dom.clickDrillModel).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillModel).toHaveBeenCalledWith("conn-a", "glm-5.2");
+  });
+
+  it("model pick starting on the EFFORT level: backs out to root with a deferred commit, then opens the group and clicks the exact id", async () => {
+    let level: DrillWorld["level"] = "effort";
+    let opened: string | null = null;
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      groups: [{ connectionId: "conn-a", count: 1 }],
+      visibleModels: () => (level === "group" && opened === "conn-a" ? [{ connectionId: "conn-a", modelId: "glm-5.2" }] : []),
+      effortRowVisible: true,
+      efforts: ["off", "high"],
+    };
+    const dom = fakeDrillDom(world);
+    (dom.clickDrillGroup as ReturnType<typeof vi.fn>).mockImplementation((connectionId: string) => {
+      opened = connectionId;
+      setTimeout(() => {
+        world.level = "group";
+      }, 0);
+      return true;
+    });
+    const { facade, tabId } = readyFacade(dom);
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "glm-5.2" })).resolves.toEqual({ ok: true });
+    expect(dom.clickDrillBack).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillGroup).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillGroup).toHaveBeenCalledWith("conn-a");
+    expect(dom.clickDrillEffortRow).not.toHaveBeenCalled();
+    expect(dom.clickDrillEffort).not.toHaveBeenCalled();
+    expect(dom.clickDrillModel).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillModel).toHaveBeenCalledWith("conn-a", "glm-5.2");
+  });
+
+  it("effort from root skips the back navigation", async () => {
+    let level: DrillWorld["level"] = "root";
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      groups: TWO_GROUPS,
+      visibleModels: () => [],
+      effortRowVisible: true,
+      efforts: ["off", "high"],
+    };
+    const dom = fakeDrillDom(world);
+    const { facade, tabId } = readyFacade(dom);
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "high" })).resolves.toEqual({ ok: true });
+    expect(dom.clickDrillBack).not.toHaveBeenCalled();
+    expect(dom.clickDrillEffortRow).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillEffort).toHaveBeenCalledWith("high");
+  });
+
+  it("effort row hidden at root: effort_row_hidden without navigating", async () => {
+    const world: DrillWorld = {
+      level: "root",
+      groups: TWO_GROUPS,
+      visibleModels: () => [],
+      effortRowVisible: false,
+      efforts: [],
+    };
+    const dom = fakeDrillDom(world);
+    const { facade, tabId } = readyFacade(dom);
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "high" })).resolves.toEqual({ ok: false, reason: "effort_row_hidden" });
+    expect(dom.clickDrillBack).not.toHaveBeenCalled();
+    expect(dom.clickDrillEffort).not.toHaveBeenCalled();
+  });
+
+  it("effort value not in the rendered vocabulary: unknown_value without an item click", async () => {
+    let level: DrillWorld["level"] = "root";
+    const world: DrillWorld = {
+      get level() {
+        return level;
+      },
+      set level(v) {
+        level = v;
+      },
+      groups: TWO_GROUPS,
+      visibleModels: () => [],
+      effortRowVisible: true,
+      efforts: ["off", "high"],
+    };
+    const dom = fakeDrillDom(world);
+    // After the effort row opens the effort level, the world's efforts must
+    // match what that level renders — `clickDrillEffort` answers off the
+    // RENDERED vocabulary, so widen it to include what the effort level
+    // would show here (the facade must still refuse "max", which no level
+    // carries).
+    world.efforts = ["off", "high"];
+    const { facade, tabId } = readyFacade(dom);
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "max" })).resolves.toEqual({ ok: false, reason: "unknown_value" });
+    expect(dom.clickDrillEffort).toHaveBeenCalledWith("max");
+    expect(dom.clickDrillEffort).toHaveBeenCalledTimes(1);
+  });
+
+  it("failed navigation stays bounded: a back click that never reaches root reports navigation_failed after the commit deadline, not a hang", async () => {
+    const world: DrillWorld = {
+      level: "group",
+      groups: TWO_GROUPS,
+      visibleModels: () => [],
+      effortRowVisible: false,
+      efforts: [],
+    };
+    const dom = fakeDrillDom(world);
+    // The back click reports true but NEVER commits — a genuine failed
+    // navigation (row gone / handler drift).
+    (dom.clickDrillBack as ReturnType<typeof vi.fn>).mockImplementation(() => true);
+    const { facade, tabId } = readyFacade(dom);
+    const start = Date.now();
+    await expect(facade.modelPillPick(tabId, { kind: "effort", value: "high" })).resolves.toEqual({ ok: false, reason: "navigation_failed" });
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(450);
+    expect(elapsed).toBeLessThan(2000);
+  });
+
+  it("deferred chip commit still holds on the drill path: a closed popover is opened first and the walk starts only after the open commits", async () => {
+    let open = false;
+    const world: DrillWorld = {
+      level: "root",
+      groups: TWO_GROUPS,
+      visibleModels: () => [{ connectionId: "conn-a", modelId: "glm-5.2" }],
+      effortRowVisible: true,
+      efforts: ["off", "high"],
+    };
+    const dom = fakeDrillDom(world);
+    // Start closed; the chip click commits a tick later.
+    (dom.popoverOpen as unknown as ReturnType<typeof vi.fn>) = vi.fn(() => open);
+    dom.clickChip = vi.fn(() => {
+      setTimeout(() => {
+        open = true;
+      }, 0);
+    });
+    const { facade, tabId } = readyFacade(dom);
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "glm-5.2" })).resolves.toEqual({ ok: true });
+    expect(dom.clickChip).toHaveBeenCalledTimes(1);
+    expect(dom.clickDrillModel).toHaveBeenCalledWith("conn-a", "glm-5.2");
+  });
+
+  // ── Layer 2: the REAL accessor selectors against a fake document ───────
+
+  it("real accessor: reads the drill level, groups, models, and effort row through the REAL selectors", () => {
+    const harness = buildRealAccessorHarness("root", {
+      popular: [{ connectionId: "conn-b", modelId: "mistral-large" }],
+      groups: [
+        { connectionId: "conn-a", count: 2, items: [] },
+        { connectionId: "conn-b", count: 1, items: [] },
+      ],
+      efforts: ["off", "high"],
+    });
+    try {
+      const real = harness.real;
+      expect(real.drillMenuVisible!()).toBe(true);
+      expect(real.drillMenuLevel!()).toBe("root");
+      expect(real.drillMenuGroups!()).toEqual([
+        { connectionId: "conn-a", count: 2 },
+        { connectionId: "conn-b", count: 1 },
+      ]);
+      expect(real.drillMenuModels!()).toEqual([{ connectionId: "conn-b", modelId: "mistral-large" }]);
+      expect(real.drillEffortRowVisible!()).toBe(true);
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it("real accessor: clicks back/group/model/effort rows by their data attributes and flips the fake level one tick later", async () => {
+    const harness = buildRealAccessorHarness("root", {
+      popular: [{ connectionId: "conn-b", modelId: "mistral-large" }],
+      groups: [{ connectionId: "conn-a", count: 2, items: [{ connectionId: "conn-a", modelId: "glm-5.2" }] }],
+      efforts: ["off", "high"],
+    });
+    const state = harness.state;
+    try {
+      const real = harness.real;
+      // A group level re-renders the menu with ONLY the back row + the
+      // group's items — mirror that live, like the real ModelDrillMenu.
+      const renderLevel = (): void => {
+        harness.menu.children = [];
+        harness.menu.attrs["data-level"] = state.level;
+        if (state.level === "root") {
+          append(
+            harness.menu,
+            el("button", "start-model-item", { "data-connection-id": "conn-b", "data-model-id": "mistral-large" }),
+            el("button", "start-model-row start-model-group", { "data-connection-id": "conn-a", "data-model-count": "2" }),
+            el("button", "start-model-row start-model-effort-row", { "data-effort": "off" }),
+          );
+        } else if (state.level === "group") {
+          append(
+            harness.menu,
+            el("button", "start-model-back", {}, "Models"),
+            el("button", "start-model-item", { "data-connection-id": "conn-a", "data-model-id": "glm-5.2" }),
+          );
+        } else {
+          append(
+            harness.menu,
+            el("button", "start-model-back", {}, "Effort"),
+            el("button", "start-model-item", { "data-effort": "off" }, "Off"),
+            el("button", "start-model-item", { "data-effort": "high" }, "High"),
+          );
+        }
+        wireDrillClicks(harness.doc, state, renderLevel);
+      };
+      renderLevel();
+      expect(real.clickDrillGroup!("conn-a")).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      renderLevel(); // the group level's commit re-renders the rows
+      expect(harness.state.level).toBe("group");
+      expect(real.clickDrillModel!("conn-a", "glm-5.2")).toBe(true);
+      expect(real.clickDrillModel!("conn-a", "no-such")).toBe(false);
+      // From the group level, back returns to root and the effort row opens.
+      expect(real.clickDrillBack!()).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      renderLevel();
+      expect(harness.state.level).toBe("root");
+      expect(real.clickDrillEffortRow!()).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      renderLevel();
+      expect(harness.state.level).toBe("effort");
+      // The effort level's items carry data-effort; a miss reports false.
+      expect(real.clickDrillEffort!("high")).toBe(true);
+      expect(real.clickDrillEffort!("max")).toBe(false);
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it("real accessor: absent menu inside a mounted popover, absent popover, and absent root all read as no drill menu — and a popover WITHOUT the shared menu (legacy pages) does too", () => {
+    const harness = buildRealAccessorHarness("root", { popular: [], groups: [], efforts: [] });
+    try {
+      const real = harness.real;
+      // (a) popover mounted but the drill menu gone (popover closed while
+      // the wrapper stays, or a legacy-pages popover rendering no menu).
+      harness.popover.children = [];
+      expect(real.drillMenuVisible!()).toBe(false);
+      expect(real.drillMenuLevel!()).toBeNull();
+      expect(real.drillMenuGroups!()).toEqual([]);
+      expect(real.drillMenuModels!()).toEqual([]);
+      expect(real.drillEffortRowVisible!()).toBe(false);
+      expect(real.clickDrillBack!()).toBe(false);
+      expect(real.clickDrillGroup!("conn-a")).toBe(false);
+      expect(real.clickDrillModel!("conn-a", "glm-5.2")).toBe(false);
+      expect(real.clickDrillEffortRow!()).toBe(false);
+      expect(real.clickDrillEffort!("high")).toBe(false);
+
+      // (b) the whole popover absent — the popover() chain now yields
+      // undefined (not null), which a bare `!== null` probe misread as TRUE.
+      harness.root.children = [];
+      expect(real.drillMenuVisible!()).toBe(false);
+      expect(real.drillMenuLevel!()).toBeNull();
+      expect(real.drillMenuGroups!()).toEqual([]);
+      expect(real.drillMenuModels!()).toEqual([]);
+      expect(real.drillEffortRowVisible!()).toBe(false);
+      expect(real.clickDrillBack!()).toBe(false);
+      expect(real.clickDrillGroup!("conn-a")).toBe(false);
+      expect(real.clickDrillModel!("conn-a", "glm-5.2")).toBe(false);
+      expect(real.clickDrillEffortRow!()).toBe(false);
+      expect(real.clickDrillEffort!("high")).toBe(false);
+
+      // (c) the whole .model-pill root absent — same undefined-chain shape.
+      harness.doc.children = [];
+      expect(real.drillMenuVisible!()).toBe(false);
+      expect(real.drillMenuLevel!()).toBeNull();
+      expect(real.drillEffortRowVisible!()).toBe(false);
+      expect(real.clickDrillBack!()).toBe(false);
+      expect(real.clickDrillEffort!("high")).toBe(false);
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it("real accessor: currentPage maps data-level group/effort to the public model/effort shape, with the legacy .model-pill-back fallback intact", () => {
+    // Drill menu present: the level comes off data-level.
+    const drill = buildRealAccessorHarness("root", { popular: [], groups: [], efforts: [] });
+    try {
+      const real = drill.real;
+      expect(real.currentPage()).toBe("root");
+      drill.menu.attrs["data-level"] = "group";
+      expect(real.currentPage()).toBe("model");
+      drill.menu.attrs["data-level"] = "effort";
+      expect(real.currentPage()).toBe("effort");
+      drill.menu.attrs["data-level"] = "root";
+      expect(real.currentPage()).toBe("root");
+    } finally {
+      drill.restore();
+    }
+    // Legacy pages: NO drill menu — the old .model-pill-back text decides.
+    const legacy = buildRealAccessorHarness("root", { popular: [], groups: [], efforts: [] });
+    try {
+      const real = legacy.real;
+      legacy.popover.children = []; // drop the menu
+      append(legacy.popover, el("button", "model-pill-back", {}, "Model"));
+      expect(real.currentPage()).toBe("model");
+      legacy.popover.children = [];
+      append(legacy.popover, el("button", "model-pill-back", {}, "Effort"));
+      expect(real.currentPage()).toBe("effort");
+      legacy.popover.children = [];
+      expect(real.currentPage()).toBe("root");
+    } finally {
+      legacy.restore();
+    }
+  });
+
+  it("real accessor: facade end-to-end over the REAL selectors — a foreign-group model is picked through actual querySelector calls", async () => {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port), { connectionId: "conn-a", providerId: "z-ai" });
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "high", availableEffortLevels: ["off", "high"] });
+    tabsStore.getState().setActiveTab("tab-a");
+
+    // The world starts at the root level with NO popular hits for the target;
+    // group levels are simulated by REPLACING the menu subtree on each level
+    // flip (the fake document is live — accessor helpers re-query it lazily).
+    const harness = buildRealAccessorHarness("root", {
+      popular: [{ connectionId: "conn-a", modelId: "glm-4.6" }],
+      groups: [
+        { connectionId: "conn-a", count: 1, items: [{ connectionId: "conn-a", modelId: "glm-5.2" }] },
+        { connectionId: "conn-b", count: 1, items: [{ connectionId: "conn-b", modelId: "mistral-large" }] },
+      ],
+      efforts: ["off", "high"],
+    });
+    const state = harness.state;
+    // ONE persistent live-state object: the click handlers mutate it in
+    // place (level, which group page is open, the exact terminal item
+    // clicked), so `renderLevel` and the assertions all see the latest.
+    const live = { level: state.level as string, openedGroup: null as string | null, terminal: null as { kind: "model" | "effort"; connectionId?: string; id: string } | null };
+    try {
+      const real = harness.real;
+      // Re-render the menu subtree whenever the level flips: a group level
+      // shows the back button + ONLY the OPENED connection's items, exactly
+      // like the real `ModelDrillMenu` (`page.kind !== "root"` renders the
+      // back row; a group page renders that group's models and no others).
+      const renderLevel = (): void => {
+        state.level = live.level as typeof state.level;
+        harness.menu.children = [];
+        if (state.level === "root") {
+          harness.menu.attrs["data-level"] = "root";
+          append(
+            harness.menu,
+            el("button", "start-model-item", { "data-connection-id": "conn-a", "data-model-id": "glm-4.6" }),
+            el("button", "start-model-row start-model-group", { "data-connection-id": "conn-a", "data-model-count": "1" }),
+            el("button", "start-model-row start-model-group", { "data-connection-id": "conn-b", "data-model-count": "1" }),
+            el("button", "start-model-row start-model-effort-row", { "data-effort": "high" }),
+          );
+        } else if (state.level === "group") {
+          harness.menu.attrs["data-level"] = "group";
+          append(harness.menu, el("button", "start-model-back", {}, "Models"));
+          // Only the OPENED group's items exist on this level — the whole
+          // point of the walk: another group's rows are simply not rendered.
+          if (live.openedGroup === "conn-b") {
+            append(harness.menu, el("button", "start-model-item", { "data-connection-id": "conn-b", "data-model-id": "mistral-large" }));
+          } else {
+            append(harness.menu, el("button", "start-model-item", { "data-connection-id": "conn-a", "data-model-id": "glm-5.2" }));
+          }
+        } else {
+          harness.menu.attrs["data-level"] = "effort";
+          append(harness.menu, el("button", "start-model-back", {}, "Effort"));
+        }
+        // A commit re-renders the WHOLE tree the accessor's click registry
+        // walks — rewire after every re-render.
+        rewireE2E(harness.doc, live, renderLevel);
+      };
+      rewireE2E(harness.doc, live, renderLevel);
+      renderLevel();
+
+      const facade = createAutomationFacade(
+        registry,
+        tabsStore,
+        stubBridge(),
+        noTranscriptDomD,
+        noTodoPanelDomD,
+        noStartScreenDomD,
+        real,
+        settingsStoreWithD(settingsSnapshotWithCatalogD("z-ai", [{ id: "glm-5.2" }])),
+      );
+      await expect(facade.modelPillPick("tab-a", { kind: "model", value: "mistral-large" })).resolves.toEqual({ ok: true });
+      // The pick is terminal — flush one tick for the click's deferred commit.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The walk really opened the FOREIGN group (conn-a pinned-first missed,
+      // backed out, conn-b opened) and clicked THAT group's exact row.
+      expect(live.terminal).toEqual({ kind: "model", connectionId: "conn-b", id: "mistral-large" });
+      expect(live.openedGroup).toBe("conn-b");
+      expect(state.level).toBe("group");
+    } finally {
+      harness.restore();
+    }
+  });
+
+  /**
+   * Rewires the whole fake document's click handlers to the CURRENT render
+   * closure. `live` is ONE persistent object across the whole test — the
+   * click handlers mutate `live.level`/`live.openedGroup`/`live.terminal` in
+   * place, so `renderLevel` and the assertions all see the latest facts.
+   */
+  function rewireE2E(
+    doc: FakeEl,
+    live: { level: string; openedGroup: string | null; terminal: { kind: "model" | "effort"; connectionId?: string; id: string } | null },
+    renderLevel: () => void,
+  ): void {
+    wireTracked(doc, live, renderLevel);
+  }
+
+  /** Tracks committed navigation + terminal picks into the given slots, re-rendering via `rerender` on level flips. */
+  function wireTracked(
+    doc: FakeEl,
+    slots: { level: string; openedGroup: string | null; terminal: { kind: "model" | "effort"; connectionId?: string; id: string } | null },
+    rerender: () => void,
+  ): void {
+    const all: FakeEl[] = [];
+    walk(doc, all);
+    for (const node of all) {
+      node.click = () => {
+        setTimeout(() => {
+          if (node.classes.has("start-model-back")) {
+            slots.level = "root";
+            slots.openedGroup = null;
+          } else if (node.classes.has("start-model-group")) {
+            slots.level = "group";
+            slots.openedGroup = node.attrs["data-connection-id"] ?? null;
+          } else if (node.classes.has("start-model-effort-row")) {
+            slots.level = "effort";
+          } else if (node.classes.has("start-model-item")) {
+            slots.terminal =
+              node.attrs["data-model-id"] !== undefined
+                ? { kind: "model", connectionId: node.attrs["data-connection-id"], id: node.attrs["data-model-id"] }
+                : { kind: "effort", id: node.attrs["data-effort"] ?? "" };
+            return; // popover closes; no level flip, no re-render
+          } else {
+            return;
+          }
+          rerender();
+        }, 0);
+      };
+    }
+  }
+
+  it("real accessor: end-to-end effort pick over the REAL selectors — exact data-effort item clicked, off-vocabulary value refused", async () => {
+    const tabsStore: TabsStoreApi = createTabsStore();
+    const registry: TabRegistry = createTabRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "high", availableEffortLevels: ["off", "high"] });
+    tabsStore.getState().setActiveTab("tab-a");
+
+    const harness = buildRealAccessorHarness("root", {
+      popular: [],
+      groups: [{ connectionId: "conn-a", count: 1, items: [] }],
+      efforts: ["off", "high"],
+    });
+    const state = harness.state;
+    const live = { level: state.level as string, openedGroup: null as string | null, terminal: null as { kind: "model" | "effort"; connectionId?: string; id: string } | null };
+    try {
+      const real = harness.real;
+      const renderLevel = (): void => {
+        state.level = live.level as typeof state.level;
+        harness.menu.children = [];
+        if (live.level === "root") {
+          harness.menu.attrs["data-level"] = "root";
+          append(
+            harness.menu,
+            el("button", "start-model-row start-model-group", { "data-connection-id": "conn-a", "data-model-count": "1" }),
+            el("button", "start-model-row start-model-effort-row", { "data-effort": "high" }),
+          );
+        } else {
+          harness.menu.attrs["data-level"] = "effort";
+          append(
+            harness.menu,
+            el("button", "start-model-back", {}, "Effort"),
+            el("button", "start-model-item", { "data-effort": "off" }, "Off"),
+            el("button", "start-model-item", { "data-effort": "high" }, "High"),
+          );
+        }
+        rewireE2E(harness.doc, live, renderLevel);
+      };
+      rewireE2E(harness.doc, live, renderLevel);
+      renderLevel();
+
+      const facade = createAutomationFacade(
+        registry,
+        tabsStore,
+        stubBridge(),
+        noTranscriptDomD,
+        noTodoPanelDomD,
+        noStartScreenDomD,
+        real,
+        settingsStoreWithD(null),
+      );
+      await expect(facade.modelPillPick("tab-a", { kind: "effort", value: "high" })).resolves.toEqual({ ok: true });
+      // The pick is terminal — the facade returns without awaiting the click's
+      // deferred commit, so flush one tick before reading the recorded item.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The actual terminal click was the exact "high" data-effort item.
+      expect(live.terminal).toEqual({ kind: "effort", id: "high" });
+      await expect(facade.modelPillPick("tab-a", { kind: "effort", value: "max" })).resolves.toEqual({ ok: false, reason: "unknown_value" });
+      // The refusal fired NO item click — the terminal record is untouched.
+      expect(live.terminal).toEqual({ kind: "effort", id: "high" });
+    } finally {
+      harness.restore();
+    }
+  });
+
+  // ── Guard/open behavior preserved alongside the drill path ─────────────
+
+  it("legacy guards still fire before any drill interaction (pick_disabled, tab_not_active)", async () => {
+    const world: DrillWorld = {
+      level: "root",
+      groups: TWO_GROUPS,
+      visibleModels: () => [],
+      effortRowVisible: true,
+      efforts: ["off", "high"],
+    };
+    const dom = fakeDrillDom(world);
+    const { facade, tabId, port, tabsStore } = readyFacade(dom);
+    port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
+    await expect(facade.modelPillPick(tabId, { kind: "model", value: "glm-5.2" })).resolves.toEqual({ ok: false, reason: "pick_disabled" });
+    expect(dom.clickChip).not.toHaveBeenCalled();
+    expect(dom.clickDrillGroup).not.toHaveBeenCalled();
+
+    registryGuard: {
+      void tabsStore;
+    }
+    await expect(facade.modelPillPick("other", { kind: "model", value: "glm-5.2" })).resolves.toEqual({ ok: false, reason: "tab_not_active" });
   });
 });
