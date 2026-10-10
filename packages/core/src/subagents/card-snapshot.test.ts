@@ -202,6 +202,47 @@ describe("reduceSubagentCardEvent — subagent_end", () => {
     expect(acc.end && "responseModel" in acc.end).toBe(false);
   });
 
+  // TASK.219: the terminal's own model/engine outrank the start event's
+  // pre-boot accepted label for the card's identity; absent terminal fields
+  // retain the start values (legacy/inline); a duplicate end keeps the FIRST
+  // terminal attribution.
+  it("terminal model+engine override the start identity (accepted label differs from booted fact)", () => {
+    let acc = reduceSubagentCardEvent(
+      createSubagentCardAccumulator(),
+      start({ model: "m", engine: undefined }),
+    );
+    acc = reduceSubagentCardEvent(acc, end({ model: "booted-model", engine: "codex" }));
+    expect(acc.identity).toMatchObject({ model: "booted-model", engine: "codex" });
+  });
+
+  it("terminal model capped at SUBAGENT_CARD_MODEL_MAX_CHARS", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start({ model: "m" }));
+    const overlong = "x".repeat(SUBAGENT_CARD_MODEL_MAX_CHARS + 50);
+    acc = reduceSubagentCardEvent(acc, end({ model: overlong }));
+    expect(acc.identity?.model).toBe("x".repeat(SUBAGENT_CARD_MODEL_MAX_CHARS));
+  });
+
+  it("absent terminal model/engine retain the start identity values (legacy/inline compatibility)", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start({ model: "start-model", engine: "claude" }));
+    acc = reduceSubagentCardEvent(acc, end());
+    expect(acc.identity?.model).toBe("start-model");
+    expect(acc.identity?.engine).toBe("claude");
+  });
+
+  it("partial override: terminal model without engine keeps the start engine", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start({ model: "m", engine: "codex" }));
+    acc = reduceSubagentCardEvent(acc, end({ model: "booted-model" }));
+    expect(acc.identity?.model).toBe("booted-model");
+    expect(acc.identity?.engine).toBe("codex");
+  });
+
+  it("a duplicate end retains the FIRST terminal attribution — a second end cannot re-write identity", () => {
+    let acc = reduceSubagentCardEvent(createSubagentCardAccumulator(), start({ model: "m" }));
+    acc = reduceSubagentCardEvent(acc, end({ model: "booted-model" }));
+    acc = reduceSubagentCardEvent(acc, end({ model: "other-model" }));
+    expect(acc.identity?.model).toBe("booted-model");
+  });
+
   it("folds finalTurnFinishReason:\"length\" into acc.end; absent on the event => key absent", () => {
     let withLength = reduceSubagentCardEvent(createSubagentCardAccumulator(), start());
     withLength = reduceSubagentCardEvent(withLength, end({ finalTurnFinishReason: "length" }));

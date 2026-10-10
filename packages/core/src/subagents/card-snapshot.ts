@@ -136,8 +136,24 @@ export function reduceSubagentCardEvent(
       if (!acc.started || acc.end !== null) {
         return acc;
       }
+      // TASK.219: the terminal's own model/engine are the child's ACTUAL
+      // facts and outrank the start event's pre-boot accepted label for the
+      // card's identity (they may legitimately differ, e.g. accepted
+      // "default" vs booted "booted-model"). Per-field: absent terminal
+      // fields (legacy payloads, inline tier) retain the start values.
+      const identity =
+        ev.model !== undefined || ev.engine !== undefined
+          ? {
+              ...acc.identity!,
+              ...(ev.model !== undefined
+                ? { model: capCodePoints(ev.model, SUBAGENT_CARD_MODEL_MAX_CHARS) }
+                : {}),
+              ...(ev.engine !== undefined ? { engine: ev.engine } : {}),
+            }
+          : acc.identity;
       return {
         ...acc,
+        identity,
         end: {
           status: ev.status,
           turns: ev.turns,

@@ -2457,6 +2457,103 @@ describe("desktop store — subagent_end.responseModel forwarding (TASK.161 slic
 // A4's, and the sequence contract is frozen in §2.5, so the case closes with
 // its designed behavior rather than a stub). Only a session-tier child's
 // permission broker ever emits the event.
+// TASK.219: the terminal's own child-fact model/engine are authoritative for
+// the live card's identity (they may differ from the start event's pre-boot
+// accepted label); absent fields retain the start values; a duplicate end
+// keeps the first terminal attribution.
+describe("desktop store — subagent_end model/engine forwarding (TASK.219)", () => {
+  function beginAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "tool_call",
+        toolCall: { id: toolCallId, name: "Agent", input: { description: "explore", prompt: "look around" } },
+      },
+    });
+  }
+
+  const findByToolCallId = (store: ReturnType<typeof createDesktopStore>, id: string) =>
+    store.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === id);
+
+  it("differing start/end model: terminal model wins over the start's accepted label, engine forwarded, responseModel rides final", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-t219a");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-t219a", agentType: "explore", description: "d", model: "m" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_end",
+        toolCallId: "call-t219a",
+        status: "completed",
+        turns: 1,
+        durationMs: 100,
+        model: "booted-model",
+        responseModel: "booted-model",
+        engine: "codex",
+      },
+    });
+    const block = findByToolCallId(store, "call-t219a");
+    // The card shows the terminal model and compares the provider claim
+    // against IT — no false discrepancy against the start label "m".
+    expect(block).toMatchObject({
+      subagent: { model: "booted-model", engine: "codex", final: { responseModel: "booted-model" } },
+    });
+  });
+
+  it("absent terminal model/engine retain the start values (legacy/inline compatibility)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-t219b");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-t219b", agentType: "explore", description: "d", model: "start-model", engine: "claude" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-t219b", status: "completed", turns: 1, durationMs: 100 },
+    });
+    const block = findByToolCallId(store, "call-t219b");
+    expect(block).toMatchObject({ subagent: { model: "start-model", engine: "claude" } });
+  });
+
+  it("a duplicate subagent_end retains the FIRST terminal attribution", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-t219c");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-t219c", agentType: "explore", description: "d", model: "m" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-t219c", status: "completed", turns: 1, durationMs: 100, model: "booted-model" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-t219c", status: "error", turns: 9, durationMs: 999, model: "other-model" },
+    });
+    const block = findByToolCallId(store, "call-t219c");
+    expect(block).toMatchObject({ subagent: { model: "booted-model", final: { status: "completed" } } });
+  });
+});
+
 describe("desktop store — subagent_attention permission-wait flag (TASK.102 CUT-S2 §2.5/§10.1)", () => {
   function beginAgentToolCall(store: ReturnType<typeof createDesktopStore>, turnId: string, toolCallId: string): void {
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });

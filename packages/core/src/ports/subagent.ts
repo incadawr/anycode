@@ -107,10 +107,12 @@ export interface SubagentOutcome {
  *     different question — what the provider reported, not what we asked
  *     for — and is kept specifically because it is the only instrument for
  *     the open z.ai accounting investigation (TASK.174); it is never merged
- *     into, and never overrides, `model`. Absent for engine/session-tier
- *     children, for a child that inherited the parent's shared port (a
- *     shared port's last claim is not attributable to one child), and for
- *     providers/transports that expose no raw claim at all.
+ *     into, and never overrides, `model`. Absent for engine children (an
+ *     engine run exposes no core provider claim), for a child that inherited
+ *     the parent's shared port (a shared port's last claim is not attributable
+ *     to one child), and for providers/transports that expose no raw claim at
+ *     all; a DEDICATED core session child CAN carry a known claim (read off
+ *     its own port at terminal).
  */
 export type SubagentProgress =
   // `engine` is set only for an engine persona (md-profile `engine:`) — a
@@ -141,6 +143,9 @@ export type SubagentProgress =
       activitySuppressed?: number;
       model?: string;
       responseModel?: string;
+      // `engine` (same semantics as on `start`): present only for an engine
+      // persona's one-shot run.
+      engine?: "codex" | "claude";
       finalTurnFinishReason?: "length";
     }
   // Permission-broker gate crossing (TASK.102 CUT-S2 §2.2/§0.8): ONLY the

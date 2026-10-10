@@ -690,6 +690,14 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 durationMs: event.durationMs,
                 ...(event.activitySuppressed !== undefined ? { activitySuppressed: event.activitySuppressed } : {}),
                 ...(event.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: event.finalTurnFinishReason } : {}),
+                // Child-fact model attribution (TASK.219): the terminal's
+                // `model` is the child host's ACTIVE session model (never
+                // req.model nor the parent's pre-boot accepted label);
+                // `responseModel` is the child's dedicated-port claim when it
+                // reported one; `engine` rides the request's own engine fact.
+                ...(event.model !== undefined ? { model: event.model } : {}),
+                ...(event.responseModel !== undefined ? { responseModel: event.responseModel } : {}),
+                ...(req.engine !== undefined ? { engine: req.engine } : {}),
               };
               opts.onProgress?.(progress);
               finish(outcome);

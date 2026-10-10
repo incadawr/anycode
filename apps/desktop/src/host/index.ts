@@ -777,12 +777,18 @@ function buildChildBrokerEmit(emitFn: (message: HostToUiMessage) => void): (mess
  * own `process.parentPort` — the child side of the wire — identically for
  * every engine.
  */
-function buildChildSessionOptions(flushHistory: () => Promise<void>): ChildSessionOptions {
+function buildChildSessionOptions(
+  flushHistory: () => Promise<void>,
+  responseModel?: () => string | undefined,
+): ChildSessionOptions {
   return {
     onReady: () => {
       process.parentPort.postMessage({ type: CHILD_READY_TYPE } satisfies ChildReady);
     },
     flushHistory,
+    // Core-only seam: reads the child's dedicated model port's provider claim
+    // at terminal. Engine boots pass no getter (no core claim exists there).
+    ...(responseModel !== undefined ? { responseModel } : {}),
     onTerminal: (report) => {
       process.parentPort.postMessage({
         type: CHILD_TERMINAL_TYPE,
@@ -792,6 +798,8 @@ function buildChildSessionOptions(flushHistory: () => Promise<void>): ChildSessi
         turns: report.turns,
         toolCalls: report.toolCalls,
         durationMs: report.durationMs,
+        ...(report.model !== undefined ? { model: report.model } : {}),
+        ...(report.responseModel !== undefined ? { responseModel: report.responseModel } : {}),
         ...(report.activitySuppressed !== undefined ? { activitySuppressed: report.activitySuppressed } : {}),
         ...(report.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: report.finalTurnFinishReason } : {}),
         ...(report.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true } : {}),
@@ -3321,7 +3329,12 @@ async function boot(): Promise<void> {
       // child's transcript is durably on disk). CUT-S4 §4.1: `buildChildSessionOptions`
       // is the exact same onReady/onTerminal/onProgress bodies, extracted so
       // codex/claude share them too — only `flushHistory` differs per engine.
-      ...(args.child !== undefined ? { child: buildChildSessionOptions(() => historySink!.flushChecked()) } : {}),
+      // Core-only: pass the dedicated wrapped modelPort's claim getter (the
+      // same port the loop streams through) so the terminal report can carry
+      // `responseModel`; engine boots below pass no getter.
+      ...(args.child !== undefined
+        ? { child: buildChildSessionOptions(() => historySink!.flushChecked(), () => modelPort.lastResponseModel) }
+        : {}),
     });
 
     console.log(

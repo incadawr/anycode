@@ -330,6 +330,73 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
     });
   });
 
+  // TASK.219: end uses the terminal's own child-fact model fields and the
+  // REQUEST's engine — never req.model nor the accepted event's model.
+  describe("terminal model/responseModel/engine passthrough (TASK.219)", () => {
+    it("terminal model+responseModel with an engine request: end carries all three, ignoring req/accepted models", async () => {
+      const { port, sent, emit } = harness();
+      const onProgress = vi.fn();
+      const pending = port.run(
+        { agentType: "engine-persona", description: "d", prompt: "p", spawnToolCallId: "spawn-m1", model: "sent-model", engine: "codex" },
+        { onProgress },
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-m1", childTabId: "tab-m1", model: "m" });
+      onProgress.mockClear();
+
+      emit(terminalEvent(requestId, { childSessionId: "child-m1", model: "booted-model", responseModel: "glm-5.3" }));
+
+      expect(onProgress).toHaveBeenCalledWith({
+        kind: "end",
+        status: "completed",
+        turns: 0,
+        durationMs: 0,
+        model: "booted-model",
+        responseModel: "glm-5.3",
+        engine: "codex",
+      });
+      await pending;
+    });
+
+    it("bare terminal with no engine request: model/responseModel/engine all absent", async () => {
+      const { port, sent, emit } = harness();
+      const onProgress = vi.fn();
+      const pending = port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-m2" },
+        { onProgress },
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-m2", childTabId: "tab-m2", model: "m" });
+      onProgress.mockClear();
+
+      emit(terminalEvent(requestId, { childSessionId: "child-m2" }));
+
+      expect(onProgress).toHaveBeenCalledTimes(1);
+      const end = onProgress.mock.calls[0]?.[0] as SubagentProgress;
+      expect(end && "model" in end).toBe(false);
+      expect(end && "responseModel" in end).toBe(false);
+      expect(end && "engine" in end).toBe(false);
+      await pending;
+    });
+
+    it("engine request with a bare terminal: engine present, model/responseModel absent", async () => {
+      const { port, sent, emit } = harness();
+      const onProgress = vi.fn();
+      const pending = port.run(
+        { agentType: "engine-persona", description: "d", prompt: "p", spawnToolCallId: "spawn-m3", engine: "codex" },
+        { onProgress },
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-m3", childTabId: "tab-m3", model: "m" });
+      onProgress.mockClear();
+
+      emit(terminalEvent(requestId, { childSessionId: "child-m3" }));
+
+      expect(onProgress).toHaveBeenCalledWith({ kind: "end", status: "completed", turns: 0, durationMs: 0, engine: "codex" });
+      await pending;
+    });
+  });
+
   it("terminal declaredDoneAtCeiling reaches the attached outcome (and is absent otherwise) (TASK 4149)", async () => {
     for (const flag of [true, false]) {
       const { port, sent, emit } = harness();
