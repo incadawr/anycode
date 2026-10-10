@@ -1415,13 +1415,10 @@ body {
 }
 
 .environment-workspace {
-  /* TASK.119 п.6: room for the head-ellipsized session cwd; the preserved
-     worktree tail must not be re-clipped by an end-ellipsis — wrap instead. */
+  /* TASK.119 п.6: room for the session cwd. workspaceLabel() already
+     head-ellipsizes it to ≤44 chars, so it stays on one line; the base
+     end-ellipsis only kicks in if the bar is narrower than that. */
   max-width: 44ch;
-  overflow-wrap: anywhere;
-  white-space: normal;
-  overflow: visible;
-  text-overflow: clip;
   color: var(--text-1);
   font-weight: var(--w-medium);
 }
