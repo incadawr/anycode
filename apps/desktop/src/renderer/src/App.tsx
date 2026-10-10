@@ -1111,6 +1111,7 @@ function ChildHistoryContent({ parentSessionId, spawnToolCallId }: ChildHistoryC
             connection="host_exited"
             retry={null}
             onTryAgain={() => {}}
+            readOnly={true}
           />
         </div>
       )}
