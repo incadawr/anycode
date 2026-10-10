@@ -587,6 +587,42 @@ describe("fail-fast validation", () => {
     expect(port.calls).toEqual([]);
   });
 
+  it("caps an oversized precheck summary at WORKFLOW_OUTPUT_MAX_BYTES", async () => {
+    // A huge agentType used to reach the persisted payload uncapped via the
+    // precheck `output` (TASK.221); it must go through the same cap as the
+    // normal run path.
+    const hugeType = "x".repeat(WORKFLOW_OUTPUT_MAX_BYTES + 100);
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, "x"),
+    );
+    const wf = def("big-precheck", [{ id: "A", agentType: hugeType, promptTemplate: "${input}" }]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run(
+      { name: "big-precheck", input: "x" },
+      {},
+    );
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.truncated).toBe(true);
+    expect(new TextEncoder().encode(outcome.output).length).toBe(WORKFLOW_OUTPUT_MAX_BYTES);
+  });
+
+  it("keeps a normal-size precheck summary whole (no truncation)", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, "x"),
+    );
+    const wf = def("badtype", [
+      { id: "A", agentType: "general-purpose", promptTemplate: "${input}" },
+      { id: "B", agentType: "nope", promptTemplate: "${input}" },
+    ]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run({ name: "badtype", input: "x" }, {});
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.truncated).toBe(false);
+    expect(outcome.output).toBe(`step B: unknown agentType "nope"`);
+  });
+
   it("an unknown step agentType fails fast BEFORE launching any step (zero tokens)", async () => {
     const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
       emitAndComplete(opts, req, "x"),

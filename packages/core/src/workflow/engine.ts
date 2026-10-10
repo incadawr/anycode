@@ -140,9 +140,13 @@ function createRunner(
                 `Unknown agentType "${step.agentType}" (available: ${availableList}).`,
               ),
         );
-        const summary = unknownSteps
-          .map((step) => `step ${step.id}: unknown agentType "${step.agentType}"`)
-          .join("\n");
+        const cappedSummary = capUtf8Bytes(
+          unknownSteps
+            .map((step) => `step ${step.id}: unknown agentType "${step.agentType}"`)
+            .join("\n"),
+          WORKFLOW_OUTPUT_MAX_BYTES,
+        );
+        const summary = cappedSummary.text;
         // TASK.193: a fail-fast pre-check streams the same start/step_end/end
         // trio a launched run would — with `unlaunched` on every error
         // terminal — so the card, CLI and telemetry see the failed step and
@@ -179,7 +183,7 @@ function createRunner(
         return {
           status: "failed",
           output: summary,
-          truncated: false,
+          truncated: cappedSummary.truncated,
           steps: outcomes,
           durationMs: precheckDurationMs,
         };

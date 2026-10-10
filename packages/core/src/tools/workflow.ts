@@ -161,8 +161,13 @@ export const workflowTool: ToolDefinition<WorkflowInput, WorkflowOutput> = {
     const body = output?.output ?? "";
     if (!result.ok) {
       // The model sees the failure summary followed by any rendered output.
+      // TASK.221: a capped precheck output carries the same truncation marker
+      // the completed path appends — truncation is reported, never silent.
       const summary = result.error ?? "Workflow: the run failed.";
-      return body ? `${summary}\n\n${body}` : summary;
+      const marker = output?.truncated
+        ? `\n[workflow output truncated at ${WORKFLOW_OUTPUT_MAX_BYTES} bytes]`
+        : "";
+      return body ? `${summary}\n\n${body}${marker}` : summary;
     }
     if (!output) {
       return "";
