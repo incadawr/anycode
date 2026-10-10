@@ -1555,3 +1555,66 @@ describe("detached stall notice delivery (TASK.148 slice 2)", () => {
     emit(terminalEvent(requestId, { childSessionId: "child-dstall-6" }));
   });
 });
+
+// TASK.180: the profile turn budget rides the wire as ChildSpawnRequest
+// .maxTurns — only for a fresh spawn, validated pre-flight.
+describe("createChildSessionPort — maxTurns (TASK.180)", () => {
+  it("sends a defined budget on the spawn request verbatim", async () => {
+    const { port, sent, emit } = harness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-mt-1", maxTurns: 15 },
+      {},
+    );
+    const spawn = spawns(sent)[0]!;
+    expect(spawn.maxTurns).toBe(15);
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: spawn.requestId, kind: "accepted", childSessionId: "c", childTabId: "t", model: "m" });
+    emit(terminalEvent(spawn.requestId));
+    const outcome = await pending;
+    expect(outcome.status).toBe("completed");
+  });
+
+  it("an absent budget leaves the spawn request unchanged (no key)", async () => {
+    const { port, sent, emit } = harness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-mt-2" },
+      {},
+    );
+    const spawn = spawns(sent)[0]!;
+    expect("maxTurns" in spawn).toBe(false);
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: spawn.requestId, kind: "accepted", childSessionId: "c", childTabId: "t", model: "m" });
+    emit(terminalEvent(spawn.requestId));
+    await pending;
+  });
+
+  it("an invalid budget fails immediately with an honest error and sends NOTHING", async () => {
+    const { port, sent } = harness();
+    for (const maxTurns of [0, -1, 2.5, 201, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+      const outcome = await port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-mt-bad", maxTurns },
+        {},
+      );
+      expect(outcome.status).toBe("error");
+      expect(outcome.finalText).toContain("malformed turn budget");
+    }
+    expect(sent).toHaveLength(0);
+  });
+
+  it("a follow-up (resume) request does not impose a new budget", async () => {
+    const { port, sent, emit } = harness();
+    const pending = port.run(
+      {
+        agentType: "general-purpose",
+        description: "d",
+        prompt: "again",
+        spawnToolCallId: "spawn-mt-3",
+        resumeChildSessionId: "child-9",
+        maxTurns: 40,
+      },
+      {},
+    );
+    const spawn = spawns(sent)[0]!;
+    expect("maxTurns" in spawn).toBe(false);
+    emit(terminalEvent(spawn.requestId));
+    await pending;
+  });
+});

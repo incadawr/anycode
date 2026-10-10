@@ -485,6 +485,9 @@ export function createSubagentRunner(
         engine: persona.engine,
         systemPrompt: persona.systemPrompt,
         ...(persona.model !== undefined ? { model: persona.model } : {}),
+        // TASK.180: persona.turnBudget rides through the same as model —
+        // omitted entirely when absent, never a present-but-undefined key.
+        ...(persona.turnBudget !== undefined ? { turnBudget: persona.turnBudget } : {}),
       };
     },
     async run(req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> {

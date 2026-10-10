@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, SessionSubagentPort } from "@anycode/core";
@@ -13,11 +14,14 @@ import {
   CodexEngine,
   createNativeCodexSession,
   resumeNativeCodexSession,
+  startCodexEngine,
+  resumeCodexEngine,
   type CodexClient,
 } from "./codex-engine.js";
 
 import { CodexDynamicToolBridge, ANYCODE_AGENT_TOOL } from "./dynamic-tool-bridge.js";
 
+const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
 const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
 
 /** Every notification (method + params) line of a captured app-server fixture, in wire order — RPC responses/requests (an `id`) are excluded. */
@@ -2709,5 +2713,129 @@ describe("TASK.239 owned active-turn steering", () => {
     await expect(engine.steer("clarification")).rejects.toMatchObject({ deliveryState: "unknown" });
     expect(server.interrupts).toBe(0);
     server.completeTurn("completed"); await turn.done; await engine.dispose("session-close");
+  });
+});
+
+// TASK.180: a codex child's profile budget is NOT enforced — the supplied
+// boot notice is surfaced once, as a visible engine_notice warning on the
+// FIRST turn only, and no native Codex budget field is ever sent.
+describe("CodexEngine — boot notices (TASK.180: maxTurns not enforced)", () => {
+  const BUDGET_NOTICE: AgentEvent = {
+    type: "engine_notice",
+    level: "warning",
+    message: "Profile maxTurns (12) is not enforced for the codex engine; the child is bounded only by its time/stall limits.",
+  };
+
+  it("the supplied budget warning appears as engine_notice level warning on the first turn, exactly once across two turns", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, undefined, undefined, [BUDGET_NOTICE]);
+    const turn1 = await runTurn(server, engine, "first");
+    const notices1 = turn1.filter((e): e is Extract<AgentEvent, { type: "engine_notice" }> => e.type === "engine_notice" && e.message.includes("maxTurns (12)"));
+    expect(notices1).toHaveLength(1);
+    expect(notices1[0]).toMatchObject({ type: "engine_notice", level: "warning", message: expect.stringContaining("not enforced") });
+
+    const turn2 = await runTurn(server, engine, "second");
+    expect(turn2.filter((e): e is Extract<AgentEvent, { type: "engine_notice" }> => e.type === "engine_notice" && e.message.includes("maxTurns (12)"))).toHaveLength(0);
+  });
+
+  it("no notice at all without a supplied boot notice", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+    const turn = await runTurn(server, engine, "hi");
+    expect(turn.filter((e) => e.type === "engine_notice")).toHaveLength(0);
+  });
+
+  it("no native Codex budget field is sent on thread/start or turn/start", async () => {
+    const server = new FakeAppServer();
+    await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, undefined, undefined, [BUDGET_NOTICE]);
+    const startParams = JSON.stringify(server.calls.find((call) => call.method === "thread/start")?.params ?? {});
+    expect(startParams).not.toMatch(/maxTurns|max_turns|max-turns/i);
+    const { engine } = await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, undefined, undefined, [BUDGET_NOTICE]);
+    await runTurn(server, engine, "hi");
+    const turnParams = JSON.stringify(server.calls.find((call) => call.method === "turn/start")?.params ?? {});
+    expect(turnParams).not.toMatch(/maxTurns|max_turns|max-turns/i);
+  });
+
+  it("the resume path seeds the same notice queue", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, undefined, undefined, undefined, [BUDGET_NOTICE]);
+    const turn = await runTurn(server, engine, "again");
+    expect(turn.filter((e) => e.type === "engine_notice" && e.message.includes("maxTurns (12)"))).toHaveLength(1);
+  });
+});
+
+// TASK.180 (rework): the PUBLIC wrappers startCodexEngine/resumeCodexEngine
+// must forward options.bootNotices into the native session's notices queue —
+// a native-function test cannot catch a wrapper dropping the argument. Runs
+// against the REAL AppServerClient with the test-child.mjs fake app-server
+// (answers the boot RPCs), so the full wrapper -> client -> native path is
+// exercised. The notices surface on the FIRST runTurn as engine_notice
+// warnings, exactly once.
+describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding (TASK.180)", () => {
+  const BUDGET_NOTICE: AgentEvent = {
+    type: "engine_notice",
+    level: "warning",
+    message: "Profile maxTurns (12) is not enforced for the codex engine; the child is bounded only by its time/stall limits.",
+  };
+
+  function wrapperOptions(bootNotices?: AgentEvent[]): Parameters<typeof startCodexEngine>[0] {
+    return {
+      binaryPath: process.execPath,
+      binaryArgs: [childPath],
+      cwd: process.cwd(),
+      sourceEnv: { HOME: "/home/test", PATH: process.env.PATH, CODEX_HOME: "/codex-home" },
+      binaryTrust: () => null,
+      bootstrap: { adopt: () => {} } as never,
+      broker: new IpcPermissionBroker(() => {}),
+      workspace: "/work",
+      ...(bootNotices !== undefined ? { bootNotices } : {}),
+    } as Parameters<typeof startCodexEngine>[0];
+  }
+
+  async function firstTurnEvents(engine: CodexEngine): Promise<AgentEvent[]> {
+    const events: AgentEvent[] = [];
+    const turn = (async () => {
+      for await (const event of engine.runTurn("hi", { signal: new AbortController().signal })) {
+        events.push(event);
+      }
+    })();
+    // The fake app-server never completes the turn on its own; terminate the
+    // stream after the boot notices have been dispatched.
+    await tick();
+    await engine.dispose("session-close");
+    await turn.catch(() => {});
+    return events;
+  }
+
+  it("startCodexEngine forwards bootNotices — the warning appears once on the first turn", async () => {
+    const connected = await startCodexEngine(wrapperOptions([BUDGET_NOTICE]));
+    try {
+      const events = await firstTurnEvents(connected.engine);
+      const notices = events.filter((event): event is Extract<AgentEvent, { type: "engine_notice" }> => event.type === "engine_notice" && event.message.includes("maxTurns (12)"));
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ type: "engine_notice", level: "warning", message: expect.stringContaining("not enforced") });
+    } finally {
+      await connected.engine.dispose("session-close").catch(() => {});
+    }
+  });
+
+  it("resumeCodexEngine forwards bootNotices to the resumed native session", async () => {
+    const connected = await resumeCodexEngine({ ...wrapperOptions([BUDGET_NOTICE]), externalSessionRef: "thread-180" });
+    try {
+      const events = await firstTurnEvents(connected.engine);
+      expect(events.filter((event): event is Extract<AgentEvent, { type: "engine_notice" }> => event.type === "engine_notice" && event.message.includes("maxTurns (12)"))).toHaveLength(1);
+    } finally {
+      await connected.engine.dispose("session-close").catch(() => {});
+    }
+  });
+
+  it("without bootNotices the first turn carries no engine_notice at all", async () => {
+    const connected = await startCodexEngine(wrapperOptions());
+    try {
+      const events = await firstTurnEvents(connected.engine);
+      expect(events.filter((event) => event.type === "engine_notice")).toHaveLength(0);
+    } finally {
+      await connected.engine.dispose("session-close").catch(() => {});
+    }
   });
 });

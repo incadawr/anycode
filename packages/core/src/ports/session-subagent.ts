@@ -83,6 +83,18 @@ export interface SessionSubagentRequest {
    * refuses otherwise. Absent = a fresh child, byte-identical to before.
    */
   resumeChildSessionId?: string;
+  /**
+   * Turn budget for the child (TASK.180): originates from a profile's
+   * `maxTurns`/`turnBudget` frontmatter and applies ONLY to the creating
+   * spawn — follow-up (resume) requests omit it, and no budget-reset
+   * behavior exists. Validated at every boundary as a safe integer within
+   * 1..SUBAGENT_MAX_TURNS_CEILING (200). Enforcement is engine-dependent:
+   * a core child uses it as AgentLoopConfig.maxTurns, a claude child maps it
+   * to the CLI's native --max-turns flag, and a codex child (no native turn
+   * cap) merely shows one visible engine_notice warning that the budget is
+   * not enforced. Absent = existing default budgets, byte-identical.
+   */
+  maxTurns?: number;
 }
 
 /**

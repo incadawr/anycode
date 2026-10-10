@@ -4752,3 +4752,90 @@ describe("TabHostManager — follow-up card alias", () => {
     expect(manager.followUpChildSessionId("other-root", "call-a2")).toBeUndefined();
   });
 });
+
+// TASK.180: the creating spawn's turn budget (req.maxTurns) rides the child's
+// argv as --child-max-turns <n> — only for a FRESH child, never a follow-up
+// (resumed) child or an ordinary tab.
+describe("TabHostManager — child turn budget argv (TASK.180)", () => {
+  function forkSpyRig() {
+    const hosts: FakeHost[] = [];
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args, _opts) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    });
+    return { forkSpy, hosts };
+  }
+
+  it("a fresh CORE child request with a budget forks with --child-max-turns <n>", () => {
+    const { forkSpy, hosts } = forkSpyRig();
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-budget-core", resume: false });
+    expect(root.ok).toBe(true);
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "budget-core", maxTurns: 17 }));
+
+    const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(childArgs).toContain("--child-max-turns");
+    expect(childArgs[childArgs.indexOf("--child-max-turns") + 1]).toBe("17");
+  });
+
+  it("a fresh ENGINE child request with a budget also forks with --child-max-turns <n>", () => {
+    const { forkSpy, hosts } = forkSpyRig();
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window, { engineReady: () => true });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-budget-engine", resume: false });
+    expect(root.ok).toBe(true);
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "budget-engine", engine: "claude", maxTurns: 5 }));
+
+    const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(childArgs).toContain("--child-max-turns");
+    expect(childArgs[childArgs.indexOf("--child-max-turns") + 1]).toBe("5");
+  });
+
+  it("a child request WITHOUT a budget leaves the argv unchanged (no flag)", () => {
+    const { forkSpy, hosts } = forkSpyRig();
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-budget-none", resume: false });
+    expect(root.ok).toBe(true);
+
+    hosts[0]!.emit("message", spawnRequest({ requestId: "budget-none" }));
+
+    const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
+    expect(childArgs).not.toContain("--child-max-turns");
+  });
+
+  it("a follow-up (resumed) child omits the budget even if the request carries one", async () => {
+    const { forkSpy, hosts } = forkSpyRig();
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-budget-followup", resume: false });
+    expect(root.ok).toBe(true);
+
+    // First (creating) run: budget rides argv; child finishes.
+    hosts[0]!.emit("message", spawnRequest({ requestId: "budget-first", maxTurns: 9 }));
+    const childHost = hosts[1]!;
+    const accepted = childRunEvents(hosts[0]!).find((e) => e.requestId === "budget-first" && e.kind === "accepted");
+    const childSessionId = accepted?.kind === "accepted" ? accepted.childSessionId : "";
+    childHost.emit("message", childReadyMsg());
+    childHost.emit("message", childTerminalMsg());
+    // Let the reap (shutdown -> exit -> reaped.then) microtask chain settle so
+    // the follow-up admits synchronously rather than parking on `reaped`.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Follow-up on the finished child: a NEW host forks, without the budget.
+    const forksBefore = forkSpy.mock.calls.length;
+    hosts[0]!.emit("message", spawnRequest({ requestId: "budget-second", resumeChildSessionId: childSessionId, maxTurns: 40 }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(forkSpy.mock.calls.length).toBe(forksBefore + 1);
+    const followUpArgs = forkSpy.mock.calls[forkSpy.mock.calls.length - 1]?.[1] ?? [];
+    expect(followUpArgs).not.toContain("--child-max-turns");
+  });
+});

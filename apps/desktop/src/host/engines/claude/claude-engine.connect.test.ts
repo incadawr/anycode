@@ -470,3 +470,44 @@ describe("TASK.226 срез S4 — the MCP bridge is wired BEFORE initialize is 
     }
   });
 });
+
+// TASK.180: the PUBLIC wrappers (startClaudeEngine/resumeClaudeEngine) must
+// not drop the child's turn budget — options.maxTurns has to reach the actual
+// ClaudeClient spawn argv as --max-turns <n> on BOTH the fresh and the resume
+// path (claude-engine.ts spreads ...options into ClaudeClient).
+describe("startClaudeEngine/resumeClaudeEngine — maxTurns forwarding (TASK.180)", () => {
+  it("startClaudeEngine carries options.maxTurns onto the spawn argv as --max-turns <n>", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await startClaudeEngine({ ...baseOptions(spawnImpl), maxTurns: 14 });
+    try {
+      const args = capturedArgs() ?? [];
+      expect(args).toContain("--max-turns");
+      expect(args[args.indexOf("--max-turns") + 1]).toBe("14");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("resumeClaudeEngine carries options.maxTurns onto the spawn argv too", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await resumeClaudeEngine({ ...baseOptions(spawnImpl), maxTurns: 6, externalSessionRef: "ref-180" });
+    try {
+      const args = capturedArgs() ?? [];
+      expect(args).toContain("--resume");
+      expect(args).toContain("--max-turns");
+      expect(args[args.indexOf("--max-turns") + 1]).toBe("6");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("without options.maxTurns the spawn argv has no --max-turns flag", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await startClaudeEngine(baseOptions(spawnImpl));
+    try {
+      expect(capturedArgs() ?? []).not.toContain("--max-turns");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+});

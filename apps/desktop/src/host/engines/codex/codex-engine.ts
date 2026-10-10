@@ -354,6 +354,13 @@ export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "
   selection?: CodexSessionSelection;
   /** Host-owned shadow command log (cut §2(e)); absent only in tests that do not exercise resume-history. */
   shadowLog?: CodexShadowLogPort;
+  /**
+   * TASK.180: one-shot boot notices (e.g. the codex child's "profile
+   * maxTurns is not enforced" warning) seeded into the native session's
+   * notices queue — drained exactly once on the first `runTurn`, like every
+   * other boot notice. Never a Codex protocol field.
+   */
+  bootNotices?: AgentEvent[];
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -469,11 +476,12 @@ export async function createNativeCodexSession(
   shadowLog?: CodexShadowLogPort,
   agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
   agentCardLog?: CodexAgentCardLogPort,
+  bootNotices?: AgentEvent[],
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
   const catalog = await CodexModelCatalog.load(client);
-  const notices: AgentEvent[] = [];
+  const notices: AgentEvent[] = [...(bootNotices ?? [])];
   const preset = resolvePreset(selection, notices);
   const model = resolveModel(catalog, selection, notices);
   const result = await client.request<ThreadResult>("thread/start", {
@@ -514,11 +522,12 @@ export async function resumeNativeCodexSession(
   shadowLog?: CodexShadowLogPort,
   agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge,
   agentCardLog?: CodexAgentCardLogPort,
+  bootNotices?: AgentEvent[],
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
   await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
   const catalog = await CodexModelCatalog.load(client);
-  const notices: AgentEvent[] = [];
+  const notices: AgentEvent[] = [...(bootNotices ?? [])];
   const preset = resolvePreset(selection, notices);
   const resumed = await client.request<ThreadResult>("thread/resume", {
     threadId: externalSessionRef,
@@ -580,7 +589,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   } });
   try {
     await client.start();
-    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog);
+    const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog, options.bootNotices);
     engine = connected.engine;
     return connected;
   } catch (error) {
@@ -615,6 +624,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       options.shadowLog,
       options.agentBridge,
       options.agentCardLog,
+      options.bootNotices,
     );
     engine = connected.engine;
     return connected;
