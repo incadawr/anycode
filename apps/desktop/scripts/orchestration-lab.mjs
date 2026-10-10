@@ -7,6 +7,7 @@
  * (default $TMPDIR/anycode-orch-lab, override with --lab <dir>).
  *
  *   start   --workspace <dir> --brief <file> [--no-chromium-sandbox]
+ *           [--secrets <envfile>] [--provider <catalogId>] [--model <modelId>]
  *           launch the app (detached, outlives this script), open a Codex tab
  *           on <dir> and send <file> as its first prompt.
  *   task    --workspace <dir> --brief <file>
@@ -26,7 +27,12 @@
  *   stop    <tabId>      stop the running turn.
  *   quit    close the app.
  *
- * Credentials: GLM from .smoke-secrets/glm.env (or ANYCODE_SMOKE_SECRETS),
+ * Credentials: the lab's one provider connection defaults to GLM (z-ai,
+ * glm-5.3) with keys from .smoke-secrets/glm.env. Override for `start` with
+ * --secrets <envfile> (precedence: --secrets > ANYCODE_SMOKE_SECRETS > default;
+ * relative paths resolve against cwd, then the repo, then the main checkout),
+ * --provider <catalogId> and --model <modelId>, e.g.
+ *   start --secrets .smoke-secrets/deepseek.env --provider deepseek --model deepseek-flash
  * Codex = the ambient signed-in account.
  */
 
@@ -50,7 +56,7 @@ function opt(name, fallback) {
   const i = argv.indexOf(name);
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fallback;
 }
-const VALUE_OPTS = new Set(["--workspace", "--brief", "--engine", "--lab", "--quiet-min", "--last", "--width"]);
+const VALUE_OPTS = new Set(["--workspace", "--brief", "--engine", "--lab", "--secrets", "--provider", "--model", "--quiet-min", "--last", "--width"]);
 function positional(n) {
   return argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_OPTS.has(argv[i - 1])))[n];
 }
@@ -83,6 +89,11 @@ function ctxOf(lab) {
 }
 
 function secretsPath() {
+  const explicit = opt("--secrets");
+  if (explicit) {
+    const candidates = [resolve(explicit), resolve(repoRoot, explicit), resolve(repoRoot, "..", "..", "..", explicit)];
+    return candidates.find((c) => existsSync(c)) ?? candidates[0];
+  }
   if (process.env.ANYCODE_SMOKE_SECRETS) return process.env.ANYCODE_SMOKE_SECRETS;
   const local = join(repoRoot, ".smoke-secrets", "glm.env");
   if (existsSync(local)) return local;
@@ -108,7 +119,7 @@ async function start() {
         version: 2,
         provider: {
           activeConnectionId: CONNECTION_ID,
-          connections: [{ id: CONNECTION_ID, providerId: "z-ai", model: GLM_MODEL }],
+          connections: [{ id: CONNECTION_ID, providerId: opt("--provider", "z-ai"), model: opt("--model", GLM_MODEL) }],
         },
         tools: {},
         // --no-allow: no blanket rules, so the permission guard and its modals
@@ -423,7 +434,10 @@ const handlers = {
 
 const handler = handlers[command];
 if (!handler) {
-  console.error("usage: orchestration-lab.mjs start|watch|show|tabs|allow|deny|send|stop|quit (see header)");
+  console.error("usage: orchestration-lab.mjs start|task|watch|show|child|tabs|allow|deny|send|stop|quit (see header)\n" +
+      "  start --workspace <dir> --brief <file> [--no-chromium-sandbox] [--secrets <envfile>] [--provider <catalogId>] [--model <modelId>]\n" +
+      "    defaults: --secrets .smoke-secrets/glm.env (ANYCODE_SMOKE_SECRETS overrides default), --provider z-ai, --model glm-5.3\n" +
+      "    e.g. start --secrets .smoke-secrets/deepseek.env --provider deepseek --model deepseek-flash");
   process.exit(2);
 }
 try {
