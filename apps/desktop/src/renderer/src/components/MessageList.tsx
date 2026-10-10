@@ -36,6 +36,7 @@ import { PreviewConsoleRow } from "./PreviewConsoleRow.js";
 import { ToolCallCard } from "./ToolCallCard.js";
 import { ToolCallStack } from "./ToolCallStack.js";
 import { WorkingRow, formatElapsed, getTurnStartedAt } from "./WorkingRow.js";
+import { formatBlockTime } from "../block-time.js";
 import { formatUsageLimitReset } from "../provider-notices.js";
 
 /** ≥ this many new blocks in one render = bulk (hydration/replay), not a live append. */
@@ -714,9 +715,17 @@ export function MessageList({
               if (block.origin === "system") {
                 return <ChildReportBlock key={block.id} block={block} enter={enterIds.has(block.id)} />;
               }
+              const userTime = formatBlockTime(block.at, Date.now());
               return (
                 <div key={block.id} className={`message message-user${enterClass(block.id)}`}>
-                  <div className="message-label">You</div>
+                  <div className="message-label">
+                    You
+                    {userTime && (
+                      <time className="block-time" title={userTime.title}>
+                        {userTime.label}
+                      </time>
+                    )}
+                  </div>
                   {block.text.length > 0 && <div className="message-text">{block.text}</div>}
                   {block.images?.length ? (
                     <div className="message-images">
@@ -783,11 +792,13 @@ export function MessageList({
                   {formatStreamRetryLine(block.attempt, block.maxAttempts, block.delayMs, block.reason)}
                 </div>
               );
-            case "loop_end":
+            case "loop_end": {
+              const endTime = formatBlockTime(block.at, Date.now());
               return (
                 <div
                   key={block.id}
                   data-block-id={block.id}
+                  title={endTime?.title}
                   className={`message message-loop-end${enterClass(block.id)}`}
                 >
                   {block.reason === "max_turns"
@@ -798,7 +809,7 @@ export function MessageList({
                     ? `Stopped: turn limit reached (${block.turns} turns).`
                     : `Turn ended: ${block.reason} (${block.turns} turn${block.turns === 1 ? "" : "s"}${
                         block.durationMs !== undefined ? ` · ${formatElapsed(Math.round(block.durationMs / 1000))}` : ""
-                      })`}
+                      }${endTime ? ` · ${endTime.label}` : ""})`}
                   {showTryAgainButton(retry, block.id, connection) && (
                     <button type="button" className="retry-try-again-button" onClick={onTryAgain}>
                       Try again
@@ -806,6 +817,7 @@ export function MessageList({
                   )}
                 </div>
               );
+            }
             // TASK.106 cut-2 §D5: the provider switch reads as what it is — a
             // session boundary (the host really was respawned), so it borrows
             // the loop-end divider's register rather than an error tint.
