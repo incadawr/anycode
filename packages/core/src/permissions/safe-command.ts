@@ -540,3 +540,17 @@ export function classifyBashCommandLine(command: string): BashCommandLineClassif
   }
   return { class: "read-only", shellExpression: true };
 }
+
+// TASK.36: the scoped-runner grammar lives once in rules.ts; re-exported here so
+// the desktop renderer reaches it through this EXISTING package.json subpath
+// (the exports map is frozen outside TASK.36's allowed paths). This module
+// already imports splitBashSegments from ./rules.js, so no new dependency edge.
+export {
+  SCOPED_PATTERN_PREFIX,
+  SCOPED_RUNNER_BINARIES,
+  SCOPED_RUNNER_VERBS,
+  formatScopedRunnerPattern,
+  parseScopedRunnerPattern,
+  recognizeScopedRunnerCommand,
+} from "./rules.js";
+export type { ScopedRunnerRule } from "./rules.js";

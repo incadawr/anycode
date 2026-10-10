@@ -10,8 +10,14 @@
 import { describe, expect, it } from "vitest";
 import type { EnginePresentation } from "../../../shared/protocol.js";
 import {
+  SCOPED_RUNNER_BINARIES,
+  SCOPED_RUNNER_VERBS,
+  formatScopedRunnerPattern,
+} from "@anycode/core/permissions/safe-command";
+import {
   PLAN_PREVIEW_MAX_CHARS,
   UNKNOWN_SHELL_HINT,
+  alwaysAllowCheckboxText,
   buildAlwaysAllowRule,
   buildPermissionAllowMessage,
   canRememberPermission,
@@ -406,5 +412,244 @@ describe("CodexExec always-allow birth points (TASK.144)", () => {
   it("offers no pattern for CodexApplyPatch — a multi-file patch has no single subject", () => {
     expect(suggestAlwaysAllowPattern("CodexApplyPatch", { paths: ["/workspace/a.ts"] })).toBeUndefined();
     expect(buildAlwaysAllowRule("CodexApplyPatch", undefined)).toEqual({ toolName: "CodexApplyPatch" });
+  });
+});
+
+/** Pinned literal: JSON.stringify of `{workspace,runner,verb}`, fixed key order. */
+const SCOPED_PNPM_TEST = 'scoped-runner:{"workspace":"/ws/proj","runner":"pnpm","verb":"test"}';
+
+/**
+ * TASK.36 — the modal's scoped proposal: `cd <workspace> && <runner> <verb>
+ * [inert args]` against the active tab's canonical workspace. The recognizer is
+ * core's (reached through the safe-command subpath) so create and match cannot
+ * drift; here we pin the proposal side and its fail-closed edges.
+ */
+describe("suggestAlwaysAllowPattern — scoped project-runner proposal (TASK.36)", () => {
+  it("proposes the scoped pattern for the exact form against the workspace", () => {
+    expect(suggestAlwaysAllowPattern("Bash", { command: "cd /ws/proj && pnpm test" }, "/ws/proj")).toBe(
+      SCOPED_PNPM_TEST,
+    );
+  });
+
+  it("proposes the exact serialized string for all 16 runner/verb pairs", () => {
+    for (const runner of SCOPED_RUNNER_BINARIES) {
+      for (const verb of SCOPED_RUNNER_VERBS) {
+        const expected = formatScopedRunnerPattern("/ws/proj", runner, verb);
+        expect(
+          suggestAlwaysAllowPattern("Bash", { command: `cd /ws/proj && ${runner} ${verb}` }, "/ws/proj"),
+          `${runner} ${verb}`,
+        ).toBe(expected);
+      }
+    }
+  });
+
+  it("no workspace (null, or the old 2-arg call) yields no scoped proposal (fail-closed / back-compat)", () => {
+    expect(suggestAlwaysAllowPattern("Bash", { command: "cd /ws/proj && pnpm test" }, null)).toBeUndefined();
+    expect(suggestAlwaysAllowPattern("Bash", { command: "cd /ws/proj && pnpm test" })).toBeUndefined();
+  });
+
+  it("back-compat: a non-scoped command still gets the generic '<binary> *' suggestion when a workspace is present", () => {
+    expect(suggestAlwaysAllowPattern("Bash", { command: "git status" }, "/ws/proj")).toBe("git *");
+  });
+
+  it("positive equivalents: inert changed args, horizontal spacing, no-space && reuse the scope", () => {
+    for (const command of [
+      "cd /ws/proj && pnpm test -- packages/a/b.test.ts",
+      "cd /ws/proj && pnpm test --filter web run",
+      "cd  /ws/proj  &&  pnpm  test",
+      "cd\t/ws/proj\t&&\tpnpm\ttest",
+      "cd /ws/proj&&pnpm test",
+      "cd '/ws/proj' && pnpm test",
+    ]) {
+      expect(suggestAlwaysAllowPattern("Bash", { command }, "/ws/proj"), command).toBe(SCOPED_PNPM_TEST);
+    }
+  });
+
+  it("positive equivalents: a correctly quoted special-character workspace proposes its own scoped pattern", () => {
+    for (const ws of ["/ws/my proj", "/ws/a*b", "/ws/a[b]", "/ws/a{b,c}", "/ws/a(b)"]) {
+      const expected = formatScopedRunnerPattern(ws, "pnpm", "test");
+      expect(expected, ws).toBeDefined();
+      expect(suggestAlwaysAllowPattern("Bash", { command: `cd "${ws}" && pnpm test` }, ws), ws).toBe(expected);
+      expect(suggestAlwaysAllowPattern("Bash", { command: `cd '${ws}' && pnpm test` }, ws), ws).toBe(expected);
+    }
+  });
+
+  it("unsupported quote/unquoted forms never propose the SCOPED rule (fail-closed)", () => {
+    // unquoted forms of a special-character workspace
+    expect(suggestAlwaysAllowPattern("Bash", { command: "cd /ws/my proj && pnpm test" }, "/ws/my proj")).toBeUndefined();
+    expect(suggestAlwaysAllowPattern("Bash", { command: "cd /ws/a*b && pnpm test" }, "/ws/a*b")).toBeUndefined();
+    expect(suggestAlwaysAllowPattern("Bash", { command: "cd /ws/a(b) && pnpm test" }, "/ws/a(b)")).toBeUndefined();
+    // a workspace containing its own quote delimiter has no supported literal form:
+    // the scoped proposal is never born (the generic path may still offer its own
+    // pre-existing suggestion for such an odd one-token line, which the user reviews).
+    const withApos = "/ws/a'b";
+    const aposScoped = formatScopedRunnerPattern(withApos, "pnpm", "test");
+    expect(aposScoped).toBeDefined();
+    expect(
+      suggestAlwaysAllowPattern("Bash", { command: `cd '${withApos}' && pnpm test` }, withApos),
+      "single-quoted apostrophe synthesizes its own delimiter",
+    ).not.toBe(aposScoped);
+    const withBoth = `/ws/a'b"c`;
+    const bothScoped = formatScopedRunnerPattern(withBoth, "pnpm", "test");
+    expect(bothScoped).toBeDefined();
+    expect(
+      suggestAlwaysAllowPattern("Bash", { command: `cd "${withBoth}" && pnpm test` }, withBoth),
+    ).not.toBe(bothScoped);
+    expect(
+      suggestAlwaysAllowPattern("Bash", { command: `cd '${withBoth}' && pnpm test` }, withBoth),
+    ).not.toBe(bothScoped);
+  });
+
+  const nonProposals: [string, string][] = [
+    ["other directory", "cd /ws/proj/other && pnpm test"],
+    ["publish verb", "cd /ws/proj && pnpm publish"],
+    ["exec verb", "cd /ws/proj && pnpm exec vitest"],
+    ["run verb", "cd /ws/proj && pnpm run test"],
+    ["testify verb", "cd /ws/proj && pnpm testify"],
+    ["third segment", "cd /ws/proj && pnpm test && rm -rf /"],
+    ["semicolon separator", "cd /ws/proj; pnpm test"],
+    ["pipe separator", "cd /ws/proj | pnpm test"],
+    ["or separator", "cd /ws/proj || pnpm test"],
+    ["background separator", "cd /ws/proj & pnpm test"],
+    ["assignment before runner", "cd /ws/proj && FOO=1 pnpm test"],
+    ["assignment before cd", "FOO=1 cd /ws/proj && pnpm test"],
+    ["env wrapper", "cd /ws/proj && env pnpm test"],
+    ["export wrapper", "cd /ws/proj && export FOO=1 && pnpm test"],
+    ["redirect", "cd /ws/proj && pnpm test > out.txt"],
+    ["redirect append", "cd /ws/proj && pnpm test >> out.txt"],
+    ["redirect in", "cd /ws/proj && pnpm test < in.txt"],
+    ["fd redirect", "cd /ws/proj && pnpm test 2>&1"],
+    ["amp redirect", "cd /ws/proj && pnpm test &>log"],
+    ["command substitution", "cd /ws/proj && pnpm test $(touch /tmp/x)"],
+    ["backtick", "cd /ws/proj && pnpm test `x`"],
+    ["substitution inside quotes", 'cd /ws/proj && pnpm test "$(touch /tmp/x)"'],
+    ["backtick inside quotes", 'cd /ws/proj && pnpm test "`x`"'],
+    ["process substitution", "cd /ws/proj && pnpm test <(touch /tmp/x)"],
+    ["process substitution out", "cd /ws/proj && pnpm test >(touch /tmp/x)"],
+    ["comment", "cd /ws/proj && pnpm test # comment"],
+    ["escaped separator", "cd /ws/proj && pnpm test \\; x"],
+    ["quoted arg", 'cd /ws/proj && pnpm test -- "a b.test.ts"'],
+    ["trailing separator", "cd /ws/proj && pnpm test;"],
+    ["trailing separator pipe", "cd /ws/proj && pnpm test |"],
+    ["trailing and", "cd /ws/proj && pnpm test &&"],
+    ["empty runner segment", "cd /ws/proj &&"],
+    ["empty middle segment", "cd /ws/proj &&  && pnpm test"],
+    ["leading separator", "&& cd /ws/proj && pnpm test"],
+    ["newline before", "\ncd /ws/proj && pnpm test"],
+    ["newline after", "cd /ws/proj && pnpm test\n"],
+    ["newline middle", "cd /ws/proj && pnpm test\nrm -rf /"],
+    ["carriage return", "cd /ws/proj && pnpm test\r"],
+    ["nul byte", "cd /ws/proj && pnpm test\u0000"],
+    ["other control char", "cd /ws/proj && pnpm test\u0007"],
+    ["unterminated double quote", 'cd /ws/proj && pnpm test "x'],
+    ["unterminated quote", "cd /ws/proj && pnpm test 'x"],
+    ["backslash newline", "cd /ws/proj && pnpm test \\\nrm -rf /"],
+    ["non-shell whitespace before &&", "cd /ws/proj\u00a0 && pnpm test"],
+    ["non-shell whitespace before runner", "cd /ws/proj && \u00a0pnpm test"],
+    ["non-shell whitespace between runner and verb", "cd /ws/proj && pnpm\u00a0test"],
+    ["non-shell whitespace before cd", "\u00a0cd /ws/proj && pnpm test"],
+    ["byte-exact trailing slash", "cd /ws/proj/ && pnpm test"],
+  ];
+  for (const [label, command] of nonProposals) {
+    it(`proposes nothing: ${label}`, () => {
+      expect(suggestAlwaysAllowPattern("Bash", { command }, "/ws/proj")).toBeUndefined();
+    });
+  }
+
+  it("an unquoted cd into a space-containing workspace proposes nothing", () => {
+    expect(suggestAlwaysAllowPattern("Bash", { command: "cd /ws/my proj && pnpm test" }, "/ws/my proj")).toBeUndefined();
+  });
+});
+
+describe("alwaysAllowCheckboxText (TASK.36)", () => {
+  it("scoped command with the untouched scoped pattern -> project-scoped label", () => {
+    expect(
+      alwaysAllowCheckboxText("Bash", { command: "cd /ws/proj && pnpm test" }, "/ws/proj", SCOPED_PNPM_TEST),
+    ).toBe("Always allow pnpm test in this project");
+  });
+
+  it("a user edit of the pattern falls back to the generic label", () => {
+    expect(alwaysAllowCheckboxText("Bash", { command: "cd /ws/proj && pnpm test" }, "/ws/proj", "pnpm *")).toBe(
+      "Always allow Bash matching",
+    );
+  });
+
+  it("a malformed scoped edit falls back to the generic label too", () => {
+    expect(
+      alwaysAllowCheckboxText("Bash", { command: "cd /ws/proj && pnpm test" }, "/ws/proj", "scoped-runner:garbage"),
+    ).toBe("Always allow Bash matching");
+  });
+
+  it("a generic command with the seeded glob keeps the generic label", () => {
+    expect(alwaysAllowCheckboxText("Bash", { command: "git status" }, "/ws/proj", "git *")).toBe(
+      "Always allow Bash matching",
+    );
+  });
+
+  it("restoring the original scoped pattern brings the scoped label back", () => {
+    const args = ["Bash", { command: "cd /ws/proj && pnpm test" }, "/ws/proj"] as const;
+    expect(alwaysAllowCheckboxText(...args, "pnpm *")).toBe("Always allow Bash matching");
+    expect(alwaysAllowCheckboxText(...args, SCOPED_PNPM_TEST)).toBe("Always allow pnpm test in this project");
+  });
+
+  it("is a command-tool label only: a non-command tool with a command-shaped input stays generic", () => {
+    expect(alwaysAllowCheckboxText("Read", { command: "cd /ws/proj && pnpm test" }, "/ws/proj", SCOPED_PNPM_TEST)).toBe(
+      "Always allow Read matching",
+    );
+  });
+
+  it("offers the scoped label for CodexExec too (the other command-line tool)", () => {
+    expect(
+      alwaysAllowCheckboxText("CodexExec", { command: "cd /ws/proj && pnpm test" }, "/ws/proj", SCOPED_PNPM_TEST),
+    ).toBe("Always allow pnpm test in this project");
+  });
+
+  it("no suggestion and an empty pattern -> bare tool label", () => {
+    expect(alwaysAllowCheckboxText("Write", { file_path: "/x" }, "/ws/proj", "")).toBe("Always allow Write");
+  });
+
+  it("a CLEARED pattern field (empty string) on a scoped command falls back to the bare tool label", () => {
+    expect(alwaysAllowCheckboxText("Bash", { command: "cd /ws/proj && pnpm test" }, "/ws/proj", "")).toBe(
+      "Always allow Bash",
+    );
+  });
+});
+
+describe("scoped pattern survives the generic sanitizers untouched (TASK.36)", () => {
+  it("buildAlwaysAllowRule is a no-op on the scoped pattern (single token, first token has '{')", () => {
+    expect(buildAlwaysAllowRule("Bash", SCOPED_PNPM_TEST)).toEqual({ toolName: "Bash", pattern: SCOPED_PNPM_TEST });
+  });
+
+  it("buildPermissionAllowMessage carries the same scoped pattern verbatim on both planes", () => {
+    expect(buildPermissionAllowMessage("id", "Bash", { pattern: SCOPED_PNPM_TEST })).toEqual({
+      type: "permission_response",
+      requestId: "id",
+      behavior: "allow",
+      remember: { pattern: SCOPED_PNPM_TEST },
+    });
+  });
+
+  it("no remember payload without consent — the checkbox, not the scope, is what grants it", () => {
+    expect(buildPermissionAllowMessage("id", "Bash")).toEqual({
+      type: "permission_response",
+      requestId: "id",
+      behavior: "allow",
+    });
+  });
+
+  it("with consent, both planes carry EXACTLY the same scoped string, even when the workspace holds spaces/quotes", () => {
+    const workspaces = ["/ws/proj", "/ws/my proj", "/ws/a*b", "/ws/a(b)", "/ws/a,b", "/ws/a'b", '/ws/a"b'];
+    for (const workspace of workspaces) {
+      const pattern = formatScopedRunnerPattern(workspace, "pnpm", "test");
+      expect(pattern, workspace).toBeDefined();
+      const scoped = pattern as string;
+      expect(buildAlwaysAllowRule("Bash", scoped), workspace).toEqual({ toolName: "Bash", pattern: scoped });
+      expect(buildPermissionAllowMessage("id", "Bash", { pattern: scoped }), workspace).toEqual({
+        type: "permission_response",
+        requestId: "id",
+        behavior: "allow",
+        remember: { pattern: scoped },
+      });
+    }
   });
 });
