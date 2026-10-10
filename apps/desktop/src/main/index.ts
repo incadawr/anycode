@@ -90,6 +90,7 @@ import {
   resolveEffectiveTransport,
   resolveRecognizerConfig,
   scrubSecretEnv,
+  shellOwnsProxyFamily,
   shouldSkipConnectionHealthBinding,
   snapshotBootEnv,
   type ProxyMaterializationDeps,
@@ -2328,6 +2329,12 @@ void app.whenReady().then(async () => {
       return env;
     },
     spawn: spawnProxyProbe,
+    // The canonical gate, not a copy: the probe's shell-wins answer must read
+    // the same predicate the fork's env materialisation (`applyConnectionProxy`)
+    // uses. NODE_USE_ENV_PROXY is left entirely to that path — a shell
+    // HTTPS_PROXY stays inert for the core fork unless the shell itself sets
+    // the flag, with no implicit activation here.
+    shellOwnsProxyFamily,
   });
 
   // TASK.198 срез E2: the Vision panel's "Probe" button. Same spawned-child
