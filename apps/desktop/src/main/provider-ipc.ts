@@ -56,6 +56,7 @@ import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/fi
 import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderConnection, SecretKey } from "../shared/settings.js";
 import type { SecretSetResult } from "./vault.js";
+import { ProxyMisconfiguredError } from "./provider-proxy-fetch.js";
 
 // ── URL policy (single source of truth is settings/schema.ts's
 // `isHttpsOrLocalhostUrl`; re-exported under this module's original name so
@@ -159,6 +160,12 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   } catch (err) {
     if (err instanceof Error && err.name === "TimeoutError") {
       return { ok: false, reason: "timeout" };
+    }
+    if (err instanceof ProxyMisconfiguredError) {
+      // FIXED text only — no URL, no interpolated value (masking cannot be
+      // trusted on malformed junk).
+      console.warn("[provider-ipc] refusing to bypass a misconfigured proxy for a models fetch");
+      return { ok: false, reason: "network_error" };
     }
     // Node's fetch rejects a `redirect: "error"` hit with a TypeError("fetch
     // failed") whose `.cause` carries the specific "unexpected redirect"
@@ -325,6 +332,8 @@ export interface ProviderIpcDeps {
   now?: () => string;
   /** The guarded fetch (tests inject a fake; default `fetchCustomProviderModels`). */
   fetchModels?: (params: FetchModelsParams) => Promise<FetchModelsOutcome>;
+  /** TASK.133: per-connection fetch (proxy routing); supplied by main/index.ts. */
+  connectionFetch?: (connectionId: string) => FetchLike;
   /**
    * Catalog lookup for the connection-scoped fetch (`{connectionId}` request
    * shape). Absent = that shape is refused `invalid_request` (fail-closed) —
@@ -667,6 +676,7 @@ async function handleConnectionFetchModels(
     baseUrl: catalogModelsBaseUrl(resolved.baseUrl),
     apiKey: resolved.apiKey,
     kind: resolved.kind,
+    ...(deps.connectionFetch !== undefined ? { fetchImpl: deps.connectionFetch(connectionId) } : {}),
   });
   if (!outcome.ok || outcome.models.length === 0) {
     return outcome;

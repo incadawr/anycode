@@ -36,6 +36,7 @@ import {
   app,
   dialog,
   nativeImage,
+  net,
   safeStorage,
   session,
   shell,
@@ -95,6 +96,13 @@ import {
   type ResolvedProviderSelection,
 } from "./host-env.js";
 import { registerNetworkIpc } from "./network-ipc.js";
+import {
+  createProxyChainFetch,
+  decideUpdaterRoute,
+  makeUpdaterLoginHandler,
+  ProxyMisconfiguredError,
+  type ProxyRequestFactory,
+} from "./provider-proxy-fetch.js";
 import { spawnProxyProbe } from "./proxy-probe.js";
 import { spawnRecognizerProbeChild } from "./recognizer-probe.js";
 import { registerRecognizerProbeIpc } from "./recognizer-probe-ipc.js";
@@ -157,7 +165,7 @@ import { readSessionLimits } from "../shared/session-limits.js";
 // NAMES are no longer needed here — the doctor/login deps below read their value
 // through `engineProxyCarrierValue`, which is also where shell-wins is decided.
 import { stripEngineProxyCarriers } from "../shared/engines.js";
-import { proxyProfileSecretKey, type SystemProxyResolver } from "../shared/proxy.js";
+import { proxyProfileSecretKey, hostForkProxyChain, type SystemProxyResolver } from "../shared/proxy.js";
 import {
   ENGINES_CHANGED_CHANNEL,
   codexDoctorSourceEnv,
@@ -1076,6 +1084,161 @@ function proxyMaterializationFor(targetUrl: string | undefined): ProxyMaterializ
   return targetUrl === undefined ? proxyMaterialization : { ...proxyMaterialization, targetUrl };
 }
 
+// TASK.133: main's own provider requests ride per-credential partition
+// sessions via net.request (per-request `login` = proxy auth), never env
+// mutation.
+const proxyRequestFactory: ProxyRequestFactory = ({ url, method, headers, partition, redirect }) =>
+  net.request({ url, method, headers, partition, redirect, session: session.fromPartition(partition, { cache: false }) });
+const fetchForProxyChain = createProxyChainFetch({
+  readSettings: () => settings,
+  materializationFor: proxyMaterializationFor,
+  requestFactory: proxyRequestFactory,
+  setProxyFor: (partition, rules) =>
+    session.fromPartition(partition, { cache: false }).setProxy({ mode: "fixed_servers", proxyRules: rules }),
+});
+const connectionProxyFetch = (connectionId: string) => fetchForProxyChain(hostForkProxyChain(connectionId));
+
+// TASK.133: updater routing — decided at REQUEST time (beforeNetwork), never
+// at boot only. No setFeedURL wiring exists anywhere in main (verified by
+// grep): the feed is electron-builder's `publish` config surfaced through
+// app-update.yml, so no feed URL is ever fabricated here.
+const UPDATER_PARTITION = "electron-updater"; // what electron-updater's own executor resolves (verified)
+let updaterPartitionManaged = false; // "we ever setProxy'd the updater partition"
+let updaterProxyCreds: { login: string; password: string; host: string; port: number } | undefined;
+let updaterLastProxyKey: string | undefined;
+const updaterBeforeNetwork = async (): Promise<void> => {
+  const current = settings;
+  if (current === null) {
+    return; // nothing loaded — untouched
+  }
+  // Stale creds cleared on EVERY decision, before the route is even computed.
+  updaterProxyCreds = undefined;
+  let decisionResult: Awaited<ReturnType<typeof decideUpdaterRoute>>;
+  try {
+    decisionResult = await decideUpdaterRoute(current, proxyMaterializationFor(undefined), undefined);
+  } catch (err) {
+    // Sanitized: a raw resolver error could quote an authenticated proxy URL.
+    void err;
+    throw new Error("updater proxy route decision failed");
+  }
+  const { decision, creds } = decisionResult;
+  // Config identity INCLUDES credentials (a password rotation at the same
+  // host:port must flush Chromium's session auth cache — rules alone would
+  // hash identically and the cached old credential would ride on).
+  const configKey =
+    decision.kind === "fixed"
+      ? `${decision.rules}\n${decision.bypass ?? ""}\n${creds?.login ?? ""}\n${creds?.password ?? ""}`
+      : undefined;
+  const updaterSession = (): Electron.Session => session.fromPartition(UPDATER_PARTITION, { cache: false });
+  /** Changed config (rules/bypass/credentials) must not ride a warm session: flush sockets + auth cache. */
+  const flushIfChanged = async (): Promise<void> => {
+    if (updaterPartitionManaged && configKey !== updaterLastProxyKey) {
+      await flushSession(updaterSession());
+      updaterLastProxyKey = undefined;
+    }
+  };
+  const applyProxy = async (config: Electron.ProxyConfig): Promise<void> => {
+    try {
+      await updaterSession().setProxy(config);
+    } catch (err) {
+      // Sanitized: a setProxy rejection could quote the rules string.
+      void err;
+      throw new Error("updater proxy session configuration failed");
+    }
+  };
+  /**
+   * Sanitized session flush (TASK.133 defect 3): closeAllConnections /
+   * clearAuthCache rejections propagate as FIXED messages — a raw session
+   * error could quote the authenticated proxy URL. Fail-closed: the gate
+   * still rejects, so no updater request rides a stale/failed flush.
+   */
+  const flushSession = async (ses: Electron.Session): Promise<void> => {
+    try {
+      await ses.closeAllConnections();
+    } catch (err) {
+      void err;
+      throw new Error("updater proxy session flush failed");
+    }
+    // clearAuthCache exists on the real Electron Session type; structural
+    // fakes in wiring tests may not carry it.
+    const clearer = (ses as Partial<Electron.Session>).clearAuthCache;
+    if (typeof clearer === "function") {
+      try {
+        await clearer.call(ses);
+      } catch (err) {
+        void err;
+        throw new Error("updater proxy session flush failed");
+      }
+    }
+  };
+  switch (decision.kind) {
+    case "untouched": {
+      // "Untouched" = never configured AND never managed only. If WE managed
+      // the partition and the config was since removed, reset the owned
+      // session back to Chromium's system default (flushing auth first — the
+      // old config's credentials must not survive the reset).
+      if (updaterPartitionManaged) {
+        await flushSession(updaterSession());
+        await applyProxy({ mode: "system" });
+        updaterPartitionManaged = false;
+        updaterLastProxyKey = undefined;
+      }
+      return;
+    }
+    case "system": {
+      await flushIfChanged();
+      await applyProxy({ mode: "system" });
+      updaterPartitionManaged = true;
+      updaterLastProxyKey = undefined;
+      return;
+    }
+    case "direct": {
+      // Explicit-direct / dangling / '*'-exemption: mode "direct" (NOT
+      // "system" — the OS proxy setting itself could route elsewhere).
+      await flushIfChanged();
+      await applyProxy({ mode: "direct" });
+      updaterPartitionManaged = true;
+      updaterLastProxyKey = undefined;
+      return;
+    }
+    case "misconfigured": {
+      if (updaterPartitionManaged) {
+        await flushSession(updaterSession());
+        await applyProxy({ mode: "system" });
+        updaterPartitionManaged = false;
+        updaterLastProxyKey = undefined;
+      }
+      throw new ProxyMisconfiguredError(); // fixed message, credential-free
+    }
+    case "fixed": {
+      await flushIfChanged();
+      await applyProxy({
+        mode: "fixed_servers",
+        proxyRules: decision.rules,
+        ...(decision.bypass !== undefined ? { proxyBypassRules: decision.bypass } : {}),
+      });
+      updaterPartitionManaged = true;
+      updaterLastProxyKey = configKey as string;
+      if (creds !== undefined && decision.rules !== "") {
+        try {
+          const parsed = new URL(decision.rules);
+          // Default port by SCHEME: 443 for https proxies, 80 for http.
+          const defaultPort = parsed.protocol === "https:" ? 443 : 80;
+          updaterProxyCreds = {
+            ...creds,
+            host: parsed.hostname.replace(/^\[|\]$/g, ""), // normalize IPv6 brackets away
+            port: Number(parsed.port !== "" ? parsed.port : defaultPort),
+          };
+        } catch {
+          updaterProxyCreds = undefined;
+        }
+      }
+      return;
+    }
+  }
+};
+
+
 /**
  * The endpoint the ENGINE carriers of a given settings view are resolved
  * against: the active connection's effective base url, when there is one.
@@ -1578,11 +1741,13 @@ void app.whenReady().then(async () => {
     vault,
     resolveConfig: (id) => oauthConfigFromEntry(findCatalogEntry(id)),
     allowWeak: () => settings?.security.allowWeakSecretStorage ?? false,
+    fetchFor: connectionProxyFetch,
     logger: fileLogger,
   });
   oauthEngine = new OAuthEngine({
     vault,
     openExternal: (url) => shell.openExternal(url),
+    fetchFor: connectionProxyFetch,
     logger: fileLogger,
   });
   parkedResumeId = resolveResumeId();
@@ -2195,6 +2360,7 @@ void app.whenReady().then(async () => {
     vault,
     settingsPath,
     logger: fileLogger,
+    connectionFetch: connectionProxyFetch,
     // Connection-scoped fetch-models resolution (structural, same discipline
     // as settingsIpcDeps' catalog injection): only id/baseUrl/defaultTransport
     // ever cross this seam.
@@ -2586,6 +2752,19 @@ void app.whenReady().then(async () => {
     logger: fileLogger,
     platform: process.platform,
     openExternal: (url) => shell.openExternal(url),
+    beforeNetwork: updaterBeforeNetwork,
+  });
+  // TASK.133: app-scope proxy auth for the updater (public API — verified
+  // emit at electron-updater/out/AppUpdater.js ~206). Connection credentials
+  // NEVER land here: the handler reads the app-scope creds captured by the
+  // last updaterBeforeNetwork decision, and answers only challenges for the
+  // exact configured proxy host/port.
+  // Reads the CURRENT auth state on every challenge — never captured at boot.
+  autoUpdater.on("login", (authInfo, callback) => {
+    const handler = makeUpdaterLoginHandler(() => updaterProxyCreds);
+    handler(authInfo as never as Parameters<typeof handler>[0], (username, password) =>
+      username === undefined ? (callback as () => void)() : callback(username, password ?? ""),
+    );
   });
 
   // Boot decision tree: explicit initial targets start a tab; a normal GUI launch

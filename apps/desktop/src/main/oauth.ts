@@ -88,6 +88,8 @@ export interface OAuthEngineDeps {
   openExternal: (url: string) => Promise<unknown> | unknown;
   /** Token-endpoint fetch (default: global fetch). */
   fetchFn?: FetchLike;
+  /** TASK.133: per-connection token-endpoint fetch (proxy routing); wins over `fetchFn` when set. */
+  fetchFor?: (connectionId: string) => FetchLike;
   /** Flow deadline in ms (default 5 min). */
   timeoutMs?: number;
   /** Clock (default Date.now). */
@@ -126,6 +128,7 @@ export class OAuthEngine {
   private readonly vault: OAuthTokenStore;
   private readonly openExternal: (url: string) => Promise<unknown> | unknown;
   private readonly fetchFn: FetchLike;
+  private readonly fetchFor: OAuthEngineDeps["fetchFor"];
   private readonly timeoutMs: number;
   private readonly now: () => number;
   private readonly logger: OAuthEngineDeps["logger"];
@@ -145,6 +148,7 @@ export class OAuthEngine {
     this.vault = deps.vault;
     this.openExternal = deps.openExternal;
     this.fetchFn = deps.fetchFn ?? defaultFetch;
+    this.fetchFor = deps.fetchFor;
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.now = deps.now ?? Date.now;
     this.logger = deps.logger;
@@ -305,7 +309,13 @@ export class OAuthEngine {
     }
 
     try {
-      const blob = await this.exchangeCode(ctx.config, code, ctx.redirectUri(), ctx.verifier);
+      const blob = await this.exchangeCode(
+        ctx.config,
+        code,
+        ctx.redirectUri(),
+        ctx.verifier,
+        this.fetchFor?.(ctx.connectionId) ?? this.fetchFn,
+      );
       // Residual §6.5: if the flow settled (cancelled — e.g. the connection was
       // deleted) WHILE the token exchange was in flight, do NOT persist. The
       // engine persists by connectionId; writing now would strand a blob under a
@@ -367,6 +377,7 @@ export class OAuthEngine {
     code: string,
     redirectUri: string,
     verifier: string,
+    fetchFn: FetchLike = this.fetchFn,
   ): Promise<OAuthTokenBlob> {
     const body = new URLSearchParams({
       grant_type: "authorization_code",
@@ -375,7 +386,7 @@ export class OAuthEngine {
       client_id: config.clientId,
       code_verifier: verifier,
     }).toString();
-    const res = await this.fetchFn(config.tokenUrl, {
+    const res = await fetchFn(config.tokenUrl, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body,

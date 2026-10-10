@@ -11,6 +11,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { UPDATE_RELEASES_URL, type UpdateStatus } from "../shared/updates.js";
+import { ProxyMisconfiguredError } from "./provider-proxy-fetch.js";
 import {
   createUpdaterController,
   DEFAULT_PERIODIC_INTERVAL_RANGE_MS,
@@ -472,5 +473,84 @@ describe("updater: openReleasesPage (TASK.47 defect 2)", () => {
 
     expect(controller.openReleasesPage()).toEqual({ ok: true });
     expect(warn).toHaveBeenCalledWith("updater: openExternal failed", expect.any(Error));
+  });
+});
+
+// ── TASK.133: beforeNetwork hook (updater proxy routing gate) ──
+
+describe("updater: beforeNetwork hook (TASK.133)", () => {
+  it("a rejecting beforeNetwork fails check() with the same error and checkForUpdates is NEVER called", async () => {
+    const gate = vi.fn(async () => {
+      throw new ProxyMisconfiguredError();
+    });
+    const { deps, autoUpdater } = makeDeps({ beforeNetwork: gate });
+    const controller = createUpdaterController(deps);
+    await expect(controller.check()).rejects.toBeInstanceOf(ProxyMisconfiguredError);
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it("a rejecting beforeNetwork fails download() likewise (after status reached available)", async () => {
+    const gate = vi.fn(async () => {
+      throw new ProxyMisconfiguredError();
+    });
+    const { deps, autoUpdater } = makeDeps({ platform: "linux", beforeNetwork: gate });
+    const controller = createUpdaterController(deps);
+    // Sneak past the invalid_state gate WITHOUT tripping beforeNetwork:
+    // fire the event the library would emit from its own (mocked) check.
+    autoUpdater.fire("update-available", { version: "1.2.3" });
+    await expect(controller.download()).rejects.toBeInstanceOf(ProxyMisconfiguredError);
+    expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+  });
+
+  it("a resolving beforeNetwork keeps byte-identical check/download behavior", async () => {
+    const gate = vi.fn(async () => undefined);
+    const { deps, autoUpdater } = makeDeps({ platform: "linux", beforeNetwork: gate });
+    const controller = createUpdaterController(deps);
+    expect(await controller.check()).toEqual({ ok: true });
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(gate).toHaveBeenCalledTimes(1);
+    autoUpdater.fire("update-available", { version: "1.2.3" });
+    expect(await controller.download()).toEqual({ ok: true });
+    expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(gate).toHaveBeenCalledTimes(2);
+  });
+
+  it("an absent beforeNetwork changes nothing (plain check/download assertions still pass)", async () => {
+    const { deps, autoUpdater } = makeDeps({ platform: "linux" });
+    const controller = createUpdaterController(deps);
+    expect(await controller.check()).toEqual({ ok: true });
+    autoUpdater.fire("update-available", { version: "1.2.3" });
+    expect(await controller.download()).toEqual({ ok: true });
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedule: an armed tick with a rejecting beforeNetwork never reaches checkForUpdates, and the schedule survives", async () => {
+    const gate = vi.fn(async () => {
+      throw new ProxyMisconfiguredError();
+    });
+    const { schedule, armed } = fakeSchedule({ startupDelayRangeMs: [1_000, 1_000], intervalRangeMs: [2_000, 2_000] });
+    const { deps, autoUpdater } = makeDeps({ schedule, beforeNetwork: gate });
+    createUpdaterController(deps);
+    armed[0]?.fn();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(gate).toHaveBeenCalledTimes(1);      // the tick DID route through the gated check()
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(armed).toHaveLength(2);              // the schedule re-armed despite the refusal
+  });
+
+  it("schedule: with a resolving beforeNetwork the armed tick performs the check (pins the gated tick routing)", async () => {
+    const gate = vi.fn(async () => undefined);
+    const { schedule, armed } = fakeSchedule({ startupDelayRangeMs: [1_000, 1_000], intervalRangeMs: [2_000, 2_000] });
+    const { deps, autoUpdater } = makeDeps({ schedule, beforeNetwork: gate });
+    createUpdaterController(deps);
+    armed[0]?.fn();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 });

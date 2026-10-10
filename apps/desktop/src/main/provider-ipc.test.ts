@@ -9,12 +9,13 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../settings/files.js";
-import type { CustomProviderRecord, SecretKey } from "../shared/settings.js";
+import type { AnycodeSettings, CustomProviderRecord, SecretKey } from "../shared/settings.js";
 import {
   catalogModelsBaseUrl,
   connectionApiKeySecretKey,
@@ -31,6 +32,8 @@ import {
   type ProviderVaultLike,
 } from "./provider-ipc.js";
 import type { SecretSetResult } from "./vault.js";
+import { createProxyChainFetch, type ProxyDispatchRequest } from "./provider-proxy-fetch.js";
+import { hostForkProxyChain } from "../shared/proxy.js";
 
 /** `saveSettings` call counter (F-C zero-trace red-proofs — asserted by spy, not just by re-reading the file). */
 const saveSettingsSpy = vi.hoisted(() => ({ count: 0 }));
@@ -1172,5 +1175,172 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(receivedAuth).toBeUndefined();
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.connections[0]?.models).toEqual(["kimi-for-coding", "k3"]);
+  });
+
+  // ── TASK.133: INTEGRATED production-seam tests (proxy routing through the
+  // real guarded fetch, fake ONLY at the Electron net boundary) ──
+
+  it("TASK.133: proxied connection fetches models through the production proxy dispatcher", async () => {
+    await seedConnection({
+      id: "conn-1",
+      providerId: "kimi",
+      proxyRef: "proxy-1",
+    });
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        ...(JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>),
+        network: { proxyProfiles: [{ id: "proxy-1", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" }] },
+      }),
+    );
+    vault.store.set(connectionApiKeySecretKey("conn-1"), "sk-kimi-secret");
+
+    // A fake boundary whose requests respond 200 with a models list.
+    const listenersByRequest: Array<Map<string, Array<(...args: unknown[]) => void>>> = [];
+    const dispatches: ProxyDispatchRequest[] = [];
+    const requestFactory = (dispatch: ProxyDispatchRequest): unknown => {
+      dispatches.push(dispatch);
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      listenersByRequest.push(listeners);
+      const base: Record<string, unknown> = {
+        on(event: string, listener: (...args: never[]) => void) {
+          const arr = listeners.get(event) ?? [];
+          arr.push(listener as (...args: unknown[]) => void);
+          listeners.set(event, arr);
+          return base;
+        },
+        write: () => true,
+        end: () => undefined,
+        abort: () => undefined,
+      };
+      return base;
+    };
+    const productionFetch = createProxyChainFetch({
+      readSettings: () => JSON.parse(readFileSync(settingsPath, "utf8")) as AnycodeSettings,
+      materializationFor: () => ({ proxyPassword: () => "pw" }),
+      requestFactory,
+      setProxyFor: async () => undefined,
+      fallbackFetch: (async (url: string, init: RequestInit) => new Response("fallback", { status: 599 })) as typeof globalThis.fetch,
+    })(hostForkProxyChain("conn-1"));
+
+    // Drive the fake wire as soon as the dispatch lands.
+    const drive = (async () => {
+      for (let i = 0; i < 100 && dispatches.length === 0; i++) {
+        await new Promise((r) => setTimeout(r, 2));
+      }
+      const listeners = listenersByRequest[0];
+      if (listeners === undefined) {
+        return;
+      }
+      let dataFn: ((chunk: Buffer) => void) | undefined;
+      let endFn: (() => void) | undefined;
+      const incoming = {
+        statusCode: 200,
+        statusMessage: "",
+        headers: { "content-type": "application/json" },
+        on(event: "data" | "end" | "error", l: unknown) {
+          if (event === "data") dataFn = l as (chunk: Buffer) => void;
+          if (event === "end") endFn = l as () => void;
+          return incoming;
+        },
+      };
+      for (const l of listeners.get("response") ?? []) l(incoming);
+      await new Promise((r) => setTimeout(r, 2));
+      dataFn?.(Buffer.from('{"data":[{"id":"live-a"}]}'));
+      endFn?.();
+    })();
+
+    const { deps, calls } = makeCatalogDeps({
+      fetchModels: undefined, // the REAL guarded fetch
+      connectionFetch: () => productionFetch as FetchLike,
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1" });
+    await drive;
+    expect(res).toEqual({ ok: true, models: [{ id: "live-a" }] });
+    expect(dispatches).toHaveLength(1);
+    expect(dispatches[0]?.url).toBe("https://api.kimi.com/coding/v1/models");
+    expect(dispatches[0]?.redirect).toBe("manual"); // manual transport; redirect:error is enforced in the redirect event
+    expect(dispatches[0]?.headers["x-api-key"]).toBe("sk-kimi-secret");
+    expect(calls).toEqual([]);
+  });
+
+  it("TASK.133: malformed proxy refuses with renderer-compatible reason and a credential-free log", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", proxyUrl: "socks5://x:1" });
+    vault.store.set(connectionApiKeySecretKey("conn-1"), "sk-kimi-secret");
+    const dispatches: ProxyDispatchRequest[] = [];
+    const fallbackCalls: Array<{ url: string }> = [];
+    const productionFetch = createProxyChainFetch({
+      readSettings: () => JSON.parse(readFileSync(settingsPath, "utf8")) as AnycodeSettings,
+      materializationFor: () => ({ proxyPassword: () => "pw" }),
+      requestFactory: (dispatch) => {
+        dispatches.push(dispatch);
+        throw new Error("factory must not be called");
+      },
+      setProxyFor: async () => undefined,
+      fallbackFetch: (async (url: string) => {
+        fallbackCalls.push({ url });
+        return new Response("fallback", { status: 599 });
+      }) as typeof globalThis.fetch,
+    })(hostForkProxyChain("conn-1"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const { deps } = makeCatalogDeps({
+        fetchModels: undefined,
+        connectionFetch: () => productionFetch as FetchLike,
+      });
+      const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1" });
+      expect(res).toEqual({ ok: false, reason: "network_error" });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("pw");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("socks5");
+      expect(dispatches).toEqual([]);
+      expect(fallbackCalls).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("TASK.133: unproxied connection routes through the wired production chain to the UNCHANGED fallback (no session/dispatcher config)", async () => {
+    // Production ALWAYS wires connectionFetch; an unproxied connection must
+    // reach the fallback with the URL/init the caller passed, and never
+    // configure a partition or dispatch a proxied request.
+    await seedConnection({ id: "conn-2", providerId: "kimi" }); // NO proxy fields
+    vault.store.set(connectionApiKeySecretKey("conn-2"), "sk-kimi-secret");
+    const dispatches: ProxyDispatchRequest[] = [];
+    const fallbackCalls: Array<{ url: string; init: RequestInit }> = [];
+    const fallbackFetch = (async (url: string, init: RequestInit) => {
+      fallbackCalls.push({ url, init });
+      return new Response('{"data":[{"id":"fb-1"}]}', { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof globalThis.fetch;
+    // The REAL chain factory with the production-shaped deps; the chain is
+    // constructed for THIS connection id (as main's connectionFetch does).
+    const productionFetch = createProxyChainFetch({
+      readSettings: () => JSON.parse(readFileSync(settingsPath, "utf8")) as AnycodeSettings,
+      materializationFor: () => ({ proxyPassword: () => "pw" }),
+      requestFactory: (dispatch) => {
+        dispatches.push(dispatch);
+        throw new Error("dispatcher must not be called for an unproxied connection");
+      },
+      setProxyFor: async () => {
+        throw new Error("setProxyFor must not be called for an unproxied connection");
+      },
+      fallbackFetch,
+    })(hostForkProxyChain("conn-2"));
+    const { deps } = makeCatalogDeps({
+      fetchModels: undefined,
+      connectionFetch: () => productionFetch as FetchLike,
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-2" });
+    expect(res).toEqual({ ok: true, models: [{ id: "fb-1" }] });
+    expect(dispatches).toEqual([]);
+    expect(fallbackCalls).toHaveLength(1);
+    expect(fallbackCalls[0]?.url).toBe("https://api.kimi.com/coding/v1/models");
+  });
+
+  it("TASK.133: unproxied connection adds no fetchImpl when the seam is unwired", async () => {
+    await seedConnection({ id: "conn-12", providerId: "kimi" });
+    const { deps, calls } = makeCatalogDeps();
+    await handleCustomProviderFetchModels(deps, { connectionId: "conn-12" });
+    expect("fetchImpl" in (calls[0] as object)).toBe(false);
   });
 });

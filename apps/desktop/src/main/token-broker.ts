@@ -44,6 +44,8 @@ export interface TokenBrokerDeps {
   /** Weak-storage consent for the rotated-blob write (read fresh from settings). */
   allowWeak: () => boolean;
   fetchFn?: FetchLike;
+  /** TASK.133: per-connection refresh fetch (proxy routing); wins over `fetchFn` when set. */
+  fetchFor?: (connectionId: string) => FetchLike;
   /** ms before expiry to trigger a refresh (default 60s). */
   skewMs?: number;
   now?: () => number;
@@ -65,6 +67,7 @@ export class TokenBroker {
   private readonly resolveConfig: (providerId: string) => OAuthProviderConfig | undefined;
   private readonly allowWeak: () => boolean;
   private readonly fetchFn: FetchLike;
+  private readonly fetchFor: TokenBrokerDeps["fetchFor"];
   private readonly skewMs: number;
   private readonly now: () => number;
   private readonly logger: TokenBrokerDeps["logger"];
@@ -76,6 +79,7 @@ export class TokenBroker {
     this.resolveConfig = deps.resolveConfig;
     this.allowWeak = deps.allowWeak;
     this.fetchFn = deps.fetchFn ?? defaultFetch;
+    this.fetchFor = deps.fetchFor;
     this.skewMs = deps.skewMs ?? DEFAULT_SKEW_MS;
     this.now = deps.now ?? Date.now;
     this.logger = deps.logger;
@@ -128,7 +132,11 @@ export class TokenBroker {
       return undefined;
     }
     try {
-      const fresh = await this.exchangeRefresh(config, blob.refreshToken);
+      const fresh = await this.exchangeRefresh(
+        this.fetchFor?.(connectionId) ?? this.fetchFn,
+        config,
+        blob.refreshToken,
+      );
       await this.vault.setOAuthTokens(connectionId, fresh, { allowWeak: this.allowWeak() });
       return fresh.accessToken;
     } catch (err) {
@@ -142,13 +150,13 @@ export class TokenBroker {
     }
   }
 
-  private async exchangeRefresh(config: OAuthProviderConfig, refreshToken: string): Promise<OAuthTokenBlob> {
+  private async exchangeRefresh(fetchFn: FetchLike, config: OAuthProviderConfig, refreshToken: string): Promise<OAuthTokenBlob> {
     const body = new URLSearchParams({
       grant_type: "refresh_token",
       refresh_token: refreshToken,
       client_id: config.clientId,
     }).toString();
-    const res = await this.fetchFn(config.tokenUrl, {
+    const res = await fetchFn(config.tokenUrl, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
       body,
