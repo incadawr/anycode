@@ -306,3 +306,52 @@ describe("profile `engine:` round-trip through the editor", () => {
     expect(result).toMatchObject({ ok: false, reason: "validation_failed" });
   });
 });
+
+describe("main-inherited profiles are read-only (TASK.214)", () => {
+  function md(fields: Record<string, string>, body: string): string {
+    const lines = Object.entries(fields).map(([k, v]) => `${k}: ${v}`);
+    return `---\n${lines.join("\n")}\n---\n${body}`;
+  }
+
+  async function makeWorktree(parent: string): Promise<{ main: string; wt: string; gitdir: string }> {
+    const main = join(parent, "main");
+    const wt = join(parent, "wt");
+    const gitdir = join(main, ".git", "worktrees", "wt");
+    await mkdir(join(main, ".git"), { recursive: true });
+    await mkdir(gitdir, { recursive: true });
+    await mkdir(wt, { recursive: true });
+    await writeFile(join(wt, ".git"), `gitdir: ${gitdir}\n`, "utf-8");
+    await writeFile(join(gitdir, "commondir"), "../../\n", "utf-8");
+    await writeFile(join(gitdir, "gitdir"), `${join(wt, ".git")}\n`, "utf-8");
+    return { main, wt, gitdir };
+  }
+
+  it("save and delete refuse a main-inherited profile; file remains unchanged", async () => {
+    const parent = await tmp();
+    const home = await tmp();
+    const { main, wt } = await makeWorktree(parent);
+    const mainRoot = join(main, ".anycode/agents");
+    const profilePath = join(mainRoot, "reviewer.md");
+    const original = md({ name: "reviewer", description: "from main" }, "unchanged body");
+    await mkdir(mainRoot, { recursive: true });
+    await writeFile(profilePath, original, "utf-8");
+
+    // Editor custody: ownAgentRoots(wt, home) — the inherited main root is NOT writable.
+    const roots = ownAgentRoots(wt, home);
+    expect(roots).toEqual([join(wt, ".anycode/agents"), join(home, ".anycode/agents")]);
+
+    const saved = await saveAgentProfile(
+      fs,
+      profilePath,
+      mainRoot,
+      { name: "reviewer", description: "hijacked", body: "new body" },
+      roots,
+    );
+    expect(saved).toEqual({ ok: false, reason: "outside_own_roots" });
+
+    const deleted = await deleteAgentProfile(fs, profilePath, roots);
+    expect(deleted).toEqual({ ok: false, reason: "outside_own_roots" });
+
+    await expect(readFile(profilePath, "utf-8")).resolves.toBe(original);
+  });
+});

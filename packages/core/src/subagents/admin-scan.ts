@@ -14,7 +14,8 @@
  * `@anycode/core/subagents-admin` subpath for the Electron main process.
  */
 
-import { join } from "node:path";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { discoverPlugins } from "../plugins/discovery.js";
 import { MAX_AGENT_PROFILES, SUBAGENT_MAX_TURNS_CEILING } from "../types/config.js";
@@ -33,6 +34,181 @@ function subdir(baseDir: string, rel: string): string {
 }
 
 /**
+ * TASK.214: resolves the MAIN checkout root of a linked git worktree, purely
+ * from on-disk metadata (NO git process). `workspace` must be the worktree
+ * root; returns undefined for ordinary checkouts, missing/garbage metadata, or
+ * anything that does not match git's canonical linked-worktree layout:
+ *
+ *   <ws>/.git            — exactly one "gitdir: <path>" line (optional final EOL)
+ *   <gitdir>/commondir   — single line, relative resolved against gitdir
+ *   <gitdir>/gitdir      — PLAIN path line (git's backlink), resolved against gitdir
+ *
+ * Layout requirements (canonicalized via realpath to tolerate macOS /tmp
+ * aliases): common's basename is ".git", gitdir is a direct child of
+ * common/worktrees, common is gitdir's canonical grandparent, and the backlink
+ * matches canonical `<ws>/.git`. Metadata components must be regular
+ * non-symlink files; `main/.git` must be a real directory resolving to common.
+ * Returns undefined whenever `main === workspace`. Fails silently to undefined.
+ */
+export function resolveWorktreeMainRootSync(workspace: string): string | undefined {
+  try {
+    const dotGitPath = resolve(workspace, ".git");
+
+    // <ws>/.git must be a regular non-symlink FILE with a strict single
+    // "gitdir: <path>" line. An ordinary checkout's .git DIRECTORY yields
+    // undefined here (lstatSync follows nothing on the final component).
+    let dotGitStat: { isFile(): boolean; isSymbolicLink(): boolean };
+    try {
+      dotGitStat = lstatSync(dotGitPath);
+    } catch {
+      return undefined;
+    }
+    if (dotGitStat.isSymbolicLink() || !dotGitStat.isFile()) {
+      return undefined;
+    }
+    let raw: string;
+    try {
+      raw = readFileSync(dotGitPath, "utf-8");
+    } catch {
+      return undefined;
+    }
+    // Exactly one "gitdir: ..." line: a nonempty path allowing INTERNAL spaces
+    // (valid repo/worktree paths may contain them) but no CR/LF/NUL, with an
+    // optional final EOL; any second line or trailing content fails the match.
+    const m = /^gitdir: ([^\r\n\0]+)\r?\n?$/.exec(raw);
+    if (!m) {
+      return undefined;
+    }
+    const gitdirRaw = m[1]!;
+    const gitdir = isAbsolute(gitdirRaw) ? resolve(gitdirRaw) : resolve(workspace, gitdirRaw);
+
+    // gitdir/commondir — strict single line (internal spaces allowed, no
+    // CR/LF/NUL, optional final EOL), relative resolved against gitdir.
+    const commondirPath = join(gitdir, "commondir");
+    let commonStat: { isFile(): boolean; isSymbolicLink(): boolean };
+    let commonRaw: string;
+    try {
+      commonStat = lstatSync(commondirPath);
+      if (commonStat.isSymbolicLink() || !commonStat.isFile()) return undefined;
+      commonRaw = readFileSync(commondirPath, "utf-8");
+    } catch {
+      return undefined;
+    }
+    const cm = /^([^\r\n\0]+)\r?\n?$/.exec(commonRaw);
+    if (!cm) return undefined;
+    const commonRawVal = cm[1]!;
+    const common = isAbsolute(commonRawVal) ? resolve(commonRawVal) : resolve(gitdir, commonRawVal);
+
+    // gitdir/gitdir — a PLAIN path line (git's backlink; internal spaces
+    // allowed, no CR/LF/NUL, optional final EOL), resolved against gitdir.
+    const backlinkPath = join(gitdir, "gitdir");
+    let backStat: { isFile(): boolean; isSymbolicLink(): boolean };
+    let backRaw: string;
+    try {
+      backStat = lstatSync(backlinkPath);
+      if (backStat.isSymbolicLink() || !backStat.isFile()) return undefined;
+      backRaw = readFileSync(backlinkPath, "utf-8");
+    } catch {
+      return undefined;
+    }
+    const bm = /^([^\r\n\0]+)\r?\n?$/.exec(backRaw);
+    if (!bm) return undefined;
+    const backRawVal = bm[1]!;
+    const backlink = isAbsolute(backRawVal) ? resolve(backRawVal) : resolve(gitdir, backRawVal);
+
+    // Canonicalize for comparisons (tolerates macOS /tmp -> /private/var aliases).
+    const real = (p: string): string | undefined => {
+      try {
+        return realpathSync(p);
+      } catch {
+        return undefined;
+      }
+    };
+    const realWorkspace = real(workspace);
+    const realGitdir = real(gitdir);
+    const realCommon = real(common);
+    const realBacklink = real(backlink);
+    const realDotGit = real(dotGitPath);
+    if (
+      realWorkspace === undefined ||
+      realGitdir === undefined ||
+      realCommon === undefined ||
+      realBacklink === undefined ||
+      realDotGit === undefined
+    ) {
+      return undefined;
+    }
+
+    // Canonical layout: common basename ".git"; gitdir is a direct child of
+    // common/worktrees; common is gitdir's canonical grandparent; backlink
+    // matches canonical <ws>/.git.
+    if (basename(realCommon) !== ".git") return undefined;
+    const worktreesDir = join(realCommon, "worktrees");
+    if (dirname(realGitdir) !== worktreesDir) return undefined;
+    if (dirname(dirname(realGitdir)) !== realCommon) return undefined;
+    if (realBacklink !== realDotGit) return undefined;
+
+    // Main checkout root is common's parent; main/.git must be a real directory
+    // resolving to common.
+    const main = dirname(realCommon);
+    const mainDotGit = join(main, ".git");
+    let mainStat: { isDirectory(): boolean; isSymbolicLink(): boolean };
+    try {
+      mainStat = lstatSync(mainDotGit);
+    } catch {
+      return undefined;
+    }
+    if (mainStat.isSymbolicLink() || !mainStat.isDirectory()) return undefined;
+    if (real(mainDotGit) !== realCommon) return undefined;
+
+    if (main === realWorkspace) return undefined;
+
+    // Validate main/.anycode and main/.anycode/agents against the canonical main
+    // root: reject a final agents symlink and any parent symlink escaping main.
+    // Missing components (ENOENT) are normal; other errors / dangling symlinks
+    // fail closed to undefined.
+    const checkComponent = (p: string): void => {
+      let st: { isSymbolicLink(): boolean; isDirectory(): boolean };
+      try {
+        st = lstatSync(p);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return;
+        throw err;
+      }
+      if (st.isSymbolicLink()) throw new Error("symlink component");
+      if (!st.isDirectory()) throw new Error("not a directory");
+    };
+    try {
+      checkComponent(join(main, ".anycode"));
+      checkComponent(join(main, ".anycode", "agents"));
+    } catch {
+      return undefined;
+    }
+    // Containment: any EXISTING component path must not resolve outside main.
+    const under = (base: string, cand: string): boolean => {
+      const rel = relative(base, cand);
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    };
+    for (const p of [join(main, ".anycode"), join(main, ".anycode", "agents")]) {
+      let exists = true;
+      try {
+        lstatSync(p);
+      } catch {
+        exists = false;
+      }
+      if (exists) {
+        const rp = real(p);
+        if (rp === undefined || !under(main, rp)) return undefined;
+      }
+    }
+
+    return main;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Builds the precedence-ordered agent-profile roots (project `.anycode/agents` >
  * user `.anycode/agents` > plugin roots). EXTRACTED from the extensions bootstrap
  * so both boot discovery and the admin scan share one recipe. workspace === home
@@ -44,11 +220,44 @@ export function buildAgentProfileRoots(
   pluginAgentRoots: readonly AgentProfileRoot[],
 ): AgentProfileRoot[] {
   const sameWorkspaceHome = workspace === home;
-  return [
+  const roots: AgentProfileRoot[] = [
     { dir: subdir(workspace, ".anycode/agents"), source: "project" },
-    ...(sameWorkspaceHome ? [] : [{ dir: subdir(home, ".anycode/agents"), source: "user" }]),
-    ...pluginAgentRoots,
   ];
+  // TASK.214: a linked-worktree workspace inherits the MAIN checkout's agent
+  // profiles — validated main/.anycode/agents slots SECOND with source
+  // "project" (precedence worktree > main > user > plugins). Admitted
+  // REGARDLESS of home equality: even when main === home the inherited catalog
+  // keeps the project tier (the later user root is deduped against it, with
+  // canonical alias comparison). main === workspace is the only exclusion.
+  const main = resolveWorktreeMainRootSync(workspace);
+  if (main !== undefined && main !== workspace) {
+    const mainRoot = { dir: subdir(main, ".anycode/agents"), source: "project" };
+    if (!roots.some((r) => r.dir === mainRoot.dir)) {
+      roots.push(mainRoot);
+    }
+  }
+  if (!sameWorkspaceHome) {
+    // Dedupe the user root when its directory already appears as the inherited
+    // project root (main === home) — canonicalizing the HOME BASE (the agents
+    // dir may not exist yet, so realpath the base and rebuild the path) so a
+    // macOS-style /var vs /private/var alias does not duplicate the entry.
+    const userRoot = { dir: subdir(home, ".anycode/agents"), source: "user" };
+    let canonicalHome: string | undefined;
+    try {
+      canonicalHome = realpathSync(home);
+    } catch {
+      canonicalHome = undefined;
+    }
+    const canonicalUserDir = canonicalHome !== undefined ? subdir(canonicalHome, ".anycode/agents") : undefined;
+    const duplicate =
+      roots.some((r) => r.dir === userRoot.dir) ||
+      (canonicalUserDir !== undefined && roots.some((r) => r.dir === canonicalUserDir));
+    if (!duplicate) {
+      roots.push(userRoot);
+    }
+  }
+  roots.push(...pluginAgentRoots);
+  return roots;
 }
 
 /**
@@ -146,11 +355,22 @@ export async function scanAgentProfilesAdmin(
   }
 
   const roots = buildAgentProfileRoots(workspace, home, pluginAgentRoots);
-  // The writable own-catalog roots (project/user). An OWN root that is itself a
-  // symlink escaping this area must never be enumerated (see the guard below);
-  // plugin roots are a separate read-only trust domain (plugin discovery already
-  // contains them) so the guard is scoped to project/user roots.
+  // The writable own-catalog roots (project/user) — UNCHANGED (TASK.214): admin
+  // WRITES stay confined to the worktree/user roots; an inherited main root is
+  // read-catalog only.
   const ownRoots = ownAgentRoots(workspace, home);
+  // Read-catalog roots for the containment guard below: the own roots PLUS the
+  // validated inherited project root(s) built by the shared recipe (full
+  // catalog paths — the helper assumes catalog roots, not checkout roots).
+  // This grants the scan reading access only; it is NEVER passed to writes.
+  const main = resolveWorktreeMainRootSync(workspace);
+  const readCatalogRoots = [...ownRoots];
+  if (main !== undefined && main !== workspace) {
+    const mainAgents = subdir(main, ".anycode/agents");
+    if (!readCatalogRoots.includes(mainAgents)) {
+      readCatalogRoots.push(mainAgents);
+    }
+  }
 
   const rows: AgentProfileAdminRow[] = [];
   const claimed = new Set<string>();
@@ -169,7 +389,7 @@ export async function scanAgentProfilesAdmin(
     // content-free: never interpolate the (attacker-controlled) link target.
     if (
       (root.source === "project" || root.source === "user") &&
-      !(await isUnderOwnRootsResolved(fs, root.dir, ownRoots, { allowEqual: true }))
+      !(await isUnderOwnRootsResolved(fs, root.dir, readCatalogRoots, { allowEqual: true }))
     ) {
       problems.push(`Agent-profile root ${root.dir}: is a symbolic link escaping the catalog — ignored`);
       continue;
