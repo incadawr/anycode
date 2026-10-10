@@ -249,6 +249,15 @@ export function customProviderIds(settings: AnycodeSettings): string[] {
 const CUSTOM_PROVIDER_PREFIX = "custom:";
 
 /**
+ * The bare builtin catalog sentinel id (`custom`, no colon) — core-free local
+ * literal of core's `CUSTOM_PROVIDER_ID` (the host-env module never imports
+ * core; this mirror follows the same convention as the env-var mirrors above).
+ * TASK.152 (b): the keyless-sentinel default-transport rung in `buildHostEnv`
+ * keys on it.
+ */
+const CUSTOM_SENTINEL_ID = "custom";
+
+/**
  * True when a providerId names a user-created custom-provider RECORD
  * (`custom:<slug>`). Deliberately distinct from the builtin catalog `custom`
  * SENTINEL (the bare literal, no colon), which keeps its pre-existing
@@ -316,6 +325,17 @@ export function customKindDefaultTransport(kind: CustomProviderRecord["kind"]): 
     case "openai-compatible":
       return "openai-chat-completions";
   }
+}
+
+/**
+ * TASK.152: core's `loadEnvConfig` accepts a missing API key ONLY on the two
+ * OpenAI-family transports (a key is mandatory when the resolved transport is
+ * undefined or `anthropic-messages`). This predicate mirrors that rule for the
+ * connection-level authOptional waiver so the readiness gate can never say
+ * "ready" for a fork core would refuse to boot.
+ */
+export function acceptsKeylessTransport(transport: string | undefined): boolean {
+  return transport !== undefined && transport !== "anthropic-messages";
 }
 
 /**
@@ -1025,11 +1045,33 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // implicit anthropic-family default so the anthropic/GLM/deepseek/moonshot/
   // custom fork env stays byte-identical to pre-W5; an env value already rides
   // in `{...bootEnv}` and `fillFromSettings` never overwrites it.
+  //
+  // TASK.152 (b) — the keyless-sentinel default rung: when the ACTIVE
+  // connection is the bare `custom` sentinel AND declares authOptional AND
+  // neither env nor settings selected a transport, supply the OpenAI-compatible
+  // default (`openai-chat-completions`) instead of leaving the rung empty. The
+  // readiness gate's `selectedTransportInfo` (index.ts/settings-ipc.ts)
+  // resolves the SAME rung, so the gate's transport-governed waiver and the
+  // fork env always agree: the sentinel with no explicit transport would
+  // otherwise resolve the CATALOG default `anthropic-messages` (readiness
+  // refuses the key there) while the fork got NO transport variable at all
+  // (core's loadEnvConfig demands a key on undefined too) — the gate and the
+  // boot would disagree in BOTH directions. With the rung, source is
+  // "catalog-default" with a NON-anthropic value, so `transportToEmit` emits
+  // it and core boots keyless. Env and explicit settings transports still win
+  // by ladder construction; connections WITHOUT the flag keep `undefined` —
+  // byte-identical env to pre-TASK.152.
+  const keylessSentinelDefault =
+    view.id === CUSTOM_SENTINEL_ID && view.authOptional === true
+      ? customKindDefaultTransport("openai-compatible") // "openai-chat-completions"
+      : undefined;
   const effectiveTransport = resolveEffectiveTransport({
     bootEnv,
     settingsTransport: view.transport,
     defaultTransport:
-      customRecord !== undefined ? customKindDefaultTransport(customRecord.kind) : selection?.defaultTransport,
+      customRecord !== undefined
+        ? customKindDefaultTransport(customRecord.kind)
+        : keylessSentinelDefault ?? selection?.defaultTransport,
   });
   fillFromSettings(env, ENV_PROVIDER_TRANSPORT, transportToEmit(effectiveTransport));
 
@@ -1330,9 +1372,14 @@ export interface ReadinessParams {
    * requirement entirely. Set by the caller for a catalog entry marked
    * `authOptional` (vLLM), or for `custom` on a resolved openai-family
    * transport (mirrors core's `loadEnvConfig` — a key is only ever mandatory
-   * on `anthropic-messages`). Undefined/false keeps the byte-compat
-   * fail-closed default: anthropic and every other `api_key` provider still
-   * require a key regardless of transport.
+   * on `anthropic-messages`). The connection-level `authOptional` declaration
+   * (TASK.152, projected through `activeProviderView`) waives the same
+   * requirement, but — exactly like core's own rule — ONLY when the effective
+   * transport is OpenAI-family (`acceptsKeylessTransport`); an undefined or
+   * anthropic-messages transport still demands a key so the gate can never
+   * say "ready" for a fork core would refuse to boot. Undefined/false keeps
+   * the byte-compat fail-closed default: anthropic and every other
+   * `api_key` provider still require a key regardless of transport.
    */
   authOptional?: boolean;
   /**
@@ -1353,9 +1400,15 @@ export interface ReadinessParams {
  * ANYCODE_API_KEY OR the vault yields a decryptable value for the selected
  * provider's `credentialKey` (a present-but-undecryptable entry counts as unset,
  * ruling §1: user re-enters) OR `authOptional` waives the requirement (TASK.43
- * W5). model is ready from env or the settings default. Readiness is blocked
- * outright when the resolved transport is not one the selected catalog entry
- * supports (TASK.43 W5 cut Risk #3) — never a silent anthropic fallback.
+ * W5; since TASK.152 the ACTIVE CONNECTION's own `authOptional` declaration —
+ * projected through `activeProviderView` — waives it the same way, but
+ * TRANSPORT-GOVERNED exactly like core's own `loadEnvConfig` rule: only on
+ * OpenAI-family transports, never on undefined or anthropic-messages, so the
+ * gate and the spawned fork can never disagree; the model is still required).
+ * model is ready from env or the settings
+ * default. Readiness is blocked outright when the resolved transport is not
+ * one the selected catalog entry supports (TASK.43 W5 cut Risk #3) — never a
+ * silent anthropic fallback.
  */
 export async function computeProviderReady(params: ReadinessParams): Promise<boolean> {
   const readiness = await computeProviderReadiness(params);
@@ -1370,7 +1423,11 @@ export async function computeProviderReadiness(params: ReadinessParams): Promise
     !params.supportedTransports.includes(params.resolvedTransport)
   );
   const credentialKey = params.credentialKey ?? "provider.apiKey";
-  const apiKeyReady = params.authOptional === true || envPresent(bootEnv, ENV_API_KEY) || hasValue(await getSecret(credentialKey));
+  const apiKeyReady =
+    params.authOptional === true ||
+    (activeProviderView(settings).authOptional === true && acceptsKeylessTransport(params.resolvedTransport)) ||
+    envPresent(bootEnv, ENV_API_KEY) ||
+    hasValue(await getSecret(credentialKey));
   const modelReady = envPresent(bootEnv, ENV_MODEL) || hasValue(activeProviderView(settings).model);
   return { apiKeyReady, modelReady, transportReady };
 }

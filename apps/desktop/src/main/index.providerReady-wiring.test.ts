@@ -218,6 +218,42 @@ afterEach(async () => {
 });
 
 describe("main/index.ts — custom:* readiness-gate wiring (FX4)", () => {
+  it("TASK.152: a bare custom sentinel connection with authOptional + model (no key) is spawnable — the gate honours the connection's own declaration", async () => {
+    // The live incident shape verbatim: providerId "custom" (the bare catalog
+    // sentinel, NOT a custom:<slug> record), model set, authOptional true, no
+    // baseUrl, no key anywhere. The custom catalog entry's default transport
+    // is anthropic-messages, so the transport-level authOptional stays false
+    // — only the connection's own declaration (projected through
+    // activeProviderView into selectedTransportInfo/computeProviderReadiness)
+    // can waive the key. Pre-TASK.152 the module-level providerReady gate
+    // stayed false and tab-create refused not_ready with the generic
+    // "Configure a provider" copy.
+    await writeFile(
+      join(dir, "settings.json"),
+      JSON.stringify({
+        version: 2,
+        provider: {
+          connections: [{ id: "conn-1", providerId: "custom", model: "m", authOptional: true }],
+          activeConnectionId: "conn-1",
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+
+    await import("./index.js");
+    const handleTabCreate = await waitForHandler(TAB_CREATE_CHANNEL);
+    const tabResult = (await handleTabCreate({}, { kind: "new", workspace: dir })) as CreateTabResult;
+
+    expect(tabResult.ok).toBe(true);
+    if (!tabResult.ok) {
+      expect((tabResult as { reason: string }).reason).not.toBe("not_ready");
+    }
+  });
+
+
   it("a custom:* connection with its OWN key, made active, is spawnable — tab-create does NOT refuse not_ready", async () => {
     await import("./index.js");
 
