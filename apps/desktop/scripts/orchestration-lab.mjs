@@ -188,7 +188,8 @@ async function task() {
     execFileSync("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"], { cwd: workspace, stdio: "ignore" });
   }
   // The app caps open tabs: close the previous task's supervisor tab once it is idle (its session stays saved).
-  if (lab.supervisorTabId) {
+  // --parallel keeps it: an idle supervisor may only be waiting on its detached child.
+  if (lab.supervisorTabId && !argv.includes("--parallel")) {
     const prev = (await api(ctx, "GET", "/state")).body?.snapshot?.states?.[lab.supervisorTabId];
     if (prev && prev.turn?.status === "idle") {
       await api(ctx, "POST", `/tabs/${lab.supervisorTabId}/close`, {});
