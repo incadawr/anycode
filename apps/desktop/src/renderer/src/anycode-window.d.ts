@@ -375,6 +375,7 @@ declare global {
         loginStart(profileId?: string, mode?: import("../../shared/codex-login.js").CodexLoginMode): Promise<CodexLoginStartResult>;
         onLoginProgress(callback: (progress: import("../../shared/codex-login.js").CodexDeviceCodeProgress) => void): () => void;
         loginCancel(): Promise<void>;
+        loginOpenDevicePage(): Promise<void>;
         // TASK.50 (cut §2/§4): the profile control-plane — settings/fs
         // mutations only, no spawns. No credential value ever crosses this
         // bridge (custody, cut §4.4).

@@ -470,6 +470,8 @@ export interface CodexBridge {
   loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
   onLoginProgress?(callback: (progress: CodexDeviceCodeProgress) => void): () => void;
   loginCancel(): Promise<void>;
+  /** Opens the verification page of the pending device-code login (main holds the URL). */
+  loginOpenDevicePage?(): Promise<void>;
   listProfiles(): Promise<CodexProfilesSnapshot>;
   createProfile(request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult>;
   deleteProfile(id: string): Promise<CodexProfileGuardResult>;
@@ -512,6 +514,8 @@ interface CodexProfileRowProps {
   onDeviceSignIn: () => void;
   deviceCode?: CodexDeviceCodeProgress | null;
   onCancelSignIn: () => void;
+  onOpenDevicePage?: () => void;
+  onCopyDeviceText?: (text: string, what: string) => void;
   onRepairLink: () => void;
   onConfirmDelete: () => void;
   onCancelDelete: () => void;
@@ -539,7 +543,12 @@ function CodexProfileRow(props: CodexProfileRowProps) {
         {props.signingIn ? (
           <>
             <span className="settings-oauth-pending">Waiting for browser sign-in…</span>
-            {props.deviceCode && <div role="status">Open {props.deviceCode.verificationUrl} and enter <code>{props.deviceCode.userCode}</code> there.</div>}
+            {props.deviceCode && <div role="status">
+              Open {props.deviceCode.verificationUrl} and enter <code>{props.deviceCode.userCode}</code> there.
+              <button type="button" className="settings-button" onClick={props.onOpenDevicePage}>Open page</button>
+              <button type="button" className="settings-button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.verificationUrl, "link")}>Copy link</button>
+              <button type="button" className="settings-button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.userCode, "code")}>Copy code</button>
+            </div>}
             <button type="button" className="settings-button" onClick={props.onCancelSignIn}>
               Cancel
             </button>
@@ -810,6 +819,10 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     await createAndSignIn({ label: "main", authLink: MAIN_AUTH_LINK_TARGET });
   }
 
+  function copyDeviceText(text: string, what: string): void {
+    void navigator.clipboard.writeText(text).catch(() => setNotice(`Could not copy the ${what}. Select and copy it manually.`));
+  }
+
   async function signInProfile(id: string, mode: CodexLoginMode = "browser"): Promise<void> {
     setNotice(null);
     setDeviceCode(null);
@@ -896,7 +909,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       {signingInId && deviceCode?.profileId === signingInId && <div className="settings-section" role="status">
         <p>Open <strong>{deviceCode.verificationUrl}</strong> and enter this code on that page:</p>
         <code>{deviceCode.userCode}</code>
-        <button type="button" className="settings-button" onClick={() => void navigator.clipboard.writeText(deviceCode.userCode).catch(() => setNotice("Could not copy the code. Select and copy it manually."))}>Copy code</button>
+        <button type="button" className="settings-button settings-button-primary" onClick={() => void bridge.loginOpenDevicePage?.()}>Open page</button>
+        <button type="button" className="settings-button" onClick={() => copyDeviceText(deviceCode.verificationUrl, "link")}>Copy link</button>
+        <button type="button" className="settings-button" onClick={() => copyDeviceText(deviceCode.userCode, "code")}>Copy code</button>
         <p className="settings-field-hint">Device-code login may need to be enabled in your ChatGPT security or workspace settings.</p>
       </div>}
       <details className="connection-drawer-advanced"><summary>Advanced troubleshooting</summary>
@@ -995,6 +1010,8 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             onDeviceSignIn={() => void signInProfile(SYSTEM_PROFILE_ID, "device")}
             deviceCode={deviceCode?.profileId === SYSTEM_PROFILE_ID ? deviceCode : null}
             onCancelSignIn={() => void bridge.loginCancel()}
+            onOpenDevicePage={() => void bridge.loginOpenDevicePage?.()}
+            onCopyDeviceText={copyDeviceText}
             onRepairLink={() => {}}
             onConfirmDelete={() => {}}
             onCancelDelete={() => {}}
@@ -1016,6 +1033,8 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             onDeviceSignIn={() => void signInProfile(profile.id, "device")}
             deviceCode={deviceCode?.profileId === profile.id ? deviceCode : null}
             onCancelSignIn={() => void bridge.loginCancel()}
+            onOpenDevicePage={() => void bridge.loginOpenDevicePage?.()}
+            onCopyDeviceText={copyDeviceText}
             onRepairLink={() => void repairLink(profile.id)}
             onConfirmDelete={() => setConfirmDeleteId(profile.id)}
             onCancelDelete={() => setConfirmDeleteId(null)}
