@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AnycodeSettings } from "./settings.js";
-import { resolveProviderConnection } from "./settings.js";
+import { activeProviderView, resolveProviderConnection } from "./settings.js";
 import { connectionFixture, providerV2Multi } from "./provider-v2-fixture.js";
 
 function settingsWith(activeConnectionId: string | undefined, connections: ReturnType<typeof connectionFixture>[]): AnycodeSettings {
@@ -74,5 +74,23 @@ describe("resolveProviderConnection (TASK.102 CUT-S2 §10.9.3 F4)", () => {
     const settings = settingsWith(undefined, []);
 
     expect(resolveProviderConnection(settings, "anthropic")).toBeUndefined();
+  });
+});
+
+describe("activeProviderView — connection-level authOptional projection (TASK.152)", () => {
+  it("projects authOptional === true for a connection that declares it", () => {
+    const settings = settingsWith("conn-legacy", [
+      connectionFixture({ id: "custom", model: "m", authOptional: true }),
+    ]);
+
+    expect(activeProviderView(settings).authOptional).toBe(true);
+  });
+
+  it("projects NO authOptional key for a connection without the flag", () => {
+    const settings = settingsWith("conn-legacy", [
+      connectionFixture({ id: "custom", model: "m" }),
+    ]);
+
+    expect("authOptional" in activeProviderView(settings)).toBe(false);
   });
 });

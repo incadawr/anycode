@@ -28,6 +28,8 @@ export interface SingletonFixture {
   /** HTTP(S) proxy the connection routes through (TASK.132) — lets a fixture express a proxied connection. */
   proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
+  /** "No API key" declaration (TASK.152) — projected only-truthy, like the real connection shape. */
+  authOptional?: boolean;
 }
 
 /** Deterministic fixture connection id (bare/custom -> `conn-legacy`, else `conn-<providerId>`); kept inline so this fixture stays zero-dep. */
@@ -37,7 +39,7 @@ export function fixtureConnectionId(providerId: string | undefined): string {
 
 /** One connection object from a singleton description (id defaults to the deterministic fixture id). */
 export function connectionFixture(singleton: SingletonFixture & { connectionId?: string }): ProviderConnection {
-  const { id, connectionId, label, model, baseUrl, transport, proxyUrl, reasoningEffort } = singleton;
+  const { id, connectionId, label, model, baseUrl, transport, proxyUrl, reasoningEffort, authOptional } = singleton;
   return {
     id: connectionId ?? fixtureConnectionId(id),
     providerId: id ?? "",
@@ -47,6 +49,7 @@ export function connectionFixture(singleton: SingletonFixture & { connectionId?:
     ...(transport !== undefined ? { transport } : {}),
     ...(proxyUrl !== undefined ? { proxyUrl } : {}),
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    ...(authOptional !== undefined && authOptional !== false ? { authOptional: true } : {}),
   };
 }
 
@@ -62,7 +65,8 @@ export function providerV2(singleton: SingletonFixture = {}): ProviderSettingsV2
     singleton.baseUrl !== undefined ||
     singleton.transport !== undefined ||
     singleton.proxyUrl !== undefined ||
-    singleton.reasoningEffort !== undefined;
+    singleton.reasoningEffort !== undefined ||
+    singleton.authOptional !== undefined;
   if (!hasConfig) {
     return { connections: [] };
   }

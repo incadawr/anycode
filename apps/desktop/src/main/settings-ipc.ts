@@ -92,6 +92,7 @@ import type {
   TrustedBinaryConsent,
 } from "../shared/settings.js";
 import {
+  acceptsKeylessTransport,
   computeProviderReady,
   computeProviderReadiness,
   connectionSecretKey,
@@ -605,7 +606,16 @@ function activeCredential(deps: SettingsIpcDeps, settings: AnycodeSettings): Sec
  * path). `authOptional` is true either statically (a catalog entry marked
  * `authOptional`, e.g. vLLM) or dynamically for `custom` once its resolved
  * transport is an OpenAI-family one (mirrors core's `loadEnvConfig`: a key is
- * only ever mandatory on `anthropic-messages`).
+ * only ever mandatory on `anthropic-messages`), or — since TASK.152 — by the
+ * ACTIVE CONNECTION's own `authOptional` declaration — but that
+ * connection-level waiver is TRANSPORT-GATED the same way
+ * (`acceptsKeylessTransport`, mirroring core's `loadEnvConfig`: no key only
+ * on OpenAI-family transports, never on undefined or anthropic-messages, so
+ * the gate can never say "ready" for a fork core would refuse to boot).
+ * The catalog branch also mirrors `buildHostEnv`'s keyless-sentinel default
+ * rung: a bare `custom` sentinel with authOptional and no explicit transport
+ * resolves `openai-chat-completions` as its default, so readiness and the
+ * fork env see the SAME transport.
  *
  * FX4: a `custom:*` providerId with a live record resolves its OWN kind-implied
  * ladder (`customKindDefaultTransport`/`customSupportedTransports`, mirroring
@@ -623,12 +633,19 @@ function selectedTransportInfo(
 ): { authOptional: boolean; resolvedTransport?: string; supportedTransports?: readonly string[] } {
   const view = activeProviderView(settings);
   const id = view.id;
+  // TASK.152: the active connection's own "no API key" declaration waives auth
+  // — but TRANSPORT-GATED exactly like core's own rule (`acceptsKeylessTransport`):
+  // only when the transport the host will actually get is OpenAI-family, never
+  // on undefined or anthropic-messages (core's loadEnvConfig demands a key in
+  // both of those, so an ungated waiver here would let the gate say "ready"
+  // for a fork core refuses to boot).
+  const connectionAuthOptional = view.authOptional === true;
   // Legacy / no-catalog branches: still apply the env rung over the active
   // connection's transport, but there is no catalog entry to validate against.
   const resolveLegacy = (): string | undefined =>
     resolveEffectiveTransport({ bootEnv: deps.bootEnv, settingsTransport: view.transport }).value;
   if (id === undefined || id.trim() === "") {
-    return { authOptional: false, resolvedTransport: resolveLegacy() };
+    return { authOptional: connectionAuthOptional && acceptsKeylessTransport(resolveLegacy()), resolvedTransport: resolveLegacy() };
   }
   const customRecord = isCustomProviderRecordId(id) ? findCustomProviderRecord(settings, id) : undefined;
   if (customRecord !== undefined) {
@@ -641,7 +658,9 @@ function selectedTransportInfo(
       defaultTransport: customKindDefaultTransport(customRecord.kind),
     }).value;
     return {
-      authOptional: resolvedTransport !== "anthropic-messages",
+      authOptional:
+        (connectionAuthOptional && acceptsKeylessTransport(resolvedTransport)) ||
+        resolvedTransport !== "anthropic-messages",
       resolvedTransport,
       supportedTransports: customSupportedTransports(customRecord.kind),
     };
@@ -656,24 +675,40 @@ function selectedTransportInfo(
     // transport guard — but only when resolvedTransport is defined, so pin a
     // non-empty sentinel when neither env nor the connection selects one (a bare
     // resolveLegacy() can be undefined, which would SKIP the guard entirely).
-    return { authOptional: false, resolvedTransport: resolveLegacy() ?? "custom-provider-deleted", supportedTransports: [] };
+    // The connection-level waiver (TASK.152) still ORs in here (transport-gated),
+    // but it cannot rescue readiness: the empty supportedTransports guard above
+    // is what keeps this branch fail-closed, and it trips regardless of authOptional.
+    return {
+      authOptional: connectionAuthOptional && acceptsKeylessTransport(resolveLegacy()),
+      resolvedTransport: resolveLegacy() ?? "custom-provider-deleted",
+      supportedTransports: [],
+    };
   }
   const entry: CatalogSummaryEntry | undefined = deps.catalog?.find((e) => e.id === id);
   if (entry === undefined) {
-    return { authOptional: false, resolvedTransport: resolveLegacy() };
+    return { authOptional: connectionAuthOptional && acceptsKeylessTransport(resolveLegacy()), resolvedTransport: resolveLegacy() };
   }
   // Env-inclusive ladder (env > active-connection transport > catalog default)
   // so the readiness guard + the custom auth-waiver see the SAME transport the
-  // fork runs.
+  // fork runs. TASK.152 (b): the bare `custom` sentinel with authOptional and
+  // no higher rung resolves the keyless OpenAI-compatible default instead of
+  // the entry's anthropic-messages default — mirroring `buildHostEnv`'s own
+  // keyless-sentinel default rung, so the gate and the fork env agree. The
+  // ladder's precedence (env > settings > default) already guarantees explicit
+  // choices win.
+  const isCustomEntry = deps.isCustom?.(id) === true;
   const resolvedTransport = resolveEffectiveTransport({
     bootEnv: deps.bootEnv,
     settingsTransport: view.transport,
-    defaultTransport: entry.defaultTransport,
+    defaultTransport:
+      isCustomEntry && connectionAuthOptional
+        ? customKindDefaultTransport("openai-compatible")
+        : entry.defaultTransport,
   }).value;
-  const isCustomEntry = deps.isCustom?.(id) === true;
   const authOptional =
+    (connectionAuthOptional && acceptsKeylessTransport(resolvedTransport)) ||
     entry.authOptional === true ||
-    (isCustomEntry && resolvedTransport !== undefined && resolvedTransport !== "anthropic-messages");
+    (isCustomEntry && acceptsKeylessTransport(resolvedTransport));
   return { authOptional, resolvedTransport, supportedTransports: entry.supportedTransports };
 }
 

@@ -798,6 +798,43 @@ describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5
     expect(snap.providerReady).toBe(false);
   });
 
+  it("custom sentinel with authOptional:true is ready with no key (TASK.152) — the keyless-sentinel default rung resolves openai-chat-completions", async () => {
+    // The connection's OWN "no API key" declaration waives auth, and the
+    // catalog branch mirrors buildHostEnv's keyless-sentinel default rung:
+    // no explicit transport ⇒ resolvedTransport is openai-chat-completions
+    // (OpenAI-family), so the transport-gated waiver applies and the gate
+    // matches the fork env it will actually spawn.
+    await handleConnectionCreate(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
+      providerId: "custom",
+      model: "m",
+      baseUrl: "https://bridge.example",
+      authOptional: true,
+    });
+    const snap = await buildSettingsSnapshot(
+      makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: CUSTOM_CATALOG, isCustom: (id) => id === "custom" }),
+    );
+    expect(snap.providerReady).toBe(true);
+  });
+
+  it("custom sentinel with authOptional:true but an EXPLICIT anthropic transport is NOT ready (TASK.152 review fix)", async () => {
+    // Honest refusal: the user declared keylessness AND pinned the transport
+    // to anthropic-messages — core's loadEnvConfig demands a key on that
+    // transport, so the gate must not say "ready" for a fork core would
+    // refuse to boot. The transport gate on the connection-level waiver is
+    // exactly what closes the lie.
+    await handleConnectionCreate(makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS }), {
+      providerId: "custom",
+      model: "m",
+      baseUrl: "https://bridge.example",
+      transport: "anthropic-messages",
+      authOptional: true,
+    });
+    const snap = await buildSettingsSnapshot(
+      makeDeps({ catalogIds: TRANSPORT_CATALOG_IDS, catalog: CUSTOM_CATALOG, isCustom: (id) => id === "custom" }),
+    );
+    expect(snap.providerReady).toBe(false);
+  });
+
   it("an env-forced OpenAI transport on a keyless custom endpoint waives auth ⇒ ready (TASK.43 W5-FIX #1)", async () => {
     // settings.transport UNSET; the env rung forces an OpenAI-family transport.
     // Pre-W5-FIX the auth waiver read only settings.transport (unset ⇒ treated
