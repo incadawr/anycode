@@ -285,7 +285,8 @@ export type FetchModelsFailureReason =
   | "network_error"
   | "invalid_response"
   | "error_payload"
-  | "empty_models";
+  | "empty_models"
+  | "read_only";
 
 export type FetchModelsOutcome = { ok: true; models: { id: string }[] } | { ok: false; reason: FetchModelsFailureReason };
 
@@ -495,6 +496,7 @@ declare global {
         fetchModels(
           req:
             | { id: string }
+            | { connectionId: string; addModels: string[] }
             | { connectionId: string }
             | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"] },
         ): Promise<FetchModelsOutcome>;
