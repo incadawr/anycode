@@ -2206,6 +2206,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       activitySuppressed?: number,
       responseModel?: string,
       finalTurnFinishReason?: "length",
+      // TASK.219: the terminal's own child-fact model/engine — when present
+      // they outrank the start event's pre-boot accepted label (the two may
+      // legitimately differ, e.g. accepted "default" vs booted
+      // "booted-model"); absent (legacy payloads, inline tier) keeps the
+      // start values.
+      model?: string,
+      engine?: "codex" | "claude",
     ): void {
       flushDeltas();
       set((state) => {
@@ -2219,6 +2226,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             ...block.subagent,
             turns,
             activityDropped: block.subagent.activityDropped + (activitySuppressed ?? 0),
+            ...(model !== undefined ? { model } : {}),
+            ...(engine !== undefined ? { engine } : {}),
             final: {
               status,
               durationMs,
@@ -3387,6 +3396,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             event.activitySuppressed,
             event.responseModel,
             event.finalTurnFinishReason,
+            event.model,
+            event.engine,
           );
           return;
         // Per-child-tool activity (slice P7.18/F16b, design §4 W2): additive

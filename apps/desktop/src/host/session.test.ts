@@ -3205,6 +3205,8 @@ function createChildHarness(opts: {
   mode?: PermissionMode;
   bootHistory?: HistoryItem[];
   flushHistoryImpl?: () => Promise<void>;
+  /** TASK.219: optional dedicated-port claim getter installed on the child options. */
+  responseModel?: () => string | undefined;
   now?: () => number;
   /** F7 regression harness: lets a test gate `flushTelemetry()` to deterministically land inside the turn-teardown window. */
   envStatus?: SessionOptions["envStatus"];
@@ -3281,7 +3283,7 @@ function createChildHarness(opts: {
     bootHistory: opts.bootHistory,
     rules: new SessionPermissionRules(),
     persistence,
-    child: { onReady, flushHistory, onTerminal, onProgress, now, ...(opts.wrapUpRescue !== undefined ? { wrapUpRescue: opts.wrapUpRescue } : {}) },
+    child: { onReady, flushHistory, onTerminal, onProgress, now, ...(opts.wrapUpRescue !== undefined ? { wrapUpRescue: opts.wrapUpRescue } : {}), ...(opts.responseModel !== undefined ? { responseModel: opts.responseModel } : {}) },
     ...(opts.envStatus ? { envStatus: opts.envStatus } : {}),
     ...(opts.imageInputEnabled ? { imageInputEnabled: opts.imageInputEnabled } : {}),
   });
@@ -3520,6 +3522,62 @@ describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)
       const report = h.onTerminal.mock.calls[0]?.[0];
       expect(report?.status).toBe("error");
       expect(report?.finalText).toContain("disk full");
+    } finally {
+      h.close();
+    }
+  });
+
+  // TASK.219: the terminal report carries the child host's ACTIVE session
+  // model (`this.model`), plus the dedicated-port claim when a getter is
+  // installed; without the getter the responseModel key stays absent.
+  it("healthy terminal carries the harness session model plus the supplied getter claim (TASK.219)", async () => {
+    const h = createChildHarness({
+      steps: [textStep("all done")],
+      responseModel: () => "glm-5.3",
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.model).toBe("scripted-model");
+      expect(report?.responseModel).toBe("glm-5.3");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("healthy terminal without a getter: model present, responseModel key ABSENT (TASK.219)", async () => {
+    const h = createChildHarness({ steps: [textStep("all done")] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.model).toBe("scripted-model");
+      expect(report && "responseModel" in report).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("flush-error terminal also carries model plus the getter claim (TASK.219)", async () => {
+    const h = createChildHarness({
+      steps: [textStep("all done")],
+      flushHistoryImpl: () => Promise.reject(new Error("disk full")),
+      responseModel: () => "glm-5.3",
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      const report = h.onTerminal.mock.calls[0]?.[0];
+      expect(report?.status).toBe("error");
+      expect(report?.model).toBe("scripted-model");
+      expect(report?.responseModel).toBe("glm-5.3");
     } finally {
       h.close();
     }

@@ -736,6 +736,62 @@ describe("parseChildTerminal", () => {
     expect("declaredDoneAtCeiling" in (parseChildRunEvent(plain) ?? {})).toBe(false);
   });
 
+  // TASK.219: additive model/responseModel on terminal payloads — legacy
+  // payloads without them parse unchanged (keys stay absent); invalid types,
+  // empty strings, and over-cap values are rejected with the same
+  // nonempty-capped model validator (CHILD_MODEL_MAX_CHARS).
+  it("round-trips model+responseModel on ChildTerminal and ChildRunEvent terminal; absent keys stay absent (TASK.219)", () => {
+    const withModels = { ...valid, model: "booted-model", responseModel: "glm-5.3" };
+    expect(parseChildTerminal(withModels)).toEqual(withModels);
+    const parsed = parseChildTerminal(valid);
+    expect(parsed && "model" in parsed).toBe(false);
+    expect(parsed && "responseModel" in parsed).toBe(false);
+
+    const event = {
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "terminal" as const,
+      status: "completed" as const,
+      finalText: "done",
+      truncated: false,
+      turns: 3,
+      toolCalls: 9,
+      durationMs: 1200,
+      childSessionId: "sess-1",
+      model: "booted-model",
+      responseModel: "glm-5.3",
+    };
+    expect(parseChildRunEvent(event)).toEqual(event);
+    const { model: _m, responseModel: _rm, ...legacy } = event;
+    const parsedEvent = parseChildRunEvent(legacy);
+    expect(parsedEvent && parsedEvent.kind === "terminal" && "model" in parsedEvent).toBe(false);
+    expect(parsedEvent && parsedEvent.kind === "terminal" && "responseModel" in parsedEvent).toBe(false);
+  });
+
+  it("rejects invalid model/responseModel values on both parsers (type, empty, over-cap) (TASK.219)", () => {
+    expect(parseChildTerminal({ ...valid, model: 42 })).toBeNull();
+    expect(parseChildTerminal({ ...valid, model: "" })).toBeNull();
+    expect(parseChildTerminal({ ...valid, model: "a".repeat(CHILD_MODEL_MAX_CHARS + 1) })).toBeNull();
+    expect(parseChildTerminal({ ...valid, responseModel: [] })).toBeNull();
+    expect(parseChildTerminal({ ...valid, responseModel: "a".repeat(CHILD_MODEL_MAX_CHARS + 1) })).toBeNull();
+
+    const baseEvent = {
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "terminal" as const,
+      status: "completed" as const,
+      finalText: "done",
+      truncated: false,
+      turns: 3,
+      toolCalls: 9,
+      durationMs: 1200,
+      childSessionId: "sess-1",
+    };
+    expect(parseChildRunEvent({ ...baseEvent, model: 42 })).toBeNull();
+    expect(parseChildRunEvent({ ...baseEvent, model: "" })).toBeNull();
+    expect(parseChildRunEvent({ ...baseEvent, responseModel: "a".repeat(CHILD_MODEL_MAX_CHARS + 1) })).toBeNull();
+  });
+
   it("rejects a negative activitySuppressed", () => {
     expect(parseChildTerminal({ ...valid, activitySuppressed: -1 })).toBeNull();
   });

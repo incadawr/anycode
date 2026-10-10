@@ -2690,6 +2690,33 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
   });
 
+  // TASK.219: the child's own model facts ride the terminal relay verbatim.
+  it("a ChildTerminal with model+responseModel relays both verbatim; a legacy terminal relays neither (TASK.219)", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-term-models", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "m1" }));
+    const childHost = hosts[1]!;
+
+    childHost.emit(
+      "message",
+      childTerminalMsg({ status: "completed", finalText: "hi", model: "booted-model", responseModel: "glm-5.3" }),
+    );
+    const withModels = childRunEvents(rootHost).find((e) => e.requestId === "m1" && e.kind === "terminal");
+    expect(withModels).toMatchObject({ model: "booted-model", responseModel: "glm-5.3" });
+
+    rootHost.emit("message", spawnRequest({ requestId: "m2" }));
+    const legacyChildHost = hosts[2]!;
+    legacyChildHost.emit("message", childTerminalMsg({ status: "completed", finalText: "legacy" }));
+    const legacy = childRunEvents(rootHost).find((e) => e.requestId === "m2" && e.kind === "terminal");
+    expect(legacy).toMatchObject({ status: "completed", finalText: "legacy" });
+    expect(legacy && "model" in legacy).toBe(false);
+    expect(legacy && "responseModel" in legacy).toBe(false);
+  });
+
   it("an unexpected child crash (no ChildTerminal ever sent) finalizes terminal error EXACTLY once, frees the quota EXACTLY once, and NEVER respawns the child", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();

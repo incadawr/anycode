@@ -280,7 +280,9 @@ export type AgentEvent =
       /**
        * Provider-reported model id observed on the child's port after its
        * final model call (including the wrap-up rescue call). Absent for
-       * engine children, session-tier children, children that inherited the
+       * engine children, session-tier children that inherited or share a
+       * port (a DEDICATED core session child can carry a known claim read
+       * off its own port at terminal), children that inherited the
        * parent's port, and providers that expose no raw claim. This is the
        * provider's CLAIM, not proof of serving — a SEPARATE datum from
        * `model` above (TASK.171 owner's ruling: the request, not the
@@ -289,6 +291,13 @@ export type AgentEvent =
        * accounting investigation (TASK.174).
        */
       responseModel?: string;
+      /**
+       * Set only for an engine persona (md-profile `engine:`) — mirrors
+       * `subagent_start.engine` above and SubagentProgress's `end` variant
+       * (ports/subagent.ts). Additive-optional: absent on legacy replays;
+       * never inferred from `agentType`.
+       */
+      engine?: "codex" | "claude";
       /**
        * Present only when the child's final turn_end carried finishReason
        * "length" — the report was cut by the model's output-token ceiling.

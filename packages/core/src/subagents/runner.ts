@@ -597,6 +597,7 @@ export function createSubagentRunner(
             // self-describing on its own — an engine child has no port to
             // read a provider claim off, so `responseModel` never applies here.
             ...(requestedModel !== undefined ? { model: requestedModel } : {}),
+            engine: persona.engine,
           });
 
           await fireSubagentStop(parent, persona, req, outcome, signal);

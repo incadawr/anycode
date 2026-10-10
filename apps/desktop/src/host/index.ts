@@ -782,6 +782,7 @@ function buildChildBrokerEmit(emitFn: (message: HostToUiMessage) => void): (mess
 function buildChildSessionOptions(
   flushHistory: () => Promise<void>,
   wrapUpRescue?: () => Promise<string>,
+  responseModel?: () => string | undefined,
 ): ChildSessionOptions {
   return {
     // TASK.196: present ONLY for core-engine children — codex/claude have no
@@ -793,6 +794,9 @@ function buildChildSessionOptions(
       process.parentPort.postMessage({ type: CHILD_READY_TYPE } satisfies ChildReady);
     },
     flushHistory,
+    // Core-only seam: reads the child's dedicated model port's provider claim
+    // at terminal. Engine boots pass no getter (no core claim exists there).
+    ...(responseModel !== undefined ? { responseModel } : {}),
     onTerminal: (report) => {
       process.parentPort.postMessage({
         type: CHILD_TERMINAL_TYPE,
@@ -802,6 +806,8 @@ function buildChildSessionOptions(
         turns: report.turns,
         toolCalls: report.toolCalls,
         durationMs: report.durationMs,
+        ...(report.model !== undefined ? { model: report.model } : {}),
+        ...(report.responseModel !== undefined ? { responseModel: report.responseModel } : {}),
         ...(report.activitySuppressed !== undefined ? { activitySuppressed: report.activitySuppressed } : {}),
         ...(report.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: report.finalTurnFinishReason } : {}),
         ...(report.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true } : {}),
@@ -3335,16 +3341,17 @@ async function boot(): Promise<void> {
       // child's transcript is durably on disk). CUT-S4 §4.1: `buildChildSessionOptions`
       // is the exact same onReady/onTerminal/onProgress bodies, extracted so
       // codex/claude share them too — only `flushHistory` differs per engine.
-      // TASK.196: core-engine children get the wrap-up rescue — one bounded
-      // tool-free model call via core's runWrapUp against THIS loop/config
-      // (config.eventTap already accounts model stream telemetry, and the
-      // Session helper converts a degraded empty return into the failure
-      // notice). Codex/claude boots above deliberately pass no callback.
+      // TASK.196: core children get the wrap-up rescue (one bounded tool-free
+      // model call via core's runWrapUp against THIS loop/config). TASK.219:
+      // also pass the dedicated wrapped modelPort's claim getter (the same
+      // port the loop streams through) so the terminal can carry
+      // `responseModel`. Engine boots below pass neither.
       ...(args.child !== undefined
         ? {
             child: buildChildSessionOptions(
               () => historySink!.flushChecked(),
               () => runWrapUp(config, loop, "", SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS).then((r) => r.text),
+              () => modelPort.lastResponseModel,
             ),
           }
         : {}),
