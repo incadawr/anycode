@@ -471,6 +471,28 @@ export class ClaudeEngine implements SessionEngine {
   private interruptSent = false;
   private turnActive = false;
   private terminalError: Error | null = null;
+  // ── TASK.189: single-owner notification stream ──────────────────────────
+  /** The engine's ONE cached pending read of the notification stream. Shared
+   *  by the idle reader and every owner turn; see takeFrame/frameConsumed. */
+  private pendingNext: Promise<IteratorResult<ClaudeStreamMessage>> | null = null;
+  /** TASK.189: the cached read's fulfillment, once it has landed. Draining
+   *  code inspects this after a microtask checkpoint instead of racing
+   *  promises (a `.then` wrapper adds a microtask and loses every race
+   *  against an already-resolved sentinel). */
+  private readyFrame: IteratorResult<ClaudeStreamMessage> | null = null;
+  /** The idle reader is running (at most one, engine lifetime). */
+  private idleReading = false;
+  /** A CLI self-started turn observed between owner turns, if one is open. */
+  private foreignTurn: { done: { promise: Promise<void>; resolve: () => void } } | null = null;
+  /** The idle reader's current race token — bump to stop it. */
+  private idleEpoch = 0;
+  /** Wakes the idle reader's abort race (runTurn entry / dispose). */
+  private idleWake: (() => void) | null = null;
+  /** TASK.189: resolved once when dispose() runs while an owner turn is parked
+   *  in the foreign-wait loop. Created lazily and never rejects; the resolver
+   *  is idempotent. */
+  private disposalWait: Promise<void> | null = null;
+  private resolveDisposalWait: () => void = () => {};
   private disposed = false;
   /** Live engine state from the most recent `system/init` (re-emitted every turn). */
   private sessionId: string | null = null;
@@ -537,6 +559,11 @@ export class ClaudeEngine implements SessionEngine {
     // the fail-closed capability.
     this.capabilities = approvals === undefined ? CLAUDE_ENGINE_CAPABILITIES : CLAUDE_BRIDGED_CAPABILITIES;
     this.bounds = { ...DEFAULT_CLAUDE_ENGINE_TIMEOUTS, ...overrides };
+    // TASK.189: the idle reader owns the notification stream from boot, so an
+    // unsolicited CLI turn BEFORE the first owner turn is absorbed too. If the
+    // constructor throws earlier (invalid water marks), no reader was started
+    // and no client was spawned — fine.
+    this.runIdleReader();
   }
 
   get activePresetId(): string {
@@ -714,7 +741,10 @@ export class ClaudeEngine implements SessionEngine {
       return;
     }
     yield { type: "turn_start", turn };
-    for (const notice of this.drainNotices()) yield notice;
+    // TASK.189 (order fix): the notice drain moves to AFTER the pre-send frame
+    // drain below — a foreign-started notice is queued DURING that drain
+    // (absorbIdleFrame -> queueNotice), so draining here would defer it to the
+    // NEXT turn. `turn_start` stays the first event.
 
     const abort = watchAbort(options.signal);
     const translator = new ClaudeTurnTranslator({
@@ -724,6 +754,11 @@ export class ClaudeEngine implements SessionEngine {
       ...(this.takePresentation !== undefined ? { takePresentation: this.takePresentation } : {}),
     });
     this.interruptSent = false;
+    // TASK.189: take stream ownership BEFORE the first await. `turnActive`
+    // being set here (not after) is what keeps runIdleReader from re-entering
+    // once an await boundary appears; stopIdleReader's epoch bump makes any
+    // in-flight idle callback a no-op.
+    this.stopIdleReader();
     this.turnActive = true;
     // TASK.159: turn-scoped reset — see lastTurnTokenUsage's own doc comment.
     this.resetTurnTokenUsage();
@@ -755,23 +790,198 @@ export class ClaudeEngine implements SessionEngine {
     // `settle?.cancel()` in `finally` narrows to `never`.
     const cancelSettle = (): void => settle?.cancel();
 
-    const iterator = this.client.notifications()[Symbol.asyncIterator]();
-    let next = iterator.next();
-
     try {
-      // A turn IS a user message on the shared stdin — one process, one
-      // session, many turns (probe #1). There is no per-turn request/response.
-      this.client.sendUserMessage(userMessageContent(input, options.attachments));
-      // An abort that arrives before anything streamed still has a live
-      // session to interrupt, so it fires immediately rather than latching.
-      if (options.signal.aborted) {
-        abortObserved = true;
-        beginInterrupt();
+      // ── TASK.189: the SEND BARRIER. The owner input is sent only from a
+      // synchronous segment whose START was re-verified: every await or yield
+      // (frame drain, notice delivery, foreign-turn wait) restarts the whole
+      // barrier so nothing that arrived while the generator was suspended can
+      // slip past classification into the owner turn, and a dispose or Stop
+      // that landed in any such gap cancels BEFORE the send — the owner input
+      // is never injected after either.
+      let sendCancelled = false;
+      barrier: for (;;) {
+        if (this.disposed) { sendCancelled = true; break barrier; }
+        if (!abortObserved && options.signal.aborted) {
+          // Stop before anything was sent: no owner input is injected. The
+          // interrupt still fires (the CLI may be running something we did
+          // not detect); the owner loop below consumes the CLI's terminal
+          // result, with the TASK.156 settle deadline as backstop.
+          abortObserved = true;
+          usageDeliveryActive = false;
+          beginInterrupt();
+          break barrier; // fall into the owner loop WITHOUT sending
+        }
+        // (a) Pre-send classification of ALREADY-ARRIVED frames. The cached
+        // read's fulfillment lands in `readyFrame` in a microtask; the
+        // checkpoint below lets an already-resolved (or buffered-and-
+        // immediately-resolved) read land there, while a not-yet-resolved one
+        // leaves it null — nothing parks. Every ready frame is classified
+        // (absorbIdleFrame — including init, which reconciles state), NEVER
+        // handed to the owner translator.
+        let drained: "ok" | "stream-end" | "disposed" = "ok";
+        for (;;) {
+          this.takeFrame();
+          await Promise.resolve(); // microtask checkpoint only — never parks
+          if (this.disposed) { drained = "disposed"; break; }
+          const ready = this.readyFrame;
+          if (ready === null) break; // nothing has arrived — stop draining
+          this.frameConsumed();
+          if (ready.done) { drained = "stream-end"; break; }
+          this.absorbIdleFrame(ready.value);
+        }
+        if (drained === "disposed") { sendCancelled = true; break barrier; }
+        if (drained === "stream-end") {
+          throw this.terminalError ?? new Error("Claude exited during a turn");
+        }
+        // Notices — yielding one suspends this generator for an unbounded
+        // time, so the whole barrier re-runs on resume (drain again, dispose
+        // and Stop checks again) before any send.
+        const notices = this.drainNotices();
+        if (notices.length > 0) {
+          for (const notice of notices) yield notice;
+          continue barrier;
+        }
+        // (b) Wait out a STILL-RUNNING foreign turn. NO TIMER, NO
+        //     AUTO-INTERRUPT: normal unsolicited work may run arbitrarily
+        //     long. While waiting, the OWNER is the single reader: every
+        //     arriving frame is classified by absorbIdleFrame (a foreign
+        //     `result` closes foreignTurn and ends the wait). Adjacent
+        //     foreign turns loop back through the barrier before any send.
+        if (this.foreignTurn !== null) {
+          // The disposal wait is created BEFORE the notice yield: a dispose
+          // that lands while the generator is suspended at that yield resolves
+          // THIS promise (dispose's resolver is a no-op if nobody parked yet,
+          // so creating it lazily after the yield would miss the disposal
+          // entirely), and the race below wakes cancelled instead of falling
+          // through to the closed stream's error path.
+          const disposal = this.ensureDisposalWait();
+          yield { type: "engine_notice", level: "info",
+            message: "Claude is finishing a turn it started on its own; your message will be sent when it finishes." };
+          const foreignDone = this.foreignTurn.done.promise;
+          let waitWhy: "abort" | "dispose" | "done" | "stream-end" | null = null;
+          while (waitWhy === null) {
+            // Disposal and abort are registered BEFORE the frame arm: when
+            // the generator resumes after a dispose that already closed the
+            // stream, several arms are settled at once and Promise.race
+            // settles in registration order — the frame arm (done:true from
+            // close()) must not outrank the disposal wake.
+            const raced = await Promise.race([
+              disposal.then(() => ({ kind: "dispose" as const })),
+              abort.promise.then(() => ({ kind: "abort" as const })),
+              foreignDone.then(() => ({ kind: "foreign-done" as const })),
+              this.takeFrame().then(
+                (value) => ({ kind: "notification" as const, value }),
+                (error: unknown) => ({ kind: "rejected" as const, error }),
+              ),
+            ]);
+            if (raced.kind === "abort") { waitWhy = "abort"; break; }
+            if (raced.kind === "dispose") { waitWhy = "dispose"; break; }
+            if (raced.kind === "foreign-done") { waitWhy = "done"; break; }
+            if (raced.kind === "rejected") {
+              if (this.disposed) { waitWhy = "dispose"; break; } // the closed stream, not a turn failure
+              throw this.terminalError ?? (raced.error instanceof Error ? raced.error : new Error(String(raced.error)));
+            }
+            if (raced.value.done) {
+              // A stream end observed under dispose is the disposal itself
+              // (dispose closes the transport), not a mid-turn transport death.
+              if (this.disposed) { waitWhy = "dispose"; break; }
+              waitWhy = "stream-end"; break;
+            }
+            this.frameConsumed();
+            this.absorbIdleFrame(raced.value.value); // a result here resolves foreignTurn
+          }
+          if (waitWhy === "dispose") {
+            for (const event of translator.finishTerminal("cancelled")) yield event;
+            return;                                    // finally still runs: turnActive=false, etc.
+          }
+          if (waitWhy === "stream-end") {
+            throw this.terminalError ?? new Error("Claude exited during a turn");
+          }
+          if (waitWhy === "abort") {
+            // Owner Stop during the foreign wait. The turn being interrupted
+            // is the CLI's own: interrupt immediately (mid-turn Stop
+            // semantics), NEVER send the owner input (the user stopped —
+            // nothing to inject). The interrupted foreign turn's terminal
+            // result{terminal_reason:"aborted_streaming"} is consumed HERE
+            // (the owner translator never sees foreign frames); if it does
+            // not settle in time, the EXISTING TASK.156 settle deadline
+            // terminalizes cancelled. The foreign-turn state is cleared so a
+            // later owner turn cannot wait forever for a result already
+            // consumed.
+            abortObserved = true;
+            usageDeliveryActive = false;
+            beginInterrupt();
+            const open = this.foreignTurn!;
+            const settleDeadline = settle!; // beginInterrupt just installed it
+            // Keep READING while the interrupted foreign turn settles — its
+            // terminal result is consumed by absorbIdleFrame (which resolves
+            // `open.done`); the settle deadline is the backstop.
+            let stopped: "done" | "settle-timeout" | "stream-end" | "failed" = "done";
+            while (open === this.foreignTurn) {
+              const why = await Promise.race([
+                this.takeFrame().then(
+                  (value) => ({ kind: "frame" as const, value }),
+                  (error: unknown) => ({ kind: "failed" as const, error }),
+                ),
+                open.done.promise.then(() => ({ kind: "done" as const })),
+                settleDeadline.promise,
+              ]);
+              if (why.kind === "done") break;
+              if (why.kind === "settle-timeout") { stopped = "settle-timeout"; break; }
+              if (why.kind === "failed") { stopped = "failed"; this.terminalError ??= why.error instanceof Error ? why.error : new Error(String(why.error)); break; }
+              if (why.value.done) { stopped = "stream-end"; break; }
+              this.frameConsumed();
+              this.absorbIdleFrame(why.value.value);
+            }
+            this.foreignTurn = null;
+            if (stopped === "settle-timeout") {
+              this.terminalError = new Error(
+                `Claude did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms; the session was closed. Start a new session to continue.`,
+              );
+              void this.client.close().catch(() => {});
+              yield {
+                type: "engine_notice",
+                level: "info",
+                message: "Stopped; the engine was still finishing a running command, so this session was closed. Start a new session to continue.",
+              };
+            }
+            for (const event of translator.finishTerminal("cancelled")) yield event;
+            return; // finally still runs: turnActive=false, reader restart guard, etc.
+          }
+          // waitWhy === "done": foreign settled normally — the barrier
+          // re-runs (drain any backlog buffered behind its result; adjacent
+          // foreign turns re-enter the wait above) before any send.
+          continue barrier;
+        }
+        // FINAL SEGMENT — no await or yield from here to the send: readiness,
+        // disposal and Stop are re-inspected synchronously. A frame that
+        // landed during the last checkpoint's microtask gap is classified
+        // before a re-run instead of leaking into the owner turn; a dispose or
+        // Stop that landed there cancels instead of injecting owner input.
+        if (this.readyFrame !== null) continue barrier;
+        if (this.disposed) { sendCancelled = true; break barrier; }
+        if (!abortObserved && options.signal.aborted) {
+          abortObserved = true;
+          usageDeliveryActive = false;
+          beginInterrupt();
+          break barrier; // fall into the owner loop WITHOUT sending
+        }
+        // A turn IS a user message on the shared stdin — one process, one
+        // session, many turns (probe #1). There is no per-turn request/response.
+        this.client.sendUserMessage(userMessageContent(input, options.attachments));
+        break barrier;
+      }
+      if (sendCancelled) {
+        for (const event of translator.finishTerminal("cancelled")) yield event;
+        return; // finally still runs: turnActive=false, reader restart guard, etc.
       }
 
       while (!terminal) {
         const raced = await Promise.race([
-          next.then((value) => ({ kind: "notification" as const, value })),
+          this.takeFrame().then(
+            (value) => ({ kind: "notification" as const, value }),
+            (error: unknown) => ({ kind: "rejected" as const, error }),
+          ),
           ...(abortObserved ? [] : [abort.promise.then(() => ({ kind: "abort" as const }))]),
           // A settled mid-turn context read wakes the race on its own — that
           // is the whole point: the event must surface during a quiet period,
@@ -815,6 +1025,11 @@ export class ClaudeEngine implements SessionEngine {
           }
           throw new Error(`Claude did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms`);
         }
+        if (raced.kind === "rejected") {
+          // TASK.189: the cached read rejected — same terminal path the old
+          // `await next` rejection took (the catch below owns it).
+          throw raced.error;
+        }
         if (raced.value.done) {
           // Transport closed under a pending Stop (e.g. Stop then tab close):
           // that is the cancellation the user asked for, not an engine error.
@@ -824,7 +1039,9 @@ export class ClaudeEngine implements SessionEngine {
           }
           throw this.terminalError ?? new Error("Claude exited during a turn");
         }
-        next = iterator.next();
+        // TASK.189: the slot's frame is consumed by THIS loop iteration; the
+        // next iteration's takeFrame() re-parks. Exactly one read in flight.
+        this.frameConsumed();
         // TASK.157: at user/tool-result and assistant boundaries, kick off a
         // throttled, non-overlapping mid-turn context refresh. Never awaited
         // here — the completion rides the race above.
@@ -892,12 +1109,20 @@ export class ClaudeEngine implements SessionEngine {
       // silently on its own and emits nothing into later turns.
       pendingUsage = null;
       usageDeliveryActive = false;
+      // TASK.189: restart the idle reader for the between-turns window. Safe
+      // even if the turn threw: takeFrame() re-parks on the (possibly closed)
+      // stream and the done path parks the reader.
+      if (!this.disposed && this.terminalError === null) this.runIdleReader();
     }
   }
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
     this.disposed = true;
     this.approvals?.denyAll("Claude engine is shutting down", "shutdown");
+    // TASK.189: epoch bump + wake stops the idle reader; the disposal wait
+    // settles a waiting owner turn, which terminalizes cancelled.
+    this.stopIdleReader();
+    this.resolveDisposalWait();
     void this.sendInterruptOnce();
     return this.client.close();
   }
@@ -1142,6 +1367,146 @@ export class ClaudeEngine implements SessionEngine {
       // The receipt is best-effort: the turn's own terminal `result` (or the
       // settle deadline) still closes the turn.
     }
+  }
+
+  // ── TASK.189: single-owner notification stream ─────────────────────────────
+
+  /** Exactly ONE pending read of the stream exists at any moment. The read is
+   *  created once and cached; its fulfillment lands in `readyFrame` (the only
+   *  `.then` handler runs in a microtask, which is what `readyFrame`'s
+   *  checkpoint relies on), while a REJECTION stays
+   *  parked in `pendingNext` for the next owner turn's catch to observe — it
+   *  is never silently cleared by idle code. */
+  private takeFrame(): Promise<IteratorResult<ClaudeStreamMessage>> {
+    if (this.pendingNext === null) {
+      const read = this.client.notifications()[Symbol.asyncIterator]().next();
+      this.pendingNext = read;
+      read.then(
+        (value) => {
+          if (this.pendingNext === read) this.readyFrame = value;
+        },
+        () => {
+          // Rejection stays parked in the slot; only the OWNER loop awaits it
+          // (the idle reader treats a rejected read as "drop and park" without
+          // clearing it — clearing would assume the next read also fails).
+        },
+      );
+    }
+    return this.pendingNext;
+  }
+
+  /** Called only after a frame (or done) has been fully consumed by its reader. */
+  private frameConsumed(): void {
+    this.pendingNext = null;
+    this.readyFrame = null;
+  }
+
+  /** TASK.189: does this frame PROVE the CLI is running a turn we did not ask
+   *  for? Deliberately narrow: assistant and genuine (non-replay) user and
+   *  stream_event only. Idle noise (system status, rate_limit_event) is not a
+   *  turn; a replay/local-command user echo is OUR OWN input coming back, not
+   *  evidence of a new CLI turn (TASK.189; see event-translator's onUser). */
+  private isForeignTurnFrame(frame: ClaudeStreamMessage): boolean {
+    if (frame.type === "assistant" || frame.type === "stream_event") return true;
+    if (frame.type === "user") {
+      const user = frame as { isReplay?: boolean; message?: { content?: unknown } };
+      if (user.isReplay === true) return false;
+      // A bare-string user frame is our own input echo (or a local-command
+      // stdout acknowledgement without the replay marker) — idle noise here.
+      return Array.isArray(user.message?.content);
+    }
+    return false;
+  }
+
+  /** TASK.189: classification applied by BOTH idle and pre-send drains. Returns
+   *  nothing; mutates engine state only. Foreign frames NEVER reach an owner
+   *  turn's translator. */
+  private absorbIdleFrame(frame: ClaudeStreamMessage): void {
+    try {
+      if (frame.type === "system" && (frame as { subtype?: string }).subtype === "init") {
+        // Live posture is state, not transcript: reconcile even mid-foreign-turn.
+        this.onSystemInit(frame as unknown as ClaudeSystemInitMessage);
+        return;
+      }
+      if (frame.type === "result") {
+        // A result belonging to no owner turn: closes the open foreign turn
+        // (if any). Cost IS session state (onResult); the turn-local usage it
+        // set is NOT — an absorbed turn owns no meter/token accounting, so the
+        // owner turn's own top-of-turn reset is re-asserted here (onResult
+        // sets lastTurnTokenUsage; the owner's numbers must stay its own).
+        this.onResult(frame as unknown as ClaudeResultMessage);
+        this.resetTurnTokenUsage();
+        const open = this.foreignTurn;
+        this.foreignTurn = null;
+        open?.done.resolve();
+        return;
+      }
+      if (this.foreignTurn === null && this.isForeignTurnFrame(frame)) {
+        let settle: () => void = () => {};
+        const promise = new Promise<void>((resolve) => { settle = resolve; });
+        this.foreignTurn = { done: { promise, resolve: settle } };
+        this.queueNotice({
+          type: "engine_notice", level: "info",
+          message: "Claude started a turn on its own (likely a cross-session notice); its output is kept out of this transcript.",
+        });
+      }
+      // Everything else — including frames while a foreign turn is already
+      // open — is absorbed silently. rate_limit_event quota state is NOT
+      // merged (the quota tap is turn-scoped in this cut; a documented
+      // limitation, not silently pretended).
+    } catch {
+      // An absorption bug must never surface as an unhandled rejection from
+      // an idle callback; the next owner turn still owns the stream.
+    }
+  }
+
+  /** TASK.189: the between-turns (and pre-first-turn) reader. Catches its own
+   *  rejection; NEVER lets a transport error become an unhandled rejection —
+   *  idle errors are DROPPED and the slot is cleared; the next owner turn hits
+   *  the real terminal path on the closed stream. */
+  private runIdleReader(): void {
+    if (this.idleReading || this.disposed || this.terminalError !== null || this.turnActive) return;
+    this.idleReading = true;
+    const step = (): void => {
+      if (this.disposed || this.terminalError !== null || this.turnActive) { this.idleReading = false; return; }
+      const epoch = ++this.idleEpoch;
+      const wake = new Promise<null>((resolve) => { this.idleWake = () => resolve(null); });
+      void Promise.race([this.takeFrame().then((value) => value, () => null), wake])
+        .then((value) => {
+          // An old epoch's callback returns BEFORE touching shared state: a
+          // newer reader (owner turn or a restarted idle reader) owns it now.
+          if (epoch !== this.idleEpoch) return;
+          this.idleWake = null;
+          if (value === null) {
+            // Rejected read: drop it here, but DO NOT clear the slot — the
+            // rejection stays observable by the next owner runTurn. Park.
+            this.idleReading = false;
+            return;
+          }
+          if (value.done) { this.idleReading = false; return; } // stream closed; next turn sees terminal path
+          this.frameConsumed();
+          this.absorbIdleFrame(value.value);
+          step();
+        })
+        .catch(() => { this.idleReading = false; });
+    };
+    step();
+  }
+
+  /** TASK.189: bump the epoch (handoff took over), wake the parked race, and
+   *  mark the reader stopped so `runIdleReader` can restart from a turn's
+   *  finally. */
+  private stopIdleReader(): void {
+    this.idleEpoch += 1;
+    this.idleReading = false;
+    this.idleWake?.();
+    this.idleWake = null;
+  }
+
+  /** TASK.189: lazily-created, never-rejecting disposal wait (E7). */
+  private ensureDisposalWait(): Promise<void> {
+    this.disposalWait ??= new Promise<void>((resolve) => { this.resolveDisposalWait = resolve; });
+    return this.disposalWait;
   }
 
   /** Boot-time notices have no wire of their own — an AgentEvent only travels inside a turn, so they are flushed here, once. */

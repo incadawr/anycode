@@ -176,6 +176,11 @@ class FakeTransport implements ClaudeTransport {
     for (const waiter of this.waiters.splice(0)) waiter({ value: undefined, done: true });
   }
 
+  /** TASK.189: frames delivered on the NEXT sendUserMessage (a later turn's stream). */
+  enqueue(frame: ClaudeStreamMessage): void {
+    this.pending.push(frame);
+  }
+
   /** Delivers one frame to the turn (or buffers it until the turn asks). */
   push(frame: ClaudeStreamMessage): void {
     const waiter = this.waiters.shift();
@@ -261,6 +266,47 @@ function resultFrame157(reason: "completed" | "aborted_streaming" = "completed")
     total_cost_usd: 0,
     terminal_reason: reason,
   } as unknown as ClaudeStreamMessage;
+}
+
+// ── TASK.189: CLI self-started (foreign) turn fixtures ──────────────────────
+
+function foreignAssistantFrame(id: string, text: string): ClaudeStreamMessage {
+  return {
+    type: "assistant",
+    message: { id, model: "foreign-model", content: [{ type: "text", text }] },
+  } as unknown as ClaudeStreamMessage;
+}
+
+function foreignToolUseFrame(id: string, name: string): ClaudeStreamMessage {
+  return {
+    type: "assistant",
+    message: { id, model: "foreign-model", content: [{ type: "tool_use", id: `toolu_${id}`, name, input: {} }] },
+  } as unknown as ClaudeStreamMessage;
+}
+
+function foreignResultFrame(
+  result: string,
+  options: { cost?: number; usage?: Record<string, unknown>; terminalReason?: string } = {},
+): ClaudeStreamMessage {
+  return {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result,
+    num_turns: 1,
+    duration_ms: 1,
+    duration_api_ms: 1,
+    total_cost_usd: options.cost ?? 0,
+    ...(options.usage !== undefined ? { usage: options.usage } : {}),
+    ...(options.terminalReason !== undefined ? { terminal_reason: options.terminalReason } : {}),
+  } as unknown as ClaudeStreamMessage;
+}
+
+function ownerFrames(label: string, usage?: Record<string, unknown>): ClaudeStreamMessage[] {
+  return [
+    foreignAssistantFrame(`m-owner-${label}`, `OWNER OUTPUT ${label}`),
+    foreignResultFrame(`owner result ${label}`, { usage }),
+  ];
 }
 
 describe("ClaudeEngine.runTurn — projection of a real W0 turn", () => {
@@ -751,6 +797,387 @@ describe("ClaudeEngine — presentation surface", () => {
 });
 
 /**
+ * TASK.189: a CLI turn started by ITSELF (injected cross-session notice)
+ * between owner turns must be absorbed — never misattributed to the next
+ * owner turn's transcript, never allowed to terminate that turn early.
+ *
+ * T1 is the chronology-shaped reproduction of the incident (foreign text AND
+ * foreign tool activity, then a foreign result, then a genuine owner turn).
+ * Observed failure on the UNMODIFIED engine (run before E1–E9):
+ *   AssertionError: expected '[{"type":"turn_start","turn":2},…' to contain
+ *   'OWNER OUTPUT two' — the foreign tool_use rendered into turn 2's events
+ *   (tool_call/tool_execution_start/tool_result for toolu_m-f-tool, "Bash")
+ *   and the foreign `result` TERMINATED turn 2 (turn_end stop + loop_end
+ *   completed with no owner assistant output); engine_session_tokens carried
+ *   the FOREIGN usage snapshot (input 115 = fixture + foreign 111).
+ */
+describe("ClaudeEngine — TASK.189: CLI self-started turns", () => {
+  it("repro: an unsolicited CLI turn between owner turns is absorbed, not misattributed", async () => {
+    const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
+    const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const turn1 = await collect(engine.runTurn("first prompt", { signal: new AbortController().signal }));
+
+    // No awaits here: the foreign burst arrives between turns, back-to-back.
+    transport.push(foreignAssistantFrame("m-f1", "FOREIGN TEXT"));
+    transport.push(foreignToolUseFrame("m-f-tool", "Bash"));
+    transport.push(foreignResultFrame("foreign result", { usage: { input_tokens: 111, output_tokens: 11 } }));
+    // Distinct owner usage snapshot — the separator (supervisor correction 5).
+    for (const f of ownerFrames("two", { input_tokens: 10, output_tokens: 5 })) transport.enqueue(f);
+
+    const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const loopEnds = events.filter((event) => event.type === "loop_end");
+    expect(loopEnds).toHaveLength(1);
+    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
+    expect(events.find((event) => event.type === "turn_end")).toEqual({ type: "turn_end", turn: 2, finishReason: "stop" });
+    const serialized = JSON.stringify(events);
+    expect(serialized).toContain("OWNER OUTPUT two");
+    expect(serialized).not.toContain("FOREIGN TEXT");
+    expect(serialized).not.toContain("foreign result");
+    expect(serialized).not.toContain("Bash"); // the foreign tool_use never renders
+    expect(transport.sent).toEqual(["first prompt", "second"]);
+    // The absorbed turn owns NO meter read: the owner's tokens are exactly its
+    // own usage snapshot, cumulative from turn 1's fixture usage.
+    const tokens = events.find((event) => event.type === "engine_session_tokens") as
+      | { input: number; output: number; total: number }
+      | undefined;
+    expect(tokens).toBeDefined();
+    // Cumulative = turn 1's own tokens + the owner 10/5 snapshot; the foreign
+    // 111/11 usage is absorbed and must NOT appear anywhere in the total.
+    const turn1Tokens = turn1.find((event) => event.type === "engine_session_tokens") as
+      | { input: number; output: number }
+      | undefined;
+    expect(tokens!.input).toBe((turn1Tokens?.input ?? 0) + 10);
+    expect(tokens!.output).toBe((turn1Tokens?.output ?? 0) + 5);
+    const notice = events.find(
+      (event) => event.type === "engine_notice" && String((event as { message?: string }).message).includes("started a turn on its own"),
+    );
+    expect(notice).toBeDefined();
+  });
+
+  it("a burst of adjacent unsolicited turns is absorbed entirely", async () => {
+    const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
+    const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("first prompt", { signal: new AbortController().signal }));
+
+    // Back-to-back with NO awaits: two whole foreign turns, then the owner's.
+    transport.push(foreignAssistantFrame("m-fa", "F-A"));
+    transport.push(foreignResultFrame("fa"));
+    transport.push(foreignAssistantFrame("m-fb", "F-B"));
+    transport.push(foreignResultFrame("fb"));
+    for (const f of ownerFrames("two")) transport.enqueue(f);
+
+    const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const loopEnds = events.filter((event) => event.type === "loop_end");
+    expect(loopEnds).toHaveLength(1);
+    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
+    const serialized = JSON.stringify(events);
+    expect(serialized).toContain("OWNER OUTPUT two");
+    expect(serialized).not.toContain("F-A");
+    expect(serialized).not.toContain("F-B");
+    expect(transport.sent.at(-1)).toBe("second");
+  });
+
+  it("an owner prompt during a running self-started turn waits for its result — no timer, no interrupt, no close", async () => {
+    const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
+    const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const turn1 = await collect(engine.runTurn("first prompt", { signal: new AbortController().signal }));
+
+    // The foreign turn is RUNNING (no result yet).
+    transport.push(foreignAssistantFrame("m-f1", "FOREIGN RUNNING"));
+    const turn2 = collect(engine.runTurn("owner during", { signal: new AbortController().signal }));
+    await new Promise((r) => setImmediate(r)); // let the engine park in the foreign wait
+
+    // Mid-flight: nothing sent, nothing interrupted, nothing closed.
+    expect(transport.sent).not.toContain("owner during");
+    expect(transport.interrupts).toBe(0);
+    expect(transport.closed).toBe(0);
+
+    // Owner frames are enqueued BEFORE the foreign result is released, so the
+    // flush-on-send cannot race the release.
+    for (const f of ownerFrames("two", { input_tokens: 10, output_tokens: 5 })) transport.enqueue(f);
+    transport.push(foreignResultFrame("foreign done", { usage: { input_tokens: 111, output_tokens: 11 } }));
+    const events = await turn2;
+
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const loopEnds = events.filter((event) => event.type === "loop_end");
+    expect(loopEnds).toHaveLength(1);
+    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
+    expect(events.find((event) => event.type === "turn_end")).toEqual({ type: "turn_end", turn: 2, finishReason: "stop" });
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("FOREIGN RUNNING");
+    expect(serialized).toContain("OWNER OUTPUT two");
+    expect(transport.interrupts).toBe(0);
+    expect(transport.closed).toBe(0);
+    expect(transport.sent).toEqual(["first prompt", "owner during"]);
+    // The foreign 111/11 usage owns no meter read; the owner's 10/5 does.
+    const tokens = events.find((event) => event.type === "engine_session_tokens") as
+      | { input: number; output: number }
+      | undefined;
+    const turn1Tokens = turn1.find((event) => event.type === "engine_session_tokens") as
+      | { input: number; output: number }
+      | undefined;
+    expect(tokens).toBeDefined();
+    expect(tokens!.input).toBe((turn1Tokens?.input ?? 0) + 10);
+    expect(tokens!.output).toBe((turn1Tokens?.output ?? 0) + 5);
+
+    // The session survives: a third turn runs normally.
+    for (const f of ownerFrames("three")) transport.enqueue(f);
+    const third = await collect(engine.runTurn("third", { signal: new AbortController().signal }));
+    expect(third.some((event) => event.type === "error")).toBe(false);
+    expect(third.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 3 }]);
+    expect(JSON.stringify(third)).toContain("OWNER OUTPUT three");
+  });
+
+  it("a long self-started turn is not interrupted when the owner prompts — settle bound does not apply to normal foreign work", async () => {
+    const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
+    const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { timeouts: { postInterruptSettleMs: 30 } });
+    await collect(engine.runTurn("first prompt", { signal: new AbortController().signal }));
+
+    transport.push(foreignAssistantFrame("m-f1", "FOREIGN LONG"));
+    const events: AgentEvent[] = [];
+    const turn2 = (async () => {
+      for await (const event of engine.runTurn("owner waits", { signal: new AbortController().signal })) events.push(event);
+    })();
+    await new Promise((r) => setTimeout(r, 80)); // 80ms > 2x the 30ms settle bound
+
+    expect(transport.interrupts).toBe(0);
+    expect(transport.closed).toBe(0);
+    expect(events.some((event) => event.type === "loop_end")).toBe(false); // still waiting
+
+    for (const f of ownerFrames("two")) transport.enqueue(f);
+    transport.push(foreignResultFrame("foreign done"));
+    await turn2;
+
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 2 }]);
+    expect(transport.interrupts).toBe(0);
+  });
+
+  it("an unsolicited turn before any owner turn is absorbed by the boot-time idle reader", async () => {
+    const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+
+    // BEFORE any runTurn — only the boot-time idle reader can see these.
+    transport.push(foreignAssistantFrame("m-f0", "FOREIGN BOOT"));
+    transport.push(foreignResultFrame("foreign boot"));
+    for (const f of ownerFrames("one")) transport.enqueue(f);
+
+    const events = await collect(engine.runTurn("first ever", { signal: new AbortController().signal }));
+
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("FOREIGN BOOT");
+    expect(serialized).toContain("OWNER OUTPUT one");
+    const notice = events.find(
+      (event) => event.type === "engine_notice" && String((event as { message?: string }).message).includes("started a turn on its own"),
+    );
+    expect(notice).toBeDefined();
+  });
+
+  it("a Stop while waiting for the self-started turn interrupts it and terminalizes cancelled", async () => {
+    const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
+    const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("first prompt", { signal: new AbortController().signal }));
+
+    transport.push(foreignAssistantFrame("m-f1", "FOREIGN TEXT"));
+    const controller = new AbortController();
+    const events: AgentEvent[] = [];
+    const turn2 = (async () => {
+      for await (const event of engine.runTurn("stop me", { signal: controller.signal })) {
+        events.push(event);
+        if (events.some((e) => e.type === "engine_notice" && String((e as { message?: string }).message).includes("finishing a turn"))) {
+          controller.abort();
+          queueMicrotask(() =>
+            transport.push(foreignResultFrame("foreign", { terminalReason: "aborted_streaming" })),
+          );
+        }
+      }
+    })();
+    await turn2;
+
+    expect(transport.interrupts).toBe(1);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "cancelled", turns: 2 }]);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(transport.sent).toEqual(["first prompt"]); // the owner input was NEVER sent
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("FOREIGN TEXT");
+    expect(serialized).not.toContain('"foreign"');
+
+    // Correction 3: no foreign-turn state left behind — a later turn does not
+    // wait forever for a result already consumed.
+    for (const f of ownerFrames("three")) transport.enqueue(f);
+    const third = await collect(engine.runTurn("third", { signal: new AbortController().signal }));
+    expect(third.some((event) => event.type === "error")).toBe(false);
+    expect(third.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 3 }]);
+  });
+
+  it("dispose while waiting for a self-started turn settles the waiting turn as cancelled", async () => {
+    const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
+    const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("first prompt", { signal: new AbortController().signal }));
+
+    transport.push(foreignAssistantFrame("m-f1", "FOREIGN TEXT"));
+    const events: AgentEvent[] = [];
+    const turn2 = (async () => {
+      for await (const event of engine.runTurn("waiting", { signal: new AbortController().signal })) events.push(event);
+    })();
+    await new Promise((r) => setImmediate(r)); // park in the foreign wait
+    await engine.dispose("session-close");
+    await turn2;
+
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "cancelled", turns: 2 }]);
+    expect(transport.closed).toBe(1);
+  });
+
+  it("idle status noise between turns does not open a foreign turn or delay the next owner input", async () => {
+    const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
+    const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("first prompt", { signal: new AbortController().signal }));
+
+    // Idle noise — no result ever follows, and none is needed.
+    transport.push({ type: "system", subtype: "status", status: "compacting" } as unknown as ClaudeStreamMessage);
+    for (const f of ownerFrames("two")) transport.enqueue(f);
+
+    const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 2 }]);
+    expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
+    const foreignNotices = events.filter(
+      (event) => event.type === "engine_notice" && String((event as { message?: string }).message).includes("started a turn on its own"),
+    );
+    expect(foreignNotices).toHaveLength(0);
+    expect(transport.sent.at(-1)).toBe("second");
+  });
+
+  it("idle replay/local-command echo does not open a foreign turn (no wait for a nonexistent result)", async () => {
+    const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
+    const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("first prompt", { signal: new AbortController().signal }));
+
+    // Both live echo shapes from event-translator's onUser: the replay marker
+    // AND the bare-string local-command stdout without it.
+    transport.push({
+      type: "user",
+      isReplay: true,
+      message: { role: "user", content: [{ type: "text", text: "first prompt" }] },
+    } as unknown as ClaudeStreamMessage);
+    transport.push({
+      type: "user",
+      message: { role: "user", content: "<local-command-stdout>model set</local-command-stdout>" },
+    } as unknown as ClaudeStreamMessage);
+    for (const f of ownerFrames("two")) transport.enqueue(f);
+
+    const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 2 }]);
+    const foreignNotices = events.filter(
+      (event) => event.type === "engine_notice" && String((event as { message?: string }).message).includes("started a turn on its own"),
+    );
+    expect(foreignNotices).toHaveLength(0);
+    expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
+    expect(transport.sent).toEqual(["first prompt", "second"]); // never waited for a nonexistent result
+  });
+
+  it("foreign frames arriving during a yielded pre-send notice stay foreign (send barrier re-runs after every yield)", async () => {
+    const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    engine.queueNotice({ type: "engine_notice", level: "info", message: "review checkpoint" });
+    for (const f of ownerFrames("review")) transport.enqueue(f);
+
+    const iterator = engine.runTurn("owner", { signal: new AbortController().signal })[Symbol.asyncIterator]();
+    await iterator.next(); // turn_start
+    const notice = await iterator.next();
+    expect(notice.value).toMatchObject({ type: "engine_notice", message: "review checkpoint" });
+
+    // While the generator is SUSPENDED at the notice yield, the CLI starts
+    // (and finishes) a whole foreign turn. The barrier must re-run on resume:
+    // classify the foreign frames, re-wait, and only then send the input —
+    // which flushes the enqueued OWNER frames, never the foreign ones.
+    transport.push(foreignAssistantFrame("review-foreign", "FOREIGN AT YIELD"));
+    transport.push(foreignResultFrame("foreign done"));
+
+    const events: AgentEvent[] = [];
+    for (;;) {
+      const step = await iterator.next();
+      if (step.done) break;
+      events.push(step.value);
+    }
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("FOREIGN AT YIELD");
+    expect(serialized).toContain("OWNER OUTPUT review");
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
+    await engine.dispose("session-close");
+  });
+
+  it("dispose during a suspended pre-send notice never sends the owner input and terminalizes cancelled", async () => {
+    const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    engine.queueNotice({ type: "engine_notice", level: "info", message: "review checkpoint" });
+
+    const iterator = engine.runTurn("owner", { signal: new AbortController().signal })[Symbol.asyncIterator]();
+    await iterator.next(); // turn_start
+    await iterator.next(); // the queued notice — generator suspended at its yield
+
+    await engine.dispose("session-close");
+    const events: AgentEvent[] = [];
+    for (;;) {
+      const step = await iterator.next();
+      if (step.done) break;
+      events.push(step.value);
+    }
+    expect(transport.sent).toEqual([]); // the owner input was never injected
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "cancelled", turns: 1 }]);
+  });
+
+  it("dispose while suspended at the foreign-wait notice settles the waiting turn as cancelled, not error", async () => {
+    const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+
+    // A RUNNING foreign turn (no result yet) parks the owner turn in the
+    // foreign wait. Manual, SEQUENTIAL iteration: stop exactly at the
+    // finishing-notice yield, dispose while the generator is SUSPENDED there,
+    // then drain — a concurrent consumer would already have resumed the
+    // generator into its wait race and would not exercise the suspension.
+    transport.push(foreignAssistantFrame("pending", "FOREIGN"));
+    const iterator = engine.runTurn("owner during", { signal: new AbortController().signal })[Symbol.asyncIterator]();
+    const events: AgentEvent[] = [];
+    for (;;) {
+      const step = await iterator.next();
+      if (step.done) throw new Error("missing finishing notice");
+      events.push(step.value);
+      if (step.value.type === "engine_notice" && String((step.value as { message?: string }).message).includes("finishing a turn")) break;
+    }
+
+    await engine.dispose("session-close");
+
+    for (;;) {
+      const step = await iterator.next();
+      if (step.done) break;
+      events.push(step.value);
+    }
+    expect(transport.sent).toEqual([]); // the owner input was never injected
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "cancelled", turns: 1 }]);
+  });
+});
+
+/**
  * cut §1.5 hazard (б) — the resumed session's FIRST `system/init` is the truth
  * about model and permission mode, not the row we resumed from. These pin what
  * the engine does with that init: it adopts the native posture into its own
@@ -832,8 +1259,8 @@ describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 
     expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan" }]);
 
     // A second turn re-emits `system/init` (probe #1); the announcement does not repeat.
-    transport.push(initFrame("model-x", "plan"));
-    transport.push(RESULT);
+    transport.enqueue(initFrame("model-x", "plan"));
+    transport.enqueue(RESULT);
     await collect(engine.runTurn("again", { signal: new AbortController().signal }));
     expect(seen).toHaveLength(1);
   });
@@ -904,8 +1331,8 @@ describe("ClaudeEngine — session-cumulative token accounting (TASK.159)", () =
     // context-meter read it sits beside in runTurn).
     expect(types(first).indexOf("engine_session_tokens")).toBeGreaterThan(types(first).indexOf("loop_end"));
 
-    transport.push(INIT);
-    transport.push(resultFrame({ input_tokens: 10, output_tokens: 5 }));
+    transport.enqueue(INIT);
+    transport.enqueue(resultFrame({ input_tokens: 10, output_tokens: 5 }));
     const second = await collect(engine.runTurn("two", { signal: new AbortController().signal }));
     expect(second.find((event) => event.type === "engine_session_tokens")).toEqual({
       type: "engine_session_tokens",
@@ -924,8 +1351,8 @@ describe("ClaudeEngine — session-cumulative token accounting (TASK.159)", () =
     // The skipped turn must leave the SAME engine's cumulative accumulator
     // untouched: the next turn's real usage starts from 0, not from a phantom
     // partial sum the skip could have left behind.
-    transport.push(INIT);
-    transport.push(resultFrame({ input_tokens: 3, output_tokens: 1 }));
+    transport.enqueue(INIT);
+    transport.enqueue(resultFrame({ input_tokens: 3, output_tokens: 1 }));
     const next = await collect(engine.runTurn("hi again", { signal: new AbortController().signal }));
     expect(next.find((event) => event.type === "engine_session_tokens")).toEqual({
       type: "engine_session_tokens",
@@ -953,8 +1380,12 @@ describe("ClaudeEngine — session-cumulative token accounting (TASK.159)", () =
  * unconditional post-loop_end final read is preserved.
  */
 describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
-  /** Continuously consumes a turn while it stays open; resolves with events when it finishes. */
-  function consume(engine: ClaudeEngine, signal: AbortSignal): { events: AgentEvent[]; done: Promise<AgentEvent[]> } {
+  /** Continuously consumes a turn while it stays open; resolves with events when it finishes.
+   *  TASK.189: `parked` resolves once the turn has passed its pre-send barrier
+   *  and actually SENT — under engine-lifetime stream ownership a frame pushed
+   *  before that point is (correctly) classified as a CLI self-started turn,
+   *  not this turn's mid-turn stream. */
+  function consume(engine: ClaudeEngine, signal: AbortSignal): { events: AgentEvent[]; parked: Promise<void>; done: Promise<AgentEvent[]> } {
     const events: AgentEvent[] = [];
     const iterator = engine.runTurn("work", { signal })[Symbol.asyncIterator]();
     const done = (async () => {
@@ -964,7 +1395,11 @@ describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
         events.push(step.value);
       }
     })();
-    return { events, done };
+    const parked = (async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+    })();
+    return { events, parked, done };
   }
 
   /** Waits until predicate holds over the shared events list (event observed mid-turn). */
@@ -980,6 +1415,7 @@ describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
     const engine = engineWith(transport);
     const controller = new AbortController();
     const turn = consume(engine, controller.signal);
+    await turn.parked;
 
     transport.push(assistantFrame("a1"));
     await until(() => turn.events.some((event) => event.type === "context_usage"), "mid-turn context_usage");
@@ -1008,6 +1444,7 @@ describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
       });
       const engine = engineWith(transport);
       const turn = consume(engine, new AbortController().signal);
+      await turn.parked;
 
       transport.push(assistantFrame("a1"));
       await until(() => transport.contextUsageCalls === 1, "first mid-turn read");
@@ -1046,6 +1483,7 @@ describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
     });
     const engine = engineWith(transport, { timeouts: { midTurnContextUsageIntervalMs: 0 } });
     const turn = consume(engine, new AbortController().signal);
+      await turn.parked;
 
     transport.push(assistantFrame("a1"));
     await until(() => gates.length === 1, "first gated read");
@@ -1091,6 +1529,7 @@ describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
     });
     const engine = engineWith(transport);
     const turn = consume(engine, new AbortController().signal);
+      await turn.parked;
 
     transport.push(assistantFrame("a1"));
     await until(() => transport.contextUsageCalls === 1, "gated mid-turn read started");
@@ -1130,6 +1569,7 @@ describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
       });
       const engine = engineWith(transport, { timeouts: { midTurnContextUsageIntervalMs: 0 } });
       const turn = consume(engine, new AbortController().signal);
+      await turn.parked;
 
       transport.push(assistantFrame("a1"));
       await until(() => transport.contextUsageCalls >= 1, "first mid-turn read attempted");
@@ -1170,6 +1610,7 @@ describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
     const engine = engineWith(transport);
     const controller = new AbortController();
     const turn = consume(engine, controller.signal);
+    await turn.parked;
 
     transport.push(assistantFrame("a1"));
     await until(() => transport.contextUsageCalls === 1, "gated mid-turn read started");
