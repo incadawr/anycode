@@ -70,6 +70,14 @@ export interface ChildSpawnRequest {
   description: string;
   prompt: string;
   provider?: string;
+  /**
+   * Taskana 4269: EXACT connection id from a profile's `connection:` frontmatter
+   * (relayed via `SessionSubagentRequest.connectionId`). Main resolves it against
+   * the live connections registry and pins the child's env to it. Mutually
+   * exclusive with `provider` — a request carrying both is refused. Rides the
+   * creating spawn only; never a resume.
+   */
+  connectionId?: string;
   model?: string;
   /**
    * Reasoning tier from the profile's `effort:` frontmatter. Core children:
@@ -414,6 +422,7 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "description",
   "prompt",
   "provider",
+  "connectionId",
   "model",
   "effort",
   "permissionMode",
@@ -454,6 +463,14 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.provider !== undefined && !isNonEmptyCappedString(msg.provider, CHILD_PROVIDER_MAX_CHARS)) {
     return null;
   }
+  // Taskana 4269: same shape cap as `provider`; both at once rejects the whole
+  // message (they are two ways to select the same connection).
+  if (msg.connectionId !== undefined && !isNonEmptyCappedString(msg.connectionId, CHILD_PROVIDER_MAX_CHARS)) {
+    return null;
+  }
+  if (msg.provider !== undefined && msg.connectionId !== undefined) {
+    return null;
+  }
   if (msg.model !== undefined && !isIdString(msg.model, CHILD_MODEL_MAX_CHARS)) {
     return null;
   }
@@ -489,6 +506,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     description: msg.description,
     prompt: msg.prompt,
     ...(msg.provider !== undefined ? { provider: msg.provider as string } : {}),
+    ...(msg.connectionId !== undefined ? { connectionId: msg.connectionId as string } : {}),
     ...(msg.model !== undefined ? { model: msg.model as string } : {}),
     ...(msg.effort !== undefined ? { effort: msg.effort } : {}),
     permissionMode: msg.permissionMode,

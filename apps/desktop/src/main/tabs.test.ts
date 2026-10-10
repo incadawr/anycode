@@ -1751,7 +1751,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     expect(hosts).toHaveLength(hostsBefore); // no fork attempted
   });
 
-  it("an EXPLICIT known provider resolves via resolveProviderConnection — its connectionId (not the parent's) rides the child's fork env", () => {
+  it("an EXPLICIT known provider resolves via resolveProviderConnection and PREPARES: no fork before the deferred resolves, then forks on the frozen resolved target with the pin held through registration", async () => {
     const { hosts } = shutdownableForkRig();
     const envs: NodeJS.ProcessEnv[] = [];
     const forkSpy = vi.fn<HostForkFn>((_entry, _args, opts) => {
@@ -1764,8 +1764,17 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
       return host as unknown as UtilityProcess;
     });
     const { window } = windowRig();
+    // A controlled deferred: the fork must NOT happen until this settles.
+    let resolvePrep!: (v: { ok: true; release: () => void } | { ok: false }) => void;
+    const prepPromise = new Promise<{ ok: true; release: () => void } | { ok: false }>((res) => {
+      resolvePrep = res;
+    });
+    const releaseSpy = vi.fn();
+    let releaseCountAtAccepted = -1;
+    let pinHeldAtAccepted = false;
     const manager = childManager(forkSpy, window, {
       resolveProviderConnection: (provider) => (provider === "known" ? "conn-known" : undefined),
+      prepareChildConnection: () => prepPromise,
     });
     const root = manager.createTab({
       workspace: "/ws",
@@ -1775,12 +1784,40 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     });
     expect(root.ok).toBe(true);
     const rootHost = hosts[0]!;
+    // Observe the accepted reply AT EMIT TIME: the preparation pin must still be
+    // held (the manager releases it only in its `finally`, after registration).
+    const originalPost = rootHost.postMessage.getMockImplementation();
+    rootHost.postMessage.mockImplementation((msg: unknown) => {
+      if ((msg as { kind?: unknown }).kind === "accepted" && (msg as { requestId?: unknown }).requestId === "prov-1") {
+        releaseCountAtAccepted = releaseSpy.mock.calls.length;
+        pinHeldAtAccepted = manager.pinnedConnectionIds().has("conn-known");
+      }
+      originalPost?.(msg);
+    });
+    const hostsBefore = hosts.length;
 
     rootHost.emit("message", spawnRequest({ requestId: "prov-1", provider: "known" }));
+    await flush();
 
+    // (a) No fork while preparation is pending.
+    expect(hosts).toHaveLength(hostsBefore);
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "prov-1")).toBe(false);
+
+    resolvePrep({ ok: true, release: releaseSpy });
+    await flush();
+
+    // (b) Forked on the FROZEN resolved target, not the parent's connection.
     expect(envs[1]).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-known" });
-    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "prov-1");
-    expect(accepted).toMatchObject({ kind: "accepted" });
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "prov-1")).toMatchObject({ kind: "accepted" });
+    // (c) Pin-release integration ordering: at the moment `accepted` was emitted
+    // the manager had NOT yet released the preparation pin, and the just-
+    // registered child tab already protects "conn-known" via pinnedConnectionIds.
+    expect(releaseCountAtAccepted).toBe(0);
+    expect(pinHeldAtAccepted).toBe(true);
+    // ...and once admitChildSpawn returns, the preparation pin is released
+    // exactly once while the registered tab keeps protecting the connection.
+    expect(releaseSpy).toHaveBeenCalledTimes(1);
+    expect(manager.pinnedConnectionIds().has("conn-known")).toBe(true);
   });
 
   it("an UNKNOWN provider is refused not_ready with the exact §2.7 text, and never forks", () => {
@@ -1888,7 +1925,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
   });
 
-  it("a resolved connection whose env is unavailable ALSO rolls back and replies spawn_failed (the non-throwing W10-FIX F3 fork-failure path)", () => {
+  it("a resolved connection whose env is unavailable is refused not_ready before the fork, releasing the pin once (Taskana 4269)", async () => {
     const hosts: FakeHost[] = [];
     const forkSpy = vi.fn<HostForkFn>(() => {
       const host = new FakeHost();
@@ -1899,11 +1936,16 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
       return host as unknown as UtilityProcess;
     });
     const { window } = windowRig();
+    const releaseSpy = vi.fn();
     const manager = childManager(forkSpy, window, {
       // The PARENT root's own connection resolves fine; only the CHILD's
       // explicitly-requested provider resolves to a connection whose env is gone.
       env: (connectionId) => (connectionId === "conn-gone" ? undefined : { PATH: "/base" }),
       resolveProviderConnection: () => "conn-gone",
+      // Preparation itself "succeeds" (env priming reports nothing to do), but
+      // the env for the frozen id is still absent — admission must refuse and
+      // release the pin exactly once, never fork.
+      prepareChildConnection: async () => ({ ok: true, release: releaseSpy }),
     });
     const root = manager.createTab({ workspace: "/ws", sessionId: "root-envgone", resume: false });
     expect(root.ok).toBe(true);
@@ -1911,17 +1953,20 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     const hostsBefore = hosts.length;
 
     rootHost.emit("message", spawnRequest({ requestId: "env-gone", provider: "anything" }));
+    await flush();
 
     expect(childRunEvents(rootHost)).toEqual([
       {
         type: CHILD_RUN_EVENT_TYPE,
         requestId: "env-gone",
         kind: "rejected",
-        reason: "spawn_failed",
-        message: "Agent: the child session failed to start.",
+        reason: "not_ready",
+        message:
+          'Agent: connection "conn-gone" could not be prepared for this child (deleted or its fork env is unavailable). Retry, or pick another connection.',
       },
     ]);
-    expect(hosts).toHaveLength(hostsBefore); // spawnTabHost's soft-fail path never reaches fork()
+    expect(hosts).toHaveLength(hostsBefore); // no fork
+    expect(releaseSpy).toHaveBeenCalledTimes(1);
   });
 
   it("cancelling a run holds its slot until the REAL reap — a 4th spawn stays PARKED (TASK.147 срез 1) until the cancelled child actually exits, then wakes it (not whoever asks next)", () => {
@@ -4777,13 +4822,20 @@ describe("TASK.194 model admission before fork", () => {
     expect(hosts).toHaveLength(1);
     expect(childRunEvents(root)).toMatchObject([{ kind: "rejected", reason: "not_ready", message: expect.stringContaining("matching provider/connection") }]);
   });
-  it("validates against an explicitly selected provider rather than the parent", () => {
+  it("validates against an explicitly selected provider rather than the parent", async () => {
     const { fork, hosts } = liveForkRig();
     const { window } = windowRig();
     const validateChildModel = vi.fn();
-    const manager = childManager(fork, window, { validateChildModel, resolveProviderConnection: () => "anthropic-connection" });
+    const manager = childManager(fork, window, {
+      validateChildModel,
+      resolveProviderConnection: () => "anthropic-connection",
+      // Taskana 4269: an explicit provider now prepares its connection before
+      // the fork (env primed + pin held).
+      prepareChildConnection: async () => ({ ok: true, release: () => {} }),
+    });
     manager.createTab({ workspace: "/ws", sessionId: "model-provider-root", resume: false, connectionId: "z-ai-connection" });
     hosts[0]!.emit("message", spawnRequest({ model: "claude-opus-4-20250514", provider: "anthropic" }));
+    await flush();
     expect(validateChildModel).toHaveBeenCalledWith("claude-opus-4-20250514", "anthropic-connection");
     expect(hosts).toHaveLength(2);
   });
@@ -5166,5 +5218,802 @@ describe("TabHostManager — child turn budget argv (TASK.180)", () => {
     expect(forkSpy.mock.calls.length).toBe(forksBefore + 1);
     const followUpArgs = forkSpy.mock.calls[forkSpy.mock.calls.length - 1]?.[1] ?? [];
     expect(followUpArgs).not.toContain("--child-max-turns");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4269: a profile selects its own connection. These exercise the LOAD-
+// BEARING admission protocol in main/tabs.ts: the child-run ledger slot is
+// reserved SYNCHRONOUSLY before the preparation await (so caps stay exact), the
+// frozen connection id comes from prepareChildConnection under resolveResumePin's
+// protocol, and post-await rechecks refuse to fork after close/shutdown/cancel/
+// generation change. The env-recording fork lets us prove WHICH connection each
+// child actually booted on.
+
+describe("child spawn — profile-declared connection routing (Taskana 4269)", () => {
+  type PrepResult = { ok: true; release: () => void } | { ok: false };
+
+  /** A controllable preparation: the test decides when (and how) it settles. */
+  function deferred(): { promise: Promise<PrepResult>; resolve: (v: PrepResult) => void } {
+    let resolve!: (v: PrepResult) => void;
+    const promise = new Promise<PrepResult>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  /** Shutdownable env-recording fork: hosts exit on `shutdown`, and every fork's env is captured. */
+  function envRig() {
+    const hosts: FakeHost[] = [];
+    const envs: NodeJS.ProcessEnv[] = [];
+    const fork: HostForkFn = (_entry, _args, opts) => {
+      envs.push(opts.env ?? {});
+      const host = new FakeHost();
+      hosts.push(host);
+      queueMicrotask(() => host.emit("spawn"));
+      host.postMessage.mockImplementation((msg: unknown) => {
+        if ((msg as { type?: unknown }).type === "shutdown") queueMicrotask(() => host.emit("exit", 0));
+      });
+      return host as unknown as UtilityProcess;
+    };
+    return { fork, hosts, envs };
+  }
+
+  function acceptedOn(host: FakeHost) {
+    return childRunEvents(host).filter((e) => e.kind === "accepted");
+  }
+
+  it("DoD: two routed spawns on ONE parent fork on their own connections (glm-planner conn-glm, ds-executor conn-ds)", async () => {
+    const { fork, hosts, envs } = envRig();
+    const { window } = windowRig();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-routing", resume: false, connectionId: "conn-parent" });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "glm", agentType: "glm-planner", connectionId: "conn-glm" }));
+    rootHost.emit("message", spawnRequest({ requestId: "ds", agentType: "ds-executor", connectionId: "conn-ds" }));
+    await flush();
+    expect(preps).toHaveLength(2); // both reached preparation; no fork until it settles
+    expect(acceptedOn(rootHost)).toHaveLength(0);
+
+    preps[0]!.resolve({ ok: true, release: () => {} });
+    await flush();
+    preps[1]!.resolve({ ok: true, release: () => {} });
+    await flush();
+
+    expect(acceptedOn(rootHost).map((e) => e.requestId).sort()).toEqual(["ds", "glm"]);
+    // SAME supervisor parent (one root), DIFFERENT child connections.
+    expect(envs[1]!.ANYCODE_CONNECTION_ID).toBe("conn-glm");
+    expect(envs[2]!.ANYCODE_CONNECTION_ID).toBe("conn-ds");
+  });
+
+  it("counts a PENDING preparation against the per-parent cap (the reservation precedes the await)", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: () => 1,
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-cap", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+    expect(preps).toHaveLength(1); // A reserved its slot synchronously, now awaiting preparation
+    expect(hosts).toHaveLength(1);
+
+    // B sees the cap FULL even though A has not forked — proof the slot is held pre-await.
+    rootHost.emit("message", spawnRequest({ requestId: "B", connectionId: "conn-ds" }));
+    expect(preps).toHaveLength(1); // B parked, never reached preparation
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "B")).toBe(false);
+    expect(hosts).toHaveLength(1);
+
+    preps[0]!.resolve({ ok: true, release: () => {} });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({ kind: "accepted" });
+    expect(hosts).toHaveLength(2);
+
+    // Finishing A frees the slot -> pump admits B -> B prepares and forks on conn-ds.
+    hosts[1]!.emit("message", childTerminalMsg());
+    await flush();
+    expect(preps).toHaveLength(2);
+    expect(acceptedOn(rootHost).some((e) => e.requestId === "B")).toBe(false);
+    preps[1]!.resolve({ ok: true, release: () => {} });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "B")).toMatchObject({ kind: "accepted" });
+    expect(hosts).toHaveLength(3);
+  });
+
+  it("preparation failure => not_ready naming the connection, slot released, NO fork, release never called", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const releaseSpy = vi.fn();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: () => 1,
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-prepfail", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+    preps[0]!.resolve({ ok: false });
+    await flush();
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "A",
+      kind: "rejected",
+      reason: "not_ready",
+      message:
+        'Agent: connection "conn-glm" could not be prepared for this child (deleted or its fork env is unavailable). Retry, or pick another connection.',
+    });
+    expect(releaseSpy).not.toHaveBeenCalled();
+    expect(hosts).toHaveLength(1); // no fork
+
+    // The failed slot was released -> a following spawn admits immediately.
+    rootHost.emit("message", spawnRequest({ requestId: "B", connectionId: "conn-ds" }));
+    await flush();
+    expect(preps).toHaveLength(2);
+    preps[1]!.resolve({ ok: true, release: releaseSpy });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "B")).toMatchObject({ kind: "accepted" });
+  });
+
+  it("a rejecting prepareChildConnection is caught: same honest not_ready, no unhandled rejection", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => Promise.reject(new Error("priming blew up")),
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-prepreject", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({
+      kind: "rejected",
+      reason: "not_ready",
+      message:
+        'Agent: connection "conn-glm" could not be prepared for this child (deleted or its fork env is unavailable). Retry, or pick another connection.',
+    });
+    expect(hosts).toHaveLength(1); // no fork, and the process survived
+  });
+
+  it("NO prepareChildConnection dep => honest not_ready, never a successful no-op fork", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      resolveChildConnection: (id) => id,
+      // prepareChildConnection deliberately absent; an env happens to exist.
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-nodep", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({
+      kind: "rejected",
+      reason: "not_ready",
+      message:
+        'Agent: connection "conn-glm" could not be prepared for this child (deleted or its fork env is unavailable). Retry, or pick another connection.',
+    });
+    expect(hosts).toHaveLength(1);
+  });
+
+  it("NO resolveChildConnection dep (unknown id) => not_ready naming the connection, no preparation, no fork", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const prepareSpy = vi.fn(async () => ({ ok: true as const, release: () => {} }));
+    const manager = childManager(fork, window, { prepareChildConnection: prepareSpy });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-noresolver", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-ghost" }));
+    await flush();
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "A",
+      kind: "rejected",
+      reason: "not_ready",
+      message:
+        'Agent: connection "conn-ghost" declared by this profile is not available in this host. Fix or remove the profile\'s "connection:" frontmatter.',
+    });
+    expect(prepareSpy).not.toHaveBeenCalled();
+    expect(hosts).toHaveLength(1);
+  });
+
+  it("EXPLICIT provider path: unknown provider fails closed, no preparation, no parent fallback", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const prepareSpy = vi.fn(async () => ({ ok: true as const, release: () => {} }));
+    const manager = childManager(fork, window, {
+      resolveProviderConnection: (p) => (p === "known" ? "conn-known" : undefined),
+      prepareChildConnection: prepareSpy,
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-unknownprov", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", provider: "mystery" }));
+    await flush();
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({
+      kind: "rejected",
+      reason: "not_ready",
+      message: 'Agent: provider connection "mystery" is not available in this host. Omit "provider" to use the parent session\'s connection.',
+    });
+    expect(prepareSpy).not.toHaveBeenCalled();
+    expect(hosts).toHaveLength(1); // never silently on the parent's conn-parent
+  });
+
+  it("deleted-while-queued: a request whose target is DELETED between enqueue and admission is refused not_ready, no preparation, no fork", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    // conn-ds EXISTS at enqueue time — this is the planned deletion BETWEEN
+    // enqueue and admission, not an unknown-id case.
+    let live = new Set(["conn-parent", "conn-glm", "conn-ds"]);
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: () => 1,
+      resolveChildConnection: (id) => (live.has(id) ? id : undefined),
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-delqueue", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+    expect(preps).toHaveLength(1); // A holds the single slot, awaiting preparation
+
+    // B parks behind the cap while its target is still LIVE.
+    rootHost.emit("message", spawnRequest({ requestId: "B", connectionId: "conn-ds" }));
+    await flush();
+    expect(preps).toHaveLength(1); // B parked, never resolved yet
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "B")).toBe(false);
+
+    // ...now the target is DELETED while B is queued (before admission).
+    live = new Set(["conn-parent", "conn-glm"]);
+
+    // Free A's slot -> pump admits B -> resolution now fails on the deleted id.
+    preps[0]!.resolve({ ok: true, release: () => {} });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({ kind: "accepted" });
+    hosts[1]!.emit("message", childTerminalMsg());
+    await flush();
+
+    const bEvent = childRunEvents(rootHost).find((e) => e.requestId === "B");
+    expect(bEvent).toMatchObject({ kind: "rejected", reason: "not_ready" });
+    expect(bEvent).toMatchObject({
+      message:
+        'Agent: connection "conn-ds" declared by this profile is not available in this host. Fix or remove the profile\'s "connection:" frontmatter.',
+    });
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "B" && e.kind === "accepted")).toBe(false);
+    expect(preps).toHaveLength(1); // B never reached preparation
+    expect(hosts).toHaveLength(2); // only the root + A's child; B never forked
+  });
+
+  it("MISSING target env after a successful preparation => not_ready, release once, no fork", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const releaseSpy = vi.fn();
+    const manager = childManager(fork, window, {
+      env: (id) => (id === "conn-glm" ? undefined : { PATH: "/base" }),
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: async () => ({ ok: true, release: releaseSpy }),
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-noenv", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({
+      kind: "rejected",
+      reason: "not_ready",
+      message:
+        'Agent: connection "conn-glm" could not be prepared for this child (deleted or its fork env is unavailable). Retry, or pick another connection.',
+    });
+    expect(hosts).toHaveLength(1);
+    expect(releaseSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("engine children reject a connection selection (both codex and claude)", async () => {
+    for (const engine of ["codex", "claude"] as const) {
+      const { fork, hosts } = envRig();
+      const { window } = windowRig();
+      const prepareSpy = vi.fn(async () => ({ ok: true as const, release: () => {} }));
+      const manager = childManager(fork, window, {
+        engineReady: () => true,
+        engineEnv: (e) => ({ [ENV_ENGINE]: e }),
+        resolveChildConnection: (id) => id,
+        prepareChildConnection: prepareSpy,
+      });
+      const root = manager.createTab({ workspace: "/ws", sessionId: `root-engine-${engine}`, resume: false, connectionId: "conn-parent" });
+      const rootHost = hosts[0]!;
+
+      rootHost.emit("message", spawnRequest({ requestId: "A", engine, connectionId: "conn-glm" }));
+      await flush();
+
+      expect(childRunEvents(rootHost).find((e) => e.requestId === "A"), engine).toMatchObject({
+        kind: "rejected",
+        reason: "not_ready",
+        message:
+          "Agent: a connection selection is not valid for an engine child — it runs on its own CLI account, not an AnyCode provider connection.",
+      });
+      expect(prepareSpy, engine).not.toHaveBeenCalled();
+      expect(hosts, engine).toHaveLength(1);
+    }
+  });
+
+  it("provider + connectionId on one spawn: the wire parser drops it, and a DIRECT caller is refused defensively", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const prepareSpy = vi.fn(async () => ({ ok: true as const, release: () => {} }));
+    const manager = childManager(fork, window, {
+      resolveProviderConnection: () => "conn-known",
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: prepareSpy,
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-conflict", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+    const rootTab = manager.getTab(root.ok ? root.tab.tabId : "");
+    expect(rootTab).toBeDefined();
+
+    // (1) Through the normal message boundary the shared parser drops the pair
+    // outright — no event, nothing admitted.
+    rootHost.emit("message", spawnRequest({ requestId: "A", provider: "known", connectionId: "conn-glm" }));
+    await flush();
+    expect(childRunEvents(rootHost)).toHaveLength(0);
+
+    // (2) A DIRECT caller bypassing the parser still hits main's defensive refusal
+    // (a prompt not_ready naming the conflict — never a silent parent fallback).
+    const direct = manager as unknown as {
+      spawnChild: (tab: unknown, sender: unknown, req: ChildSpawnRequest) => void;
+    };
+    direct.spawnChild(rootTab, rootHost, spawnRequest({ requestId: "D", provider: "known", connectionId: "conn-glm" }));
+    await flush();
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "D")).toMatchObject({
+      kind: "rejected",
+      reason: "not_ready",
+      message:
+        'Agent: "provider" and "connectionId" are mutually exclusive on one spawn; the profile selects its own connection — omit "provider".',
+    });
+    expect(prepareSpy).not.toHaveBeenCalled();
+    expect(hosts).toHaveLength(1);
+  });
+
+  it("a resume carrying connectionId is refused; a plain resume keeps the child's original pin", async () => {
+    const { fork, hosts, envs } = envRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: async () => ({ ok: true, release: () => {} }),
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-resume", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "A" && e.kind === "accepted");
+    expect(accepted).toMatchObject({ kind: "accepted" });
+    const childSessionId = accepted!.kind === "accepted" ? accepted!.childSessionId : "";
+    // Finish + reap the child so the follow-up is admissible.
+    hosts[1]!.emit("message", childReadyMsg());
+    hosts[1]!.emit("message", childTerminalMsg());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // A resume MAY NOT re-send routing.
+    rootHost.emit("message", spawnRequest({ requestId: "R-override", resumeChildSessionId: childSessionId, connectionId: "conn-ds" }));
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "R-override")).toMatchObject({
+      kind: "rejected",
+      reason: "not_ready",
+      message: "Agent: a continued child keeps its own connection and model; omit provider/model when continuing.",
+    });
+
+    // A PLAIN resume forks on the child's ORIGINAL pin (conn-glm), not the parent's.
+    rootHost.emit("message", spawnRequest({ requestId: "R-plain", resumeChildSessionId: childSessionId }));
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "R-plain")).toMatchObject({ kind: "accepted" });
+    expect(envs[envs.length - 1]!.ANYCODE_CONNECTION_ID).toBe("conn-glm");
+  });
+
+  it("an unrouted fresh spawn inherits the parent connection WITHOUT preparation", async () => {
+    const { fork, hosts, envs } = envRig();
+    const { window } = windowRig();
+    const prepareSpy = vi.fn(async () => ({ ok: true as const, release: () => {} }));
+    const manager = childManager(fork, window, { prepareChildConnection: prepareSpy });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-inherit", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A" }));
+    await flush();
+
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({ kind: "accepted" });
+    expect(envs[1]!.ANYCODE_CONNECTION_ID).toBe("conn-parent");
+    expect(prepareSpy).not.toHaveBeenCalled();
+  });
+
+  it("an explicit route EQUAL to the parent's pin still prepares (selection is explicit, never inferred)", async () => {
+    const { fork, hosts, envs } = envRig();
+    const { window } = windowRig();
+    const prepareSpy = vi.fn(async () => ({ ok: true as const, release: () => {} }));
+    const manager = childManager(fork, window, {
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: prepareSpy,
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-equal", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-parent" }));
+    await flush();
+
+    expect(prepareSpy).toHaveBeenCalledWith("conn-parent");
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({ kind: "accepted" });
+    expect(envs[1]!.ANYCODE_CONNECTION_ID).toBe("conn-parent");
+  });
+
+  it("validates the requested model against the SELECTED connection; an incompatible model never forks", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const validateChildModel = vi.fn((model: string) => {
+      if (model === "nope") throw new Error("not available on this connection");
+    });
+    const manager = childManager(fork, window, {
+      validateChildModel,
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: async () => ({ ok: true, release: () => {} }),
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-model", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm", model: "nope" }));
+    await flush();
+
+    expect(validateChildModel).toHaveBeenCalledWith("nope", "conn-glm");
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({ kind: "rejected", reason: "not_ready" });
+    expect(hosts).toHaveLength(1); // no fork
+  });
+
+  it("a parent CLOSE during preparation finalizes the starting entry: no late fork, no accepted, pin released", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const releaseSpy = vi.fn();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root1 = manager.createTab({ workspace: "/ws", sessionId: "root-close-1", resume: false, connectionId: "conn-parent" });
+    const root2 = manager.createTab({ workspace: "/ws", sessionId: "root-close-2", resume: false, connectionId: "conn-parent" });
+    expect(root1.ok && root2.ok).toBe(true);
+    const root1Host = hosts[0]!;
+
+    root1Host.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+    expect(preps).toHaveLength(1);
+
+    const hostsBeforeClose = hosts.length;
+    await manager.closeTab(root1.ok ? root1.tab.tabId : "");
+    expect(hosts).toHaveLength(hostsBeforeClose); // no child fork on close
+
+    preps[0]!.resolve({ ok: true, release: releaseSpy });
+    await flush();
+    expect(hosts).toHaveLength(hostsBeforeClose); // no LATE fork either
+    expect(acceptedOn(root1Host)).toHaveLength(0);
+    expect(releaseSpy).toHaveBeenCalledTimes(1); // pin released, not leaked
+  });
+
+  it("SHUTDOWN during preparation: pending A is finalized and a QUEUED B is purged — no late fork, no accepted, pins released once", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const releaseA = vi.fn();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: () => 1,
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-shutdown", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+    expect(preps).toHaveLength(1);
+    // B QUEUES behind the pending A (cap=1) — it has a waiter, not a reservation.
+    rootHost.emit("message", spawnRequest({ requestId: "B", connectionId: "conn-ds" }));
+    await flush();
+    expect(preps).toHaveLength(1); // B parked
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "B")).toBe(false);
+    const hostsBefore = hosts.length;
+
+    await manager.shutdownAllTabHosts();
+    // A's preparation SUCCEEDS late; its connection's env is available — so a
+    // fork would have happened had the closing custody not intervened.
+    preps[0]!.resolve({ ok: true, release: releaseA });
+    await flush();
+
+    // Neither the pending A nor the queued B ever forked or got accepted.
+    expect(hosts).toHaveLength(hostsBefore);
+    expect(acceptedOn(rootHost)).toHaveLength(0);
+    expect(preps).toHaveLength(1); // the queued B was purged, never admitted
+    expect(releaseA).toHaveBeenCalledTimes(1); // A's pin released exactly once
+    // Replies to the now-dead parent host are suppressed (replyChildRunEvent
+    // no-ops once its proc is null); the substantive guarantees above hold.
+  });
+
+  it("a parent generation change (exit + respawn) during preparation never forks on the dead sender", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const releaseSpy = vi.fn();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-gen", resume: false, connectionId: "conn-parent" });
+    const oldHost = hosts[0]!;
+
+    oldHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+    expect(preps).toHaveLength(1);
+
+    oldHost.emit("exit", 0); // drain + respawn: the parent generation is replaced
+    await flush();
+    const hostsAfterRespawn = hosts.length;
+
+    preps[0]!.resolve({ ok: true, release: releaseSpy });
+    await flush();
+    expect(hosts).toHaveLength(hostsAfterRespawn); // the dead sender never forks
+    expect(acceptedOn(oldHost)).toHaveLength(0);
+    expect(releaseSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("preparation failure of A admits an already-queued B without an external completion event (cap=1)", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: () => 1,
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-pumpfail", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+    rootHost.emit("message", spawnRequest({ requestId: "B", connectionId: "conn-ds" })); // parked
+    expect(preps).toHaveLength(1);
+
+    preps[0]!.resolve({ ok: false }); // A fails -> rollback pumps the queue -> B admitted
+    await flush();
+    expect(preps).toHaveLength(2); // B reached preparation with no external completion
+    preps[1]!.resolve({ ok: true, release: () => {} });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "B")).toMatchObject({ kind: "accepted" });
+    // No leaked slot/pin: a THIRD spawn still fits after B finishes.
+    hosts[1]!.emit("message", childTerminalMsg());
+    await flush();
+    rootHost.emit("message", spawnRequest({ requestId: "C", connectionId: "conn-glm" }));
+    await flush();
+    expect(preps).toHaveLength(3);
+  });
+
+  it("preparation REJECTION of A likewise admits an already-queued B (cap=1), no unhandled rejection", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: () => 1,
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-pumpreject", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", connectionId: "conn-glm" }));
+    await flush();
+    rootHost.emit("message", spawnRequest({ requestId: "B", connectionId: "conn-ds" })); // parked
+    expect(preps).toHaveLength(1);
+
+    // Make A's preparation REJECT -> caught, treated as failure -> rollback pumps B.
+    preps[0]!.resolve(Promise.reject(new Error("boom")) as unknown as PrepResult);
+    await flush();
+    await flush();
+    expect(preps).toHaveLength(2); // B admitted with no external completion event
+    preps[1]!.resolve({ ok: true, release: () => {} });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "B")).toMatchObject({ kind: "accepted" });
+  });
+
+  // §3 item 12: a cancellation during preparation followed by a replacement B
+  // must not let A's LATE completion or failure erase B's sibling set, dedup
+  // key, or emit a second result. Exercised at cap=1 so B's admission itself
+  // proves A's slot was freed, and so a THIRD request can prove B still holds
+  // the slot afterwards.
+  it("a cancellation during preparation + replacement B: A's LATE FAILURE emits no second result and leaves B's slot/dedup intact", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const releaseA = vi.fn();
+    const releaseB = vi.fn();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: () => 1,
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-cancel-fail", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", spawnToolCallId: "call-A", connectionId: "conn-glm" }));
+    await flush();
+    expect(preps).toHaveLength(1);
+
+    // Cancel A while its preparation is pending (no tab yet -> the ledger
+    // finalize funnel frees A's slot and tombstones its entry).
+    rootHost.emit("message", runCancel("A"));
+    await flush();
+    const aTerminals = childRunEvents(rootHost).filter((e) => e.requestId === "A" && e.kind !== "accepted");
+    expect(aTerminals).toHaveLength(1); // A is answered EXACTLY once by the funnel
+
+    // B is admitted (A's slot was freed) and now consumes the single slot.
+    rootHost.emit("message", spawnRequest({ requestId: "B", spawnToolCallId: "call-B", connectionId: "conn-ds" }));
+    await flush();
+    expect(preps).toHaveLength(2);
+    preps[1]!.resolve({ ok: true, release: releaseB });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "B")).toMatchObject({ kind: "accepted" });
+    const aEventsAfterB = childRunEvents(rootHost).filter((e) => e.requestId === "A").length;
+
+    // A's preparation finally settles FAILURE — the entry is tombstoned, so this
+    // must emit NO second A result and must NOT touch B's reservations.
+    preps[0]!.resolve({ ok: false });
+    await flush();
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "A")).toHaveLength(aEventsAfterB); // unchanged
+    expect(releaseA).not.toHaveBeenCalled(); // failure => the release closure is a no-op
+
+    // B STILL consumes the cap: a third request must stay parked.
+    rootHost.emit("message", spawnRequest({ requestId: "C", connectionId: "conn-glm" }));
+    await flush();
+    expect(preps).toHaveLength(2); // C parked, never reached preparation
+    expect(childRunEvents(rootHost).some((e) => e.requestId === "C")).toBe(false);
+
+    // B's dedup key SURVIVED: a duplicate (parentSessionId, spawnToolCallId) is
+    // still refused while B runs.
+    rootHost.emit("message", spawnRequest({ requestId: "B-dupe", spawnToolCallId: "call-B", connectionId: "conn-ds" }));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "B-dupe")).toEqual({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "B-dupe",
+      kind: "rejected",
+      reason: "spawn_failed",
+      message:
+        "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.",
+    });
+
+    // B's completion pumps the queued C.
+    hosts[hosts.length - 1]!.emit("message", childTerminalMsg());
+    await flush();
+    expect(preps).toHaveLength(3); // C admitted
+    expect(releaseB).toHaveBeenCalledTimes(1); // B's pin released at its terminal
+  });
+
+  it("a cancellation during preparation + replacement B: A's LATE SUCCESS releases its pin exactly once and clobbers nothing", async () => {
+    const { fork, hosts } = envRig();
+    const { window } = windowRig();
+    const releaseA = vi.fn();
+    const preps: Array<ReturnType<typeof deferred>> = [];
+    const manager = childManager(fork, window, {
+      childRunsPerParentMax: () => 1,
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: () => {
+        const d = deferred();
+        preps.push(d);
+        return d.promise;
+      },
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-cancel-success", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    rootHost.emit("message", spawnRequest({ requestId: "A", spawnToolCallId: "call-A", connectionId: "conn-glm" }));
+    await flush();
+    rootHost.emit("message", runCancel("A"));
+    await flush();
+    const aEventCount = childRunEvents(rootHost).filter((e) => e.requestId === "A").length;
+
+    rootHost.emit("message", spawnRequest({ requestId: "B", spawnToolCallId: "call-B", connectionId: "conn-ds" }));
+    await flush();
+    preps[1]!.resolve({ ok: true, release: () => {} });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "B")).toMatchObject({ kind: "accepted" });
+
+    // A's preparation now resolves SUCCESSFULLY, late. The tombstoned entry must
+    // not fork, must not emit a second result, and MUST release the pin it took.
+    preps[0]!.resolve({ ok: true, release: releaseA });
+    await flush();
+    expect(childRunEvents(rootHost).filter((e) => e.requestId === "A")).toHaveLength(aEventCount); // unchanged
+    expect(acceptedOn(rootHost).some((e) => e.requestId === "A")).toBe(false); // no late fork
+    expect(releaseA).toHaveBeenCalledTimes(1); // pin released exactly once
+
+    // B still consumes the cap.
+    rootHost.emit("message", spawnRequest({ requestId: "C", connectionId: "conn-glm" }));
+    await flush();
+    expect(preps).toHaveLength(2); // C parked
+  });
+
+  it("bridge→admission identity chain: paired glm-planner/conn-glm and ds-executor/provider deepseek->conn-ds, SAME parent", async () => {
+    const { fork, hosts, envs } = envRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, {
+      // The real policy resolves a catalog provider id to a configured connection.
+      resolveProviderConnection: (p) => (p === "deepseek" ? "conn-ds" : undefined),
+      resolveChildConnection: (id) => id,
+      prepareChildConnection: async () => ({ ok: true, release: () => {} }),
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-bridge-chain", resume: false, connectionId: "conn-parent" });
+    const rootHost = hosts[0]!;
+
+    // Exactly the fixtures the core-side agent-bridge tests capture (item 9).
+    rootHost.emit("message", spawnRequest({ requestId: "glm", agentType: "glm-planner", connectionId: "conn-glm" }));
+    rootHost.emit("message", spawnRequest({ requestId: "ds", agentType: "ds-executor", provider: "deepseek" }));
+    await flush();
+
+    expect(acceptedOn(rootHost).map((e) => e.requestId).sort()).toEqual(["ds", "glm"]);
+    expect(envs[1]!.ANYCODE_CONNECTION_ID).toBe("conn-glm");
+    expect(envs[2]!.ANYCODE_CONNECTION_ID).toBe("conn-ds");
   });
 });

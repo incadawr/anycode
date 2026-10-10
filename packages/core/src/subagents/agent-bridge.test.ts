@@ -846,3 +846,77 @@ describe("runAgentBridgeCall — catalog maxTurns (TASK.180)", () => {
     expect(seen !== undefined && "maxTurns" in seen!).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4269 — profile connection routing on the bridge path (the codex
+// supervisor bridge and the Claude MCP bridge share runAgentBridgeCall). A
+// routed catalog entry's declared target rides the CREATING spawn only; a
+// continuation keeps the child's original connection. The tool description
+// surfaces the route as a `[connection: …]` / `[provider: …]` marker.
+
+describe("runAgentBridgeCall — profile connection routing (Taskana 4269)", () => {
+  function capturePort(): { port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
+    let seen: SessionSubagentRequest | undefined;
+    return {
+      seen: () => seen,
+      port: {
+        run: async (req) => {
+          seen = req;
+          return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+        },
+      },
+    };
+  }
+
+  it("a connection-routed entry => the creating spawn carries connectionId, no provider", async () => {
+    const { port, seen } = capturePort();
+    await runAgentBridgeCall(
+      { agent_type: "glm-planner", description: "d", prompt: "p" },
+      {
+        catalog: [{ name: "glm-planner", description: "Plans", systemPrompt: "S", connection: "conn-glm" }],
+        port,
+        spawnToolCallId: "toolu_r1",
+      },
+    );
+    expect(seen()?.connectionId).toBe("conn-glm");
+    expect(seen() !== undefined && "provider" in seen()!).toBe(false);
+  });
+
+  it("a provider-routed entry => the creating spawn carries provider, no connectionId", async () => {
+    const { port, seen } = capturePort();
+    await runAgentBridgeCall(
+      { agent_type: "ds-executor", description: "d", prompt: "p" },
+      {
+        catalog: [{ name: "ds-executor", description: "Exec", systemPrompt: "S", provider: "deepseek" }],
+        port,
+        spawnToolCallId: "toolu_r2",
+      },
+    );
+    expect(seen()?.provider).toBe("deepseek");
+    expect(seen() !== undefined && "connectionId" in seen()!).toBe(false);
+  });
+
+  it("continue_session on a routed entry => neither routing key rides the resume", async () => {
+    const { port, seen } = capturePort();
+    await runAgentBridgeCall(
+      { agent_type: "glm-planner", description: "d", prompt: "again", continue_session: "child-9" },
+      {
+        catalog: [{ name: "glm-planner", description: "Plans", systemPrompt: "S", connection: "conn-glm" }],
+        port,
+        spawnToolCallId: "toolu_r3",
+      },
+    );
+    expect(seen()?.resumeChildSessionId).toBe("child-9");
+    expect(seen() !== undefined && "connectionId" in seen()!).toBe(false);
+    expect(seen() !== undefined && "provider" in seen()!).toBe(false);
+  });
+
+  it("buildAgentBridgeToolDecl marks the route with [connection: …] / [provider: …]", () => {
+    const decl = buildAgentBridgeToolDecl([
+      { name: "glm-planner", description: "Plans", systemPrompt: "S", connection: "conn-glm" },
+      { name: "ds-executor", description: "Exec", systemPrompt: "S", provider: "deepseek" },
+    ]);
+    expect(decl?.description).toContain("[connection: conn-glm]");
+    expect(decl?.description).toContain("[provider: deepseek]");
+  });
+});

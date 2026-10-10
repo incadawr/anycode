@@ -248,6 +248,34 @@ describe("parseChildSpawnRequest", () => {
       expect(parseChildSpawnRequest({ ...valid, model })).toEqual({ ...valid, model });
     });
   });
+
+  // Taskana 4269: `connectionId` is the exact id a profile's `connection:`
+  // frontmatter selects. Wire shape mirrors `provider`; the two are mutually
+  // exclusive (two ways to name the same connection).
+  describe("connectionId routing (Taskana 4269)", () => {
+    it("accepts an optional connectionId and round-trips it", () => {
+      const withConnection = { ...valid, connectionId: "conn-glm" };
+      expect(parseChildSpawnRequest(withConnection)).toEqual(withConnection);
+    });
+
+    it("rejects a non-string optional connectionId", () => {
+      expect(parseChildSpawnRequest({ ...valid, connectionId: 42 })).toBeNull();
+    });
+
+    it("rejects an empty-string connectionId (isNonEmptyCappedString policy — distinct from a blank frontmatter value)", () => {
+      expect(parseChildSpawnRequest({ ...valid, connectionId: "" })).toBeNull();
+    });
+
+    it("rejects a provider+connectionId pair (mutually exclusive)", () => {
+      expect(parseChildSpawnRequest({ ...valid, provider: "z-ai", connectionId: "conn-glm" })).toBeNull();
+    });
+
+    it("accepts exactly CHILD_PROVIDER_MAX_CHARS and refuses one over", () => {
+      const atCap = "a".repeat(CHILD_PROVIDER_MAX_CHARS);
+      expect(parseChildSpawnRequest({ ...valid, connectionId: atCap })).toEqual({ ...valid, connectionId: atCap });
+      expect(parseChildSpawnRequest({ ...valid, connectionId: "a".repeat(CHILD_PROVIDER_MAX_CHARS + 1) })).toBeNull();
+    });
+  });
 });
 
 describe("parseChildRunCancel", () => {

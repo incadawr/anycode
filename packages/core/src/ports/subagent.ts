@@ -230,4 +230,6 @@ export interface SubagentPort {
    * branch instead of the deprecated one-shot path in `subagents/runner.ts`).
    */
   engineProfile?(agentType: string): EngineProfileInfo | null;
+  /** Resolves an md-profile's `connection:`/`provider:` frontmatter; null for built-ins, engine profiles, and unrouted profiles. */
+  profileRouting?(agentType: string): { provider?: string; connection?: string } | null;
 }

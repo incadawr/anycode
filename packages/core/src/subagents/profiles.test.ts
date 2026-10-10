@@ -585,3 +585,80 @@ describe("discoverAgentProfiles — maxTurns frontmatter (TASK.74 §2.3)", () =>
     expect(problems[0]).toContain('maxTurns "abc"');
   });
 });
+
+// ---------------------------------------------------------------------------
+// `connection:`/`provider:` frontmatter (Taskana 4269): the profile's own
+// connection selection flows through the single parseAgentProfileMd oracle into
+// PersonaDefinition. Same fatal-on-invalid and claim-set semantics as
+// bad_model/bad_engine.
+
+describe("discoverAgentProfiles — profile connection/provider routing (Taskana 4269)", () => {
+  it("maps connection:/provider: onto the PersonaDefinition; a bad value is a problem and the profile is not registered", async () => {
+    const fs = new FakeFs({
+      [WS]: {
+        "glm.md": md({ name: "glm-planner", description: "d", connection: "conn-glm" }, "BODY"),
+        "ds.md": md({ name: "ds-executor", description: "d", provider: "deepseek" }, "BODY"),
+        "bad.md": md({ name: "bad", description: "d", connection: "a sentence here" }, "BODY"),
+      },
+    });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+
+    expect(profiles.find((p) => p.name === "glm-planner")?.connection).toBe("conn-glm");
+    expect(profiles.find((p) => p.name === "ds-executor")?.provider).toBe("deepseek");
+    expect(profiles.find((p) => p.name === "bad")).toBeUndefined();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("bad.md");
+    expect(problems[0]).toContain("a sentence here");
+  });
+
+  it("each new fatal kind claims the name: a higher-precedence invalid file shadows a valid lower same-named one", async () => {
+    const cases: Array<{ label: string; fields: Record<string, string>; text: string }> = [
+      {
+        label: "bad_connection",
+        fields: { name: "scout", description: "project — bad", connection: "a sentence here" },
+        text: 'connection "a sentence here"',
+      },
+      {
+        label: "bad_provider",
+        fields: { name: "scout", description: "project — bad", provider: "a sentence here" },
+        text: 'provider "a sentence here"',
+      },
+      {
+        label: "engine_connection_conflict",
+        fields: { name: "scout", description: "project — bad", engine: "codex", connection: "conn-x" },
+        text: '"connection"/"provider" cannot be combined with "engine: codex"',
+      },
+      {
+        label: "connection_provider_conflict",
+        fields: { name: "scout", description: "project — bad", connection: "a", provider: "b" },
+        text: '"connection" and "provider" are mutually exclusive',
+      },
+    ];
+    for (const c of cases) {
+      const fs = new FakeFs({
+        [WS]: { "scout.md": md(c.fields, "PROJECT BODY") },
+        [HOME]: { "scout.md": md({ name: "scout", description: "user — valid" }, "USER BODY") },
+      });
+
+      const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+
+      expect(profiles.some((p) => p.name === "scout"), c.label).toBe(false);
+      expect(problems, c.label).toHaveLength(1);
+      expect(problems[0], c.label).toContain(join(WS, "scout.md"));
+      expect(problems[0], c.label).toContain(c.text);
+    }
+  });
+
+  it("both routing keys is a connection_provider_conflict problem; the profile is not registered", async () => {
+    const fs = new FakeFs({
+      [WS]: { "both.md": md({ name: "both", description: "d", connection: "a", provider: "b" }, "BODY") },
+    });
+
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+
+    expect(profiles).toHaveLength(0);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('"connection" and "provider" are mutually exclusive');
+  });
+});

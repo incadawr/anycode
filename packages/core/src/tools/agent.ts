@@ -253,8 +253,32 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         return runSessionTier(input, ctx, agentType, engineProfile);
       }
 
+      // Profile connection routing (Taskana 4269). A routed md-profile declares
+      // its own connection (`connection:` exact id, or `provider:` catalog id);
+      // that declaration is AUTHORITATIVE. An explicit `provider` argument is
+      // refused rather than allowed to win — the argument winning would mask the
+      // profile's declared target, the dishonesty class this task forbids. The
+      // routing is resolved here, once, and handed to the session tier; the
+      // inline tier has no session host to prepare a connection, so a routed
+      // profile is refused there too.
+      const routing = ctx.subagents?.profileRouting?.(agentType) ?? null;
+      if (routing !== null && input.provider !== undefined) {
+        return {
+          ok: false,
+          errorKind: "invalid_input",
+          error: `Agent: "provider" cannot be combined with profile "${agentType}" — the profile selects its own connection; omit "provider".`,
+        };
+      }
+      if (routing !== null && tier !== "session") {
+        return {
+          ok: false,
+          errorKind: "invalid_input",
+          error: `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`,
+        };
+      }
+
       if (tier === "session") {
-        return runSessionTier(input, ctx, agentType);
+        return runSessionTier(input, ctx, agentType, undefined, routing ?? undefined);
       }
       return runInlineTier(input, ctx, agentType);
     },
@@ -343,6 +367,7 @@ async function runSessionTier(
   ctx: ToolContext,
   agentType: string,
   engineProfile?: EngineProfileInfo,
+  routing?: { provider?: string; connection?: string },
 ): Promise<ToolResult<AgentOutput>> {
   if (!ctx.sessionSubagents) {
     return {
@@ -398,6 +423,13 @@ async function runSessionTier(
         })),
     ...(resumeChildSessionId !== undefined ? { resumeChildSessionId } : {}),
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
+    // Taskana 4269: a routed profile's declared target rides the CREATING spawn
+    // only; a continuation keeps the child's original connection (main resumes
+    // the child's own pin and never re-reads routing). Exactly one of these two
+    // keys can be present — the parser refuses both-keys profiles and the
+    // handler above refused a routed profile with an explicit `provider`.
+    ...(resumeChildSessionId === undefined && routing?.provider !== undefined ? { provider: routing.provider } : {}),
+    ...(resumeChildSessionId === undefined && routing?.connection !== undefined ? { connectionId: routing.connection } : {}),
     // TASK.145 срез 1: only ever `true` here — the validation check above
     // already refused `detach:true` on any tier but "session", and `false`/
     // absent is dropped rather than riding the wire as an explicit `false`

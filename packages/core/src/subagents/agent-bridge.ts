@@ -66,6 +66,18 @@ export interface AgentBridgeCatalogEntry {
   systemPrompt: string;
   /** Profile turn budget (TASK.180) for the creating spawn; absent = existing default. */
   maxTurns?: number;
+  /**
+   * Profile `connection:` frontmatter (Taskana 4269) — EXACT AnyCode connection
+   * id the creating spawn's child pins. Absent = inherit the parent's connection.
+   * Mutually exclusive with `provider` (parser-enforced) and with `engine`.
+   */
+  connection?: string;
+  /**
+   * Profile `provider:` frontmatter (Taskana 4269) — catalog provider id the
+   * creating spawn's child runs on; main resolves it to a configured connection.
+   * Absent = inherit the parent's connection. Mutually exclusive with `connection`.
+   */
+  provider?: string;
 }
 
 export interface AgentBridgeToolDecl {
@@ -83,7 +95,9 @@ function describeCatalogEntry(entry: AgentBridgeCatalogEntry): string {
   const engineLabel = entry.engine ?? "core";
   const modelLabel = entry.model ?? "inherited";
   const effortLabel = entry.effort !== undefined ? `, effort ${entry.effort}` : "";
-  return `- ${entry.name} (${engineLabel}, model ${modelLabel}${effortLabel}): ${entry.description}`;
+  const routeLabel =
+    entry.connection !== undefined ? ` [connection: ${entry.connection}]` : entry.provider !== undefined ? ` [provider: ${entry.provider}]` : "";
+  return `- ${entry.name} (${engineLabel}, model ${modelLabel}${effortLabel}${routeLabel}): ${entry.description}`;
 }
 
 /** Model-facing meaning of `detach` — the supervisor's whole wait discipline rides on this sentence. */
@@ -636,6 +650,10 @@ export async function runAgentBridgeCall(
   // the same shape the native Agent tool's detached call has.
   const request: SessionSubagentRequest = {
     ...built,
+    // Taskana 4269: a routed entry's declared target rides the CREATING spawn
+    // only; a continued child keeps the connection its session started on.
+    ...(continueSession === undefined && entry.connection !== undefined ? { connectionId: entry.connection } : {}),
+    ...(continueSession === undefined && entry.provider !== undefined ? { provider: entry.provider } : {}),
     ...(input.detach === true ? { detach: true } : {}),
     ...(continueSession !== undefined ? { resumeChildSessionId: continueSession } : {}),
   };

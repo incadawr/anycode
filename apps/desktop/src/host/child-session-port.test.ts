@@ -1659,3 +1659,106 @@ describe("createChildSessionPort — maxTurns (TASK.180)", () => {
     await pending;
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4269: `connectionId` — a profile's exact `connection:` id — rides the
+// posted ChildSpawnRequest, mirroring `provider`'s shape cap. Carrying BOTH is
+// refused with a PROMPT error (never a hang to the start deadline; nothing is
+// posted).
+
+describe("createChildSessionPort — profile connectionId routing (Taskana 4269)", () => {
+  it("forwards connectionId on the wire only when the request carries it (never alongside provider)", async () => {
+    const { port, sent, emit } = harness();
+
+    const pending = port.run(
+      {
+        agentType: "general-purpose",
+        description: "d",
+        prompt: "p",
+        spawnToolCallId: "spawn-conn-1",
+        connectionId: "conn-glm",
+      },
+      {},
+    );
+    expect(spawns(sent)[0]).toMatchObject({ connectionId: "conn-glm" });
+    expect(spawns(sent)[0]).not.toHaveProperty("provider");
+
+    emit(terminalEvent(spawns(sent)[0]!.requestId));
+    await pending;
+  });
+
+  it("an over-cap connectionId resolves an IMMEDIATE MALFORMED_CONNECTION error outcome and sends NOTHING", async () => {
+    const { port, sent } = harness();
+    const outcome = await port.run(
+      {
+        agentType: "general-purpose",
+        description: "d",
+        prompt: "p",
+        spawnToolCallId: "spawn-conn-bad",
+        connectionId: "c".repeat(CHILD_PROVIDER_MAX_CHARS + 1),
+      },
+      {},
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe("Agent: the child session failed to start (malformed connectionId).");
+  });
+
+  it("a NON-STRING connectionId resolves an IMMEDIATE MALFORMED_CONNECTION error outcome and sends NOTHING", async () => {
+    const { port, sent } = harness();
+    const outcome = await port.run(
+      {
+        agentType: "general-purpose",
+        description: "d",
+        prompt: "p",
+        spawnToolCallId: "spawn-conn-nonstring",
+        connectionId: 42 as unknown as string,
+      },
+      {},
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe("Agent: the child session failed to start (malformed connectionId).");
+  });
+
+  it("an EMPTY-string connectionId resolves an IMMEDIATE MALFORMED_CONNECTION error outcome and sends NOTHING", async () => {
+    const { port, sent } = harness();
+    const outcome = await port.run(
+      {
+        agentType: "general-purpose",
+        description: "d",
+        prompt: "p",
+        spawnToolCallId: "spawn-conn-empty",
+        connectionId: "",
+      },
+      {},
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe("Agent: the child session failed to start (malformed connectionId).");
+  });
+
+  it("provider + connectionId resolves a PROMPT conflict error outcome and sends NOTHING (the caller never hangs)", async () => {
+    const { port, sent } = harness();
+    const outcome = await port.run(
+      {
+        agentType: "general-purpose",
+        description: "d",
+        prompt: "p",
+        spawnToolCallId: "spawn-conn-conflict",
+        provider: "z-ai",
+        connectionId: "conn-glm",
+      },
+      {},
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe(
+      'Agent: "provider" and "connectionId" are mutually exclusive on one spawn; the profile selects its own connection — omit "provider".',
+    );
+  });
+});

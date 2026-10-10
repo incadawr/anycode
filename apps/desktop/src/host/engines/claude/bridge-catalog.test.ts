@@ -89,3 +89,26 @@ describe("catalogFromProfiles — turnBudget (TASK.180)", () => {
     ]);
   });
 });
+
+// Taskana 4269: a profile's own connection selection rides the catalog — and
+// thus the bridge's creating spawn — verbatim. An engine profile can never
+// carry these (parser-fatal), so this projection adds nothing else.
+describe("catalogFromProfiles — connection/provider routing (Taskana 4269)", () => {
+  it("carries connection:/provider: through verbatim for core profiles", () => {
+    expect(
+      catalogFromProfiles([
+        profile({ name: "glm-planner", connection: "conn-glm" }),
+        profile({ name: "ds-executor", provider: "deepseek" }),
+      ]),
+    ).toEqual([
+      { name: "glm-planner", description: "Reviews code", systemPrompt: "You review code.", connection: "conn-glm" },
+      { name: "ds-executor", description: "Reviews code", systemPrompt: "You review code.", provider: "deepseek" },
+    ]);
+  });
+
+  it("omits both routing keys when the profile declares neither", () => {
+    expect(catalogFromProfiles([profile()])).toEqual([
+      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code." },
+    ]);
+  });
+});

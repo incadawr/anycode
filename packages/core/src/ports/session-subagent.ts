@@ -49,6 +49,14 @@ export interface SessionSubagentRequest {
   spawnToolCallId: string;
   /** Provider connection id; defaults to the parent session's own connection. Invalid for the inline tier. */
   provider?: string;
+  /**
+   * EXACT provider connection id from a profile's `connection:` frontmatter (or a
+   * bridge catalog entry's `connection`); main resolves it to the live connection
+   * and stamps it as the child tab's pin. Never rides a resume request; a request
+   * carrying both `provider` and `connectionId` is refused by the host port and
+   * (defensively) by main — core never builds one.
+   */
+  connectionId?: string;
   /** Exact engine model id on that connection; defaults to the parent's model. */
   model?: string;
   /**

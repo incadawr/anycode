@@ -566,6 +566,27 @@ export function createSubagentRunner(
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
+    // Taskana 4269: resolves an md-profile's `connection:`/`provider:` frontmatter
+    // for tools/agent.ts's routing branch. Reads the SAME thunk (currentProfiles())
+    // as engineProfile above — a mid-session rescan is visible here too. Built-ins
+    // and engine profiles never route (engine children run on their own CLI account;
+    // engine+routing is parse-fatal anyway).
+    profileRouting(agentType: string): { provider?: string; connection?: string } | null {
+      if (isKnownPersona(agentType)) {
+        return null;
+      }
+      const persona = currentProfiles().get(agentType);
+      if (!persona || persona.engine !== undefined) {
+        return null;
+      }
+      if (persona.provider === undefined && persona.connection === undefined) {
+        return null;
+      }
+      return {
+        ...(persona.provider !== undefined ? { provider: persona.provider } : {}),
+        ...(persona.connection !== undefined ? { connection: persona.connection } : {}),
+      };
+    },
     async run(req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> {
       const startedAt = Date.now();
       const { signal, onProgress } = runOpts;
@@ -582,6 +603,22 @@ export function createSubagentRunner(
         return {
           status: "error",
           finalText: `Unknown agent_type "${req.agentType}". Available agent types: ${available}.`,
+          truncated: false,
+          turns: 0,
+          toolCalls: 0,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
+      // Taskana 4269: a routed profile runs ONLY as a session-tier child (its
+      // declared connection must be prepared and pinned by the host). This port
+      // has no session tier — the workflow engine and any direct caller bypassing
+      // tools/agent.ts land here. Refuse honestly instead of silently running the
+      // child on the parent's connection.
+      if (persona.provider !== undefined || persona.connection !== undefined) {
+        return {
+          status: "error",
+          finalText: `Agent: profile "${persona.name}" selects its own connection and runs only as a session-tier child; this caller has no session tier.`,
           truncated: false,
           turns: 0,
           toolCalls: 0,

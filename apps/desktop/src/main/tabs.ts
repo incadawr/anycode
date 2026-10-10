@@ -139,6 +139,20 @@ function childEngineNotReadyMessage(engine: EngineId): string {
  */
 const CHILD_ENGINE_PROVIDER_MESSAGE =
   'Agent: "provider" is not valid for an engine child — it runs on its own CLI account, not an AnyCode provider connection.';
+/** Taskana 4269: an explicit exact-connection selection is core-only, same rationale as provider above. */
+const CHILD_ENGINE_CONNECTION_MESSAGE =
+  'Agent: a connection selection is not valid for an engine child — it runs on its own CLI account, not an AnyCode provider connection.';
+/** Taskana 4269: both selectors on one spawn name the same thing twice — refused before anything forks. */
+const CHILD_PROVIDER_CONNECTION_CONFLICT_MESSAGE =
+  'Agent: "provider" and "connectionId" are mutually exclusive on one spawn; the profile selects its own connection — omit "provider".';
+/** Taskana 4269: a profile-declared exact connection id is unknown in this host. */
+function childConnectionNotReadyMessage(connectionId: string): string {
+  return `Agent: connection "${connectionId}" declared by this profile is not available in this host. Fix or remove the profile's "connection:" frontmatter.`;
+}
+/** Taskana 4269: the connection existed but could not be prepared (deleted mid-spawn, or its fork env is unavailable). */
+function childConnectionPrepareFailedMessage(connectionId: string): string {
+  return `Agent: connection "${connectionId}" could not be prepared for this child (deleted or its fork env is unavailable). Retry, or pick another connection.`;
+}
 /**
  * §10.8.2 п.2 — ratified verbatim replacement: names the load-bearing fact
  * that the builder's draft lost — the prompt only ships to the child on
@@ -480,6 +494,12 @@ interface ChildSpawnWaiter {
   parentTabId: string;
   spawnKey: string;
   req: ChildSpawnRequest;
+  /**
+   * Taskana 4269: the ORIGINAL sending host, captured so a queued request's
+   * generation can be re-checked after its preparation await — a respawn while
+   * it waited must never let a stale sender fork.
+   */
+  sender: UtilityProcess;
 }
 
 /**
@@ -657,6 +677,16 @@ export interface TabHostManagerDeps {
    * a cross-connection spawn, which is the safe default.
    */
   resolveProviderConnection?: (provider: string) => string | undefined;
+  /** Existence check against the live connections registry for a profile-declared exact connection id. */
+  resolveChildConnection?: (connectionId: string) => string | undefined;
+  /**
+   * Prepares ONE already-resolved connection id for a child fork, resolveResumePin's
+   * protocol: synchronous existence check + pin reservation, await env priming,
+   * post-await existence re-check. ok:true carries a release() the caller MUST
+   * invoke after the child tab is registered (or on any failure). Never re-resolves.
+   */
+  prepareChildConnection?: (connectionId: string) =>
+    Promise<{ ok: true; release: () => void } | { ok: false }>;
   /** Reject a core model override before creating a child or sending a request. */
   validateChildModel?: (model: string, connectionId: string | undefined) => void;
   /**
@@ -1463,6 +1493,7 @@ export class TabHostManager {
         parentTabId: parentTab.tabId,
         spawnKey,
         req,
+        sender,
       });
       this.childSpawnQueue.push(req.requestId);
       // No reply yet: this request has been neither accepted nor rejected —
@@ -1472,7 +1503,7 @@ export class TabHostManager {
     }
 
     this.childSpawnKeys.set(spawnKey, req.requestId);
-    this.admitChildSpawn(parentTab, req, spawnKey);
+    void this.admitChildSpawn(parentTab, sender, req, spawnKey);
   }
 
   /**
@@ -1510,7 +1541,12 @@ export class TabHostManager {
    * down, a provider connection that was deleted, while it sat in the queue
    * — never against a stale answer computed before the wait began.
    */
-  private admitChildSpawn(parentTab: TabHost, req: ChildSpawnRequest, spawnKey: string): void {
+  private async admitChildSpawn(
+    parentTab: TabHost,
+    sender: UtilityProcess,
+    req: ChildSpawnRequest,
+    spawnKey: string,
+  ): Promise<void> {
     const reject = (reason: ChildRunRejectReason, message: string): void => {
       this.childSpawnKeys.delete(spawnKey);
       this.replyChildRunEvent(parentTab, {
@@ -1521,6 +1557,20 @@ export class TabHostManager {
         message,
       });
     };
+
+    // Taskana 4269 — generation custody at entry, before resolution or
+    // reservation. Both callers check synchronously just before this, but a
+    // stale sender or a replaced/missing parent has no reachable live host to
+    // reply to, so drop silently (mirrors spawnChild's own stale-sender
+    // precedent); a quitting/non-running parent gets the closing refusal.
+    if (parentTab.proc !== sender || this.tabs.get(parentTab.tabId) !== parentTab) {
+      this.childSpawnKeys.delete(spawnKey);
+      return;
+    }
+    if (this.quitting || parentTab.state !== "running") {
+      reject("closing", CHILD_CLOSING_MESSAGE);
+      return;
+    }
 
     // TASK.102 CUT-S4 §3.2 п.1-2: `req.engine` chooses which readiness
     // authority gates this spawn — the SAME `isEngineReady` a root tab's
@@ -1540,7 +1590,7 @@ export class TabHostManager {
         reject("not_ready", CHILD_RESUME_UNKNOWN_MESSAGE);
         return;
       }
-      if (req.provider !== undefined || req.model !== undefined) {
+      if (req.provider !== undefined || req.model !== undefined || req.connectionId !== undefined) {
         reject("not_ready", CHILD_RESUME_OVERRIDE_MESSAGE);
         return;
       }
@@ -1549,11 +1599,24 @@ export class TabHostManager {
         return;
       }
     }
+    // Taskana 4269: two ways to name one connection on one spawn is refused
+    // before anything is resolved (defensive — the wire parser and the host
+    // port already reject it; a direct caller must not slip through).
+    if (req.provider !== undefined && req.connectionId !== undefined) {
+      reject("not_ready", CHILD_PROVIDER_CONNECTION_CONFLICT_MESSAGE);
+      return;
+    }
     if (req.provider !== undefined && engine !== "core") {
       // §3.2 п.3: an engine child runs on its own CLI account — "provider" is
       // a core-connection concept and is meaningless here. core-side already
       // refuses it (tools/agent.ts §2.2 п.1); main refuses independently.
       reject("not_ready", CHILD_ENGINE_PROVIDER_MESSAGE);
+      return;
+    }
+    if (req.connectionId !== undefined && engine !== "core") {
+      // Same law as provider above: an engine child's account is ambient, never
+      // an AnyCode provider connection.
+      reject("not_ready", CHILD_ENGINE_CONNECTION_MESSAGE);
       return;
     }
     let connectionId = resumable !== undefined ? resumable.connectionId : parentTab.connectionId;
@@ -1565,6 +1628,16 @@ export class TabHostManager {
       const resolved = this.deps.resolveProviderConnection?.(req.provider);
       if (resolved === undefined) {
         reject("not_ready", childProviderNotReadyMessage(req.provider));
+        return;
+      }
+      connectionId = resolved;
+    } else if (req.connectionId !== undefined) {
+      // Taskana 4269: the profile declared an EXACT connection id; resolve it
+      // against the live registry. Unknown/deleted ⇒ an honest not_ready naming
+      // the connection, never a silent fallback to the parent's connection.
+      const resolved = this.deps.resolveChildConnection?.(req.connectionId);
+      if (resolved === undefined) {
+        reject("not_ready", childConnectionNotReadyMessage(req.connectionId));
         return;
       }
       connectionId = resolved;
@@ -1609,11 +1682,104 @@ export class TabHostManager {
     const rollback = (): void => {
       this.childRuns.delete(req.requestId);
       this.childSpawnKeys.delete(spawnKey);
-      siblings!.delete(childTabId);
-      if (siblings!.size === 0) {
-        this.childrenByParentTab.delete(parentTab.tabId);
+      // Taskana 4269: a previously captured `siblings` set may have been
+      // REPLACED during a preparation await (the parent's set deleted and
+      // recreated by another spawn). Touch only the CURRENT set, and only this
+      // entry's own childTabId — never another request's reservations.
+      const current = this.childrenByParentTab.get(parentTab.tabId);
+      if (current !== undefined) {
+        current.delete(childTabId);
+        if (current.size === 0) {
+          this.childrenByParentTab.delete(parentTab.tabId);
+        }
       }
     };
+
+    // ── Preparation (Taskana 4269) ──
+    // A child that selects its own connection (an explicit provider/connectionId,
+    // or a resumed child pinned to a connection other than the parent's) must
+    // have that connection prepared — its env primed and a pin held — BEFORE the
+    // fork, so the fork cannot fail closed on an absent env and a concurrent
+    // deletion cannot release the pin mid-spawn. The exact id is FROZEN here:
+    // never re-resolved after this point. An unrouted fresh spawn keeps the
+    // pre-4269 synchronous inheritance path untouched (no await, no pin).
+    let releasePrepared: () => void = () => {};
+    const needsPrepare =
+      engine === "core" &&
+      (req.provider !== undefined ||
+        req.connectionId !== undefined ||
+        (resumable !== undefined && connectionId !== parentTab.connectionId));
+    if (needsPrepare) {
+      const prepare = this.deps.prepareChildConnection;
+      if (connectionId === undefined || prepare === undefined) {
+        // A selected target MUST be a defined string, and a missing preparation
+        // dependency is an honest failure — never a successful no-op.
+        rollback();
+        reject("not_ready", childConnectionPrepareFailedMessage(req.connectionId ?? connectionId ?? ""));
+        this.pumpChildSpawnQueue();
+        return;
+      }
+      const frozenConnectionId = connectionId;
+      let prepared: { ok: true; release: () => void } | { ok: false };
+      try {
+        prepared = await prepare(frozenConnectionId);
+      } catch {
+        prepared = { ok: false };
+      }
+      let released = false;
+      releasePrepared = (): void => {
+        if (!released && prepared.ok) {
+          released = true;
+          prepared.release();
+        }
+      };
+      let keepPin = false;
+      try {
+        // Generation custody AFTER the await (precedes BOTH success and failure
+        // handling): another funnel may have finalized this entry, or the parent
+        // generation may have gone, while we awaited.
+        if (this.childRuns.get(req.requestId) !== entry) {
+          // Tombstoned by another funnel — release any pin we took and return;
+          // never rollback or emit a second outcome for a gone entry.
+          return;
+        }
+        if (
+          this.tabs.get(parentTab.tabId) !== parentTab ||
+          parentTab.proc !== sender ||
+          parentTab.state !== "running" ||
+          this.quitting ||
+          this.drainingParents.has(parentTab.tabId)
+        ) {
+          rollback();
+          reject("closing", CHILD_CLOSING_MESSAGE);
+          this.pumpChildSpawnQueue();
+          return;
+        }
+        if (entry.state !== "starting") {
+          // Another funnel owns this entry's outcome now.
+          return;
+        }
+        if (!prepared.ok) {
+          rollback();
+          reject("not_ready", childConnectionPrepareFailedMessage(frozenConnectionId));
+          this.pumpChildSpawnQueue();
+          return;
+        }
+        // Existence is not availability: the env must actually be present for
+        // this frozen id, or the fork would fail closed with no explanation.
+        if (this.env(frozenConnectionId) === undefined) {
+          rollback();
+          reject("not_ready", childConnectionPrepareFailedMessage(frozenConnectionId));
+          this.pumpChildSpawnQueue();
+          return;
+        }
+        keepPin = true; // success: the pin stays held through the fork below
+      } finally {
+        if (!keepPin) {
+          releasePrepared();
+        }
+      }
+    }
 
     // Main NEVER trusts payload identity (cut §2.3's own header): workspace,
     // projectRoot and the parent linkage below all come from the ACTUAL
@@ -1662,50 +1828,61 @@ export class TabHostManager {
       },
     };
 
+    // ── Fork and registration ──
+    // Taskana 4269: the prepared connection's pin is held through `tabs.set`;
+    // after that the registered tab protects it via `pinnedConnectionIds`. The
+    // `finally` runs `releasePrepared` exactly once (idempotent) on every exit —
+    // a throwing fork, a null child proc, or successful registration.
     try {
-      this.spawnTabHost(childTab, { firstSpawn: true });
-    } catch (error) {
-      rollback();
-      this.logger.error(`[main] child spawn threw for request ${req.requestId}`, error);
-      reject("spawn_failed", CHILD_SPAWN_FAILED_MESSAGE);
-      return;
-    }
-    if (childTab.proc === null) {
-      // spawnTabHost's own fail-closed path (W10-FIX F3: the resolved
-      // connection's env is unavailable) already logged and marked
-      // crash_looped without throwing — treat it the same as a throwing fork.
-      rollback();
-      reject("spawn_failed", CHILD_SPAWN_FAILED_MESSAGE);
-      return;
-    }
-
-    this.tabs.set(childTabId, childTab);
-    if (resumable !== undefined) {
-      this.followUpAliases.set(spawnKey, childSessionId);
-      while (this.followUpAliases.size > FOLLOW_UP_ALIASES_MAX) {
-        this.followUpAliases.delete(this.followUpAliases.keys().next().value as string);
+      try {
+        this.spawnTabHost(childTab, { firstSpawn: true });
+      } catch (error) {
+        rollback();
+        this.logger.error(`[main] child spawn threw for request ${req.requestId}`, error);
+        reject("spawn_failed", CHILD_SPAWN_FAILED_MESSAGE);
+        this.pumpChildSpawnQueue();
+        return;
       }
+      if (childTab.proc === null) {
+        // spawnTabHost's own fail-closed path (W10-FIX F3: the resolved
+        // connection's env is unavailable) already logged and marked
+        // crash_looped without throwing — treat it the same as a throwing fork.
+        rollback();
+        reject("spawn_failed", CHILD_SPAWN_FAILED_MESSAGE);
+        this.pumpChildSpawnQueue();
+        return;
+      }
+
+      this.tabs.set(childTabId, childTab);
+      if (resumable !== undefined) {
+        this.followUpAliases.set(spawnKey, childSessionId);
+        while (this.followUpAliases.size > FOLLOW_UP_ALIASES_MAX) {
+          this.followUpAliases.delete(this.followUpAliases.keys().next().value as string);
+        }
+      }
+      // TASK.147 срез 1: this timer starts HERE, at the REAL fork, whether the
+      // request forked immediately or spent time queued first — never at
+      // park/enqueue time. A long wait therefore never eats into the window a
+      // child gets to answer `child-ready` once it actually starts.
+      entry.startDeadline = setTimeout(() => this.handleChildStartTimeout(req.requestId), CHILD_START_DEADLINE_MS);
+      this.deliverTabPort(childTab);
+      // TASK.102 S4 gate-fix (L1): connectionId is "Never consulted for a
+      // non-core engine" (§1249's own law) — an engine child's omitted model
+      // reports the SAME placeholder describeChildModel falls back to, never
+      // the parent connection's ANYCODE_MODEL (describeChildModel(connectionId)
+      // would read a CORE model string for an engine that has none, since an
+      // omitted req.model boots the engine host with no --engine-model at all).
+      this.replyChildRunEvent(parentTab, {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: req.requestId,
+        kind: "accepted",
+        childSessionId,
+        childTabId,
+        model: modelOverride ?? (engine === "core" ? this.describeChildModel(connectionId) : "default"),
+      });
+    } finally {
+      releasePrepared();
     }
-    // TASK.147 срез 1: this timer starts HERE, at the REAL fork, whether the
-    // request forked immediately or spent time queued first — never at
-    // park/enqueue time. A long wait therefore never eats into the window a
-    // child gets to answer `child-ready` once it actually starts.
-    entry.startDeadline = setTimeout(() => this.handleChildStartTimeout(req.requestId), CHILD_START_DEADLINE_MS);
-    this.deliverTabPort(childTab);
-    // TASK.102 S4 gate-fix (L1): connectionId is "Never consulted for a
-    // non-core engine" (§1249's own law) — an engine child's omitted model
-    // reports the SAME placeholder describeChildModel falls back to, never
-    // the parent connection's ANYCODE_MODEL (describeChildModel(connectionId)
-    // would read a CORE model string for an engine that has none, since an
-    // omitted req.model boots the engine host with no --engine-model at all).
-    this.replyChildRunEvent(parentTab, {
-      type: CHILD_RUN_EVENT_TYPE,
-      requestId: req.requestId,
-      kind: "accepted",
-      childSessionId,
-      childTabId,
-      model: modelOverride ?? (engine === "core" ? this.describeChildModel(connectionId) : "default"),
-    });
   }
 
   /**
@@ -1757,7 +1934,7 @@ export class TabHostManager {
       }
       this.childSpawnQueue.splice(i, 1);
       this.childSpawnWaiters.delete(requestId);
-      this.admitChildSpawn(parentTab, waiter.req, waiter.spawnKey);
+      void this.admitChildSpawn(parentTab, waiter.sender, waiter.req, waiter.spawnKey);
       // Do not advance `i` — the next element has shifted into this index.
     }
   }
