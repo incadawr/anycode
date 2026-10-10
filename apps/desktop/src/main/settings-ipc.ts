@@ -87,6 +87,7 @@ import type {
   ProviderSettingsV2,
   ProviderTransportId,
   SecretKey,
+  SettingsMutationReason,
   SettingsMutationResult,
   SettingsPatch,
   SettingsSnapshot,
@@ -915,6 +916,37 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     const snapshot = await snapshotFrom(deps, merged, false);
     await emitMutation(deps, snapshot);
     return { ok: true, snapshot };
+  });
+}
+
+/**
+ * Compare-and-set of `settings.codex.binaryPath` (TASK.237): repoints it to
+ * `next` only while it still equals `expected`, the comparison and the write
+ * inside ONE settings-lock critical section. The managed-Codex upgrade reads
+ * the path, then spends a download + doctor pass before writing; a user who
+ * picked another CLI in between must keep that choice. Not an IPC channel —
+ * main-internal only. `changed` = the stored path no longer matches.
+ */
+export async function handleSwapCodexBinaryPath(
+  deps: SettingsIpcDeps,
+  expected: string,
+  next: string,
+): Promise<{ ok: true } | { ok: false; reason: SettingsMutationReason | "changed" }> {
+  return withSettingsFileLock(deps.settingsPath, async () => {
+    const loaded = await loadSettings(deps.settingsPath, deps.logger);
+    if (loaded.readOnly) {
+      return { ok: false, reason: "read_only" };
+    }
+    if (loaded.settings.codex?.binaryPath?.trim() !== expected) {
+      return { ok: false, reason: "changed" };
+    }
+    const merged = mergeSettings(loaded.settings, { codex: { binaryPath: next } });
+    if (!settingsSchema.safeParse(merged).success) {
+      return { ok: false, reason: "invalid" };
+    }
+    await saveSettings(deps.settingsPath, merged);
+    await emitMutation(deps, await snapshotFrom(deps, merged, false));
+    return { ok: true };
   });
 }
 

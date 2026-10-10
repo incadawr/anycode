@@ -7,6 +7,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Upgrading AnyCode now also upgrades a previously managed Codex CLI install
+  to the manifest-recommended version, so account model catalogs refresh
+  after an app update; explicitly chosen external Codex binaries are kept.
+
 ## [0.0.33] — 2026-10-09
 
 ### Changed
