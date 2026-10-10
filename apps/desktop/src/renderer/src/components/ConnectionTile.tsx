@@ -44,26 +44,105 @@ export const HEALTH_TONE: Record<ProviderHealthStatus, HealthTone> = {
   misconfigured: "warn",
 };
 
+export const LAST_HEALTH_TTL_MS: Readonly<Record<"rate_limited" | "other", number>> = {
+  rate_limited: 60 * 60 * 1000, // 1 hour — a 429 reading goes stale fast
+  other: 24 * 60 * 60 * 1000, // 24 hours for every other status
+};
+
+/** What `observeLastHealth` reports about a connection's advisory `lastHealth` — pure display input, never mutated. */
+export interface LastHealthObservation {
+  /** The advisory status to SHOW: the observed status when fresh, `unchecked` otherwise (stale/invalid/absent). */
+  status: ProviderHealthStatus;
+  /** True when a `lastHealth` observation exists at all (valid or not). */
+  observed: boolean;
+  /** Fresh within its status's TTL — a valid timestamp AT or BEYOND its TTL is stale, and an invalid timestamp is never fresh. */
+  fresh: boolean;
+  /** Age in ms since the observation, clamped to ≥ 0; `undefined` when absent or unparseable. */
+  ageMs: number | undefined;
+  /** Compact human age ("just now", "5m ago", "3h ago", "4d ago"); "age unknown" when the timestamp is unparseable; "" when no observation. */
+  compactAge: string;
+  /** Historical tooltip text for the tile's status element (identifies the previous status, its age, staleness). */
+  title: string;
+}
+
 /**
- * The status a tile actually shows: `needs_credential` OVERRIDES any stale
+ * Pure observation-age/freshness for a connection's advisory `lastHealth`
+ * (TASK.140): TTL is 1 hour for `rate_limited` (a 429 reading goes stale fast)
+ * and 24 hours for every other status; at or beyond the TTL the observation is
+ * stale and the tile must fall back to `unchecked`. A missing or unparseable
+ * timestamp is never treated as fresh — it yields `unchecked` with unknown age.
+ * Negative ages (clock skew / future timestamps) clamp to zero. Never mutates
+ * `lastHealth` or its connection.
+ */
+export function observeLastHealth(
+  lastHealth: ProviderConnection["lastHealth"],
+  /** Explicit numeric now — keeps this pure and deterministically testable. */
+  now: number,
+): LastHealthObservation {
+  if (!lastHealth) {
+    return {
+      status: "unchecked",
+      observed: false,
+      fresh: false,
+      ageMs: undefined,
+      compactAge: "",
+      title: "Never checked",
+    };
+  }
+  const parsed = Date.parse(lastHealth.at);
+  if (!Number.isFinite(parsed)) {
+    return {
+      status: "unchecked",
+      observed: true,
+      fresh: false,
+      ageMs: undefined,
+      compactAge: "age unknown",
+      title: `Previous observation: ${HEALTH_LABEL[lastHealth.status]}, age unknown`,
+    };
+  }
+  const ageMs = Math.max(0, now - parsed);
+  const ttl = lastHealth.status === "rate_limited" ? LAST_HEALTH_TTL_MS.rate_limited : LAST_HEALTH_TTL_MS.other;
+  const fresh = ageMs < ttl;
+  const minutes = Math.floor(ageMs / 60_000);
+  const hours = Math.floor(ageMs / 3_600_000);
+  const days = Math.floor(ageMs / 86_400_000);
+  const compactAge = ageMs < 60_000 ? "just now" : minutes < 60 ? `${minutes}m ago` : hours < 24 ? `${hours}h ago` : `${days}d ago`;
+  const staleNote = fresh ? "" : " (stale)";
+  return {
+    status: fresh ? lastHealth.status : "unchecked",
+    observed: true,
+    fresh,
+    ageMs,
+    compactAge,
+    title: `Previous observation: ${HEALTH_LABEL[lastHealth.status]}, ${compactAge}${staleNote}`,
+  };
+}
+
+/**
+ * The status a tile actually shows. `needs_credential` OVERRIDES any
  * `lastHealth` the moment the credential is absent (a cleared/never-set key
  * must never keep showing a prior `ready`/`auth_invalid` reading) — mirrors
  * `computeProviderReady`'s own "credential set" gate. A present-but-
  * undecryptable vault entry (`set: true`, `source: "none"` — TASK.45 W12-FIX
  * §4) is equally unusable at runtime and gets the SAME treatment, never a
  * stale `ready`/`auth_invalid` reading either. Otherwise the connection's
- * advisory `lastHealth.status`, or `unchecked` when it has never been probed.
+ * advisory `lastHealth.status` — but only while that observation is FRESH
+ * (TASK.140: 1h TTL for `rate_limited`, 24h otherwise; see
+ * `observeLastHealth`) — falling back to `unchecked` for a stale, invalid or
+ * absent observation. `now` defaults to the current clock; the tile passes its
+ * minute-ticking local `now` state so an open tile ages on its own.
  */
 export function connectionHealthStatus(
   connection: ProviderConnection,
   credentialStatus: SecretStatus | undefined,
   /** True when no credential is expected at all (catalog `authOptional` — vLLM — or the connection's own "no API key" declaration): an absent key is then a non-event, never a `needs_credential` nag. */
   keyless = false,
+  now = Date.now(),
 ): ProviderHealthStatus {
   if (!keyless && (!credentialStatus?.set || credentialStatus.source === "none")) {
     return "needs_credential";
   }
-  return connection.lastHealth?.status ?? "unchecked";
+  return observeLastHealth(connection.lastHealth, now).status;
 }
 
 /** `{text, tone}` for a resolved `ProviderHealthStatus` — the one place a tile/menu maps status to presentation. */
@@ -144,6 +223,47 @@ export interface ConnectionTileProps {
   onKeyDownRoving(event: KeyboardEvent<HTMLButtonElement>): void;
 }
 
+/** The exact `{text, title, tone}` a tile's status element renders — pure, so tests cover the real selection (TASK.140). */
+export interface TileStatusPresentation {
+  text: string;
+  title: string | undefined;
+  tone: HealthTone;
+}
+
+/**
+ * Pure presentation the tile's status element displays (TASK.140). `checking`
+ * wins first ("Checking…", no title). A credential override keeps
+ * `Needs credential` as the CURRENT status but still reports the previous
+ * observation — its age (or "age unknown"), staleness marked, in the text (or
+ * the title when compactness requires it). Otherwise a fresh observation shows
+ * its status + compact age inline; a stale/unparseable one falls back to
+ * Unchecked with the historical title naming the previous status, its age and
+ * staleness.
+ */
+export function tileStatusPresentation(
+  healthStatus: ProviderHealthStatus,
+  observation: LastHealthObservation | undefined,
+  checking: boolean,
+): TileStatusPresentation {
+  if (checking) {
+    return { text: "Checking…", title: undefined, tone: describeConnectionHealth(healthStatus).tone };
+  }
+  const described = describeConnectionHealth(healthStatus);
+  // Credential override: the tile names the current blocker; the previous
+  // observation (status, age, stale mark) stays in the title — never dropped,
+  // never presented as current.
+  if (healthStatus === "needs_credential" && observation?.observed) {
+    return { text: described.text, title: observation.title, tone: described.tone };
+  }
+  if (!observation || !observation.observed) {
+    return { text: described.text, title: undefined, tone: described.tone };
+  }
+  if (observation.fresh) {
+    return { text: `${described.text} (${observation.compactAge})`, title: `Checked ${observation.compactAge}`, tone: described.tone };
+  }
+  return { text: described.text, title: observation.title, tone: described.tone };
+}
+
 export function ConnectionTile({
   connection,
   catalogEntry,
@@ -168,12 +288,29 @@ export function ConnectionTile({
   const firstMenuItemRef = useRef<HTMLButtonElement>(null);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
 
+  // Local clock (TASK.140): re-rendered every minute so an open tile AGES on
+  // its own — a fresh `ready` decays to `unchecked` with no settings write and
+  // no user action. Cleanup clears the interval on unmount.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const healthStatus = connectionHealthStatus(
     connection,
     credentialStatus,
     catalogEntry?.authOptional === true || connection.authOptional === true,
+    now,
   );
-  const described = describeConnectionHealth(healthStatus);
+  // The tile's exact display selection lives in the pure
+  // `tileStatusPresentation` (tested directly); the component only supplies
+  // its inputs. `checking` suppresses the observation display entirely.
+  const presentation = tileStatusPresentation(
+    healthStatus,
+    checking ? undefined : observeLastHealth(connection.lastHealth, now),
+    checking,
+  );
   const providerName = catalogEntry?.name ?? "Custom";
   const authKind = catalogEntry?.authKind ?? "api_key";
   const replaceKeyLabel = authKind === "oauth" ? (credentialStatus?.set ? "Sign out" : "Sign in") : "Replace key";
@@ -259,9 +396,12 @@ export function ConnectionTile({
         </div>
         <div className="connection-tile-name">{displayName}</div>
         <div className="connection-tile-model">{connection.model || "Default model"}</div>
-        <div className={`connection-tile-status connection-tile-status-${described.tone}`}>
+        <div
+          className={`connection-tile-status connection-tile-status-${presentation.tone}`}
+          title={presentation.title}
+        >
           <span className="connection-tile-status-dot" aria-hidden="true" />
-          <span>{checking ? "Checking…" : described.text}</span>
+          <span>{presentation.text}</span>
         </div>
       </button>
 
