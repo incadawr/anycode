@@ -20,6 +20,13 @@ import type { ReasoningEffort } from "../types/config.js";
 
 export type PersonaName = "general-purpose" | "explore";
 
+/**
+ * Effort vocabulary for agent profiles: the global ReasoningEffort tiers plus
+ * "xhigh", which is carried verbatim for engine children (claude/codex) and
+ * mapped to the existing core "max" at core consumption boundaries.
+ */
+export type AgentProfileEffort = ReasoningEffort | "xhigh";
+
 export interface PersonaDefinition {
   /**
    * Persona/profile name. Widened from PersonaName to string in slice 3.3
@@ -58,10 +65,12 @@ export interface PersonaDefinition {
   turnBudget?: number;
   /**
    * Reasoning tier declared by a role (md-profile `effort:` frontmatter).
-   * Absent => the child runs at its connection's default tier. Built-in
-   * personas leave it undefined.
+   * Widened to AgentProfileEffort: "xhigh" is carried verbatim for engine
+   * children and mapped to the existing core "max" at core consumption
+   * boundaries. Absent => the child runs at its connection's default tier.
+   * Built-in personas leave it undefined.
    */
-  effort?: ReasoningEffort;
+  effort?: AgentProfileEffort;
   /**
    * Md-profile `engine:` frontmatter. When set, children of this persona run as
    * a one-shot foreign CLI run (Codex or Claude Code) instead of an in-process
@@ -70,6 +79,10 @@ export interface PersonaDefinition {
    * this undefined — they always run in-process.
    */
   engine?: AgentProfileEngine;
+  /** Md-profile `connection:` frontmatter — EXACT connection id; resolved by main, never core. */
+  connection?: string;
+  /** Md-profile `provider:` frontmatter — catalog provider id resolved by main's resolveProviderConnection. */
+  provider?: string;
 }
 
 /**

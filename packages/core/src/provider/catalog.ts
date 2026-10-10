@@ -78,6 +78,18 @@ export interface CatalogProviderEntry {
    * (`https://gw.example/api/openai`) stays expressible.
    */
   transportBaseUrls?: Partial<Record<ProviderTransport, string>>;
+  /**
+   * COMPLETE URL of the entry's models-list endpoint, for entries whose
+   * models route lives under a different root than any transport baseUrl
+   * (DeepSeek: anthropic transport at /anthropic, models at the bare origin).
+   * LIMITED CONTRACT: declaring this asserts the endpoint follows OpenAI
+   * models conventions — `Authorization: Bearer` auth and an
+   * `{object:"list",data:[{id}]}` response — regardless of the entry's
+   * session transport. Entries whose models route follows the transport's
+   * auth shape MUST NOT declare it. Absent ⇒ derived `<base>/v1/models`,
+   * unchanged.
+   */
+  modelsUrl?: string;
   /** Transport used when neither env nor settings pick one. */
   defaultTransport: ProviderTransport;
   /** Every transport this endpoint is known to speak; a UI may only offer these. */

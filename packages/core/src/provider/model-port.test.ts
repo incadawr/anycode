@@ -97,14 +97,57 @@ describe("reasoningRequestOptions", () => {
       "Z.AI (GLM)",
     );
     expect(high.maxOutputTokens).toBe(115_072);
-    expect(high.maxOutputTokens! + high.providerOptions!.anthropic.thinking.budgetTokens).toBe(131_072);
+    expect(high.maxOutputTokens! + high.providerOptions!.anthropic.thinking!.budgetTokens).toBe(131_072);
 
     const max = reasoningRequestOptions(
       { ...baseRequest, maxOutputTokens: 131_072, reasoningEffort: "max" },
       "Z.AI (GLM)",
     );
     expect(max.maxOutputTokens).toBe(99_072);
-    expect(max.maxOutputTokens! + max.providerOptions!.anthropic.thinking.budgetTokens).toBe(131_072);
+    expect(max.maxOutputTokens! + max.providerOptions!.anthropic.thinking!.budgetTokens).toBe(131_072);
+  });
+
+  // TASK 4241 (2026-10-10): DeepSeek declares distinct low/high/max effort
+  // tiers (live GET /models facts, default high). The wire mapping sends the
+  // enum VERBATIM via providerOptions.anthropic.effort with NO thinking
+  // budget (no DeepSeek budget fact exists) and NO maxOutputTokens
+  // arithmetic — unlike the default Anthropic path, `max` is preserved.
+  it("maps DeepSeek effort verbatim low/high/max with no thinking budget and untouched maxOutputTokens (TASK 4241)", () => {
+    const low = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "low" }, "DeepSeek");
+    expect(low).toEqual({ maxOutputTokens: 512, providerOptions: { anthropic: { effort: "low" } } });
+    expect(low.providerOptions!.anthropic.thinking).toBeUndefined();
+
+    const high = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "high" }, "DeepSeek");
+    expect(high).toEqual({ maxOutputTokens: 512, providerOptions: { anthropic: { effort: "high" } } });
+    expect(high.providerOptions!.anthropic.thinking).toBeUndefined();
+
+    // Preserved verbatim — the default Anthropic path would collapse max to
+    // high's budgetTokens instead of carrying the enum.
+    const maxEffort = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "max" }, "DeepSeek");
+    expect(maxEffort).toEqual({ maxOutputTokens: 512, providerOptions: { anthropic: { effort: "max" } } });
+    expect(maxEffort.providerOptions!.anthropic.thinking).toBeUndefined();
+  });
+
+  it("collapses an undeclared DeepSeek 'medium' to 'high' (local precedent, mirrors the GLM branch)", () => {
+    expect(reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "medium" }, "DeepSeek")).toEqual({
+      maxOutputTokens: 512,
+      providerOptions: { anthropic: { effort: "high" } },
+    });
+  });
+
+  it("provider isolation: the same request maps differently on Anthropic vs Z.AI (GLM) vs DeepSeek (TASK 4241)", () => {
+    const request = { ...baseRequest, maxOutputTokens: 512, reasoningEffort: "high" } as const;
+    const anthropic = reasoningRequestOptions({ ...request }, "Anthropic");
+    expect(anthropic.providerOptions!.anthropic.thinking).toEqual({ type: "enabled", budgetTokens: 24_576 });
+    expect("effort" in anthropic.providerOptions!.anthropic).toBe(false);
+
+    const glm = reasoningRequestOptions({ ...request }, "Z.AI (GLM)");
+    expect(glm.providerOptions!.anthropic.effort).toBe("high");
+    expect(glm.providerOptions!.anthropic.thinking).toEqual({ type: "enabled", budgetTokens: 16_000 });
+
+    const deepseek = reasoningRequestOptions({ ...request }, "DeepSeek");
+    expect(deepseek.providerOptions!.anthropic.effort).toBe("high");
+    expect(deepseek.providerOptions!.anthropic.thinking).toBeUndefined();
   });
 });
 

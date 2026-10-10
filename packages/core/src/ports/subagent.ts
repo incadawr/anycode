@@ -10,6 +10,7 @@
  */
 
 import type { FinishReason, TokenUsage } from "../types/events.js";
+import type { ReasoningEffort } from "../types/config.js";
 
 export interface SubagentRequest {
   /** 3.1 personas: "general-purpose" | "explore"; 3.3 widens with md-profiles. */
@@ -204,6 +205,12 @@ export type EngineProfileInfo = {
    * discipline as `model`.
    */
   turnBudget?: number;
+  /**
+   * The profile's own `effort:` frontmatter, relayed when defined — same
+   * discipline as `model`: omitted when absent. "xhigh" is carried verbatim
+   * for engine children; core consumption boundaries map it to "max".
+   */
+  effort?: ReasoningEffort | "xhigh";
 };
 
 export interface SubagentPort {
@@ -223,4 +230,6 @@ export interface SubagentPort {
    * branch instead of the deprecated one-shot path in `subagents/runner.ts`).
    */
   engineProfile?(agentType: string): EngineProfileInfo | null;
+  /** Resolves an md-profile's `connection:`/`provider:` frontmatter; null for built-ins, engine profiles, and unrouted profiles. */
+  profileRouting?(agentType: string): { provider?: string; connection?: string } | null;
 }

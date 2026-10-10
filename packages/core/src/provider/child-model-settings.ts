@@ -16,7 +16,7 @@
  */
 
 import type { CatalogProviderEntry } from "./catalog.js";
-import { DEFAULT_CONTEXT_WINDOW_TOKENS, type ReasoningEffort } from "../types/config.js";
+import type { ReasoningEffort } from "../types/config.js";
 import { resolveContextWindow, resolveMaxOutputTokens, resolveReasoningEffort } from "./capabilities.js";
 
 export interface ChildModelSettings {
@@ -38,16 +38,17 @@ export function buildChildModelSettingsResolver(deps: {
   catalogEntry: CatalogProviderEntry | undefined;
   envMaxOutputTokens: number | undefined;
   envContextWindow: number | undefined;
+  envContextWindowModel?: string;
   onClamp?: (requested: number, clamped: number, modelId: string) => void;
   onStubFallback?: (modelId: string, applied: number) => void;
 }): (modelId: string, selectedTier: ReasoningEffort | undefined) => ChildModelSettings {
-  const { catalogEntry, envMaxOutputTokens, envContextWindow, onClamp, onStubFallback } = deps;
+  const { catalogEntry, envMaxOutputTokens, envContextWindow, envContextWindowModel, onClamp, onStubFallback } = deps;
   return (modelId, selectedTier) => {
     try {
       return {
         maxOutputTokens: resolveMaxOutputTokens(modelId, catalogEntry, envMaxOutputTokens, onClamp, onStubFallback),
         reasoningEffort: resolveReasoningEffort(modelId, catalogEntry, selectedTier),
-        contextWindowTokens: resolveContextWindow(modelId, catalogEntry, envContextWindow) ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
+        contextWindowTokens: resolveContextWindow(modelId, catalogEntry, envContextWindow, envContextWindowModel),
       };
     } catch {
       // Degrades to the same conservative unknown-model shape a catalog-miss
@@ -59,7 +60,7 @@ export function buildChildModelSettingsResolver(deps: {
       return {
         maxOutputTokens: resolveMaxOutputTokens(modelId, undefined, envMaxOutputTokens, undefined, onStubFallback),
         reasoningEffort: undefined,
-        contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+        contextWindowTokens: resolveContextWindow(modelId, undefined, envContextWindow, envContextWindowModel),
       };
     }
   };
