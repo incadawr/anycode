@@ -50,7 +50,7 @@ function opt(name, fallback) {
   const i = argv.indexOf(name);
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fallback;
 }
-const VALUE_OPTS = new Set(["--workspace", "--brief", "--lab", "--quiet-min", "--last", "--width"]);
+const VALUE_OPTS = new Set(["--workspace", "--brief", "--engine", "--lab", "--quiet-min", "--last", "--width"]);
 function positional(n) {
   return argv.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_OPTS.has(argv[i - 1])))[n];
 }
@@ -197,7 +197,10 @@ async function task() {
     }
   }
   await api(ctx, "POST", "/start-screen/open", { workspace });
-  await api(ctx, "POST", "/start-screen/engine", { engineId: "codex" });
+  // --engine core runs the supervisor on the app's own (GLM) engine — e.g. while the
+  // installed Codex is outside the active version policy.
+  const engineId = opt("--engine", "codex");
+  await api(ctx, "POST", "/start-screen/engine", { engineId });
   await api(ctx, "POST", "/start-screen/prompt", { text: readFileSync(briefPath, "utf8") });
   let tabId = null;
   for (let i = 0; i < 120; i += 1) {
@@ -208,7 +211,7 @@ async function task() {
     }
     await sleep(500);
   }
-  if (tabId === null) throw new Error("codex tab was not created");
+  if (tabId === null) throw new Error(`${engineId} tab was not created`);
   writeLab({ ...lab, workspace, supervisorTabId: tabId });
   event(`TASK supervisor tab ${tabId} on ${workspace}`);
   console.log(tabId);
