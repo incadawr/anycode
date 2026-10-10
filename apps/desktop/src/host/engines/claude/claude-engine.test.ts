@@ -65,6 +65,13 @@ interface FakeTransportOptions {
   contextUsage?: Record<string, unknown> | (() => never);
   /** Control subtypes that must be REFUSED, mapping to the refusal message. */
   refuse?: Record<string, string>;
+  /**
+   * TASK.157: a per-call provider of `get_context_usage` readings. Each call
+   * receives the call index (0-based) and returns a reading, a promise of one,
+   * or throws. Takes precedence over `contextUsage` when present. Use
+   * `deferredUsage()` to gate individual calls.
+   */
+  contextUsageSequence?: (call: number) => Record<string, unknown> | Promise<Record<string, unknown>>;
 }
 
 /**
@@ -76,6 +83,10 @@ class FakeTransport implements ClaudeTransport {
   readonly controls: ControlCall[] = [];
   readonly order: string[] = [];
   contextUsageCalls = 0;
+  /** TASK.157: concurrent in-flight `get_context_usage` requests right now. */
+  activeContextUsage = 0;
+  /** TASK.157: high-water mark of concurrent context requests. */
+  maxConcurrentContextUsage = 0;
   interrupts = 0;
   closed = 0;
   readonly sent: (string | unknown[])[] = [];
@@ -104,6 +115,16 @@ class FakeTransport implements ClaudeTransport {
   async getContextUsage(): Promise<Record<string, unknown>> {
     this.contextUsageCalls += 1;
     this.order.push("get_context_usage");
+    const sequence = this.options.contextUsageSequence;
+    if (sequence !== undefined) {
+      this.activeContextUsage += 1;
+      this.maxConcurrentContextUsage = Math.max(this.maxConcurrentContextUsage, this.activeContextUsage);
+      try {
+        return await sequence(this.contextUsageCalls - 1);
+      } finally {
+        this.activeContextUsage -= 1;
+      }
+    }
     const usage = this.options.contextUsage;
     if (typeof usage === "function") {
       usage();
@@ -168,16 +189,26 @@ class FakeTransport implements ClaudeTransport {
  */
 function engineWith(
   transport: ClaudeTransport,
-  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog } = {},
+  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: { postInterruptSettleMs?: number; midTurnContextUsageIntervalMs?: number } } = {},
 ): ClaudeEngine {
   const catalog = overrides.catalog ?? liveCatalog();
-  return new ClaudeEngine(transport, "session-ref-1", undefined, {
-    catalog,
-    model: overrides.model ?? "default",
-    preset: findClaudePreset(overrides.presetId ?? "ask")!,
-    effortsByModel: new Map(),
-    notices: [],
-  });
+  const timeouts = {
+    ...(overrides.timeouts?.postInterruptSettleMs !== undefined ? { postInterruptSettleMs: overrides.timeouts.postInterruptSettleMs } : {}),
+    ...(overrides.timeouts?.midTurnContextUsageIntervalMs !== undefined ? { midTurnContextUsageIntervalMs: overrides.timeouts.midTurnContextUsageIntervalMs } : {}),
+  };
+  return new ClaudeEngine(
+    transport,
+    "session-ref-1",
+    undefined,
+    {
+      catalog,
+      model: overrides.model ?? "default",
+      preset: findClaudePreset(overrides.presetId ?? "ask")!,
+      effortsByModel: new Map(),
+      notices: [],
+    },
+    Object.keys(timeouts).length > 0 ? timeouts : undefined,
+  );
 }
 
 async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
@@ -188,6 +219,52 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 
 function types(events: readonly AgentEvent[]): string[] {
   return events.map((event) => event.type);
+}
+
+/** TASK.157: a manually-gated `get_context_usage` reading. */
+interface DeferredUsage {
+  readonly promise: Promise<Record<string, unknown>>;
+  resolve(reading: Record<string, unknown>): void;
+  reject(error: unknown): void;
+}
+
+function deferredUsage(): DeferredUsage {
+  let resolve!: (reading: Record<string, unknown>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<Record<string, unknown>>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve: (r) => resolve(r), reject: (e) => reject(e) };
+}
+
+/** A minimal assistant frame that produces translated events without a terminal result. */
+function assistantFrame(id: string): ClaudeStreamMessage {
+  return {
+    type: "assistant",
+    message: { id, model: "model-x", content: [{ type: "text", text: `chunk ${id}` }] },
+  } as unknown as ClaudeStreamMessage;
+}
+
+function userToolResultFrame(id: string): ClaudeStreamMessage {
+  return {
+    type: "user",
+    uuid: id,
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] },
+  } as unknown as ClaudeStreamMessage;
+}
+
+function resultFrame157(reason: "completed" | "aborted_streaming" = "completed"): ClaudeStreamMessage {
+  return {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    num_turns: 1,
+    duration_ms: 1,
+    duration_api_ms: 1,
+    total_cost_usd: 0,
+    terminal_reason: reason,
+  } as unknown as ClaudeStreamMessage;
 }
 
 describe("ClaudeEngine.runTurn — projection of a real W0 turn", () => {
@@ -355,9 +432,11 @@ describe("ClaudeEngine — the context meter is get_context_usage, never a resul
     const transport = new FakeTransport({ frames, contextUsage: { totalTokens: 33_333, maxTokens: 200_000 } });
     const events = await collect(engineWith(transport).runTurn("hi", { signal: new AbortController().signal }));
 
-    const usage = events.find((event) => event.type === "context_usage");
+    // TASK.157: the fixture carries user (tool-result) frames, so a mid-turn
+    // refresh fires too — the FINAL reading is the LAST context_usage.
+    const usage = events.filter((event) => event.type === "context_usage").at(-1);
     expect(usage).toEqual({ type: "context_usage", estimatedTokens: 33_333, budgetTokens: 200_000, source: "provider" });
-    expect(transport.contextUsageCalls).toBe(1);
+    expect(transport.contextUsageCalls).toBe(2);
   });
 
   it("pulls the meter AFTER the terminal result, and yields it after loop_end", async () => {
@@ -367,11 +446,16 @@ describe("ClaudeEngine — the context meter is get_context_usage, never a resul
     });
     const events = await collect(engineWith(transport).runTurn("hi", { signal: new AbortController().signal }));
     const order = types(events);
-    expect(order.indexOf("context_usage")).toBeGreaterThan(order.indexOf("loop_end"));
-    // Ordering on the wire, not just in the event list: the $0 read happens
-    // once the turn is already terminal, never inside the hot path.
+    // TASK.157: the FINAL reading is the LAST context_usage, strictly after
+    // loop_end; mid-turn refreshes only ever precede it.
+    expect(order.lastIndexOf("context_usage")).toBeGreaterThan(order.lastIndexOf("loop_end"));
+    // Ordering on the wire, not just in the event list: the fixture's
+    // user/tool-result boundary triggers one mid-turn refresh inside the hot
+    // path, then the terminal $0 read lands after sendUserMessage, still
+    // exactly once post-terminal.
     expect(transport.order.filter((step) => step === "get_context_usage" || step === "sendUserMessage")).toEqual([
       "sendUserMessage",
+      "get_context_usage",
       "get_context_usage",
     ]);
   });
@@ -799,5 +883,268 @@ describe("ClaudeEngine — session-cumulative token accounting (TASK.159)", () =
     });
     const events = await collect(engineWith(transport).runTurn("hi", { signal: new AbortController().signal }));
     expect(events.find((event) => event.type === "engine_session_tokens")).toBeUndefined();
+  });
+});
+
+/**
+ * TASK.157: mid-turn provider context refreshes. Claude must refresh the
+ * meter at user/tool-result and assistant boundaries during a RUNNING turn,
+ * at most once per 30s (first refresh immediately eligible), never
+ * overlapping, with completions surfacing during quiet periods without
+ * another frame. Mid-turn failures/malformed readings are fully silent. The
+ * unconditional post-loop_end final read is preserved.
+ */
+describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
+  /** Continuously consumes a turn while it stays open; resolves with events when it finishes. */
+  function consume(engine: ClaudeEngine, signal: AbortSignal): { events: AgentEvent[]; done: Promise<AgentEvent[]> } {
+    const events: AgentEvent[] = [];
+    const iterator = engine.runTurn("work", { signal })[Symbol.asyncIterator]();
+    const done = (async () => {
+      for (;;) {
+        const step = await iterator.next();
+        if (step.done) return events;
+        events.push(step.value);
+      }
+    })();
+    return { events, done };
+  }
+
+  /** Waits until predicate holds over the shared events list (event observed mid-turn). */
+  async function until(predicate: () => boolean, what: string): Promise<void> {
+    for (let i = 0; i < 200 && !predicate(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    if (!predicate()) throw new Error(`timed out waiting for ${what}`);
+  }
+
+  it("1. emits a mid-turn context_usage during a quiet period, before any loop_end, then a fresh final reading", async () => {
+    const transport = new FakeTransport({
+      contextUsageSequence: (call) => ({ totalTokens: 100 + call, maxTokens: 200_000 }),
+    });
+    const engine = engineWith(transport);
+    const controller = new AbortController();
+    const turn = consume(engine, controller.signal);
+
+    transport.push(assistantFrame("a1"));
+    await until(() => turn.events.some((event) => event.type === "context_usage"), "mid-turn context_usage");
+    expect(turn.events.some((event) => event.type === "loop_end" || event.type === "turn_end")).toBe(false);
+    expect(turn.events.find((event) => event.type === "context_usage")).toEqual({
+      type: "context_usage",
+      estimatedTokens: 100,
+      budgetTokens: 200_000,
+      source: "provider",
+    });
+
+    transport.push(resultFrame157("completed"));
+    const events = await turn.done;
+    const usages = events.filter((event) => event.type === "context_usage");
+    expect(usages).toHaveLength(2);
+    expect(usages.at(-1)).toEqual({ type: "context_usage", estimatedTokens: 101, budgetTokens: 200_000, source: "provider" });
+    expect(types(events).lastIndexOf("context_usage")).toBeGreaterThan(types(events).lastIndexOf("loop_end"));
+  });
+
+  it("2. throttles to one read per 30s: an in-window boundary does not read, +30_001ms does, and the final read is never throttled", async () => {
+    let now = 0;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const transport = new FakeTransport({
+        contextUsageSequence: (call) => ({ totalTokens: 10 + call, maxTokens: 100 }),
+      });
+      const engine = engineWith(transport);
+      const turn = consume(engine, new AbortController().signal);
+
+      transport.push(assistantFrame("a1"));
+      await until(() => transport.contextUsageCalls === 1, "first mid-turn read");
+
+      // Inside the window: no second read.
+      now = 10_000;
+      transport.push(assistantFrame("a2"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(transport.contextUsageCalls).toBe(1);
+
+      now = 30_001;
+      transport.push(assistantFrame("a3"));
+      await until(() => transport.contextUsageCalls === 2, "second mid-turn read after interval");
+      await until(() => turn.events.filter((event) => event.type === "context_usage").length === 2, "second mid-turn event");
+
+      // Final read fires immediately even though it lands inside the throttle window.
+      now = 30_002;
+      transport.push(resultFrame157("completed"));
+      const events = await turn.done;
+      expect(transport.contextUsageCalls).toBe(3);
+      expect(types(events).lastIndexOf("context_usage")).toBeGreaterThan(types(events).lastIndexOf("loop_end"));
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("3. never overlaps requests: with interval 0 and an unresolved first read, further boundaries start nothing; resolving it delivers the event", async () => {
+    const gates: DeferredUsage[] = [];
+    const transport = new FakeTransport({
+      contextUsageSequence: (call) => {
+        if (call >= 2) return { totalTokens: 60, maxTokens: 100 }; // final read
+        const gate = deferredUsage();
+        gates.push(gate);
+        return gate.promise;
+      },
+    });
+    const engine = engineWith(transport, { timeouts: { midTurnContextUsageIntervalMs: 0 } });
+    const turn = consume(engine, new AbortController().signal);
+
+    transport.push(assistantFrame("a1"));
+    await until(() => gates.length === 1, "first gated read");
+    // Several boundaries while the first read is unresolved: no overlap.
+    transport.push(assistantFrame("a2"));
+    transport.push(userToolResultFrame("t1"));
+    transport.push(assistantFrame("a3"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(transport.contextUsageCalls).toBe(1);
+    expect(transport.maxConcurrentContextUsage).toBe(1);
+
+    // Resolve WITHOUT pushing another frame: the completion alone surfaces.
+    gates[0]!.resolve({ totalTokens: 42, maxTokens: 50 });
+    await until(() => turn.events.some((event) => event.type === "context_usage"), "gated mid-turn event");
+    expect(turn.events.find((event) => event.type === "context_usage")).toEqual({
+      type: "context_usage",
+      estimatedTokens: 42,
+      budgetTokens: 50,
+      source: "provider",
+    });
+
+    // The slot is free again: another boundary permits another read.
+    transport.push(assistantFrame("a4"));
+    await until(() => gates.length === 2, "second gated read");
+    gates[1]!.resolve({ totalTokens: 43, maxTokens: 50 });
+    transport.push(resultFrame157("completed"));
+    const events = await turn.done;
+    expect(transport.maxConcurrentContextUsage).toBe(1);
+    expect(types(events).lastIndexOf("context_usage")).toBeGreaterThan(types(events).lastIndexOf("loop_end"));
+  });
+
+  it("4. a result pushed while a read is unresolved waits for it: max concurrency stays one and the final read still runs, even in-window", async () => {
+    const gate = deferredUsage();
+    let gateUsed = false;
+    const transport = new FakeTransport({
+      contextUsageSequence: () => {
+        if (!gateUsed) {
+          gateUsed = true;
+          return gate.promise;
+        }
+        return { totalTokens: 999, maxTokens: 1_000 };
+      },
+    });
+    const engine = engineWith(transport);
+    const turn = consume(engine, new AbortController().signal);
+
+    transport.push(assistantFrame("a1"));
+    await until(() => transport.contextUsageCalls === 1, "gated mid-turn read started");
+    transport.push(resultFrame157("completed"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(transport.contextUsageCalls).toBe(1); // final read has NOT started
+
+    gate.resolve({ totalTokens: 5, maxTokens: 10 });
+    const events = await turn.done;
+    expect(transport.contextUsageCalls).toBe(2); // final read ran after the first settled
+    expect(transport.maxConcurrentContextUsage).toBe(1);
+    const last = events.filter((event) => event.type === "context_usage").at(-1);
+    expect(last).toEqual({ type: "context_usage", estimatedTokens: 999, budgetTokens: 1_000, source: "provider" });
+    expect(types(events).lastIndexOf("context_usage")).toBeGreaterThan(types(events).lastIndexOf("loop_end"));
+  });
+
+  it("5. mid-turn rejections and malformed readings are fully silent; a valid final reading still completes the turn", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const readings: (Record<string, unknown> | (() => never))[] = [
+        (): never => {
+          throw new Error("mid-turn request failed");
+        },
+        { totalTokens: 5 }, // maxTokens absent
+        { totalTokens: Number.NaN, maxTokens: 10 },
+        { totalTokens: 777, maxTokens: 1_000 }, // final (index 3)
+      ];
+      const transport = new FakeTransport({
+        contextUsageSequence: (call) => {
+          const reading = readings[Math.min(call, readings.length - 1)]!;
+          if (typeof reading === "function") {
+            reading();
+            throw new Error("thrower returned");
+          }
+          return reading;
+        },
+      });
+      const engine = engineWith(transport, { timeouts: { midTurnContextUsageIntervalMs: 0 } });
+      const turn = consume(engine, new AbortController().signal);
+
+      transport.push(assistantFrame("a1"));
+      await until(() => transport.contextUsageCalls >= 1, "first mid-turn read attempted");
+      await new Promise((resolve) => setTimeout(resolve, 10)); // let the null completion be consumed
+      transport.push(assistantFrame("a2"));
+      await until(() => transport.contextUsageCalls >= 2, "failed/malformed mid-turn reads attempted");
+      await new Promise((resolve) => setTimeout(resolve, 10)); // consume the null completion
+      transport.push(assistantFrame("a3"));
+      await until(() => transport.contextUsageCalls >= 3, "NaN mid-turn read attempted");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(turn.events.filter((event) => event.type === "context_usage")).toHaveLength(0);
+      expect(turn.events.some((event) => event.type === "error")).toBe(false);
+
+      transport.push(resultFrame157("completed"));
+      const events = await turn.done;
+      expect(errorSpy).not.toHaveBeenCalled(); // mid-turn path is silent; final reading is valid
+      expect(events.filter((event) => event.type === "context_usage")).toEqual([
+        { type: "context_usage", estimatedTokens: 777, budgetTokens: 1_000, source: "provider" },
+      ]);
+      expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("6. an unresolved measurement never delays Stop; the preserved final read completes after cancellation without overlap or stale mid-turn events", async () => {
+    const gate = deferredUsage();
+    let gateUsed = false;
+    const transport = new FakeTransport({
+      contextUsageSequence: () => {
+        if (!gateUsed) {
+          gateUsed = true;
+          return gate.promise;
+        }
+        return { totalTokens: 20, maxTokens: 30 };
+      },
+    });
+    const engine = engineWith(transport);
+    const controller = new AbortController();
+    const turn = consume(engine, controller.signal);
+
+    transport.push(assistantFrame("a1"));
+    await until(() => transport.contextUsageCalls === 1, "gated mid-turn read started");
+
+    // Stop: the interrupt must be sent BEFORE the gate resolves.
+    controller.abort();
+    await until(() => transport.interrupts === 1, "interrupt sent while read unresolved");
+    expect(gateUsed).toBe(true);
+
+    // The mid-turn measurement resolves while the terminal result is STILL
+    // WITHHELD: an observed abort must disable delivery, so no context_usage
+    // may surface while the turn is still running/cancelling.
+    gate.resolve({ totalTokens: 1, maxTokens: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(turn.events.filter((event) => event.type === "context_usage")).toHaveLength(0);
+    expect(transport.contextUsageCalls).toBe(1); // final read still withheld too
+
+    // Only now does the CLI terminate the cancelled turn.
+    transport.push(resultFrame157("aborted_streaming"));
+    const events = await turn.done;
+    expect(transport.contextUsageCalls).toBe(2); // preserved final measurement ran
+    expect(transport.maxConcurrentContextUsage).toBe(1);
+    expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "cancelled", turns: 1 });
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    // No stale mid-turn event after the abort: the only context_usage is the final one, after loop_end.
+    const order = types(events);
+    expect(order.filter((type) => type === "context_usage")).toHaveLength(1);
+    expect(order.lastIndexOf("context_usage")).toBeGreaterThan(order.lastIndexOf("loop_end"));
+    expect(events.filter((event) => event.type === "context_usage").at(-1)).toEqual({
+      type: "context_usage",
+      estimatedTokens: 20,
+      budgetTokens: 30,
+      source: "provider",
+    });
   });
 });

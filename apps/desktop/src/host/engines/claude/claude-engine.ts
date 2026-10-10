@@ -19,10 +19,14 @@
  *     (`w0-03-interrupt-pending`), and ClaudeClient's pairing rule turns our
  *     late answer into a no-op. We only settle the broker so the modal closes.
  *
- * The context meter is pulled from `get_context_usage` AFTER the terminal
- * `result` ($0) — never summed out of `result.usage` (cut §0.3-5). The codex
- * C-bug-1 lesson is that a plausible self-made meter is worse than none: the
- * model's context window is a fact the CLI knows and we do not.
+ * The context meter is pulled from `get_context_usage` (TASK.157) at TWO
+ * points: throttled (>= 30s apart, first immediately eligible) SILENT
+ * refreshes at user/tool-result and assistant boundaries during a running
+ * turn — never overlapping, never failing the turn — and once more AFTER the
+ * terminal `result` ($0), unconditionally — never summed out of
+ * `result.usage` (cut §0.3-5). The codex C-bug-1 lesson is that a plausible
+ * self-made meter is worse than none: the model's context window is a fact
+ * the CLI knows and we do not.
  */
 
 import { randomUUID } from "node:crypto";
@@ -103,10 +107,13 @@ const CLAUDE_BRIDGED_CAPABILITIES: EngineCapabilities = {
 
 export interface ClaudeEngineTimeouts {
   postInterruptSettleMs: number;
+  /** TASK.157: minimum spacing between mid-turn `get_context_usage` refreshes. */
+  midTurnContextUsageIntervalMs: number;
 }
 
 export const DEFAULT_CLAUDE_ENGINE_TIMEOUTS: ClaudeEngineTimeouts = {
   postInterruptSettleMs: CLAUDE_POST_INTERRUPT_SETTLE_MS,
+  midTurnContextUsageIntervalMs: 30_000,
 };
 
 /** The narrow transport seam, so lifecycle tests need no real child process. */
@@ -498,6 +505,22 @@ export class ClaudeEngine implements SessionEngine {
    * all (fail-soft: an undercount, never an invented one, per TASK.159 §DoD).
    */
   private lastTurnTokenUsage: { input: number; output: number } | null = null;
+  /**
+   * TASK.157: timestamp (ms) of the LAST STARTED mid-turn context refresh, or
+   * `null` when none has started yet. `null` (not 0) is the sentinel so a
+   * mocked clock sitting at zero still permits the FIRST refresh of a turn.
+   */
+  private lastMidTurnUsageReadAt: number | null = null;
+  /**
+   * TASK.157: the PHYSICAL in-flight guard for `get_context_usage`. Engine
+   * level, not turn level: an iterator closed before its outstanding read
+   * settles must still block a later turn from overlapping that request. Held
+   * until the actual transport request settles, then cleared by promise
+   * identity check (a stale callback from an earlier request can't clear a
+   * newer one). A request that outlives its turn settles silently and emits
+   * nothing.
+   */
+  private contextUsageInFlight: Promise<unknown> | null = null;
 
   constructor(
     private readonly client: ClaudeTransport,
@@ -707,6 +730,16 @@ export class ClaudeEngine implements SessionEngine {
     let abortObserved = false;
     let settle: SettleDeadline | null = null;
     let terminal = false;
+    // TASK.157: the run-turn-local PENDING COMPLETION slot for a mid-turn
+    // context refresh. Distinct from the engine-level physical in-flight guard
+    // (`contextUsageInFlight`): this one is consumed by the loop below and
+    // dropped with the turn, so a read that settles after the turn ended can
+    // never deliver a stale event into a LATER turn. Resolves
+    // `{kind:"usage", event}` — never rejects; a settled completion stays
+    // parked here until the loop's next race consumes it (never cleared from a
+    // promise callback).
+    let pendingUsage: Promise<{ kind: "usage"; event: AgentEvent | null }> | null = null;
+    let usageDeliveryActive = true;
 
     /** Latched Stop: settle any parked approval, then interrupt exactly once. */
     const beginInterrupt = (): void => {
@@ -740,10 +773,26 @@ export class ClaudeEngine implements SessionEngine {
         const raced = await Promise.race([
           next.then((value) => ({ kind: "notification" as const, value })),
           ...(abortObserved ? [] : [abort.promise.then(() => ({ kind: "abort" as const }))]),
+          // A settled mid-turn context read wakes the race on its own — that
+          // is the whole point: the event must surface during a quiet period,
+          // with no further stream frame to carry it.
+          ...(usageDeliveryActive && !abortObserved && pendingUsage !== null
+            ? [pendingUsage.then((completion) => ({ kind: "usage" as const, completion }))]
+            : []),
           ...settleRacers(),
         ]);
+        if (raced.kind === "usage") {
+          // Consume the local slot EXACTLY once, before touching raced.value.
+          pendingUsage = null;
+          if (raced.completion.event !== null) yield raced.completion.event;
+          continue;
+        }
         if (raced.kind === "abort") {
           abortObserved = true;
+          // TASK.157: an observed Stop disables mid-turn usage delivery — a
+          // measurement settling after the abort must never surface as a
+          // context_usage of the dying turn.
+          usageDeliveryActive = false;
           beginInterrupt();
           continue;
         }
@@ -760,6 +809,18 @@ export class ClaudeEngine implements SessionEngine {
           throw this.terminalError ?? new Error("Claude exited during a turn");
         }
         next = iterator.next();
+        // TASK.157: at user/tool-result and assistant boundaries, kick off a
+        // throttled, non-overlapping mid-turn context refresh. Never awaited
+        // here — the completion rides the race above.
+        if (!abortObserved && (raced.value.value.type === "user" || raced.value.value.type === "assistant")) {
+          if (pendingUsage === null && this.contextUsageInFlight === null) {
+            const now = Date.now();
+            if (this.lastMidTurnUsageReadAt === null || now - this.lastMidTurnUsageReadAt >= this.bounds.midTurnContextUsageIntervalMs) {
+              this.lastMidTurnUsageReadAt = now;
+              pendingUsage = this.readMidTurnContextUsage();
+            }
+          }
+        }
         for (const event of translator.onMessage(raced.value.value)) {
           if (event.type === "loop_end") terminal = true;
           yield event;
@@ -769,7 +830,14 @@ export class ClaudeEngine implements SessionEngine {
       // The ctx meter, AFTER the terminal result and only for a turn that
       // actually ran (cut §1.4 table: "result -> turn_end + loop_end; следом
       // ctx-метр"). Session drains the full iterable, so an event yielded
-      // after loop_end still reaches the UI.
+      // after loop_end still reaches the UI. TASK.157: the final read is
+      // UNCONDITIONAL — never throttled by, and never merged with, a mid-turn
+      // refresh. Any physical request still in flight is awaited first (it
+      // never rejects) so the two can never overlap; the turn-local pending
+      // event is discarded here so it cannot fire after this point.
+      pendingUsage = null;
+      usageDeliveryActive = false;
+      await this.awaitContextUsageInFlight();
       const usage = await this.readContextUsage();
       if (usage !== null) yield usage;
       // TASK.159: session-cumulative token accounting, next to the context
@@ -802,6 +870,12 @@ export class ClaudeEngine implements SessionEngine {
       this.turnActive = false;
       cancelSettle();
       abort.dispose();
+      // TASK.157: drop the turn-local mid-turn refresh state. The local
+      // completion slot dies with the turn; a still-running PHYSICAL guard
+      // (`contextUsageInFlight`) is deliberately NOT cleared — it settles
+      // silently on its own and emits nothing into later turns.
+      pendingUsage = null;
+      usageDeliveryActive = false;
     }
   }
 
@@ -813,6 +887,62 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
+   * TASK.157: the shared mapping/validation half of `readContextUsage`. When
+   * `applyModel` is set (the FINAL read only — a mid-turn refresh must never
+   * patch `liveModel` from a reading whose turn may already be closed), a
+   * string `usage.model` is applied to `liveModel` BEFORE the numeric gate,
+   * exactly the pre-TASK.157 final-read ordering. Invalid numbers return
+   * `null`; the caller decides whether that is silent (mid-turn) or logged
+   * (final, fail-soft).
+   */
+  private mapContextUsageReading(usage: Record<string, unknown>, applyModel: boolean): AgentEvent | null {
+    const totalTokens = usage.totalTokens;
+    const maxTokens = usage.maxTokens;
+    if (applyModel && typeof usage.model === "string") this.liveModel = usage.model;
+    if (
+      typeof totalTokens !== "number" || !Number.isFinite(totalTokens) || totalTokens < 0 ||
+      typeof maxTokens !== "number" || !Number.isFinite(maxTokens) || maxTokens <= 0
+    ) {
+      return null;
+    }
+    return { type: "context_usage", estimatedTokens: totalTokens, budgetTokens: maxTokens, source: "provider" };
+  }
+
+  /**
+   * TASK.157: a mid-turn context refresh. Fully SILENT — a failed or malformed
+   * reading emits nothing, logs nothing, and never disrupts the turn. The
+   * returned promise never rejects. It also installs/holds the engine-level
+   * physical in-flight guard until the underlying request actually settles.
+   */
+  private readMidTurnContextUsage(): Promise<{ kind: "usage"; event: AgentEvent | null }> {
+    const request = this.client.getContextUsage().then(
+      (usage) => this.mapContextUsageReading(usage, false),
+      () => null,
+    );
+    this.contextUsageInFlight = request;
+    void request.then(() => {
+      // Promise identity check: only the request that installed the guard
+      // clears it — a late callback from an earlier request cannot lift the
+      // guard for a newer one.
+      if (this.contextUsageInFlight === request) this.contextUsageInFlight = null;
+    });
+    return request.then((event) => ({ kind: "usage" as const, event }));
+  }
+
+  /** TASK.157: waits out any physically in-flight context read (never rejects). */
+  private async awaitContextUsageInFlight(): Promise<void> {
+    while (this.contextUsageInFlight !== null) {
+      try {
+        await this.contextUsageInFlight;
+      } catch {
+        // The mid-turn path never rejects; this is belt-and-braces so the
+        // final unconditional read can never be skipped by a throw.
+      }
+      // Loop: the await may have observed a request that was already replaced.
+    }
+  }
+
+  /**
    * The $0 context read (`get_context_usage`) that feeds the meter. Its
    * `totalTokens`/`maxTokens` are the CLI's OWN accounting of the model's
    * window — the one thing a host-side sum of `result.usage` can never get
@@ -821,23 +951,20 @@ export class ClaudeEngine implements SessionEngine {
   private async readContextUsage(): Promise<AgentEvent | null> {
     try {
       const usage = await this.client.getContextUsage();
-      const totalTokens = usage.totalTokens;
-      const maxTokens = usage.maxTokens;
-      if (typeof usage.model === "string") this.liveModel = usage.model;
-      if (
-        typeof totalTokens !== "number" || !Number.isFinite(totalTokens) || totalTokens < 0 ||
-        typeof maxTokens !== "number" || !Number.isFinite(maxTokens) || maxTokens <= 0
-      ) {
+      const event = this.mapContextUsageReading(usage, true);
+      if (event === null) {
         // Shape drift is the other way this read dies silently: the request
-        // succeeded, so the catch above never fires, yet the meter stays blank.
+        // succeeded, so the catch below never fires, yet the meter stays blank.
         // Only the two numbers are logged — the rest of the payload carries
         // custody-sensitive metadata (memoryFiles[] paths, C2).
+        const totalTokens = usage.totalTokens;
+        const maxTokens = usage.maxTokens;
         console.error(
           `[claude] get_context_usage returned an unusable reading: totalTokens=${JSON.stringify(totalTokens)} maxTokens=${JSON.stringify(maxTokens)}`,
         );
         return null;
       }
-      return { type: "context_usage", estimatedTokens: totalTokens, budgetTokens: maxTokens, source: "provider" };
+      return event;
     } catch (error) {
       // A failed read leaves the meter at its last value rather than painting a
       // wrong one; it is never a turn failure. Logged rather than swallowed
