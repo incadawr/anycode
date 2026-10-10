@@ -79,6 +79,10 @@ export interface PersonaDefinition {
    * this undefined — they always run in-process.
    */
   engine?: AgentProfileEngine;
+  /** Md-profile `connection:` frontmatter — EXACT connection id; resolved by main, never core. */
+  connection?: string;
+  /** Md-profile `provider:` frontmatter — catalog provider id resolved by main's resolveProviderConnection. */
+  provider?: string;
 }
 
 /**

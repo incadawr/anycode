@@ -2140,6 +2140,74 @@ describe("engineProfile() (TASK.102 CUT-S4 §2.1)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// profileRouting() port method (Taskana 4269): tools/agent.ts's routing branch
+// resolves an md-profile's `connection:`/`provider:` frontmatter through this
+// method. Realized through the SAME thunk mechanism as engineProfile
+// (currentProfiles()) — no second list/cache. Built-ins and engine profiles
+// always resolve to null. The workflow/direct-port backstop in run() refuses a
+// routed profile honestly when no session tier exists.
+
+describe("profileRouting() (Taskana 4269)", () => {
+  const glmPlanner: PersonaDefinition = {
+    name: "glm-planner",
+    description: "plans on GLM",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    model: "glm-5.3",
+    connection: "conn-glm",
+  };
+  const dsExecutor: PersonaDefinition = {
+    name: "ds-executor",
+    description: "executes on DeepSeek",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    provider: "deepseek",
+  };
+  const codexPersona: PersonaDefinition = {
+    name: "codex-worker",
+    description: "runs on the codex engine",
+    tools: ["Read"],
+    systemPrompt: "PERSONA BODY",
+    engine: "codex",
+  };
+
+  it("returns the declared route for a routed md-profile (connection / provider)", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [glmPlanner, dsExecutor] });
+    expect(runner.profileRouting?.("glm-planner")).toEqual({ connection: "conn-glm" });
+    expect(runner.profileRouting?.("ds-executor")).toEqual({ provider: "deepseek" });
+  });
+
+  it("returns null for built-ins, engine profiles, unrouted profiles, and unknown types", async () => {
+    const plain = await makeProfile("reviewer", { body: "P" });
+    const runner = createSubagentRunner(makeParent(), { profiles: [glmPlanner, codexPersona, plain] });
+    expect(runner.profileRouting?.("general-purpose")).toBeNull();
+    expect(runner.profileRouting?.("explore")).toBeNull();
+    expect(runner.profileRouting?.("codex-worker")).toBeNull();
+    expect(runner.profileRouting?.("reviewer")).toBeNull();
+    expect(runner.profileRouting?.("no-such-type")).toBeNull();
+  });
+
+  it("reads the current profiles thunk — an edited route is returned by the next fresh lookup", () => {
+    let live: PersonaDefinition[] = [glmPlanner];
+    const runner = createSubagentRunner(makeParent(), { profiles: () => live });
+    expect(runner.profileRouting?.("glm-planner")).toEqual({ connection: "conn-glm" });
+    // A mid-session route edit (THUNK form, same mechanism engineProfile uses).
+    live = [{ ...glmPlanner, connection: undefined, provider: "deepseek" }];
+    expect(runner.profileRouting?.("glm-planner")).toEqual({ provider: "deepseek" });
+    // ...and a removal leaves it unrouted (null).
+    live = [{ ...glmPlanner, connection: undefined }];
+    expect(runner.profileRouting?.("glm-planner")).toBeNull();
+  });
+
+  it("run() refuses a routed profile with the honest session-tier backstop error", async () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [glmPlanner] });
+    const outcome = await runner.run({ ...REQ, agentType: "glm-planner" }, {});
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toContain("session-tier child");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // TASK.74 — wall-clock budget + wrap-up rescue. The measurement that motivated
 // this: one child in three died on the 8-turn cap having spent 13-66% of its
 // 600s, and the partial the parent received was the preamble of the cut-off
