@@ -43,6 +43,14 @@ export interface ModelDrillMenuProps {
   onActivateRow(row: ModelDrillRow): void;
   onBack(): void;
   /**
+   * Taskana 4237: the action behind the empty-root level's "Add connection"
+   * button. Rendered ONLY when the root level has no rows at all (the
+   * no-connected-provider state) — never alongside populated rows, and never
+   * on an empty non-root level (a group with no models is not a place to add
+   * a connection).
+   */
+  onAddConnection(): void;
+  /**
    * Whether a row's connection is the one already in use — the start screen
    * answers with the draft's pin, a running session with the tab's. Only a
    * popular pick that would SWITCH connection is annotated with its group
@@ -155,6 +163,46 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
           connection always keeps a group, even an empty one). An empty box
           would read as a broken popover. */}
       {rows.length === 0 && <div className="start-model-empty">{emptyText}</div>}
+      {/* Taskana 4237: the empty root level's escape hatch — a real, enabled
+          action (existing row styling, Tab-reachable like any button) that
+          opens Settings on the Add-connection drawer. Only on an empty ROOT:
+          an empty group is no place to add a connection, and populated levels
+          do not need it.
+
+          It also joins the owner's roving-focus registry at index 0 — with no
+          rows, that slot is free and is exactly the index both hosts seed on
+          open, so ArrowDown/ArrowUp (count 0 → index 0) and the open-seeding
+          effect keep the caret on this, the level's only action.
+
+          Enter/Space are handled HERE, not by the host's menu handler: that
+          handler `preventDefault()`s and then finds no row to activate, which
+          would silently swallow the keystroke (and, in ModelPill, run twice
+          through nested handlers). Consuming the key explicitly keeps native
+          button activation from being cancelled — and `stopPropagation` keeps
+          the host handler out of it. Escape is deliberately NOT touched, so it
+          still bubbles to the host and closes/backs out as before. */}
+      {rows.length === 0 && page.kind === "root" && (
+        <button
+          type="button"
+          role="menuitem"
+          className="start-model-item"
+          ref={(el) => {
+            itemRefs.current[0] = el;
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            props.onAddConnection();
+          }}
+          onClick={props.onAddConnection}
+        >
+          <span className="start-model-item-check" aria-hidden="true" />
+          <span className="start-model-item-name">Add connection</span>
+        </button>
+      )}
       {rows.map((row, index) => {
         // The root's three sections are separated by hairlines; the levels
         // below it are a single uninterrupted list.
