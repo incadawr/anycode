@@ -1955,7 +1955,7 @@ describe("engine persona (one-shot foreign CLI run)", () => {
 
     expect(outcome.status).toBe("error");
     expect(outcome.finalText).toBe(
-      'Agent: agent type "codex-worker" runs on the "codex" engine. Engine agents now run as child sessions via the Agent tool; this caller (workflow step or non-desktop host) cannot spawn one.',
+      'Agent: agent type "codex-worker" runs on the "codex" engine. Engine agents now run as child sessions via the Agent tool; this caller has no session tier and cannot spawn one.',
     );
   });
 
