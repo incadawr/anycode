@@ -535,7 +535,7 @@ export function applyCodexProfilesHomeOverride(env: NodeJS.ProcessEnv, override:
  * `ALL_PROXY` is deliberately NOT a member — see `ALL_PROXY_KEYS` in
  * shared/engines.ts for the measurement that decision is waiting on.
  */
-function shellOwnsProxyFamily(bootEnv: NodeJS.ProcessEnv): boolean {
+export function shellOwnsProxyFamily(bootEnv: NodeJS.ProcessEnv): boolean {
   return PROXY_FAMILY_KEYS.some((name) => bootEnv[name] !== undefined);
 }
 
