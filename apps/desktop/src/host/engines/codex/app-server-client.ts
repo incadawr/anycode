@@ -364,6 +364,12 @@ export class AppServerClient {
     return this.stderr;
   }
 
+  private versionWarningValue: string | null = null;
+  /** Soft-allow warning from the last preflight (null when the version was verified or no policy travelled). */
+  get versionWarning(): string | null {
+    return this.versionWarningValue;
+  }
+
   notifications(): AsyncIterable<JsonRpcNotification> {
     return this.queue;
   }
@@ -615,6 +621,7 @@ export class AppServerClient {
     if (version === null || !policy.allows(version)) {
       throw new EngineVersionError(`Unsupported Codex version: ${output.trim() || "unparseable"} (supported ${policy.supportedRange})`);
     }
+    this.versionWarningValue = version === null ? null : policy.warningFor(version);
   }
 
   /**

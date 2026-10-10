@@ -40,6 +40,12 @@ export interface HostCodexVersionPolicy {
    */
   supportedRange: string;
   allows(version: CodexVersion): boolean;
+  /**
+   * Soft-allow warning for a version `allows` admitted without verification,
+   * or null (verified in-range, risk-accepted, or the strict compiled fallback —
+   * the fallback never soft-allows and never warns).
+   */
+  warningFor(version: CodexVersion): string | null;
 }
 
 /** Resolves the policy ONE preflight will judge against, from that client's source env. */
@@ -49,10 +55,12 @@ export function resolveHostCodexVersionPolicy(env: NodeJS.ProcessEnv): HostCodex
     return {
       supportedRange: SUPPORTED_CODEX_VERSION,
       allows: (version) => isSupportedCodexVersion(version),
+      warningFor: () => null,
     };
   }
   return {
     supportedRange: supportedRangeText(policy.ranges),
     allows: (version) => judgeCodexVersion(`${version.major}.${version.minor}.${version.patch}`, policy).allowed,
+    warningFor: (version) => judgeCodexVersion(`${version.major}.${version.minor}.${version.patch}`, policy).warning ?? null,
   };
 }

@@ -1332,7 +1332,7 @@ describe("createCodexOnboardingController.verifySpawnFreshness (Taskana 4230)", 
 });
 
 describe("spawn-freshness integration — real refusal refresh + active policy judgment (Taskana 4230, supervisor #5, reject #2)", () => {
-  it("ready 0.161.0 -> stamp change + 0.162.1 outside old range -> forced network manifest widens -> ready and policy admits 0.162.1", async () => {
+  it("ready 0.161.0 -> stamp change + 0.155.0 below old range -> forced network manifest widens -> ready and policy admits 0.155.0", async () => {
     const { mkdtempSync: mk, rmSync: rm, writeFileSync: wf } = await import("node:fs");
     const manifestModule = await import("./codex-manifest.js");
     const { setActiveCodexVersionPolicy, activeCodexVersionPolicy, codexVersionVerdict, createCodexManifestRefusalRefresh } = manifestModule;
@@ -1348,8 +1348,8 @@ describe("spawn-freshness integration — real refusal refresh + active policy j
       const widenedManifest: import("../shared/codex-support.js").CodexSupportManifest = {
         ...oldManifest,
         updatedAt: "2026-07-17T00:00:00Z",
-        supported: [{ range: ">=0.160.0 <0.164.0", status: "tested" }],
-        recommended: "0.162.1",
+        supported: [{ range: ">=0.144.0 <0.164.0", status: "tested" }],
+        recommended: "0.161.0",
       };
       manifestModule.resetActiveCodexVersionPolicy();
       setActiveCodexVersionPolicy({ manifest: oldManifest });
@@ -1381,22 +1381,23 @@ describe("spawn-freshness integration — real refusal refresh + active policy j
       const deps = makeDeps({ runDoctor, statBinary, refreshPolicyBeforeRefusal });
       const controller = createCodexOnboardingController(deps);
 
-      // BEFORE: 0.162.1 is refused by the old policy (the premise of the scenario).
-      expect(codexVersionVerdict("0.162.1", activeCodexVersionPolicy()).allowed).toBe(false);
+      // BEFORE: 0.155.0 is refused by the old policy (the premise of the
+      // scenario): an external CLI change into the unverified below-range gap.
+      expect(codexVersionVerdict("0.155.0", activeCodexVersionPolicy()).allowed).toBe(false);
 
       await controller.recheck(); // 0.161.0 judged ready against the old policy
       expect(controller.lastReportFor()?.status).toBe("ready");
 
-      installedVersion = "0.162.1"; // the external CLI upgrade
+      installedVersion = "0.155.0"; // the external CLI change into the unverified gap
       await expect(controller.verifySpawnFreshness()).resolves.toBe(true); // upgrade observed, gate re-checks
       expect(runDoctor).toHaveBeenCalledTimes(3);
       expect(refreshSpies.calls).toBe(1);
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       expect(controller.lastReportFor()?.status).toBe("ready");
-      expect(controller.lastReportFor()?.version).toBe("0.162.1");
-      // AFTER: the refreshed ACTIVE policy now admits 0.162.1 — this is the
+      expect(controller.lastReportFor()?.version).toBe("0.155.0");
+      // AFTER: the refreshed ACTIVE policy now admits 0.155.0 — this is the
       // same state index.ts stamps per fork via encodeCodexSupportPolicy.
-      expect(codexVersionVerdict("0.162.1", activeCodexVersionPolicy()).allowed).toBe(true);
+      expect(codexVersionVerdict("0.155.0", activeCodexVersionPolicy()).allowed).toBe(true);
     } finally {
       manifestModule.resetActiveCodexVersionPolicy();
       rm(join(cacheFile, ".."), { recursive: true, force: true });
