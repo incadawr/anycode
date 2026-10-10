@@ -278,6 +278,25 @@ describe("computeModelChipDisplay (§3-D3)", () => {
       isDefault: false,
     });
   });
+
+  // : an unresolved model (no draft pick AND no provider default)
+  // is a call to action, not a blank label — while modelId/isDefault are kept
+  // untouched so the call sites' existing logic still sees them.
+  it("returns the 'Add a model' placeholder for an empty resolved model id", () => {
+    expect(computeModelChipDisplay(null, "", models)).toEqual({
+      modelId: "",
+      label: "Add a model",
+      isDefault: true,
+    });
+  });
+
+  it("returns the 'Add a model' placeholder for a whitespace-only model id", () => {
+    expect(computeModelChipDisplay("   ", "", models)).toEqual({
+      modelId: "   ",
+      label: "Add a model",
+      isDefault: false,
+    });
+  });
 });
 
 describe("CODEX_DRAFT_PRESETS / DEFAULT_CODEX_DRAFT_PRESET (, cut §2(d)/§3.8)", () => {
