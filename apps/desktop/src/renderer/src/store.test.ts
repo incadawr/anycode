@@ -1747,7 +1747,7 @@ describe("desktop store — Wave-1 revision actions", () => {
     expect(store.getState().connection).toBe("awaiting_host_ready");
 
     store.getState().appendUserText("req-1", "hi there");
-    expect(store.getState().transcript).toEqual([{ kind: "user_text", id: "req-1", text: "hi there" }]);
+    expect(store.getState().transcript).toEqual([{ kind: "user_text", id: "req-1", text: "hi there", at: expect.any(Number) }]);
   });
 });
 
@@ -4393,8 +4393,8 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     const blocks = projectHistoryToBlocks(fixtureItems);
 
     expect(blocks).toEqual([
-      { kind: "user_text", id: "h1:0", text: "hello" },
-      { kind: "user_text", id: "h2:0", text: "[compact summary] earlier conversation" },
+      { kind: "user_text", id: "h1:0", text: "hello", at: expect.any(Number) },
+      { kind: "user_text", id: "h2:0", text: "[compact summary] earlier conversation", at: expect.any(Number) },
       { kind: "assistant_text", id: "h3:0", text: "Let me check." },
       {
         kind: "tool_call",
@@ -4414,7 +4414,7 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
   it("preserves restored user image attachments for transcript rendering", () => {
     const images = [{ mediaType: "image/png" as const, data: "UE5H" }];
     expect(projectHistoryToBlocks([{ id: "image", createdAt: 1, message: { role: "user", content: "Look:", images } }])).toEqual([
-      { kind: "user_text", id: "image:0", text: "Look:", images },
+      { kind: "user_text", id: "image:0", text: "Look:", images, at: expect.any(Number) },
     ]);
   });
 
@@ -4665,7 +4665,7 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     ];
 
     const blocks = projectHistoryToBlocks(items);
-    expect(blocks).toEqual([{ kind: "user_text", id: "r1:0", text: "please fix the bug" }]);
+    expect(blocks).toEqual([{ kind: "user_text", id: "r1:0", text: "please fix the bug", at: expect.any(Number) }]);
   });
 
   it("projectHistoryToBlocks emits zero blocks for a wholly-reminder user item, without disturbing neighbor id numbering", () => {
@@ -4675,7 +4675,7 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     ];
 
     const blocks = projectHistoryToBlocks(items);
-    expect(blocks).toEqual([{ kind: "user_text", id: "r2:0", text: "hello" }]);
+    expect(blocks).toEqual([{ kind: "user_text", id: "r2:0", text: "hello", at: expect.any(Number) }]);
   });
 
   it("projectHistoryToBlocks leaves a reminder-free user message byte-identical (lock)", () => {
@@ -4683,7 +4683,7 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     const items: WireHistoryItem[] = [{ id: "r1", createdAt: 1, message: { role: "user", content: text } }];
 
     const blocks = projectHistoryToBlocks(items);
-    expect(blocks).toEqual([{ kind: "user_text", id: "r1:0", text }]);
+    expect(blocks).toEqual([{ kind: "user_text", id: "r1:0", text, at: expect.any(Number) }]);
   });
 
   it("applyHostMessage(session_history) hydrates a reminder-carrying resumed user item with the block stripped from the transcript", () => {
@@ -4700,7 +4700,7 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     ];
     store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
 
-    expect(store.getState().transcript).toEqual([{ kind: "user_text", id: "r1:0", text: "please fix the bug" }]);
+    expect(store.getState().transcript).toEqual([{ kind: "user_text", id: "r1:0", text: "please fix the bug", at: expect.any(Number) }]);
   });
 });
 
@@ -6558,5 +6558,18 @@ describe("desktop store — background_children (detached agents strip)", () => 
     expect(store.getState().notice).toBeNull();
     store.getState().applyHostMessage({ type: "background_child_cancel_result", requestId: "r2", ok: false, reason: "already finished" });
     expect(store.getState().notice?.text).toContain("already finished");
+  });
+});
+
+describe("projectHistoryToBlocks createdAt -> at", () => {
+  it("projects createdAt onto user_text.at", () => {
+    const blocks = projectHistoryToBlocks([
+      { id: "u1", createdAt: 1_700_000_000_000, message: { role: "user", content: "hi" } },
+    ]);
+    expect(blocks[0]).toMatchObject({ kind: "user_text", at: 1_700_000_000_000 });
+  });
+  it("omits at when createdAt is not a positive number", () => {
+    const blocks = projectHistoryToBlocks([{ id: "u2", createdAt: 0, message: { role: "user", content: "hi" } }]);
+    expect(blocks[0]).not.toHaveProperty("at");
   });
 });

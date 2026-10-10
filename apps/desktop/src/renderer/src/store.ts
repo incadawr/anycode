@@ -395,6 +395,8 @@ export type TranscriptBlock =
       images?: readonly ImageAttachment[];
       /** TASK.145 срез 2: present iff this "user" turn was host-injected (a detached child's report), not typed by the human — MessageList.tsx renders it as a compact system card instead of the normal user bubble. Survives reload: mirrors WireHistoryItem.origin via projectHistoryToBlocks, and the live append path (tab-registry.ts) stamps it too. */
       origin?: "system";
+      /** Epoch ms: when the message was sent (live: renderer clock at creation; reload: the persisted item's createdAt). Absent -> no time shown. */
+      at?: number;
     }
   | { kind: "assistant_text"; id: string; text: string }
   | { kind: "reasoning"; id: string; text: string; collapsed: boolean }
@@ -433,7 +435,7 @@ export type TranscriptBlock =
    */
   | { kind: "degeneration"; id: string; channel: "text" | "reasoning"; period: number; repeats: number }
   /** `durationMs`: wall time from this renderer's `turn_started` to the loop_end; absent when the start was not seen live (a replayed/reconnected turn). */
-  | { kind: "loop_end"; id: string; reason: string; turns: number; durationMs?: number }
+  | { kind: "loop_end"; id: string; reason: string; turns: number; durationMs?: number; /** Epoch ms when the turn ended (renderer clock). */ at?: number }
   /**
    * One persisted line per `stream_retry` AgentEvent (TASK.33 W8), ADDITIVE to
    * the existing one-slot `notice` toast (which still shows the LATEST retry
@@ -1410,6 +1412,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         // appendUserText) — a persisted `HistoryItem.origin` rehydrates into
         // the SAME system-card view, not the ordinary user bubble.
         ...(item.origin !== undefined ? { origin: item.origin } : {}),
+        ...(typeof item.createdAt === "number" && item.createdAt > 0 ? { at: item.createdAt } : {}),
       });
       continue;
     }
@@ -3024,6 +3027,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                   reason: event.reason,
                   turns: event.turns,
                   ...(durationMs !== undefined ? { durationMs } : {}),
+                  at: Date.now(),
                 },
               ],
               ...(armRetry && lastSent !== null
@@ -3752,6 +3756,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 id: `pending:${message.turnId}`,
                 text: message.text,
                 ...(message.images?.length ? { images: message.images } : {}),
+                at: Date.now(),
               });
             }
             return;
@@ -4261,7 +4266,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       },
 
       appendUserText(id: string, text: string, origin?: "system"): void {
-        appendBlock({ kind: "user_text", id, text, ...(origin !== undefined ? { origin } : {}) });
+        appendBlock({ kind: "user_text", id, text, ...(origin !== undefined ? { origin } : {}), at: Date.now() });
       },
 
       appendUsageLimitNotice(notice: UsageLimitNotice): void {
