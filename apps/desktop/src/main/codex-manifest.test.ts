@@ -1,16 +1,21 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { BUNDLED_CODEX_MANIFEST, CODEX_MIN_FLOOR, type CodexSupportManifest } from "../shared/codex-support.js";
 import {
   activeCodexVersionPolicy,
+  CODEX_MANIFEST_FETCH_TIMEOUT_MS,
+  CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS,
+  CODEX_MANIFEST_REFRESH_INTERVAL_MS,
   codexVersionVerdict,
+  createCodexManifestRefusalRefresh,
   effectiveCodexManifest,
   manifestSupportedRange,
   refreshCodexManifest,
   resetActiveCodexVersionPolicy,
   setActiveCodexVersionPolicy,
+  startCodexManifestRefreshSchedule,
   validateCodexManifest,
 } from "./codex-manifest.js";
 
@@ -302,5 +307,231 @@ describe("refreshCodexManifest (network + ETag cache, cut §7.1)", () => {
     const { fetchImpl } = fetchReturning(200, huge);
     const result = await refreshCodexManifest({ cacheFile, fetchImpl, now: () => T0 });
     expect(result.source).toBe("bundled");
+  });
+
+  // ── Taskana 4230: whole-operation timeout (an injected fetch that IGNORES
+  // the abort signal must still fail closed) ──
+
+  it("fails closed when the fetch never settles and ignores the abort signal", async () => {
+    vi.useFakeTimers();
+    try {
+      const cacheFile = join(scratchDir, "manifest-hung-fetch.json");
+      writeFileSync(cacheFile, JSON.stringify({ fetchedAt: new Date(T0 - 7 * 3600_000).toISOString(), manifest: validManifest() }));
+      const fetchImpl = vi.fn(
+        (_u: string | URL | Request, _init?: RequestInit) => new Promise<Response>(() => { /* never; deliberately ignore init.signal */ }),
+      ) as unknown as typeof fetch;
+      const p = refreshCodexManifest({ cacheFile, fetchImpl, now: () => T0 });
+      await vi.advanceTimersByTimeAsync(CODEX_MANIFEST_FETCH_TIMEOUT_MS + 1);
+      await expect(p).resolves.toEqual({ manifest: validManifest(), source: "cache" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed when the response BODY hangs", async () => {
+    vi.useFakeTimers();
+    try {
+      const cacheFile = join(scratchDir, "manifest-hung-body.json");
+      writeFileSync(cacheFile, JSON.stringify({ fetchedAt: new Date(T0 - 7 * 3600_000).toISOString(), manifest: validManifest() }));
+      const fetchImpl = vi.fn(
+        (_u: string | URL | Request, _init?: RequestInit) =>
+          Promise.resolve({ status: 200, headers: { get: () => null }, text: () => new Promise<string>(() => {}) }) as unknown as Response,
+      ) as unknown as typeof fetch;
+      const p = refreshCodexManifest({ cacheFile, fetchImpl, now: () => T0 });
+      await vi.advanceTimersByTimeAsync(CODEX_MANIFEST_FETCH_TIMEOUT_MS + 1);
+      await expect(p).resolves.toEqual({ manifest: validManifest(), source: "cache" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("supervisor #2: a body that settles AFTER the deadline never persists a late manifest", async () => {
+    vi.useFakeTimers();
+    try {
+      const cacheFile = join(scratchDir, "manifest-late-body.json");
+      writeFileSync(cacheFile, JSON.stringify({ fetchedAt: new Date(T0 - 7 * 3600_000).toISOString(), manifest: validManifest() }));
+      const lateManifest = validManifest({ supported: [{ range: ">=0.150.0 <0.160.0", status: "tested" }], recommended: "0.150.1" });
+      let resolveBody: ((v: string) => void) | undefined;
+      const fetchImpl = vi.fn(
+        (_u: string | URL | Request, _init?: RequestInit) =>
+          Promise.resolve({
+            status: 200,
+            headers: { get: () => null },
+            text: () => new Promise<string>((resolve) => { resolveBody = resolve; }),
+          }) as unknown as Response,
+      ) as unknown as typeof fetch;
+      const p = refreshCodexManifest({ cacheFile, fetchImpl, now: () => T0 });
+      await vi.advanceTimersByTimeAsync(CODEX_MANIFEST_FETCH_TIMEOUT_MS + 1);
+      await expect(p).resolves.toEqual({ manifest: validManifest(), source: "cache" });
+      // The straggler body now lands — it must NOT overwrite the cache.
+      resolveBody?.(JSON.stringify(lateManifest));
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.runAllTimersAsync();
+      expect((JSON.parse(readFileSync(cacheFile, "utf8")) as { manifest: CodexSupportManifest }).manifest).toEqual(validManifest());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ── Taskana 4230: periodic schedule ──
+
+describe("startCodexManifestRefreshSchedule", () => {
+  const T0 = Date.parse("2026-07-16T12:00:00Z");
+
+  it("schedules at the cache-TTL interval and unrefs the timer", () => {
+    const cleared: unknown[] = [];
+    const handle = { unref: vi.fn() };
+    let capturedFn: (() => void) | undefined;
+    const timer = {
+      set: (fn: () => void, ms: number) => {
+        expect(ms).toBe(CODEX_MANIFEST_REFRESH_INTERVAL_MS);
+        capturedFn = fn;
+        return handle;
+      },
+      clear: (h: unknown) => { cleared.push(h); },
+    };
+    const schedule = startCodexManifestRefreshSchedule({ cacheFile: join(scratchDir, "schedule-unused.json"), timer });
+    expect(handle.unref).toHaveBeenCalledTimes(1);
+    expect(capturedFn).toBeTypeOf("function");
+    schedule.stop();
+    expect(cleared).toEqual([handle]);
+  });
+
+  it("a tick runs the NON-forced refresh, applies a changed manifest once, and reports changed=true", async () => {
+    const cacheFile = join(scratchDir, "schedule-tick.json");
+    const onResult = vi.fn();
+    let capturedFn: (() => void) | undefined;
+    const timer = { set: (fn: () => void) => { capturedFn = fn; return { unref: vi.fn() }; }, clear: () => {} };
+    const refresh = vi.fn(async (o: { cacheFile: string; force?: boolean }) => {
+      expect(o.force).toBeUndefined();
+      expect(o.cacheFile).toBe(cacheFile);
+      return { manifest: validManifest(), source: "network" } as const;
+    });
+    startCodexManifestRefreshSchedule({ cacheFile, timer, refresh, onResult });
+    capturedFn!();
+    await vi.waitFor(() => expect(onResult).toHaveBeenCalled());
+    expect(activeCodexVersionPolicy().manifest).toEqual(validManifest());
+    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ source: "network" }), true);
+  });
+
+  it("an identical manifest reports changed=false and does not touch the policy", async () => {
+    const cacheFile = join(scratchDir, "schedule-same.json");
+    setActiveCodexVersionPolicy({ manifest: validManifest() });
+    const onResult = vi.fn();
+    let capturedFn: (() => void) | undefined;
+    const timer = { set: (fn: () => void) => { capturedFn = fn; return { unref: vi.fn() }; }, clear: () => {} };
+    const refresh = vi.fn(async () => ({ manifest: validManifest(), source: "network" } as const));
+    startCodexManifestRefreshSchedule({ cacheFile, timer, refresh, onResult });
+    capturedFn!();
+    await vi.waitFor(() => expect(onResult).toHaveBeenCalled());
+    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ source: "network" }), false);
+    expect(activeCodexVersionPolicy().manifest).toEqual(validManifest());
+  });
+
+  it("a rejecting tick is swallowed: onResult is NOT called and the active policy is retained", async () => {
+    const cacheFile = join(scratchDir, "schedule-reject.json");
+    const before = activeCodexVersionPolicy().manifest;
+    const onResult = vi.fn();
+    let capturedFn: (() => void) | undefined;
+    const timer = { set: (fn: () => void) => { capturedFn = fn; return { unref: vi.fn() }; }, clear: () => {} };
+    const refresh = vi.fn(async () => { throw new Error("offline"); });
+    startCodexManifestRefreshSchedule({ cacheFile, timer, refresh, onResult });
+    capturedFn!();
+    // Await microtask drains — the awaited settle is itself the "no unhandled
+    // rejection escapes" assertion.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onResult).not.toHaveBeenCalled();
+    expect(activeCodexVersionPolicy().manifest).toBe(before);
+  });
+});
+
+// ── Taskana 4230: refresh-before-refusal ──
+
+describe("createCodexManifestRefusalRefresh", () => {
+  const T0 = Date.parse("2026-07-16T12:00:00Z");
+
+  function fetchReturning(status: number, body?: string, headers: Record<string, string> = {}) {
+    const calls: unknown[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: (init?.headers as Record<string, string> | undefined) ?? {} });
+      return new Response(status === 304 ? null : (body ?? ""), { status, headers });
+    }) as typeof fetch;
+    return { calls, fetchImpl };
+  }
+
+  it("applies a network manifest and resolves true only on change", async () => {
+    const cacheFile = join(scratchDir, "refuse-net.json");
+    const { fetchImpl } = fetchReturning(200, JSON.stringify(validManifest()));
+    const r = createCodexManifestRefusalRefresh({ cacheFile, fetchImpl, now: () => T0 });
+    await expect(r.refreshBeforeRefusal()).resolves.toBe(true);
+    expect(activeCodexVersionPolicy().manifest).toEqual(validManifest());
+  });
+
+  it("a FAILED forced refresh retains the current active policy even with no cache (bundled fallback cannot overwrite it)", async () => {
+    const cacheFile = join(scratchDir, "refuse-fail.json");
+    const newer = validManifest({ supported: [{ range: ">=0.150.0 <0.160.0", status: "tested" }], recommended: "0.150.1", minimum: "0.150.0" });
+    setActiveCodexVersionPolicy({ manifest: newer });
+    const { fetchImpl } = fetchReturning(500, "down");
+    const r = createCodexManifestRefusalRefresh({ cacheFile, fetchImpl, now: () => T0 });
+    await expect(r.refreshBeforeRefusal()).resolves.toBe(false);
+    expect(activeCodexVersionPolicy().manifest).toEqual(newer);
+  });
+
+  it("rate-limits to one forced attempt per window and re-arms after it — SAME limiter, mutable clock", async () => {
+    const cacheFile = join(scratchDir, "refuse-rate.json");
+    let t = T0;
+    // The body MOVES between attempts so each landed network manifest is an
+    // actual policy change (the first fetch widens the range, the second adds
+    // a further entry) — otherwise a repeat of the same manifest is
+    // legitimately changed=false.
+    const first = validManifest({ supported: [{ range: ">=0.144.0 <0.146.0", status: "tested" }] });
+    const second = validManifest({ supported: [{ range: ">=0.144.0 <0.150.0", status: "tested" }] });
+    let body = JSON.stringify(first);
+    const calls: unknown[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: (init?.headers as Record<string, string> | undefined) ?? {} });
+      return new Response(body, { status: 200, headers: {} });
+    }) as typeof fetch;
+    const r = createCodexManifestRefusalRefresh({ cacheFile, fetchImpl, now: () => t });
+    await expect(r.refreshBeforeRefusal()).resolves.toBe(true);
+    expect(calls).toHaveLength(1);
+    await expect(r.refreshBeforeRefusal()).resolves.toBe(false);
+    expect(calls).toHaveLength(1);
+    t += CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS + 1;
+    body = JSON.stringify(second);
+    await expect(r.refreshBeforeRefusal()).resolves.toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("coalesces concurrent callers onto the in-flight attempt even inside the rate-limit window", async () => {
+    const cacheFile = join(scratchDir, "refuse-coalesce.json");
+    let resolveFetch: ((v: Response) => void) | undefined;
+    const calls: unknown[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), headers: (init?.headers as Record<string, string> | undefined) ?? {} });
+      return new Promise<Response>((resolve) => { resolveFetch = resolve; });
+    }) as typeof fetch;
+    const r = createCodexManifestRefusalRefresh({ cacheFile, fetchImpl, now: () => T0 });
+    const p1 = r.refreshBeforeRefusal();
+    const p2 = r.refreshBeforeRefusal();
+    resolveFetch?.(new Response(JSON.stringify(validManifest()), { status: 200 }));
+    const [v1, v2] = await Promise.all([p1, p2]);
+    expect(v1).toBe(true);
+    expect(v2).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a 304 retains the active policy and resolves false", async () => {
+    const cacheFile = join(scratchDir, "refuse-304.json");
+    const seeded = validManifest({ supported: [{ range: ">=0.150.0 <0.160.0", status: "tested" }], recommended: "0.150.1", minimum: "0.150.0" });
+    setActiveCodexVersionPolicy({ manifest: seeded });
+    writeFileSync(cacheFile, JSON.stringify({ fetchedAt: new Date(T0 - CODEX_MANIFEST_FORCED_REFRESH_MIN_INTERVAL_MS - 3600_000).toISOString(), etag: '"e"', manifest: validManifest() }));
+    const { fetchImpl } = fetchReturning(304);
+    const r = createCodexManifestRefusalRefresh({ cacheFile, fetchImpl, now: () => T0 });
+    await expect(r.refreshBeforeRefusal()).resolves.toBe(false);
+    expect(activeCodexVersionPolicy().manifest).toEqual(seeded);
   });
 });

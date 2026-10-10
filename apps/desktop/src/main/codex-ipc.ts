@@ -18,6 +18,7 @@
  * copies of these five constants, kept in sync by contract.
  */
 import { ipcMain } from "electron";
+import { statSync } from "node:fs";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type { SettingsMutationResult } from "../shared/settings.js";
 import { ENV_CODEX_BIN, ENV_CODEX_PROXY_URL, stripEngineProxyCarriers } from "../shared/engines.js";
@@ -157,6 +158,19 @@ export interface CodexIpcDeps {
    * comes from the snapshot's own ISO `checkedAt`, so nothing new crosses to disk.
    */
   now?: () => number;
+  /**
+   * Taskana 4230: stamps the discovered binary (size+mtime) onto each cached
+   * verdict; the spawn-freshness guard compares it per spawn attempt.
+   * Default: node fs statSync; null = unobservable (guard degrades to allow).
+   */
+  statBinary?: (path: string) => { size: number; mtimeMs: number } | null;
+  /**
+   * Taskana 4230 (refresh-before-refuse): invoked when a doctor pass classifies
+   * the binary as update_required, BEFORE the refusal is cached. Resolves true
+   * when the active version-support policy changed (caller re-runs the doctor
+   * once). Absent = legacy behavior, byte-identical.
+   */
+  refreshPolicyBeforeRefusal?: () => Promise<boolean>;
 }
 
 export interface CodexOnboardingController {
@@ -205,6 +219,8 @@ export interface CodexOnboardingController {
    * so a bogus id stays unknown (every click re-resolves cheaply, no spawn).
    */
   hasVerdictFor(profileId?: string): boolean;
+  /** Taskana 4230 spawn-freshness guard: re-validates a cached READY verdict against the binary's current {size, mtimeMs} stamp. */
+  verifySpawnFreshness(profileId?: string): Promise<boolean>;
   /**
    * The last cached doctor verdict for this profile (absent id = the active
    * one), or undefined when none has landed. Reads the existing cache only —
@@ -331,6 +347,25 @@ export function codexDoctorSourceEnv(
  */
 export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboardingController {
   const runDoctor = deps.runDoctor ?? runCodexDoctor;
+  // Taskana 4230 (supervisor #3 / reject #3): EVERY stat call site funnels
+  // through this one SAFE wrapper — an injected statBinary seam that throws
+  // (or the real statSync on a vanished file) degrades to null
+  // (unobservable), never rejects the recheck/refresh path it serves.
+  const rawStatBinary = deps.statBinary ?? ((path: string) => {
+    try {
+      const s = statSync(path);
+      return { size: s.size, mtimeMs: s.mtimeMs };
+    } catch {
+      return null;
+    }
+  });
+  const statBinary = (path: string): { size: number; mtimeMs: number } | null => {
+    try {
+      return rawStatBinary(path);
+    } catch {
+      return null;
+    }
+  };
   const runLogin = deps.runLogin ?? runCodexLogin;
   const now = deps.now ?? Date.now;
   const registry = createCodexProfilesRegistry({
@@ -353,7 +388,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
    * `checkedAt` is memory-only; the disk `lastCheck.at` still comes from the
    * snapshot's own ISO `checkedAt` (custody §4.4 — nothing new crosses out).
    */
-  const reports = new Map<string, { snapshot: CodexOnboardingSnapshot; checkedAt: number }>();
+  const reports = new Map<string, { snapshot: CodexOnboardingSnapshot; checkedAt: number; binaryStamp: { size: number; mtimeMs: number } | null }>();
   /** Last-read `activeProfileId` — refreshed on every registry read so the sync `readyFor()` gate can answer for "the active profile". */
   let cachedActiveProfileId: string = SYSTEM_PROFILE_ID;
   /** Keeps the runners' pre-spawn home guard on the SAME filesystem seam as the registry — absent, they default to the real fs. */
@@ -545,6 +580,9 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       return shutdownSnapshot();
     }
     const consents = deps.readTrustedBinaries?.() ?? [];
+    // Taskana 4230 (supervisor #3): capture the binary stamp BEFORE the doctor
+    // run — an upgrade landing mid-probe must not be stamped as already judged.
+    let binaryStamp = binaryPath !== null ? statBinary(binaryPath) : null;
     const report: CodexDoctorReport =
       binaryPath === null
         ? discoveryTrustRefusal !== undefined
@@ -574,12 +612,34 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             ...(profileGuard !== undefined ? { profileGuard } : {}),
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
-    const snapshot: CodexOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };
+    let effectiveReport: CodexDoctorReport = report;
+    // Taskana 4230 (refresh-before-refuse): a doctor pass that classifies the
+    // binary as update_required gets ONE bounded, rate-limited forced manifest
+    // refresh before the refusal is cached — a manifest update that widens the
+    // supported range re-runs the doctor so the user sees the fresh verdict.
+    if (report.status === "update_required" && deps.refreshPolicyBeforeRefusal !== undefined && binaryPath !== null) {
+      let policyChanged = false;
+      try { policyChanged = await deps.refreshPolicyBeforeRefusal(); } catch { policyChanged = false; }
+      if (policyChanged) {
+        if (shuttingDown) return shutdownSnapshot();
+        // Supervisor #3: stamp immediately before the second run too.
+        binaryStamp = binaryPath !== null ? statBinary(binaryPath) : null;
+        effectiveReport = await runDoctor(binaryPath, {
+          env: doctorSourceEnv(),
+          signal: lifetime.signal,
+          profile,
+          consents,
+          ...(profileGuard !== undefined ? { profileGuard } : {}),
+          ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+        });
+      }
+    }
+    const snapshot: CodexOnboardingSnapshot = { report: effectiveReport, binaryPath, source, checkedAt: new Date().toISOString() };
     // TASK.65: stamp the numeric TTL clock alongside the snapshot. Only a real
     // doctor run reaches here, so a cache entry always means "a verdict landed"
     // — a resolution refusal returns resolutionErrorSnapshot without caching,
     // keeping a bogus id UNKNOWN (hasVerdictFor stays false).
-    reports.set(report.profileId ?? SYSTEM_PROFILE_ID, { snapshot, checkedAt: now() });
+    reports.set(effectiveReport.profileId ?? SYSTEM_PROFILE_ID, { snapshot, checkedAt: now(), binaryStamp });
     await persist(snapshot);
     deps.onSnapshot(snapshot);
     return snapshot;
@@ -668,9 +728,30 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     return runRecheck(profileId);
   }
 
+  /**
+   * Taskana 4230 spawn-freshness guard: a cached READY verdict is valid only
+   * while the binary file it judged is unchanged (size+mtime). A mismatch
+   * force-rechecks (whose update_required path itself runs
+   * refresh-before-refusal) and answers by the FRESH verdict. Unknown verdict,
+   * non-ready verdict, or unobservable stamp: true (the existing gates own
+   * those paths).
+   */
+  async function verifySpawnFreshness(profileId?: string): Promise<boolean> {
+    const entry = reports.get(profileId ?? cachedActiveProfileId);
+    if (entry === undefined || entry.snapshot.report.status !== "ready") return true;
+    if (entry.binaryStamp === null || entry.snapshot.binaryPath === null) return true;
+    let current: { size: number; mtimeMs: number } | null;
+    current = statBinary(entry.snapshot.binaryPath);
+    if (current === null) return true;
+    if (current.size === entry.binaryStamp.size && current.mtimeMs === entry.binaryStamp.mtimeMs) return true;
+    await ensureChecked(profileId, { force: true });
+    return reports.get(profileId ?? cachedActiveProfileId)?.snapshot.report.status === "ready";
+  }
+
   return {
     recheck: (profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot> => ensureChecked(profileId, options),
     ensureChecked,
+    verifySpawnFreshness,
 
     async pickBinary(): Promise<CodexPickBinaryResult> {
       if (shuttingDown) {
