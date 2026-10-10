@@ -1176,11 +1176,30 @@ export function childActionBadge(
  * spawned — the child's own work is still ahead. "Success" on that card read
  * as "the delegated work is done"; "Dispatched" says what actually happened,
  * and the child badge beside it carries the child's live state.
+ *
+ * TASK.229: an Agent call whose child has not actually started is shown as
+ * "Queued" rather than "Running". `proposed` is inherently pre-dispatch, and a
+ * `running` card with NO subagent telemetry (`subagent` null or omitted) means
+ * no `subagent_start` has landed yet — the child is still waiting behind the
+ * concurrency ceiling. Once start telemetry is seeded (even with turns/toolCalls
+ * at 0) the existing "Running" label takes over. This is display-derived: no
+ * status is ever persisted as "queued".
  */
-export function statusLabel(block: Pick<ToolCallBlock, "toolName" | "status" | "input">): string {
+export function statusLabel(
+  block: Pick<ToolCallBlock, "toolName" | "status" | "input"> &
+    Partial<Pick<ToolCallBlock, "subagent">>,
+): string {
   const input = block.input as { detach?: unknown } | null | undefined;
   if (block.toolName === "Agent" && block.status === "success" && input?.detach === true) {
     return "Dispatched";
+  }
+  if (block.toolName === "Agent") {
+    if (block.status === "proposed") {
+      return "Queued";
+    }
+    if (block.status === "running" && (block.subagent === undefined || block.subagent === null)) {
+      return "Queued";
+    }
   }
   return STATUS_LABELS[block.status];
 }

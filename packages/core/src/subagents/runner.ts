@@ -34,8 +34,8 @@ import { capUtf8Bytes } from "../util/bytes.js";
 import { linkAbortSignal } from "../util/abort.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
+  DEFAULT_TOOL_CONCURRENCY,
   SUBAGENT_MAX_TURNS_CEILING,
-  MAX_CONCURRENT_SUBAGENTS,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SUBAGENT_LOOP_DEADLINE_MS,
   SUBAGENT_OUTCOME_DEADLINE_MS,
@@ -180,6 +180,18 @@ export interface SubagentRunnerOptions {
    * out of S4's scope.
    */
   runEngineChild?: (spec: EngineChildSpec, opts: SubagentRunOptions) => Promise<SubagentOutcome>;
+  /**
+   * Max INLINE child loops this runner admits at once (TASK.229). Resolution
+   * precedence, highest first: this option > the `ANYCODE_SUBAGENT_CONCURRENCY`
+   * environment variable > `DEFAULT_TOOL_CONCURRENCY` (currently 4). Width is
+   * SNAPSHOTTED at runner construction, so changing the option or env later in
+   * a session does not retune an already-built runner.
+   *
+   * A finite numeric value is floored and clamped to >= 1. An unsafe or
+   * non-finite value (NaN/Infinity/absurdly large) warns and falls through to
+   * the env/default route rather than admitting a broken width.
+   */
+  maxConcurrent?: number;
 }
 
 /**
@@ -426,10 +438,70 @@ class SemaphoreAbortError extends Error {
 }
 
 /**
+ * Environment variable carrying the inline child-concurrency width (TASK.229).
+ * Trimmed signed-decimal-integer text; empty/whitespace is treated as absent.
+ * Malformed/fractional/non-finite/unsafe values warn and fall back to the
+ * default. Zero/negative values clamp to 1.
+ */
+export const ENV_SUBAGENT_CONCURRENCY = "ANYCODE_SUBAGENT_CONCURRENCY";
+
+/**
+ * Resolves the semaphore width for one runner (TASK.229). Precedence:
+ * `opts.maxConcurrent` > `ANYCODE_SUBAGENT_CONCURRENCY` > DEFAULT_TOOL_CONCURRENCY.
+ *
+ * Snapshotted at construction. A finite option is floored and clamped >= 1; an
+ * unsafe/non-finite option warns and falls through to env/default. The env text
+ * must be a signed decimal integer that parses to a finite SAFE integer — every
+ * other shape warns and falls back to the default. Never returns NaN/Infinity.
+ */
+function resolveSubagentConcurrency(opts?: SubagentRunnerOptions): number {
+  const option = opts?.maxConcurrent;
+  if (option !== undefined) {
+    if (Number.isFinite(option) && Number.isSafeInteger(Math.floor(option))) {
+      return Math.max(1, Math.floor(option));
+    }
+    console.warn(
+      `[subagents] SubagentRunnerOptions.maxConcurrent=${String(option)} is not a finite width; ` +
+        `falling back to ${ENV_SUBAGENT_CONCURRENCY}/default.`,
+    );
+  }
+
+  const raw = process.env[ENV_SUBAGENT_CONCURRENCY];
+  if (raw !== undefined) {
+    const text = raw.trim();
+    if (text.length !== 0) {
+      if (/^[+-]?\d+$/.test(text)) {
+        const parsed = Number(text);
+        if (Number.isSafeInteger(parsed)) {
+          return Math.max(1, parsed);
+        }
+        console.warn(
+          `[subagents] ${ENV_SUBAGENT_CONCURRENCY}="${raw}" is not a safe integer; falling back to the default.`,
+        );
+      } else {
+        console.warn(
+          `[subagents] ${ENV_SUBAGENT_CONCURRENCY}="${raw}" is not decimal integer text; falling back to the default.`,
+        );
+      }
+    }
+  }
+
+  return DEFAULT_TOOL_CONCURRENCY;
+}
+
+/**
  * Builds a SubagentPort backed by child AgentLoops derived from `parent`. One
- * runner per parent config (attached by withSubagents), so the
- * MAX_CONCURRENT_SUBAGENTS semaphore is per-parent: at most that many child
- * loops run at once atop the parent's own toolConcurrency.
+ * runner per parent config (attached by withSubagents), so the inline child
+ * semaphore is per-parent: at most `resolveSubagentConcurrency(opts)` child
+ * loops run at once. That width is a SEPARATE ceiling from the parent loop's
+ * `toolConcurrency`: a parent tool slot held by an inline Agent handler waiting
+ * on this semaphore is not freed by the child admission, so the effective
+ * inline admission width in one step is min(toolConcurrency, child width).
+ * Building a child config omits `toolConcurrency`, so each child loop keeps its
+ * own tool concurrency — this multiplies potential TOOL handlers, never model
+ * streams. Session-tier/engine agents route through the session tier instead
+ * (bypassing this semaphore), and detached children outlive their handlers, so
+ * this setting bounds neither detached lifetimes nor host session concurrency.
  *
  * `opts.profiles` (slice 3.3, §2.5) adds md-profile personas as extra agent
  * types. Resolution inside run() is built-in-wins: an agentType that names a
@@ -440,7 +512,7 @@ export function createSubagentRunner(
   parent: AgentLoopConfig,
   opts?: SubagentRunnerOptions,
 ): SubagentPort {
-  const semaphore = new Semaphore(MAX_CONCURRENT_SUBAGENTS);
+  const semaphore = new Semaphore(resolveSubagentConcurrency(opts));
 
   // Profiles keyed by name; a built-in name in the map is unreachable because
   // resolution consults isKnownPersona FIRST (built-in always wins). Rebuilt
@@ -573,6 +645,12 @@ export function createSubagentRunner(
         }
 
         try {
+          // Release-to-continuation race (TASK.229): the abort may have landed
+          // between the permit handoff and this continuation. Re-check before
+          // any start progress or engine run; the `finally` still releases.
+          if (signal?.aborted) {
+            return cancelledOutcome(startedAt);
+          }
           onProgress?.({
             kind: "start",
             agentType: persona.name,
@@ -713,6 +791,13 @@ export function createSubagentRunner(
       let stallPollTimer: ReturnType<typeof setInterval> | undefined;
 
       try {
+        // Release-to-continuation race (TASK.229): the permit may have been
+        // handed to this waiter in the same turn the parent aborted. Re-check
+        // inside the permit's try/finally, before any start progress, child
+        // construction or model call, so the `finally` still releases the slot.
+        if (signal?.aborted) {
+          return cancelledOutcome(startedAt);
+        }
         onProgress?.({
           kind: "start",
           agentType: persona.name,
