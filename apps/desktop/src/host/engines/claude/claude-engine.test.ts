@@ -1256,7 +1256,7 @@ describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 
     expect(seen).toEqual([]);
 
     await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
-    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan" }]);
+    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan", mcpServerNames: [] }]);
 
     // A second turn re-emits `system/init` (probe #1); the announcement does not repeat.
     transport.enqueue(initFrame("model-x", "plan"));
@@ -1272,7 +1272,7 @@ describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 
 
     const seen: { model: string }[] = [];
     engine.onFirstSystemInit((init) => seen.push(init));
-    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan" }]);
+    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan", mcpServerNames: [] }]);
   });
 });
 
