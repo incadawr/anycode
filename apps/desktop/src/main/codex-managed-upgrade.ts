@@ -205,7 +205,7 @@ async function upgradeOnce(deps: CodexManagedUpgradeDeps): Promise<CodexManagedU
   // the manifest's own recommendation is judged like any other version, so a
   // tampered/narrowed manifest cannot push an unsupported binary.
   const verdict = codexVersionVerdict(plan.toVersion, policy);
-  if (!verdict.allowed) {
+  if (!verdict.allowed || verdict.warning !== undefined) {
     return { ok: false, error: `recommended version ${plan.toVersion} is outside the supported range (${verdict.supportedRange})` };
   }
 

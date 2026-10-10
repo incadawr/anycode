@@ -30,6 +30,11 @@ const value = (name) => {
 };
 
 if (args[0] === "--version") {
+  const reportVersion = value("--report-version");
+  if (reportVersion !== undefined) {
+    process.stdout.write(`codex-cli ${reportVersion}\n`);
+    process.exit(0);
+  }
   if (flag("--version-grandchild")) {
     // The W2-review Critical for the preflight lane: a version wrapper that
     // forks a grandchild and then hangs. Killing only the direct child on

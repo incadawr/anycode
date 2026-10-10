@@ -675,7 +675,7 @@ export function createCodexInstallController(deps: CodexInstallControllerDeps): 
     const policy = activeCodexVersionPolicy();
     const version = requested ?? policy.manifest.recommended;
     const verdict = codexVersionVerdict(version, policy);
-    if (!verdict.allowed) {
+    if (!verdict.allowed || verdict.warning !== undefined) {
       return { ok: false, error: `version ${version} is outside the supported range (${verdict.supportedRange}) and has no risk acceptance` };
     }
     const installed = await installCodexVersion(version, {
