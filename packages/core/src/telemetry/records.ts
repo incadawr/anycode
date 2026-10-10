@@ -118,6 +118,25 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         repeats: event.repeats,
         turn: event.turn,
       };
+    case "ceiling_refused":
+      // TASK.208: refusal FACT only — closed reason enum plus numbers. The
+      // paired `remaining`/`nextAction` text (on ceiling_grant) is never
+      // carried on this port.
+      return {
+        t: "ceiling_refused",
+        reason: event.reason,
+        turn: event.turn,
+        round: event.round,
+      };
+    case "ceiling_grant":
+      // TASK.208: numeric projection only — `remaining`/`nextAction` are the
+      // model's free text and are deliberately dropped here.
+      return {
+        t: "ceiling_grant",
+        round: event.round,
+        granted: event.granted,
+        totalGranted: event.totalGranted,
+      };
     case "error":
       return { t: "error" };
     case "checkpoint_created":

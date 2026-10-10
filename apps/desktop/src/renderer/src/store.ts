@@ -3554,6 +3554,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           });
           return;
 
+        // TASK.208: a refused ladder round is telemetry-only for now — the
+        // paired loop_end already stops the feed, so no UI surface.
+        case "ceiling_refused":
+          return;
+
         default: {
           const _exhaustive: never = event;
           void _exhaustive;

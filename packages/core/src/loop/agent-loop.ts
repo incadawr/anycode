@@ -1030,7 +1030,7 @@ export class AgentLoop {
           // were never reached. Children never receive this predicate
           // (buildChildConfig omits it), so they always keep the ladder.
           if (this.config.ceiling?.supervisedRoot?.() !== true) {
-            const ceiling = yield* this.tryCeilingGrant(maxTurns, signal);
+            const ceiling = yield* this.tryCeilingGrant(maxTurns, signal, turn - 1);
             if (ceiling !== "granted") {
               yield* this.emitLoopEnd(
                 "max_turns",
@@ -1371,10 +1371,12 @@ export class AgentLoop {
    * One round of the turn-ceiling ladder (TASK.124 cut-1). Returns a tri-state
    * CeilingDecision: "granted" when a grant was issued (the effective cap is
    * raised and `ceiling_grant` has been emitted), "done" when the verdict was
-   * a readable done:true declaration that the work is finished, and "refused"
-   * for every silent refusal — the caller's `loop_end`/`max_turns` already
-   * says the run stopped, so a second event variant for "asked and was told
-   * no" would only multiply consumers (§1.8).
+   * a readable done:true declaration that the work is finished (event-free),
+   * and "refused" when the ladder declined to extend the run — each refusal
+   * emits exactly one `ceiling_refused` event immediately before the paired
+   * `loop_end`, so consumers can tell "asked and was told no" (and why) apart
+   * from the plain turn cap the caller's `loop_end`/`max_turns` already
+   * reports.
    *
    * The cheap gates run BEFORE the model call: a ladder that spends a call to
    * discover it had no round, no successful tool call or no grant budget left
@@ -1383,25 +1385,34 @@ export class AgentLoop {
   private async *tryCeilingGrant(
     maxTurns: number,
     signal: AbortSignal | undefined,
+    turn: number,
   ): AsyncGenerator<AgentEvent, CeilingDecision, unknown> {
     const config = this.config.ceiling;
-    if (config?.enabled === false || this.ceilingRounds >= MAX_CEILING_ROUNDS) {
+    const round = this.ceilingRounds + 1;
+    if (config?.enabled === false) {
+      yield { type: "ceiling_refused", reason: "ladder_disabled", turn, round };
       return "refused";
     }
-    const round = this.ceilingRounds + 1;
+    if (this.ceilingRounds >= MAX_CEILING_ROUNDS) {
+      yield { type: "ceiling_refused", reason: "rounds_exhausted", turn, round };
+      return "refused";
+    }
     // Round 1 gates on the verdict alone: "at least one successful tool call
     // since the previous ceiling" has no previous ceiling to measure from, and
     // requiring it would make the ladder unreachable for a run that spent its
     // whole budget on a single long-running dispatch (§1.5).
     if (round >= 2 && this.ceilingSuccessfulToolCalls <= 0) {
+      yield { type: "ceiling_refused", reason: "no_successful_tool_calls", turn, round };
       return "refused";
     }
     const grant = ceilingGrant(round, maxTurns, this.ceilingGrantedTurns, config);
     if (grant <= 0) {
+      yield { type: "ceiling_refused", reason: "grant_budget_exhausted", turn, round };
       return "refused";
     }
     const windowMs = ceilingWindowMs(config, Date.now());
     if (windowMs === null) {
+      yield { type: "ceiling_refused", reason: "window_collapsed", turn, round };
       return "refused";
     }
 
@@ -1420,6 +1431,7 @@ export class AgentLoop {
       signal,
     });
     if (verdict === null) {
+      yield { type: "ceiling_refused", reason: "unreadable_verdict", turn, round };
       return "refused";
     }
     if (verdict.done) {
@@ -1433,6 +1445,7 @@ export class AgentLoop {
         successfulToolCalls: this.ceilingSuccessfulToolCalls,
       })
     ) {
+      yield { type: "ceiling_refused", reason: "verdict_rejected", turn, round };
       return "refused";
     }
 
