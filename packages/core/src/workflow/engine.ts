@@ -6,9 +6,12 @@
  * code (cancellation cascades into the existing child-loop SIGTERM/SIGKILL chain).
  *
  * Import direction (§2.10): workflow/ imports ONLY ports/types/util (+ the
- * personas data leaf for the fail-fast fallback, §3.3) and a TYPE-ONLY
+ * personas data leaf for the fail-fast fallback, §3.3), a TYPE-ONLY
  * AgentLoopConfig — it never imports the runner or AgentLoop, and loop/ knows
- * only the WorkflowPort type (the mirror of the SubagentPort arrow).
+ * only the WorkflowPort type (the mirror of the SubagentPort arrow) — and the
+ * shared session-tier request builder (subagents/agent-bridge.js's
+ * buildSessionSubagentRequest, TASK.192) so engine-profile steps compose the
+ * SAME SessionSubagentRequest the Agent tool does, byte-for-byte.
  *
  * DAG semantics (§3.4):
  *   - ready-set = steps whose deps are ALL completed; every ready step is
@@ -27,6 +30,7 @@
  */
 
 import type { AgentLoopConfig } from "../loop/agent-loop.js";
+import type { SessionSubagentPort } from "../ports/session-subagent.js";
 import type {
   SubagentOutcome,
   SubagentPort,
@@ -43,6 +47,7 @@ import type {
   WorkflowStepDefinition,
   WorkflowStepOutcome,
 } from "../ports/workflow.js";
+import { buildSessionSubagentRequest } from "../subagents/agent-bridge.js";
 import { listPersonaNames } from "../subagents/personas.js";
 import {
   WORKFLOW_OUTPUT_MAX_BYTES,
@@ -57,6 +62,14 @@ import { stepFailure } from "./step-failure.js";
 interface WorkflowRunnerOptions {
   /** Per-step wall-clock timeout, armed on the child's start-progress. */
   stepTimeoutMs?: number;
+  /**
+   * Session tier for engine-profile steps (TASK.192): when `subagents.
+   * engineProfile(step.agentType)` returns a profile, the step runs through
+   * THIS port (the same one the Agent tool uses) instead of the inline
+   * SubagentPort. Absent (CLI, child sessions, hosts without the desktop
+   * main process) = engine steps fail closed with a clear refusal.
+   */
+  sessionSubagents?: SessionSubagentPort;
 }
 
 /**
@@ -72,6 +85,7 @@ function createRunner(
   opts?: WorkflowRunnerOptions,
 ): WorkflowPort {
   const stepTimeoutMs = opts?.stepTimeoutMs ?? WORKFLOW_STEP_TIMEOUT_MS;
+  const sessionSubagents = opts?.sessionSubagents;
 
   // First definition wins on a duplicate name; discovery (3.4.3) already dedupes
   // project>user, so this only guards a hand-built list.
@@ -306,25 +320,72 @@ function createRunner(
             // resolved outcome so the reported status includes a timeout
             // override the subagent cannot know about.
             //
-            // `attention` and `stalled` are ignored too: both describe a
-            // SESSION-tier child, and a workflow step is inline (TASK.192 —
-            // an engine-profile step cannot start at all today), so neither
-            // can occur on this path. They get their own branches when a
-            // workflow step can reach the session tier, not before.
+            // `attention` and `stalled` are ignored too: session-tier steps
+            // (TASK.192) CAN now produce them, but both kinds remain
+            // report-only with no workflow-card mapping — they get their own
+            // branches when a card event is designed for them, not before.
           },
         };
 
         let sub: SubagentOutcome;
         try {
-          sub = await subagents.run(
-            {
+          // TASK.192: an engine-profile step (engine: claude/codex md-profile)
+          // routes through the session tier — the SAME SessionSubagentPort and
+          // buildSessionSubagentRequest composition the Agent tool uses —
+          // never the inline child loop. Plain steps keep the inline call
+          // below, byte-identical (including maxTurns).
+          const engineProfile = subagents.engineProfile?.(step.agentType) ?? null;
+          if (engineProfile !== null && sessionSubagents === undefined) {
+            // Host without a session tier (CLI, child sessions): refuse
+            // clearly rather than silently running the engine profile inline.
+            sub = {
+              status: "error",
+              finalText:
+                `Step "${step.id}" uses engine agent profile "${step.agentType}" ` +
+                `(engine "${engineProfile.engine}"), which runs as a child session; ` +
+                `this host does not provide a session tier, so the step cannot run.`,
+              truncated: false,
+              turns: 0,
+              toolCalls: 0,
+              durationMs: Date.now() - stepStartedAt,
+            };
+          } else if (engineProfile !== null) {
+            const spawnToolCallId = `wf-${step.id}-${globalThis.crypto.randomUUID()}`;
+            const request = buildSessionSubagentRequest({
               agentType: step.agentType,
               description: `workflow ${definition.name} step ${step.id}`,
               prompt: cappedPrompt.text,
-              maxTurns: step.maxTurns,
-            },
-            subOpts,
-          );
+              spawnToolCallId,
+              profile: engineProfile,
+            });
+            const sessionOutcome = await sessionSubagents!.run(request, subOpts);
+            // Round-trip check (F14, ports/session-subagent.ts): core minted
+            // the spawn identity, so the host must return exactly it.
+            if (sessionOutcome.spawnToolCallId !== spawnToolCallId) {
+              sub = {
+                status: "error",
+                finalText:
+                  `Agent: the session host returned a mismatched spawn identity ` +
+                  `(sent "${spawnToolCallId}", got "${sessionOutcome.spawnToolCallId}").`,
+                truncated: false,
+                turns: 0,
+                toolCalls: 0,
+                durationMs: Date.now() - stepStartedAt,
+              };
+            } else {
+              sub = sessionOutcome;
+            }
+          } else {
+            sub = await subagents.run(
+              {
+                agentType: step.agentType,
+                description: `workflow ${definition.name} step ${step.id}`,
+                prompt: cappedPrompt.text,
+                maxTurns: step.maxTurns,
+              },
+              subOpts,
+            );
+          }
         } catch (error) {
           // The port contract says run() never throws; stay defensive anyway.
           sub = {
@@ -627,6 +688,8 @@ export function createWorkflowRunnerForTest(
  * Wiring helper: attaches a WorkflowPort to `config` AFTER withSubagents (design
  * §2.10). Reads `config.subagents`; if absent, attaches NOTHING (the Workflow
  * tool stays fail-closed "unavailable"). Mutates and returns the same config.
+ * Also reads `config.sessionSubagents` (TASK.192): when present, engine-profile
+ * steps run through it as child sessions; when absent, they fail closed.
  * A child loop is created WITHOUT this helper, so it receives no port
  * (non-recursion lock).
  */
@@ -635,7 +698,13 @@ export function withWorkflows(
   definitions: readonly WorkflowDefinition[],
 ): AgentLoopConfig {
   if (config.subagents) {
-    config.workflows = createWorkflowRunner(config.subagents, definitions);
+    // createRunner (not the frozen public createWorkflowRunner) so the
+    // session-tier option rides along; the public two-arg signature stands.
+    config.workflows = createRunner(config.subagents, definitions, {
+      ...(config.sessionSubagents !== undefined
+        ? { sessionSubagents: config.sessionSubagents }
+        : {}),
+    });
   }
   return config;
 }

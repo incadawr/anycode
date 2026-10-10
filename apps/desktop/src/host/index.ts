@@ -2900,10 +2900,13 @@ async function boot(): Promise<void> {
     // withWorkflows runs AFTER withSubagents (order is load-bearing — it reads
     // `config.subagents`, which the call above just attached) and attaches a
     // WorkflowPort backed by the SAME SubagentPort, so every workflow step
-    // shares the one runner semaphore. Absent that port (should not happen
-    // here, since withSubagents always attaches one) it attaches nothing and
-    // the Workflow tool stays fail-closed "unavailable" — the same posture a
-    // child loop sees, since child configs never call either helper.
+    // shares the one runner semaphore. It ALSO reads `config.sessionSubagents`
+    // (TASK.192), already assigned further above, so an engine-profile step
+    // runs through the SAME session port the Agent tool uses. Absent that port
+    // (should not happen here, since withSubagents always attaches one) it
+    // attaches nothing and the Workflow tool stays fail-closed "unavailable" — the
+    // same posture a child loop sees, since child configs never call either
+    // helper.
     // env/memorySection (design slice-3.6-cut.md §2.4/§6) thread the same
     // session-static facts + AGENTS.md memory into every child's harness
     // prelude, so a subagent confabulates tools no more than the parent does.
@@ -2917,11 +2920,12 @@ async function boot(): Promise<void> {
     // `runEngineChild` (engine-children.ts) is NO LONGER wired here (TASK.102
     // CUT-S4 §0.3): an `engine:` md-profile persona now routes to the
     // session-child path (tools/agent.ts, S4a) instead of a one-shot Claude
-    // Code / Codex CLI run. `engine-children.ts` itself stays byte-untouched
-    // and importable (deprecated-live, owner-gated removal per spec §10) —
-    // only this ONE wiring line is gone, so an engine-profile Agent call from
-    // a WORKFLOW step (which cannot reach the session tier) now falls through
-    // to runner.ts's existing `runEngineChild === undefined` refusal branch.
+    // Code / Codex CLI run — and, as of TASK.192, a WORKFLOW step with an
+    // engine profile routes through that same session port via
+    // withWorkflows(config.sessionSubagents), not the old refusal.
+    // `engine-children.ts` itself stays byte-untouched and importable
+    // (deprecated-live, owner-gated removal per spec §10) — only this ONE
+    // wiring line is gone.
     // profiles is a THUNK, not a snapshot: `ext` is reassigned in place by
     // refreshExtensionProfiles below (mirrors the switchModel callback's
     // in-place `config` mutation), so the runner built here re-reads whatever

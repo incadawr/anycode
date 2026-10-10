@@ -551,7 +551,7 @@ export function createSubagentRunner(
             status: "error",
             finalText:
               `Agent: agent type "${persona.name}" runs on the "${persona.engine}" engine. Engine agents now run ` +
-              `as child sessions via the Agent tool; this caller (workflow step or non-desktop host) cannot spawn one.`,
+              `as child sessions via the Agent tool; this caller has no session tier and cannot spawn one.`,
             truncated: false,
             turns: 0,
             toolCalls: 0,

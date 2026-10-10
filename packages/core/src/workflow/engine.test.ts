@@ -34,11 +34,17 @@ import type { ModelStreamEvent } from "../types/events.js";
 import type { CorePorts, ExecutionPort, FileSystemPort, HttpPort } from "../ports/index.js";
 import type { HookRunner } from "../types/hooks.js";
 import type {
+  EngineProfileInfo,
   SubagentOutcome,
   SubagentPort,
   SubagentRequest,
   SubagentRunOptions,
 } from "../ports/subagent.js";
+import type {
+  SessionSubagentOutcome,
+  SessionSubagentPort,
+  SessionSubagentRequest,
+} from "../ports/session-subagent.js";
 import type {
   WorkflowDefinition,
   WorkflowProgress,
@@ -72,10 +78,15 @@ class FakeSubagentPort implements SubagentPort {
   constructor(
     private readonly agentTypes: string[],
     private readonly behavior: StepBehavior,
+    private readonly engineProfiles: Map<string, EngineProfileInfo> = new Map(),
   ) {}
 
   listAgentTypes(): string[] {
     return [...this.agentTypes];
+  }
+
+  engineProfile(agentType: string): EngineProfileInfo | null {
+    return this.engineProfiles.get(agentType) ?? null;
   }
 
   async run(req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> {
@@ -1477,4 +1488,316 @@ describe("step_end progress event carries failure + unlaunched (TASK.193 slice S
       expect(bEnd.failure?.kind).toBe("degenerate");
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.192: engine-profile steps route through the session tier.
+
+/** Typed fake SessionSubagentPort: records requests, runs injected behavior. */
+class FakeSessionSubagentPort implements SessionSubagentPort {
+  readonly requests: SessionSubagentRequest[] = [];
+
+  constructor(
+    private readonly behavior: (
+      req: SessionSubagentRequest,
+      opts: SubagentRunOptions,
+    ) => Promise<SessionSubagentOutcome>,
+  ) {}
+
+  async run(
+    req: SessionSubagentRequest,
+    opts: SubagentRunOptions,
+  ): Promise<SessionSubagentOutcome> {
+    this.requests.push(req);
+    return this.behavior(req, opts);
+  }
+}
+
+function sessionOutcome(
+  req: SessionSubagentRequest,
+  extra: Partial<SessionSubagentOutcome> = {},
+): SessionSubagentOutcome {
+  return {
+    status: "completed",
+    finalText: "ok",
+    truncated: false,
+    turns: 1,
+    toolCalls: 1,
+    durationMs: 1,
+    childSessionId: "child-1",
+    parentSessionId: "parent-1",
+    spawnToolCallId: req.spawnToolCallId,
+    ...extra,
+  };
+}
+
+describe("workflow engine session tier (engine-profile steps)", () => {
+  it("T1: a claude engine-profile step routes to the session port with the composed prompt, not inline", async () => {
+    const engineProfiles = new Map<string, EngineProfileInfo>([
+      ["reviewer", { engine: "claude", systemPrompt: "REVIEW RULES", model: "claude-x" }],
+    ]);
+    const inline = new FakeSubagentPort(
+      ["reviewer"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      engineProfiles,
+    );
+    const session = new FakeSessionSubagentPort(async (req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      return sessionOutcome(req, { finalText: "ok-review", turns: 3, toolCalls: 5 });
+    });
+
+    const wf = def("wf-session", [
+      { id: "r", agentType: "reviewer", promptTemplate: "${input}" },
+    ]);
+    const events: WorkflowProgress[] = [];
+    const outcome = await createWorkflowRunnerForTest(inline, [wf], {
+      sessionSubagents: session,
+    }).run({ name: "wf-session", input: "go" }, { onProgress: (p) => events.push(p) });
+
+    expect(inline.calls).toEqual([]);
+    expect(session.requests).toHaveLength(1);
+    const req = session.requests[0]!;
+    expect(req.prompt).toBe("REVIEW RULES\n\n---\n\ngo");
+    expect(req.engine).toBe("claude");
+    expect(req.model).toBe("claude-x");
+    expect(req.description).toBe("workflow wf-session step r");
+    expect(req.spawnToolCallId.startsWith("wf-r-")).toBe(true);
+
+    const step = outcomeOf(outcome.steps, "r");
+    expect(step.status).toBe("completed");
+    expect(step.finalText).toBe("ok-review");
+    expect(step.turns).toBe(3);
+    expect(step.toolCalls).toBe(5);
+    expect(outcome.status).toBe("completed");
+
+    expect(events.some((e) => e.kind === "step_running" && e.stepId === "r")).toBe(true);
+    const end = events.find((e) => e.kind === "step_end" && e.stepId === "r");
+    expect(end?.kind === "step_end" && end.status === "completed" && end.turns === 3).toBe(true);
+  });
+
+  it.each(["claude", "codex"] as const)(
+    "T2: a %s session error fails the workflow, carries the failure and skips dependents",
+    (engine) => {
+      return (async () => {
+        const engineProfiles = new Map<string, EngineProfileInfo>([
+          ["eng", { engine, systemPrompt: "SP" }],
+        ]);
+        const inline = new FakeSubagentPort(
+          ["eng"],
+          (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+          engineProfiles,
+        );
+        const session = new FakeSessionSubagentPort(async (req) =>
+          sessionOutcome(req, {
+            status: "error",
+            finalText: `${engine} CLI not installed`,
+            turns: 0,
+            toolCalls: 0,
+          }),
+        );
+
+        const wf = def("wf-sess-err", [
+          { id: "a", agentType: "eng", promptTemplate: "${input}" },
+          { id: "b", agentType: "eng", promptTemplate: "${steps.a}", dependsOn: ["a"] },
+        ]);
+        const events: WorkflowProgress[] = [];
+        const outcome = await createWorkflowRunnerForTest(inline, [wf], {
+          sessionSubagents: session,
+        }).run({ name: "wf-sess-err", input: "go" }, { onProgress: (p) => events.push(p) });
+
+        expect(outcome.status).toBe("failed");
+        const a = outcomeOf(outcome.steps, "a");
+        expect(a.status).toBe("error");
+        expect(a.failureKind).toBe("error");
+        expect(a.finalText).toContain(`${engine} CLI not installed`);
+        expect(outcomeOf(outcome.steps, "b").status).toBe("skipped");
+
+        const aEnd = events.find((e) => e.kind === "step_end" && e.stepId === "a");
+        expect(aEnd?.kind).toBe("step_end");
+        if (aEnd?.kind === "step_end") {
+          expect(aEnd.status).toBe("error");
+          expect(aEnd.failure?.text).toContain(`${engine} CLI not installed`);
+        }
+      })();
+    },
+  );
+
+  it("T3: no session port refuses an engine step clearly, with no inline invocation (production wiring)", async () => {
+    const engineProfiles = new Map<string, EngineProfileInfo>([
+      ["eng", { engine: "codex", systemPrompt: "SP" }],
+    ]);
+    const inline = new FakeSubagentPort(
+      ["eng"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      engineProfiles,
+    );
+
+    const wf = def("wf-refuse", [
+      { id: "a", agentType: "eng", promptTemplate: "${input}" },
+    ]);
+    // Real production wiring: withWorkflows without config.sessionSubagents.
+    const config = { subagents: inline } as unknown as AgentLoopConfig;
+    withWorkflows(config, [wf]);
+
+    const outcome = await config.workflows!.run({ name: "wf-refuse", input: "go" }, {});
+
+    expect(outcome.status).toBe("failed");
+    const a = outcomeOf(outcome.steps, "a");
+    expect(a.status).toBe("error");
+    expect(a.finalText).toContain("child session");
+    expect(a.finalText).toContain("session tier");
+    expect(a.turns).toBe(0);
+    expect(inline.calls).toEqual([]);
+  });
+
+  it("T4: mixed engine/plain steps route each to its own tier and both complete", async () => {
+    const engineProfiles = new Map<string, EngineProfileInfo>([
+      ["eng", { engine: "claude", systemPrompt: "SP" }],
+    ]);
+    const inline = new FakeSubagentPort(
+      ["eng", "plain"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      engineProfiles,
+    );
+    const session = new FakeSessionSubagentPort(async (req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      return sessionOutcome(req, { finalText: "session-out" });
+    });
+
+    const wf = def("wf-mixed", [
+      { id: "p", agentType: "plain", promptTemplate: "${input}" },
+      { id: "e", agentType: "eng", promptTemplate: "${input}" },
+    ]);
+    const outcome = await createWorkflowRunnerForTest(inline, [wf], {
+      sessionSubagents: session,
+    }).run({ name: "wf-mixed", input: "go" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(inline.calls).toEqual(["p"]);
+    expect(session.requests.map((r) => r.agentType)).toEqual(["eng"]);
+    expect(outcomeOf(outcome.steps, "p").finalText).toBe("inline:p");
+    expect(outcomeOf(outcome.steps, "e").finalText).toBe("session-out");
+  });
+
+  it("T5: a mismatched spawn identity fails closed with explanatory text", async () => {
+    const engineProfiles = new Map<string, EngineProfileInfo>([
+      ["eng", { engine: "claude", systemPrompt: "SP" }],
+    ]);
+    const inline = new FakeSubagentPort(
+      ["eng"],
+      (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+      engineProfiles,
+    );
+    const session = new FakeSessionSubagentPort(async (req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      return sessionOutcome(req, { spawnToolCallId: "not-what-we-sent" });
+    });
+
+    const wf = def("wf-mismatch", [
+      { id: "a", agentType: "eng", promptTemplate: "${input}" },
+    ]);
+    const outcome = await createWorkflowRunnerForTest(inline, [wf], {
+      sessionSubagents: session,
+    }).run({ name: "wf-mismatch", input: "go" }, {});
+
+    expect(outcome.status).toBe("failed");
+    const a = outcomeOf(outcome.steps, "a");
+    expect(a.status).toBe("error");
+    expect(a.finalText).toContain("mismatched spawn identity");
+    expect(a.turns).toBe(0);
+  });
+
+  it.each(["claude", "codex"] as const)(
+    "T6: production withWorkflows wiring with a session tier executes engine steps via config.workflows.run (%s)",
+    (engine) => {
+      return (async () => {
+        const engineProfiles = new Map<string, EngineProfileInfo>([
+          ["eng", { engine, systemPrompt: "SP" }],
+        ]);
+        const inline = new FakeSubagentPort(
+          ["eng"],
+          (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`),
+          engineProfiles,
+        );
+        const session = new FakeSessionSubagentPort(async (req, opts) => {
+          opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+          return sessionOutcome(req, { finalText: `${engine}-done` });
+        });
+
+        const wf = def("wf-prod", [
+          { id: "a", agentType: "eng", promptTemplate: "${input}" },
+        ]);
+        const config = { subagents: inline, sessionSubagents: session } as unknown as AgentLoopConfig;
+        withWorkflows(config, [wf]);
+
+        const events: WorkflowProgress[] = [];
+        const outcome = await config.workflows!.run(
+          { name: "wf-prod", input: "go" },
+          { onProgress: (p) => events.push(p) },
+        );
+
+        expect(inline.calls).toEqual([]);
+        expect(session.requests).toHaveLength(1);
+        expect(outcome.status).toBe("completed");
+        expect(outcome.output).toContain(`${engine}-done`);
+        const end = events.find((e) => e.kind === "end");
+        expect(end?.kind === "end" && end.status === "completed").toBe(true);
+      })();
+    },
+  );
+
+  it("T7: workflow cancellation reaches the session child's signal; the step is cancelled", async () => {
+    const engineProfiles = new Map<string, EngineProfileInfo>([
+      ["eng", { engine: "claude", systemPrompt: "SP" }],
+    ]);
+    const inline = new FakeSubagentPort(["eng"], (id, req, opts) => emitAndComplete(opts, req, id), engineProfiles);
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let childSawAbort = false;
+    const session = new FakeSessionSubagentPort(async (req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      markStarted();
+      await whenAborted(opts.signal);
+      childSawAbort = true;
+      return sessionOutcome(req, { status: "cancelled", finalText: "stopped" });
+    });
+    const wf = def("wf-cancel", [{ id: "a", agentType: "eng", promptTemplate: "${input}" }]);
+
+    const controller = new AbortController();
+    const runPromise = createWorkflowRunnerForTest(inline, [wf], { sessionSubagents: session }).run(
+      { name: "wf-cancel", input: "go" },
+      { signal: controller.signal },
+    );
+    await started;
+    controller.abort();
+    const outcome = await runPromise;
+
+    expect(childSawAbort).toBe(true);
+    expect(outcome.status).toBe("cancelled");
+    expect(outcomeOf(outcome.steps, "a").status).toBe("cancelled");
+  });
+
+  it("T8: the per-step timeout applies to a session-tier step", async () => {
+    const engineProfiles = new Map<string, EngineProfileInfo>([
+      ["eng", { engine: "codex", systemPrompt: "SP" }],
+    ]);
+    const inline = new FakeSubagentPort(["eng"], (id, req, opts) => emitAndComplete(opts, req, id), engineProfiles);
+    const session = new FakeSessionSubagentPort(async (req, opts) => {
+      opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
+      await whenAborted(opts.signal);
+      return sessionOutcome(req, { status: "cancelled", finalText: "" });
+    });
+    const wf = def("wf-timeout", [{ id: "a", agentType: "eng", promptTemplate: "${input}" }]);
+
+    const outcome = await createWorkflowRunnerForTest(inline, [wf], {
+      sessionSubagents: session,
+      stepTimeoutMs: 30,
+    }).run({ name: "wf-timeout", input: "go" }, {});
+
+    expect(outcomeOf(outcome.steps, "a").status).toBe("error");
+    expect(outcomeOf(outcome.steps, "a").finalText).toContain("timed out");
+    expect(outcome.status).toBe("failed");
+  }, 5_000);
 });
