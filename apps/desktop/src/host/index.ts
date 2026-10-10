@@ -166,7 +166,7 @@ import { assertChildModel, readAllowedChildModels } from "../shared/child-model.
  */
 
 import { randomUUID } from "node:crypto";
-import { homedir, release } from "node:os";
+import { homedir, release, tmpdir } from "node:os";
 import { realpath as fsRealpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { defaultChildReportDir, saveFullChildReport } from "./child-report-spill.js";
@@ -380,6 +380,7 @@ import { ENV_CODEX_BIN } from "../shared/engines.js";
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
 import { resumeClaudeEngine, startClaudeEngine } from "./engines/claude/claude-engine.js";
+import { prepareEngineMcpForward, missingForwardedMcpServerNames } from "./engines/mcp-forward-boot.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
 import { catalogFromProfiles } from "./engines/claude/bridge-catalog.js";
 import { ClaudeMcpBridge } from "./engines/claude/mcp-bridge.js";
@@ -881,6 +882,36 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     const rejected = assertCodexProfileHome(codexProfile);
     if (rejected !== null) throw new Error(`Codex profile home rejected: ${rejected}`);
   }
+  // TASK.182 / Taskana 4136: MCP forwarding. After profile resolution: load
+  // the specs ONCE (core reader; project → user → .mcp.json winners) and
+  // serialize the Codex thread config map. Identical for system, managed and
+  // linked profiles and for session children — no profile config.toml writes,
+  // no argv overrides, no MCP values in boot logs (names/counts only). The
+  // map rides thread/start / thread/resume over the existing JSON-RPC pipe.
+  const codexMcpForward = await prepareEngineMcpForward({
+    fs: new NodeFileSystemAdapter(),
+    workspace,
+    home: homedir(),
+    tmpDir: tmpdir(),
+    pid: process.pid,
+    engines: ["codex"],
+  });
+  if (codexMcpForward.codexNames.length > 0) {
+    console.log(`[host] codex mcp forward: ${codexMcpForward.codexNames.length} server(s): ${codexMcpForward.codexNames.join(", ")}`);
+  }
+  for (const notice of codexMcpForward.notices) {
+    console.warn(`[host] codex mcp forward: ${notice.type === "engine_notice" ? notice.message : ""}`);
+  }
+  const codexForwardOptions = {
+    ...((codexMcpForward.codexServers !== null || codexMcpForward.notices.length > 0)
+      ? {
+          mcpForward: {
+            ...(codexMcpForward.codexServers !== null ? { servers: codexMcpForward.codexServers } : {}),
+            ...(codexMcpForward.notices.length > 0 ? { notices: codexMcpForward.notices } : {}),
+          },
+        }
+      : {}),
+  };
   const bridgeRowId = args.sessionId ?? randomUUID();
   const agentCardLog = new SqliteCodexAgentCardLog(persistence, bridgeRowId);
   let codexAgentBridge: CodexDynamicToolBridge | undefined;
@@ -935,6 +966,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
           },
         }
       : {}),
+    ...codexForwardOptions,
   };
 
   // TASK.39: the draft (pre-session) model/preset choice arrives as argv from
@@ -1357,6 +1389,31 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     console.log("[host] claude mcp bridge: child boot, no bridge");
   }
 
+  // TASK.182 / Taskana 4136: MCP forwarding. After bridge/catalog/database
+  // preparation and immediately before the connect options: sweep dead-pid
+  // leftovers, then load the specs ONCE and materialize the private 0600
+  // --mcp-config document (only when nonempty). The connect interval below
+  // owns the failure contract: any failure after materialization cleans the
+  // file up and rethrows; on success the CLIENT owns the file until close —
+  // boot returns while the session stays alive, so NO unconditional finally
+  // cleanup. Only safe counts/names and controlled notices are ever logged.
+  const mcpForward = await prepareEngineMcpForward({
+    fs,
+    workspace,
+    home: homedir(),
+    tmpDir: tmpdir(),
+    pid: process.pid,
+    engines: ["claude"],
+  });
+  if (mcpForward.claudeNames.length > 0) {
+    console.log(`[host] claude mcp forward: ${mcpForward.claudeNames.length} server(s): ${mcpForward.claudeNames.join(", ")}`);
+  }
+  for (const notice of mcpForward.notices) {
+    console.warn(`[host] claude mcp forward: ${notice.type === "engine_notice" ? notice.message : ""}`);
+  }
+  const claudeBootNotices = mcpForward.notices;
+  const claudeMcpConfigPath = mcpForward.claudeConfigPath;
+
   const options = {
     bootstrap,
     broker,
@@ -1371,6 +1428,8 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // rationale (D-S4-4).
     binaryTrust: (path: string) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
     ...(processOwnership !== undefined ? { processOwnership } : {}),
+    ...(claudeMcpConfigPath !== null ? { mcpConfigPath: claudeMcpConfigPath } : {}),
+    ...(claudeBootNotices.length > 0 ? { bootNotices: claudeBootNotices } : {}),
     ...(mcpBridge !== undefined
       ? {
           mcpBridge,
@@ -1383,8 +1442,18 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
       : {}),
   };
 
-  const connected = await (args.resume
-    ? (async () => {
+  // TASK.182: the interval from materialization through boot completion. A
+  // failure in connect releases the file HERE and rethrows; after a
+  // successful connect the CLIENT owns the file (its bootstrap-adopted
+  // close() is idempotent and removes it), and boot()'s own outer catch
+  // disposes the engine bootstrap — and with it the client — on any LATER
+  // boot-step failure, so no failure path can strand the file. NO
+  // unconditional finally runs on success, because boot returns while the
+  // session remains alive.
+  let connected: Awaited<ReturnType<typeof startClaudeEngine>> & { sessionMeta: Awaited<ReturnType<typeof persistence.getRootSession>> };
+  try {
+    connected = await (args.resume
+      ? (async () => {
         if (args.sessionId === undefined || args.sessionId.length === 0) {
           throw new Error("Claude resume requires a session id");
         }
@@ -1425,6 +1494,13 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         });
         return { ...created, sessionMeta: null };
       })());
+  } catch (error) {
+    // TASK.182: the client (if any) closes itself through connect's own
+    // failure path or the bootstrap disposer; this belt cleans the file when
+    // no client was ever constructed. Idempotent with the client's cleanup.
+    mcpForward.cleanupFile();
+    throw error;
+  }
 
   const claudeEngine = connected.engine;
 
@@ -1478,12 +1554,19 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // carries the catalog `value` (`opus[1m]`) rather than the resolved id the
   // CLI reports (`claude-opus-4-8`); persisting the latter would fail
   // `catalog.has()` on the next resume and fall back to the default model.
-  claudeEngine.onFirstSystemInit(() => {
+  claudeEngine.onFirstSystemInit((init) => {
     const settled = claudeEngine.snapshot();
     // The `mode` TEXT column stores the Claude preset id verbatim, the same
     // no-migration arrangement codex uses (cut §2(k).4). Nothing reads this
     // column back as a core PermissionMode for a Claude session.
     rowWriter.materialize({ model: settled.model, mode: settled.activePresetId });
+    // TASK.182: reconcile the CLI's OWN reported mcp_servers against what we
+    // forwarded PLUS the in-band anycode bridge when one exists (a child
+    // boot never expects it). Warnings name missing SERVERS only; no values,
+    // no paths. Pure seam tested in mcp-forward-boot.test.ts.
+    for (const name of missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, mcpBridge !== undefined)) {
+      console.warn(`[host] claude mcp forward: server "${name}" did not appear in the session's MCP server list`);
+    }
   });
 
   if (connected.sessionMeta !== null) {
