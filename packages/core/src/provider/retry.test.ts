@@ -6,7 +6,7 @@
 import { APICallError } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_RETRY_AFTER_CAP_MS, DEFAULT_STREAM_STALL_TIMEOUT_MS } from "../types/config.js";
-import { DEFAULT_RETRY_POLICY, isRetryableStreamError, retryDelayMs, type RetryPolicy } from "./retry.js";
+import { DEFAULT_RETRY_POLICY, isRetryableStreamError, isTransientNetworkError, retryDelayMs, type RetryPolicy } from "./retry.js";
 
 function apiCallError(opts: {
   statusCode?: number;
@@ -79,6 +79,7 @@ describe("retryDelayMs", () => {
     baseDelayMs: 1_000,
     maxDelayMs: 30_000,
     retryAfterCapMs: DEFAULT_RETRY_AFTER_CAP_MS,
+    networkRetryBudgetMs: 0,
     stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
   };
 
@@ -143,6 +144,7 @@ describe("retryDelayMs", () => {
       maxDelayMs: 30_000,
       retryAfterCapMs: DEFAULT_RETRY_AFTER_CAP_MS,
       stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
+      networkRetryBudgetMs: 0,
     });
   });
 });
@@ -153,6 +155,7 @@ describe("retryDelayMs — retry-after cap (design slice-2.3-cut.md, tail 4)", (
     baseDelayMs: 1_000,
     maxDelayMs: 30_000,
     retryAfterCapMs: 60_000,
+    networkRetryBudgetMs: 0,
     stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
   };
 
@@ -164,5 +167,23 @@ describe("retryDelayMs — retry-after cap (design slice-2.3-cut.md, tail 4)", (
   it("leaves a retry-after header below the cap untouched", () => {
     const error = apiCallError({ statusCode: 429, responseHeaders: { "retry-after": "5" } });
     expect(retryDelayMs(0, error, policy)).toBe(5_000);
+  });
+});
+
+describe("isTransientNetworkError", () => {
+  it("accepts connect timeouts, errno codes and fetch failed with a cause", () => {
+    const connect = Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" });
+    expect(isTransientNetworkError(connect)).toBe(true);
+    expect(isTransientNetworkError(Object.assign(new Error("x"), { code: "ECONNRESET" }))).toBe(true);
+    expect(isTransientNetworkError(Object.assign(new Error("x"), { code: "UND_ERR_SOCKET" }))).toBe(true);
+    expect(isTransientNetworkError(new TypeError("fetch failed", { cause: connect }))).toBe(true);
+    expect(isTransientNetworkError(new Error("boom", { cause: connect }))).toBe(true);
+  });
+
+  it("rejects HTTP-status failures and unrelated errors", () => {
+    expect(isTransientNetworkError(Object.assign(new Error("rate"), { statusCode: 429 }))).toBe(false);
+    expect(isTransientNetworkError(Object.assign(new Error("auth"), { statusCode: 401 }))).toBe(false);
+    expect(isTransientNetworkError(new Error("boom"))).toBe(false);
+    expect(isTransientNetworkError("fetch failed")).toBe(false);
   });
 });
