@@ -348,6 +348,13 @@ export const SUBAGENT_OUTPUT_MAX_BYTES = 100_000;
  */
 export const SUBAGENT_MAX_OUTPUT_TOKENS = 32_768;
 
+/**
+ * Wall-clock budget (ms) a child session keeps retrying a transient network
+ * outage past the normal retry count, so a detached agent survives a short
+ * connectivity loss instead of losing its session. See RetryPolicy.
+ */
+export const CHILD_NETWORK_RETRY_BUDGET_MS = 180_000;
+
 /** Clamps a resolved child output ceiling to SUBAGENT_MAX_OUTPUT_TOKENS; undefined falls back to it. */
 export function clampSubagentMaxOutputTokens(resolved: number | undefined): number {
   return Math.min(resolved ?? SUBAGENT_MAX_OUTPUT_TOKENS, SUBAGENT_MAX_OUTPUT_TOKENS);
