@@ -71,7 +71,7 @@
 import { ipcMain } from "electron";
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
-import { isAbsolute, join, resolve as pathResolve, sep } from "node:path";
+import { isAbsolute, join, relative as pathRelative, resolve as pathResolve, sep } from "node:path";
 import { z } from "zod";
 import type { PreviewOpenSuccess, PreviewResult } from "../shared/preview.js";
 import { extensionOfPath, PREVIEWABLE_DOC_EXTENSIONS } from "../shared/previewable.js";
@@ -182,6 +182,8 @@ export interface ArtifactsFs {
   realpath(path: string): Promise<string>;
   /** O_NOFOLLOW read — the file being previewed must not be a symlink swapped in after the containment check. */
   readFileNoFollow(path: string): Promise<Buffer>;
+  /** TASK.149: bounded directory listing for the workspace tail-match index. */
+  readdir(path: string): Promise<string[]>;
 }
 
 export class NodeArtifactsFs implements ArtifactsFs {
@@ -201,6 +203,10 @@ export class NodeArtifactsFs implements ArtifactsFs {
     } finally {
       await handle.close();
     }
+  }
+  async readdir(path: string): Promise<string[]> {
+    const entries = await fsp.readdir(path, { withFileTypes: true });
+    return entries.map((e) => (e.isDirectory() ? e.name + "/" : e.name));
   }
 }
 
@@ -259,6 +265,8 @@ export interface ArtifactsIpcDeps {
   confirmOpen(realPath: string): Promise<boolean>;
   /** TASK.77-A: per-tab consent grants; main injects one process-lifetime singleton (main/index.ts). */
   consent: ArtifactConsentStore;
+  /** TASK.149: bounded, TTL-cached unique tail-match index over workspaces; one process-lifetime singleton. */
+  tailIndex: WorkspaceTailIndex;
   /**
    * Night-track wave-1: opens `realPath` (already containment-and-extension
    * checked by `handleArtifactPreview`) in the tab's PreviewHost window.
@@ -339,6 +347,144 @@ export function isUnderRoot(resolvedChild: string, resolvedRoot: string, platfor
 }
 
 /**
+ * TASK.149: unique tail-match index over a workspace. Models write paths
+ * relative to a subdirectory they were working in ("brief-next-stage.md"
+ * meaning `working-docs/brief-next-stage.md`); base 1 (workspace root) alone
+ * rejects those. This index maps a relative candidate to the UNIQUE file in
+ * the workspace whose tail (full path relative to its containing directory)
+ * matches. Ambiguity is silence: two matches ⇒ `null`, never a guess. The
+ * same silence applies when the walk was TRUNCATED by the entry budget: a
+ * duplicate of the candidate may sit in an entry never listed or a directory
+ * never visited, so a sole hit from a truncated listing is not provably
+ * unique and is refused (`null`) — the truncated listing itself is cached, so
+ * the refusal is consistent until the TTL expires.
+ *
+ * The walk is BOUNDED — depth 6, 20 000 entries, skips `node_modules`, `.git`,
+ * `dist`, `out`, and any dot-directory — and its result is cached per
+ * workspace with a short TTL. The previewable channel is documented "safe to
+ * call on every render" because it costs only `stat`s; an unbounded,
+ * uncached tree walk per render would quietly break that property.
+ *
+ * Containment never widens: the index only ever lists files under the
+ * workspace itself, and every hit still flows through the SAME
+ * realpath + `isUnderRoot` checks as a root-resolved candidate.
+ */
+export const TAIL_INDEX_MAX_DEPTH = 6;
+export const TAIL_INDEX_MAX_ENTRIES = 20_000;
+export const TAIL_INDEX_TTL_MS = 30_000;
+
+const TAIL_INDEX_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "out"]);
+
+export class WorkspaceTailIndex {
+  /** Map<normalizedDirPath, { dir; files }>; `files` are direct children (dirs keep their trailing "/"). */
+  private readonly cache = new Map<
+    string,
+    { builtAt: number; truncated: boolean; listing: Map<string, { dir: string; files: string[] }> }
+  >();
+  /** One walk per workspace at a time: every path span of a message asks at once on render. */
+  private readonly building = new Map<string, Promise<void>>();
+
+  /**
+   * Returns the unique in-workspace file whose tail matches `relPath`, or
+   * `null` (missing, ambiguous, or a listing TRUNCATED by the entry budget —
+   * uniqueness is unprovable there). Candidate tails are compared with
+   * `normalizeForCompare`'s case/separator rules so darwin/win32 behave like
+   * the containment check itself.
+   */
+  async findUnique(fs: ArtifactsFs, workspace: string, relPath: string, now = Date.now()): Promise<string | null> {
+    const key = normalizeForCompare(workspace, process.platform);
+    let cached = this.cache.get(key);
+    if (cached === undefined || now - cached.builtAt >= TAIL_INDEX_TTL_MS) {
+      let build = this.building.get(key);
+      if (build === undefined) {
+        build = this.build(fs, workspace, key, now).finally(() => this.building.delete(key));
+        this.building.set(key, build);
+      }
+      await build;
+      cached = this.cache.get(key);
+      if (cached === undefined) return null;
+    }
+    return this.match(cached, workspace, relPath);
+  }
+
+  private async build(fs: ArtifactsFs, workspace: string, key: string, now: number): Promise<void> {
+    {
+      const listing = new Map<string, { dir: string; files: string[] }>();
+      let truncated = false;
+      const budget = { entries: TAIL_INDEX_MAX_ENTRIES };
+      const walk = async (dir: string, depth: number): Promise<void> => {
+        if (depth > TAIL_INDEX_MAX_DEPTH) return;
+        if (budget.entries <= 0) {
+          truncated = true; // queued but never visited — uniqueness unprovable
+          return;
+        }
+        let names: string[];
+        try {
+          names = await fs.readdir(dir);
+        } catch {
+          return; // unreadable directory — silently contributes nothing
+        }
+        const files: string[] = [];
+        const subdirs: string[] = [];
+        for (const name of names) {
+          if (budget.entries <= 0) {
+            truncated = true; // entries beyond the cap were never examined
+            break;
+          }
+          budget.entries--;
+          if (name.endsWith("/")) {
+            const base = name.slice(0, -1);
+            if (base.startsWith(".") || TAIL_INDEX_SKIP_DIRS.has(base)) continue;
+            subdirs.push(base);
+          } else {
+            files.push(name);
+          }
+        }
+        listing.set(normalizeForCompare(dir, process.platform), { dir, files });
+        for (const sub of subdirs) await walk(join(dir, sub), depth + 1);
+      };
+      await walk(workspace, 0);
+      this.cache.set(key, { builtAt: now, truncated, listing });
+    }
+  }
+
+  private match(
+    cached: { truncated: boolean; listing: Map<string, { dir: string; files: string[] }> },
+    workspace: string,
+    relPath: string,
+  ): string | null {
+    const wantedParts = relPath.split(/[\\/]+/).filter((p) => p.length > 0 && p !== ".");
+    const hits: string[] = [];
+    for (const { dir, files } of cached.listing.values()) {
+      // Tail match: the candidate's component sequence equals the LAST same-
+      // number of components of the file's workspace-relative path (so
+      // `reviews/stage2.md` matches `working-docs/reviews/stage2.md`, and a
+      // bare `plan.md` matches any depth). Longer files are proper tails;
+      // an exact full match never reaches here for real files (base 1
+      // already resolved it), so no extra guard is needed.
+      const dirRel = pathRelative(workspace, dir);
+      const dirParts = dirRel === "" || dirRel === "." ? [] : dirRel.split(sep);
+      for (const file of files) {
+        const full = [...dirParts, file];
+        if (full.length < wantedParts.length) continue;
+        const tail = full.slice(full.length - wantedParts.length);
+        if (normalizeForCompare(tail.join("/"), process.platform) === normalizeForCompare(wantedParts.join("/"), process.platform)) {
+          hits.push(join(dir, file));
+        }
+      }
+    }
+    if (cached.truncated) return null; // truncated listing ⇒ uniqueness unprovable
+    if (hits.length !== 1) return null;
+    return hits[0] ?? null;
+  }
+
+  /** Drops every cached listing (main may wire this into the tab-close path). */
+  clear(): void {
+    this.cache.clear();
+  }
+}
+
+/**
  * Resolves the caller-supplied path against the allowed roots: absolutizes
  * (relative paths resolve against the tab's workspace — the form a bare
  * `out/icon.png` in a reply arrives in), realpaths the file itself AND every
@@ -375,7 +521,25 @@ export async function resolveArtifactPath(
   try {
     realPath = await deps.fs.realpath(candidate);
   } catch {
-    return { failure: "not_found" };
+    // TASK.149 base 2: a workspace-root miss on a RELATIVE candidate may be
+    // a path written relative to some subdirectory. Only a UNIQUE tail match
+    // inside the workspace is tried, and the hit re-enters the SAME
+    // realpath+containment flow below — containment roots never widen. An
+    // ambiguous match (two files with the same tail) stays `not_found`.
+    if (!isAbsolute(rawPath) && !rawPath.startsWith("~")) {
+      const tailHit = await deps.tailIndex.findUnique(deps.fs, workspace, rawPath);
+      if (tailHit !== null) {
+        try {
+          realPath = await deps.fs.realpath(tailHit);
+        } catch {
+          return { failure: "not_found" };
+        }
+      } else {
+        return { failure: "not_found" };
+      }
+    } else {
+      return { failure: "not_found" };
+    }
   }
   for (const root of allowedArtifactRoots(workspace, deps.home(), deps.tmpdir())) {
     let realRoot: string;
