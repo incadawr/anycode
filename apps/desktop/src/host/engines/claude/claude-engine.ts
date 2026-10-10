@@ -748,6 +748,22 @@ export class ClaudeEngine implements SessionEngine {
           continue;
         }
         if (raced.kind === "settle-timeout") {
+          // TASK.156: a Stop that cannot settle in time is cancellation.
+          // Close the unsettled transport so a late result cannot end a
+          // subsequent turn; the terminal latch requires a new session.
+          if (abortObserved) {
+            this.terminalError = new Error(
+              `Claude did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms; the session was closed. Start a new session to continue.`,
+            );
+            void this.client.close().catch(() => {});
+            yield {
+              type: "engine_notice",
+              level: "info",
+              message: "Stopped; the engine was still finishing a running command, so this session was closed. Start a new session to continue.",
+            };
+            for (const event of translator.finishTerminal("cancelled")) yield event;
+            return;
+          }
           throw new Error(`Claude did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms`);
         }
         if (raced.value.done) {

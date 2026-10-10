@@ -18,7 +18,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@anycode/core";
-import { CLAUDE_ENGINE_CAPABILITIES, CLAUDE_PRESET_IDS, ClaudeEngine, type ClaudeTransport } from "./claude-engine.js";
+import {
+  CLAUDE_ENGINE_CAPABILITIES,
+  CLAUDE_PRESET_IDS,
+  ClaudeEngine,
+  type ClaudeEngineTimeouts,
+  type ClaudeTransport,
+} from "./claude-engine.js";
 import { ClaudeModelCatalog } from "./models.js";
 import { findClaudePreset } from "./presets.js";
 import type { ClaudeStreamMessage } from "./protocol.js";
@@ -168,7 +174,7 @@ class FakeTransport implements ClaudeTransport {
  */
 function engineWith(
   transport: ClaudeTransport,
-  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog } = {},
+  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts> } = {},
 ): ClaudeEngine {
   const catalog = overrides.catalog ?? liveCatalog();
   return new ClaudeEngine(transport, "session-ref-1", undefined, {
@@ -177,7 +183,7 @@ function engineWith(
     preset: findClaudePreset(overrides.presetId ?? "ask")!,
     effortsByModel: new Map(),
     notices: [],
-  });
+  }, overrides.timeouts);
 }
 
 async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
@@ -545,6 +551,68 @@ describe("ClaudeEngine — cancellation and disposal", () => {
 
     expect(transport.interrupts).toBe(1);
     expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "cancelled", turns: 1 });
+  });
+
+  it("TASK.156: a Stop that cannot settle in time closes the session and terminalizes as cancelled with a restart-required posture", async () => {
+    const transport = new FakeTransport({
+      frames: [
+        {
+          type: "assistant",
+          message: { id: "m-bash", model: "x", content: [{ type: "tool_use", id: "toolu_sleep", name: "Bash", input: { command: "sleep 60" } }] },
+        } as unknown as ClaudeStreamMessage,
+      ],
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    const engine = engineWith(transport, { timeouts: { postInterruptSettleMs: 50 } });
+    const controller = new AbortController();
+
+    const events: AgentEvent[] = [];
+    const turn = (async () => {
+      for await (const event of engine.runTurn("long job", { signal: controller.signal })) {
+        events.push(event);
+        if (event.type === "tool_call") controller.abort();
+      }
+    })();
+    await turn;
+
+    expect(events.some((event) => event.type === "tool_call")).toBe(true);
+    expect(transport.interrupts).toBe(1);
+    expect(transport.closed).toBe(1);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const notice = events.find((event) => event.type === "engine_notice") as
+      | { level: string; message: string }
+      | undefined;
+    expect(notice).toBeDefined();
+    expect(notice!.level).toBe("info");
+    expect(notice!.message).toContain("running command");
+    const loopEnds = events.filter((event) => event.type === "loop_end");
+    expect(loopEnds).toHaveLength(1);
+    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "cancelled", turns: 1 });
+    expect(events[events.length - 2]).toMatchObject({ type: "turn_end" });
+    expect(events[events.length - 1]).toEqual({ type: "loop_end", reason: "cancelled", turns: 1 });
+
+    // The terminal latch: the next turn never reaches the dead transport.
+    const next = await collect(engine.runTurn("again", { signal: new AbortController().signal }));
+    expect(types(next)).toEqual(["error", "turn_end", "loop_end"]);
+    const nextError = next[0] as { type: "error"; error: Error };
+    expect(nextError.error.message).toContain("session was closed");
+    expect(nextError.error.message).toContain("Start a new session");
+    expect(transport.sent).toEqual(["long job"]);
+  });
+
+  it("TASK.156: a transport that dies without an abort is still an error turn", async () => {
+    const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const controller = new AbortController();
+    const events: AgentEvent[] = [];
+    const turn = (async () => {
+      for await (const event of engineWith(transport).runTurn("hi", { signal: controller.signal })) {
+        events.push(event);
+        if (event.type === "turn_start") queueMicrotask(() => transport.close());
+      }
+    })();
+    await turn;
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "error", turns: 1 });
   });
 
   it("dispose interrupts before closing the transport", async () => {
