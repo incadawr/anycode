@@ -73,7 +73,9 @@ describe("CodexApprovalBridge — decisions", () => {
       toolName: "CodexExec",
       input: { command: "git status", cwd: "/workspace" },
       mode: "build",
-      metadata: { riskLevel: "high", sideEffectScope: "process" },
+      // TASK.184: `git status` classifies read-only with no shell expression,
+      // so the first decision test's default command now presents as low risk.
+      metadata: { readOnly: true, riskLevel: "low", sideEffectScope: "process" },
     });
     broker.handleResponse(ask(emitted).requestId, "allow");
     await flush();
@@ -242,5 +244,76 @@ describe("CodexApprovalBridge — tolerant decoding (TASK.38 DoD)", () => {
     await flush();
     expect(ask(emitted).input).not.toHaveProperty("kind");
     expect(ask(emitted).input).not.toHaveProperty("reason");
+  });
+});
+
+/**
+ * TASK.184: metadata is derived from the shared Bash classifier, fail-closed.
+ * Read-only commands with NO shell expression present as readOnly/low; every
+ * other shape — unknown class, any shell expression (even a harmless compound),
+ * a stdin write, or a missing command — keeps the high default. Classification
+ * only changes what the modal SAYS; the decision still goes through the broker.
+ */
+describe("CodexApprovalBridge — classifier-derived metadata (TASK.184)", () => {
+  it.each([
+    ["ls", { readOnly: true, riskLevel: "low" }],
+    ["cat src/main.ts", { readOnly: true, riskLevel: "low" }],
+    ["git status", { readOnly: true, riskLevel: "low" }],
+  ])("presents %s as read-only/low", async (cmd, expected) => {
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: cmd }), responder());
+    await flush();
+    expect(ask(emitted)).toMatchObject({ toolName: "CodexExec", metadata: expected });
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await flush();
+  });
+
+  it.each([
+    ["rm -rf x"],
+    ["npm install"],
+    ["ls; rm -rf x"],
+    ["git status && npm install"],
+    ["cat a.txt | wc -l"],
+    ["cat $(x)"],
+    ["echo 'unmatched"],
+    // A HARMLESS compound still stays high: the compound-command fail-closed
+    // gate keys on shellExpression, not on whether each segment is safe.
+    ["ls; cat a.txt"],
+  ])("keeps the high fail-closed default for %s", async (cmd) => {
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: cmd }), responder());
+    await flush();
+    expect(ask(emitted)).toMatchObject({ toolName: "CodexExec", metadata: { readOnly: false, riskLevel: "high" } });
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await flush();
+  });
+
+  it("keeps the high default when no command is present (no index fallback to guess from)", async () => {
+    const { bridge, broker, emitted } = rig(undefined, { ...ACTIVE, items: new TurnItemIndex() });
+    bridge.handle(command({ command: undefined }), responder());
+    await flush();
+    const presented = ask(emitted);
+    expect(presented.toolName).toBe("CodexExec");
+    expect(presented.metadata).toMatchObject({ readOnly: false, riskLevel: "high" });
+    broker.handleResponse(presented.requestId, "deny");
+    await flush();
+  });
+
+  it("keeps the high default for a stdin write even when the command is read-only", async () => {
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: "ls", kind: "writeStdin" }), responder());
+    await flush();
+    expect(ask(emitted)).toMatchObject({ metadata: { readOnly: false, riskLevel: "high" } });
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await flush();
+  });
+
+  it("pins the metadata tool name so rule translation can key on it", async () => {
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: "ls" }), responder());
+    await flush();
+    expect(ask(emitted).metadata.name).toBe("CodexExec");
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await flush();
   });
 });
