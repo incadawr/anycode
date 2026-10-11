@@ -31,8 +31,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - A model the catalog does not know now assumes an 8,192-token context window
-  (it previously inherited the larger default); set the real value in the
-  connection drawer. A known model still uses its catalog window.
+  (it previously inherited a 200,000-token default); set the real value in the
+  connection drawer. A known model still uses its catalog window. While the
+  window is assumed, the context meter shows "≈" and its popover says so.
 - Agent profile `effort` aliases and `xhigh` reach Codex and Claude children and
   core subagents.
 - The worktree janitor looks at a bounded window of recent sessions (200), while
