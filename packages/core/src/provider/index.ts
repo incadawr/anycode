@@ -46,12 +46,13 @@ export {
 export type { ModelBoundCoreEnvConfig } from "./env.js";
 export {
   resolveContextWindow,
+  resolveContextWindowInfo,
   resolveEffortLevels,
   resolveImageInput,
   resolveMaxOutputTokens,
   resolveReasoningEffort,
   UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
 } from "./capabilities.js";
-export type { ImageInputOverride } from "./capabilities.js";
+export type { ContextWindowInfo, ImageInputOverride } from "./capabilities.js";
 export { buildChildModelSettingsResolver } from "./child-model-settings.js";
 export type { ChildModelSettings } from "./child-model-settings.js";

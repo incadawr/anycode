@@ -332,6 +332,8 @@ export interface HarnessOptions {
    * to `imageInputEnabled` alone).
    */
   imageFallbackAvailable?: boolean | (() => boolean);
+  /** Taskana 4127: `SessionOptions.contextWindowAssumed` seam; omitted -> absent (no hint on the wire). */
+  contextWindowAssumed?: boolean | (() => boolean);
   /**
    * TASK.198 срез C: the host-owned commit callback a test can inspect
    * (e.g. `vi.fn()`) to assert what Session's deferred-apply mechanics
@@ -655,6 +657,14 @@ export function createHarness(options: HarnessOptions): Harness {
             typeof options.imageFallbackAvailable === "function"
               ? options.imageFallbackAvailable
               : () => options.imageFallbackAvailable === true,
+        }
+      : {}),
+    ...(options.contextWindowAssumed !== undefined
+      ? {
+          contextWindowAssumed:
+            typeof options.contextWindowAssumed === "function"
+              ? options.contextWindowAssumed
+              : () => options.contextWindowAssumed === true,
         }
       : {}),
     ...(options.applyRecognizerConfig !== undefined ? { applyRecognizerConfig: options.applyRecognizerConfig } : {}),

@@ -738,6 +738,13 @@ export interface SessionOptions {
    */
   imageFallbackAvailable?: () => boolean;
   /**
+   * Taskana 4127: true while the active model's context window is the assumed
+   * unknown-model fallback (not catalog, not an explicit override). Re-read per
+   * emit (host_ready / model_changed). Absent (codex/claude, legacy tests) ->
+   * the wire field is omitted and the UI shows no hint.
+   */
+  contextWindowAssumed?: () => boolean;
+  /**
    * TASK.198 срез C (plan §1.3): host-owned commit for a live recognizer-
    * config push (main's RecognizerConfigChanged, TASK.198 E1). Session's own
    * `applyRecognizerConfig` public method decides WHEN to call this (now, if
@@ -890,6 +897,7 @@ export class Session {
   private readonly imageInputEnabled: (() => boolean) | undefined;
   /** TASK.198 срез C: see SessionOptions.imageFallbackAvailable's own doc. */
   private readonly imageFallbackAvailable: (() => boolean) | undefined;
+  private readonly contextWindowAssumed: (() => boolean) | undefined;
   /** TASK.198 срез C: see SessionOptions.applyRecognizerConfig's own doc. */
   private readonly applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
   /**
@@ -1198,6 +1206,7 @@ export class Session {
     this.checkpoints = options.checkpoints;
     this.imageInputEnabled = options.imageInputEnabled;
     this.imageFallbackAvailable = options.imageFallbackAvailable;
+    this.contextWindowAssumed = options.contextWindowAssumed;
     this.applyRecognizerConfigImpl = options.applyRecognizerConfig;
     this.refineTitle = options.refineTitle;
     this.reasoningSupported = options.reasoningSupported ?? true;
@@ -1584,6 +1593,7 @@ export class Session {
           // optional discipline as imageInput above — absent seam (codex/
           // claude, legacy tests) -> field absent, no fallback-aware gating.
           ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
+          ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
           ...(presentation !== undefined ? { engine: presentation } : {}),
           // Design TASK.40 §2(f)/§3.2: shell is emitted ONLY alongside a
           // present `engine` (never for core), so the core wire stays
@@ -1838,6 +1848,7 @@ export class Session {
           ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
           // TASK.198 срез C: same additive-optional discipline as imageInput above.
           ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
+          ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
         });
         break;
       }

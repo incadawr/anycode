@@ -500,6 +500,8 @@ export type HostToUiMessage =
        * seam wired) means the renderer applies no fallback-aware gating.
        */
       imageFallback?: boolean;
+      /** Taskana 4127: the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
+      contextWindowAssumed?: boolean;
       /** Present only for a non-core engine; absent retains legacy core wire exactly. */
       engine?: EnginePresentation;
       /** Present only alongside `engine` (never for core, cut §3.2/§2(f)); absent = every shell feature enabled. */
@@ -709,6 +711,8 @@ export type HostToUiMessage =
       imageInput?: boolean;
       /** TASK.198 срез C: the fallback verdict re-read for the NEW model, same precedent as `imageInput` above. */
       imageFallback?: boolean;
+      /** Taskana 4127: the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
+      contextWindowAssumed?: boolean;
     }
   | { type: "mode_change_rejected"; reason: string }
   // Codex-fixes TASK.39 (cut §3.3): host acknowledges a `set_engine_preset` or a

@@ -439,6 +439,14 @@ export function ctxPopoverHeadline(usage: ContextUsage | null, percent: number |
   return `${formatCtxTokenCount(usage.estimatedTokens)}/${formatCtxTokenCount(usage.budgetTokens)} (${percent}%)`;
 }
 
+/** Taskana 4127: shown when the active model's context window is the assumed 8K fallback. */
+export const CTX_WINDOW_ASSUMED_HINT = "Context window unknown \u2014 assumed 8K. Set it in the connection settings.";
+
+/** Ctx meter label: a leading \u2248 marks the percent as relative to an assumed window. Exported for unit testing. */
+export function ctxMeterLabel(roundedPercent: number, assumed: boolean): string {
+  return `${assumed ? "\u2248" : ""}${roundedPercent}% ctx`;
+}
+
 /** One rendered category row: label + its share of `totalEstimatedTokens`, as a raw (unrounded) percent. */
 export interface CtxPopoverRow {
   label: string;
@@ -686,6 +694,7 @@ function CtxPopover({
   percent,
   tint,
   supportsContextBreakdown,
+  contextWindowAssumed,
 }: {
   contextUsage: ContextUsage | null;
   contextBreakdown: WireContextBreakdown | null;
@@ -695,6 +704,8 @@ function CtxPopover({
   tint: string;
   /** codex-profiles cut §5.2: Codex has no per-category breakdown — the popover shows an honest message instead of a skeleton (see `ctxPopoverBodyState`'s "unsupported" branch). */
   supportsContextBreakdown: boolean;
+  /** Taskana 4127: the window is the assumed unknown-model fallback — show the hint. */
+  contextWindowAssumed: boolean;
 }) {
   const sendToHost = useTabSend();
   const [open, setOpen] = useState(false);
@@ -835,7 +846,8 @@ function CtxPopover({
       <button
         ref={triggerRef}
         type="button"
-        className={`composer-ctx-meter${tint}`}
+        className={`composer-ctx-meter${tint}${contextWindowAssumed ? " composer-ctx-meter-assumed" : ""}`}
+        title={contextWindowAssumed ? CTX_WINDOW_ASSUMED_HINT : undefined}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label="Context window usage"
@@ -843,7 +855,7 @@ function CtxPopover({
         onFocus={handleFocus}
       >
         <CtxRing percent={percent} />
-        {roundedPercent}% ctx
+        {ctxMeterLabel(roundedPercent, contextWindowAssumed)}
       </button>
 
       {open && (
@@ -857,6 +869,7 @@ function CtxPopover({
             <span className="ctx-popover-title">Context window</span>
             {headline !== null && <span className="ctx-popover-headline">{headline}</span>}
           </div>
+          {contextWindowAssumed && <div className="ctx-popover-assumed">{CTX_WINDOW_ASSUMED_HINT}</div>}
           <div className="ctx-popover-bar">
             <div className="ctx-popover-bar-fill" style={{ width: `${fillPercent}%` }} />
           </div>
@@ -978,6 +991,7 @@ export function Composer() {
   const connection = useTabStore((state) => state.connection);
   const contextUsage = useTabStore((state) => state.contextUsage);
   const contextBreakdown = useTabStore((state) => state.contextBreakdown);
+  const contextWindowAssumed = useTabStore((state) => state.contextWindowAssumed);
   const sessionTokens = useTabStore((state) => state.sessionTokens);
   const quota = useTabStore((state) => state.quota);
   const engine = useTabStore((state) => state.engine);
@@ -1613,6 +1627,7 @@ export function Composer() {
               percent={ctxPercent}
               tint={ctxTint}
               supportsContextBreakdown={supportsContextBreakdown}
+              contextWindowAssumed={contextWindowAssumed === true}
             />
           )}
           {running ? (
