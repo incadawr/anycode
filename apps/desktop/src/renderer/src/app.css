@@ -4036,6 +4036,18 @@ body {
   color: var(--danger);
 }
 
+/* Taskana 4127: the window is an assumed 8K fallback — dotted underline marks
+   the percent as approximate without competing with the warning/danger tint. */
+.composer-ctx-meter-assumed {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.ctx-popover-assumed {
+  font-size: var(--fs-xs);
+  color: var(--warning);
+}
+
 /* ── slash-command menu (design slice-P7.23-cut.md §1/§4.1/§4.4, P7.23/F24
    W2). Floats ABOVE the composer, same width, small gap — `.composer`'s own
    `position:relative` (added above) is this popover's containing block. */

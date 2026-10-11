@@ -238,7 +238,7 @@ import {
   loadWebSearchConfig,
   mapChildRunStatusToNotification,
   matchCatalogEntryByBaseUrl,
-  resolveContextWindow,
+  resolveContextWindowInfo,
   resolveEffortLevels,
   resolveImageInput,
   resolveIncludeUsage,
@@ -2289,7 +2289,8 @@ async function boot(): Promise<void> {
 
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
-    const bootContextWindow = resolveContextWindow(envConfig.model, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+    const bootContextInfo = resolveContextWindowInfo(envConfig.model, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+    const bootContextWindow: number | undefined = bootContextInfo.tokens;
     // Taskana 4150: a detached child is a subagent too; the 100 KB finalText cap
     // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
     const clampChildOutput = (resolved: number | undefined): number | undefined =>
@@ -2562,6 +2563,9 @@ async function boot(): Promise<void> {
     // === bootContextWindow ?? DEFAULT, byte-identical to the pre-P7.15 inline
     // repo-map budget above.
     let liveContextWindow = bootContextWindow ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+    // Taskana 4127: true while the live window is the assumed unknown-model
+    // fallback (no catalog entry, no explicit override) — surfaced to the UI.
+    let liveContextWindowAssumed = bootContextInfo.source === "assumed";
 
     // Repo-map render closure (design slice-P7.15-cut.md §2.1, mirror of
     // cli/main.ts:915-931): re-renders the repo-map section under the CURRENT
@@ -3125,8 +3129,9 @@ async function boot(): Promise<void> {
         // model binding is absent or names THIS id (TASK.142) — a pair saved for
         // model A never leaks its window onto B, and an unknown id re-resolves
         // the assumed fallback rather than a stale previous model's window.
-        const contextWindow =
-          resolveContextWindow(id, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+        const contextInfo = resolveContextWindowInfo(id, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+        const contextWindow = contextInfo.tokens;
+        liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
           id,
           catalogEntry,
@@ -3417,6 +3422,7 @@ async function boot(): Promise<void> {
         flushTelemetry: () => telemetry?.port.flush() ?? Promise.resolve(),
       },
       imageInputEnabled: media.imageInputEnabled,
+      contextWindowAssumed: () => liveContextWindowAssumed,
       // TASK.198 срез C: core-only wiring (codex/claude Sessions never pass
       // these two — "codex/claude НЕ задеты (замыкание не установлено)").
       imageFallbackAvailable: media.recognizerConfigured,

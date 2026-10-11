@@ -43,6 +43,16 @@ export function resolveImageInput(
 export const UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 8_192;
 
 /**
+ * Where a resolved context window came from (Taskana 4127). `assumed` is the
+ * conservative unknown-model fallback — the UI says so instead of letting a
+ * large unknown model silently behave as 8K.
+ */
+export interface ContextWindowInfo {
+  tokens: number;
+  source: "override" | "catalog" | "assumed";
+}
+
+/**
  * Context-window resolution (Phase 6 slice 6.4, mirror of resolveImageInput):
  * an explicit override (env ANYCODE_CONTEXT_WINDOW) may carry a model binding
  * (`ANYCODE_CONTEXT_WINDOW_MODEL`); it applies only when the binding is absent
@@ -51,20 +61,30 @@ export const UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 8_192;
  * `min(contextWindow, usableContextWindow ?? contextWindow)`; otherwise the
  * explicit `UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS` assumed fallback.
  */
+export function resolveContextWindowInfo(
+  modelId: string,
+  entry: CatalogProviderEntry | undefined,
+  override: number | undefined,
+  overrideModel?: string,
+): ContextWindowInfo {
+  if (override !== undefined && (overrideModel === undefined || overrideModel === modelId)) {
+    return { tokens: override, source: "override" };
+  }
+  const model = entry?.models.find((candidate) => candidate.id === modelId);
+  if (model === undefined) {
+    return { tokens: UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS, source: "assumed" };
+  }
+  return { tokens: Math.min(model.contextWindow, model.usableContextWindow ?? model.contextWindow), source: "catalog" };
+}
+
+/** Thin wrapper over {@link resolveContextWindowInfo} for callers that need only the token count. */
 export function resolveContextWindow(
   modelId: string,
   entry: CatalogProviderEntry | undefined,
   override: number | undefined,
   overrideModel?: string,
 ): number {
-  if (override !== undefined && (overrideModel === undefined || overrideModel === modelId)) {
-    return override;
-  }
-  const model = entry?.models.find((candidate) => candidate.id === modelId);
-  if (model === undefined) {
-    return UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS;
-  }
-  return Math.min(model.contextWindow, model.usableContextWindow ?? model.contextWindow);
+  return resolveContextWindowInfo(modelId, entry, override, overrideModel).tokens;
 }
 
 /**

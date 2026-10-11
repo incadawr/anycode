@@ -8,6 +8,7 @@ import type { CatalogProviderEntry } from "./catalog.js";
 import { findCatalogEntry } from "./catalog-data.js";
 import {
   resolveContextWindow,
+  resolveContextWindowInfo,
   resolveEffortLevels,
   resolveImageInput,
   resolveMaxOutputTokens,
@@ -171,6 +172,22 @@ const Z_AI_ENTRY: CatalogProviderEntry = {
     { id: "glm-4.5-air", name: "GLM-4.5 Air", contextWindow: 128_000 },
   ],
 };
+
+describe("resolveContextWindowInfo provenance (Taskana 4127)", () => {
+  it("a catalog model reports source catalog", () => {
+    expect(resolveContextWindowInfo("glm-4.5", Z_AI_ENTRY, undefined)).toEqual({ tokens: 128_000, source: "catalog" });
+  });
+
+  it("an explicit override (also for an unknown model, or a matching binding) reports source override", () => {
+    expect(resolveContextWindowInfo("glm-4.5", Z_AI_ENTRY, 50_000)).toEqual({ tokens: 50_000, source: "override" });
+    expect(resolveContextWindowInfo("ghost", undefined, 50_000, "ghost")).toEqual({ tokens: 50_000, source: "override" });
+  });
+
+  it("an unknown model with no applicable override is assumed at 8192", () => {
+    expect(resolveContextWindowInfo("ghost", Z_AI_ENTRY, undefined)).toEqual({ tokens: 8_192, source: "assumed" });
+    expect(resolveContextWindowInfo("ghost", undefined, 50_000, "other-model")).toEqual({ tokens: 8_192, source: "assumed" });
+  });
+});
 
 describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)", () => {
   it("an explicit override wins even for a known model", () => {
