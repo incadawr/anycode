@@ -349,6 +349,17 @@ describe("desktop store — connection lifecycle", () => {
     expect(store.getState().imageInput).toBeUndefined();
   });
 
+  it("contextWindowAssumed follows host_ready and model_changed, undefined when the host omits it (Taskana 4127)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    expect(store.getState().contextWindowAssumed).toBeUndefined();
+    store.getState().applyHostMessage({ type: "model_changed", model: "ghost", reasoningEffort: "off", contextWindowAssumed: true });
+    expect(store.getState().contextWindowAssumed).toBe(true);
+    store.getState().applyHostMessage({ type: "model_changed", model: "glm-4.5", reasoningEffort: "off", contextWindowAssumed: false });
+    expect(store.getState().contextWindowAssumed).toBe(false);
+  });
+
   it("model_changed re-reads the verdict on a vision -> non-vision switch, and back", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

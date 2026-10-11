@@ -1090,6 +1090,49 @@ describe("Session — vision fallback (TASK.198 срез C)", () => {
     }
   });
 
+  it("host_ready carries contextWindowAssumed only when the seam is wired (true for an assumed window, false for a catalog one)", async () => {
+    for (const assumed of [true, false]) {
+      const h = createHarness({ steps: [], contextWindowAssumed: assumed });
+      try {
+        h.send({ type: "ui_ready" });
+        const ready = await h.waitFor(isHostReady);
+        expect(ready.contextWindowAssumed).toBe(assumed);
+      } finally {
+        h.close();
+      }
+    }
+    const legacy = createHarness({ steps: [] });
+    try {
+      legacy.send({ type: "ui_ready" });
+      const ready = await legacy.waitFor(isHostReady);
+      expect("contextWindowAssumed" in ready).toBe(false);
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it("model_changed re-reads contextWindowAssumed for the new model", async () => {
+    let current = "catalog-model";
+    const h = createHarness({
+      steps: [],
+      contextWindowAssumed: () => current === "unknown-model",
+      switchModel: (id: string) => {
+        current = id;
+        return { model: id, reasoningEffort: "off" as const };
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready.contextWindowAssumed).toBe(false);
+      h.send({ type: "set_model", model: "unknown-model" });
+      const changed = await h.waitFor(isModelChanged);
+      expect(changed.contextWindowAssumed).toBe(true);
+    } finally {
+      h.close();
+    }
+  });
+
   it("applies a live recognizer-config push immediately while idle, and emits image_fallback_changed AFTER the commit", async () => {
     const applied: (RecognizerEndpoint | null)[] = [];
     let current: RecognizerEndpoint | null = null;

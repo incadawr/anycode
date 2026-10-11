@@ -978,6 +978,8 @@ export interface DesktopState {
    * recognizer config.
    */
   imageFallback: boolean | undefined;
+  /** Taskana 4127: host says the context window is the assumed 8K fallback (set by host_ready/model_changed). */
+  contextWindowAssumed: boolean | undefined;
   turn: TurnState;
   transcript: TranscriptBlock[];
   permission: PermissionUiRequest | null;
@@ -3730,6 +3732,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       availableEffortLevels: undefined,
       imageInput: undefined,
       imageFallback: undefined,
+      contextWindowAssumed: undefined,
       ...initialSessionSlice(),
       lastFatal: null,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
@@ -3818,6 +3821,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // Absent -> undefined -> attachment gating falls back to
               // `imageInput` alone.
               imageFallback: message.imageFallback,
+              contextWindowAssumed: message.contextWindowAssumed,
             });
             return;
           case "mode_changed":
@@ -3859,6 +3863,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // too — the fallback is what keeps attachments legal when the new
               // model is blind.
               imageFallback: message.imageFallback,
+              contextWindowAssumed: message.contextWindowAssumed,
             });
             return;
           case "mode_change_rejected":

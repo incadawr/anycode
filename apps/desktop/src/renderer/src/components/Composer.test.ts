@@ -14,6 +14,8 @@ import {
   ctxPopoverAnchorFromRect,
   ctxPopoverBodyState,
   ctxPopoverHeadline,
+  ctxMeterLabel,
+  CTX_WINDOW_ASSUMED_HINT,
   ctxPopoverLoading,
   ctxPopoverRows,
   ctxRingDashOffset,
@@ -433,5 +435,16 @@ describe("composer image helpers", () => {
     expect(sniffComposerImageMediaType(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))).toBe("image/gif");
     expect(sniffComposerImageMediaType(new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]))).toBe("image/webp");
     expect(sniffComposerImageMediaType(new Uint8Array([0x3c, 0x73, 0x76, 0x67]))).toBeNull();
+  });
+});
+
+describe("assumed context window hint (Taskana 4127)", () => {
+  it("states the assumption and where to fix it", () => {
+    expect(CTX_WINDOW_ASSUMED_HINT).toBe("Context window unknown \u2014 assumed 8K. Set it in the connection settings.");
+  });
+
+  it("marks the ctx meter label only when the window is assumed", () => {
+    expect(ctxMeterLabel(42, true)).toBe("\u224842% ctx");
+    expect(ctxMeterLabel(42, false)).toBe("42% ctx");
   });
 });

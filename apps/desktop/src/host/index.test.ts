@@ -2643,7 +2643,7 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
 
   it("boot and /model switch both pass the model binding as the 4th argument, and evaluated they resolve B through the catalog", async () => {
     const source = await readIndexSource();
-    const calls = callArguments(source, "resolveContextWindow");
+    const calls = callArguments(source, "resolveContextWindowInfo");
 
     // Exactly the two production call sites (boot + mid-session switch).
     expect(calls).toHaveLength(2);
