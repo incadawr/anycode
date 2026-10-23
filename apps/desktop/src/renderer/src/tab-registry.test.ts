@@ -514,6 +514,23 @@ describe("tab-registry — child-session registration (TASK.102 CUT-S2 §2.5, sl
     expect(port.sent).toEqual([{ type: "ui_ready" }]);
   });
 
+  // Taskana 4265: `listChildTabs` is the enumeration seam the automation
+  // snapshot's `childStates` reads — a child tab's store lives ONLY here.
+  it("listChildTabs returns every live child with its relation meta, and drops it once the host exits", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+
+    registry.registerPort("root-1", "/ws/root", asPort(new FakeMessagePort()));
+    registry.registerPort("child-1", "/ws/root", asPort(new FakeMessagePort()), undefined, childField());
+
+    expect(registry.listChildTabs()).toEqual([{ tabId: "child-1", child: childField() }]);
+
+    // markHostExited deletes a child's entry entirely (no respawn), so the
+    // child disappears from the enumeration the moment its host is gone.
+    registry.markHostExited("child-1");
+    expect(registry.listChildTabs()).toEqual([]);
+  });
+
   it("disposing a child tab leaves the active root tab (and the tabs list) untouched", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);

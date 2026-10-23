@@ -64,3 +64,22 @@ export function codexChildPosture(mode: PermissionMode): "read-only" | "ask" {
       return "ask";
   }
 }
+
+/**
+ * Taskana 4265: whether a codex child's boot policy pre-authorises writes
+ * inside its own workspace — mirroring Claude's `workspace` tier
+ * (acceptEdits, `claudeChildPresetId` above) and core edit-mode containment.
+ * `build`/`plan` deliberately keep asking for every patch (same posture a
+ * core build-mode child gets).
+ */
+export function codexChildAutoAcceptsWorkspacePatches(mode: PermissionMode): boolean {
+  switch (mode) {
+    case "plan":
+    case "build":
+      return false;
+    case "edit":
+    case "auto":
+    case "yolo":
+      return true;
+  }
+}

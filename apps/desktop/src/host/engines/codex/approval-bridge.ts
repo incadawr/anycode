@@ -18,7 +18,10 @@
  * terminal transport failure (TASK.38 §4).
  *
  * Fail-closed still holds: every path that is not an explicit user allow ends
- * as a denial, and nothing is ever auto-approved.
+ * as a denial, and nothing is auto-approved except a file change that
+ * `shouldAutoAcceptPatch` (patch-auto-approval.ts, Taskana 4265) proves inside
+ * the workspace under a policy that already allows workspace writes; without
+ * `patchAutoApproval` the bridge never auto-approves.
  */
 
 import { classifyBashCommandLine } from "@anycode/core";
@@ -32,6 +35,7 @@ import {
   type JsonRpcError,
   type JsonRpcServerRequest,
 } from "./protocol.js";
+import { shouldAutoAcceptPatch, type CodexPatchAutoApprovalContext } from "./patch-auto-approval.js";
 import { commandOf, fileChangesOf, type TurnItemIndex } from "./turn-item-index.js";
 import type { ServerRequestResponder } from "./app-server-client.js";
 
@@ -50,6 +54,13 @@ export interface ActiveCodexTurn {
 export interface CodexApprovalBridgeOptions {
   broker: IpcPermissionBroker;
   activeTurn(): ActiveCodexTurn | null;
+  /**
+   * Taskana 4265: when supplied, a file-change approval whose every target is
+   * realpath-provably inside the session workspace — under a policy that
+   * already allows workspace writes — is accepted without asking. Absent =
+   * the bridge asks for every patch (the pre-4265 behaviour).
+   */
+  patchAutoApproval?: CodexPatchAutoApprovalContext;
 }
 
 type DecodedApproval = {
@@ -236,6 +247,27 @@ export class CodexApprovalBridge {
     if (active === null || active.threadId !== decoded.threadId || active.turnId !== decoded.turnId) {
       responder.error(denial("Stale Codex approval request"));
       return;
+    }
+    const ctx = this.options.patchAutoApproval;
+    if (ctx !== undefined && serverRequest.method === OBSERVED_FILE_CHANGE_APPROVAL_METHOD) {
+      const params = record(serverRequest.params);
+      const grantRoot = optionalString(params?.grantRoot);
+      const itemId = decoded.request.toolCallId;
+      let accept = false;
+      try {
+        accept = await shouldAutoAcceptPatch(ctx, itemId === undefined ? undefined : active.items?.get(itemId), grantRoot);
+      } catch {
+        accept = false;
+      }
+      if (accept) {
+        const still = this.options.activeTurn();
+        if (still === null || still.threadId !== decoded.threadId || still.turnId !== decoded.turnId) {
+          responder.error(denial("Stale Codex approval request"));
+          return;
+        }
+        responder.result({ decision: "accept" });
+        return;
+      }
     }
     if (this.pending) {
       responder.error(denial("Codex approval request rejected: another approval is pending"));

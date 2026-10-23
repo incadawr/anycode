@@ -14,7 +14,7 @@
 
 import { PERMISSION_MODES } from "@anycode/core";
 import { describe, expect, it } from "vitest";
-import { claudeChildPresetId, codexChildPosture } from "./child-permission-map.js";
+import { claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./child-permission-map.js";
 import { CLAUDE_PERMISSION_PRESETS, findClaudePreset } from "./claude/presets.js";
 import { CODEX_PERMISSION_PRESETS, findCodexPreset } from "./codex/presets.js";
 
@@ -81,5 +81,17 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
       expect(FORBIDDEN_CODEX_REVIEWERS).not.toContain(preset!.threadParams.approvalsReviewer);
       expect(FORBIDDEN_CODEX_SANDBOX_MODES).not.toContain(preset!.threadParams.sandbox);
     }
+  });
+});
+
+describe("codexChildAutoAcceptsWorkspacePatches (Taskana 4265)", () => {
+  it("is true exactly for edit/auto/yolo — the modes whose Claude twin gets the workspace tier", () => {
+    expect(PERMISSION_MODES.map((mode) => [mode, codexChildAutoAcceptsWorkspacePatches(mode)])).toEqual([
+      ["plan", false],
+      ["build", false],
+      ["edit", true],
+      ["auto", true],
+      ["yolo", true],
+    ]);
   });
 });

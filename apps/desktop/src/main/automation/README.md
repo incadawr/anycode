@@ -89,8 +89,8 @@ missing/bad token → `401`.
 | Method / path | Returns |
 |---|---|
 | `GET /health` | `{ok, pid, version, tabs}` |
-| `GET /state?tail=N` | `{snapshot:{tabs, activeTabId, states}, tabs:[{tabId, workspace, sessionId, state, pid}]}` — `tail` slices each transcript to the last N blocks |
-| `GET /state/:tabId?tail=N` | same, narrowed to one tab |
+| `GET /state?tail=N` | `{snapshot:{tabs, activeTabId, states, childStates}, tabs:[{tabId, workspace, sessionId, state, pid}]}` — `tail` slices each transcript to the last N blocks. `childStates` (Taskana 4265) is keyed by childTabId: per-tab state plus `child{parentTabId, parentSessionId, spawnToolCallId, childSessionId}` — answer a child's pending ask with `POST /tabs/<childTabId>/permission {behavior, requestId}` |
+| `GET /state/:tabId?tail=N` | same, narrowed to one tab: a root tabId also returns its children in `childStates`; a child tabId returns just itself there |
 | `GET /sessions` | `SessionSummary[]` |
 | `GET /screenshot` | `{png:"<base64>"}` — window capture (evidence / calibration) |
 | `GET /transcript/scroll?tabId=` | `{ok:true, scrollTop, scrollHeight, clientHeight, atBottom, jumpVisible}` \| `{ok:false, reason}` — see below |
@@ -117,7 +117,7 @@ missing/bad token → `401`.
 | `POST /tabs/:tabId/child/split` | `{}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"not_active"\|"not_open"}` (TASK.188 S9.4) — puts an open child pane into the SPLIT layout by a REAL `.click()` on layout B's own "Split" breadcrumb button, same posture and same refusals as `child/close` above. Split is the only layout in which the root transcript is on screen, and so the only one in which a finished child hands playback back to the root by itself (see the replay probe below) |
 | `POST /tabs` | `{kind:"new", workspace}` | `{ok:true, tabId, sessionId, workspace}` (bypasses the native open dialog) |
 | `POST /tabs` | `{kind:"resume", sessionId}` | `{ok:true, tabId, workspace}` |
-| `POST /wait` | `{tabId, until:{connection?, turnStatus?, permissionPending?, transcriptIncludes?, gitStatusKnown?, gitPendingEmpty?}, timeoutMs?}` | `{matched, elapsedMs, state}` — polls every 150 ms; default 60 s, cap 300 s |
+| `POST /wait` | `{tabId, until:{connection?, turnStatus?, permissionPending?, transcriptIncludes?, gitStatusKnown?, gitPendingEmpty?}, timeoutMs?}` | `{matched, elapsedMs, state}` — polls every 150 ms; default 60 s, cap 300 s; `tabId` may be a childTabId (Taskana 4265 — child state is read from `childStates`) |
 | `POST /sidebar/groups/more` | `{workspace}` | `{ok:true}` \| `{ok:false, reason:"unknown_workspace"\|"no_cut"\|"did_not_commit"}` — a real `.click()` on that group's row-cut toggle (TASK.125); returns only after the drawn row count actually moves |
 | `POST /sidebar/filter` | `{query}` | `{ok:true}` \| `{ok:false, reason:"no_search_input"\|"did_not_commit"}` — types into the real filter input (`""` clears it). An active filter LIFTS the row cut, which is why the driver exists |
 | `POST /quit` | `{}` | `{ok:true}` — graceful shutdown (kills hosts, unlinks discovery file) |

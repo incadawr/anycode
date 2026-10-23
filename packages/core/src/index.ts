@@ -199,3 +199,4 @@ export type { SubagentPromptOptions } from "./prompts/subagent.js";
 // `tsx src/cli/main.ts`, where the guard works correctly.
 export { linkAbortSignal, raceWithTimeout } from "./util/abort.js";
 export type { TimeoutRaceResult } from "./util/abort.js";
+export { resolveWorkspaceWriteFacts } from "./util/path-containment.js";

@@ -390,7 +390,7 @@ import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./en
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
-import { claudeChildPresetId, codexChildPosture } from "./engines/child-permission-map.js";
+import { claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
 import { checkClaudeBinaryTrustOnDisk } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
 // TASK.103: the host-side consent reader. Host never WRITES settings.json
@@ -942,6 +942,17 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   const options = {
     bootstrap,
     broker,
+    // Taskana 4265: the codex approval bridge auto-accepts a file change only
+    // when every target is realpath-provably inside the workspace AND the
+    // session's policy already allows workspace writes — for a child, the
+    // inherited core mode (edit/auto/yolo, `codexChildAutoAcceptsWorkspacePatches`);
+    // a root session keeps `false`, so for it only a seeded Edit/Write
+    // always-allow rule can ever vouch for a patch.
+    patchAutoApproval: {
+      fs: new NodeFileSystemAdapter(),
+      workspaceWritesAllowed: args.child !== undefined && codexChildAutoAcceptsWorkspacePatches(args.child.initialMode),
+      rules,
+    },
     binaryPath,
     cwd: workspace,
     workspace,

@@ -34,6 +34,7 @@ import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../session-engine.js";
 import type { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js";
+import type { CodexPatchAutoApprovalPolicy } from "./patch-auto-approval.js";
 import { AppServerClient, type AppServerClientOptions } from "./app-server-client.js";
 import { CodexModelCatalog } from "./catalog.js";
 import { TurnTranslator } from "./event-translator.js";
@@ -361,6 +362,8 @@ export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "
   bootstrap: EngineBootstrap;
   workspace: string;
   broker: IpcPermissionBroker;
+  /** Taskana 4265: policy for accepting a provably in-workspace file change without asking; absent = always ask. */
+  patchAutoApproval?: CodexPatchAutoApprovalPolicy;
   timeouts?: Partial<CodexEngineTimeouts>;
   /** Draft (new session) or persisted (resume) model/preset choice; validated host-side, never trusted. */
   selection?: CodexSessionSelection;
@@ -628,6 +631,9 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   const approvals = new CodexApprovalBridge({
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
+    ...(options.patchAutoApproval !== undefined
+      ? { patchAutoApproval: { ...options.patchAutoApproval, workspace: options.workspace, activePresetId: () => engine?.snapshot().activePresetId ?? null } }
+      : {}),
   });
   const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
     const owner = engine?.activeTurnDetails ?? null;
@@ -653,6 +659,9 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
   const approvals = new CodexApprovalBridge({
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
+    ...(options.patchAutoApproval !== undefined
+      ? { patchAutoApproval: { ...options.patchAutoApproval, workspace: options.workspace, activePresetId: () => engine?.snapshot().activePresetId ?? null } }
+      : {}),
   });
   const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
     const owner = engine?.activeTurnDetails ?? null;

@@ -562,8 +562,85 @@ describe("automation facade — respondPermission", () => {
   });
 });
 
+/**
+ * Taskana 4265: a child tab's store lives ONLY in the tab registry (never in
+ * tabsStore), so the facade snapshot carries children as `childStates` —
+ * per-child state plus the parent relation — while `states` stays root-only.
+ */
+describe("automation facade — child tabs (Taskana 4265)", () => {
+  function withReadyChild() {
+    const fixture = setupReadyTab();
+    const childPort = new FakeMessagePort();
+    fixture.registry.registerPort("child-1", "/ws/child", asPort(childPort), undefined, {
+      parentTabId: "tab-a",
+      parentSessionId: "sess-a",
+      spawnToolCallId: "call-1",
+      childSessionId: "sess-c",
+    });
+    childPort.emit(HOST_READY("/ws/child", "sess-c"));
+    childPort.emit({
+      type: "permission_request",
+      requestId: "req-c1",
+      toolName: "CodexApplyPatch",
+      input: {
+        paths: ["/ws/child/a.ts"],
+        changes: [{ path: "/ws/child/a.ts", kind: "add", diff: "+a" }],
+      },
+      mode: "build",
+      metadata: {
+        name: "CodexApplyPatch",
+        description: "",
+        readOnly: false,
+        destructive: false,
+        riskLevel: "high",
+        sideEffectScope: "filesystem",
+      },
+    });
+    return { ...fixture, childPort };
+  }
+
+  it("snapshots the child under childStates (with its relation and pending permission); states stays root-only", () => {
+    const { tabsStore, registry } = withReadyChild();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const snap = facade.snapshot();
+
+    expect(Object.keys(snap.states)).toEqual(["tab-a"]);
+    expect(snap.childStates["child-1"]?.permission).toMatchObject({
+      requestId: "req-c1",
+      toolName: "CodexApplyPatch",
+      input: { paths: ["/ws/child/a.ts"] },
+    });
+    expect(snap.childStates["child-1"]?.child).toEqual({
+      parentTabId: "tab-a",
+      parentSessionId: "sess-a",
+      spawnToolCallId: "call-1",
+      childSessionId: "sess-c",
+    });
+  });
+
+  it("respondPermission answers the child's pending request on the child's own port", () => {
+    const { tabsStore, registry, port, childPort } = withReadyChild();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const result = facade.respondPermission("child-1", "allow", "req-c1");
+
+    expect(result).toEqual({ ok: true });
+    expect(childPort.sent).toContainEqual({ type: "permission_response", requestId: "req-c1", behavior: "allow" });
+    // The root port heard nothing but its own ui_ready handshake.
+    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+  });
+
+  it("childStates is an empty object when no children are registered", () => {
+    const { tabsStore, registry } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    expect(facade.snapshot().childStates).toEqual({});
+  });
+});
+
 describe("automation facade — setMode", () => {
-  it("rejects an invalid mode string without sending", () => {
+  it("sends set_mode when ready+idle+valid, valid against uiToHostMessageSchema", () => {
     const { registry, tabsStore, port, tabId } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
 

@@ -87,6 +87,13 @@ interface TabEntry {
    * mine".
    */
   isChild: boolean;
+  /**
+   * Taskana 4265: the relation meta of a child tab (`PortEnvelope["child"]`,
+   * parent/spawn/child session ids), recorded at `registerPort`; null for a
+   * root tab. Lets `/state`'s `childStates` carry the parent relation without
+   * a second lookup into the child-relation store.
+   */
+  child: NonNullable<PortEnvelope["child"]> | null;
 }
 
 export interface TabRegistry {
@@ -155,6 +162,14 @@ export interface TabRegistry {
   sendToTab(tabId: string, message: UiToHostMessage): void;
   /** The tab's store instance, or undefined if the tab isn't registered (yet, or anymore). */
   getStore(tabId: string): DesktopStoreApi | undefined;
+  /**
+   * Taskana 4265: every registered child tab (entry still live) with its
+   * relation meta, in registration order. A child tab's store lives in this
+   * registry but never in tabsStore, so this is the only enumeration seam the
+   * automation snapshot (`childStates`) has; a host-exited child's entry is
+   * deleted by `markHostExited`, so it disappears here the same way.
+   */
+  listChildTabs(): Array<{ tabId: string; child: NonNullable<PortEnvelope["child"]> }>;
   /** Whether `tabId` has been disposed (closeTab already ran for it). */
   isClosed(tabId: string): boolean;
   /**
@@ -549,6 +564,7 @@ export function createTabRegistry(
           unsubscribeStatus: null,
           unsubscribeQueue: null,
           isChild: kind === "child",
+          child: null,
         };
         entries.set(tabId, entry);
         if (kind === "child") {
@@ -618,6 +634,10 @@ export function createTabRegistry(
         entry.store.getState().setPinnedConnection(pinnedConnection);
       }
       if (child !== undefined) {
+        // Taskana 4265: remembered on the entry itself so `listChildTabs()`
+        // (the automation snapshot's child enumeration seam) can carry the
+        // relation without a child-relation-store lookup.
+        entry.child = child;
         // TASK.102 CUT-S2 §2.5: records (or re-records) the relation C3's
         // Open button and breadcrumb resolve through. Re-registering an
         // already-known (parent, spawn) pair resets `live` to true —
@@ -721,6 +741,16 @@ export function createTabRegistry(
 
     getStore(tabId): DesktopStoreApi | undefined {
       return entries.get(tabId)?.store;
+    },
+
+    listChildTabs(): Array<{ tabId: string; child: NonNullable<PortEnvelope["child"]> }> {
+      const children: Array<{ tabId: string; child: NonNullable<PortEnvelope["child"]> }> = [];
+      for (const [tabId, entry] of entries) {
+        if (entry.isChild && entry.child !== null) {
+          children.push({ tabId, child: entry.child });
+        }
+      }
+      return children;
     },
 
     isClosed(tabId): boolean {

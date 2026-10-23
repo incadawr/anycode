@@ -1241,6 +1241,34 @@ describe("health / getState / screenshot", () => {
     expect(result.tabs).toEqual(tabs);
   });
 
+  // Taskana 4265: a facade snapshot carrying childStates narrows them — a
+  // root tabId also returns its children, a child tabId returns just itself,
+  // and a pre-4265 facade snapshot gains no childStates key at all.
+  it("getStateForTab narrows childStates to the tab itself plus its children", async () => {
+    const snapshot = {
+      tabs: [],
+      activeTabId: null,
+      states: {},
+      childStates: {
+        c1: { child: { parentTabId: "t1" } },
+        c2: { child: { parentTabId: "t9" } },
+      },
+    };
+    const deps = fakeDeps({ callFacade: vi.fn(async () => snapshot) });
+
+    const root = (await getStateForTab(deps, "t1", undefined)).snapshot as { childStates: Record<string, unknown> };
+    expect(Object.keys(root.childStates)).toEqual(["c1"]);
+
+    const child = (await getStateForTab(deps, "c2", undefined)).snapshot as { childStates: Record<string, unknown> };
+    expect(Object.keys(child.childStates)).toEqual(["c2"]);
+  });
+
+  it("getStateForTab adds no childStates key when the facade snapshot has none", async () => {
+    const deps = fakeDeps({ callFacade: vi.fn(async () => ({ tabs: [], activeTabId: null, states: {} })) });
+    const result = await getStateForTab(deps, "t1", undefined);
+    expect(Object.keys(result.snapshot as Record<string, unknown>)).not.toContain("childStates");
+  });
+
   it("screenshot base64-encodes capturePage's PNG", async () => {
     const win = fakeWindow(async () => ({ __facade: "ok" }));
     const result = await screenshot(fakeDeps({ getWindow: () => win }));
@@ -1522,6 +1550,27 @@ describe("waitFor poller (§4.3)", () => {
       connection: "ready",
       turn: { status: "compacting" },
       permission: null,
+      transcript: [],
+    });
+  });
+
+  // Taskana 4265: a child tab's state lives in `childStates`, never in
+  // `states` — `/wait` accepts a childTabId and matches its pending ask.
+  it("matches a child tabId against childStates (Taskana 4265)", async () => {
+    const callFacade = vi.fn(async () => ({
+      states: {},
+      childStates: {
+        c1: { connection: "ready", turn: { status: "running" }, permission: { requestId: "r" }, transcript: [] },
+      },
+    }));
+    const deps = fakeDeps({ callFacade, now: () => 0, sleep: async () => {}, pollMs: 0 });
+
+    const result = await waitFor(deps, "c1", { permissionPending: true }, 60_000);
+    expect(result.matched).toBe(true);
+    expect(result.state).toEqual({
+      connection: "ready",
+      turn: { status: "running" },
+      permission: { requestId: "r" },
       transcript: [],
     });
   });
