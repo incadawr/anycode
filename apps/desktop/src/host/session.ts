@@ -52,6 +52,7 @@ import type {
   ImageAttachment,
   LspServerStatus,
   PermissionMode,
+  ProviderUsageRecord,
   ReasoningEffort,
   RecognizerEndpoint,
   RewindResult,
@@ -542,6 +543,66 @@ export interface SessionPersistence {
   touch(patch: { title?: string; mode?: PermissionMode; model?: string; enginePreset?: string }): void;
 }
 
+/**
+ * Taskana 4083 / TASK.34: the host's write-behind recorder for the persistent
+ * per-step provider-usage audit. Fed from the SAME TASK.117 finish-capture
+ * site that folds checkpointSessionTokens (engine gating, step identity and
+ * reconnect-dedup context are shared), one call per completed core model
+ * step. The SQLite PK (session_id, turn_id, step) + INSERT OR IGNORE make a
+ * replayed/duplicate finish after a reconnect write nothing new.
+ */
+export interface ProviderUsageAudit {
+  /** Fire-and-forget, never blocks or fails the turn (write-behind, TASK.34 invariant 3). */
+  record(record: Omit<ProviderUsageRecord, "sessionId" | "createdAt">): void;
+}
+
+/** Taskana 4083 / TASK.34: read side — the durable step list + honest totals for hydration. */
+export interface ProviderUsageSummaryPort {
+  summary(): Promise<{
+    steps: ProviderUsageRecord[];
+    totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number } | null;
+  }>;
+}
+
+/**
+ * Taskana 4083 / TASK.34: pure fold over the durable step list (host/index.ts
+ * wires it behind the summary port; exported for unit tests). Sums ONLY
+ * defined values (a NULL column is "provider did not report", never 0);
+ * `stepsReported` counts steps with any token field, `stepsWithCache` counts
+ * steps with `cachedInputTokens !== undefined`. An empty list is honestly
+ * `{ steps: [], totals: null }`.
+ */
+export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
+  steps: ProviderUsageRecord[];
+  totals: { input: number; output: number; total: number; stepsReported: number; stepsWithCache: number } | null;
+} {
+  if (steps.length === 0) {
+    return { steps, totals: null };
+  }
+  let input = 0;
+  let output = 0;
+  let total = 0;
+  let stepsReported = 0;
+  let stepsWithCache = 0;
+  for (const step of steps) {
+    if (step.inputTokens !== undefined) input += step.inputTokens;
+    if (step.outputTokens !== undefined) output += step.outputTokens;
+    if (step.totalTokens !== undefined) total += step.totalTokens;
+    if (
+      step.inputTokens !== undefined ||
+      step.cachedInputTokens !== undefined ||
+      step.outputTokens !== undefined ||
+      step.totalTokens !== undefined
+    ) {
+      stepsReported += 1;
+    }
+    if (step.cachedInputTokens !== undefined) {
+      stepsWithCache += 1;
+    }
+  }
+  return { steps, totals: { input, output, total, stepsReported, stepsWithCache } };
+}
+
 export interface SessionOptions {
   outbound: Outbound;
   /** The host-selected agent runtime; Session never imports an external engine. */
@@ -606,6 +667,17 @@ export interface SessionOptions {
   hasTitle?: boolean;
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
+  /**
+   * Taskana 4083 / TASK.34: the persistent per-step provider-usage audit
+   * (SQLite provider_usage, migration v19). Wired ONLY for the core engine's
+   * boot (host/index.ts) — a foreign engine's usage arrives as cumulative
+   * REPLACE snapshots, not per-step finishes, so mapping it would be
+   * dishonest; those engines keep engine_session_tokens semantics. Absent
+   * (every legacy test, codex/claude boots) -> the write-behind recorder,
+   * the session_checkpoint.usageAudit hydration field and the
+   * usage_audit_request reply are all inert, byte-identical to pre-TASK.34.
+   */
+  usageAudit?: { sink: ProviderUsageAudit; summary: ProviderUsageSummaryPort };
   /**
    * Tier-2 LLM title refinement one-shot (Phase 4 slice 4.4-T, design
 
@@ -882,6 +954,8 @@ export class Session {
   private model: string;
   private readonly sessionId: string;
   private readonly persistence: SessionPersistence | undefined;
+  /** Taskana 4083 / TASK.34: see SessionOptions.usageAudit's own doc. */
+  private readonly usageAudit: SessionOptions["usageAudit"];
   private readonly rules: SessionPermissionRules;
   private readonly git: GitUiBridge | undefined;
   /** Design TASK.40 §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
@@ -980,6 +1054,21 @@ export class Session {
    * runTurn's event loop; undefined outside a turn / for foreign engines.
    */
   private currentStep: number | undefined;
+  /**
+   * Taskana 4083 / TASK.34: `stream_retry` events observed for the CURRENT
+   * core step — the transport-retry count the usage audit row for that step
+   * carries (a step with no retry records 0). Reset beside `currentStep`
+   * (turn start/teardown) and after each audit record (per-step scope).
+   */
+  private finishRetries = 0;
+  /**
+   * Taskana 4083 / TASK.34: the last audit summary the hydration path has
+   * read (pushSessionCheckpoint is sync; the summary port is async, so the
+   * ui_ready cascade kicks the read and re-pushes when it lands). Null
+   * before the first read (the checkpoint then ships without usageAudit
+   * when the summary hasn't landed yet — additive-optional field).
+   */
+  private lastUsageSummary: Awaited<ReturnType<ProviderUsageSummaryPort["summary"]>> | null = null;
   /**
    * TASK.117: the live outer turn's requestId (pair with this.turnId), kept
    * only while the turn is in flight — the ui_ready cascade re-asserts
@@ -1195,6 +1284,7 @@ export class Session {
     this.model = options.model;
     this.sessionId = options.sessionId;
     this.persistence = options.persistence;
+    this.usageAudit = options.usageAudit;
     this.rules = options.rules;
     this.git = options.git;
     this.shell = options.shell;
@@ -1654,6 +1744,19 @@ export class Session {
         // fresh store's slots are then already correct, and any ring copy
         // that still replays is idempotent (permission set-slot, finish
         // once-per-step fold, context_usage latest-wins).
+        // Taskana 4083 / TASK.34: kick the DURABLE audit-summary read ONCE
+        // per ui_ready, BEFORE the direct checkpoint push — pushSessionCheckpoint
+        // is sync, so it ships without usageAudit when the summary hasn't
+        // landed yet; the second push (if any) is just another checkpoint
+        // (renderer REPLACE semantics tolerate it). Failures are swallowed
+        // (write-behind posture: audit I/O never breaks a handshake).
+        void this.usageAudit?.summary
+          .summary()
+          .then((s) => {
+            this.lastUsageSummary = s;
+            this.pushSessionCheckpoint();
+          })
+          .catch(() => {});
         this.pushSessionCheckpoint();
         this.outbound.replay();
         for (const delivery of this.agentDeliveries.values()) this.outbound.sendDirect({ type: "agent_message", delivery });
@@ -1900,6 +2003,9 @@ export class Session {
       case "lsp_status_request":
         this.pushLspStatus();
         break;
+      case "usage_audit_request":
+        this.pushUsageAudit();
+        break;
       case "context_breakdown_request":
         if (this.engine.capabilities.supportsContextBreakdown) this.pushContextBreakdown();
         break;
@@ -1955,6 +2061,29 @@ export class Session {
 
   private pushLspStatus(): void {
     this.outbound.sendDirect({ type: "lsp_status", servers: this.lsp?.status() ?? [] });
+  }
+
+  /**
+   * Taskana 4083 / TASK.34: answers a `usage_audit_request` with the durable
+   * audit list (newest-first, bounded to the last 50 steps) + totals. Core
+   * only by construction (the option is wired only for the core boot); a
+   * foreign host answers NOTHING — the renderer keeps its skeleton until
+   * timeout, the same posture as an unsupported `context_breakdown`. A read
+   * failure answers an empty list (honest "nothing loaded" instead of a hang)
+   * and logs to the process console; never throws into the wire loop.
+   */
+  private async pushUsageAudit(): Promise<void> {
+    if (this.usageAudit === undefined) {
+      return;
+    }
+    try {
+      const s = await this.usageAudit.summary.summary();
+      this.lastUsageSummary = s;
+      this.outbound.sendDirect({ type: "usage_audit", steps: s.steps.slice(-50).reverse(), totals: s.totals });
+    } catch (e) {
+      console.error(`[host] usage audit read failed: ${e instanceof Error ? e.message : String(e)}`);
+      this.outbound.sendDirect({ type: "usage_audit", steps: [], totals: null });
+    }
   }
 
   /**
@@ -2151,6 +2280,19 @@ export class Session {
         ? { sessionTokens: this.checkpointSessionTokens, ...(this.checkpointCountedSteps.length > 0 ? { countedSteps: [...this.checkpointCountedSteps] } : {}) }
         : {}),
       ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
+      // Taskana 4083 / TASK.34: the durable audit slice — present only when
+      // the option is wired AND a summary has landed (async read kicked per
+      // ui_ready). Additive-optional: an older renderer / unwired host
+      // changes nothing.
+      ...(this.usageAudit !== undefined && this.lastUsageSummary !== null
+        ? {
+            usageAudit: {
+              lastStep: this.lastUsageSummary.steps.at(-1) ?? null,
+              totals: this.lastUsageSummary.totals,
+              totalSteps: this.lastUsageSummary.steps.length,
+            },
+          }
+        : {}),
       ...(shown !== null
         ? {
             permission: {
@@ -2708,6 +2850,7 @@ export class Session {
         this.abort = null;
         this.turnId = null;
         this.currentStep = undefined;
+        this.finishRetries = 0;
         this.lastTurnRequest = undefined;
         this.snapshotPaths.clear();
         // TASK.117 acceptance defect 1: the partial-stream checkpoint dies with
@@ -3198,6 +3341,7 @@ export class Session {
     const controller = new AbortController();
     this.turnId = turnId;
     this.currentStep = undefined;
+    this.finishRetries = 0;
     this.abort = controller;
     this.turnStartedAt = Date.now();
     this.outbound.emit({ type: "turn_started", requestId, turnId, startedAt: this.turnStartedAt });
@@ -3311,6 +3455,11 @@ export class Session {
             this.pendingPrompt = null;
           }
         }
+        // Taskana 4083 / TASK.34: count this step's transport retries for the
+        // usage audit row (reset per finish capture and per turn boundary).
+        if (this.engine.id === "core" && event.type === "stream_retry") {
+          this.finishRetries += 1;
+        }
         this.outbound.emit({
           type: "agent_event",
           turnId,
@@ -3342,6 +3491,26 @@ export class Session {
         // ring overflow this host-side capture is the only surviving record.
         if (this.engine.id === "core" && event.type === "finish") {
           this.checkpointSessionTokens = accumulateCheckpointTokens(this.checkpointSessionTokens, event.usage);
+          // Taskana 4083 / TASK.34: the SAME emission-time capture feeds the
+          // DURABLE per-step audit (write-behind — the sink never blocks or
+          // fails the turn; idempotency is the SQLite PK + INSERT OR IGNORE,
+          // so a replayed finish after a reconnect writes nothing new).
+          // `turnId` is runTurn's OUTER turn uuid — the same value the
+          // checkpoint `${turnId}:${step}` keys use, stable across
+          // reconnects.
+          this.usageAudit?.sink.record({
+            turnId,
+            step: this.currentStep!,
+            model: this.model,
+            reasoningEffort: this.selectedEffort,
+            inputTokens: event.usage.inputTokens,
+            cachedInputTokens: event.usage.cachedInputTokens,
+            outputTokens: event.usage.outputTokens,
+            totalTokens: event.usage.totalTokens,
+            finishReason: event.finishReason,
+            transportRetries: this.finishRetries,
+          });
+          this.finishRetries = 0;
           // Newest-first; trimmed to the bounded window (an entry older
           // than the ring capacity can never replay again).
           if (this.currentStep !== undefined) {
@@ -3454,6 +3623,7 @@ export class Session {
       this.abort = null;
       this.turnId = null;
       this.currentStep = undefined;
+      this.finishRetries = 0;
       this.lastTurnRequest = undefined;
       this.snapshotPaths.clear();
       this.liveStreams.clear();

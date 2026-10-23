@@ -399,7 +399,7 @@ import { createEngineChildRunner } from "./engine-children.js";
 import { readTrustedBinaryConsentsSync } from "../settings/files.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
-import { Outbound, Session, tapChildPermissions, type ChildSessionOptions } from "./session.js";
+import { Outbound, Session, summarizeProviderUsage, tapChildPermissions, type ChildSessionOptions } from "./session.js";
 // TASK.102 CUT-S2 §2.6.2/§2.6.3 (slice S2b B4) built the CHILD side of this
 // wire (child-ready on first ui_ready, child-start dispatch, permission-tap
 // attention, terminal report). Slice S2b B5 (below) adds the PARENT side: the
@@ -3437,6 +3437,22 @@ async function boot(): Promise<void> {
           void persistence.touchSession(sessionId, patch).catch((error) => {
             console.error(`[host] touchSession failed: ${describeError(error)}`);
           });
+        },
+      },
+      // Taskana 4083 / TASK.34: the persistent per-step provider-usage audit,
+      // CORE-ONLY wiring (codex/claude boots above pass nothing — their usage
+      // arrives as cumulative REPLACE snapshots, not per-step finishes).
+      // Write-behind: the sink swallows+logs its own failures, so audit I/O
+      // can never block or fail a turn.
+      usageAudit: {
+        sink: {
+          record: (r) =>
+            void persistence!
+              .recordProviderUsage({ ...r, sessionId, createdAt: Date.now() })
+              .catch((e) => console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`)),
+        },
+        summary: {
+          summary: () => persistence!.listProviderUsage(sessionId).then(summarizeProviderUsage),
         },
       },
 

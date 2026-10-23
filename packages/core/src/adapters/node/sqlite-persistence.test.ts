@@ -741,7 +741,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -812,7 +812,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -865,7 +865,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -943,7 +943,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
     migrated.close();
   });
 
@@ -998,7 +998,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
@@ -1272,7 +1272,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
     migrated.close();
   });
 
@@ -3099,6 +3099,7 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
       // row's own engine (TASK.102 S2 review BLOCKER, Luna).
       claudeTranscriptItems: 0,
       codexThreadItems: 1,
+      providerUsage: 0,
     });
 
     // Zero orphan rows for the deleted session in every linked table.
@@ -3120,7 +3121,7 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
     const summary = await adapter.deleteSession("missing");
     expect(summary.deleted).toEqual([]);
-    expect(summary.counts).toEqual({ historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 });
+    expect(summary.counts).toEqual({ historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 });
     expect(await adapter.getSessionById("s1")).not.toBeNull();
   });
 
@@ -3130,7 +3131,7 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     await seedFullSession(adapter, "b", "ref-b", "claude");
     const summary = await adapter.deleteSessions(["a", "b", "missing"]);
     expect(summary.deleted).toEqual(["a", "b"]);
-    expect(summary.counts).toEqual({ historyItems: 2, checkpoints: 2, claudeTranscriptItems: 1, codexThreadItems: 1 });
+    expect(summary.counts).toEqual({ historyItems: 2, checkpoints: 2, claudeTranscriptItems: 1, codexThreadItems: 1, providerUsage: 0 });
     expect(await adapter.listRootSessions()).toEqual([]);
   });
 
@@ -3308,7 +3309,137 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     const summary = await adapter.deleteSession("root");
     expect(summary.deleted).toEqual(["root"]);
     expect(summary.removedIds.sort()).toEqual(["child", "root"]);
-    expect(summary.counts).toEqual({ historyItems: 1, checkpoints: 1, claudeTranscriptItems: 1, codexThreadItems: 1 });
+    expect(summary.counts).toEqual({ historyItems: 1, checkpoints: 1, claudeTranscriptItems: 1, codexThreadItems: 1, providerUsage: 0 });
     expect(await adapter.listRootSessions()).toEqual([]);
+  });
+});
+
+/**
+ * Taskana 4083 / TASK.34: the provider_usage audit (migration v19). One row
+ * per completed core model step, append-only, idempotent per
+ * (session, turn, step). All tests run on :memory: or tmp-dir databases only.
+ */
+describe("SqlitePersistenceAdapter — provider_usage audit (Taskana 4083 / TASK.34)", () => {
+  function makeUsage(overrides: Partial<Parameters<SqlitePersistenceAdapter["recordProviderUsage"]>[0]> = {}) {
+    return {
+      sessionId: "s1",
+      turnId: "t1",
+      step: 1,
+      createdAt: 1000,
+      model: "m1",
+      reasoningEffort: "medium",
+      inputTokens: 100,
+      cachedInputTokens: 90,
+      outputTokens: 10,
+      totalTokens: 110,
+      finishReason: "stop",
+      transportRetries: 2,
+      ...overrides,
+    };
+  }
+
+  it("round-trips a full record field-for-field", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    const full = makeUsage();
+    await adapter.recordProviderUsage(full);
+    expect(await adapter.listProviderUsage("s1")).toEqual([full]);
+    await adapter.close();
+  });
+
+  it("round-trips an optional-absent record with undefined (not 0) token fields", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    await adapter.recordProviderUsage(
+      makeUsage({ model: undefined, reasoningEffort: undefined, inputTokens: undefined, cachedInputTokens: undefined, outputTokens: undefined, totalTokens: undefined }),
+    );
+    const rows = await adapter.listProviderUsage("s1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.model).toBeUndefined();
+    expect(rows[0]!.reasoningEffort).toBeUndefined();
+    expect(rows[0]!.inputTokens).toBeUndefined();
+    expect(rows[0]!.cachedInputTokens).toBeUndefined();
+    expect(rows[0]!.outputTokens).toBeUndefined();
+    expect(rows[0]!.totalTokens).toBeUndefined();
+    expect(rows[0]!.finishReason).toBe("stop");
+    expect(rows[0]!.transportRetries).toBe(2);
+    await adapter.close();
+  });
+
+  it("is idempotent per (session, turn, step): a conflicting second write is ignored, first wins", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    await adapter.recordProviderUsage(makeUsage({ inputTokens: 100, outputTokens: 10 }));
+    await adapter.recordProviderUsage(makeUsage({ createdAt: 2000, inputTokens: 999, outputTokens: 888, finishReason: "length" }));
+    const rows = await adapter.listProviderUsage("s1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.inputTokens).toBe(100);
+    expect(rows[0]!.outputTokens).toBe(10);
+    expect(rows[0]!.finishReason).toBe("stop");
+    expect(rows[0]!.createdAt).toBe(1000);
+    await adapter.close();
+  });
+
+  it("orders by created_at ASC (step ASC tiebreak) across interleaved turns", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    await adapter.recordProviderUsage(makeUsage({ turnId: "t2", step: 1, createdAt: 3000 }));
+    await adapter.recordProviderUsage(makeUsage({ turnId: "t1", step: 2, createdAt: 2000 }));
+    await adapter.recordProviderUsage(makeUsage({ turnId: "t1", step: 1, createdAt: 1000 }));
+    const rows = await adapter.listProviderUsage("s1");
+    expect(rows.map((r) => [r.turnId, r.step])).toEqual([
+      ["t1", 1],
+      ["t1", 2],
+      ["t2", 1],
+    ]);
+    await adapter.close();
+  });
+
+  it("keeps a missing cached_input_tokens column NULL on disk (undefined, never 0)", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "anycode-usage-"));
+    try {
+      const dbPath = join(tmp, "usage.sqlite");
+      const adapter = new SqlitePersistenceAdapter(dbPath);
+      await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+      await adapter.recordProviderUsage(makeUsage({ cachedInputTokens: undefined }));
+      await adapter.close();
+      const raw = new DatabaseSync(dbPath);
+      try {
+        const row = raw.prepare("SELECT cached_input_tokens FROM provider_usage WHERE session_id = 's1'").get() as { cached_input_tokens: number | null };
+        expect(row.cached_input_tokens).toBeNull();
+      } finally {
+        raw.close();
+      }
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("survives a close/reopen cycle (restart/resume evidence)", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "anycode-usage-"));
+    try {
+      const dbPath = join(tmp, "usage.sqlite");
+      const first = new SqlitePersistenceAdapter(dbPath);
+      await first.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+      await first.recordProviderUsage(makeUsage());
+      await first.close();
+      const second = new SqlitePersistenceAdapter(dbPath);
+      const rows = await second.listProviderUsage("s1");
+      expect(rows).toEqual([makeUsage()]);
+      await second.close();
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("cascades with deleteSessionTree: counts.providerUsage and an empty list after", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    await adapter.recordProviderUsage(makeUsage({ step: 1 }));
+    await adapter.recordProviderUsage(makeUsage({ step: 2, createdAt: 2000 }));
+    const summary = await adapter.deleteSession("s1");
+    expect(summary.counts.providerUsage).toBe(2);
+    expect(await adapter.listProviderUsage("s1")).toEqual([]);
+    await adapter.close();
   });
 });

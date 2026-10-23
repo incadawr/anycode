@@ -45,6 +45,8 @@ import {
   RuleAwarePermissionEngine,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SessionPermissionRules,
+  SqlitePersistenceAdapter,
+  type ProviderUsageRecord,
   bashTool,
   createDefaultToolRegistry,
   buildChildModelSettingsResolver,
@@ -101,9 +103,12 @@ import {
   Outbound,
   REPLAY_BUFFER_CAP,
   Session,
+  summarizeProviderUsage,
   tapChildPermissions,
   type ChildProgressReport,
   type ChildTerminalReport,
+  type ProviderUsageAudit,
+  type ProviderUsageSummaryPort,
   type SessionOptions,
   type SessionPersistence,
 } from "./session.js";
@@ -6770,6 +6775,420 @@ describe("Session — child mode: engine-death latch vs recoverable errors (TASK
       expect(report.status).toBe("error");
       expect(report.finalText).not.toContain("secret-poison");
       expect(JSON.stringify(h.received)).not.toContain("secret-poison");
+    } finally {
+      h.close();
+    }
+  });
+});
+
+/**
+ * Taskana 4083 / TASK.34: the persistent per-step provider-usage audit.
+ * Mirrors the TASK.117 describe's usageStep shape; the harness's new
+ * `usageAudit` option threads a recording sink + summary port into Session
+ * exactly the way host/index.ts wires the real SqlitePersistenceAdapter.
+ */
+describe("Session — provider usage audit (Taskana 4083)", () => {
+  type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
+  const isCheckpoint = (m: HostToUiMessage): m is Of<"session_checkpoint"> => m.type === "session_checkpoint";
+  const isUsageAudit = (m: HostToUiMessage): m is Of<"usage_audit"> => m.type === "usage_audit";
+
+  const usageStep = (
+    usage: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; totalTokens?: number },
+    text: string,
+  ): ModelStreamEvent[] => [
+    { type: "start" },
+    { type: "text_start", id: "t1" },
+    { type: "text_delta", id: "t1", text },
+    { type: "text_end", id: "t1" },
+    { type: "finish", finishReason: "stop", usage },
+  ];
+
+  const retryStep = (
+    usage: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; totalTokens?: number },
+    retries: number,
+  ): ModelStreamEvent[] => [
+    ...Array.from({ length: retries }, (_, i): ModelStreamEvent => ({
+      type: "stream_retry",
+      attempt: i + 1,
+      maxAttempts: 3,
+      delayMs: 1,
+      reason: "test retry",
+    })),
+    { type: "start" },
+    { type: "tool_call", toolCall: { id: "call-r", name: "Write", input: WRITE_INPUT } },
+    { type: "finish", finishReason: "tool_calls", usage },
+  ];
+
+  /** A recording sink: captures every record() call, never throws. */
+  function recordingSink(): { sink: ProviderUsageAudit; records: Parameters<ProviderUsageAudit["record"]>[0][] } {
+    const records: Parameters<ProviderUsageAudit["record"]>[0][] = [];
+    return { sink: { record: (r) => void records.push(structuredClone(r)) }, records };
+  }
+
+  /** A fake summary port over a canned result. */
+  function fakeSummary(result: Awaited<ReturnType<ProviderUsageSummaryPort["summary"]>>): ProviderUsageSummaryPort {
+    return { summary: () => Promise.resolve(structuredClone(result)) };
+  }
+
+  async function runOneTurn(
+    h: ReturnType<typeof createHarness>,
+    requestId = "r1",
+  ): Promise<{ turnId: string }> {
+    h.send({ type: "user_message", requestId, text: "go" });
+    await h.waitFor((m): m is HostToUiMessage => m.type === "agent_event" && m.event.type === "loop_end");
+    await h.flush();
+    const turnStarted = h.received.find((m): m is Of<"turn_started"> => m.type === "turn_started");
+    expect(turnStarted).toBeDefined();
+    return { turnId: turnStarted!.turnId };
+  }
+
+  it("normal finish: sink records ONE entry with the real outer turnId, step 1, model, finishReason", async () => {
+    const { sink, records } = recordingSink();
+    const h = createHarness({
+      steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],
+      usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const { turnId } = await runOneTurn(h);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toEqual({
+        turnId,
+        step: 1,
+        model: "scripted-model",
+        reasoningEffort: "off",
+        inputTokens: 10,
+        cachedInputTokens: undefined,
+        outputTokens: 4,
+        totalTokens: 14,
+        finishReason: "stop",
+        transportRetries: 0,
+      });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("multi-step turn: a tool-call step then a final step -> 2 records with the right usage each", async () => {
+    const { sink, records } = recordingSink();
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write" }); // auto-allow: no permission ask parks the turn
+    const h = createHarness({
+      steps: [
+        [
+          { type: "start" },
+          { type: "tool_call", toolCall: { id: "call-1", name: "Write", input: WRITE_INPUT } },
+          { type: "finish", finishReason: "tool_calls", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } },
+        ],
+        usageStep({ inputTokens: 20, outputTokens: 6, totalTokens: 26 }, "done"),
+      ],
+      rules,
+      usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await runOneTurn(h);
+      expect(records).toHaveLength(2);
+      expect(records[0]!.step).toBe(1);
+      expect(records[0]!.inputTokens).toBe(7);
+      expect(records[0]!.finishReason).toBe("tool_calls");
+      expect(records[1]!.step).toBe(2);
+      expect(records[1]!.inputTokens).toBe(20);
+      expect(records[1]!.totalTokens).toBe(26);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("missing cache field: usage without cachedInputTokens -> record has cachedInputTokens === undefined", async () => {
+    const { sink, records } = recordingSink();
+    const h = createHarness({
+      steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],
+      usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await runOneTurn(h);
+      expect(records).toHaveLength(1);
+      expect(records[0]!.cachedInputTokens).toBeUndefined();
+    } finally {
+      h.close();
+    }
+  });
+
+  it("retry-before-finish: transportRetries carries the step's stream_retry count; a no-retry step records 0", async () => {
+    const { sink, records } = recordingSink();
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write" }); // auto-allow: the tool step runs without an ask
+    const h = createHarness({
+      steps: [retryStep({ inputTokens: 5, outputTokens: 2, totalTokens: 7 }, 2), usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "final")],
+      rules,
+      usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await runOneTurn(h);
+      expect(records).toHaveLength(2);
+      expect(records[0]!.transportRetries).toBe(2);
+      expect(records[1]!.transportRetries).toBe(0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("no double record on reconnect replay: the SECOND sink call is a no-op in storage (real adapter as the summary)", async () => {
+    // Integration, no fake: the real SqlitePersistenceAdapter backs BOTH the
+    // sink (idempotent by PK) and the summary, exactly as host/index.ts wires it.
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const sinkRecords: Parameters<ProviderUsageAudit["record"]>[0][] = [];
+    const usageAudit = {
+      sink: {
+        record: (r: Parameters<ProviderUsageAudit["record"]>[0]) => {
+          sinkRecords.push(structuredClone(r));
+          void adapter.recordProviderUsage({ ...r, sessionId: "test-session", createdAt: Date.now() }).catch(() => {});
+        },
+      } satisfies ProviderUsageAudit,
+      summary: {
+        summary: () => adapter.listProviderUsage("test-session").then(summarizeProviderUsage),
+      } satisfies ProviderUsageSummaryPort,
+    };
+    const h = createHarness({ steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")], usageAudit });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await runOneTurn(h);
+      expect(sinkRecords).toHaveLength(1);
+      // Reconnect replay delivers the same finish again: the sink fires a
+      // second time, but the PK makes it a storage no-op — one durable row.
+      // (A ui_ready re-handshake re-runs the ring replay through the SAME
+      // outbound port, exactly the duplicate-finish window production sees.)
+      const sinkCallsBeforeReplay = sinkRecords.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isCheckpoint).length >= 2);
+      await h.flush();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(sinkRecords.length).toBeGreaterThanOrEqual(sinkCallsBeforeReplay);
+      const s = await usageAudit.summary.summary();
+      expect(s.steps).toHaveLength(1);
+      expect(s.steps[0]!.inputTokens).toBe(10);
+      expect(s.totals).toEqual({ input: 10, output: 4, total: 14, stepsReported: 1, stepsWithCache: 0 });
+    } finally {
+      h.close();
+      await adapter.close();
+    }
+  });
+
+  it("storage failure: a rejecting sink never breaks the turn (loop_end observed, error logged, nothing thrown)", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Production shape: the sink itself swallows/logs (host/index.ts wires
+      // persistence.recordProviderUsage(...).catch(console.error)). A rejecting
+      // PROMISE (not a synchronous throw) is the honest failure mode.
+      const consoleError2 = consoleError;
+      const sink: ProviderUsageAudit = {
+        record: () => {
+          Promise.reject(new Error("audit sink boom")).catch((e) =>
+            consoleError2(`[test] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`),
+          );
+        },
+      };
+      const h = createHarness({
+        steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],
+        usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
+      });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+        h.send({ type: "user_message", requestId: "r1", text: "go" });
+        await h.waitFor((m): m is HostToUiMessage => m.type === "agent_event" && m.event.type === "loop_end");
+        await h.flush();
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("usage audit"));
+      } finally {
+        h.close();
+      }
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("foreign engine: a codex finish with usage -> NO sink call (the core gate holds)", async () => {
+    const { sink, records } = recordingSink();
+    const h = createHarness({
+      steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],
+      usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      // Replace this with a true foreign-engine turn below.
+      h.close();
+    } finally {
+      // closed above
+    }
+    // Foreign-engine turn via a minimal engine (mirrors the TASK.117 foreign test).
+    const engine: SessionEngine = {
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: false,
+        costAccounting: false,
+        supportsModelSelection: false,
+        supportsReasoningEffort: false,
+        supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+      mode: () => "build",
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(): AsyncIterable<AgentEvent> {
+        yield { type: "turn_start", turn: 1 };
+        yield { type: "finish", finishReason: "stop", usage: { inputTokens: 99, outputTokens: 9, totalTokens: 108 } };
+        yield { type: "turn_end", turn: 1, finishReason: "stop" };
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      },
+      historyItems: () => [],
+      dispose: async () => {},
+    };
+    const h2 = createHarness({ steps: [], engine, usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) } });
+    try {
+      h2.send({ type: "ui_ready" });
+      await h2.waitFor(isHostReady);
+      h2.send({ type: "user_message", requestId: "r1", text: "go" });
+      await h2.waitFor((m): m is HostToUiMessage => m.type === "agent_event" && m.event.type === "loop_end");
+      await h2.flush();
+      expect(records).toHaveLength(0);
+    } finally {
+      h2.close();
+    }
+  });
+
+  it("absent option: no usageAudit -> everything green, no record attempts (the existing suite is this case)", async () => {
+    const h = createHarness({ steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      await runOneTurn(h);
+      // No sink was ever wired; the turn completed and no checkpoint carries usageAudit.
+      const checkpoints = h.received.filter(isCheckpoint);
+      for (const cp of checkpoints) {
+        expect(cp.usageAudit).toBeUndefined();
+      }
+    } finally {
+      h.close();
+    }
+  });
+
+  it("checkpoint hydration: after a turn, a ui_ready's checkpoint carries usageAudit.lastStep + totals", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const usageAudit = {
+      sink: {
+        record: (r: Parameters<ProviderUsageAudit["record"]>[0]) => {
+          void adapter.recordProviderUsage({ ...r, sessionId: "test-session", createdAt: Date.now() }).catch(() => {});
+        },
+      } satisfies ProviderUsageAudit,
+      summary: {
+        summary: () => adapter.listProviderUsage("test-session").then(summarizeProviderUsage),
+      } satisfies ProviderUsageSummaryPort,
+    };
+    const h = createHarness({ steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")], usageAudit });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const { turnId } = await runOneTurn(h);
+      // Write-behind: wait for the row to be durable before the reconnect read.
+      let durable: ProviderUsageRecord[] = [];
+      for (let i = 0; i < 100; i++) {
+        durable = await adapter.listProviderUsage("test-session");
+        if (durable.length >= 1) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(durable).toHaveLength(1);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      // Poll on a timer (not the harness's message-driven waitUntil): the
+      // second checkpoint (the async summary push) carries the durable row,
+      // and a message-driven wait could stop at the first empty one.
+      for (let i = 0; i < 100 && !h.received.slice(before).some((m) => isCheckpoint(m) && (m.usageAudit?.totalSteps ?? -1) === 1); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const withAudit = h.received.slice(before).filter((m): m is Of<"session_checkpoint"> => isCheckpoint(m) && m.usageAudit !== undefined);
+      const checkpoint = withAudit[withAudit.length - 1]!;
+      expect(checkpoint.usageAudit!.totalSteps).toBe(1);
+      expect(checkpoint.usageAudit!.totals).toEqual({ input: 10, output: 4, total: 14, stepsReported: 1, stepsWithCache: 0 });
+      expect(checkpoint.usageAudit!.lastStep).toMatchObject({ turnId, step: 1, inputTokens: 10, outputTokens: 4, totalTokens: 14, finishReason: "stop" });
+    } finally {
+      h.close();
+      await adapter.close();
+    }
+  });
+
+  it("zero-step session: option present + summary read landed -> checkpoint carries usageAudit with totals:null, lastStep:null, totalSteps:0", async () => {
+    const h = createHarness({
+      steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],
+      usageAudit: { sink: recordingSink().sink, summary: fakeSummary({ steps: [], totals: null }) },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some((m) => isCheckpoint(m) && m.usageAudit !== undefined));
+      const checkpoint = h.received.slice(before).find((m): m is Of<"session_checkpoint"> => isCheckpoint(m) && m.usageAudit !== undefined)!;
+      expect(checkpoint.usageAudit).toEqual({ lastStep: null, totals: null, totalSteps: 0 });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("usage_audit_request: answers newest-first steps + totals; a second request returns the same (idempotent read)", async () => {
+    const steps = [
+      { sessionId: "s", turnId: "t1", step: 1, createdAt: 1000, model: "m1", reasoningEffort: "low", inputTokens: 10, outputTokens: 4, totalTokens: 14, finishReason: "stop", transportRetries: 0 },
+      { sessionId: "s", turnId: "t1", step: 2, createdAt: 2000, model: "m1", reasoningEffort: "low", inputTokens: 85900, cachedInputTokens: 85400, outputTokens: 500, totalTokens: 86400, finishReason: "stop", transportRetries: 1 },
+    ];
+    const h = createHarness({
+      steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")],
+      usageAudit: { sink: recordingSink().sink, summary: fakeSummary(summarizeProviderUsage(steps)) },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const before = h.received.length;
+      h.send({ type: "usage_audit_request" });
+      await h.waitUntil(() => h.received.slice(before).some(isUsageAudit));
+      const reply = h.received.slice(before).find(isUsageAudit)!;
+      expect(reply.steps.map((s) => s.step)).toEqual([2, 1]); // newest-first
+      expect(reply.steps[0]!.cachedInputTokens).toBe(85400);
+      expect(reply.steps[1]!.cachedInputTokens).toBeUndefined();
+      expect(reply.totals).toEqual({ input: 85910, output: 504, total: 86414, stepsReported: 2, stepsWithCache: 1 });
+      const before2 = h.received.length;
+      h.send({ type: "usage_audit_request" });
+      await h.waitUntil(() => h.received.slice(before2).some(isUsageAudit));
+      const reply2 = h.received.slice(before2).find(isUsageAudit)!;
+      expect(reply2.steps).toEqual(reply.steps);
+      expect(reply2.totals).toEqual(reply.totals);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("usage_audit_request on a session WITHOUT the option: no reply ever (foreign host posture)", async () => {
+    const h = createHarness({ steps: [usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "one")] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "usage_audit_request" });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(h.received.some(isUsageAudit)).toBe(false);
     } finally {
       h.close();
     }

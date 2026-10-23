@@ -318,6 +318,43 @@ export interface WireContextBreakdown {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// ── provider-usage audit (Taskana 4083 / TASK.34) ── durable per-step usage.
+// On-demand only, exactly like context_breakdown: the host->ui variant
+// (usage_audit) is emitted ONLY in response to a request, and the
+// session_checkpoint.usageAudit field is additive-optional, so no legacy/
+// byte-locked replay or automation snapshot carries one. The ui->host
+// direction is untrusted -> validated by zod below (fail-closed).
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * One completed model step's durable usage row (mirror of core's
+ * `ProviderUsageRecord` minus sessionId). Optional-absent fields mean
+ * "provider did not report", never 0.
+ */
+export interface WireUsageAuditStep {
+  turnId: string;
+  step: number;
+  createdAt: number;
+  model?: string;
+  reasoningEffort?: string;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  finishReason: string;
+  transportRetries: number;
+}
+
+/** Honest session totals folded from the durable step list; `stepsReported`/`stepsWithCache` expose the coverage. */
+export interface WireUsageAuditTotals {
+  input: number;
+  output: number;
+  total: number;
+  stepsReported: number;
+  stepsWithCache: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // ── checkpoints / rewind (slice P7.26 · R2) ── timeline + /rewind wire surface.
 // On-demand only, exactly like context_breakdown (§2.4): the host->ui variants
 // (checkpoint_list / rewind_result) are emitted ONLY in response to a request,
@@ -419,6 +456,11 @@ export type UiToHostMessage =
   // mid-turn (contextBreakdown() is a pure read). Sent only when the ctx-meter
   // popover opens.
   | { type: "context_breakdown_request" }
+  // Taskana 4083 / TASK.34: payload-less persistent provider-usage audit
+  // request (mirror of context_breakdown_request). Served by the CORE host
+  // only — a foreign engine's host never answers (the renderer's list stays
+  // null, same posture as an unsupported context_breakdown).
+  | { type: "usage_audit_request" }
   // TASK.146: manual conversation compaction. Payload-less, mirror of
   // context_breakdown_request. Served ONLY between turns — Session drops it
   // when busy or on an engine without `compactNow` (a chat/codex engine gates
@@ -660,6 +702,19 @@ export type HostToUiMessage =
        */
       countedSteps?: string[];
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
+      /**
+       * Taskana 4083 / TASK.34: the SQLite-backed provider-usage audit slice
+       * for THIS session (last completed step + honest totals + step count),
+       * read from the durable provider_usage table — the record that
+       * survives a host restart, unlike sessionTokens above (process
+       * lifetime). Every field additive-optional: absent = older host / no
+       * audit / nothing captured; the renderer changes nothing.
+       */
+      usageAudit?: {
+        lastStep: WireUsageAuditStep | null;
+        totals: WireUsageAuditTotals | null;
+        totalSteps: number;
+      };
       permission?: {
         requestId: string;
         toolName: string;
@@ -690,6 +745,16 @@ export type HostToUiMessage =
       content: string | null;
       truncated: boolean;
     } // content:null = unreadable / too large
+  // Taskana 4083 / TASK.34: trusted provider-usage audit list, sent ONLY in
+  // response to a usage_audit_request (no zod, precedent context_breakdown).
+  // No legacy/byte-locked flow emits one, so automation/replay snapshots stay
+  // byte-identical. Core host only; a foreign host never answers.
+  | {
+      type: "usage_audit";
+      /** Newest-first, bounded to the last 50 steps. */
+      steps: WireUsageAuditStep[];
+      totals: WireUsageAuditTotals | null;
+    }
   | { type: "mode_changed"; mode: PermissionMode }
   | { type: "reasoning_effort_changed"; effort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] }
   // Slice P7.15 (F14): host acknowledges a `set_model` switch (trusted, no zod,
@@ -1051,6 +1116,15 @@ export const contextBreakdownRequestSchema = z
   })
   .strict();
 
+// Taskana 4083 / TASK.34: payload-less usage-audit request (mirror of
+// contextBreakdownRequestSchema). Untrusted ui->host direction, so it rides
+// zod even though it carries no data — fail-closed on any extra key.
+export const usageAuditRequestSchema = z
+  .object({
+    type: z.literal("usage_audit_request"),
+  })
+  .strict();
+
 // TASK.146: payload-less manual-compaction request (mirror of
 // contextBreakdownRequestSchema). Fail-closed on any extra key under .strict().
 export const compactRequestSchema = z
@@ -1147,6 +1221,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   contextBreakdownRequestSchema,
+  usageAuditRequestSchema,
   compactRequestSchema,
   taskListRequestSchema,
   taskOutputRequestSchema,

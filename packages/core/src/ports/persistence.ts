@@ -145,6 +145,8 @@ export interface SessionDeleteSummary {
     checkpoints: number;
     claudeTranscriptItems: number;
     codexThreadItems: number;
+    /** Taskana 4083 / TASK.34: provider_usage rows (migration v19) the cascade removed. */
+    providerUsage: number;
   };
 }
 

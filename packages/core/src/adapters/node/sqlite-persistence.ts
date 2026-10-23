@@ -327,6 +327,35 @@ const MIGRATIONS: readonly Migration[] = [
     version: 18,
     statements: ["ALTER TABLE sessions ADD COLUMN next_image_ref INTEGER NOT NULL DEFAULT 1"],
   },
+  {
+    // Persistent per-step provider-usage audit (Taskana 4083 / TASK.34):
+    // append-only, one row per COMPLETED model step (a core `finish`). The
+    // PK (session_id, turn_id, step) makes the write idempotent per step —
+    // a replayed/duplicate finish after a renderer reconnect writes nothing
+    // new (the adapter writes INSERT OR IGNORE, first write wins). A NULL
+    // token column means "provider did not report", never 0 — undefined
+    // fields stay undefined on read. No API keys, no raw payloads, no
+    // prompts — numbers and enums only.
+    version: 19,
+    statements: [
+      `CREATE TABLE provider_usage (
+         session_id TEXT NOT NULL,
+         turn_id TEXT NOT NULL,
+         step INTEGER NOT NULL,
+         created_at INTEGER NOT NULL,
+         model TEXT,
+         reasoning_effort TEXT,
+         input_tokens INTEGER,
+         cached_input_tokens INTEGER,
+         output_tokens INTEGER,
+         total_tokens INTEGER,
+         finish_reason TEXT NOT NULL,
+         transport_retries INTEGER NOT NULL DEFAULT 0,
+         PRIMARY KEY (session_id, turn_id, step)
+       )`,
+      `CREATE INDEX idx_provider_usage_session ON provider_usage (session_id, created_at ASC)`,
+    ],
+  },
 ];
 
 /**
@@ -638,6 +667,61 @@ function rowToCodexShadowCommandItem(row: CodexThreadItemRow): CodexShadowComman
 }
 
 // ---------------------------------------------------------------------------
+// Provider usage audit (Taskana 4083 / TASK.34) — migration v19. One row per
+// completed core model step, written fire-and-forget by the desktop host's
+// write-behind recorder. Numbers and enums only — no keys, no payloads, no
+// prompts; a NULL token column means "provider did not report", never 0.
+
+/** One completed model step's provider-reported usage (migration v19, append-only). */
+export interface ProviderUsageRecord {
+  sessionId: string;
+  turnId: string;
+  step: number;
+  createdAt: number;
+  model?: string;
+  reasoningEffort?: string;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  finishReason: string;
+  transportRetries: number;
+}
+
+interface ProviderUsageRow {
+  session_id: string;
+  turn_id: string;
+  step: number;
+  created_at: number;
+  model: string | null;
+  reasoning_effort: string | null;
+  input_tokens: number | null;
+  cached_input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  finish_reason: string;
+  transport_retries: number;
+}
+
+/** Mirrors rowToCodexShadowCommandItem: optional fields spread only when non-null (undefined never decodes as 0). */
+function rowToProviderUsage(row: ProviderUsageRow): ProviderUsageRecord {
+  return {
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    step: row.step,
+    createdAt: row.created_at,
+    ...(row.model !== null ? { model: row.model } : {}),
+    ...(row.reasoning_effort !== null ? { reasoningEffort: row.reasoning_effort } : {}),
+    ...(row.input_tokens !== null ? { inputTokens: row.input_tokens } : {}),
+    ...(row.cached_input_tokens !== null ? { cachedInputTokens: row.cached_input_tokens } : {}),
+    ...(row.output_tokens !== null ? { outputTokens: row.output_tokens } : {}),
+    ...(row.total_tokens !== null ? { totalTokens: row.total_tokens } : {}),
+    finishReason: row.finish_reason,
+    transportRetries: row.transport_retries,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Claude shadow transcript mirror (migration v12, cut §1.5) — mirrors the
 // codex_thread_items shape above, but the payload is a ready HistoryItem
 // projection rather than structured command fields.
@@ -910,7 +994,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       .all(rootId) as unknown as { id: string; external_session_ref: string | null; engine_id: string | null }[];
 
     const deletedSessionIds = treeRows.map((row) => row.id);
-    const counts = { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 };
+    const counts = { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 };
     if (deletedSessionIds.length === 0) {
       return { deletedSessionIds, externalSessionRefs: [], counts };
     }
@@ -921,6 +1005,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     const idPlaceholders = deletedSessionIds.map(() => "?").join(", ");
     counts.historyItems = Number(db.prepare(`DELETE FROM history_items WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
     counts.checkpoints = Number(db.prepare(`DELETE FROM checkpoints WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
+    // Taskana 4083 / TASK.34: the usage audit is keyed by the AnyCode session
+    // id directly (unlike the shadow logs' native engine refs), so it cascades
+    // with the same placeholders as history/checkpoints.
+    counts.providerUsage = Number(db.prepare(`DELETE FROM provider_usage WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
 
     // The shadow-log tables are keyed by the native engine ref (thread_id /
     // session_ref), never the AnyCode session id — see codex/shadow-log.ts
@@ -1357,6 +1445,49 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   // -------------------------------------------------------------------------
+  // Provider usage audit (Taskana 4083 / TASK.34, migration v19). Additive to
+  // PersistencePort — host-only usage, never consumed through that interface
+  // (mirrors the shadow-log precedents above).
+
+  /**
+   * Appends one completed-step usage row. INSERT OR IGNORE by the
+   * (session_id, turn_id, step) PK: idempotent per step, first write wins —
+   * a replayed/duplicate finish after a reconnect writes nothing new.
+   */
+  async recordProviderUsage(record: ProviderUsageRecord): Promise<void> {
+    const db = this.open();
+    db.prepare(
+      `INSERT OR IGNORE INTO provider_usage
+         (session_id, turn_id, step, created_at, model, reasoning_effort,
+          input_tokens, cached_input_tokens, output_tokens, total_tokens,
+          finish_reason, transport_retries)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      record.sessionId,
+      record.turnId,
+      record.step,
+      record.createdAt,
+      record.model ?? null,
+      record.reasoningEffort ?? null,
+      record.inputTokens ?? null,
+      record.cachedInputTokens ?? null,
+      record.outputTokens ?? null,
+      record.totalTokens ?? null,
+      record.finishReason,
+      record.transportRetries,
+    );
+  }
+
+  /** Ordered oldest-first: (created_at ASC, then step ASC). */
+  async listProviderUsage(sessionId: string): Promise<ProviderUsageRecord[]> {
+    const db = this.open();
+    const rows = db
+      .prepare("SELECT * FROM provider_usage WHERE session_id = ? ORDER BY created_at ASC, step ASC")
+      .all(sessionId) as unknown as ProviderUsageRow[];
+    return rows.map(rowToProviderUsage);
+  }
+
+  // -------------------------------------------------------------------------
   // Claude shadow transcript mirror (migration v12, cut §1.5). Additive to
   // PersistencePort — host-only usage, never consumed through that interface
   // (mirrors the codex_thread_items precedent immediately above).
@@ -1398,7 +1529,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return {
       deleted: [],
       removedIds: [],
-      counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+      counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 },
     };
   }
 
@@ -1409,6 +1540,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     target.counts.checkpoints += add.counts.checkpoints;
     target.counts.claudeTranscriptItems += add.counts.claudeTranscriptItems;
     target.counts.codexThreadItems += add.counts.codexThreadItems;
+    target.counts.providerUsage += add.counts.providerUsage;
   }
 
   /** TASK.114: one root — `deleteSessionTree`'s engine + the summary aggregate. */

@@ -83,13 +83,13 @@ const persistenceStub: TabIpcDeps["persistence"] = {
   deleteSession: async () => ({
     deleted: [],
     removedIds: [],
-    counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+    counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 },
   }),
   listSessionsOlderThan: async () => [],
   deleteSessions: async () => ({
     deleted: [],
     removedIds: [],
-    counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+    counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 },
   }),
   getChildSession: async () => null,
   getSessionById: async () => null,
@@ -300,9 +300,9 @@ describe("handleCreate — persisted engine identity", () => {
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => ({
         id: "worktree-session",
@@ -340,9 +340,9 @@ describe("handleCreate — persisted engine identity", () => {
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => ({
         id: "codex-session",
@@ -372,9 +372,9 @@ describe("handleCreate — persisted engine identity", () => {
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => ({
         id: "unknown-session",
@@ -405,9 +405,9 @@ describe("handleCreate — imported-session model override (codex-profiles S4-1 
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
     getRootSession: async () => importMeta(id),
     listRootSessions: async () => [],
@@ -540,9 +540,9 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ connectionId: "conn-x" }),
       listRootSessions: async () => [],
@@ -563,9 +563,9 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ connectionId: "conn-gone" }),
       listRootSessions: async () => [],
@@ -585,9 +585,9 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta(), // no connectionId
       listRootSessions: async () => [],
@@ -609,9 +609,9 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ connectionId: "conn-x" }),
       listRootSessions: async () => [],
@@ -632,9 +632,9 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ connectionId: "conn-x" }),
       listRootSessions: async () => [],
@@ -654,9 +654,9 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ connectionId: "conn-dead" }),
       listRootSessions: async () => [],
@@ -688,9 +688,9 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ connectionId: "conn-alive" }),
       listRootSessions: async () => [],
@@ -720,9 +720,9 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ connectionId: "conn-dead" }),
       listRootSessions: async () => [],
@@ -754,9 +754,9 @@ describe("handleCreate — connection pinning + resume matrix (TASK.45 W10)", ()
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ connectionId: "conn-dead" }),
       listRootSessions: async () => [],
@@ -1012,9 +1012,9 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta(),
       listRootSessions: async () => [],
@@ -1036,9 +1036,9 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ codexProfileId: "work" }),
       listRootSessions: async () => [],
@@ -1060,9 +1060,9 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ codexProfileId: "deleted-profile" }),
       listRootSessions: async () => [],
@@ -1085,9 +1085,9 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ codexProfileId: "work" }),
       listRootSessions: async () => [],
@@ -1141,9 +1141,9 @@ describe("handleCreate — readiness gate keys on the PICKED Codex profile (S3-1
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
       getRootSession: async () => resumeMeta({ codexProfileId: "work" }),
       listRootSessions: async () => [],
@@ -1321,9 +1321,9 @@ describe("handleCreate — unknown-readiness hydration (TASK.64)", () => {
       getChildSession: async () => null,
       getSessionById: async () => null,
       // TASK.114 stubs — the Pick grew three methods; these tests never call them.
-      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       listSessionsOlderThan: async () => [],
-      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+      deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
       loadHistory: async () => [],
     getRootSession: async () => meta,
     listRootSessions: async () => [],
@@ -1559,7 +1559,7 @@ describe("handleSessionDelete (TASK.114)", () => {
       ...persistenceStub,
       deleteSession: async (id: string) => {
         deletedWith.push([id]);
-        return { deleted: [id], removedIds: [id], counts: { historyItems: 1, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } };
+        return { deleted: [id], removedIds: [id], counts: { historyItems: 1, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } };
       },
       ...over,
     };
@@ -1636,7 +1636,7 @@ describe("handleSessionDelete (TASK.114)", () => {
         deleted: ["s1"],
         skippedActive: [],
         removedIds: ["s1"],
-        counts: { historyItems: 1, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+        counts: { historyItems: 1, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 },
       },
     });
   });
@@ -1661,7 +1661,7 @@ describe("handleSessionsDeleteOlder (TASK.114)", () => {
         return {
           deleted: [...ids],
           removedIds: [...ids],
-          counts: { historyItems: ids.length, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+          counts: { historyItems: ids.length, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 },
         };
       },
     };
@@ -1704,7 +1704,7 @@ describe("handleSessionsDeleteOlder (TASK.114)", () => {
       summary: expect.objectContaining({
         deleted: ["old-1", "old-2"],
         skippedActive: [],
-        counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+        counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 },
       }),
     });
   });
@@ -2258,9 +2258,9 @@ function metaPersistenceResume(meta: ReturnType<typeof codexMetaResume>): TabIpc
   return {
     getChildSession: async () => null,
     getSessionById: async () => null,
-    deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+    deleteSession: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
     listSessionsOlderThan: async () => [],
-    deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 } }),
+    deleteSessions: async () => ({ deleted: [], removedIds: [], counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 } }),
     loadHistory: async () => [],
     getRootSession: async () => meta,
     listRootSessions: async () => [],

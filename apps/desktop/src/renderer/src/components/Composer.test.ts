@@ -24,6 +24,8 @@ import {
   formatQuotaWindowLine,
   formatSessionTokensLine,
   formatLatestCacheHitLine,
+  formatUsageAuditLines,
+  formatUsageAuditStepRow,
   hasSendableDraft,
   insertDraftText,
   quotaWindowLabel,
@@ -446,5 +448,73 @@ describe("assumed context window hint (Taskana 4127)", () => {
   it("marks the ctx meter label only when the window is assumed", () => {
     expect(ctxMeterLabel(42, true)).toBe("\u224842% ctx");
     expect(ctxMeterLabel(42, false)).toBe("42% ctx");
+  });
+});
+
+/**
+ * Taskana 4083 / TASK.34: the durable audit lines. The last-step cache % is
+ * computed ONLY from that step's own numbers; absent fields render the honest
+ * "not reported" line; cost/quota wording never appears (the provider did not
+ * report it).
+ */
+describe("formatUsageAuditLines (Taskana 4083 / TASK.34)", () => {
+  const step = {
+    turnId: "t1",
+    step: 2,
+    createdAt: 2000,
+    model: "m1",
+    reasoningEffort: "low",
+    finishReason: "stop",
+    transportRetries: 0,
+  };
+
+  it("totals null -> both lines null", () => {
+    expect(formatUsageAuditLines({ lastStep: null, totals: null })).toEqual({ session: null, lastStep: null });
+  });
+
+  it("totals present -> the exact audited-session string", () => {
+    const lines = formatUsageAuditLines({
+      lastStep: null,
+      totals: { input: 85_900, output: 500, total: 86_400, stepsReported: 2, stepsWithCache: 1 },
+    });
+    expect(lines.session).toBe("Audited (2 steps, 1 with cache): in 85.9K · out 500 · total 86.4K");
+    expect(lines.lastStep).toBeNull();
+  });
+
+  it("lastStep without cache -> the honest not-reported line", () => {
+    const lines = formatUsageAuditLines({
+      lastStep: { ...step, inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+      totals: null,
+    });
+    expect(lines.lastStep).toBe("Last audited step: cache not reported by provider");
+  });
+
+  it("lastStep with the live 85.4K/85.9K reading -> a 99% cache line from THAT step's own numbers", () => {
+    const lines = formatUsageAuditLines({
+      lastStep: { ...step, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 500, totalTokens: 86_400 },
+      totals: null,
+    });
+    expect(lines.lastStep).toBe("Last audited step: 99% cache (85.4K/85.9K input)");
+  });
+
+  it("never renders cost or quota wording", () => {
+    const lines = formatUsageAuditLines({
+      lastStep: { ...step, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 500, totalTokens: 86_400 },
+      totals: { input: 85_900, output: 500, total: 86_400, stepsReported: 1, stepsWithCache: 1 },
+    });
+    expect(lines.session).not.toMatch(/cost|quota/i);
+    expect(lines.lastStep).not.toMatch(/cost|quota/i);
+  });
+});
+
+describe("formatUsageAuditStepRow (Taskana 4083 / TASK.34)", () => {
+  it("omits cached/retry parts when undefined/0", () => {
+    const base = { turnId: "t1", createdAt: 1, finishReason: "stop" };
+    expect(formatUsageAuditStepRow({ ...base, step: 1, inputTokens: 10, outputTokens: 4, transportRetries: 0 })).toBe(
+      "step 1 · in 10 · out 4",
+    );
+    expect(
+      formatUsageAuditStepRow({ ...base, step: 2, inputTokens: 85_900, cachedInputTokens: 85_400, outputTokens: 500, transportRetries: 2 }),
+    ).toBe("step 2 · in 85.9K · cached 85.4K · out 500 · retry 2");
   });
 });
