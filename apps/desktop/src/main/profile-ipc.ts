@@ -264,8 +264,10 @@ function defaultTelemetryDir(home: string): string {
   return `${stripTrailingSep(home)}/.anycode/telemetry`;
 }
 
-/** `<home>/.anycode/config.json` — byte-identical to core/telemetry/settings.ts's `userTelemetryConfigPath`. */
-function userConfigPath(home: string): string {
+/** `<home>/.anycode/config.json` — byte-identical to core/telemetry/settings.ts's `userTelemetryConfigPath`.
+ *  Exported for telemetry-retention.ts (Taskana 4109 / TASK.122), which reads
+ *  `telemetry.retention` from the exact config Profile reads. */
+export function userConfigPath(home: string): string {
   return `${stripTrailingSep(home)}/.anycode/config.json`;
 }
 
@@ -276,8 +278,9 @@ function isAbsolutePath(path: string): boolean {
 
 const TELEMETRY_KILL_SWITCH_VALUES = new Set(["0", "false", "off"]);
 
-/** Mirror of core/telemetry/config.ts's (unexported) kill-switch check. */
-function isKillSwitchActive(env: NodeJS.ProcessEnv): boolean {
+/** Mirror of core/telemetry/config.ts's (unexported) kill-switch check.
+ *  Exported for telemetry-retention.ts (Taskana 4109 / TASK.122). */
+export function isKillSwitchActive(env: NodeJS.ProcessEnv): boolean {
   const raw = env.ANYCODE_TELEMETRY;
   return raw !== undefined && TELEMETRY_KILL_SWITCH_VALUES.has(raw.toLowerCase());
 }
@@ -314,14 +317,17 @@ async function readUserTelemetryDirOverride(fs: ProfileFs, home: string): Promis
   }
 }
 
-interface ResolvedProfileDir {
+/** Exported for telemetry-retention.ts (Taskana 4109 / TASK.122), which must
+ *  sweep EXACTLY the directory Profile reads. */
+export interface ResolvedProfileDir {
   dir: string;
   telemetryEnabled: boolean;
   killSwitchActive: boolean;
 }
 
-/** Resolves the scan/reveal directory + status flags per §2-D2. Never throws (loadTelemetryConfig + readUserTelemetryDirOverride are both fail-soft). */
-async function resolveProfileDir(deps: ProfileIpcDeps): Promise<ResolvedProfileDir> {
+/** Resolves the scan/reveal directory + status flags per §2-D2. Never throws (loadTelemetryConfig + readUserTelemetryDirOverride are both fail-soft).
+ *  Exported for telemetry-retention.ts (Taskana 4109 / TASK.122). */
+export async function resolveProfileDir(deps: ProfileIpcDeps): Promise<ResolvedProfileDir> {
   const home = deps.home();
   const killSwitchActive = isKillSwitchActive(deps.env);
   const loaded = await loadTelemetryConfig(deps.fs, home, home, deps.env);
