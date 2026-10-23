@@ -18,17 +18,23 @@
  *  - `noteTurnSettled(lastPublicText)`: the turn's final text. A terminal
  *    marker present anywhere in it means the supervisor CLOSED the task —
  *    disarm permanently until the next settle. Otherwise arm `firstAfterMs`.
- *  - `noteTurnStarted()`: any new turn start proves the supervisor woke on
- *    its own — disarm the pending reminder and reset the counter (a reminder
- *    racing through anyway is held harmlessly by the busy child_report queue).
+ *  - `noteTurnStarted()`: any new turn start disarms the pending reminder (a
+ *    reminder racing through anyway is held harmlessly by the busy
+ *    child_report queue). The counter survives, so a reminder's own turn
+ *    that again ends without a marker continues the chain.
  *  - `noteBackgroundChildrenChanged(n)`: live detached children going
  *    non-empty disarms (work is in flight; the per-child SubagentStallClock
  *    owns that regime); returning to empty re-arms a FRESH `firstAfterMs`.
  *
+ * Supervision gate: the watchdog only arms for a session that has had a
+ * live detached child since its last terminal marker — an ordinary chat
+ * (every root session carries the seam) is never nagged.
+ *
  * Reminder cadence: the first reminder fires after `firstAfterMs`; every
  * subsequent one after `repeatEveryMs`, with `reminderCount` 1, 2, 3, … The
  * text swap at escalation is the CALLER's job — the report just carries
- * `escalated: true` once `reminderCount > escalateAfter`.
+ * `escalated: true` once `reminderCount > escalateAfter`. The escalated
+ * reminder is the last one until real progress (marker or child dispatch).
  */
 
 export interface SupervisorIdleFacts {
@@ -94,6 +100,20 @@ export class SupervisorIdleWatchdog {
   private reminderCount = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  /**
+   * True once this session has had a live detached child since its last
+   * terminal marker — i.e. it is actually SUPERVISING. Every root session
+   * carries the seam (codex and core), so without this gate an ordinary chat
+   * whose answer happens to lack a marker word would get a system reminder
+   * turn every 15 minutes. Cleared by a terminal marker (the chain closed).
+   */
+  private supervising = false;
+  /**
+   * True after the escalated (owner) reminder fired: the chain stays silent
+   * until real progress (a marker, or a child dispatch) — the reminders are
+   * themselves paid turns and must not repeat forever on an unattended night.
+   */
+  private exhausted = false;
 
   constructor(facts: SupervisorIdleFacts, onIdle: (report: SupervisorIdleReport) => void) {
     this.facts = facts;
@@ -103,8 +123,11 @@ export class SupervisorIdleWatchdog {
 
   /**
    * Called when the session's turn settles. `lastPublicText` = the turn's
-   * final assistant text: a terminal marker anywhere in it → disarm; else arm
-   * the first reminder for `firstAfterMs` (fresh stretch, counter reset).
+   * final assistant text: a terminal marker anywhere in it → disarm and end
+   * supervision. Otherwise (only while supervising): the first settle of a
+   * silent stretch arms `firstAfterMs`; a settle that follows a reminder
+   * (the reminder's own turn, still no marker) keeps the counter and arms
+   * `repeatEveryMs`, so the chain does escalate instead of restarting at 1.
    */
   noteTurnSettled(lastPublicText: string): void {
     if (this.disposed) {
@@ -112,12 +135,22 @@ export class SupervisorIdleWatchdog {
     }
     if (this.hasTerminalMarker(lastPublicText)) {
       this.disarm();
+      this.reminderCount = 0;
+      this.supervising = false;
+      this.exhausted = false;
+      return;
+    }
+    if (!this.supervising || this.exhausted) {
+      return;
+    }
+    if (this.reminderCount > 0) {
+      this.schedule(this.facts.repeatEveryMs);
       return;
     }
     this.armFresh();
   }
 
-  /** Any new turn start disarms the pending reminder (the supervisor woke on its own). */
+  /** Any new turn start disarms the pending reminder (the supervisor is awake). */
   noteTurnStarted(): void {
     if (this.disposed) {
       return;
@@ -126,17 +159,20 @@ export class SupervisorIdleWatchdog {
   }
 
   /**
-   * Live detached children changed: non-empty → disarm (work in flight, the
-   * per-child stall clock owns that regime); empty again → re-arm a FRESH
-   * `firstAfterMs`.
+   * Live detached children changed: non-empty → this session supervises;
+   * disarm and reset (work in flight, the per-child stall clock owns that
+   * regime); empty again → re-arm a FRESH `firstAfterMs`.
    */
   noteBackgroundChildrenChanged(liveChildren: number): void {
     if (this.disposed) {
       return;
     }
     if (liveChildren > 0) {
+      this.supervising = true;
+      this.exhausted = false;
+      this.reminderCount = 0;
       this.disarm();
-    } else {
+    } else if (this.supervising && !this.exhausted) {
       this.armFresh();
     }
   }
@@ -144,20 +180,11 @@ export class SupervisorIdleWatchdog {
   /** Stops everything permanently — no further reminder can ever fire. */
   dispose(): void {
     this.disposed = true;
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+    this.disarm();
   }
 
   private hasTerminalMarker(text: string): boolean {
-    return this.facts.terminalMarkers.some((marker) => {
-      try {
-        return new RegExp(`\\b${escapeRegExp(marker)}\\b`).test(text);
-      } catch {
-        return text.includes(marker);
-      }
-    });
+    return this.facts.terminalMarkers.some((marker) => new RegExp(`\\b${escapeRegExp(marker)}\\b`).test(text));
   }
 
   /** Starts a fresh silent stretch: resets the counter, arms the first reminder. */
@@ -167,7 +194,7 @@ export class SupervisorIdleWatchdog {
     this.schedule(this.facts.firstAfterMs);
   }
 
-  /** Cancels the pending reminder and freezes the current idle stretch. */
+  /** Cancels the pending reminder. */
   private disarm(): void {
     if (this.timer !== null) {
       clearTimeout(this.timer);
@@ -176,11 +203,7 @@ export class SupervisorIdleWatchdog {
   }
 
   private schedule(waitMs: number): void {
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    this.idleSince ??= Date.now();
+    this.disarm();
     this.timer = setTimeout(() => this.fire(), Math.max(0, waitMs));
     // Never itself keeps the host process alive — this is an observer, not work.
     this.timer.unref?.();
@@ -198,6 +221,11 @@ export class SupervisorIdleWatchdog {
       reminderCount: this.reminderCount,
       escalated,
     });
+    if (escalated) {
+      // The owner variant is the last word: no further reminder until progress.
+      this.exhausted = true;
+      return;
+    }
     this.schedule(this.facts.repeatEveryMs);
   }
 }
