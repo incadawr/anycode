@@ -640,7 +640,7 @@ describe("automation facade — child tabs (Taskana 4265)", () => {
 });
 
 describe("automation facade — setMode", () => {
-  it("sends set_mode when ready+idle+valid, valid against uiToHostMessageSchema", () => {
+  it("rejects an invalid mode string without sending", () => {
     const { registry, tabsStore, port, tabId } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
 

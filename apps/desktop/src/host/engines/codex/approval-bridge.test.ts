@@ -439,6 +439,33 @@ describe("CodexApprovalBridge — workspace patch auto-accept (Taskana 4265)", (
     expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
   });
 
+  it.each([[""], [42], [{}]])("treats a non-null grantRoot %j as a grant request and asks", async (grantRoot) => {
+    const { bridge, broker, emitted } = rig4265(fileItem(join(WS, "a.ts")), { patchAutoApproval: patchCtx() });
+    const response = responder();
+    bridge.handle(file({ grantRoot }), response);
+    await vi.waitFor(() => expect(emitted.some((m) => m.type === "permission_request")).toBe(true));
+    expect(response.result).not.toHaveBeenCalled();
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("errors Stale (never parks an ask) when the turn ends during the await of a non-accepted patch", async () => {
+    let calls = 0;
+    const items = fileItem(join(OUTSIDE, "x.ts"));
+    const activeTurn = (): ActiveCodexTurn | null => {
+      calls += 1;
+      return calls <= 1 ? { ...ACTIVE, items } : null;
+    };
+    const { bridge, broker, emitted } = rig4265(items, { patchAutoApproval: patchCtx(), activeTurn });
+    const response = responder();
+    bridge.handle(file(), response);
+    await vi.waitFor(() => expect(response.error).toHaveBeenCalled());
+    expect(response.error).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("Stale") }));
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
+    expect(broker.pendingCount).toBe(0);
+  });
+
   it("a command approval still asks even with the policy present", async () => {
     const { bridge, broker, emitted } = rig4265(new TurnItemIndex(), { patchAutoApproval: patchCtx() });
     const response = responder();

@@ -251,7 +251,9 @@ export class CodexApprovalBridge {
     const ctx = this.options.patchAutoApproval;
     if (ctx !== undefined && serverRequest.method === OBSERVED_FILE_CHANGE_APPROVAL_METHOD) {
       const params = record(serverRequest.params);
-      const grantRoot = optionalString(params?.grantRoot);
+      // Fail closed: anything but an absent/null grantRoot (incl. "" or a non-string) is a grant request.
+      const rawGrantRoot = params?.grantRoot;
+      const grantRoot = rawGrantRoot === undefined || rawGrantRoot === null ? null : typeof rawGrantRoot === "string" ? rawGrantRoot : "<non-string>";
       const itemId = decoded.request.toolCallId;
       let accept = false;
       try {
@@ -259,12 +261,14 @@ export class CodexApprovalBridge {
       } catch {
         accept = false;
       }
+      // Re-check after the fs await either way: a turn stopped meanwhile must not
+      // be accepted, nor park a fresh ask (denyAll already ran with nothing pending).
+      const still = this.options.activeTurn();
+      if (still === null || still.threadId !== decoded.threadId || still.turnId !== decoded.turnId) {
+        responder.error(denial("Stale Codex approval request"));
+        return;
+      }
       if (accept) {
-        const still = this.options.activeTurn();
-        if (still === null || still.threadId !== decoded.threadId || still.turnId !== decoded.turnId) {
-          responder.error(denial("Stale Codex approval request"));
-          return;
-        }
         responder.result({ decision: "accept" });
         return;
       }
