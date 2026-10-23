@@ -314,15 +314,17 @@ export function startTelemetryRetention(deps: TelemetryRetentionDeps): Telemetry
 
   const runNow = (): Promise<void> => {
     if (inFlight !== null) return inFlight;
-    const run = (async () => {
-      try {
-        await runOnce();
-      } catch (err) {
+    // Deferred via Promise.resolve().then: a run that returns synchronously
+    // (kill switch) must not clear `inFlight` before it is assigned, or the
+    // settled promise would stick and every later runNow() would be a no-op.
+    const run = Promise.resolve()
+      .then(runOnce)
+      .catch((err: unknown) => {
         console.warn(`[telemetry-retention] sweep failed: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
+      })
+      .finally(() => {
         inFlight = null;
-      }
-    })();
+      });
     inFlight = run;
     return run;
   };

@@ -486,6 +486,30 @@ describe("startTelemetryRetention", () => {
     handle.stop();
   });
 
+  it("18b. a run that returns early (kill switch) does not wedge single-flight", async () => {
+    const { home, dir } = await retentionHome();
+    const victim = await seedFile(dir, "expired.jsonl", NOW - 300 * DAY);
+    const env: NodeJS.ProcessEnv = { ANYCODE_TELEMETRY: "off" };
+    const rig = fakeTimers();
+    const handle = startTelemetryRetention({
+      home: () => home,
+      fs,
+      env,
+      protectedSessionIds: () => [],
+      now: () => NOW,
+      timers: rig.timers,
+    });
+    const a = handle.runNow();
+    await a;
+    expect(await exists(victim)).toBe(true);
+    delete env.ANYCODE_TELEMETRY;
+    const b = handle.runNow();
+    expect(b).not.toBe(a);
+    await b;
+    expect(await exists(victim)).toBe(false);
+    handle.stop();
+  });
+
   it("19. stop() clears both timers", async () => {
     const { home } = await retentionHome();
     const rig = fakeTimers();
