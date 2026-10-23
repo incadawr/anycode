@@ -274,13 +274,18 @@ async function readBodyCapped(response: Response, maxBytes: number): Promise<str
  * `z.object` (NOT `.strict()` — bodies carry many legitimate siblings we do
  * not model) that picks only the two known fields; unknown keys are ignored.
  */
+// Each field validates on its own (`.catch(undefined)`), so garbage in one
+// signal (e.g. `reasoning: null`, `supported_efforts: null`) never discards the
+// other — a `supported_parameters: ["reasoning"]` declaration survives a
+// malformed `reasoning` block.
 const liveCapsSchema = z.object({
-  supported_parameters: z.array(z.string()).optional(),
+  supported_parameters: z.array(z.string()).optional().catch(undefined),
   reasoning: z
     .object({
-      supported_efforts: z.array(z.string().max(64)).max(16).optional(),
+      supported_efforts: z.array(z.string().max(64)).max(16).optional().catch(undefined),
     })
-    .optional(),
+    .optional()
+    .catch(undefined),
 });
 
 /**

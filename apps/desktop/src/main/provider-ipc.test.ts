@@ -339,6 +339,26 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     });
   });
 
+  it("Taskana 4118 review: a null/garbage reasoning block does not discard a supported_parameters reasoning declaration", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: [
+            { id: "r-null", supported_parameters: ["reasoning"], reasoning: null },
+            { id: "e-null", supported_parameters: ["reasoning"], reasoning: { supported_efforts: null } },
+            { id: "plain", reasoning: null },
+          ],
+        }),
+      );
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({
+      ok: true,
+      models: [{ id: "r-null", reasoning: true }, { id: "e-null", reasoning: true }, { id: "plain" }],
+    });
+  });
+
   // RED-PROOF: without `redirect: "error"`, a plain `fetch` follows this 302
   // and would both return the target's models AND leak the Authorization
   // header to a DIFFERENT origin than the one the user configured.

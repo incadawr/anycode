@@ -2541,10 +2541,16 @@ async function boot(): Promise<void> {
     const projectRoot = sessionMeta.projectRoot ?? sessionMeta.workspace;
     // Taskana 4118: live capabilities for models the catalog does not know,
     // read fail-soft from settings.json (main persists them on the connection).
-    // `sessionMeta.connectionId` is the persisted pin — a resumed session keeps
-    // its own pin, exactly like `forkConnectionId` above seeds it.
+    // The fork env's connection id wins over the session row's pin: on a
+    // TASK.106 rebind main respawns the host with the NEW connection in the env
+    // BEFORE it re-pins the row (tab-ipc handleTabRebind), so the row still
+    // names the old connection at boot. Main stamps the env from
+    // `tab.connectionId` on every spawn, so it is the connection whose
+    // credentials this host actually talks to; the row pin is the fallback.
+    const liveCapsConnectionId =
+      forkConnectionId !== undefined && forkConnectionId.trim() !== "" ? forkConnectionId : sessionMeta.connectionId;
     const liveCapsMap = await readConnectionModelCapabilities(
-      sessionMeta.connectionId,
+      liveCapsConnectionId,
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
     const liveCapsFor = (id: string): LiveModelCapabilities | undefined => liveCapsMap?.[id];
