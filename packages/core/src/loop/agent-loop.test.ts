@@ -44,6 +44,8 @@ import type {
 import { ModePermissionEngine } from "../permissions/index.js";
 import { InMemoryHookRunner } from "../dispatch/hook-runner.js";
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
+import { todoWriteTool } from "../tools/todo-write.js";
+import { InMemoryTodoStore } from "../tools/todo-store.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { WorkspaceTransition } from "../ports/worktrees.js";
 import { CEILING_VERDICT_DECLARATION } from "./ceiling.js";
@@ -4138,5 +4140,177 @@ describe("AgentLoop.runTurn — degenerate-generation guard (TASK.210)", () => {
     expect(findDegeneration(events)).toBeUndefined();
     expect(events.find((e) => e.type === "turn_end")).toMatchObject({ finishReason: "stop" });
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4665: stale todo plan reminder.
+
+describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
+  function todoStep(...items: Array<{ content: string; status: "pending" | "in_progress" | "completed" }>): ModelStreamEvent[] {
+    return [
+      { type: "start" },
+      {
+        type: "tool_call",
+        toolCall: { id: `tw-${items.length}-${items[0]?.content ?? "empty"}`, name: "TodoWrite", input: { todos: items } },
+      },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  function mockStep(id: string): ModelStreamEvent[] {
+    return [
+      { type: "start" },
+      { type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  /** One step proposing THREE Mock calls in parallel (multi-call step). */
+  function multiMockStep(...ids: string[]): ModelStreamEvent[] {
+    return [
+      { type: "start" },
+      ...ids.map<ModelStreamEvent>((id) => ({ type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } })),
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  const stopStep: ModelStreamEvent[] = [
+    { type: "start" },
+    { type: "text_delta", id: "t-done", text: "done" },
+    { type: "finish", finishReason: "stop", usage: {} },
+  ];
+
+  const openPlan = [
+    { content: "a", status: "pending" as const },
+    { content: "b", status: "pending" as const },
+  ];
+
+  function makeReminderLoop(steps: ModelStreamEvent[][], todoReminder: AgentLoopConfig["todoReminder"]): AgentLoop {
+    return makeLoop({
+      modelPort: new MockModelPort(steps),
+      registry: makeRegistry({ Mock: makeTool(), TodoWrite: todoWriteTool }),
+      ports: { todos: new InMemoryTodoStore() } as unknown as CorePorts,
+      todoReminder,
+    });
+  }
+
+  /** Texts of every tool-role history message, in order. */
+  function toolTexts(loop: AgentLoop): string[] {
+    return loop.history.items
+      .filter((i) => i.message.role === "tool")
+      .map((i) => (i.message.content[0] as { text: string }).text);
+  }
+
+  function mockToolResultEvents(events: AgentEvent[]): Array<Extract<AgentEvent, { type: "tool_result" }>> {
+    return events.filter(
+      (e): e is Extract<AgentEvent, { type: "tool_result" }> => e.type === "tool_result" && e.outcome.toolName === "Mock",
+    );
+  }
+
+  it("fires on the last tool result of the due step; earlier results and the yielded event stay clean", async () => {
+    const loop = makeReminderLoop(
+      [todoStep(...openPlan), mockStep("m1"), mockStep("m2"), mockStep("m3"), stopStep],
+      { everyToolCalls: 3 },
+    );
+
+    const events = await collect(loop.runTurn("go"));
+
+    const texts = toolTexts(loop);
+    expect(texts).toHaveLength(4); // TodoWrite + 3 Mock
+    // The TodoWrite result and the first two Mock results carry no reminder.
+    expect(texts[0]).not.toContain("<system-reminder>");
+    expect(texts[1]).not.toContain("<system-reminder>");
+    expect(texts[2]).not.toContain("<system-reminder>");
+    // The 3rd Mock result (4th tool message) ends with the reminder block.
+    expect(texts[3]?.endsWith("</system-reminder>")).toBe(true);
+    // The yielded tool_result EVENT for the 3rd Mock keeps the original text.
+    const mockResults = mockToolResultEvents(events);
+    expect(mockResults).toHaveLength(3);
+    for (const e of mockResults) {
+      expect(e.outcome.modelText).not.toContain("<system-reminder>");
+    }
+  });
+
+  it("multi-call step: only the LAST tool message of the step carries the reminder", async () => {
+    const loop = makeReminderLoop(
+      [todoStep(...openPlan), multiMockStep("m1", "m2", "m3"), stopStep],
+      { everyToolCalls: 3 },
+    );
+
+    await collect(loop.runTurn("go"));
+
+    const texts = toolTexts(loop);
+    expect(texts).toHaveLength(4); // TodoWrite + 3 Mock from ONE step
+    expect(texts[0]).not.toContain("<system-reminder>");
+    expect(texts[1]).not.toContain("<system-reminder>");
+    expect(texts[2]).not.toContain("<system-reminder>");
+    expect(texts[3]).toContain("<system-reminder>");
+    expect(texts[3]).toContain("3 tool calls");
+  });
+
+  it("no plan in this loop's store: never fires", async () => {
+    const loop = makeReminderLoop(
+      [mockStep("m1"), mockStep("m2"), mockStep("m3"), mockStep("m4"), stopStep],
+      { everyToolCalls: 3 },
+    );
+
+    await collect(loop.runTurn("go"));
+
+    for (const text of toolTexts(loop)) {
+      expect(text).not.toContain("<system-reminder>");
+    }
+  });
+
+  it("all items completed: never fires", async () => {
+    const loop = makeReminderLoop(
+      [
+        todoStep(
+          { content: "a", status: "completed" },
+          { content: "b", status: "completed" },
+        ),
+        mockStep("m1"),
+        mockStep("m2"),
+        mockStep("m3"),
+        mockStep("m4"),
+        stopStep,
+      ],
+      { everyToolCalls: 3 },
+    );
+
+    await collect(loop.runTurn("go"));
+
+    for (const text of toolTexts(loop)) {
+      expect(text).not.toContain("<system-reminder>");
+    }
+  });
+
+  it("enabled:false disables the reminder", async () => {
+    const loop = makeReminderLoop(
+      [todoStep(...openPlan), mockStep("m1"), mockStep("m2"), mockStep("m3"), mockStep("m4"), stopStep],
+      { enabled: false },
+    );
+
+    await collect(loop.runTurn("go"));
+
+    for (const text of toolTexts(loop)) {
+      expect(text).not.toContain("<system-reminder>");
+    }
+  });
+
+  it("default period is 10 tool calls; fires exactly once on the 10th", async () => {
+    const steps: ModelStreamEvent[][] = [todoStep(...openPlan)];
+    for (let i = 1; i <= 10; i += 1) steps.push(mockStep(`m${i}`));
+    steps.push(stopStep);
+    const loop = makeReminderLoop(steps, undefined);
+
+    await collect(loop.runTurn("go"));
+
+    const texts = toolTexts(loop);
+    expect(texts).toHaveLength(11); // TodoWrite + 10 Mock
+    const withReminder = texts.filter((t) => t.includes("<system-reminder>"));
+    expect(withReminder).toHaveLength(1);
+    expect(withReminder[0]).toBe(texts[10]); // the 10th Mock result
+    expect(withReminder[0]).toContain("10 tool calls");
   });
 });

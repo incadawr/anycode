@@ -2414,6 +2414,10 @@ body {
   border-radius: 999px;
 }
 
+/* Taskana 4665: plan not updated for a while — the count may be stale. */
+.todo-panel-stale { margin-left: auto; color: var(--warning); font-size: 0.85em; white-space: nowrap; }
+.todo-panel-card-stale .todo-panel-title { color: var(--text-dim); }
+
 .todo-panel-header {
   display: flex;
   align-items: center;

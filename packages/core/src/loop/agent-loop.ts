@@ -75,6 +75,11 @@ import {
   requestCeilingVerdict,
   type CeilingConfig,
 } from "./ceiling.js";
+import {
+  TodoReminderTracker,
+  resolveTodoReminderEvery,
+  type TodoReminderConfig,
+} from "./todo-reminder.js";
 import type { DispatchContext } from "../dispatch/dispatcher.js";
 import { runToolBatches, type ToolSchedulerConfig } from "../dispatch/scheduler.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
@@ -262,6 +267,18 @@ export interface AgentLoopConfig {
    * verdict fires) — a human watching the screen can just press Stop.
    */
   degenerationGuard?: { enabled?: boolean };
+  /**
+   * Stale-plan reminder (Taskana 4665): the loop counts settled tool calls
+   * since the last successful TodoWrite; once `everyToolCalls` (default 10)
+   * pass with at least one unfinished item in THIS loop's own plan, a
+   * `<system-reminder>` nudge is appended to the last tool result in history
+   * (history only — the yielded tool_result events keep the original text).
+   * Omitted => ON with the default period; `{ enabled: false }` or a
+   * non-integer / < 1 `everyToolCalls` disables it. Subagent children keep
+   * the default but run against their own fresh empty store, so without a
+   * plan of their own they never fire.
+   */
+  todoReminder?: TodoReminderConfig;
   /** Passed out-of-band as ModelRequest.system on every step; never enters history. */
   systemPrompt?: string;
   maxOutputTokens?: number;
@@ -558,6 +575,13 @@ export class AgentLoop {
   private ceilingPreviousRemaining: number | undefined;
   private ceilingSuccessfulToolCalls = 0;
 
+  /**
+   * Stale-plan reminder (Taskana 4665); null when disabled. Loop-instance
+   * state (like the ceiling fields above), so the counters survive across
+   * runTurn calls.
+   */
+  private readonly todoReminder: TodoReminderTracker | null;
+
   /** Vision-fallback overview-caption cache (plan §7); shared when the wiring supplies one, private to this loop otherwise. */
   private readonly askCache: AskCache;
 
@@ -581,6 +605,9 @@ export class AgentLoop {
       maxConcurrency: config.toolConcurrency ?? DEFAULT_TOOL_CONCURRENCY,
     };
     this.askCache = config.recognizer?.cache ?? new AskCache();
+    // Taskana 4665: resolved once here; `null` means the reminder is off.
+    const every = resolveTodoReminderEvery(config.todoReminder);
+    this.todoReminder = every === null ? null : new TodoReminderTracker(every);
   }
 
   /**
@@ -1343,11 +1370,34 @@ export class AgentLoop {
         // timed_out, cancelled, invalid_input and max_turns are all outcomes in
         // which nothing was established, and a round of those earns no
         // extension.
-        for (const call of toolCalls) {
+        // Taskana 4665: feed the stale-plan reminder counter with the same
+        // settled calls, then append the nudge (if due) to the LAST appended
+        // tool result in history only — the yielded tool_result events keep the
+        // original outcome text.
+        if (this.todoReminder !== null) {
+          for (const call of toolCalls) {
+            const outcome = outcomeById.get(call.id);
+            if (outcome) this.todoReminder.observe(call.name, outcome.status);
+          }
+        }
+        const todos = this.config.ports.todos as CorePorts["todos"] | undefined;
+        const reminder = this.todoReminder?.take(() => todos?.read() ?? []) ?? null;
+        let lastAppendedIdx = -1;
+        toolCalls.forEach((call, idx) => {
+          if (outcomeById.has(call.id)) lastAppendedIdx = idx;
+        });
+        for (const [idx, call] of toolCalls.entries()) {
           const outcome = outcomeById.get(call.id);
           if (outcome) {
             const annotated = await this.annotateToolResultImages(outcome);
-            this.history.append(buildToolResultMessage(call, annotated), ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []));
+            const forHistory =
+              reminder !== null && idx === lastAppendedIdx
+                ? { ...annotated, modelText: `${annotated.modelText}\n\n${reminder}` }
+                : annotated;
+            this.history.append(
+              buildToolResultMessage(call, forHistory),
+              ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []),
+            );
             if (annotated.status === "success") {
               this.ceilingSuccessfulToolCalls += 1;
             }

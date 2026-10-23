@@ -3,3 +3,10 @@ export type { AgentLoopConfig, ContextInfo, ContextBreakdown } from "./agent-loo
 // Referenced by AgentLoopConfig.ceiling (TASK.124 cut-1), so it has to travel
 // with it on the public surface.
 export type { CeilingConfig, CeilingVerdict } from "./ceiling.js";
+export {
+  TodoReminderTracker,
+  resolveTodoReminderEvery,
+  formatTodoReminder,
+  DEFAULT_TODO_REMINDER_EVERY_TOOL_CALLS,
+} from "./todo-reminder.js";
+export type { TodoReminderConfig } from "./todo-reminder.js";

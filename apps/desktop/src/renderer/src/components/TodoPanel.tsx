@@ -14,6 +14,8 @@ export interface CurrentTodos {
   todos: TodoItemView[];
   /** `id` of the source tool_call block — matches the `data-block-id` MessageList stamps on the card. */
   sourceBlockId: string;
+  /** tool_call blocks after the source block (any tool, any status). */
+  toolCallsSince: number;
 }
 
 /**
@@ -36,7 +38,8 @@ export function selectCurrentTodos(transcript: TranscriptBlock[]): CurrentTodos 
     if (todos === null) {
       continue;
     }
-    return { todos, sourceBlockId: block.id };
+    const toolCallsSince = transcript.slice(i + 1).filter((b) => b.kind === "tool_call").length;
+    return { todos, sourceBlockId: block.id, toolCallsSince };
   }
   return null;
 }
@@ -52,10 +55,24 @@ export function shouldResetCompletedExpanded(previousSourceBlockId: string | nul
   return nextSourceBlockId !== null && nextSourceBlockId !== previousSourceBlockId;
 }
 
-/** "Progress N/M" header/pill copy (N completed, M total). */
+/** \"Progress N/M\" header/pill copy (N completed, M total). */
 export function progressLabel(todos: TodoItemView[]): string {
   const done = todos.filter((todo) => todo.status === "completed").length;
   return `Progress ${done}/${todos.length}`;
+}
+
+/** Same unit and default as core's DEFAULT_TODO_REMINDER_EVERY_TOOL_CALLS (renderer can't value-import core). */
+export const TODO_STALE_TOOL_CALLS = 10;
+
+/** Taskana 4665: open items AND >= TODO_STALE_TOOL_CALLS tool calls since the last successful TodoWrite. */
+export function isPlanPossiblyStale(current: CurrentTodos): boolean {
+  return current.toolCallsSince >= TODO_STALE_TOOL_CALLS && current.todos.some((t) => t.status !== "completed");
+}
+
+export function staleHint(current: CurrentTodos): string | null {
+  return isPlanPossiblyStale(current)
+    ? `Plan not updated for ${current.toolCallsSince} tool calls — progress may be out of date`
+    : null;
 }
 
 const TODO_STATUS_WORD: Record<TodoItemView["status"], string> = {
@@ -142,20 +159,27 @@ export function TodoPanel({
   const { todos, sourceBlockId } = selected;
   const completed = todos.filter((todo) => todo.status === "completed");
   const active = todos.filter((todo) => todo.status !== "completed");
+  const hint = staleHint(selected);
 
   return (
     <div className="todo-panel">
-      <div className={`todo-panel-card${panelCollapsed ? " todo-panel-collapsed" : ""}`} role="complementary" aria-label="Task progress">
+      <div
+        className={`todo-panel-card${panelCollapsed ? " todo-panel-collapsed" : ""}${hint !== null ? " todo-panel-card-stale" : ""}`}
+        role="complementary"
+        aria-label="Task progress"
+      >
         <button
           type="button"
           className="todo-panel-header"
           aria-expanded={!panelCollapsed}
+          title={hint ?? undefined}
           onClick={() => setPanelCollapsed(!panelCollapsed)}
         >
           <span className="tool-call-caret" aria-hidden="true">
             <Chevron />
           </span>
           <span className="todo-panel-title">{progressLabel(todos)}</span>
+          {hint !== null && <span className="todo-panel-stale">may be stale</span>}
         </button>
         {!panelCollapsed && (
           <div className="todo-panel-body">

@@ -30,6 +30,11 @@ export interface CoreEnvConfig {
    * subagent_stalled report (never a kill) is emitted.
    */
   subagentStallTimeoutMs?: number;
+  /**
+   * Stale-plan reminder period in tool calls (ANYCODE_TODO_REMINDER_EVERY,
+   * Taskana 4665); 0 disables.
+   */
+  todoReminderEvery?: number;
   /** Output-token override (ANYCODE_MAX_OUTPUT_TOKENS). */
   maxOutputTokens?: number;
   /** Opt-in reasoning budget (ANYCODE_REASONING_EFFORT). */
