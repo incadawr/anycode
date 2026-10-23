@@ -160,6 +160,19 @@ describe("pickSessionDrillRow ( cut-2 §D3 — set_model vs rebind)", () => {
       }),
     ).toEqual({ kind: "rebind", connectionId: "c-zai", modelId: "glm-5.2" });
   });
+
+  // : the near-duplicate of the "another connection"
+  // case above is deliberate — it names 's contract: the dead pin
+  // (conn-dead) stays configured and untouched; the pick targets the foreign
+  // pair, and the decision hands main exactly that pair (never the old id).
+  it(": a foreign pick carries the target pair and never the old connection", () => {
+    expect(
+      pickSessionDrillRow({
+        currentConnectionId: "conn-dead",
+        row: { kind: "model", connectionId: "conn-live", modelId: "m2" },
+      }),
+    ).toEqual({ kind: "rebind", connectionId: "conn-live", modelId: "m2" });
+  });
 });
 
 describe("resolveRebindEffort ( cut-2 §D3 — carried, or reset EXPLICITLY)", () => {
