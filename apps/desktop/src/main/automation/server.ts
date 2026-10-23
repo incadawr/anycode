@@ -88,6 +88,10 @@ import {
   tryAgainButtonClick,
   workflowStepsState,
   workflowStepClick,
+  workflowMapState,
+  workflowMapToggle,
+  workflowTicksState,
+  agentCardCollapse,
   settingsState,
   sidebarFilter,
   sidebarGroups,
@@ -368,6 +372,12 @@ const modelPillPickBody = z.discriminatedUnion("kind", [
 // pick body above — a plain `{open: boolean}` body, since the driver is a
 // single binary toggle (unlike the model-pill's multi-kind pick union). ──
 const ctxPopoverOpenBody = z.object({ open: z.boolean() }).strict();
+
+// Taskana 4161: the workflow-map toggle body rides the same `{open: boolean}`
+// shape as the ctx-popover body above — the map driver is the same kind of
+// idempotent binary (a re-run smoke must not collapse a map it wanted open),
+// with `tabId`/`toolCallId` in the path as everywhere else.
+const workflowMapToggleBody = z.object({ open: z.boolean() }).strict();
 
 // TASK.102 S2d D1: `tabId` (the ROOT tab whose pane switches) rides in the
 // path (`/tabs/:tabId/child/open`), same posture as the ctx-popover body
@@ -849,6 +859,35 @@ async function route(
     parts[4] === "workflow-steps"
   ) {
     return workflowStepsState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
+  // Workflow run-map probe (Taskana 4161):
+  // `/tabs/:tabId/agent-card/:toolCallId/workflow-map` — same
+  // `parts.length === 5` shape as the workflow-steps GET above (the two
+  // cannot collide: `parts[4]` differs), reading the expanded card's map
+  // SVG (nodes via `data-step-id`, edges via `data-from`/`data-to`).
+  if (
+    method === "GET" &&
+    parts[0] === "tabs" &&
+    parts.length === 5 &&
+    parts[2] === "agent-card" &&
+    parts[4] === "workflow-map"
+  ) {
+    return workflowMapState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
+  // Workflow collapsed-ticks probe (Taskana 4161):
+  // `/tabs/:tabId/agent-card/:toolCallId/workflow-ticks` — the COLLAPSED
+  // card's counterpart of the map GET above: the tick strip only mounts
+  // while the card is collapsed, so a mid-run smoke reads this after
+  // `POST .../collapse`. Probe-only (the ticks are store-driven, not
+  // interactive — no driver twin).
+  if (
+    method === "GET" &&
+    parts[0] === "tabs" &&
+    parts.length === 5 &&
+    parts[2] === "agent-card" &&
+    parts[4] === "workflow-ticks"
+  ) {
+    return workflowTicksState(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
   // Child-layout probe (TASK.102 S3c, CUT-S3 §6.2): `/tabs/:tabId/child/layout`
   // — read-only counterpart of `POST .../child/open` below, same
@@ -1584,6 +1623,21 @@ async function route(
     parseBody(rawBody, emptyBody);
     return agentCardExpand(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
   }
+  // Agent-card collapse driver (Taskana 4161): the expand route's twin —
+  // expand stays an idempotent "ensure expanded" (its contract is pinned),
+  // so collapse arrives as a mirror route instead of a body-driven toggle
+  // on expand. This is the only way automation can reach the one state
+  // where the collapsed tick strip renders.
+  if (
+    method === "POST" &&
+    parts[0] === "tabs" &&
+    parts.length === 5 &&
+    parts[2] === "agent-card" &&
+    parts[4] === "collapse"
+  ) {
+    parseBody(rawBody, emptyBody);
+    return agentCardCollapse(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!));
+  }
   // Try-again button click driver (TASK.33 W8-FIX #2):
   // `/tabs/:tabId/try-again-button/:blockId/click` — one segment deeper than
   // the try-again-button GET probe above, same `parts.length === 5` shape as
@@ -1624,6 +1678,24 @@ async function route(
       decodeURIComponent(parts[3]!),
       decodeURIComponent(parts[5]!),
     );
+  }
+  // Workflow map toggle driver (Taskana 4161):
+  // `/tabs/:tabId/agent-card/:toolCallId/workflow-map/toggle` — an
+  // idempotent binary like ctx-popover's open/close (`{open: boolean}`
+  // body, no click when the map is already in the target state), not a
+  // blind click-through: a re-run smoke must not collapse a map it
+  // wanted open. Fires a REAL DOM click on the card's own
+  // `.workflow-map-toggle` otherwise.
+  if (
+    method === "POST" &&
+    parts[0] === "tabs" &&
+    parts.length === 6 &&
+    parts[2] === "agent-card" &&
+    parts[4] === "workflow-map" &&
+    parts[5] === "toggle"
+  ) {
+    const body = parseBody(rawBody, workflowMapToggleBody);
+    return workflowMapToggle(deps, decodeURIComponent(parts[1]!), decodeURIComponent(parts[3]!), body.open);
   }
 
   // Replay driver + probe (TASK.188 §3.2/§5 S5, for scenario smoke): the

@@ -2502,6 +2502,76 @@ describe("workflow step buttons (render, TASK.191 slice S4)", () => {
   });
 });
 
+// Taskana 4161: the automation surface of the run map — the `data-step-id`
+// hook on each node `<g>` and the `data-from`/`data-to` pair on each edge
+// `<path>` are what `realWorkflowMapDom` reads; these SSR pins hold the
+// markup half of that contract (the accessor half lives in automation.test).
+// No visual change rides here — the hooks tag the real nodes, they do not
+// mirror state (same discipline as `data-tool-call-id`).
+describe("workflow map DOM hooks (render, Taskana 4161)", () => {
+  // Same fetch→build fixture as the S4 describe above: a two-step run with
+  // one edge between them — the smallest graph that is worth offering a map
+  // for (`mapWorthOffering = steps.length > 1`).
+  const steps: WorkflowStepStatus[] = [
+    mkStep({
+      stepId: "fetch",
+      agentType: "explore",
+      dependsOn: [],
+      started: true,
+      running: true,
+      turns: 1,
+      toolCalls: 1,
+      lastTool: "Read",
+    }),
+    mkStep({ stepId: "build", agentType: "sonnet", dependsOn: ["fetch"], started: false, running: false }),
+  ];
+  const workflow: WorkflowSubStatus = {
+    workflow: "release-flow",
+    totalSteps: 2,
+    steps,
+    activity: [{ stepId: "fetch", toolName: "Bash", summary: "ls -la" }],
+    activityDropped: 0,
+    final: null,
+  };
+
+  it("renders the toggle expanded by default and tags every node/edge with machine-readable ids", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow, selectedStepId: null, onSelectStep: () => {} }),
+    );
+    // The toggle is present and open (the map-open default is useState(true)).
+    expect(html).toContain("workflow-map-toggle");
+    expect(html).toContain('aria-expanded="true"');
+    // Each node carries its step id beside the substatus class.
+    expect(html).toMatch(/<g[^>]*data-step-id="fetch"/);
+    expect(html).toMatch(/<g[^>]*data-step-id="build"/);
+    // The single edge carries both endpoints.
+    expect(html).toMatch(/<path[^>]*data-from="fetch"[^>]*data-to="build"/);
+  });
+
+  it("mirrors the selection onto the node's aria-pressed exactly like the checklist rows", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow, selectedStepId: "fetch", onSelectStep: () => {} }),
+    );
+    const fetchTag = /<g[^>]*data-step-id="fetch"[^>]*/.exec(html)?.[0] ?? "";
+    const buildTag = /<g[^>]*data-step-id="build"[^>]*/.exec(html)?.[0] ?? "";
+    expect(fetchTag).toContain('aria-pressed="true"');
+    expect(buildTag).toContain('aria-pressed="false"');
+  });
+
+  it("offers neither toggle nor map for a single-step run — one box is not a shape", () => {
+    const single: WorkflowSubStatus = {
+      ...workflow,
+      totalSteps: 1,
+      steps: [mkStep({ stepId: "solo", agentType: "explore", dependsOn: [], started: false, running: false })],
+    };
+    const html = renderToStaticMarkup(
+      createElement(WorkflowStepsBody, { workflow: single, selectedStepId: null, onSelectStep: () => {} }),
+    );
+    expect(html).not.toContain("workflow-map-toggle");
+    expect(html).not.toContain("workflow-map-node");
+  });
+});
+
 // TASK.193: the selected step's own failure record, revealed by the SAME
 // click that already drives the activity-feed filter above — no second
 // selection mechanism, just a second thing gated on `selectedStepId`.

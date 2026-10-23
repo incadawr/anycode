@@ -892,7 +892,10 @@ function WorkflowMap({
         aria-label="Workflow run map"
       >
         {layout.edges.map((edge) => (
-          <path key={`${edge.from}->${edge.to}`} className="workflow-map-edge" d={edge.path} />
+          // data-from/data-to tag the real node (no mirrored state), same
+          // discipline as data-tool-call-id — automation reads the edge it
+          // sees instead of a second copy of the graph.
+          <path key={`${edge.from}->${edge.to}`} className="workflow-map-edge" d={edge.path} data-from={edge.from} data-to={edge.to} />
         ))}
         {layout.nodes.map((node) => {
           const step = byId.get(node.stepId);
@@ -900,7 +903,11 @@ function WorkflowMap({
           return (
             <g
               key={node.stepId}
+              // data-step-id tags the real node (no mirrored state), same
+              // discipline as data-tool-call-id — automation addresses the
+              // box it sees instead of re-deriving ids from clipped labels.
               className={`workflow-map-node substatus-${node.kind}${selected ? " is-selected" : ""}`}
+              data-step-id={node.stepId}
               role="button"
               tabIndex={0}
               aria-pressed={selected}

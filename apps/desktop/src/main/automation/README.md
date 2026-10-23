@@ -562,6 +562,58 @@ curl "${A[@]}" "$B/tabs/$TAB/agent-card/$TOOL_CALL_ID"
 curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/agent-card/$TOOL_CALL_ID/expand -d '{}'
 ```
 
+### Workflow map / ticks probes + toggle & collapse drivers (Taskana 4161)
+
+Two DOM probes and two DOM drivers for the Workflow tool card's run map and
+collapsed-header tick strip, same "no mirrored state" discipline as the
+agent-card probe above — everything is read off the card's own rendered
+markup, never re-derived from the store.
+
+`GET .../agent-card/:toolCallId/workflow-map` reads the EXPANDED card's map
+SVG: `togglePresent` (exactly one `.workflow-map-toggle` — absent for a
+single-step run, one box is not a shape), `open` (its `aria-expanded`; the
+map defaults open), `nodes` (each `<g class="workflow-map-node">`'s
+`data-step-id`, `substatus-<kind>` class, and `aria-pressed` selection —
+DOM order), and `edges` (each `<path class="workflow-map-edge">`'s
+`data-from`/`data-to`). A collapsed card honestly reads
+`{togglePresent:false, open:false, nodes:[], edges:[]}` — the map and its
+toggle live inside the expanded body, so "not mounted" and "collapsed" are
+indistinguishable to any DOM probe, by design; `ok:true` with those empty
+defaults is a normal reading, not an error.
+
+`GET .../agent-card/:toolCallId/workflow-ticks` reads the COLLAPSED card's
+counterpart: `.workflow-ticks`' own `aria-label` (the run's aggregate) plus
+one `substatus-<kind>` per `.workflow-tick` in DOM (= dependency) order. The
+strip only mounts while the card is collapsed AND the run has steps, so
+`{ok:true, present:false, label:"", kinds:[]}` is normal — including on any
+EXPANDED card. Probe-only by design: the ticks are store-driven, not
+interactive, so there is no driver twin.
+
+`POST .../agent-card/:toolCallId/workflow-map/toggle` is an idempotent
+binary like ctx-popover's open/close: `{"open":true|false}`, no click when
+the map is already in the target state (a re-run smoke must not collapse a
+map it wanted open), otherwise a REAL `.click()` on the card's own
+`.workflow-map-toggle`. `POST .../agent-card/:toolCallId/collapse` is the
+expand route's mirror twin (expand stays an idempotent "ensure expanded",
+its contract unchanged): a no-op `{ok:true}` if the card already reads
+collapsed, otherwise a REAL click on the same `.tool-call-toggle` header
+button — the only path a live smoke has to reach the collapsed state where
+the ticks render (collapse mid-run, then read `workflow-ticks`).
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /tabs/:tabId/agent-card/:toolCallId/workflow-map` | — | `{ok:true, togglePresent, open, nodes[], edges[]}` \| `{ok:false, reason:"tab_not_active"\|"unknown_tab"}` |
+| `GET /tabs/:tabId/agent-card/:toolCallId/workflow-ticks` | — | `{ok:true, present, label, kinds[]}` \| `{ok:false, reason:"tab_not_active"\|"unknown_tab"}` |
+| `POST /tabs/:tabId/agent-card/:toolCallId/workflow-map/toggle` | `{"open":boolean}` | `{ok:true}` \| `{ok:false, reason:"tab_not_active"\|"unknown_tab"\|"not_present"\|"did_not_settle"}` |
+| `POST /tabs/:tabId/agent-card/:toolCallId/collapse` | `{}` | `{ok:true}` \| `{ok:false, reason:"tab_not_active"\|"unknown_tab"\|"not_present"\|"did_not_collapse"}` |
+
+```bash
+curl "${A[@]}" "$B/tabs/$TAB/agent-card/$TOOL_CALL_ID/workflow-map"
+curl "${A[@]}" "$B/tabs/$TAB/agent-card/$TOOL_CALL_ID/workflow-ticks"
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/agent-card/$TOOL_CALL_ID/workflow-map/toggle -d '{"open":false}'
+curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/agent-card/$TOOL_CALL_ID/collapse -d '{}'
+```
+
 ### Try-again button probe/driver (TASK.33 W8-FIX #2)
 
 `POST /tabs/:tabId/retry` above (the pre-existing route) calls

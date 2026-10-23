@@ -1328,6 +1328,204 @@ describe("workflow-step click route (TASK.191 slice S4)", () => {
   });
 });
 
+describe("workflow-map route (Taskana 4161)", () => {
+  it("401s GET /tabs/:tabId/agent-card/:toolCallId/workflow-map without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map"));
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /tabs/:tabId/agent-card/:toolCallId/workflow-map -> workflowMapState", async () => {
+    const facadeResult = {
+      ok: true,
+      togglePresent: true,
+      open: true,
+      nodes: [
+        { stepId: "fetch", kind: "running", selected: false },
+        { stepId: "build", kind: "pending", selected: true },
+      ],
+      edges: [{ from: "fetch", to: "build" }],
+    };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"workflowMapState"');
+    expect(calls[0]).toContain('["tab-a","call-1"]');
+  });
+
+  it("GET .../workflow-map decodes URL-encoded tabId AND toolCallId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true, togglePresent: false, open: false, nodes: [], edges: [] });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(
+      url(h, `/tabs/${encodeURIComponent("tab a")}/agent-card/${encodeURIComponent("call 1")}/workflow-map`),
+      { headers: auth() },
+    );
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a","call 1"]');
+  });
+
+  // The workflow-map GET sits at the SAME depth as the workflow-steps GET
+  // (`parts.length===5`, `parts[2]==="agent-card"`) — proves the router
+  // separates them on `parts[4]` alone by firing both against the same
+  // recorder and checking each landed on its own facade method.
+  it("does not collide with the same-depth workflow-steps GET (different parts[4])", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map"), { headers: auth() });
+    await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-steps"), { headers: auth() });
+    expect(calls[0]).toContain('"workflowMapState"');
+    expect(calls[1]).toContain('"workflowStepsState"');
+  });
+});
+
+describe("workflow-ticks route (Taskana 4161)", () => {
+  it("401s GET /tabs/:tabId/agent-card/:toolCallId/workflow-ticks without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-ticks"));
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /tabs/:tabId/agent-card/:toolCallId/workflow-ticks -> workflowTicksState", async () => {
+    const facadeResult = {
+      ok: true,
+      present: true,
+      label: "release-flow: 1 of 2 steps done",
+      kinds: ["completed", "pending"],
+    };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-ticks"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"workflowTicksState"');
+    expect(calls[0]).toContain('["tab-a","call-1"]');
+  });
+
+  it("GET .../workflow-ticks decodes URL-encoded segments (tabId AND toolCallId)", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true, present: false, label: "", kinds: [] });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(
+      url(h, `/tabs/${encodeURIComponent("tab a")}/agent-card/${encodeURIComponent("call 1")}/workflow-ticks`),
+      { headers: auth() },
+    );
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a","call 1"]');
+  });
+});
+
+describe("workflow-map toggle route (Taskana 4161)", () => {
+  it("401s POST /tabs/:tabId/agent-card/:toolCallId/workflow-map/toggle without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map/toggle"), { method: "POST" });
+    expect(res.status).toBe(401);
+  });
+
+  it('POST .../workflow-map/toggle {"open":false} -> workflowMapToggle called with false', async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map/toggle"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ open: false }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(calls[0]).toContain('"workflowMapToggle"');
+    expect(calls[0]).toContain('["tab-a","call-1",false]');
+  });
+
+  it('POST .../workflow-map/toggle {"open":true} threads the true half of the binary', async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map/toggle"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ open: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab-a","call-1",true]');
+  });
+
+  it("POST .../workflow-map/toggle decodes URL-encoded tabId AND toolCallId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(
+      url(h, `/tabs/${encodeURIComponent("tab a")}/agent-card/${encodeURIComponent("call 1")}/workflow-map/toggle`),
+      { method: "POST", headers: auth(), body: JSON.stringify({ open: true }) },
+    );
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a","call 1",true]');
+  });
+
+  it('400 on {"open":"yes"} — a well-formed JSON body that fails the strict boolean schema', async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map/toggle"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({ open: "yes" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("400 on invalid JSON", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/workflow-map/toggle"), {
+      method: "POST",
+      headers: auth(),
+      body: "{not json",
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("agent-card collapse route (Taskana 4161)", () => {
+  it("401s POST /tabs/:tabId/agent-card/:toolCallId/collapse without a token", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/collapse"), { method: "POST" });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /tabs/:tabId/agent-card/:toolCallId/collapse -> agentCardCollapse", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/agent-card/call-1/collapse"), {
+      method: "POST",
+      headers: auth(),
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(calls[0]).toContain('"agentCardCollapse"');
+    expect(calls[0]).toContain('["tab-a","call-1"]');
+  });
+
+  it("POST .../collapse decodes URL-encoded tabId AND toolCallId", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(
+      url(h, `/tabs/${encodeURIComponent("tab a")}/agent-card/${encodeURIComponent("call 1")}/collapse`),
+      { method: "POST", headers: auth(), body: JSON.stringify({}) },
+    );
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a","call 1"]');
+  });
+
+  // The collapse POST sits at the SAME depth as the expand POST
+  // (`parts.length===5`, `parts[2]==="agent-card"`) — proves the router
+  // separates them on `parts[4]` alone by firing both against the same
+  // recorder and checking each landed on its own facade method.
+  it("does not collide with the same-depth expand POST (different parts[4])", async () => {
+    const { window, calls } = fakeWindowCapture({ ok: true });
+    const h = await boot({ getWindow: () => window });
+    await fetch(url(h, "/tabs/tab-a/agent-card/call-1/expand"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+    await fetch(url(h, "/tabs/tab-a/agent-card/call-1/collapse"), { method: "POST", headers: auth(), body: JSON.stringify({}) });
+    expect(calls[0]).toContain('"agentCardExpand"');
+    expect(calls[1]).toContain('"agentCardCollapse"');
+  });
+});
+
 describe("host-kill route (TASK.33 FIX-A)", () => {
   it("401s POST /tabs/:tabId/host/kill without a token", async () => {
     const h = await boot();
