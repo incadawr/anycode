@@ -14,6 +14,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   defaults to it — an explicit `Agent(model: …)` still wins, and unset keeps
   inheriting the parent's model.
 
+### Fixed
+
+- A `ANYCODE_EXPLORE_MODEL` default the active connection rejects (unknown or
+  disallowed id, e.g. after switching the session to another provider) now
+  falls back to the parent's model with a one-line notice in the child's
+  report instead of failing every explore call; an explicit disallowed
+  `Agent(model: …)` still errors as before.
+
 ## [0.0.35] — 2026-10-10
 
 ### Added
