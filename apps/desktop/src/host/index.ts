@@ -3052,6 +3052,11 @@ async function boot(): Promise<void> {
           profiles: () => ext.profiles,
           env: systemPromptEnv,
           memorySection: ext.memorySection,
+          // Taskana 4131: cheap-model default for inline explore children
+          // (ANYCODE_EXPLORE_MODEL). Assigned directly (not conditional-spread):
+          // with the var unset this reads `undefined`, which the runner treats
+          // exactly like an absent option — explore inherits the parent's port.
+          exploreModel: envConfig.exploreModel,
           resolveChildModelPort: (id: string) => {
             assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model));
             return modelPortFactory(id);

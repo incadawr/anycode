@@ -1331,6 +1331,9 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         profiles: ext.profiles,
         env: systemPromptEnv,
         memorySection: ext.memorySection,
+        // Taskana 4131: cheap-model default for inline explore children
+        // (ANYCODE_EXPLORE_MODEL); absent ⇒ explore inherits the parent's port.
+        ...(envConfig.exploreModel !== undefined ? { exploreModel: envConfig.exploreModel } : {}),
         ...(modelPortFactory !== undefined ? { resolveChildModelPort: modelPortFactory } : {}),
         // TASK.162 (F6) + §0b adjudication: gated on the same factory as the
         // port above — without a port there is no override spawn to resolve

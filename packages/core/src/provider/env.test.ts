@@ -8,6 +8,7 @@ import {
   ENV_CONTEXT_WINDOW,
   ENV_CONTEXT_WINDOW_MODEL,
   ENV_DB_PATH,
+  ENV_EXPLORE_MODEL,
   ENV_IMAGE_INPUT,
   ENV_MAX_RETRIES,
   ENV_MAX_OUTPUT_TOKENS,
@@ -203,6 +204,27 @@ describe("loadEnvConfig", () => {
   it("leaves imageInput undefined when ANYCODE_IMAGE_INPUT is unset (slice 6.2)", () => {
     const config = loadEnvConfig(envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" }));
     expect(config.imageInput).toBeUndefined();
+  });
+
+  it("parses ANYCODE_EXPLORE_MODEL as an optional string, trimmed (Taskana 4131)", () => {
+    const config = loadEnvConfig(
+      envWith({
+        [ENV_API_KEY]: "key-123",
+        [ENV_MODEL]: "claude-x",
+        [ENV_EXPLORE_MODEL]: "glm-5.3-flash",
+      }),
+    );
+    expect(config.exploreModel).toBe("glm-5.3-flash");
+  });
+
+  it("leaves exploreModel undefined when ANYCODE_EXPLORE_MODEL is absent or blank (Taskana 4131)", () => {
+    expect(
+      loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m" })).exploreModel,
+    ).toBeUndefined();
+    expect(
+      loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_EXPLORE_MODEL]: "   " }))
+        .exploreModel,
+    ).toBeUndefined();
   });
 
   it("parses ANYCODE_IMAGE_INPUT=on / off (slice 6.2)", () => {

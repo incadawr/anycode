@@ -7,6 +7,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The built-in `explore` recon subagent can run on a cheaper model: set
+  `ANYCODE_EXPLORE_MODEL` (exact model id) and every inline explore child
+  defaults to it — an explicit `Agent(model: …)` still wins, and unset keeps
+  inheriting the parent's model.
+
 ## [0.0.35] — 2026-10-10
 
 ### Added

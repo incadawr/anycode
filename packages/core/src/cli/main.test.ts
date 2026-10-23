@@ -2119,6 +2119,101 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
     expect(text).not.toContain("[subagent call-1] start");
   });
 
+  it("scenario 9c: ANYCODE_EXPLORE_MODEL + a factory spawns an explore child on the factory port (Taskana 4131)", async () => {
+    const parentPort = new SequencedModelPort([
+      [
+        { type: "start" } as ModelStreamEvent,
+        {
+          type: "tool_call",
+          toolCall: { id: "call-1", name: "Agent", input: { agent_type: "explore", description: "recon", prompt: "look around" } },
+        } as ModelStreamEvent,
+        { type: "finish", finishReason: "tool_calls", usage: {} } as ModelStreamEvent,
+      ],
+      [
+        { type: "start" } as ModelStreamEvent,
+        { type: "text_delta", id: "t", text: "parent-done" } as ModelStreamEvent,
+        { type: "finish", finishReason: "stop", usage: {} } as ModelStreamEvent,
+      ],
+    ]);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+
+    const runPromise = runCli({
+      argv: [],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        ANYCODE_MODEL: "test-model",
+        ANYCODE_DB_PATH: ":memory:",
+        ANYCODE_SETTINGS_PATH: isolatedSettingsPath(),
+        ANYCODE_EXPLORE_MODEL: "glm-5.3-flash",
+      } as NodeJS.ProcessEnv,
+      input,
+      output,
+      modelPort: parentPort,
+      modelPortFactory: (id: string) => new TextModelPort(`child-${id}`),
+      cwd: process.cwd(),
+    });
+
+    input.write("delegate a task\n");
+    input.write("/quit\n");
+
+    expect(await runPromise).toBe(0);
+    const text = getText();
+    // The env-configured default reached the runner through withSubagents and
+    // the explore child ran on the factory-built cheap port.
+    expect(text).toContain("[subagent call-1] start: explore");
+    expect(text).toContain("child-glm-5.3-flash");
+    expect(text).not.toContain("is not supported in this host");
+  });
+
+  it("scenario 9d: ANYCODE_EXPLORE_MODEL but NO factory fails with the honest error text (Taskana 4131)", async () => {
+    const parentPort = new SequencedModelPort([
+      [
+        { type: "start" } as ModelStreamEvent,
+        {
+          type: "tool_call",
+          toolCall: { id: "call-1", name: "Agent", input: { agent_type: "explore", description: "recon", prompt: "look around" } },
+        } as ModelStreamEvent,
+        { type: "finish", finishReason: "tool_calls", usage: {} } as ModelStreamEvent,
+      ],
+      [
+        { type: "start" } as ModelStreamEvent,
+        { type: "text_delta", id: "t", text: "parent-done" } as ModelStreamEvent,
+        { type: "finish", finishReason: "stop", usage: {} } as ModelStreamEvent,
+      ],
+    ]);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+
+    const runPromise = runCli({
+      argv: [],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        ANYCODE_MODEL: "test-model",
+        ANYCODE_DB_PATH: ":memory:",
+        ANYCODE_SETTINGS_PATH: isolatedSettingsPath(),
+        ANYCODE_EXPLORE_MODEL: "glm-5.3-flash",
+      } as NodeJS.ProcessEnv,
+      input,
+      output,
+      // Injected port, no factory ⇒ resolveChildModelPort absent ⇒ error-outcome.
+      modelPort: parentPort,
+      cwd: process.cwd(),
+    });
+
+    input.write("delegate a task\n");
+    input.write("/quit\n");
+
+    expect(await runPromise).toBe(0);
+    const text = getText();
+    expect(text).toContain(
+      'Agent: agent type "explore" declares model "glm-5.3-flash", which is not supported in this host.',
+    );
+    expect(text).not.toContain("[subagent call-1] start");
+  });
+
   it("scenario 10: /model show and switch never invoke a model call (title-lock, hazard A3)", async () => {
     const modelPort = new CountingModelPort();
     const input = new PassThrough();

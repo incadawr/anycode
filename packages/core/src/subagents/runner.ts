@@ -130,6 +130,20 @@ export interface SubagentRunnerOptions {
    */
   memorySection?: string;
   /**
+   * Default model id for the built-in EXPLORE persona's inline children
+   * (Taskana 4131): recon needs little intelligence, so a host may point it at
+   * a cheaper model. Applied ONLY when the resolved persona is exactly the
+   * built-in "explore" and neither the request nor a profile sets a model;
+   * precedence: req.model > md-profile model (never explore) > this option >
+   * the parent's port. A host that omits it keeps today's inherit-parent
+   * behaviour byte-identical. Flows through the SAME resolveChildModelPort /
+   * resolveChildModelSettings path an explicit override uses (including the
+   * honest "not supported in this host" error-outcome when no resolver is
+   * wired), so explore-on-a-cheap-model gets correct TASK.162 child settings
+   * (output ceiling / effort / context window) resolved for THAT model.
+   */
+  exploreModel?: string;
+  /**
    * Resolves an Agent-tool `model` override (slice 4.6, design §2.5) to a
    * fixed ModelPort for one child spawn. Additive-optional, same shape as
    * `ExecutionPort.runBinary?`: a host that omits this cannot honor
@@ -653,7 +667,15 @@ export function createSubagentRunner(
       // own `model:` frontmatter, which outranks inheriting the parent's port (or,
       // for an engine persona, the engine's own default). Shared by both the
       // engine and in-process paths below.
-      const requestedModel = req.model ?? persona.model;
+      // Taskana 4131: the built-in explore persona may carry a HOST-CONFIGURED
+      // default (cheaper recon). Only when the caller named no model (an explicit
+      // Agent(model:) always wins) and only for the built-in explore — md-profiles
+      // keep their own frontmatter default, general-purpose keeps inheriting.
+      const exploreDefault =
+        req.model === undefined && persona.model === undefined && persona.name === "explore"
+          ? opts?.exploreModel
+          : undefined;
+      const requestedModel = req.model ?? persona.model ?? exploreDefault;
 
       // Engine persona (md-profile `engine:`): the whole in-process path
       // (buildChildConfig/AgentLoop/resolveChildModelPort) is bypassed in favor
@@ -743,7 +765,7 @@ export function createSubagentRunner(
             finalText:
               req.model !== undefined
                 ? `Agent: model override "${req.model}" is not supported in this host; retry without the model field.`
-                : `Agent: agent type "${persona.name}" declares model "${persona.model}", which is not supported in this host.`,
+                : `Agent: agent type "${persona.name}" declares model "${requestedModel}", which is not supported in this host.`,
             truncated: false,
             turns: 0,
             toolCalls: 0,

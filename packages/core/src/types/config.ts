@@ -18,6 +18,12 @@ export interface CoreEnvConfig {
   baseUrl: string;
   /** Model id to request (ANYCODE_MODEL). */
   model: string;
+  /**
+   * Default model id for the built-in explore persona's inline children
+   * (ANYCODE_EXPLORE_MODEL, Taskana 4131). undefined ⇒ explore inherits the
+   * parent's port.
+   */
+  exploreModel?: string;
   /** Turn budget override for the main loop (ANYCODE_MAX_TURNS). */
   maxTurns?: number;
   /** Turn budget override for subagent child loops (ANYCODE_SUBAGENT_MAX_TURNS). */
