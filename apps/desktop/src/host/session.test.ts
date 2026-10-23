@@ -109,6 +109,7 @@ import {
 } from "./session.js";
 import {
   MemFs,
+  RealpathMemFs,
   ScriptedModelPort,
   ThrowingFs,
   createHarness,
@@ -2587,7 +2588,11 @@ describe("Session — always-allow (slice 2.2.3, design §5)", () => {
   it("a rule pre-seeded before boot (mirrors host/boot.ts's seedAlwaysAllowRules) auto-allows a matching tool from the very first turn", async () => {
     const rules = new SessionPermissionRules();
     rules.add({ toolName: "Write" });
-    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()], rules });
+    const h = createHarness({
+      steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
+      rules,
+      toolFs: new RealpathMemFs(),
+    });
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
@@ -2609,6 +2614,7 @@ describe("Session — always-allow (slice 2.2.3, design §5)", () => {
   it("remember on an allow adds a session rule; a subsequent matching call in the same session auto-allows without another ask", async () => {
     const h = createHarness({
       steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep(), toolStep("c2", "Write", WRITE_INPUT), finishStep()],
+      toolFs: new RealpathMemFs(),
     });
     try {
       h.send({ type: "ui_ready" });
@@ -2638,6 +2644,37 @@ describe("Session — always-allow (slice 2.2.3, design §5)", () => {
       }
       // No NEW permission_request was sent for the second (rule-matching) call.
       expect(h.received.filter(isPermissionRequest).length).toBe(requestsSoFar);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("Taskana 4294: a pre-seeded Write rule does NOT cover a write outside the workspace — the ask reaches the UI", async () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write" });
+    const toolFs = new RealpathMemFs(["/", "/workspace", "/elsewhere"]);
+    const h = createHarness({
+      steps: [toolStep("c1", "Write", { file_path: "/elsewhere/a.txt", content: "NEW" }), finishStep()],
+      rules,
+      toolFs,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "write outside" });
+
+      // The blanket rule cannot vouch for a target outside /workspace, so the
+      // ask escalates to the UI instead of being silently allowed.
+      const req = await h.waitFor(isPermissionRequest);
+      expect(req.toolName).toBe("Write");
+
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      const result = await h.waitFor(agentEventOf("tool_result"));
+      if (result.event.type === "tool_result") {
+        expect(result.event.outcome.status).toBe("denied");
+      }
+      expect(toolFs.files.has("/elsewhere/a.txt")).toBe(false);
     } finally {
       h.close();
     }

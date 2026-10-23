@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import type { PermissionWorkspaceFacts } from "../types/permissions.js";
 
 /**
  * Confinement predicate: true iff `candidatePath` is lexically within `workspaceRoot`.
@@ -14,10 +15,10 @@ import * as path from "node:path";
  * Known residual (R1): symlink escapes are NOT caught here. A path that is lexically inside
  * `workspaceRoot` but traverses a symlink pointing outside of it (e.g. `workspaceRoot/link`
  * where `link -> /etc`) is reported as confined by this predicate, because no filesystem I/O
- * or symlink resolution is performed — this module is pure string/path logic, zero `fs`. Real
- * inode-level enforcement (resolving symlinks against the actual filesystem) is the OS sandbox
- * layer's responsibility (5.2, Seatbelt). In 5.1 this predicate ships as a tested, exported
- * foundation with no runtime enforcer wired to it yet.
+ * or symlink resolution is performed — this module is pure string/path logic, zero `fs`. In
+ * 5.1 this predicate shipped as a tested, exported foundation; it is now enforced via
+ * `isProvablyInsideWorkspace`, and symlinks are resolved upstream by the dispatcher's
+ * realpath facts (the OS sandbox layer, 5.2 Seatbelt, remains the inode-level backstop).
  */
 export function isWithinWorkspace(candidatePath: string, workspaceRoot: string): boolean {
   const root = path.resolve(workspaceRoot);
@@ -29,4 +30,26 @@ export function isWithinWorkspace(candidatePath: string, workspaceRoot: string):
   if (relative === "..") return false;
   const escapePrefix = ".." + path.sep;
   return !relative.startsWith(escapePrefix);
+}
+
+/**
+ * File-write tools whose always-allow rules are confined to the session
+ * workspace (Taskana 4294). The dispatcher mints workspace facts for exactly
+ * these; RuleAwarePermissionEngine refuses to downgrade their "ask" unless the
+ * facts prove the target inside. NOT the edit-mode widening set (engine.ts
+ * keeps its literal Write/Edit pair).
+ */
+export const WORKSPACE_CONFINED_WRITE_TOOLS: ReadonlySet<string> = new Set(["Write", "Edit", "MultiEdit"]);
+
+/**
+ * True iff dispatcher-minted facts PROVE the resolved target sits inside the
+ * workspace root. Fail-closed: absent facts, non-absolute root/target, or a
+ * degenerate root (filesystem root — its own dirname) => false.
+ */
+export function isProvablyInsideWorkspace(facts: PermissionWorkspaceFacts | undefined): boolean {
+  if (facts === undefined) return false;
+  if (!path.isAbsolute(facts.root) || !path.isAbsolute(facts.resolvedPath)) return false;
+  const r = path.resolve(facts.root);
+  if (path.dirname(r) === r) return false;
+  return isWithinWorkspace(facts.resolvedPath, facts.root);
 }

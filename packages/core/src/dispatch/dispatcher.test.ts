@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { checkpointRequired, executeToolCall, type DispatchContext } from "./dispatcher.js";
 import type {
   AggregatedPreToolUseResult,
@@ -62,6 +62,7 @@ import { workflowTool } from "../tools/workflow.js";
 import { bridgeMcpTool } from "../mcp/tool-bridge.js";
 import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
 import {
+  DenyPermissionBroker,
   ModePermissionEngine,
   RuleAwarePermissionEngine,
   SafeCommandPermissionEngine,
@@ -1635,5 +1636,293 @@ describe("executeToolCall — TASK.32 workspace facts", () => {
 
     expect(outcome.status).toBe("denied");
     await expect(fsp.access(join(outside, "pwn.md"))).rejects.toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4294 — always-allow rules vs the workspace boundary.
+
+describe("executeToolCall — Taskana 4294 always-allow vs workspace boundary", () => {
+  const adapter = new NodeFileSystemAdapter();
+  const tmpRoots: string[] = [];
+
+  async function mkDir(): Promise<string> {
+    const dir = await fsp.mkdtemp(join(tmpdir(), "taskana4294-"));
+    const real = await fsp.realpath(dir);
+    tmpRoots.push(real);
+    return real;
+  }
+
+  afterEach(async () => {
+    await Promise.all(
+      tmpRoots.splice(0).map((dir) => fsp.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  function recordingBroker(behavior: "allow" | "deny") {
+    const asked: PermissionRequest[] = [];
+    return {
+      asked,
+      broker: {
+        requestPermission: async (r: PermissionRequest) => {
+          asked.push(r);
+          return behavior === "allow"
+            ? { behavior: "allow" }
+            : { behavior: "deny", reason: "user denied" };
+        },
+      } as PermissionBroker,
+    };
+  }
+
+  function labRules(): SessionPermissionRules {
+    const rules = new SessionPermissionRules();
+    ["Agent", "Read", "Glob", "Grep", "Bash", "Write", "Edit", "MultiEdit"].forEach((t) =>
+      rules.add({ toolName: t }),
+    );
+    return rules;
+  }
+
+  const multiEditStub = makeTool({
+    metadata: { ...editTool.metadata, name: "MultiEdit" },
+    inputSchema: z.object({
+      file_path: z.string(),
+      edits: z.array(z.object({ old_string: z.string(), new_string: z.string() })),
+    }),
+  });
+
+  function makeCtx4294(
+    cwd: string,
+    broker: PermissionBroker,
+  ): DispatchContext {
+    return {
+      registry: makeRegistry({
+        Write: writeTool,
+        Edit: editTool,
+        MultiEdit: multiEditStub,
+      } as unknown as Record<string, AnyToolDefinition>),
+      hooks: makeHooks(),
+      permissionEngine: new RuleAwarePermissionEngine(
+        new SafeCommandPermissionEngine(new ModePermissionEngine()),
+        labRules(),
+      ),
+      permissionBroker: broker,
+      mode: "build",
+      ports: { fs: adapter } as unknown as CorePorts,
+      cwd,
+    };
+  }
+
+  it("build + blanket rules + Edit OUTSIDE (deny broker): denied, the ask reached the broker, file untouched", async () => {
+    const a = await mkDir();
+    const b = await mkDir();
+    await fsp.writeFile(join(b, "f.ts"), "orig", "utf-8");
+    const { asked, broker } = recordingBroker("deny");
+
+    const outcome = await executeToolCall(makeCtx4294(a, broker), {
+      id: "e-1",
+      name: "Edit",
+      input: { file_path: join(b, "f.ts"), old_string: "orig", new_string: "pwn" },
+    });
+
+    expect(outcome.status).toBe("denied");
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.toolName).toBe("Edit");
+    await expect(fsp.readFile(join(b, "f.ts"), "utf-8")).resolves.toBe("orig");
+  });
+
+  it("build + blanket rules + Edit OUTSIDE (allow broker): the human approved via the modal, write lands", async () => {
+    const a = await mkDir();
+    const b = await mkDir();
+    await fsp.writeFile(join(b, "f.ts"), "orig", "utf-8");
+    const { asked, broker } = recordingBroker("allow");
+
+    const outcome = await executeToolCall(makeCtx4294(a, broker), {
+      id: "e-2",
+      name: "Edit",
+      input: { file_path: join(b, "f.ts"), old_string: "orig", new_string: "pwn" },
+    });
+
+    expect(outcome.status).toBe("success");
+    await expect(fsp.readFile(join(b, "f.ts"), "utf-8")).resolves.toBe("pwn");
+    expect(asked).toHaveLength(1);
+  });
+
+  it("unattended: DenyPermissionBroker and an explicit unattended broker both deny the outside write, file untouched", async () => {
+    const a = await mkDir();
+    const b = await mkDir();
+    await fsp.writeFile(join(b, "f.ts"), "orig", "utf-8");
+
+    const outcomeDeny = await executeToolCall(makeCtx4294(a, new DenyPermissionBroker()), {
+      id: "e-3",
+      name: "Edit",
+      input: { file_path: join(b, "f.ts"), old_string: "orig", new_string: "pwn" },
+    });
+    expect(outcomeDeny.status).toBe("denied");
+    await expect(fsp.readFile(join(b, "f.ts"), "utf-8")).resolves.toBe("orig");
+
+    const unattended: PermissionBroker = {
+      isUnattended: true,
+      requestPermission: async () => ({ behavior: "deny", reason: "unattended" }),
+    };
+    const outcomeUnattended = await executeToolCall(makeCtx4294(a, unattended), {
+      id: "e-4",
+      name: "Edit",
+      input: { file_path: join(b, "f.ts"), old_string: "orig", new_string: "pwn" },
+    });
+    expect(outcomeUnattended.status).toBe("denied");
+    await expect(fsp.readFile(join(b, "f.ts"), "utf-8")).resolves.toBe("orig");
+  });
+
+  it("Write and MultiEdit outside are both denied with the ask reaching the broker; the broker sees the workspace facts", async () => {
+    const a = await mkDir();
+    const b = await mkDir();
+    await fsp.writeFile(join(b, "f.ts"), "orig", "utf-8");
+    const { asked, broker } = recordingBroker("deny");
+
+    const write = await executeToolCall(makeCtx4294(a, broker), {
+      id: "w-4294",
+      name: "Write",
+      input: { file_path: join(b, "new.ts"), content: "pwn" },
+    });
+    expect(write.status).toBe("denied");
+    expect(asked).toHaveLength(1);
+    await expect(fsp.access(join(b, "new.ts"))).rejects.toBeDefined();
+
+    const multi = await executeToolCall(makeCtx4294(a, broker), {
+      id: "m-4294",
+      name: "MultiEdit",
+      input: { file_path: join(b, "f.ts"), edits: [{ old_string: "orig", new_string: "pwn" }] },
+    });
+    expect(multi.status).toBe("denied");
+    expect(asked).toHaveLength(2);
+    const multiRequest = asked[1];
+    expect(multiRequest?.toolName).toBe("MultiEdit");
+    expect(multiRequest?.workspace?.root).toBe(a);
+    expect(multiRequest?.workspace?.resolvedPath).toBe(join(b, "f.ts"));
+  });
+
+  it("the exact 4294 topology: child worktree under repo/.anycode/worktrees/x, edit of the main checkout -> denied", async () => {
+    const repo = await mkDir();
+    await fsp.mkdir(join(repo, ".anycode", "worktrees", "x"), { recursive: true });
+    await fsp.mkdir(join(repo, "src"), { recursive: true });
+    await fsp.writeFile(join(repo, "src", "f.ts"), "orig", "utf-8");
+    const worktree = await fsp.realpath(join(repo, ".anycode", "worktrees", "x"));
+    const { asked, broker } = recordingBroker("deny");
+
+    const outcome = await executeToolCall(makeCtx4294(worktree, broker), {
+      id: "e-5",
+      name: "Edit",
+      input: { file_path: join(repo, "src", "f.ts"), old_string: "orig", new_string: "pwn" },
+    });
+
+    expect(outcome.status).toBe("denied");
+    expect(asked).toHaveLength(1);
+    await expect(fsp.readFile(join(repo, "src", "f.ts"), "utf-8")).resolves.toBe("orig");
+  });
+
+  it("lexical traversal '..' spelling of the sibling target -> denied (facts refuse raw .. segments)", async () => {
+    const a = await mkDir();
+    const b = await mkDir();
+    await fsp.writeFile(join(b, "f.ts"), "orig", "utf-8");
+    const { asked, broker } = recordingBroker("deny");
+
+    const outcome = await executeToolCall(makeCtx4294(a, broker), {
+      id: "e-6",
+      name: "Edit",
+      input: {
+        file_path: `${a}/../${basename(b)}/f.ts`,
+        old_string: "orig",
+        new_string: "pwn",
+      },
+    });
+
+    expect(outcome.status).toBe("denied");
+    expect(asked).toHaveLength(1);
+    await expect(fsp.readFile(join(b, "f.ts"), "utf-8")).resolves.toBe("orig");
+  });
+
+  it("symlink escape: Write via a workspace symlink and Edit through it -> both denied, target dir clean", async () => {
+    const a = await mkDir();
+    const b = await mkDir();
+    await fsp.writeFile(join(b, "f.ts"), "orig", "utf-8");
+    await fsp.symlink(b, join(a, "link"), "dir");
+    const { asked, broker } = recordingBroker("deny");
+
+    const write = await executeToolCall(makeCtx4294(a, broker), {
+      id: "w-4294b",
+      name: "Write",
+      input: { file_path: join(a, "link", "evil.ts"), content: "pwn" },
+    });
+    expect(write.status).toBe("denied");
+    expect(asked).toHaveLength(1);
+    await expect(fsp.access(join(b, "evil.ts"))).rejects.toBeDefined();
+
+    const edit = await executeToolCall(makeCtx4294(a, broker), {
+      id: "e-7",
+      name: "Edit",
+      input: { file_path: join(a, "link", "f.ts"), old_string: "orig", new_string: "pwn" },
+    });
+    expect(edit.status).toBe("denied");
+    await expect(fsp.readFile(join(b, "f.ts"), "utf-8")).resolves.toBe("orig");
+  });
+
+  it("relative targets: 'src/f.ts' and '../<sibling>/f.ts' both ask (no facts) and are denied by the broker", async () => {
+    const a = await mkDir();
+    const b = await mkDir();
+    await fsp.mkdir(join(a, "src"), { recursive: true });
+    await fsp.writeFile(join(a, "src", "f.ts"), "orig", "utf-8");
+    await fsp.writeFile(join(b, "f.ts"), "orig", "utf-8");
+    const { asked, broker } = recordingBroker("deny");
+
+    const relInside = await executeToolCall(makeCtx4294(a, broker), {
+      id: "e-8",
+      name: "Edit",
+      input: { file_path: "src/f.ts", old_string: "orig", new_string: "pwn" },
+    });
+    expect(relInside.status).toBe("denied");
+    expect(asked).toHaveLength(1);
+
+    const relEscape = await executeToolCall(makeCtx4294(a, broker), {
+      id: "e-9",
+      name: "Edit",
+      input: {
+        file_path: `../${basename(b)}/f.ts`,
+        old_string: "orig",
+        new_string: "pwn",
+      },
+    });
+    expect(relEscape.status).toBe("denied");
+    await expect(fsp.readFile(join(b, "f.ts"), "utf-8")).resolves.toBe("orig");
+  });
+
+  it("inside the workspace the blanket rule stays silent-allow: Write/Edit/MultiEdit all succeed with zero broker asks", async () => {
+    const a = await mkDir();
+    await fsp.writeFile(join(a, "g.ts"), "orig", "utf-8");
+    const { asked, broker } = recordingBroker("deny");
+
+    const write = await executeToolCall(makeCtx4294(a, broker), {
+      id: "w-4294c",
+      name: "Write",
+      input: { file_path: join(a, "new.ts"), content: "hi" },
+    });
+    expect(write.status).toBe("success");
+    await expect(fsp.readFile(join(a, "new.ts"), "utf-8")).resolves.toBe("hi");
+
+    const edit = await executeToolCall(makeCtx4294(a, broker), {
+      id: "e-10",
+      name: "Edit",
+      input: { file_path: join(a, "g.ts"), old_string: "orig", new_string: "edited" },
+    });
+    expect(edit.status).toBe("success");
+
+    const multi = await executeToolCall(makeCtx4294(a, broker), {
+      id: "m-4294b",
+      name: "MultiEdit",
+      input: { file_path: join(a, "g.ts"), edits: [{ old_string: "edited", new_string: "multi" }] },
+    });
+    expect(multi.status).toBe("success");
+    // The MultiEdit stub's handler is a no-op mock; only the permission
+    // pipeline is under test here (zero broker asks below), not file mutation.
+    expect(asked).toHaveLength(0);
   });
 });

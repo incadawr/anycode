@@ -39,10 +39,23 @@
  * token edges are trimmed of SHELL whitespace only (space, horizontal tab); JS
  * `trim()`'s wider Unicode set (NBSP, U+2028, …) is deliberately not applied,
  * because Bash treats those as ordinary characters — see `scopedTrimShell`.
+ *
+ * Taskana 4294 — always-allow rules are CONFINED to the session workspace for
+ * the file-write tools (WORKSPACE_CONFINED_WRITE_TOOLS: Write/Edit/MultiEdit).
+ * A matching rule (bare or patterned) may downgrade an "ask" to "allow" only
+ * when the dispatcher-minted workspace facts (`request.workspace`, realpath-
+ * resolved at the dispatch site) PROVE the target sits inside the session
+ * workspace. Outside or unprovable => the ask stands: interactive -> modal,
+ * unattended/no-client broker -> deny. A child session rooted at a
+ * `.anycode/worktrees/<x>` worktree therefore cannot ride a blanket Edit rule
+ * to edit the main checkout by absolute path. Bash is out of scope: its
+ * command line is not path-analysable, so a blanket Bash rule remains a full
+ * bypass by owner grant (residual documented in Taskana 4294).
  */
 
 import picomatch from "picomatch";
 import type { PermissionEngine, PermissionRequest, PermissionRule, PermissionRuling } from "../types/permissions.js";
+import { WORKSPACE_CONFINED_WRITE_TOOLS, isProvablyInsideWorkspace } from "./workspace-policy.js";
 
 /** Per-tool field read as the pattern-matching subject; tools absent here have no subject. */
 const SUBJECT_FIELD: Record<string, string> = {
@@ -50,6 +63,7 @@ const SUBJECT_FIELD: Record<string, string> = {
   Read: "file_path",
   Edit: "file_path",
   Write: "file_path",
+  MultiEdit: "file_path",
   Glob: "path",
   Grep: "path",
   WebFetch: "url",
@@ -490,9 +504,19 @@ export class RuleAwarePermissionEngine implements PermissionEngine {
     if (ruling.decision !== "ask") {
       return ruling;
     }
-    if (this.rules.matches(request.toolName, request.input)) {
-      return { decision: "allow", reason: `${request.toolName}: allowed by a session /allow rule` };
+    if (!this.rules.matches(request.toolName, request.input)) {
+      return ruling;
     }
-    return ruling;
+    // Taskana 4294: an always-allow rule (bare or patterned) never authorises a
+    // file write the dispatcher could not PROVE lands inside the session
+    // workspace (realpath-resolved facts, request.workspace). Outside or
+    // unprovable => the ask stands: interactive -> modal, unattended -> deny.
+    if (WORKSPACE_CONFINED_WRITE_TOOLS.has(request.toolName) && !isProvablyInsideWorkspace(request.workspace)) {
+      return {
+        decision: "ask",
+        reason: `${request.toolName}: target is outside the session workspace (or not provably inside it); always-allow rules only cover writes inside the workspace`,
+      };
+    }
+    return { decision: "allow", reason: `${request.toolName}: allowed by a session /allow rule` };
   }
 }

@@ -60,6 +60,7 @@ import {
   type ResultPreviewDirection,
 } from "../util/result-budget.js";
 import { resolveWorkspaceWriteFacts } from "../util/path-containment.js";
+import { WORKSPACE_CONFINED_WRITE_TOOLS } from "../permissions/workspace-policy.js";
 
 export interface DispatchContext {
   registry: ToolRegistry;
@@ -270,14 +271,18 @@ export async function executeToolCall(
       // hook rewriting. Resolver failures are caught by the defensive net.
       let metadata = tool.resolveMetadata?.(input) ?? tool.metadata;
 
-      // TASK.32 (DV-2/DV-3): dispatch-site workspace facts for the Write/Edit
-      // containment proof. Computed here — via ports, before the request is
-      // built — because the engine is sync and pure. Tool gate is literal:
-      // exactly Write and Edit. Fail-closed: unprovable => the block is
-      // absent => the engine keeps today's ruling. `ctx.ports.fs` may be
-      // absent in mocked contexts; the resolver tolerates undefined.
+      // TASK.32 (DV-2/DV-3) + Taskana 4294: dispatch-site workspace facts for
+      // the Write/Edit containment proof AND the always-allow rule gate.
+      // Computed here — via ports, before the request is built — because the
+      // engine is sync and pure. Tool gate is WORKSPACE_CONFINED_WRITE_TOOLS
+      // (Write/Edit/MultiEdit): MultiEdit joined in Taskana 4294 so its rules
+      // are workspace-confined too; the edit-mode containment WIDENING in
+      // engine.ts stays gated to the literal Write/Edit pair. Fail-closed:
+      // unprovable => the block is absent => the engine keeps today's ruling.
+      // `ctx.ports.fs` may be absent in mocked contexts; the resolver
+      // tolerates undefined.
       const workspace =
-        toolName === "Write" || toolName === "Edit"
+        WORKSPACE_CONFINED_WRITE_TOOLS.has(toolName)
           ? await resolveWorkspaceWriteFacts(
               ctx.ports.fs,
               ctx.cwd,
