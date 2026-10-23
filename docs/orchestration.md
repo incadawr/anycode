@@ -175,9 +175,12 @@ as child reports, telling the supervisor to either dispatch the next task or
 close with a terminal marker. The reminder repeats every **10 minutes**, and
 after **two ignored reminders** the text escalates to an
 `OWNER ATTENTION REQUIRED` variant addressed to whoever reads the
-transcript. The watchdog only ever delivers text — it never kills sessions
+transcript; that escalated reminder is the last one until the supervisor
+dispatches a child or closes. The watchdog only arms in a session that has
+actually had a live detached child since its last marker, so an ordinary
+chat is never reminded. It only ever delivers text — it never kills sessions
 or cancels children — and a marker anywhere in the supervisor's final
-assistant message disarms it for that turn. Its first reminder waits
+assistant message disarms it and ends supervision until the next dispatch. Its first reminder waits
 deliberately longer than one child-stall cycle (10 minutes), so a slow
 child's stall notice, not the watchdog, is what wakes the supervisor first.
 

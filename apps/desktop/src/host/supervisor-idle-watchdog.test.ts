@@ -37,6 +37,12 @@ function recorder(): { reports: SupervisorIdleReport[]; onIdle: (r: SupervisorId
   return { reports, onIdle: (r) => reports.push(r) };
 }
 
+/** Puts the watchdog in supervising mode: a detached child went live (and the timer is disarmed). */
+function supervising(watchdog: SupervisorIdleWatchdog): SupervisorIdleWatchdog {
+  watchdog.noteBackgroundChildrenChanged(1);
+  return watchdog;
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -45,7 +51,7 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
   it("fires the first reminder exactly at firstAfterMs when a turn settles with no marker and no live children", async () => {
     vi.useFakeTimers();
     const { reports, onIdle } = recorder();
-    const watchdog = new SupervisorIdleWatchdog(facts(), onIdle);
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
 
     watchdog.noteTurnSettled("Investigating the failing build, will report back.");
 
@@ -68,7 +74,7 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
     ]) {
       vi.useFakeTimers();
       const { reports, onIdle } = recorder();
-      const watchdog = new SupervisorIdleWatchdog(facts(), onIdle);
+      const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
 
       watchdog.noteTurnSettled(text);
       // Advance past EVERY threshold (first + several repeats): must stay silent.
@@ -83,7 +89,7 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
   it("a marker word inside a larger word does not disarm (word-boundary match)", async () => {
     vi.useFakeTimers();
     const { reports, onIdle } = recorder();
-    const watchdog = new SupervisorIdleWatchdog(facts(), onIdle);
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
 
     // "READINESS" contains READY but is not the marker; "unACCEPTable" likewise.
     watchdog.noteTurnSettled("Still gathering READINESS context; the wait is unACCEPTable.");
@@ -96,7 +102,7 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
   it("noteTurnStarted disarms; settling again without a marker re-arms", async () => {
     vi.useFakeTimers();
     const { reports, onIdle } = recorder();
-    const watchdog = new SupervisorIdleWatchdog(facts(), onIdle);
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
 
     watchdog.noteTurnSettled("no marker yet");
     await vi.advanceTimersByTimeAsync(FIRST_MS - 1);
@@ -118,7 +124,7 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
   it("live children disarm the watchdog; children empty again re-arms a fresh firstAfterMs", async () => {
     vi.useFakeTimers();
     const { reports, onIdle } = recorder();
-    const watchdog = new SupervisorIdleWatchdog(facts(), onIdle);
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
 
     watchdog.noteTurnSettled("no marker");
     await vi.advanceTimersByTimeAsync(FIRST_MS - 1);
@@ -140,7 +146,7 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
   it("repeats follow repeatEveryMs cadence; reminderCount increments; escalated strictly after escalateAfter", async () => {
     vi.useFakeTimers();
     const { reports, onIdle } = recorder();
-    const watchdog = new SupervisorIdleWatchdog(facts(), onIdle);
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
 
     watchdog.noteTurnSettled("no marker");
 
@@ -156,9 +162,9 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
     expect(reports.map((r) => r.reminderCount)).toEqual([1, 2, 3]);
     expect(reports[2]!.escalated).toBe(true); // 3 > 2
 
-    await vi.advanceTimersByTimeAsync(REPEAT_MS);
-    expect(reports.map((r) => r.reminderCount)).toEqual([1, 2, 3, 4]);
-    expect(reports[3]!.escalated).toBe(true);
+    // The escalated reminder is the last one until progress.
+    await vi.advanceTimersByTimeAsync(REPEAT_MS * 5);
+    expect(reports.map((r) => r.reminderCount)).toEqual([1, 2, 3]);
 
     // idleMs keeps counting from the arm: first at FIRST_MS, then +REPEAT_MS each.
     expect(reports[0]!.idleMs).toBe(FIRST_MS);
@@ -171,7 +177,7 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
   it("repeats stop while children are live and resume on the next idle settle — never while work is in flight", async () => {
     vi.useFakeTimers();
     const { reports, onIdle } = recorder();
-    const watchdog = new SupervisorIdleWatchdog(facts(), onIdle);
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
 
     watchdog.noteTurnSettled("no marker");
     await vi.advanceTimersByTimeAsync(FIRST_MS); // reminder 1 fires
@@ -189,10 +195,69 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
     watchdog.dispose();
   });
 
-  it("dispose() stops everything", async () => {
+  it("an ordinary chat that never had a live detached child is never reminded", async () => {
     vi.useFakeTimers();
     const { reports, onIdle } = recorder();
     const watchdog = new SupervisorIdleWatchdog(facts(), onIdle);
+
+    watchdog.noteTurnSettled("Here is the refactor you asked for.");
+    watchdog.noteBackgroundChildrenChanged(0);
+    await vi.advanceTimersByTimeAsync(FIRST_MS + REPEAT_MS * 5);
+    expect(reports).toHaveLength(0);
+
+    watchdog.dispose();
+  });
+
+  it("the reminder's own marker-less turns continue the chain: escalation is reached, then silence", async () => {
+    vi.useFakeTimers();
+    const { reports, onIdle } = recorder();
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
+    watchdog.noteBackgroundChildrenChanged(0);
+    watchdog.noteTurnStarted(); // the child's report turn
+    watchdog.noteTurnSettled("Reviewed the report.");
+
+    await vi.advanceTimersByTimeAsync(FIRST_MS);
+    for (let i = 0; i < 3; i += 1) {
+      // Each reminder is delivered as a system turn that again ends without a marker.
+      watchdog.noteTurnStarted();
+      watchdog.noteTurnSettled("Hmm, let me think.");
+      await vi.advanceTimersByTimeAsync(REPEAT_MS);
+    }
+    expect(reports.map((r) => [r.reminderCount, r.escalated])).toEqual([
+      [1, false],
+      [2, false],
+      [3, true],
+    ]);
+    await vi.advanceTimersByTimeAsync(FIRST_MS + REPEAT_MS * 5);
+    expect(reports).toHaveLength(3);
+
+    // A new dispatch is progress: the chain starts over.
+    watchdog.noteBackgroundChildrenChanged(1);
+    watchdog.noteBackgroundChildrenChanged(0);
+    await vi.advanceTimersByTimeAsync(FIRST_MS);
+    expect(reports).toHaveLength(4);
+    expect(reports[3]!.reminderCount).toBe(1);
+
+    watchdog.dispose();
+  });
+
+  it("a terminal marker ends supervision: later marker-less chat settles never arm", async () => {
+    vi.useFakeTimers();
+    const { reports, onIdle } = recorder();
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
+    watchdog.noteBackgroundChildrenChanged(0);
+    watchdog.noteTurnSettled("ACCEPT — all green.");
+    watchdog.noteTurnSettled("Sure, here is an unrelated answer.");
+    await vi.advanceTimersByTimeAsync(FIRST_MS + REPEAT_MS * 5);
+    expect(reports).toHaveLength(0);
+
+    watchdog.dispose();
+  });
+
+  it("dispose() stops everything", async () => {
+    vi.useFakeTimers();
+    const { reports, onIdle } = recorder();
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
 
     watchdog.noteTurnSettled("no marker");
     watchdog.dispose();
