@@ -141,6 +141,12 @@ export interface SubagentRunnerOptions {
    * honest "not supported in this host" error-outcome when no resolver is
    * wired), so explore-on-a-cheap-model gets correct TASK.162 child settings
    * (output ceiling / effort / context window) resolved for THAT model.
+   *
+   * Taskana 4131 follow-up: a default the ACTIVE connection rejects (id
+   * disallowed/unknown, e.g. after the owner switched the session to another
+   * provider) degrades to the parent's model — the run's outcome.finalText
+   * carries a one-line notice. An EXPLICIT Agent(model:) that is rejected
+   * still errors, exactly as before.
    */
   exploreModel?: string;
   /**
@@ -675,7 +681,16 @@ export function createSubagentRunner(
         req.model === undefined && persona.model === undefined && persona.name === "explore"
           ? opts?.exploreModel
           : undefined;
-      const requestedModel = req.model ?? persona.model ?? exploreDefault;
+      let requestedModel: string | undefined = req.model ?? persona.model ?? exploreDefault;
+      // Taskana 4131 follow-up: the explore default is a HOST-CONFIGURED
+      // convenience, not the caller's intent. If resolving it fails (the id is
+      // disallowed/unknown on the ACTIVE connection — e.g. the owner switched
+      // the session from GLM to Anthropic while ANYCODE_EXPLORE_MODEL still
+      // names a GLM id), fall back to the parent's model instead of failing
+      // every explore call. Only the FALLBACK PATH sets this notice; it rides
+      // the outcome's finalText (the existing wrap-up-notice channel) so the
+      // parent model sees it exactly once, with the child's own report.
+      let exploreFallbackNotice: string | undefined;
 
       // Engine persona (md-profile `engine:`): the whole in-process path
       // (buildChildConfig/AgentLoop/resolveChildModelPort) is bypassed in favor
@@ -772,20 +787,42 @@ export function createSubagentRunner(
             durationMs: Date.now() - startedAt,
           };
         }
+        // Taskana 4131 follow-up: the explore default is the ONE id here that
+        // no caller asked for (host env, not req.model, not a profile's own
+        // frontmatter). When exactly that id is rejected below, degrade to
+        // the parent's model with a notice instead of failing every explore
+        // call on a connection where the id is disallowed/unknown (e.g. the
+        // owner switched the session from GLM to Anthropic while
+        // ANYCODE_EXPLORE_MODEL still names a GLM id). An explicit
+        // Agent(model:) or a profile `model:` keeps the honest error —
+        // including an explicit id that COINCIDENTALLY equals the default:
+        // `exploreDefault` above is undefined whenever req.model is set.
+        const degradeExploreDefault = exploreDefault !== undefined && requestedModel === exploreDefault;
+        const degrade = (): void => {
+          exploreFallbackNotice =
+            `Agent: explore default model "${exploreDefault}" is not available on this connection; ran on the parent's model.`;
+          requestedModel = undefined;
+          childModelPort = undefined;
+          childSettings = undefined;
+        };
         // The resolver owns the id→port mapping and may reject an id this
         // module cannot validate (no catalogue here). The port contract is
         // outcomes-not-throws, so a rejection becomes an error outcome.
         try {
           childModelPort = resolve(requestedModel);
         } catch (error) {
-          return {
-            status: "error",
-            finalText: `Agent: model "${requestedModel}" could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
-            truncated: false,
-            turns: 0,
-            toolCalls: 0,
-            durationMs: Date.now() - startedAt,
-          };
+          if (degradeExploreDefault) {
+            degrade();
+          } else {
+            return {
+              status: "error",
+              finalText: `Agent: model "${requestedModel}" could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
+              truncated: false,
+              turns: 0,
+              toolCalls: 0,
+              durationMs: Date.now() - startedAt,
+            };
+          }
         }
 
         // TASK.162 (F6): capabilities re-resolved for the child's OWN model.
@@ -799,20 +836,29 @@ export function createSubagentRunner(
         // A throw is an error-outcome, same posture as the port resolver
         // right above: falling back to the parent's already-resolved values
         // would silently reinstate the very defect this resolver removes.
-        try {
-          childSettings = opts?.resolveChildModelSettings?.(
-            requestedModel,
-            persona.effort === undefined ? undefined : persona.effort === "xhigh" ? "max" : persona.effort,
-          );
-        } catch (error) {
-          return {
-            status: "error",
-            finalText: `Agent: model "${requestedModel}" settings could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
-            truncated: false,
-            turns: 0,
-            toolCalls: 0,
-            durationMs: Date.now() - startedAt,
-          };
+        // (Taskana 4131 follow-up: the guard skips this entirely when the
+        // port fallback above already degraded — the child then inherits the
+        // parent's port AND its already-resolved parent settings.)
+        if (requestedModel !== undefined) {
+          try {
+            childSettings = opts?.resolveChildModelSettings?.(
+              requestedModel,
+              persona.effort === undefined ? undefined : persona.effort === "xhigh" ? "max" : persona.effort,
+            );
+          } catch (error) {
+            if (degradeExploreDefault) {
+              degrade();
+            } else {
+              return {
+                status: "error",
+                finalText: `Agent: model "${requestedModel}" settings could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
+                truncated: false,
+                turns: 0,
+                toolCalls: 0,
+                durationMs: Date.now() - startedAt,
+              };
+            }
+          }
         }
       } else if (persona.effort !== undefined && parent.modelPort.modelId !== undefined) {
         // A role that declares only `effort:` runs on the parent's model at
@@ -1210,7 +1256,15 @@ export function createSubagentRunner(
         const capped = capUtf8Bytes(finalText, SUBAGENT_OUTPUT_MAX_BYTES);
         const outcome: SubagentOutcome = {
           status,
-          finalText: capped.text,
+          // Taskana 4131 follow-up: the fallback notice rides the SAME field
+          // the wrap-up prefixes already use (the child's report below, an
+          // "Agent:"-prefixed line above it) — exactly once, model-visible
+          // through outcomeToResult, and capped so it can never crowd out the
+          // child's own text.
+          finalText:
+            exploreFallbackNotice !== undefined
+              ? `${exploreFallbackNotice}\n\n${capped.text}`
+              : capped.text,
           truncated: capped.truncated,
           turns,
           toolCalls,
