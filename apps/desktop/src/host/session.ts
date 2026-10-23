@@ -3498,18 +3498,24 @@ export class Session {
           // `turnId` is runTurn's OUTER turn uuid — the same value the
           // checkpoint `${turnId}:${step}` keys use, stable across
           // reconnects.
-          this.usageAudit?.sink.record({
-            turnId,
-            step: this.currentStep!,
-            model: this.model,
-            reasoningEffort: this.selectedEffort,
-            inputTokens: event.usage.inputTokens,
-            cachedInputTokens: event.usage.cachedInputTokens,
-            outputTokens: event.usage.outputTokens,
-            totalTokens: event.usage.totalTokens,
-            finishReason: event.finishReason,
-            transportRetries: this.finishRetries,
-          });
+          // try/catch: a synchronously-throwing sink must not fail the turn
+          // either (invariant 3 is Session's guarantee, not the sink's).
+          try {
+            this.usageAudit?.sink.record({
+              turnId,
+              step: this.currentStep!,
+              model: this.model,
+              reasoningEffort: this.selectedEffort,
+              inputTokens: event.usage.inputTokens,
+              cachedInputTokens: event.usage.cachedInputTokens,
+              outputTokens: event.usage.outputTokens,
+              totalTokens: event.usage.totalTokens,
+              finishReason: event.finishReason,
+              transportRetries: this.finishRetries,
+            });
+          } catch (e) {
+            console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
           this.finishRetries = 0;
           // Newest-first; trimmed to the bounded window (an entry older
           // than the ring capacity can never replay again).

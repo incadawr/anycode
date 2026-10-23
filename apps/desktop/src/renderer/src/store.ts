@@ -4502,7 +4502,17 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // response to a usage_audit_request (newest-first, last 50). The
             // host's totals win when present; the list slot is REPLACE-set
             // (list: null = never loaded / foreign host that never answers).
-            set({ usageAudit: { ...get().usageAudit, list: message.steps, totals: message.totals ?? get().usageAudit.totals } });
+            // The reply's newest row also refreshes lastStep: the checkpoint's
+            // copy is only re-read per ui_ready, so it goes stale as live
+            // turns add rows within one connection.
+            set({
+              usageAudit: {
+                ...get().usageAudit,
+                list: message.steps,
+                lastStep: message.steps[0] ?? get().usageAudit.lastStep,
+                totals: message.totals ?? get().usageAudit.totals,
+              },
+            });
             return;
           case "background_child_cancel_result":
             // The host re-pushes background_children right after a cancel, so

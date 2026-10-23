@@ -971,7 +971,7 @@ function CtxPopover({
               {cacheHitLine !== null && <div className="ctx-popover-session">{cacheHitLine}</div>}
             </>
           )}
-          {auditLines.session === null && auditLines.lastStep === null && usageAudit.list === null && usageAudit.totalSteps > 0 && (
+          {usageAudit.list === null && usageAudit.totalSteps > 0 && (
             <div className="ctx-popover-session">Audit: {usageAudit.totalSteps} steps recorded — reopen to load</div>
           )}
           {auditLines.session !== null && <div className="ctx-popover-session">{auditLines.session}</div>}
