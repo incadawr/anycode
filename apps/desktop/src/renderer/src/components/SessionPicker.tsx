@@ -75,6 +75,14 @@ export function describeCreateTabFailure(
       if (result.notReadyReason === "transport_unsupported") {
         return "This provider does not support the selected transport. Change it in Settings → Providers, then try again.";
       }
+      // TASK.109 (Taskana 4103): a LIVE-but-dead pin — the connection exists and
+      // is configured, but its key/quota is exhausted (classified `rate_limited`
+      // etc. in settings-ipc). Resume is not refused for this (the tab opens; the
+      // model-chip rebind is the escape), so this copy only ever fires when main
+      // actively refuses with `provider_dead` — dormant scaffolding until then.
+      if (result.notReadyReason === "provider_dead") {
+        return "This connection isn't responding (quota or key). Open the task, then pick another connection's model from the model chip.";
+      }
       // is configured. Renderer surfaces the configure-provider notice. 2.2.4
       // may refine the copy / route to the Settings screen.
       return "Configure a provider (API key + model) before opening a tab.";

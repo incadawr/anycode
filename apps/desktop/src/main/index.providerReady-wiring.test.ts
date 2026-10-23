@@ -25,13 +25,13 @@
  * profile, exactly like index.appVersion-wiring.test.ts (see that file for
  * why main/index.ts can only ever be exercised this way).
  */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONNECTION_CREATE_CHANNEL } from "../shared/settings.js";
 import type { SettingsMutationResult } from "../shared/settings.js";
-import { TAB_CREATE_CHANNEL } from "../shared/tabs.js";
+import { TAB_CREATE_CHANNEL, TAB_REBIND_CHANNEL } from "../shared/tabs.js";
 import type { CreateTabResult } from "../shared/tabs.js";
 
 // Not statically imported from ./provider-ipc.js: that module chain-imports
@@ -331,5 +331,99 @@ describe("main/index.ts — custom:* readiness-gate wiring (FX4)", () => {
     if (!tabResult.ok) {
       expect((tabResult as { reason: string }).reason).toBe("not_ready");
     }
+  });
+
+  it("TASK.109: resume of a session pinned to a live-but-dead connection opens the tab — the rebind escape stays reachable", async () => {
+    // The card's frame (Taskana 4103): a session pinned to a connection whose
+    // KEY/QUOTA is dead while the connection itself is still configured.
+    // `resolveResumePin` (main/index.ts) only checks EXISTENCE, and the resume
+    // gate answers from the ACTIVE connection's readiness — so this resume
+    // must NOT be refused (`connection_missing`/`not_ready`): the tab opens
+    // and the model-chip rebind (TASK.106 cut 2) is the escape. The code-side
+    // half of the card's demanded live smoke; the full ~90k-token replay
+    // against real connections remains an owner action.
+    const dbPath = join(dir, "anycode.sqlite");
+    // The beforeEach default is `:memory:` — a real file DB lets this test
+    // seed a session row BEFORE main/index.ts boots.
+    process.env.ANYCODE_DB_PATH = dbPath;
+
+    // Seed BEFORE `await import("./index.js")` (same pattern as
+    // checkpoints-rewind-wire.test.ts): a session pinned to conn-dead.
+    const { SqlitePersistenceAdapter } = await import("@anycode/core/persistence");
+    const store = new SqlitePersistenceAdapter(dbPath);
+    await store.createSession({ id: "s-t109", workspace: dir, model: "m", mode: "build" });
+    await store.touchSession("s-t109", { connectionId: "conn-dead" });
+    await store.close();
+
+    // TWO keyless-legal connections (TASK.152's authOptional rule): conn-live
+    // ACTIVE and healthy; conn-dead configured but classified quota-dead —
+    // `rate_limited` is the classified signal (settings-ipc.ts), advisory only.
+    await writeFile(
+      join(dir, "settings.json"),
+      JSON.stringify({
+        version: 2,
+        provider: {
+          connections: [
+            { id: "conn-live", providerId: "custom", model: "m", authOptional: true },
+            {
+              id: "conn-dead",
+              providerId: "custom",
+              model: "m",
+              authOptional: true,
+              lastHealth: { status: "rate_limited", at: "2026-10-01T00:00:00.000Z" },
+            },
+          ],
+          activeConnectionId: "conn-live",
+        },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+    );
+
+    await import("./index.js");
+    const resume = await waitForHandler(TAB_CREATE_CHANNEL);
+    const res = (await resume({}, { kind: "resume", sessionId: "s-t109" })) as CreateTabResult;
+
+    // The tab OPENS — never `connection_missing` (the connection exists) and
+    // never `not_ready` (the gate answers from the ACTIVE connection).
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error(`resume of a live-but-dead pin was refused: ${JSON.stringify(res)}`);
+    }
+
+    // Drive the escape's first hop: the rebind channel is wired and its guard
+    // chain runs against the real registry. Accept `busy` (the fake
+    // utilityProcess.fork host never reaches a running-port state) or `ok` —
+    // either proves the channel is live; `unknown_tab`/`connection_missing`
+    // would mean the escape is unreachable. The respawned host's full history
+    // replay needs a real host — out of scope (owner live smoke).
+    const rebind = await waitForHandler(TAB_REBIND_CHANNEL);
+    const r2 = (await rebind({}, {
+      tabId: (res as { tabId: string }).tabId,
+      connectionId: "conn-live",
+    })) as { ok: boolean; reason?: string };
+    if (r2.ok) {
+      // ok:true — the rebind fully completed against the real registry.
+    } else {
+      expect(r2.reason).not.toBe("unknown_tab");
+      expect(r2.reason).not.toBe("connection_missing");
+    }
+
+    // The OLD pin survived untouched: re-read settings.json from disk —
+    // re-pin/rebind never rewrote settings (only the session row's pin
+    // moved); conn-dead is still there with its lastHealth intact and
+    // conn-live is still the active connection.
+    const rawSettings = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as {
+      provider: {
+        connections: Array<{ id: string; lastHealth?: { status: string; at: string } }>;
+        activeConnectionId: string;
+      };
+    };
+    const connDead = rawSettings.provider.connections.find((c) => c.id === "conn-dead");
+    expect(connDead).toBeDefined();
+    expect(connDead?.lastHealth).toEqual({ status: "rate_limited", at: "2026-10-01T00:00:00.000Z" });
+    expect(rawSettings.provider.activeConnectionId).toBe("conn-live");
   });
 });
