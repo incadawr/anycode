@@ -18,6 +18,7 @@
 import type {
   CatalogSummary,
   CustomProviderRecord,
+  ModelCapabilitiesDto,
   ProviderConnection,
 } from "../../../shared/settings.js";
 import type { SessionSummary } from "../../../shared/tabs.js";
@@ -322,23 +323,49 @@ export const START_MODEL_DEFAULT_EFFORTS: readonly string[] = ["off", "low", "me
  * offer a level the host would also accept (host-side `resolveReasoningEffort`
  * fails closed on anything else).
  *
- * A model the catalog does not know (a live-fetched id) has no declared
- * vocabulary and therefore no effort level: guessing one would offer levels
- * the host would then reject. Exported for unit testing.
+ * A model the catalog does not know has no declared vocabulary — UNLESS the
+ * connection's live-fetched `modelCapabilities` map declares one (Taskana
+ * 4118). That rule is duplicated from core's `resolveEffortLevels` +
+ * `liveEffortLevels` ON PURPOSE (the renderer never imports core, same
+ * discipline as `START_MODEL_DEFAULT_EFFORTS` above): on a catalog miss,
+ * `liveCaps.reasoning === true` supplies the vocabulary — keep only
+ * off|low|medium|high|max by EXACT name, deduped, source order; empty
+ * `effortLevels` ⇒ the legacy four; an all-unknown list ⇒ `undefined` (the
+ * endpoint spoke, nothing fits — never fold `xhigh` into `high`). A
+ * catalog-known model keeps its catalog list even when live meta disagrees
+ * (D-Priority: catalog beats live). Exported for unit testing.
  */
 export function startModelEffortLevels(
   providerId: string | undefined,
   modelId: string,
   catalog: CatalogSummary | undefined,
+  liveCaps?: ModelCapabilitiesDto,
 ): readonly string[] | undefined {
   const matched = catalog
     ?.find((entry) => entry.id === providerId)
     ?.models.find((model) => model.id === modelId);
-  if (matched?.reasoning !== true) {
+  if (matched === undefined) {
+    // Taskana 4118: catalog miss ⇒ consult the connection's live caps.
+    if (liveCaps?.reasoning !== true) {
+      return undefined;
+    }
+    if (liveCaps.effortLevels === undefined || liveCaps.effortLevels.length === 0) {
+      return START_MODEL_DEFAULT_EFFORTS;
+    }
+    const mapped: string[] = [];
+    for (const raw of liveCaps.effortLevels) {
+      if (START_MODEL_EFFORT_VOCABULARY.includes(raw) && !mapped.includes(raw)) mapped.push(raw);
+    }
+    return mapped.length > 0 ? mapped : undefined;
+  }
+  if (matched.reasoning !== true) {
     return undefined;
   }
   return matched.effortLevels ?? START_MODEL_DEFAULT_EFFORTS;
 }
+
+/** The closed effort vocabulary a live-declared level must map to by exact name (Taskana 4118). */
+const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "low", "medium", "high", "max"];
 
 /**
  * The effort a draft should carry after its model changed (TASK.131): the

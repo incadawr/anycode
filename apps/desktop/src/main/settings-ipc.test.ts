@@ -2778,6 +2778,7 @@ describe("handleConnectionUpdate — a baseUrl change drops the live-fetched mod
     };
     raw.provider.connections[0]!.models = ["live-a", "live-b"];
     raw.provider.connections[0]!.modelsFetchedAt = "2026-07-18T00:00:00.000Z";
+    raw.provider.connections[0]!.modelCapabilities = { "live-a": { reasoning: true, effortLevels: ["low", "high"] } };
     await writeFile(settingsPath, JSON.stringify(raw));
   }
 
@@ -2795,6 +2796,9 @@ describe("handleConnectionUpdate — a baseUrl change drops the live-fetched mod
     expect(loaded.settings.provider.connections[0]?.baseUrl).toBe("http://localhost:9000/v1");
     expect(loaded.settings.provider.connections[0]?.models).toBeUndefined();
     expect(loaded.settings.provider.connections[0]?.modelsFetchedAt).toBeUndefined();
+    // Taskana 4118: the live capability map belongs to the origin that
+    // declared it — it is cleared with the ids, not left to linger.
+    expect(loaded.settings.provider.connections[0]?.modelCapabilities).toBeUndefined();
   });
 
   it("a same-baseUrl resend (or a no-baseUrl metadata edit) keeps the fetched list", async () => {
@@ -2816,6 +2820,10 @@ describe("handleConnectionUpdate — a baseUrl change drops the live-fetched mod
     const loaded = await loadSettings(settingsPath);
     expect(loaded.settings.provider.connections[0]?.models).toEqual(["live-a", "live-b"]);
     expect(loaded.settings.provider.connections[0]?.modelsFetchedAt).toBe("2026-07-18T00:00:00.000Z");
+    // Taskana 4118: a label-only / same-baseUrl edit preserves the map too.
+    expect(loaded.settings.provider.connections[0]?.modelCapabilities).toEqual({
+      "live-a": { reasoning: true, effortLevels: ["low", "high"] },
+    });
   });
 });
 

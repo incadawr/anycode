@@ -21,7 +21,7 @@
  * runs `environment: "node"`, so these are plain functions with no React in
  * sight; `model-drill-menu.tsx` renders whatever they return.
  */
-import type { CatalogSummary, CustomProviderRecord, ProviderConnection } from "../../../shared/settings.js";
+import type { CatalogSummary, CustomProviderRecord, ModelCapabilitiesDto, ProviderConnection } from "../../../shared/settings.js";
 import { EFFORT_LABELS } from "./ModelPill.js";
 import {
   buildStartModelGroups,
@@ -108,7 +108,14 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
   });
   const popular = buildStartModelPopularRows(groups, args.recentModelIds, args.currentConnectionId);
   const currentConnection = args.connections.find((connection) => connection.id === args.currentConnectionId);
-  const efforts = startModelEffortLevels(currentConnection?.providerId, args.currentModelId, args.catalog);
+  // Taskana 4118: a model the catalog does not know falls back to the
+  // connection's live-declared capabilities, when the fetch persisted any.
+  const efforts = startModelEffortLevels(
+    currentConnection?.providerId,
+    args.currentModelId,
+    args.catalog,
+    currentConnection?.modelCapabilities?.[args.currentModelId],
+  );
   const effort = resolveStartModelEffort(args.currentEffort, currentConnection?.reasoningEffort, efforts);
 
   let rows: ModelDrillRow[];
@@ -203,6 +210,10 @@ export interface RebindEffortDecision {
  *
  * A session with no effort at all (`currentEffort === undefined`) has nothing
  * to lose, so it is never reported as dropped. Exported for unit testing.
+ *
+ * Taskana 4118: `targetModelCapabilities` carries the TARGET connection's
+ * live-declared capabilities for the target model — the vocabulary the host
+ * will consult when the catalog does not know the model.
  */
 export function resolveRebindEffort(args: {
   currentEffort: string | undefined;
@@ -210,8 +221,9 @@ export function resolveRebindEffort(args: {
   targetModelId: string;
   catalog: CatalogSummary | undefined;
   targetConnectionEffort: string | undefined;
+  targetModelCapabilities?: ModelCapabilitiesDto;
 }): RebindEffortDecision {
-  const efforts = startModelEffortLevels(args.targetProviderId, args.targetModelId, args.catalog);
+  const efforts = startModelEffortLevels(args.targetProviderId, args.targetModelId, args.catalog, args.targetModelCapabilities);
   if (args.currentEffort === undefined || efforts === undefined) {
     return { carried: undefined, resetTo: undefined, dropped: false };
   }

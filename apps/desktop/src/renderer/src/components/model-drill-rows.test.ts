@@ -98,6 +98,32 @@ describe("buildSessionDrillRows (TASK.106 cut-2 §D4 — every connection, the T
     expect(rows.some((row) => row.kind === "effort-open")).toBe(false);
   });
 
+  // Taskana 4118: a connection model unknown to the catalog but present in
+  // the connection's live modelCapabilities gets its effort row from live.
+  it("Taskana 4118: the effort row appears for a connection model unknown to the catalog but live-declared reasoning", () => {
+    const connections: ProviderConnection[] = [
+      connection({
+        id: "c-openrouter",
+        providerId: "openrouter",
+        models: ["or/foreign-model"],
+        modelCapabilities: { "or/foreign-model": { reasoning: true, effortLevels: ["xhigh", "high", "max"] } },
+      }),
+    ];
+    const { rows, efforts, effort } = buildSessionDrillRows({
+      connections,
+      catalog: CATALOG, // has no openrouter entry — the model is catalog-unknown
+      custom: undefined,
+      currentConnectionId: "c-openrouter",
+      currentModelId: "or/foreign-model",
+      recentModelIds: [],
+    });
+    // xhigh drops at mapping; the mapped vocabulary is [high, max], the first
+    // level is what the row displays with no explicit pick.
+    expect(efforts).toEqual(["high", "max"]);
+    expect(effort).toBe("high");
+    expect(rows.at(-1)).toEqual({ kind: "effort-open", value: "high" });
+  });
+
   it("lists the OPEN group's models on the group level", () => {
     const { rows } = buildSessionDrillRows({
       connections: CONNECTIONS,
@@ -233,6 +259,46 @@ describe("resolveRebindEffort (TASK.106 cut-2 §D3 — carried, or reset EXPLICI
         targetModelId: "k3",
         catalog: CATALOG,
         targetConnectionEffort: "high",
+      }),
+    ).toEqual({ carried: undefined, resetTo: undefined, dropped: false });
+  });
+
+  // ── Taskana 4118: an effort travels only inside the TARGET's live vocabulary ──
+
+  it("Taskana 4118: carries the effort when the TARGET's live vocabulary (catalog-unknown model) contains it", () => {
+    expect(
+      resolveRebindEffort({
+        currentEffort: "high",
+        targetProviderId: "z-ai",
+        targetModelId: "or/foreign-model", // unknown to the catalog
+        catalog: CATALOG,
+        targetConnectionEffort: undefined,
+        targetModelCapabilities: { reasoning: true, effortLevels: ["high", "xhigh", "max"] },
+      }),
+    ).toEqual({ carried: "high", resetTo: undefined, dropped: false });
+  });
+
+  it("Taskana 4118: resets and reports the drop when the live vocabulary maps to levels that exclude the current one", () => {
+    expect(
+      resolveRebindEffort({
+        currentEffort: "low", // not in the mapped ["high","max"]
+        targetProviderId: "z-ai",
+        targetModelId: "or/foreign-model",
+        catalog: CATALOG,
+        targetConnectionEffort: "max",
+        targetModelCapabilities: { reasoning: true, effortLevels: ["high", "xhigh", "max"] },
+      }),
+    ).toEqual({ carried: undefined, resetTo: "max", dropped: true });
+  });
+
+  it("Taskana 4118: no vocabulary from live ⇒ neither carried nor reset (pre-4118 shape)", () => {
+    expect(
+      resolveRebindEffort({
+        currentEffort: "high",
+        targetProviderId: "z-ai",
+        targetModelId: "or/foreign-model",
+        catalog: CATALOG,
+        targetConnectionEffort: "max",
       }),
     ).toEqual({ carried: undefined, resetTo: undefined, dropped: false });
   });

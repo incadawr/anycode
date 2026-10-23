@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import type { CatalogProviderEntry } from "./catalog.js";
 import { findCatalogEntry } from "./catalog-data.js";
 import {
+  liveEffortLevels,
+  mapForeignEffortLevels,
   resolveContextWindow,
   resolveContextWindowInfo,
   resolveEffortLevels,
@@ -344,5 +346,56 @@ describe("resolveMaxOutputTokens stub-fallback notice (TASK.170)", () => {
 
   it("without an onStubFallback argument the stub still resolves correctly (callers unchanged)", () => {
     expect(resolveMaxOutputTokens("ghost-model", entry, undefined)).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+  });
+});
+
+// ── Taskana 4118: live capabilities supplement the catalog (never override) ──
+
+describe("Taskana 4118 — live capabilities supplement the catalog", () => {
+  const entry: CatalogProviderEntry = { id: "z-ai", name: "Z.AI", baseUrl: "https://api.z.ai/api/anthropic", defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"], auth: { kind: "api_key" }, models: [
+    { id: "glm-5.2", contextWindow: 200_000, reasoning: true, effortLevels: ["off", "high", "max"] },
+    { id: "glm-basic", contextWindow: 128_000 },
+  ] };
+
+  it("mapForeignEffortLevels keeps exact-name matches in source order, dedupes, drops the rest", () => {
+    expect(mapForeignEffortLevels(["xhigh", "high", "low", "minimal"])).toEqual(["high", "low"]);
+    // Case-sensitive by design: HIGH is a foreign spelling, not our enum value.
+    expect(mapForeignEffortLevels(["high", "HIGH"])).toEqual(["high"]);
+    expect(mapForeignEffortLevels([])).toEqual([]);
+    expect(mapForeignEffortLevels(["xhigh", "minimal", "none", "default"])).toEqual([]);
+  });
+
+  it("liveEffortLevels: reasoning!==true ⇒ undefined; no efforts ⇒ legacy four; all-unknown ⇒ undefined", () => {
+    expect(liveEffortLevels(undefined)).toBeUndefined();
+    expect(liveEffortLevels({ reasoning: false })).toBeUndefined();
+    expect(liveEffortLevels({})).toBeUndefined();
+    expect(liveEffortLevels({ reasoning: true })).toEqual(["off", "low", "medium", "high"]);
+    expect(liveEffortLevels({ reasoning: true, effortLevels: [] })).toEqual(["off", "low", "medium", "high"]);
+    expect(liveEffortLevels({ reasoning: true, effortLevels: ["xhigh"] })).toBeUndefined();
+    expect(liveEffortLevels({ reasoning: true, effortLevels: ["high", "xhigh", "max"] })).toEqual(["high", "max"]);
+  });
+
+  it("resolveEffortLevels: catalog match is unchanged, with AND without live meta", () => {
+    // D-Priority: live must not narrow (or widen) a catalog-known model's list.
+    expect(resolveEffortLevels("glm-5.2", entry)).toEqual(["off", "high", "max"]);
+    expect(resolveEffortLevels("glm-5.2", entry, { reasoning: true, effortLevels: ["low"] })).toEqual(["off", "high", "max"]);
+    // A catalog model without reasoning stays undefined even with live meta.
+    expect(resolveEffortLevels("glm-basic", entry, { reasoning: true, effortLevels: ["high"] })).toBeUndefined();
+  });
+
+  it("resolveEffortLevels: catalog miss consults live", () => {
+    expect(resolveEffortLevels("unknown-reasoner", entry, { reasoning: true })).toEqual(["off", "low", "medium", "high"]);
+    expect(resolveEffortLevels("unknown-reasoner", entry, { reasoning: true, effortLevels: ["high", "max"] })).toEqual(["high", "max"]);
+    // No live ⇒ pre-4118 behaviour (undefined) is unchanged.
+    expect(resolveEffortLevels("unknown-model", entry)).toBeUndefined();
+    expect(resolveEffortLevels("unknown-model", entry, { reasoning: true, effortLevels: ["xhigh"] })).toBeUndefined();
+  });
+
+  it("resolveReasoningEffort: catalog-miss override must be inside the live vocabulary", () => {
+    const live = { reasoning: true, effortLevels: ["high", "max"] };
+    expect(resolveReasoningEffort("unknown-reasoner", entry, "high", live)).toBe("high");
+    expect(resolveReasoningEffort("unknown-reasoner", entry, "medium", live)).toBeUndefined();
+    expect(resolveReasoningEffort("unknown-reasoner", entry, "high")).toBeUndefined();
+    expect(resolveReasoningEffort("unknown-reasoner", entry, "high", { reasoning: true, effortLevels: ["xhigh"] })).toBeUndefined();
   });
 });

@@ -59,7 +59,7 @@ import type {
   RetryPolicy,
   SessionMeta,
 } from "@anycode/core";
-import { SECRET_ENV_KEYS } from "../shared/settings.js";
+import { SECRET_ENV_KEYS, connectionById, type ModelCapabilitiesDto } from "../shared/settings.js";
 import { defaultSettingsPath, loadSettings } from "../settings/files.js";
 import { CREDENTIAL_REQUEST_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
 import type {
@@ -497,6 +497,37 @@ export async function seedAlwaysAllowRules(
     );
   }
   return rules;
+}
+
+// ── Taskana 4118: boot-time read of live per-model capabilities from settings.json ──
+
+/**
+ * Fail-soft reader of the `modelCapabilities` map main's connection-scoped
+ * /v1/models fetch persists on a connection (Taskana 4118). The host consults
+ * it — keyed by model id — ONLY for models the static catalog does not know;
+ * a missing file/connection or an empty map degrades to `undefined`, i.e. the
+ * exact pre-4118 catalog-only resolution. Same shape as `seedAlwaysAllowRules`
+ * above: host never writes settings.json (main is the sole writer), it only
+ * re-reads what main persisted.
+ */
+export async function readConnectionModelCapabilities(
+  connectionId: string | undefined,
+  settingsPath: string = defaultSettingsPath(),
+): Promise<Record<string, ModelCapabilitiesDto> | undefined> {
+  if (connectionId === undefined) {
+    return undefined;
+  }
+  try {
+    const { settings } = await loadSettings(settingsPath);
+    const map = connectionById(settings, connectionId)?.modelCapabilities;
+    return map !== undefined && Object.keys(map).length > 0 ? map : undefined;
+  } catch (error) {
+    console.error(
+      `[host] failed to read connection model capabilities from ${settingsPath}; continuing catalog-only: ` +
+        (error instanceof Error ? error.message : String(error)),
+    );
+    return undefined;
+  }
 }
 
 /**

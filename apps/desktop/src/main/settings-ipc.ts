@@ -1841,6 +1841,9 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     if (baseUrlChanged) {
       delete updatedConnection.models;
       delete updatedConnection.modelsFetchedAt;
+      // Taskana 4118: capabilities belong to the origin that declared them —
+      // a re-pointed connection must not keep the old endpoint's live map.
+      delete updatedConnection.modelCapabilities;
     }
     const provider: ProviderSettingsV2 = {
       ...draft.provider,

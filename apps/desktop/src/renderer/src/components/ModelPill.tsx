@@ -783,6 +783,9 @@ export function ModelPill() {
       targetModelId: modelId,
       catalog: snapshot?.catalog,
       targetConnectionEffort: target.reasoningEffort,
+      // Taskana 4118: the target connection's live-declared vocabulary for a
+      // model the catalog does not know.
+      targetModelCapabilities: target.modelCapabilities?.[modelId],
     });
     const resolvedEffort = decision.carried ?? decision.resetTo;
     // A model with no vocabulary at all leaves the connection's effort alone:

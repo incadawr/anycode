@@ -13,11 +13,16 @@
  * module exists to remove. Both cases resolve to the same unknown-model
  * shape: the env-override-or-DEFAULT output ceiling, no reasoning effort, and
  * the DEFAULT context window.
+ *
+ * Taskana 4118: an optional `liveCapabilitiesFor` dep gives children live
+ * /v1/models capabilities for catalog-unknown model ids too, mirroring what
+ * host boot and the mid-session switch already consult.
  */
 
 import type { CatalogProviderEntry } from "./catalog.js";
 import type { ReasoningEffort } from "../types/config.js";
 import { resolveContextWindow, resolveMaxOutputTokens, resolveReasoningEffort } from "./capabilities.js";
+import type { LiveModelCapabilities } from "./capabilities.js";
 
 export interface ChildModelSettings {
   /** undefined is a legal resolution for claude-* models (no declared ceiling). */
@@ -41,13 +46,15 @@ export function buildChildModelSettingsResolver(deps: {
   envContextWindowModel?: string;
   onClamp?: (requested: number, clamped: number, modelId: string) => void;
   onStubFallback?: (modelId: string, applied: number) => void;
+  /** Taskana 4118: live /v1/models capabilities, consulted on a catalog miss. */
+  liveCapabilitiesFor?: (modelId: string) => LiveModelCapabilities | undefined;
 }): (modelId: string, selectedTier: ReasoningEffort | undefined) => ChildModelSettings {
-  const { catalogEntry, envMaxOutputTokens, envContextWindow, envContextWindowModel, onClamp, onStubFallback } = deps;
+  const { catalogEntry, envMaxOutputTokens, envContextWindow, envContextWindowModel, onClamp, onStubFallback, liveCapabilitiesFor } = deps;
   return (modelId, selectedTier) => {
     try {
       return {
         maxOutputTokens: resolveMaxOutputTokens(modelId, catalogEntry, envMaxOutputTokens, onClamp, onStubFallback),
-        reasoningEffort: resolveReasoningEffort(modelId, catalogEntry, selectedTier),
+        reasoningEffort: resolveReasoningEffort(modelId, catalogEntry, selectedTier, liveCapabilitiesFor?.(modelId)),
         contextWindowTokens: resolveContextWindow(modelId, catalogEntry, envContextWindow, envContextWindowModel),
       };
     } catch {

@@ -4,6 +4,11 @@
  * optional explicit override, decide whether image attachments are allowed. The
  * CLI wires this into a MediaCapabilityPort closure so a /model switch is honored
  * on the next call.
+ *
+ * Taskana 4118 adds the live-capability seam: per-model facts a connection's
+ * /v1/models endpoint declared (`LiveModelCapabilities`) supplement the static
+ * catalog, consulted ONLY when the catalog has no matching model — the catalog
+ * is checked knowledge and is never overridden by live meta.
  */
 
 import type { CatalogProviderEntry } from "./catalog.js";
@@ -138,10 +143,18 @@ export function resolveReasoningEffort(
   modelId: string,
   entry: CatalogProviderEntry | undefined,
   override: ReasoningEffort | undefined,
+  live?: LiveModelCapabilities,
 ): ReasoningEffort | undefined {
   if (override === undefined || override === "off") return undefined;
   const matched = entry?.models.find((candidate) => candidate.id === modelId);
-  if (matched === undefined || matched.reasoning !== true) return undefined;
+  if (matched === undefined) {
+    // Taskana 4118: catalog miss ⇒ consult live capabilities, if any. The
+    // override must still be inside the live-mapped vocabulary (fail-closed:
+    // a level the endpoint never declared never reaches the wire).
+    const levels = liveEffortLevels(live);
+    return levels !== undefined && levels.includes(override) ? override : undefined;
+  }
+  if (matched.reasoning !== true) return undefined;
   // Validate against declared effortLevels: an undeclared level is rejected
   // (fail-closed) rather than silently coerced. Models without explicit
   // effortLevels accept the legacy four-level set.
@@ -157,12 +170,61 @@ export function resolveReasoningEffort(
  * model is unknown or not marked `reasoning: true` (the UI then hides the
  * selector). A reasoning model without explicit `effortLevels` falls back to
  * the legacy `["off", "low", "medium", "high"]` set (Anthropic budgetTokens).
+ *
+ * Taskana 4118: on a catalog miss (unknown id, or an entry like `openrouter`/
+ * `vllm`/`custom` whose `models` is empty), live capabilities — when the model
+ * is live-declared `reasoning: true` — supply the vocabulary instead. Live
+ * never resurrects or narrows a catalog-known model: the catalog is checked
+ * knowledge, live supplements only what it does not know.
  */
 export function resolveEffortLevels(
   modelId: string,
   entry: CatalogProviderEntry | undefined,
+  live?: LiveModelCapabilities,
 ): ReasoningEffort[] | undefined {
   const matched = entry?.models.find((candidate) => candidate.id === modelId);
-  if (matched === undefined || matched.reasoning !== true) return undefined;
+  if (matched === undefined) return liveEffortLevels(live); // Taskana 4118: catalog miss ⇒ live
+  if (matched.reasoning !== true) return undefined; // live never resurrects a catalog model
   return matched.effortLevels ?? ["off", "low", "medium", "high"];
+}
+
+/** Live per-model capability facts a models-list endpoint declared (Taskana 4118). */
+export interface LiveModelCapabilities {
+  reasoning?: boolean;
+  /** Raw foreign effort levels, UNMAPPED — mapped fail-closed at resolution. */
+  effortLevels?: string[];
+}
+
+/**
+ * Foreign effort level → our closed enum, by EXACT name only (Taskana 4118).
+ * `xhigh`/`minimal`/`none`/`default`/… are absent ⇒ dropped at mapping time —
+ * never silently folded into a neighbouring level.
+ */
+const EFFORT_LEVEL_PASSTHROUGH: Readonly<Record<string, ReasoningEffort>> = {
+  off: "off", low: "low", medium: "medium", high: "high", max: "max",
+};
+
+/** Maps foreign levels: keeps source order, drops unknowns, dedupes. */
+export function mapForeignEffortLevels(levels: readonly string[]): ReasoningEffort[] {
+  const out: ReasoningEffort[] = [];
+  for (const raw of levels) {
+    const mapped = EFFORT_LEVEL_PASSTHROUGH[raw];
+    if (mapped !== undefined && !out.includes(mapped)) out.push(mapped);
+  }
+  return out;
+}
+
+/**
+ * Live vocabulary for a model the catalog does not know (Taskana 4118):
+ * `reasoning !== true` ⇒ undefined; no declared efforts ⇒ the legacy four
+ * (same fallback a catalog reasoning model gets); declared efforts that map
+ * to nothing ⇒ undefined (fail-closed — the endpoint spoke, nothing fits).
+ */
+export function liveEffortLevels(live: LiveModelCapabilities | undefined): ReasoningEffort[] | undefined {
+  if (live?.reasoning !== true) return undefined;
+  if (live.effortLevels === undefined || live.effortLevels.length === 0) {
+    return ["off", "low", "medium", "high"];
+  }
+  const mapped = mapForeignEffortLevels(live.effortLevels);
+  return mapped.length > 0 ? mapped : undefined;
 }

@@ -236,6 +236,7 @@ import {
   loadRepoMapConfig,
   loadTelemetryConfig,
   loadWebSearchConfig,
+  type LiveModelCapabilities,
   mapChildRunStatusToNotification,
   matchCatalogEntryByBaseUrl,
   resolveContextWindowInfo,
@@ -325,6 +326,7 @@ import {
   hostDiagnosticSink,
   isChildSessionBoot,
   parseHostArgs,
+  readConnectionModelCapabilities,
   resolveChildMaxTurns,
   resolveEngineDraftPresetId,
   repairDanglingToolCalls,
@@ -2537,6 +2539,15 @@ async function boot(): Promise<void> {
       };
     }
     const projectRoot = sessionMeta.projectRoot ?? sessionMeta.workspace;
+    // Taskana 4118: live capabilities for models the catalog does not know,
+    // read fail-soft from settings.json (main persists them on the connection).
+    // `sessionMeta.connectionId` is the persisted pin — a resumed session keeps
+    // its own pin, exactly like `forkConnectionId` above seeds it.
+    const liveCapsMap = await readConnectionModelCapabilities(
+      sessionMeta.connectionId,
+      settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
+    );
+    const liveCapsFor = (id: string): LiveModelCapabilities | undefined => liveCapsMap?.[id];
     const gitForWorkspace = (cwd: string, operationSignal?: AbortSignal) =>
       new NodeGitAdapter({
         exec: execAdapter,
@@ -2679,8 +2690,8 @@ async function boot(): Promise<void> {
       (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
-    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort);
-    const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry);
+    const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, liveCapsFor(envConfig.model));
+    const bootEffortLevels = resolveEffortLevels(envConfig.model, catalogEntry, liveCapsFor(envConfig.model));
     // TASK.162 (F6): the same catalog + env overrides the three boot
     // resolutions above read, packaged once so an Agent-tool `model` override
     // re-resolves the child's ceiling/effort/window for ITS model instead of
@@ -2696,6 +2707,7 @@ async function boot(): Promise<void> {
         console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
       onStubFallback: (modelId, applied) =>
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
+      liveCapabilitiesFor: liveCapsFor,
     });
     const history = new ConversationHistory({ initial: initialHistory, sink: historySink, tokenizer });
 
@@ -3566,7 +3578,7 @@ async function boot(): Promise<void> {
           (modelId, applied) =>
             console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
         ));
-        const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier);
+        const resolvedEffort = resolveReasoningEffort(id, catalogEntry, selectedTier, liveCapsFor(id));
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
         // TASK.198 срез C (plan §9): a model switch can flip sighted<->blind,
@@ -3583,7 +3595,7 @@ async function boot(): Promise<void> {
         config.systemPromptComponents = switchedSystemPromptComponents;
         loop.setContextWindow(contextWindow);
         config.context = { ...config.context, contextWindowTokens: contextWindow };
-        const availableEffortLevels = resolveEffortLevels(id, catalogEntry);
+        const availableEffortLevels = resolveEffortLevels(id, catalogEntry, liveCapsFor(id));
         if (persistence) {
           void persistence.touchSession(sessionId, { model: id }).catch((error) => {
             console.error(`[host] touchSession(model) failed: ${describeError(error)}`);

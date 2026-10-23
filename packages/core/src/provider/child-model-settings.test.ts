@@ -230,4 +230,31 @@ describe("buildChildModelSettingsResolver", () => {
     resolve("glm-5.3-flash", "high");
     expect(stubs).toEqual([]);
   });
+
+  // ── Taskana 4118: children get live caps for catalog-unknown models too ──
+
+  it("Taskana 4118: catalog-unknown model + liveCapabilitiesFor keeps a tier inside the live vocabulary", () => {
+    const resolve = buildChildModelSettingsResolver({
+      catalogEntry: Z_AI_ENTRY,
+      envMaxOutputTokens: undefined,
+      envContextWindow: undefined,
+      liveCapabilitiesFor: (modelId) =>
+        modelId === "openrouter/foreign-model" ? { reasoning: true, effortLevels: ["high", "max"] } : undefined,
+    });
+    // Model id absent from the entry; live declares ["high","max"].
+    expect(resolve("openrouter/foreign-model", "high").reasoningEffort).toBe("high");
+    // "low" maps to nothing in the live vocabulary — dropped, fail-closed.
+    expect(resolve("openrouter/foreign-model", "low").reasoningEffort).toBeUndefined();
+    // Unknown to BOTH catalog and live ⇒ pre-4118 regression shape.
+    expect(resolve("openrouter/unlisted-model", "high").reasoningEffort).toBeUndefined();
+  });
+
+  it("Taskana 4118: without the dep the resolver is unchanged (regression)", () => {
+    const resolve = buildChildModelSettingsResolver({
+      catalogEntry: Z_AI_ENTRY,
+      envMaxOutputTokens: undefined,
+      envContextWindow: undefined,
+    });
+    expect(resolve("openrouter/foreign-model", "high").reasoningEffort).toBeUndefined();
+  });
 });

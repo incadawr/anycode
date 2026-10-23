@@ -101,7 +101,7 @@ export type FetchModelsFailureReason =
   | "read_only";
 
 export type FetchModelsOutcome =
-  | { ok: true; models: { id: string }[] }
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[] }[] }
   | { ok: false; reason: FetchModelsFailureReason };
 
 /** Minimal fetch surface this module needs (injectable; defaults to global fetch — mirrors oauth.ts's `FetchLike`). */
@@ -269,8 +269,32 @@ async function readBodyCapped(response: Response, maxBytes: number): Promise<str
   return new TextDecoder().decode(merged);
 }
 
-/** `{data:[{id}...]}` -> `{id}[]`; undefined for any other shape (fail-closed, never throws). */
-function extractModelIds(value: unknown): { id: string }[] | undefined {
+/**
+ * Taskana 4118: per-item meta fields we keep from a models-list entry. A plain
+ * `z.object` (NOT `.strict()` — bodies carry many legitimate siblings we do
+ * not model) that picks only the two known fields; unknown keys are ignored.
+ */
+const liveCapsSchema = z.object({
+  supported_parameters: z.array(z.string()).optional(),
+  reasoning: z
+    .object({
+      supported_efforts: z.array(z.string().max(64)).max(16).optional(),
+    })
+    .optional(),
+});
+
+/**
+ * `{data:[{id}...]}` -> `{id, reasoning?, effortLevels?}[]`; undefined for any
+ * other shape (fail-closed, never throws). Taskana 4118: per-item meta is kept
+ * ONLY when the endpoint declares reasoning — `supported_parameters` contains
+ * `"reasoning"` OR `reasoning.supported_efforts` is a non-empty array (either
+ * signal suffices; OpenRouter sends both) — and then `effortLevels` carries the
+ * RAW foreign strings exactly as spelled (mapping into the closed enum is
+ * core's job, at resolution). Garbage meta on an item (wrong types, over-long
+ * entries) drops ONLY that item's meta via safeParse failure; the id survives.
+ * An OpenAI-style `{id, object, created, owned_by}` body parses to plain ids.
+ */
+function extractModelIds(value: unknown): { id: string; reasoning?: boolean; effortLevels?: string[] }[] | undefined {
   if (typeof value !== "object" || value === null || !("data" in value)) {
     return undefined;
   }
@@ -278,11 +302,34 @@ function extractModelIds(value: unknown): { id: string }[] | undefined {
   if (!Array.isArray(data)) {
     return undefined;
   }
-  const models: { id: string }[] = [];
+  const models: { id: string; reasoning?: boolean; effortLevels?: string[] }[] = [];
   for (const item of data) {
-    if (typeof item === "object" && item !== null && typeof (item as { id?: unknown }).id === "string") {
-      models.push({ id: (item as { id: string }).id });
+    if (typeof item !== "object" || item === null) {
+      continue;
     }
+    const maybe = item as { id?: unknown };
+    if (typeof maybe.id !== "string") {
+      continue;
+    }
+    // D-Trust: read only the two known fields; a safeParse failure (garbage
+    // meta) degrades this item to its bare id — never to a fetch failure.
+    const meta = liveCapsSchema.safeParse(item);
+    if (!meta.success) {
+      models.push({ id: maybe.id });
+      continue;
+    }
+    const declared = meta.data.reasoning?.supported_efforts;
+    const reasoning = meta.data.supported_parameters?.includes("reasoning") === true
+      || (Array.isArray(declared) && declared.length > 0);
+    if (!reasoning) {
+      models.push({ id: maybe.id });
+      continue;
+    }
+    models.push({
+      id: maybe.id,
+      reasoning: true,
+      ...(declared !== undefined && declared.length > 0 ? { effortLevels: [...declared] } : {}),
+    });
   }
   return models;
 }
@@ -779,6 +826,21 @@ async function handleConnectionFetchModels(
       return;
     }
     const fetchedIds = outcome.models.map((m) => m.id);
+    // Taskana 4118: live per-model capabilities the endpoint declared, keyed by
+    // model id. Fail-closed like `models` above: an outcome with zero capable
+    // models leaves the stored map untouched (never deleted on empty).
+    const caps: Record<string, { reasoning?: boolean; effortLevels?: string[] }> = {};
+    for (const m of outcome.models) {
+      if (m.reasoning === true || m.effortLevels !== undefined) {
+        caps[m.id] = {
+          ...(m.reasoning === true ? { reasoning: true } : {}),
+          ...(m.effortLevels !== undefined ? { effortLevels: m.effortLevels } : {}),
+        };
+      }
+    }
+    const mergedCaps = Object.keys(caps).length > 0
+      ? { ...(target.modelCapabilities ?? {}), ...caps }
+      : target.modelCapabilities;
     const updated: ProviderConnection = {
       ...target,
       // TASK.183: fetched ids first, then the connection's previously stored
@@ -786,6 +848,7 @@ async function handleConnectionFetchModels(
       // so the merge can never replace a manual addition.
       models: mergeModelIds(fetchedIds, target.models ?? []),
       modelsFetchedAt: (deps.now ?? defaultNowIso)(),
+      ...(mergedCaps !== undefined ? { modelCapabilities: mergedCaps } : {}),
     };
     const merged: AnycodeSettings = {
       ...loaded.settings,

@@ -173,6 +173,13 @@ const connectionSchema = z.object({
   // advisory display data, same round-trip discipline as `lastHealth`.
   models: z.array(z.string()).optional(),
   modelsFetchedAt: z.string().optional(),
+  // Taskana 4118: fail-soft like maxOutputTokens above — a hand-edited bad map
+  // reads back as absent instead of resetting the whole document. Values are
+  // re-validated (levels remapped through the closed enum) at consumption.
+  modelCapabilities: z.record(z.string().max(256), z.object({
+    reasoning: z.boolean().optional(),
+    effortLevels: z.array(z.string().max(64)).max(16).optional(),
+  })).optional().catch(undefined),
   lastHealth: z
     .object({
       status: z.enum([

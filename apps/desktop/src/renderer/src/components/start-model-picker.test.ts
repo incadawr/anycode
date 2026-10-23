@@ -266,6 +266,36 @@ describe("startModelEffortLevels (TASK.131 — the vocabulary belongs to the MOD
     expect(startModelEffortLevels("mystery", "glm-5.2", EFFORT_CATALOG)).toBeUndefined();
     expect(startModelEffortLevels("z-ai", "glm-5.2", undefined)).toBeUndefined();
   });
+
+  // ── Taskana 4118: live caps supplement the catalog (renderer rule mirrors core) ──
+
+  it("Taskana 4118: catalog-unknown id + live {reasoning, [high, xhigh]} maps to [high] — unknowns dropped fail-closed", () => {
+    expect(
+      startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, {
+        reasoning: true,
+        effortLevels: ["high", "xhigh"],
+      }),
+    ).toEqual(["high"]);
+  });
+
+  it("Taskana 4118: live reasoning without effortLevels gets the legacy four; non-reasoning live stays undefined", () => {
+    expect(startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, { reasoning: true })).toEqual(
+      START_MODEL_DEFAULT_EFFORTS,
+    );
+    expect(startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, { effortLevels: ["high"] })).toBeUndefined();
+  });
+
+  it("Taskana 4118: a catalog-known model ignores conflicting live meta — the catalog list wins (D-Priority)", () => {
+    expect(
+      startModelEffortLevels("z-ai", "glm-5.2", EFFORT_CATALOG, { reasoning: true, effortLevels: ["low"] }),
+    ).toEqual(["off", "high", "max"]);
+    // A catalog non-reasoning model is never resurrected by live meta either.
+    expect(startModelEffortLevels("z-ai", "glm-4.6", EFFORT_CATALOG, { reasoning: true })).toBeUndefined();
+  });
+
+  it("Taskana 4118: no live ⇒ undefined for a catalog-unknown id (pre-4118 shape unchanged)", () => {
+    expect(startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, undefined)).toBeUndefined();
+  });
 });
 
 describe("effort carry/resolve (TASK.131)", () => {

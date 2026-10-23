@@ -137,6 +137,18 @@ export type ProviderTransportId = "anthropic-messages" | "openai-chat-completion
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
 
 /**
+ * Live per-model capability facts a connection's `/v1/models` fetch declared
+ * (Taskana 4118; mirrors core's `LiveModelCapabilities` as a value-only local
+ * shape — same zero-import rule as `ReasoningEffort` above). `effortLevels`
+ * carries the RAW foreign strings as the endpoint spelled them; mapping into
+ * the closed enum happens fail-closed at resolution, never at parse time.
+ */
+export interface ModelCapabilitiesDto {
+  reasoning?: boolean;
+  effortLevels?: string[];
+}
+
+/**
  * Advisory connection health (TASK.45 §3). NOT a runtime-readiness source — it
  * is a last-known classification of the last real request/probe. W9 only owns
  * the SHAPE (it lives in the persisted connection); W11 classifies + writes it.
@@ -284,6 +296,14 @@ export interface ProviderConnection {
   models?: string[];
   /** ISO timestamp of the last successful connection-scoped model-list fetch. */
   modelsFetchedAt?: string;
+  /**
+   * Taskana 4118: live per-model capabilities a connection-scoped /v1/models
+   * fetch declared (OpenRouter-style `supported_parameters`/`reasoning`), keyed
+   * by model id. Advisory capability data, same round-trip discipline as
+   * `models`; consumed fail-closed — unknown effort levels never reach the wire.
+   * Absent/empty = catalog-only resolution, exactly the pre-4118 behaviour.
+   */
+  modelCapabilities?: Record<string, ModelCapabilitiesDto>;
 }
 
 /**

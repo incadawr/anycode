@@ -20,6 +20,7 @@ import {
   resolvePillTarget,
   shouldPersistOnAck,
 } from "./ModelPill.js";
+import { resolveRebindEffort } from "./model-drill-rows.js";
 
 describe("resolvePid", () => {
   it("falls back to \"custom\" when provider.id is unset (legacy/free-text config)", () => {
@@ -525,5 +526,47 @@ describe("isPinSwitchInTab (TASK.153: a tab switch is not a provider switch)", (
     expect(isPinSwitchInTab({ tabId: "a", pin: glm }, "a", glm)).toBe(false);
     expect(isPinSwitchInTab({ tabId: "a", pin: null }, "a", glm)).toBe(false);
     expect(isPinSwitchInTab({ tabId: "a", pin: moderato }, "a", null)).toBe(false);
+  });
+});
+
+// Taskana 4118: ModelPill's pickForeignModel path now passes the TARGET
+// connection's modelCapabilities entry into resolveRebindEffort. The wiring
+// test pins the resolved DECISION the call path computes with the new arg —
+// the effort a rebind onto a catalog-unknown model writes.
+describe("pickForeignModel rebind effort wiring (Taskana 4118)", () => {
+  const catalog: CatalogSummary = [
+    {
+      id: "z-ai",
+      name: "Z.AI (GLM)",
+      authKind: "api_key",
+      models: [{ id: "glm-5.2", name: "GLM-5.2", reasoning: true, effortLevels: ["off", "high", "max"] }],
+    },
+  ];
+
+  it("an effort inside the target's live vocabulary carries; one outside resets to the vocabulary's first mapped level", () => {
+    const targetModelCapabilities: { reasoning: boolean; effortLevels: string[] } = {
+      reasoning: true,
+      effortLevels: ["max", "xhigh", "high"],
+    };
+    // Same args pickForeignModel assembles (ModelPill.tsx pickForeignModel):
+    // target.modelCapabilities?.[modelId] is the new 6th input.
+    const carried = resolveRebindEffort({
+      currentEffort: "high",
+      targetProviderId: "openrouter",
+      targetModelId: "or/foreign-model",
+      catalog,
+      targetConnectionEffort: undefined,
+      targetModelCapabilities,
+    });
+    expect(carried).toEqual({ carried: "high", resetTo: undefined, dropped: false });
+    const reset = resolveRebindEffort({
+      currentEffort: "medium", // outside the mapped [max, high]
+      targetProviderId: "openrouter",
+      targetModelId: "or/foreign-model",
+      catalog,
+      targetConnectionEffort: undefined,
+      targetModelCapabilities,
+    });
+    expect(reset).toEqual({ carried: undefined, resetTo: "max", dropped: true });
   });
 });

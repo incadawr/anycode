@@ -294,7 +294,11 @@ export type FetchModelsFailureReason =
   | "empty_models"
   | "read_only";
 
-export type FetchModelsOutcome = { ok: true; models: { id: string }[] } | { ok: false; reason: FetchModelsFailureReason };
+// Taskana 4118: a successful fetch may carry live per-model capabilities
+// (OpenRouter-style reasoning meta); both fields are optional additive metadata.
+export type FetchModelsOutcome =
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[] }[] }
+  | { ok: false; reason: FetchModelsFailureReason };
 
 export interface CustomProviderCreateRequest {
   name: string;

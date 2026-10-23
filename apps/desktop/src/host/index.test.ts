@@ -55,6 +55,7 @@ import {
   loadTelemetryConfig,
   matchCatalogEntryByBaseUrl,
   NodeFileSystemAdapter,
+  type LiveModelCapabilities,
   resolveContextWindow,
   resolveEffortLevels,
   resolveMaxOutputTokens,
@@ -893,12 +894,16 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
 });
 
 describe("host boot reasoning-effort support shape", () => {
-  function bootReasoningOptions(baseUrl: string, modelId: string): {
+  function bootReasoningOptions(
+    baseUrl: string,
+    modelId: string,
+    live?: LiveModelCapabilities,
+  ): {
     reasoningSupported: boolean;
     availableEffortLevels?: string[];
   } {
     const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), baseUrl);
-    const bootEffortLevels = resolveEffortLevels(modelId, catalogEntry);
+    const bootEffortLevels = resolveEffortLevels(modelId, catalogEntry, live);
     return {
       reasoningSupported: bootEffortLevels !== undefined,
       ...(bootEffortLevels !== undefined ? { availableEffortLevels: bootEffortLevels } : {}),
@@ -916,6 +921,26 @@ describe("host boot reasoning-effort support shape", () => {
     expect(bootReasoningOptions("https://api.z.ai/api/anthropic", "glm-4.6")).toEqual({
       reasoningSupported: false,
     });
+  });
+
+  // ── Taskana 4118: live caps supplement the catalog at boot ──
+
+  it("Taskana 4118: an unknown model + live {reasoning, [max,high]} maps to [max, high] (source order)", () => {
+    expect(
+      bootReasoningOptions("https://openrouter.ai/api/v1", "or/foreign-model", {
+        reasoning: true,
+        effortLevels: ["max", "high"],
+      }),
+    ).toEqual({ reasoningSupported: true, availableEffortLevels: ["max", "high"] });
+  });
+
+  it("Taskana 4118: live does not override a catalog-known model (D-Priority)", () => {
+    expect(
+      bootReasoningOptions("https://api.z.ai/api/anthropic", "glm-5.2", {
+        reasoning: true,
+        effortLevels: ["low"],
+      }),
+    ).toEqual({ reasoningSupported: true, availableEffortLevels: ["off", "high", "max"] });
   });
 });
 
@@ -2901,11 +2926,16 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
       contextWindowTokens: 50_000,
       contextWindowModel: "glm-5.2",
     };
-    const deps = new Function("envConfig", "catalogEntry", "console", `return ({${production[0]!}});`)(
-      envConfig,
-      zAiEntry,
-      console,
-    ) as Parameters<typeof buildChildModelSettingsResolver>[0];
+    // Taskana 4118: the production block now closes over a `liveCapsFor`
+    // binding (undefined map ⇒ catalog-only, the pre-4118 shape).
+    const liveCapsFor = (_id: string) => undefined as never;
+    const deps = new Function(
+      "envConfig",
+      "catalogEntry",
+      "console",
+      "liveCapsFor",
+      `return ({${production[0]!}});`,
+    )(envConfig, zAiEntry, console, liveCapsFor) as Parameters<typeof buildChildModelSettingsResolver>[0];
     expect(deps.envContextWindowModel).toBe("glm-5.2");
 
     const resolve = buildChildModelSettingsResolver(deps);

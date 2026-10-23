@@ -276,6 +276,69 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(result).toEqual({ ok: true, models: [{ id: "m" }] });
   });
 
+  // ── Taskana 4118: the fetch keeps declared per-model reasoning meta ──
+
+  it("Taskana 4118: an OpenRouter-style body keeps reasoning + RAW supported_efforts; bare items stay bare", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: [
+            {
+              id: "a",
+              supported_parameters: ["reasoning", "tools"],
+              reasoning: { supported_efforts: ["xhigh", "high", "low"] },
+            },
+            { id: "b" },
+          ],
+        }),
+      );
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({
+      ok: true,
+      models: [
+        // RAW foreign strings as spelled — mapping into the closed enum is
+        // core's job at resolution, never the parser's.
+        { id: "a", reasoning: true, effortLevels: ["xhigh", "high", "low"] },
+        { id: "b" },
+      ],
+    });
+  });
+
+  it("Taskana 4118 (DoD): an OpenAI-style body without meta parses to plain ids — the fetch does not degrade", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "gpt-x", object: "model", created: 1, owned_by: "o" }] }));
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({ ok: true, models: [{ id: "gpt-x" }] });
+  });
+
+  it("Taskana 4118: garbage meta drops ONLY that item's meta — the id survives and the fetch stays ok", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: [
+            { id: "bad-1", reasoning: { supported_efforts: "high" } },
+            { id: "bad-2", supported_parameters: "reasoning" },
+            {
+              id: "ok-3",
+              supported_parameters: ["reasoning"],
+              reasoning: { supported_efforts: ["low", "high"] },
+            },
+          ],
+        }),
+      );
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({
+      ok: true,
+      models: [{ id: "bad-1" }, { id: "bad-2" }, { id: "ok-3", reasoning: true, effortLevels: ["low", "high"] }],
+    });
+  });
+
   // RED-PROOF: without `redirect: "error"`, a plain `fetch` follows this 302
   // and would both return the target's models AND leak the Authorization
   // header to a DIFFERENT origin than the one the user configured.
@@ -1166,6 +1229,70 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(saveSettingsSpy.count).toBe(0);
   });
 
+  // ── Taskana 4118: the connection persists live per-model capabilities ──
+
+  it("Taskana 4118: a fetch outcome with caps persists modelCapabilities merged over the stored map (fetched wins on collision)", async () => {
+    await seedConnection({
+      id: "conn-caps",
+      providerId: "kimi",
+      modelCapabilities: {
+        "stale-model": { reasoning: true },
+        "live-a": { reasoning: true, effortLevels: ["off", "medium"] }, // fetched below overwrites this key
+      },
+    });
+    const { deps } = makeCatalogDeps({
+      fetchModels: async () => ({
+        ok: true,
+        models: [
+          { id: "live-a", reasoning: true, effortLevels: ["high", "max"] },
+          { id: "live-b" },
+          { id: "live-c", reasoning: true },
+        ],
+      }),
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-caps" });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.modelCapabilities).toEqual({
+      // pre-seeded key absent from the fetch survives (spread existing first).
+      "stale-model": { reasoning: true },
+      // key collision: the fetched entry wins.
+      "live-a": { reasoning: true, effortLevels: ["high", "max"] },
+      // capable model absent from the stored map is added.
+      "live-c": { reasoning: true },
+    });
+  });
+
+  it("Taskana 4118: a later fetch with NO capable models leaves the stored map intact (never deleted on empty)", async () => {
+    await seedConnection({
+      id: "conn-caps-2",
+      providerId: "kimi",
+      modelCapabilities: { "stale-model": { reasoning: true, effortLevels: ["low"] } },
+    });
+    const { deps } = makeCatalogDeps({
+      fetchModels: async () => ({ ok: true, models: [{ id: "plain-a" }, { id: "plain-b" }] }),
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-caps-2" });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.modelCapabilities).toEqual({
+      "stale-model": { reasoning: true, effortLevels: ["low"] },
+    });
+  });
+
+  it("Taskana 4118: a FAILED fetch persists nothing (caps included)", async () => {
+    await seedConnection({ id: "conn-caps-3", providerId: "kimi" });
+    const { deps } = makeCatalogDeps({
+      fetchModels: async () => ({ ok: false, reason: "http_error" }),
+    });
+    saveSettingsSpy.count = 0;
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-caps-3" });
+    expect(res).toEqual({ ok: false, reason: "http_error" });
+    expect(saveSettingsSpy.count).toBe(0);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.modelCapabilities).toBeUndefined();
+  });
+
   it("REAL SERVER: an anthropic-family catalog baseUrl with a path prefix lands on <prefix>/v1/models with x-api-key auth", async () => {
     let receivedPath: string | undefined;
     let receivedApiKey: string | string[] | undefined;
@@ -1551,6 +1678,29 @@ describe("handleConnectionAddModels — manual ids ({connectionId, addModels})",
     expect(res).toEqual({ ok: true, models: [{ id: "my-manual-id" }] });
     const [conn] = await readConnections();
     expect(conn).toMatchObject({ id: "conn-1", models: ["my-manual-id"] });
+  });
+
+  // Taskana 4118: manual ids carry no meta by definition — the branch must
+  // never write (or erase) modelCapabilities.
+  it("Taskana 4118: the addModels branch never writes modelCapabilities", async () => {
+    await writeSettingsFixture({
+      connections: [{ id: "conn-1", providerId: "kimi", modelCapabilities: { "fetched-model": { reasoning: true } } }],
+    });
+    const res = await handleCustomProviderFetchModels(makeDeps(noNetwork()), {
+      connectionId: "conn-1",
+      addModels: ["my-manual-id"],
+    });
+    expect(res).toEqual({ ok: true, models: [{ id: "my-manual-id" }] });
+    const [conn] = await readConnections();
+    expect(conn).toMatchObject({
+      models: ["my-manual-id"],
+      modelCapabilities: { "fetched-model": { reasoning: true } },
+    });
+    // And on a connection with NO stored map, none appears.
+    await writeSettingsFixture({ connections: [{ id: "conn-2", providerId: "kimi" }] });
+    await handleCustomProviderFetchModels(makeDeps(noNetwork()), { connectionId: "conn-2", addModels: ["m"] });
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]).not.toHaveProperty("modelCapabilities");
   });
 
   it("succeeds for every connection kind without a network or vault read", async () => {

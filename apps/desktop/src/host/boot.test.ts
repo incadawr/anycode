@@ -51,6 +51,7 @@ import {
   routePreviewMessage,
   scrubSecretEnv,
   seedAlwaysAllowRules,
+  readConnectionModelCapabilities,
 } from "./boot.js";
 
 describe("seedAlwaysAllowRules", () => {
@@ -119,6 +120,70 @@ describe("seedAlwaysAllowRules", () => {
     await writeFile(settingsPath(), JSON.stringify({ version: 1, garbage: true }), "utf8");
     const rules = await seedAlwaysAllowRules(settingsPath());
     expect(rules.list()).toEqual([]);
+  });
+});
+
+// ── Taskana 4118: boot-time read of live per-model capabilities (fail-soft) ──
+
+describe("readConnectionModelCapabilities (Taskana 4118)", () => {
+  let dir: string;
+  const settingsPath = () => join(dir, "settings.json");
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "anycode-boot-caps-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function seedConnection(connection: Record<string, unknown>): Promise<void> {
+    await writeFile(
+      settingsPath(),
+      JSON.stringify({
+        version: 2,
+        provider: { connections: [connection] },
+        tools: {},
+        permissions: { alwaysAllow: [] },
+        ui: { theme: "system" },
+        security: { allowWeakSecretStorage: false },
+      }),
+      "utf8",
+    );
+  }
+
+  it("returns the persisted map for the named connection", async () => {
+    await seedConnection({
+      id: "conn-1",
+      providerId: "openrouter",
+      modelCapabilities: { "or/m": { reasoning: true, effortLevels: ["high", "xhigh"] } },
+    });
+    const map = await readConnectionModelCapabilities("conn-1", settingsPath());
+    expect(map).toEqual({ "or/m": { reasoning: true, effortLevels: ["high", "xhigh"] } });
+  });
+
+  it("no connectionId -> undefined", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi" });
+    expect(await readConnectionModelCapabilities(undefined, settingsPath())).toBeUndefined();
+  });
+
+  it("missing settings file -> undefined, never throws (fail-soft)", async () => {
+    expect(await readConnectionModelCapabilities("conn-1", join(dir, "does-not-exist.json"))).toBeUndefined();
+  });
+
+  it("missing connection -> undefined", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi" });
+    expect(await readConnectionModelCapabilities("conn-other", settingsPath())).toBeUndefined();
+  });
+
+  it("empty map -> undefined", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", modelCapabilities: {} });
+    expect(await readConnectionModelCapabilities("conn-1", settingsPath())).toBeUndefined();
+  });
+
+  it("corrupt JSON -> undefined, never throws (fail-soft)", async () => {
+    await writeFile(settingsPath(), "{ not valid json", "utf8");
+    expect(await readConnectionModelCapabilities("conn-1", settingsPath())).toBeUndefined();
   });
 });
 

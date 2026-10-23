@@ -738,7 +738,14 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // vocabulary belongs to the MODEL (`glm-5.2` off/high/max vs `k3`
   // low/high/max vs most models none at all), so `undefined` here is what
   // hides the effort level entirely — there is no app-wide effort list.
-  const modelEfforts = startModelEffortLevels(chipConnection?.providerId, modelChip.modelId, snapshot?.catalog);
+  // Taskana 4118: a model the catalog does not know falls back to the
+  // connection's live-declared capabilities, when the fetch persisted any.
+  const modelEfforts = startModelEffortLevels(
+    chipConnection?.providerId,
+    modelChip.modelId,
+    snapshot?.catalog,
+    chipConnection?.modelCapabilities?.[modelChip.modelId],
+  );
   // What that level DISPLAYS and pre-selects: the draft's own pick, else the
   // effort the target connection already persists (what the session would
   // boot with if the user never opened the level), else the vocabulary's
@@ -1258,10 +1265,19 @@ export function StartScreen({ onToast }: StartScreenProps) {
     // otherwise it is dropped and the connection's own persisted effort
     // stands. Never coerced to a neighbouring level.
     const providerId = modelGroups.find((group) => group.connectionId === rowConnectionId)?.providerId;
+    // Taskana 4118: look up the row's connection for its live-declared
+    // capabilities — the vocabulary the host will consult when the catalog
+    // does not know the model.
+    const rowConnection = snapshot?.settings.provider.connections.find(
+      (connection) => connection.id === rowConnectionId,
+    );
     useTabsStore
       .getState()
       .setDraftEngineEffort(
-        carryDraftEffort(draft?.engineEffort, startModelEffortLevels(providerId, modelId, snapshot?.catalog)),
+        carryDraftEffort(
+          draft?.engineEffort,
+          startModelEffortLevels(providerId, modelId, snapshot?.catalog, rowConnection?.modelCapabilities?.[modelId]),
+        ),
       );
     closeModelMenu(true);
   }

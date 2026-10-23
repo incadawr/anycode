@@ -174,6 +174,63 @@ describe("settingsSchema (v2)", () => {
     };
     expect(settingsSchema.safeParse(bad).success).toBe(false);
   });
+
+  // ── Taskana 4118: modelCapabilities round-trips and reads back absent on corruption ──
+
+  it("Taskana 4118: a connection's modelCapabilities round-trips through parse", () => {
+    const settings = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [
+          {
+            id: "c1",
+            providerId: "openrouter",
+            modelCapabilities: {
+              "or/foreign-model": { reasoning: true, effortLevels: ["xhigh", "high", "low"] },
+              "or/plain": { reasoning: true },
+            },
+          },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(settings);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.modelCapabilities).toEqual({
+        "or/foreign-model": { reasoning: true, effortLevels: ["xhigh", "high", "low"] },
+        "or/plain": { reasoning: true },
+      });
+    }
+  });
+
+  it.each([
+    ["a non-string effortLevels entry", { m: { effortLevels: ["ok", 7] } }],
+    ["a garbage effortLevels value", { m: { effortLevels: "high" } }],
+    ["a non-object map", "nope"],
+  ])(
+    "Taskana 4118: a corrupt modelCapabilities (%s) reads back as absent without corrupting the rest of the document",
+    (_name, garbage) => {
+      const settings = {
+        ...cloneDefaults(),
+        provider: {
+          activeConnectionId: "c1",
+          connections: [
+            { id: "c1", providerId: "kimi", label: "Work", models: ["k3"], modelCapabilities: garbage },
+          ],
+        },
+      };
+      const parsed = settingsSchema.safeParse(settings);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        const connection = parsed.data.provider.connections[0];
+        expect(connection?.modelCapabilities).toBeUndefined();
+        expect(connection?.label).toBe("Work");
+        expect(connection?.models).toEqual(["k3"]);
+        expect(JSON.stringify(connection)).not.toContain("modelCapabilities");
+      }
+    },
+  );
 });
 
 describe("v1 reset (settingsMigrations[1])", () => {
