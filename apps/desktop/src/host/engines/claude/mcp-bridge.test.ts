@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { ControlRequestResponder, InboundControlRequest } from "./claude-client.js";
-import { ClaudeMcpBridge, type ClaudeMcpToolCallMeta } from "./mcp-bridge.js";
+import { ClaudeMcpBridge, CLAUDE_MCP_NOTIFICATION_ACK, type ClaudeMcpToolCallMeta } from "./mcp-bridge.js";
 import type { McpToolCallResult, McpToolDecl } from "@anycode/core";
 
 function responderSpy(): { responder: ControlRequestResponder; success: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> } {
@@ -90,10 +90,13 @@ describe("ClaudeMcpBridge — the MCP handshake, with NO dependency on ClaudeCli
 
     const initialized = responderSpy();
     await bridge.handleControlRequest(inbound({ server_name: "anycode", message: MCP_INITIALIZED_NOTIFICATION }), initialized.responder);
-    // A notification has nothing to report back: an EMPTY success, not a
-    // fabricated mcp_response envelope (plan §3.4/probes.md: "не выдумывать своей формы").
+    // Taskana 4238: a notification is answered with the official Agent SDK's
+    // empty JSON-RPC result, NOT an empty success. CLI 2.1.261 tolerated the
+    // absent `response` body; 2.1.288+ parses every mcp_message answer as an
+    // object `{mcp_response?}` and throws on `undefined`, failing the whole
+    // SDK MCP connect at `notifications/initialized`.
     expect(initialized.success).toHaveBeenCalledTimes(1);
-    expect(initialized.success.mock.calls[0]![0]).toBeUndefined();
+    expect(initialized.success.mock.calls[0]![0]).toEqual({ mcp_response: { jsonrpc: "2.0", result: {}, id: 0 } });
     expect(initialized.error).not.toHaveBeenCalled();
 
     const list = responderSpy();
@@ -166,16 +169,17 @@ describe("ClaudeMcpBridge — notifications/cancelled (P3: the ONLY cancellation
     // The tool handler actually gets cancelled...
     expect(capturedSignal?.aborted).toBe(true);
     // ...AND, independently, the ORIGINAL tools/call's own outer
-    // control_request is answered — an empty success, since the CLI has
-    // already moved past this specific request by the time this round-trips.
-    // This is the entire fix: without it, `ClaudeClient.pendingInbound` keeps
-    // one entry per cancelled call forever.
+    // control_request is answered — a JSON-RPC error for its OWN id
+    // (Taskana 4238: the CLI requires an object body for every mcp_message
+    // answer; 2.1.261's empty success is rejected by 2.1.288+). Without this
+    // answer at all, `ClaudeClient.pendingInbound` keeps one entry per
+    // cancelled call forever.
     expect(call.error).not.toHaveBeenCalled();
     expect(call.success).toHaveBeenCalledTimes(1);
-    expect(call.success.mock.calls[0]![0]).toBeUndefined();
-    // The cancellation notification's OWN envelope also gets its empty ack.
+    expect(call.success.mock.calls[0]![0]).toEqual({ mcp_response: { jsonrpc: "2.0", id: 2, error: { code: -32800, message: "Request cancelled" } } });
+    // The cancellation notification's OWN envelope gets the notification ack.
     expect(cancel.success).toHaveBeenCalledTimes(1);
-    expect(cancel.success.mock.calls[0]![0]).toBeUndefined();
+    expect(cancel.success.mock.calls[0]![0]).toEqual(CLAUDE_MCP_NOTIFICATION_ACK);
 
     // Idempotent: bookkeeping for id 2 was actually REMOVED, not merely
     // ignored once — a duplicate/late cancellation must not double-answer.
@@ -195,5 +199,61 @@ describe("ClaudeMcpBridge — server_name mismatch", () => {
 
     expect(success).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ClaudeMcpBridge — Taskana 4238: every mcp_message answer carries an object body", () => {
+  it("the CLI parses every answer as `{mcp_response?}` — no call may succeed with an absent/undefined body", async () => {
+    const bridge = makeBridge();
+
+    // A never-settling callTool so the cancelled-call path leaves a pending
+    // entry to force-close (same stand-in as the P3 suite above).
+    const neverSettles = vi.fn(() => new Promise<McpToolCallResult>(() => {}));
+    const cancelledBridge = new ClaudeMcpBridge({ serverName: "anycode", version: "0.0.1", listTools: () => [AGENT_TOOL], callTool: neverSettles });
+
+    const spies = [responderSpy(), responderSpy(), responderSpy(), responderSpy(), responderSpy()];
+    await bridge.handleControlRequest(inbound({ server_name: "anycode", message: MCP_INITIALIZE }), spies[0]!.responder);
+    await bridge.handleControlRequest(inbound({ server_name: "anycode", message: MCP_INITIALIZED_NOTIFICATION }), spies[1]!.responder);
+    await bridge.handleControlRequest(inbound({ server_name: "anycode", message: MCP_TOOLS_LIST }), spies[2]!.responder);
+    void cancelledBridge.handleControlRequest(inbound({ server_name: "anycode", message: mcpToolsCall(9, { agent_type: "probe" }, "toolu_01XYZ", 3) }), spies[3]!.responder);
+    await Promise.resolve();
+    await Promise.resolve();
+    await cancelledBridge.handleControlRequest(inbound({ server_name: "anycode", message: mcpCancelled(9, "AbortError") }), spies[4]!.responder);
+
+    const settled = spies
+      .filter((spy) => spy.success.mock.calls.length > 0)
+      .map((spy) => spy.success.mock.calls[0]![0]);
+    expect(settled.length).toBe(5);
+    for (const body of settled) {
+      expect(body).not.toBeNull();
+      expect(typeof body).toBe("object");
+      expect((body as { mcp_response?: unknown }).mcp_response).toBeTypeOf("object");
+      expect((body as { mcp_response?: { jsonrpc?: unknown } }).mcp_response!.jsonrpc).toBe("2.0");
+    }
+  });
+
+  it("the CLI's connect sequence succeeds under its strict body parsing", async () => {
+    // `apps/desktop` cannot import `@modelcontextprotocol/sdk` (it is a
+    // dependency of core only), so this mirrors the CLI's own resolver:
+    // `z.object({mcp_response: ...}).parse(response.response)` throws
+    // "expected object, received undefined" when the `response` key is
+    // absent. With the pre-4238 bridge this throws at step 2
+    // (`notifications/initialized`) — the exact live failure.
+    const cliStrictSend = async (bridge: ClaudeMcpBridge, message: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const { responder, success } = responderSpy();
+      await bridge.handleControlRequest(inbound({ server_name: "anycode", message }), responder);
+      if (success.mock.calls.length !== 1) throw new Error(`expected exactly one success for ${String(message.method)}`);
+      const body = success.mock.calls[0]![0];
+      if (body === null || typeof body !== "object") throw new Error("expected object, received undefined");
+      return body.mcp_response as Record<string, unknown>;
+    };
+
+    const bridge = makeBridge();
+    const init = await cliStrictSend(bridge, MCP_INITIALIZE);
+    expect(init).toBeTypeOf("object");
+    await cliStrictSend(bridge, MCP_INITIALIZED_NOTIFICATION);
+    const list = await cliStrictSend(bridge, MCP_TOOLS_LIST);
+    const result = list.result as { tools: McpToolDecl[] };
+    expect(result.tools[0]!.name).toBe("agent");
   });
 });

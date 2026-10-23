@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
-import { parseClaudeInitMcpServerNames } from "./claude-engine.js";
+import { parseClaudeInitMcpServerNames, parseClaudeInitMcpServerStatuses, mcpServerFailureNotices } from "./claude-engine.js";
 
 describe("parseClaudeInitMcpServerNames (TASK.182)", () => {
   it("parses {name,status,source} objects", () => {
@@ -64,5 +64,94 @@ describe("first-init payload feeds host reconciliation (TASK.182)", () => {
       "anycode",
     ]);
     expect(reportedByCli).toEqual(["alpha", "anycode"]);
+  });
+});
+
+describe("parseClaudeInitMcpServerStatuses (Taskana 4238)", () => {
+  it("keeps the status off {name,status} objects", () => {
+    expect(
+      parseClaudeInitMcpServerStatuses([
+        { name: "alpha", status: "connected", source: "config" },
+        { name: "beta", status: "failed" },
+        { name: "gamma", status: "needs-auth" },
+      ]),
+    ).toEqual([
+      { name: "alpha", status: "connected" },
+      { name: "beta", status: "failed" },
+      { name: "gamma", status: "needs-auth" },
+    ]);
+  });
+
+  it("a bare string entry yields status null", () => {
+    expect(parseClaudeInitMcpServerStatuses(["alpha", "anycode"])).toEqual([
+      { name: "alpha", status: null },
+      { name: "anycode", status: null },
+    ]);
+  });
+
+  it("skips junk entries silently and treats a non-string status as null", () => {
+    expect(
+      parseClaudeInitMcpServerStatuses([
+        "alpha",
+        { name: "beta", status: 42 },
+        { name: 42 },
+        null,
+        "",
+        { noName: true },
+      ]),
+    ).toEqual([{ name: "alpha", status: null }, { name: "beta", status: null }]);
+  });
+
+  it("returns [] for a missing or non-array field", () => {
+    expect(parseClaudeInitMcpServerStatuses(undefined)).toEqual([]);
+    expect(parseClaudeInitMcpServerStatuses("not-an-array" as unknown as unknown[])).toEqual([]);
+  });
+});
+
+describe("mcpServerFailureNotices (Taskana 4238)", () => {
+  it("anycode failed gives the exact anycode message", () => {
+    const [notice] = mcpServerFailureNotices([{ name: "anycode", status: "failed" }]);
+    expect(notice).toBeDefined();
+    expect((notice as { message: string }).message).toBe(
+      `AnyCode's MCP server "anycode" failed to connect in this Claude session, so AnyCode subagent tools (mcp__anycode__agent) are unavailable.`,
+    );
+  });
+
+  it("a non-anycode failed server gives the generic message", () => {
+    const [notice] = mcpServerFailureNotices([{ name: "alpha", status: "failed" }]);
+    expect(notice).toBeDefined();
+    expect((notice as { message: string }).message).toBe(
+      `MCP server "alpha" failed to connect in this Claude session; its tools are unavailable.`,
+    );
+  });
+
+  it("needs-auth gives the auth message", () => {
+    const [notice] = mcpServerFailureNotices([{ name: "alpha", status: "needs-auth" }]);
+    expect(notice).toBeDefined();
+    expect((notice as { message: string }).message).toBe(
+      `MCP server "alpha" needs authentication; its tools are unavailable in this Claude session.`,
+    );
+  });
+
+  it("connected/pending/null statuses produce no notice", () => {
+    expect(
+      mcpServerFailureNotices([
+        { name: "alpha", status: "connected" },
+        { name: "beta", status: "pending" },
+        { name: "gamma", status: null },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("every notice is an engine_notice warning", () => {
+    const notices = mcpServerFailureNotices([
+      { name: "anycode", status: "failed" },
+      { name: "alpha", status: "needs-auth" },
+    ]);
+    expect(notices.length).toBe(2);
+    for (const notice of notices) {
+      expect(notice.type).toBe("engine_notice");
+      expect((notice as { level: string }).level).toBe("warning");
+    }
   });
 });

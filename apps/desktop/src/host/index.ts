@@ -380,7 +380,7 @@ import { ENV_CODEX_BIN } from "../shared/engines.js";
 // both are imported into this one composition root.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
 import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
-import { resumeClaudeEngine, startClaudeEngine } from "./engines/claude/claude-engine.js";
+import { resumeClaudeEngine, startClaudeEngine, type ClaudeInitMcpServerStatus } from "./engines/claude/claude-engine.js";
 import { prepareEngineMcpForward, missingForwardedMcpServerNames } from "./engines/mcp-forward-boot.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
 import { catalogFromProfiles } from "./engines/claude/bridge-catalog.js";
@@ -1586,6 +1586,14 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // no paths. Pure seam tested in mcp-forward-boot.test.ts.
     for (const name of missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, mcpBridge !== undefined)) {
       console.warn(`[host] claude mcp forward: server "${name}" did not appear in the session's MCP server list`);
+    }
+    // Taskana 4238: a PRESENT server with a bad status is the other half of
+    // the reconciliation — the missing-names loop above cannot see it. Names
+    // and status only, never values/paths (TASK.182 rule).
+    for (const { name, status } of init.mcpServerStatuses) {
+      if (status === "failed" || status === "needs-auth") {
+        console.warn(`[host] claude mcp: server "${name}" reported status "${status}"`);
+      }
     }
   });
 

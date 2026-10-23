@@ -195,6 +195,57 @@ export function parseClaudeInitMcpServerNames(mcpServers: unknown[] | undefined)
   return names;
 }
 
+/** Taskana 4238: a `system/init` mcp_servers entry WITH its connection status (a bare string entry carries none). */
+export interface ClaudeInitMcpServerStatus {
+  name: string;
+  /** `connected`/`failed`/`needs-auth`/`pending`/… as the CLI reports it; `null` for a bare-string entry. */
+  status: string | null;
+}
+
+/**
+ * Taskana 4238: names WITH status (`connected`/`failed`/`needs-auth`/
+ * `pending`/…); bare strings => status null. Same tolerance rules as
+ * `parseClaudeInitMcpServerNames` — junk entries are skipped, never thrown.
+ */
+export function parseClaudeInitMcpServerStatuses(mcpServers: unknown[] | undefined): ClaudeInitMcpServerStatus[] {
+  if (!Array.isArray(mcpServers)) return [];
+  const statuses: ClaudeInitMcpServerStatus[] = [];
+  for (const entry of mcpServers) {
+    if (typeof entry === "string") {
+      if (entry.length > 0) statuses.push({ name: entry, status: null });
+      continue;
+    }
+    if (entry !== null && typeof entry === "object") {
+      const name = (entry as { name?: unknown }).name;
+      const status = (entry as { status?: unknown }).status;
+      if (typeof name === "string" && name.length > 0) {
+        statuses.push({ name, status: typeof status === "string" ? status : null });
+      }
+    }
+  }
+  return statuses;
+}
+
+/**
+ * Taskana 4238: one warning per server whose init status is `failed` or
+ * `needs-auth`. Names only, never values/paths (TASK.182 rule).
+ */
+export function mcpServerFailureNotices(statuses: readonly ClaudeInitMcpServerStatus[]): AgentEvent[] {
+  const notices: AgentEvent[] = [];
+  for (const { name, status } of statuses) {
+    if (status === "failed") {
+      notices.push(
+        name === "anycode"
+          ? warning(`AnyCode's MCP server "anycode" failed to connect in this Claude session, so AnyCode subagent tools (mcp__anycode__agent) are unavailable.`)
+          : warning(`MCP server "${name}" failed to connect in this Claude session; its tools are unavailable.`),
+      );
+    } else if (status === "needs-auth") {
+      notices.push(warning(`MCP server "${name}" needs authentication; its tools are unavailable in this Claude session.`));
+    }
+  }
+  return notices;
+}
+
 /**
  * Resolves the preset a session boots with. An unknown id can only come from a
  * stale renderer or an older session row — neither is a user-visible error, so
@@ -581,10 +632,25 @@ export class ClaudeEngine implements SessionEngine {
   /** Latch + one-shot observers for the FIRST turn-scoped `system/init` (`onFirstSystemInit`). */
   private firstInitSeen = false;
   private readonly firstInitListeners = new Set<
-    (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode; mcpServerNames: string[] }) => void
+    (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode; mcpServerNames: string[]; mcpServerStatuses: ClaudeInitMcpServerStatus[] }) => void
   >();
   /** TASK.182: names from the first observed `system/init`'s mcp_servers[]. */
   private liveMcpServerNames: string[] | null = null;
+  /** Taskana 4238: statuses from the most recent `system/init`'s mcp_servers[] (latched for `onFirstSystemInit`). */
+  private liveMcpServerStatuses: ClaudeInitMcpServerStatus[] | null = null;
+  /**
+   * Taskana 4238: server names whose MCP failure notice has already been
+   * surfaced. `system/init` repeats every turn, so without this latch one
+   * failed server would warn on every single turn of the session.
+   */
+  private readonly reportedMcpFailures = new Set<string>();
+  /**
+   * Taskana 4238: MCP status notices queued by the CURRENT turn's init and
+   * yielded inside that same turn (runTurn drains them right after the
+   * translator's events). An init absorbed while idle routes through
+   * `settings.notices` instead (absorbIdleFrame) — see the comment there.
+   */
+  private readonly mcpStatusNotices: AgentEvent[] = [];
   private quota: ClaudeQuotaSnapshot | null = null;
   /** Cumulative `result.total_cost_usd` for this session (capability `costAccounting`). */
   private totalCostUsd = 0;
@@ -1147,6 +1213,13 @@ export class ClaudeEngine implements SessionEngine {
           if (event.type === "loop_end") terminal = true;
           yield event;
         }
+        // Taskana 4238: MCP failure notices from THIS turn's own init are
+        // yielded inside the same turn (a notice only travels inside a turn;
+        // queueing them into settings.notices would defer them to the next
+        // turn's pre-send drain).
+        if (this.mcpStatusNotices.length > 0) {
+          for (const notice of this.mcpStatusNotices.splice(0)) yield notice;
+        }
       }
 
       // The ctx meter, AFTER the terminal result and only for a turn that
@@ -1312,12 +1385,31 @@ export class ClaudeEngine implements SessionEngine {
     this.liveModel = init.model;
     this.livePermissionMode = init.permissionMode;
     this.liveMcpServerNames = parseClaudeInitMcpServerNames(init.mcp_servers);
+    // Taskana 4238: a failed/needs-auth MCP server must be VISIBLE, not just
+    // present in the name list (the old parsing dropped `status`, so a failed
+    // "anycode" counted as healthy). One notice per server name per session —
+    // init repeats every turn, the warning must not.
+    this.liveMcpServerStatuses = parseClaudeInitMcpServerStatuses(init.mcp_servers);
+    for (const entry of this.liveMcpServerStatuses) {
+      if (entry.status !== "failed" && entry.status !== "needs-auth") continue;
+      if (this.reportedMcpFailures.has(entry.name)) continue;
+      this.reportedMcpFailures.add(entry.name);
+      console.warn(`[claude] mcp server "${entry.name}" status ${entry.status}`);
+      // Single-entry call: the notice is guaranteed to be this server's own.
+      this.mcpStatusNotices.push(...mcpServerFailureNotices([entry]));
+    }
     this.reconcileFromInit(init);
     if (!this.firstInitSeen) {
       this.firstInitSeen = true;
       for (const listener of this.firstInitListeners) {
         try {
-          listener({ sessionId: init.session_id, model: init.model, permissionMode: init.permissionMode, mcpServerNames: this.liveMcpServerNames });
+          listener({
+            sessionId: init.session_id,
+            model: init.model,
+            permissionMode: init.permissionMode,
+            mcpServerNames: this.liveMcpServerNames,
+            mcpServerStatuses: this.liveMcpServerStatuses,
+          });
         } catch {
           // A first-init observer is a side-channel (row materialization,
           // resume settle); it can never fail a turn.
@@ -1363,10 +1455,16 @@ export class ClaudeEngine implements SessionEngine {
    * registered after the first init has already been seen is invoked
    * immediately with the latched values.
    */
-  onFirstSystemInit(listener: (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode; mcpServerNames: string[] }) => void): void {
+  onFirstSystemInit(listener: (init: { sessionId: string; model: string; permissionMode: ClaudeWirePermissionMode; mcpServerNames: string[]; mcpServerStatuses: ClaudeInitMcpServerStatus[] }) => void): void {
     if (this.firstInitSeen) {
       if (this.sessionId !== null && this.liveModel !== null && this.livePermissionMode !== null) {
-        listener({ sessionId: this.sessionId, model: this.liveModel, permissionMode: this.livePermissionMode, mcpServerNames: this.liveMcpServerNames ?? [] });
+        listener({
+          sessionId: this.sessionId,
+          model: this.liveModel,
+          permissionMode: this.livePermissionMode,
+          mcpServerNames: this.liveMcpServerNames ?? [],
+          mcpServerStatuses: this.liveMcpServerStatuses ?? [],
+        });
       }
       return;
     }
@@ -1516,6 +1614,15 @@ export class ClaudeEngine implements SessionEngine {
       if (frame.type === "system" && (frame as { subtype?: string }).subtype === "init") {
         // Live posture is state, not transcript: reconcile even mid-foreign-turn.
         this.onSystemInit(frame as unknown as ClaudeSystemInitMessage);
+        // Taskana 4238: an init absorbed OUTSIDE an owner turn has no live
+        // stream to yield MCP failure notices on, so they take the boot-notice
+        // path (queueNotice -> next turn's pre-send barrier drain). The
+        // owner-turn case does NOT route through settings.notices — that path
+        // only drains pre-send, which would defer the warning to the SECOND
+        // turn; runTurn's own drain yields them in the current turn instead.
+        if (this.mcpStatusNotices.length > 0) {
+          for (const notice of this.mcpStatusNotices.splice(0)) this.queueNotice(notice);
+        }
         return;
       }
       if (frame.type === "result") {

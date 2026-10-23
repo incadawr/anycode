@@ -1423,7 +1423,7 @@ describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 
     expect(seen).toEqual([]);
 
     await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
-    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan", mcpServerNames: [] }]);
+    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan", mcpServerNames: [], mcpServerStatuses: [] }]);
 
     // A second turn re-emits `system/init` (probe #1); the announcement does not repeat.
     transport.enqueue(initFrame("model-x", "plan"));
@@ -1439,7 +1439,88 @@ describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 
 
     const seen: { model: string }[] = [];
     engine.onFirstSystemInit((init) => seen.push(init));
-    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan", mcpServerNames: [] }]);
+    expect(seen).toEqual([{ sessionId: "native-session-1", model: "model-x", permissionMode: "plan", mcpServerNames: [], mcpServerStatuses: [] }]);
+  });
+});
+
+/**
+ * Taskana 4238: a `system/init` reporting an MCP server as `failed` must be
+ * visible in the turn's own event stream — before this fix the status was
+ * dropped by name-only parsing, so a failed "anycode" counted as healthy and
+ * the model was the only one to notice ("anycode failed to connect").
+ */
+describe("ClaudeEngine — Taskana 4238: a failed MCP server is visible in the turn", () => {
+  const RESULT: ClaudeStreamMessage = {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    num_turns: 1,
+    duration_ms: 1,
+    duration_api_ms: 1,
+    total_cost_usd: 0,
+  } as unknown as ClaudeStreamMessage;
+
+  function initWithServers(mcpServers: unknown[]): ClaudeStreamMessage {
+    return {
+      type: "system",
+      subtype: "init",
+      session_id: "native-session-1",
+      model: "model-x",
+      permissionMode: "plan",
+      cwd: "/work",
+      tools: [],
+      mcp_servers: mcpServers,
+      slash_commands: [],
+      skills: [],
+      capabilities: ["interrupt_receipt_v1"],
+      claude_code_version: "2.1.288",
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  const FAILED_INIT = initWithServers([
+    { name: "anycode", status: "failed" },
+    { name: "alpha", status: "connected" },
+  ]);
+
+  it("yields exactly one engine_notice warning naming anycode and mcp__anycode__agent, before turn_end", async () => {
+    const transport = new FakeTransport({ frames: [FAILED_INIT, RESULT] });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+
+    const mcpNotices = events.filter((event) => event.type === "engine_notice" && String((event as { message?: string }).message).includes("anycode"));
+    expect(mcpNotices).toHaveLength(1);
+    const notice = mcpNotices[0] as { level: string; message: string };
+    expect(notice.level).toBe("warning");
+    expect(notice.message).toContain("mcp__anycode__agent");
+    // Before turn_end — the warning belongs to the turn that observed it.
+    expect(events.findIndex((event) => event.type === "engine_notice" && event === mcpNotices[0])).toBeLessThan(
+      events.findIndex((event) => event.type === "turn_end"),
+    );
+    // The connected server produces no notice of its own.
+    expect(events.filter((event) => event.type === "engine_notice" && String((event as { message?: string }).message).includes("\"alpha\""))).toHaveLength(0);
+  });
+
+  it("a second turn with the same failed init yields NO new notice (dedupe across turns)", async () => {
+    const transport = new FakeTransport({ frames: [FAILED_INIT, RESULT] });
+    const engine = engineWith(transport);
+
+    await collect(engine.runTurn("one", { signal: new AbortController().signal }));
+    transport.enqueue(FAILED_INIT);
+    transport.enqueue(RESULT);
+    const second = await collect(engine.runTurn("two", { signal: new AbortController().signal }));
+
+    expect(second.filter((event) => event.type === "engine_notice")).toHaveLength(0);
+  });
+
+  it("an init with only connected servers yields no MCP notice", async () => {
+    const transport = new FakeTransport({
+      frames: [initWithServers([{ name: "alpha", status: "connected" }, { name: "beta", status: "pending" }]), RESULT],
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+    expect(events.filter((event) => event.type === "engine_notice")).toHaveLength(0);
   });
 });
 

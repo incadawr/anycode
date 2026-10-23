@@ -33,6 +33,16 @@
  *    `transport.send()` for that id — confirmed live, twice: zero bytes
  *    back), leaking one `ClaudeClient.pendingInbound` entry per cancelled
  *    call. `pendingCalls` below exists solely to force that entry closed.
+ *
+ * Taskana 4238 correction to the wire shapes this file was originally built
+ * around: every `mcp_message` answer must carry an OBJECT body
+ * `{mcp_response: <JSONRPCMessage>}` — a notification is answered with the
+ * official Agent SDK's empty JSON-RPC result
+ * (`CLAUDE_MCP_NOTIFICATION_ACK` below), and a force-closed cancelled call
+ * with a JSON-RPC error for its own id. CLI 2.1.261 (the probes' CLI)
+ * tolerated the empty success (no `response` key at all) this module used
+ * to send; CLI 2.1.288+ parses every answer as an object and throws on the
+ * absent body, which failed the whole SDK MCP connect.
  */
 
 import { ControlChannelTransport, createInProcessMcpServer, type McpToolCallResult, type McpToolDecl } from "@anycode/core";
@@ -58,6 +68,15 @@ type McpRequestId = string | number;
  * spawned behind the door has its own broker for what it actually does.
  */
 export const CLAUDE_ANYCODE_MCP_TOOL_PREFIX = "mcp__anycode__";
+
+/**
+ * Taskana 4238: the CLI (>= 2.1.288) parses every mcp_message answer as
+ * `{mcp_response?: JSONRPCMessage}` OBJECT; an absent `response` body throws
+ * inside the CLI and fails the whole SDK MCP connect at
+ * `notifications/initialized`. A notification therefore gets the same body
+ * the official Agent SDK sends: an empty JSON-RPC result.
+ */
+export const CLAUDE_MCP_NOTIFICATION_ACK = { mcp_response: { jsonrpc: "2.0", result: {}, id: 0 } } as const;
 
 /**
  * Structurally identical to core's `McpToolCallMeta`
@@ -145,12 +164,14 @@ export class ClaudeMcpBridge {
    *   `id`): answered `control_response{response:{mcp_response:<answer>}}`
    *   once the SDK server actually answers that id.
    * - a plain NOTIFICATION (`notifications/initialized`): fed through and
-   *   acknowledged with an EMPTY success (no `response` key at all) — the
-   *   same "nothing to report" shape the general control-response envelope
-   *   already uses elsewhere, not a bespoke one.
-   * - `notifications/cancelled`: same empty-success treatment for ITS OWN
-   *   envelope, plus the force-close in `cancelPending` for the call it
-   *   targets (module doc point 3).
+   *   answered with `CLAUDE_MCP_NOTIFICATION_ACK` — the official Agent SDK's
+   *   empty JSON-RPC result (`{mcp_response:{jsonrpc:"2.0",result:{},id:0}}`).
+   *   Taskana 4238: CLI 2.1.261 tolerated the old empty success (no
+   *   `response` key at all); 2.1.288+ parses every mcp_message answer as an
+   *   object `{mcp_response?}` and rejects the absent body.
+   * - `notifications/cancelled`: the same `CLAUDE_MCP_NOTIFICATION_ACK` for
+   *   ITS OWN envelope, plus the force-close in `cancelPending` for the call
+   *   it targets (module doc point 3).
    */
   handleControlRequest = async (request: InboundControlRequest, responder: ControlRequestResponder): Promise<void> => {
     const body = request.request;
@@ -176,7 +197,7 @@ export class ClaudeMcpBridge {
       // that race can only go one way.
       if (!this.pendingCalls.delete(jsonRpcId)) return;
     }
-    responder.success(result === null ? undefined : { mcp_response: result });
+    responder.success(result === null ? CLAUDE_MCP_NOTIFICATION_ACK : { mcp_response: result });
   };
 
   /**
@@ -185,14 +206,20 @@ export class ClaudeMcpBridge {
    * `notifications/cancelled` arrives, rather than waiting on a
    * `transport.handleInbound` promise the SDK server will never settle
    * (probes.md P3, confirmed by two live runs: the server writes zero bytes
-   * back once a request's abort signal has fired). An empty success is
-   * enough — the CLI has already moved on from this specific request by the
-   * time its own cancellation notification round-trips.
+   * back once a request's abort signal has fired). The answer body is a
+   * JSON-RPC error for the cancelled request's own id (Taskana 4238: the
+   * CLI requires an object body for every mcp_message answer) — the CLI has
+   * already moved on from this specific request by the time its own
+   * cancellation notification round-trips.
    */
   private cancelPending(jsonRpcId: McpRequestId): void {
     const pending = this.pendingCalls.get(jsonRpcId);
     if (pending === undefined) return;
     this.pendingCalls.delete(jsonRpcId);
-    pending.success();
+    // Taskana 4238: same body-shape rule as every other mcp_message answer —
+    // the CLI (>= 2.1.288) rejects an empty success. The cancelled call is
+    // closed as a JSON-RPC error for ITS OWN id, so the CLI-side SDK client
+    // rejects rather than resolves that request.
+    pending.success({ mcp_response: { jsonrpc: "2.0", id: jsonRpcId, error: { code: -32800, message: "Request cancelled" } } });
   }
 }
