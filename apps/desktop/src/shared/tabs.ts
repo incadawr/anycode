@@ -89,6 +89,8 @@ export interface SessionDeleteSummaryWire {
     checkpoints: number;
     claudeTranscriptItems: number;
     codexThreadItems: number;
+    /**  / : provider_usage rows (core migration v19) the cascade removed. */
+    providerUsage: number;
   };
 }
 

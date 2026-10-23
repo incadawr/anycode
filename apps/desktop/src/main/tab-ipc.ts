@@ -366,7 +366,7 @@ function emptyDeleteSummaryWire(): SessionDeleteSummaryWire {
     deleted: [],
     skippedActive: [],
     removedIds: [],
-    counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+    counts: { historyItems: 0, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 },
   };
 }
 
