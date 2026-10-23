@@ -214,11 +214,6 @@ export type CreateTabResult =
         | "credential_missing"
         | "model_missing"
         | "transport_unsupported"
-        // TASK.109 (Taskana 4103): the pinned connection exists and is
-        // configured but is unusable (key/quota dead). Dormant scaffolding —
-        // nothing in main emits it yet (manual model-chip rebind is the v1
-        // escape); the renderer copy names that route.
-        | "provider_dead"
         | "engine_not_ready"
         | CodexNotReadyReason;
       /** Unsupported Codex version detail (codex_update_required). */

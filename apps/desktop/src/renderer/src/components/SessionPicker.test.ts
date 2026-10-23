@@ -128,25 +128,8 @@ describe("describeCreateTabFailure", () => {
   });
 });
 
-describe("describeCreateTabFailure — not_ready copy (Taskana 4103)", () => {
-  // TASK.109: the provider_dead copy must name the model-chip rebind escape —
-  // the connection exists and is configured but its key/quota is dead, so the
-  // fix is picking another connection's model from the open tab's model chip,
-  // not reconfiguring providers.
-  it("provider_dead names the model-chip escape route (model chip)", () => {
-    const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "provider_dead" };
-    const text = describeCreateTabFailure(result, "core");
-    expect(text).toContain("model chip");
-  });
-
-  it("provider_dead copy is distinct from the generic core copy", () => {
-    const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "provider_dead" };
-    expect(describeCreateTabFailure(result, "core")).not.toBe(
-      "Configure a provider (API key + model) before opening a tab.",
-    );
-  });
-
-  it("credential_missing keeps its existing copy (the new case must not shadow it)", () => {
+describe("describeCreateTabFailure — existing copy guards (Taskana 4103)", () => {
+  it("credential_missing keeps its existing copy", () => {
     const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "credential_missing" };
     expect(describeCreateTabFailure(result, "core")).toContain("Add an API key");
   });
