@@ -7402,6 +7402,7 @@ describe("desktop store — provider usage audit (Taskana 4083 / TASK.34)", () =
     const newer = { ...auditStep, step: 2, createdAt: 2000 };
     store.getState().applyHostMessage({ type: "usage_audit", steps: [newer, auditStep], totals });
     expect(store.getState().usageAudit.list).toEqual([newer, auditStep]);
+    expect(store.getState().usageAudit.lastStep).toEqual(newer); // the reply refreshes the stale checkpoint lastStep
     expect(store.getState().usageAudit.totals).toEqual(totals);
     store.getState().applyHostMessage({ type: "usage_audit", steps: [newer], totals: null });
     expect(store.getState().usageAudit.list).toEqual([newer]);

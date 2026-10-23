@@ -6985,15 +6985,12 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
   it("storage failure: a rejecting sink never breaks the turn (loop_end observed, error logged, nothing thrown)", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      // Production shape: the sink itself swallows/logs (host/index.ts wires
-      // persistence.recordProviderUsage(...).catch(console.error)). A rejecting
-      // PROMISE (not a synchronous throw) is the honest failure mode.
-      const consoleError2 = consoleError;
+      // A sink that THROWS synchronously: Session itself must contain the
+      // failure (invariant 3) — the turn still completes and the error is
+      // logged by the host, not by the test's own sink.
       const sink: ProviderUsageAudit = {
         record: () => {
-          Promise.reject(new Error("audit sink boom")).catch((e) =>
-            consoleError2(`[test] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`),
-          );
+          throw new Error("audit sink boom");
         },
       };
       const h = createHarness({
@@ -7006,7 +7003,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
         h.send({ type: "user_message", requestId: "r1", text: "go" });
         await h.waitFor((m): m is HostToUiMessage => m.type === "agent_event" && m.event.type === "loop_end");
         await h.flush();
-        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("usage audit"));
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("[host] usage audit write failed: audit sink boom"));
       } finally {
         h.close();
       }
