@@ -6807,8 +6807,8 @@ describe("desktop store — pendingSteers (TASK.118: steer delivery at turn_star
     const store = flushStore();
     ready(store);
     store.getState().applyHostMessage({ type: "turn_started", requestId: "req-old", turnId: "t-old" });
-    store.getState().recordPendingSteer("req-a", "STEER-A [1 img]", { text: "STEER-A", images: [{ name: "a.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "a" } }] });
-    store.getState().recordPendingSteer("req-b", "STEER-B", { text: "STEER-B", images: [] });
+    store.getState().recordPendingSteer("req-a", "STEER-A [1 img]", undefined, { text: "STEER-A", images: [{ name: "a.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "a" } }] });
+    store.getState().recordPendingSteer("req-b", "STEER-B", undefined, { text: "STEER-B", images: [] });
 
     expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["req-a", "req-b"]);
     expect(store.getState().transcript).toEqual([]);
@@ -6827,8 +6827,8 @@ describe("desktop store — pendingSteers (TASK.118: steer delivery at turn_star
     // Retry snapshot from the CURRENT turn lands first.
     store.getState().recordSentMessage("current-turn", []);
 
-    store.getState().recordPendingSteer("req-a", "STEER-A", { text: "STEER-A", images: [{ name: "a.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "a" } }] });
-    store.getState().recordPendingSteer("req-b", "STEER-B", { text: "STEER-B", images: [] });
+    store.getState().recordPendingSteer("req-a", "STEER-A", undefined, { text: "STEER-A", images: [{ name: "a.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "a" } }] });
+    store.getState().recordPendingSteer("req-b", "STEER-B", undefined, { text: "STEER-B", images: [] });
     // Queueing must NOT overwrite the current turn's retry snapshot.
     expect(store.getState().lastSentMessage?.text).toBe("current-turn");
 
@@ -6860,9 +6860,9 @@ describe("desktop store — pendingSteers (TASK.118: steer delivery at turn_star
     const live = flushStore();
     ready(live);
     live.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
-    live.getState().recordPendingSteer("req-1", "go", { text: "go", images: [] });
+    live.getState().recordPendingSteer("req-1", "go", undefined, { text: "go", images: [] });
     live.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
-    live.getState().recordPendingSteer("req-2", "STEERED-OK", { text: "STEERED-OK", images: [] });
+    live.getState().recordPendingSteer("req-2", "STEERED-OK", undefined, { text: "STEERED-OK", images: [] });
     // Turn 1 output
     live.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "text_start", id: "a1" } });
     live.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "text_delta", id: "a1", text: "answer" } });
@@ -6898,8 +6898,8 @@ describe("desktop store — pendingSteers (TASK.118: steer delivery at turn_star
     const store = flushStore();
     ready(store);
     store.getState().applyHostMessage({ type: "turn_started", requestId: "req-old", turnId: "t-old" });
-    store.getState().recordPendingSteer("req-a", "STEER-A", { text: "STEER-A", images: [] });
-    store.getState().recordPendingSteer("req-b", "STEER-B", { text: "STEER-B", images: [] });
+    store.getState().recordPendingSteer("req-a", "STEER-A", undefined, { text: "STEER-A", images: [] });
+    store.getState().recordPendingSteer("req-b", "STEER-B", undefined, { text: "STEER-B", images: [] });
 
     store.getState().applyHostMessage({ type: "turn_rejected", requestId: "req-a", reason: "busy" });
     expect(store.getState().notice?.kind).toBe("turn_rejected");
@@ -6909,6 +6909,64 @@ describe("desktop store — pendingSteers (TASK.118: steer delivery at turn_star
     // A host respawn (host_ready) clears the whole session slice.
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" } as HostToUiMessage);
     expect(store.getState().pendingSteers).toEqual([]);
+  });
+});
+
+describe("appendUserText/recordPendingSteer images (Taskana 4091: live echo carries thumbnails, TASK.84)", () => {
+  const IMG = { mediaType: "image/png" as const, data: "AAEFAA==" };
+  const QI = { name: "shot.png", sizeBytes: 5, attachment: IMG };
+
+  /** Synchronous-flush store, same double as the pendingSteers suite above. */
+  function flushStore(): ReturnType<typeof createDesktopStore> {
+    return createDesktopStore({ schedule: (fn) => fn() });
+  }
+
+  it("appendUserText carries the attachments onto the user_text block — raw text, NO badge line", () => {
+    const store = flushStore();
+    store.getState().appendUserText("r1", "hi", [IMG]);
+    expect(store.getState().transcript).toEqual([
+      { kind: "user_text", id: "r1", text: "hi", images: [IMG], at: expect.any(Number) },
+    ]);
+    const echo = store.getState().transcript[0];
+    expect(echo?.kind === "user_text" && echo.text.includes("[1 image attached]")).toBe(false);
+  });
+
+  it("appendUserText omits the images key entirely when no images (absent arg) or an empty array are passed", () => {
+    const store = flushStore();
+    store.getState().appendUserText("r1", "hi");
+    const block = store.getState().transcript[0];
+    expect(block).toMatchObject({ kind: "user_text", id: "r1", text: "hi" });
+    expect("images" in (block as object)).toBe(false);
+
+    const store2 = flushStore();
+    store2.getState().appendUserText("r1", "hi", []);
+    const block2 = store2.getState().transcript[0];
+    expect(block2).toMatchObject({ kind: "user_text", id: "r1", text: "hi" });
+    expect("images" in (block2 as object)).toBe(false);
+  });
+
+  it("a recorded steer flushes at turn_started WITH its images on the block, restores the recorded sentMessage, and empties pendingSteers", () => {
+    const store = flushStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" } as HostToUiMessage);
+    store.getState().recordPendingSteer("r1", "look", [IMG], { text: "look", images: [QI] });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+
+    const block = store.getState().transcript[0];
+    expect(block).toMatchObject({ kind: "user_text", id: "r1", text: "look" });
+    expect(block?.kind === "user_text" && block.images).toEqual([IMG]);
+    expect(store.getState().lastSentMessage).toEqual({ text: "look", images: [QI] });
+    expect(store.getState().pendingSteers).toEqual([]);
+  });
+
+  it("a REJECTED steer (turn_rejected) drops the pending entry and appends NO user_text block — pinned with images present (Taskana 4091)", () => {
+    const store = flushStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" } as HostToUiMessage);
+    store.getState().recordPendingSteer("r1", "look", [IMG], { text: "look", images: [QI] });
+
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "r1", reason: "busy" });
+    expect(store.getState().pendingSteers).toEqual([]);
+    expect(store.getState().transcript).toEqual([]);
+    expect(store.getState().lastSentMessage).toBe(null);
   });
 });
 

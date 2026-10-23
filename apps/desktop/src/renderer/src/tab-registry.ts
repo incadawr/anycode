@@ -42,7 +42,6 @@
  * would ever see.
  */
 import { createDesktopStore, type DesktopState, type QueuedPromptImage } from "./store.js";
-import { transcriptTextWithImages } from "./queue-format.js";
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import { connectHost, connectTerminal, type HostConnection, type TerminalConnection } from "./port.js";
 import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
@@ -353,7 +352,7 @@ export function createTabRegistry(
       entry.store.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
     }
     const requestId = crypto.randomUUID();
-    entry.store.getState().appendUserText(requestId, transcriptTextWithImages(text, deliveredImages.length));
+    entry.store.getState().appendUserText(requestId, text, deliveredImages.length > 0 ? deliveredImages.map((image) => image.attachment) : undefined);
     // TASK.33 W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(text, deliveredImages);
@@ -386,7 +385,7 @@ export function createTabRegistry(
     // card — see protocol.ts's `user_message.origin` doc).
     entry.store
       .getState()
-      .appendUserText(requestId, transcriptTextWithImages(item.text, item.images.length), item.origin);
+      .appendUserText(requestId, item.text, item.images.length > 0 ? item.images.map((image) => image.attachment) : undefined, item.origin);
     // TASK.33 W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(item.text, item.images);

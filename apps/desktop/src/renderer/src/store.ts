@@ -407,6 +407,13 @@ export type TranscriptBlock =
       kind: "user_text";
       id: string;
       text: string;
+      /**
+       * Attached images rendered as thumbnails (MessageList.tsx). Populated by
+       * the resume/projection path (projectHistoryToBlocks) and the reconnect
+       * `turn_started` bubble, and — since Taskana 4091 (TASK.84) — by every
+       * LIVE append path too (appendUserText / pendingSteer flush), so the
+       * thumbnail shows immediately after send instead of only after a reload.
+       */
       images?: readonly ImageAttachment[];
       /** TASK.145 срез 2: present iff this "user" turn was host-injected (a detached child's report), not typed by the human — MessageList.tsx renders it as a compact system card instead of the normal user bubble. Survives reload: mirrors WireHistoryItem.origin via projectHistoryToBlocks, and the live append path (tab-registry.ts) stamps it too. */
       origin?: "system";
@@ -1117,7 +1124,7 @@ export interface DesktopState {
    * (delivery position), removed by a matching `turn_rejected` without
    * appending. Part of the session slice — cleared by reset()/respawn.
    */
-  pendingSteers: { requestId: string; text: string; sentMessage: LastSentMessage }[];
+  pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage }[];
 
   /**
    * Prompt queue (slice P7.14 · F15): FIFO of prompts the user entered while a
@@ -1154,16 +1161,19 @@ export interface DesktopState {
    * user input back, §3). `origin` (TASK.145 срез 2) is `"system"` only when
    * this append is draining a queued detached-child report — see
    * `QueuedPrompt.origin`; absent for every ordinary human-typed send.
+   * Taskana 4091 (TASK.84): `images` carries the sent attachments onto the
+   * block so the live echo renders thumbnails (spread only when non-empty).
    */
-  appendUserText(id: string, text: string, origin?: "system"): void;
+  appendUserText(id: string, text: string, images?: readonly ImageAttachment[], origin?: "system"): void;
   /**
    * TASK.118: records a steer already sent on the wire while a turn was
    * running (child surface). Pending only — NO transcript write; the block
    * is appended by the matching `turn_started`. `text` is the display text
-   * (including image annotation); `sentMessage` keeps the ORIGINAL outgoing
-   * text+images for `lastSentMessage` restore at delivery.
+   * (raw, no image annotation — Taskana 4091); `images` carries the sent
+   * attachments onto the delivered block; `sentMessage` keeps the ORIGINAL
+   * outgoing text+images for `lastSentMessage` restore at delivery.
    */
-  recordPendingSteer(requestId: string, text: string, sentMessage: LastSentMessage): void;
+  recordPendingSteer(requestId: string, text: string, images: readonly ImageAttachment[] | undefined, sentMessage: LastSentMessage): void;
   /** Appends a renderer-only persisted provider diagnostic; never sent to the host/model. */
   appendUsageLimitNotice(notice: UsageLimitNotice): void;
   /**
@@ -1343,7 +1353,7 @@ interface SessionSlice {
    */
   pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null;
   /** TASK.118: see DesktopState.pendingSteers. Part of the session slice. */
-  pendingSteers: { requestId: string; text: string; sentMessage: LastSentMessage }[];
+  pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage }[];
 }
 
 function initialSessionSlice(): SessionSlice {
@@ -3918,7 +3928,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // starts match nothing and leave other entries pending.
             const steer = get().pendingSteers.find((entry) => entry.requestId === message.requestId);
             if (steer !== undefined) {
-              appendBlock({ kind: "user_text", id: steer.requestId, text: steer.text, at: Date.now() });
+              appendBlock({ kind: "user_text", id: steer.requestId, text: steer.text, ...(steer.images?.length ? { images: steer.images } : {}), at: Date.now() });
               set((state) => ({
                 pendingSteers: state.pendingSteers.filter((entry) => entry.requestId !== steer.requestId),
                 lastSentMessage: steer.sentMessage,
@@ -4533,16 +4543,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         set({ notice });
       },
 
-      appendUserText(id: string, text: string, origin?: "system"): void {
-        appendBlock({ kind: "user_text", id, text, ...(origin !== undefined ? { origin } : {}), at: Date.now() });
+      appendUserText(id: string, text: string, images?: readonly ImageAttachment[], origin?: "system"): void {
+        appendBlock({ kind: "user_text", id, text, ...(images?.length ? { images } : {}), ...(origin !== undefined ? { origin } : {}), at: Date.now() });
       },
 
-      recordPendingSteer(requestId: string, text: string, sentMessage: LastSentMessage): void {
+      recordPendingSteer(requestId: string, text: string, images: readonly ImageAttachment[] | undefined, sentMessage: LastSentMessage): void {
         // TASK.118: pending only — no transcript write. The user_text block is
         // appended by the matching turn_started (delivery position), so the
         // queued text never interleaves optimistically with the running turn's
         // streamed output.
-        set((state) => ({ pendingSteers: [...state.pendingSteers, { requestId, text, sentMessage }] }));
+        set((state) => ({ pendingSteers: [...state.pendingSteers, { requestId, text, ...(images?.length ? { images } : {}), sentMessage }] }));
       },
 
       appendUsageLimitNotice(notice: UsageLimitNotice): void {
