@@ -45,6 +45,8 @@ export {
 } from "./env.js";
 export type { ModelBoundCoreEnvConfig } from "./env.js";
 export {
+  liveEffortLevels,
+  mapForeignEffortLevels,
   resolveContextWindow,
   resolveContextWindowInfo,
   resolveEffortLevels,
@@ -53,6 +55,6 @@ export {
   resolveReasoningEffort,
   UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
 } from "./capabilities.js";
-export type { ContextWindowInfo, ImageInputOverride } from "./capabilities.js";
+export type { ContextWindowInfo, ImageInputOverride, LiveModelCapabilities } from "./capabilities.js";
 export { buildChildModelSettingsResolver } from "./child-model-settings.js";
 export type { ChildModelSettings } from "./child-model-settings.js";

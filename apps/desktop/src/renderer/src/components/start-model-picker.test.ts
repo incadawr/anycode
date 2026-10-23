@@ -266,6 +266,36 @@ describe("startModelEffortLevels ( — the vocabulary belongs to the MODEL)", ()
     expect(startModelEffortLevels("mystery", "glm-5.2", EFFORT_CATALOG)).toBeUndefined();
     expect(startModelEffortLevels("z-ai", "glm-5.2", undefined)).toBeUndefined();
   });
+
+  // ── : live caps supplement the catalog (renderer rule mirrors core) ──
+
+  it(": catalog-unknown id + live {reasoning, [high, xhigh]} maps to [high] — unknowns dropped fail-closed", () => {
+    expect(
+      startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, {
+        reasoning: true,
+        effortLevels: ["high", "xhigh"],
+      }),
+    ).toEqual(["high"]);
+  });
+
+  it(": live reasoning without effortLevels gets the legacy four; non-reasoning live stays undefined", () => {
+    expect(startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, { reasoning: true })).toEqual(
+      START_MODEL_DEFAULT_EFFORTS,
+    );
+    expect(startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, { effortLevels: ["high"] })).toBeUndefined();
+  });
+
+  it(": a catalog-known model ignores conflicting live meta — the catalog list wins (D-Priority)", () => {
+    expect(
+      startModelEffortLevels("z-ai", "glm-5.2", EFFORT_CATALOG, { reasoning: true, effortLevels: ["low"] }),
+    ).toEqual(["off", "high", "max"]);
+    // A catalog non-reasoning model is never resurrected by live meta either.
+    expect(startModelEffortLevels("z-ai", "glm-4.6", EFFORT_CATALOG, { reasoning: true })).toBeUndefined();
+  });
+
+  it(": no live ⇒ undefined for a catalog-unknown id (pre-4118 shape unchanged)", () => {
+    expect(startModelEffortLevels("z-ai", "live-only-id", EFFORT_CATALOG, undefined)).toBeUndefined();
+  });
 });
 
 describe("effort carry/resolve", () => {
