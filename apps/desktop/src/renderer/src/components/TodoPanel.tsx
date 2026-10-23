@@ -55,7 +55,7 @@ export function shouldResetCompletedExpanded(previousSourceBlockId: string | nul
   return nextSourceBlockId !== null && nextSourceBlockId !== previousSourceBlockId;
 }
 
-/** \"Progress N/M\" header/pill copy (N completed, M total). */
+/** "Progress N/M" header/pill copy (N completed, M total). */
 export function progressLabel(todos: TodoItemView[]): string {
   const done = todos.filter((todo) => todo.status === "completed").length;
   return `Progress ${done}/${todos.length}`;
