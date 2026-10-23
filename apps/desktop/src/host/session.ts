@@ -683,6 +683,25 @@ export interface SessionOptions {
     onChange?(listener: () => void): () => void;
   };
   /**
+   * taskana 4181: the supervisor idle-watchdog seam. Absent in every legacy/
+   * test harness (and every child-session boot) -> the feature is entirely
+   * off and every turn is byte-identical to pre-4181. When present, Session
+   * feeds it exactly two signals, both already computed here for other
+   * consumers: `noteTurnStarted` where `turn_started` is emitted in `runTurn`,
+   * and `noteTurnSettled(lastPublicText)` in `acceptUserMessage`'s finally
+   * teardown next to the ROOT `busy = false` branch — root sessions only,
+   * never a child boot (a child is supervised by its parent's watchdog, it
+   * never supervises anything itself). The watchdog object itself (thresholds,
+   * marker list, live-children feed, delivery) is host/index.ts's business,
+   * exactly like every other narrow seam on this options bag.
+   */
+  supervisorIdle?: {
+    /** The turn settled; `lastPublicText` is the turn's final assistant text. */
+    noteTurnSettled(lastPublicText: string): void;
+    /** A new turn started — the supervisor woke on its own. */
+    noteTurnStarted(): void;
+  };
+  /**
    * Renderer Panels sub-slice A: narrow read-only LSP status seam. Slice
    * P7.25/F3 adds an optional `onStatusChange` subscription so the host can
    * live-push `lsp_status` on every server state transition (coalesced upstream
@@ -889,6 +908,14 @@ export class Session {
   private readonly tasks: SessionOptions["tasks"];
   /** TASK.145 срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
   private readonly backgroundChildren: SessionOptions["backgroundChildren"];
+  /** taskana 4181: see SessionOptions.supervisorIdle's own doc. */
+  private readonly supervisorIdle: SessionOptions["supervisorIdle"];
+  /**
+   * taskana 4181: the latest turn's final assistant text, captured in
+   * runTurn's recordResult so the acceptUserMessage teardown can hand it to
+   * the supervisor idle-watchdog without a runTurn signature change.
+   */
+  private lastTurnPublicText: string | undefined;
   private readonly lsp: SessionOptions["lsp"];
   private readonly hooksList: SessionOptions["hooksList"];
   private readonly envStatus: SessionOptions["envStatus"];
@@ -1200,6 +1227,7 @@ export class Session {
     this.shell = options.shell;
     this.tasks = options.tasks;
     this.backgroundChildren = options.backgroundChildren;
+    this.supervisorIdle = options.supervisorIdle;
     this.lsp = options.lsp;
     this.hooksList = options.hooksList;
     this.envStatus = options.envStatus;
@@ -2692,6 +2720,14 @@ export class Session {
         // only ever described the child-side pause) and is reverted here.
         if (this.child === undefined) {
           this.busy = false;
+          // taskana 4181: the supervisor idle-watchdog's turn-settled signal,
+          // at the ROOT busy->idle boundary — the moment a supervisor's turn
+          // has fully ended. The watchdog itself decides whether the final
+          // text's terminal marker (READY/BLOCKED/DONE/ACCEPT) disarms it or
+          // the 15-minute idle countdown arms. Root sessions only: a child
+          // boot is supervised by its parent, never supervises anything
+          // itself. Absent seam -> no-op, byte-identical turn teardown.
+          this.supervisorIdle?.noteTurnSettled(this.lastTurnPublicText ?? "");
           // TASK.198 срез C (plan §1.3): the ONE pending recognizer-config
           // commit (if any), applied HERE — the exact "busy=false" boundary
           // the plan names, strictly before every teardown await below.
@@ -3201,6 +3237,11 @@ export class Session {
     this.abort = controller;
     this.turnStartedAt = Date.now();
     this.outbound.emit({ type: "turn_started", requestId, turnId, startedAt: this.turnStartedAt });
+    // taskana 4181: the supervisor idle-watchdog's turn-start signal, fired at
+    // the exact `turn_started` emission — a turn beginning proves the
+    // supervisor woke on its own, so any pending idle reminder disarms. Absent
+    // seam (every legacy harness, every child boot) -> no-op.
+    this.supervisorIdle?.noteTurnStarted();
     // TASK.117: remember the live turn's requestId for the per-connect
     // turn_started re-assertion (see ui_ready) — the ring copy alone is not
     // survivable past REPLAY_BUFFER_CAP overflow.
@@ -3210,6 +3251,14 @@ export class Session {
     let nativeTurnId: string | null = null;
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
       this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? null, truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
+      // taskana 4181: thread this turn's final assistant text OUT of runTurn
+      // for the supervisor idle-watchdog's noteTurnSettled call — the accept
+      // -UserMessage teardown (outside this method) reads the private field.
+      // Stored ONLY when non-empty: an aborted/quiet turn must not clobber a
+      // previous turn's marker-bearing text.
+      if (lastCompletedText?.text) {
+        this.lastTurnPublicText = lastCompletedText.text;
+      }
     };
 
     try {

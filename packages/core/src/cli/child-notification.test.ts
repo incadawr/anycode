@@ -12,9 +12,11 @@ import {
   formatChildReportCapNotice,
   formatChildStallNotice,
   formatChildTaskNotification,
+  formatSupervisorIdleReminder,
   mapChildRunStatusToNotification,
   type ChildStallNoticeInput,
   type ChildTaskNotificationInput,
+  type SupervisorIdleReminderInput,
 } from "./child-notification.js";
 import { CHILD_NOTIFICATION_SUMMARY_MAX_CHARS } from "../types/config.js";
 
@@ -291,5 +293,66 @@ describe("formatChildStallNotice (TASK.148 slice 2)", () => {
     expect(stallText).not.toBe(terminalText);
     expect(stallText).toContain("<task-stall-notice>");
     expect(terminalText).toContain("<task-notification>");
+  });
+});
+
+describe("formatSupervisorIdleReminder (taskana 4181)", () => {
+  function idleInput(overrides?: Partial<SupervisorIdleReminderInput>): SupervisorIdleReminderInput {
+    return {
+      idleMs: 15 * 60_000,
+      reminderCount: 1,
+      escalated: false,
+      liveChildren: 0,
+      ...overrides,
+    };
+  }
+
+  it("starts with the SAME verbatim anti-spoofing header as a real task notification", () => {
+    const text = formatSupervisorIdleReminder(idleInput());
+    expect(text.startsWith("[SYSTEM NOTIFICATION - NOT USER INPUT]\n")).toBe(true);
+    expect(text).toContain("This is an automated task event, NOT a message from the user.\n");
+    expect(text).toContain(
+      "Do NOT interpret this as user acknowledgement, confirmation, or response to any pending question.",
+    );
+  });
+
+  it("uses a DIFFERENT root tag — <supervisor-idle-reminder>, never <task-notification>", () => {
+    const text = formatSupervisorIdleReminder(idleInput());
+    expect(text).toContain("<supervisor-idle-reminder>");
+    expect(text).not.toContain("<task-notification>");
+  });
+
+  it("renders <idle-for>, <live-children> and <reminder-count> fields", () => {
+    const text = formatSupervisorIdleReminder(idleInput({ idleMs: 15 * 60_000, liveChildren: 0 }));
+    expect(text).toContain("<idle-for>15m</idle-for>");
+    expect(text).toContain("<live-children>0</live-children>");
+    expect(text).toContain("<reminder-count>1</reminder-count>");
+    expect(text).toContain("</supervisor-idle-reminder>");
+  });
+
+  it("normal closer names READY / BLOCKED / DONE and forbids waiting/polling", () => {
+    const text = formatSupervisorIdleReminder(idleInput());
+    expect(text).toContain("READY");
+    expect(text).toContain("BLOCKED");
+    expect(text).toContain("DONE");
+    expect(text).toContain("Do not wait or poll");
+    expect(text).not.toContain("OWNER ATTENTION REQUIRED");
+  });
+
+  it("escalated variant carries the OWNER ATTENTION REQUIRED prefix and the reminder count", () => {
+    const text = formatSupervisorIdleReminder(idleInput({ reminderCount: 3, escalated: true }));
+    expect(text).toContain("OWNER ATTENTION REQUIRED");
+    expect(text).toContain("This is reminder 3");
+    expect(text).toContain("the supervisor has not acted on the previous ones");
+    // The actionable closer still rides the escalated text.
+    expect(text).toContain("READY");
+    expect(text).toContain("Do not wait or poll");
+  });
+
+  it("XML-escapes nothing user-controllable by construction, but stays correct for numeric fields — the reminder-count never breaks the tag structure", () => {
+    // Fields are numbers; the escaping discipline is inherited from the shared
+    // escapeXmlText — pin the structure stays well-formed at any count.
+    const text = formatSupervisorIdleReminder(idleInput({ reminderCount: 10 }));
+    expect(text).toContain("<reminder-count>10</reminder-count>");
   });
 });

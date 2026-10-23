@@ -245,4 +245,23 @@ describe("ChildReportQueue.upsert (TASK.148 slice 2 — coalesces repeat notices
 
     expect(outbound.sent).toEqual([]);
   });
+
+  // taskana 4181: the supervisor idle reminder rides the same coalescing
+  // discipline — every repeat shares the ONE "supervisor-idle-reminder" id,
+  // so a long-ignored supervisor consumes at most one pending slot (latest
+  // text wins), exactly like a flapping child's stall notices above.
+  it("upsert(\"supervisor-idle-reminder\", …) twice unacked -> ONE pending slot, latest text wins", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+
+    queue.upsert("supervisor-idle-reminder", "reminder 1 (normal)");
+    queue.upsert("supervisor-idle-reminder", "reminder 3 (escalated)");
+
+    outbound.sent.length = 0;
+    queue.resendAll();
+
+    expect(outbound.sent).toEqual([
+      { type: "child_report", id: "supervisor-idle-reminder", text: "reminder 3 (escalated)" },
+    ]);
+  });
 });

@@ -6775,3 +6775,97 @@ describe("Session — child mode: engine-death latch vs recoverable errors (TASK
     }
   });
 });
+
+/**
+ * taskana 4181: the supervisor idle-watchdog seam. Session itself only ever
+ * FEEDS the watchdog — noteTurnStarted at `turn_started` emission,
+ * noteTurnSettled(final assistant text) at the root busy->idle boundary of
+ * acceptUserMessage's teardown. The timing/marker logic is the watchdog's own
+ * (pinned hermetically in supervisor-idle-watchdog.test.ts); these tests pin
+ * the SEAM: what Session hands over, in what order, and that an absent seam
+ * leaves every turn byte-identical.
+ */
+describe("Session — supervisor idle-watchdog seam (taskana 4181)", () => {
+  function idleSeam() {
+    const calls: Array<{ kind: "started" } | { kind: "settled"; text: string }> = [];
+    return {
+      calls,
+      seam: {
+        noteTurnStarted: () => calls.push({ kind: "started" }),
+        noteTurnSettled: (text: string) => calls.push({ kind: "settled", text }),
+      },
+    };
+  }
+
+  it("a scripted turn fires noteTurnStarted then noteTurnSettled with the turn's final assistant text", async () => {
+    const { calls, seam } = idleSeam();
+    const h = createHarness({
+      steps: [textStep("Investigating, will report later.")],
+      supervisorIdle: seam,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "t1", text: "go" });
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.waitUntil(() => calls.length >= 2);
+
+      const started = calls.filter((c) => c.kind === "started");
+      const settled = calls.filter((c) => c.kind === "settled");
+      expect(started).toHaveLength(1);
+      expect(settled).toHaveLength(1);
+      expect(settled[0]).toEqual({ kind: "settled", text: "Investigating, will report later." });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a second turn: noteTurnStarted fires BEFORE its noteTurnSettled, and each turn settles exactly once", async () => {
+    const { calls, seam } = idleSeam();
+    const h = createHarness({
+      steps: [textStep("first"), textStep("second")],
+      supervisorIdle: seam,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "t1", text: "go" });
+      await h.waitUntil(() => calls.length >= 2);
+      h.send({ type: "user_message", requestId: "t2", text: "again" });
+      await h.waitUntil(() => calls.length >= 4);
+      await h.flush();
+
+      const started = calls.filter((c) => c.kind === "started");
+      const settled = calls.filter((c): c is { kind: "settled"; text: string } => c.kind === "settled");
+      expect(started).toHaveLength(2);
+      expect(settled).toHaveLength(2);
+      // Ordering within each turn: started strictly before settled.
+      expect(calls[0]?.kind).toBe("started");
+      expect(calls[1]?.kind).toBe("settled");
+      expect(calls[2]?.kind).toBe("started");
+      expect(calls[3]?.kind).toBe("settled");
+      expect(settled.map((c) => c.text)).toEqual(["first", "second"]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("harness WITHOUT the seam: turns stay green (absent seam is a no-op, byte-identical)", async () => {
+    const h = createHarness({ steps: [textStep("plain")] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "t1", text: "go" });
+      await h.waitFor(agentEventOf("loop_end"));
+      await h.flush();
+
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+      expect(h.received.filter(isTurnRejected)).toHaveLength(0);
+    } finally {
+      h.close();
+    }
+  });
+});

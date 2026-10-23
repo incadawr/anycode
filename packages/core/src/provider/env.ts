@@ -16,6 +16,14 @@ export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
  * across a whole subagent run.
  */
 export const ENV_SUBAGENT_STALL_MS = "ANYCODE_SUBAGENT_STALL_MS";
+/**
+ * Supervisor idle-watchdog first-reminder threshold (taskana 4181). Distinct
+ * from BOTH stall vars: ANYCODE_STALL_TIMEOUT_MS is the per-attempt HTTP
+ * stream watchdog, ANYCODE_SUBAGENT_STALL_MS bounds a RUNNING child's silence;
+ * this one bounds how long an idle supervisor (turn ended, no live detached
+ * children, no terminal marker) sits before a reminder turn.
+ */
+export const ENV_SUPERVISOR_IDLE_MS = "ANYCODE_SUPERVISOR_IDLE_MS";
 export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
@@ -50,7 +58,8 @@ export type ModelBoundCoreEnvConfig = CoreEnvConfig & { contextWindowModel?: str
  * ANYCODE_MAX_OUTPUT_TOKENS / ANYCODE_CONTEXT_WINDOW / ANYCODE_MAX_RETRIES /
  * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS / ANYCODE_SUBAGENT_STALL_MS
  * (TASK.148 slice 1 — the subagent silence detector, distinct from the stream
- * watchdog) plus ANYCODE_DB_PATH.
+ * watchdog) / ANYCODE_SUPERVISOR_IDLE_MS (taskana 4181 — the supervisor idle
+ * watchdog, distinct from both) plus ANYCODE_DB_PATH.
  * ANYCODE_CONTEXT_WINDOW_MODEL (TASK.142) is an optional nonblank model id that
  * binds the ANYCODE_CONTEXT_WINDOW override to one model (the pair is emitted
  * together by the host/CLI); a blank/absent value leaves the override global.
@@ -87,6 +96,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const maxTurns = readOptionalInteger(env, ENV_MAX_TURNS);
   const subagentMaxTurns = readOptionalInteger(env, ENV_SUBAGENT_MAX_TURNS);
   const subagentStallTimeoutMs = readOptionalInteger(env, ENV_SUBAGENT_STALL_MS);
+  const supervisorIdleMs = readOptionalInteger(env, ENV_SUPERVISOR_IDLE_MS);
   const maxOutputTokens = readOptionalInteger(env, ENV_MAX_OUTPUT_TOKENS);
   const contextWindowTokens = readOptionalInteger(env, ENV_CONTEXT_WINDOW);
   const contextWindowModel = env[ENV_CONTEXT_WINDOW_MODEL]?.trim() || undefined;
@@ -108,6 +118,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     maxTurns,
     subagentMaxTurns,
     subagentStallTimeoutMs,
+    supervisorIdleMs,
     maxOutputTokens,
     reasoningEffort,
     contextWindowTokens,

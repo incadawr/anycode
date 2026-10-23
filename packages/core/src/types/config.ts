@@ -30,6 +30,14 @@ export interface CoreEnvConfig {
    * subagent_stalled report (never a kill) is emitted.
    */
   subagentStallTimeoutMs?: number;
+  /**
+   * Supervisor idle-watchdog first-reminder threshold override in ms (taskana
+   * 4181, ANYCODE_SUPERVISOR_IDLE_MS). NOT the subagent stall detector
+   * (`subagentStallTimeoutMs` above, ANYCODE_SUBAGENT_STALL_MS) — this one
+   * bounds how long an idle supervisor (turn ended, no live detached children,
+   * no terminal marker) may sit before a system reminder turn is delivered.
+   */
+  supervisorIdleMs?: number;
   /** Output-token override (ANYCODE_MAX_OUTPUT_TOKENS). */
   maxOutputTokens?: number;
   /** Opt-in reasoning budget (ANYCODE_REASONING_EFFORT). */
@@ -306,6 +314,32 @@ export const SUBAGENT_WRAPUP_MIN_WINDOW_MS = 15_000;
  * это агент должен килять?"). Configurable via ANYCODE_SUBAGENT_STALL_MS.
  */
 export const SUBAGENT_STALL_TIMEOUT_MS = 600_000;
+
+/**
+ * Supervisor idle-watchdog thresholds (taskana 4181). Distinct from
+ * SUBAGENT_STALL_TIMEOUT_MS above: that one watches a RUNNING child's silence;
+ * these watch a SUPERVISOR that has gone idle after ending its turn with no
+ * live detached children and no terminal marker (READY/BLOCKED/DONE/ACCEPT) in
+ * its final assistant text — the one state of the no-polling detach loop that
+ * previously sat silent forever.
+ *
+ * The first reminder waits 15 minutes — deliberately LONGER than one
+ * 10-minute child-stall cycle — so a slow child's stall notice (not this
+ * watchdog) is what wakes the supervisor first; the watchdog only fires when
+ * nothing else will. Repeats then follow every SUPERVISOR_IDLE_REPEAT_MS
+ * (10 minutes), escalating the text after SUPERVISOR_IDLE_ESCALATE_AFTER
+ * ignored reminders. Like the stall detector, the watchdog only REPORTS — it
+ * never kills, never aborts, never ends the loop. First threshold
+ * configurable via ANYCODE_SUPERVISOR_IDLE_MS (packages/core/src/provider/env.ts).
+ */
+export const SUPERVISOR_IDLE_FIRST_MS = 15 * 60_000;
+/** Supervisor idle-watchdog repeat cadence (taskana 4181); see SUPERVISOR_IDLE_FIRST_MS. */
+export const SUPERVISOR_IDLE_REPEAT_MS = 10 * 60_000;
+/**
+ * After this many ignored reminders the text escalates to the OWNER variant
+ * (taskana 4181); see SUPERVISOR_IDLE_FIRST_MS for the full contract.
+ */
+export const SUPERVISOR_IDLE_ESCALATE_AFTER = 2;
 
 // ---------------------------------------------------------------------------
 // TASK.124 constants (turn-ceiling decision ladder)

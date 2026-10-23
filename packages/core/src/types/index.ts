@@ -119,6 +119,13 @@ export {
   SUBAGENT_OUTPUT_MAX_BYTES,
   clampSubagentMaxOutputTokens,
   SUBAGENT_STALL_TIMEOUT_MS,
+  // taskana 4181: same additive reason as SUBAGENT_STALL_TIMEOUT_MS above —
+  // the desktop host's SupervisorIdleWatchdog (host/supervisor-idle-watchdog.ts)
+  // imports its default thresholds/markers from @anycode/core's root; the host
+  // never imports a core subpath.
+  SUPERVISOR_IDLE_FIRST_MS,
+  SUPERVISOR_IDLE_REPEAT_MS,
+  SUPERVISOR_IDLE_ESCALATE_AFTER,
   SUBAGENT_TIME_BUDGET_MS,
   SUBAGENT_WRAPUP_MIN_WINDOW_MS,
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,

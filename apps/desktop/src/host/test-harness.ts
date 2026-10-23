@@ -431,6 +431,13 @@ export interface HarnessOptions {
    * (every pre-existing test unaffected).
    */
   pendingChildReports?: SessionOptions["pendingChildReports"];
+  /**
+   * taskana 4181: the supervisor idle-watchdog seam, threaded DIRECTLY to
+   * Session (mirror of the pendingChildReports precedent above). Omitted ->
+   * both Session note-calls are no-ops (every pre-existing test unaffected,
+   * byte-identical turns).
+   */
+  supervisorIdle?: SessionOptions["supervisorIdle"];
 }
 
 export interface Harness {
@@ -683,6 +690,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.onContinuationComplete !== undefined ? { onContinuationComplete: options.onContinuationComplete } : {}),
     ...(options.reportProviderHealth !== undefined ? { reportProviderHealth: options.reportProviderHealth } : {}),
     ...(options.pendingChildReports !== undefined ? { pendingChildReports: options.pendingChildReports } : {}),
+    ...(options.supervisorIdle !== undefined ? { supervisorIdle: options.supervisorIdle } : {}),
   });
   session.bindPort(nodeWirePort(hostPort));
 
