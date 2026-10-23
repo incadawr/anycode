@@ -39,6 +39,11 @@ call. Do not split it, do not implement parts yourself.
 - Do not run your own baseline tests in parallel with the lead: you would
   race it for the same working tree. Verify after its report.
 - The lead's report is a claim, not evidence.
+- When ALL children have finished and you have no further dispatch, CLOSE the
+  task: reply with **READY** (work done), **BLOCKED** (impossible) or **DONE**
+  (nothing to do). An idle supervisor with no live children and no marker
+  gets a system reminder after ~15 minutes. Replying **ACCEPT** already
+  closes — it counts as a marker too.
 
 ## Verifying
 
