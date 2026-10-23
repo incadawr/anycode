@@ -29,6 +29,9 @@ export function shouldShowPromptQueue(
 export function PromptQueue() {
   const promptQueue = useTabStore((state) => state.promptQueue);
   const queuePaused = useTabStore((state) => state.queuePaused);
+  // Taskana 4111: the banner must name the REAL reason the queue is held
+  // ("turn limit" vs "cancelled/failed") — TASK.124 «Работа» §2.
+  const queuePauseReason = useTabStore((state) => state.queuePauseReason);
   // TASK.118: steers already on the wire to the host's steer queue, awaiting
   // their turn_started. Host-owned — no renderer edit/delete controls.
   const pendingSteers = useTabStore((state) => state.pendingSteers);
@@ -72,7 +75,11 @@ export function PromptQueue() {
     <div className="prompt-queue">
       {queuePaused && (
         <div className="prompt-queue-paused">
-          <span className="prompt-queue-paused-text">Queue paused — turn was cancelled/failed</span>
+          <span className="prompt-queue-paused-text">
+            {queuePauseReason === "max_turns"
+              ? "Queue held — the turn hit the turn limit"
+              : "Queue paused — turn was cancelled/failed"}
+          </span>
           <div className="prompt-queue-paused-actions">
             <button
               type="button"

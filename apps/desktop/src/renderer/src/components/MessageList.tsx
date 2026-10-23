@@ -381,6 +381,25 @@ export function showTryAgainButton(retry: RetryOffer | null, blockId: string, co
 }
 
 /**
+ * Taskana 4111: the one-shot Continue offer shows ONLY on its own max_turns
+ * loop_end row, only when the connection is live and the prompt queue is
+ * empty (a held queue's Resume banner is the continue then).
+ */
+export function showContinueButton(
+  continueOffer: { loopEndBlockId: string } | null,
+  blockId: string,
+  connection: ConnectionPhase,
+  promptQueueLength: number,
+): boolean {
+  return (
+    continueOffer !== null &&
+    continueOffer.loopEndBlockId === blockId &&
+    connection === "ready" &&
+    promptQueueLength === 0
+  );
+}
+
+/**
  * Standalone fallback Try-again row visibility (TASK.33 FIX-A): a host
  * respawn (`performReset` + hydration, store.ts) wipes the transcript and
  * rebuilds it from persisted history, whose block ids never include the
@@ -444,6 +463,9 @@ export function MessageList({
   connection,
   retry,
   onTryAgain,
+  continueOffer,
+  onContinue,
+  promptQueueLength,
   readOnly = false,
 }: {
   blocks: TranscriptBlock[];
@@ -455,6 +477,12 @@ export function MessageList({
   retry: RetryOffer | null;
   /** TASK.33 W8: consumes `retry` and re-sends its content through the normal send/queue/busy path. */
   onTryAgain: () => void;
+  /** Taskana 4111: armed one-shot Continue offer on a max_turns loop_end; null when nothing to offer. */
+  continueOffer: { loopEndBlockId: string } | null;
+  /** Taskana 4111: consumes `continueOffer` and sends the fixed continuation message. */
+  onContinue: () => void;
+  /** Taskana 4111: gates the Continue button off while a held queue's Resume banner is the continue. */
+  promptQueueLength: number;
   /** Read-only transcript surface (e.g. child history): suppresses the transcript-empty onboarding. */
   readOnly?: boolean;
 }) {
@@ -980,6 +1008,11 @@ export function MessageList({
                   {showTryAgainButton(retry, block.id, connection) && (
                     <button type="button" className="retry-try-again-button" onClick={onTryAgain}>
                       Try again
+                    </button>
+                  )}
+                  {showContinueButton(continueOffer, block.id, connection, promptQueueLength) && (
+                    <button type="button" className="retry-try-again-button" onClick={onContinue}>
+                      Continue
                     </button>
                   )}
                 </div>

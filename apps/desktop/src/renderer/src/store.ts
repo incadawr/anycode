@@ -1203,6 +1203,10 @@ export interface DesktopState {
   steerRequeueSeen: string[];
   /** True after an anomalous turn end / respawn / reject left the queue held for the user to Resume or Clear. */
   queuePaused: boolean;
+  /** Why the prompt queue is paused; read by the PromptQueue banner (Taskana 4111). */
+  queuePauseReason: "max_turns" | "cancelled" | "error" | "rejected";
+  /** One-shot Continue offer armed by a max_turns loop_end (Taskana 4111 / TASK.124 remainder 1). */
+  continueOffer: { loopEndBlockId: string } | null;
   /**
    * The single item currently "in flight": taken off the queue with its wire
    * `user_message` sent, but its `turn_started` not yet acknowledged. The
@@ -1303,6 +1307,12 @@ export interface DesktopState {
    * if there was none — a stale/double click).
    */
   consumeRetry(): RetryOffer | null;
+  /**
+   * Taskana 4111 one-shot consume: mirrors `consumeRetry` semantics —
+   * return-and-clear (null when nothing armed), so the Continue button
+   * cannot fire twice.
+   */
+  consumeContinue(): { loopEndBlockId: string } | null;
   /**
    * Records a pending git request keyed by `requestId` so the matching
    * `git_result` can be dispatched (the caller sends the wire message itself
@@ -3405,6 +3415,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               retryMeta.retryable &&
               !retryMeta.hadModelOutput &&
               lastSent !== null;
+            // Taskana 4111 (TASK.124 remainder 1): arm the one-shot Continue
+            // offer ONLY on a max_turns stop with an empty queue — with a held
+            // queue the Resume banner is already the one-action continue, so
+            // the two offers must never coexist. Never armed for
+            // completed/cancelled/error (error arms Try-again instead).
+            const armContinue = event.reason === "max_turns" && state.promptQueue.length === 0;
             return {
               transcript: [
                 ...state.transcript,
@@ -3420,6 +3436,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               ...(armRetry && lastSent !== null
                 ? { retry: { loopEndBlockId: loopEndId, text: lastSent.text, images: lastSent.images } }
                 : {}),
+              ...(armContinue ? { continueOffer: { loopEndBlockId: loopEndId } } : {}),
             };
           });
           // Slice P7.14: flip the turn to idle AND apply any non-"completed"
@@ -3465,7 +3482,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 ? { steerRequeueSeen: [...state.steerRequeueSeen, ...requeue.map((entry) => entry.requestId)] }
                 : {}),
               ...(event.reason !== "completed" && nextQueue.length > 0
-                ? { queuePaused: true }
+                ? {
+                    queuePaused: true,
+                    // Taskana 4111: the held-queue banner must name the REAL
+                    // reason ("turn limit" vs "cancelled/failed") — TASK.124
+                    // «Работа» §2's honest-held option.
+                    queuePauseReason:
+                      event.reason === "max_turns" ? "max_turns" : event.reason === "error" ? "error" : "cancelled",
+                  }
                 : {}),
             };
           });
@@ -4015,6 +4039,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // host respawn preserves user-typed prompts (see QueuedPrompt comment).
       promptQueue: [],
       queuePaused: false,
+      queuePauseReason: "cancelled",
+      continueOffer: null,
       queueInFlight: null,
       // Cross-review F2: reload-recovery dedupe list — outside the session
       // slice so a respawn+replay never double-enqueues a refused steer.
@@ -4191,6 +4217,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // stale offer never reappears on a later loop_end.
               lastErrorRetry: null,
               retry: null,
+              // Taskana 4111: a new turn (any send) consumes the one-shot
+              // Continue offer so a stale button never reappears.
+              continueOffer: null,
               ...(inFlight?.requestId === message.requestId ? { queueInFlight: null } : {}),
             });
             // TASK.118: a steer sent while a turn was running delivers at the
@@ -4218,7 +4247,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             const { queueInFlight, promptQueue } = get();
             const restore =
               queueInFlight && queueInFlight.requestId === message.requestId
-                ? { promptQueue: [queueInFlight.item, ...promptQueue], queuePaused: true, queueInFlight: null }
+                ? {
+                    promptQueue: [queueInFlight.item, ...promptQueue],
+                    queuePaused: true,
+                    queuePauseReason: "rejected" as const,
+                    queueInFlight: null,
+                  }
                 : null;
             set({
               notice: {
@@ -5085,6 +5119,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         const offer = get().retry;
         if (offer !== null) {
           set({ retry: null });
+        }
+        return offer;
+      },
+
+      consumeContinue(): { loopEndBlockId: string } | null {
+        const offer = get().continueOffer;
+        if (offer !== null) {
+          set({ continueOffer: null });
         }
         return offer;
       },

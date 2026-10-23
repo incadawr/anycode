@@ -14,6 +14,8 @@ import {
   CLOSE_TAB_CONFIRM,
   computeGitPanelOpen,
   computeSessionContentColumns,
+  CONTINUE_AFTER_CEILING_TEXT,
+  dispatchContinue,
   dispatchTryAgain,
   emptyPaneSidebarAffordance,
   selectMainPaneView,
@@ -277,6 +279,51 @@ describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/
     expect(sent).toEqual([]);
     expect(store.getState().retry).toEqual(offer);
     expect(store.getState().transcript.some((b) => b.kind === "user_text")).toBe(false);
+  });
+});
+
+describe("dispatchContinue (Taskana 4111 — one-shot Continue on a max_turns stop)", () => {
+  /** Arms the offer through the real production path: a max_turns loop_end on an idle-queue turn. */
+  function armContinueViaRealPath(store: ReturnType<typeof createDesktopStore>): void {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "max_turns", turns: 3 } });
+  }
+
+  it("armed offer + ready + idle ⇒ sent: echoes user_text, records the send, puts the fixed continuation on the wire with a fresh requestId, consumes the offer", () => {
+    const store = createDesktopStore();
+    armContinueViaRealPath(store);
+    const sent: UiToHostMessage[] = [];
+
+    const outcome = dispatchContinue(store, (m) => sent.push(m));
+
+    expect(outcome).toBe("sent");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ type: "user_message", text: CONTINUE_AFTER_CEILING_TEXT });
+    expect((sent[0] as { requestId: string }).requestId).not.toBe("req-1");
+    expect(store.getState().transcript.some((b) => b.kind === "user_text" && b.text === CONTINUE_AFTER_CEILING_TEXT)).toBe(true);
+    expect(store.getState().lastSentMessage).toEqual({ text: CONTINUE_AFTER_CEILING_TEXT, images: [] });
+    expect(store.getState().continueOffer).toBeNull();
+  });
+
+  it("nothing armed ⇒ no_offer and nothing on the wire", () => {
+    const store = createDesktopStore();
+    store.setState({ connection: "ready" });
+    const sent: UiToHostMessage[] = [];
+
+    expect(dispatchContinue(store, (m) => sent.push(m))).toBe("no_offer");
+    expect(sent).toEqual([]);
+  });
+
+  it("connection not ready ⇒ not_ready, the offer stays armed and unconsumed", () => {
+    const store = createDesktopStore();
+    armContinueViaRealPath(store);
+    store.setState({ connection: "host_exited" });
+    const sent: UiToHostMessage[] = [];
+
+    expect(dispatchContinue(store, (m) => sent.push(m))).toBe("not_ready");
+    expect(sent).toEqual([]);
+    expect(store.getState().continueOffer).toEqual({ loopEndBlockId: "loop_end:t1" });
   });
 });
 

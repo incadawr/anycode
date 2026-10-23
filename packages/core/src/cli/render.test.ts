@@ -52,6 +52,10 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
   it("surfaces output and turn limits explicitly", () => {
     expect(collect([{ type: "turn_end", turn: 1, finishReason: "length" }])).toContain("output truncated");
     expect(collect([{ type: "loop_end", reason: "max_turns", turns: 100 }])).toContain("turn limit reached (100 turns)");
+    // Taskana 4111: the stop line names the one action that works.
+    expect(collect([{ type: "loop_end", reason: "max_turns", turns: 100 }])).toContain(
+      "send a message to continue with the same history",
+    );
   });
 
   it("renders a ceiling grant with round, grant, total and remaining (TASK.124 T19)", () => {
@@ -74,6 +78,9 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
     expect(collect([{ type: "loop_end", reason: "max_turns", turns: 150 }])).not.toContain(
       "ANYCODE_MAX_TURNS",
     );
+    // Taskana 4111: the action pointer is ONLY on the max_turns stop — a
+    // clean completion never suggests sending more.
+    expect(collect([{ type: "loop_end", reason: "completed", turns: 3 }])).not.toContain("send a message");
   });
 
   // TASK.240/4055: an adaptive grant renders its own line naming the

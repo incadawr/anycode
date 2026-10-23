@@ -513,9 +513,12 @@ export function renderEvent(
       // Since TASK.124 the turn cap is a decision point, not a setting to raise:
       // the ladder already asked and either granted (a ceiling_grant line above)
       // or refused. Pointing at Settings/ANYCODE_MAX_TURNS would name an action
-      // that is no longer the one that happened, so the line just states the fact.
+      // that is no longer the one that happened. Taskana 4111: the line now
+      // names the ONE action that works — a new message continues on the same
+      // history with a fresh turn budget (the interactive REPL already accepts
+      // the next message; `--print` is headless-by-contract and out of scope).
       write(event.reason === "max_turns"
-        ? `\n[stopped: turn limit reached (${event.turns} turns)]\n`
+        ? `\n[stopped: turn limit reached (${event.turns} turns) — send a message to continue with the same history]\n`
         : `\n[loop_end: ${event.reason}, turns=${event.turns}]\n`);
       break;
     case "stream_retry":

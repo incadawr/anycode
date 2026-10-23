@@ -1532,6 +1532,52 @@ describe("AgentLoop.runTurn — ceiling decision ladder (TASK.124 cut-1)", () =>
     expect(serialized).not.toContain("ceiling_verdict");
   });
 
+  it("seam (Taskana 4111): refused ceiling → loop_end max_turns → a NEW user turn continues on the same history with a fresh turn counter", async () => {
+    // Run 1: two tool turns trip the cap; the decision stream carries no
+    // verdict tool call, so the round is refused (unreadable_verdict) and the
+    // run ends max_turns — the desktop's Continue offer / CLI's "send a
+    // message" pointer both assume the seam this test pins.
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }], // unreadable verdict
+      // Run 2's first turn: a plain tool-free completion.
+      completionStep(),
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry });
+
+    const events1 = await collect(loop.runTurn("go"));
+
+    // (a) run 1 ends refused: exactly one ceiling_refused (unreadable_verdict)
+    // immediately before the max_turns loop_end, and no grant ever fired.
+    expect(grantEvents(events1)).toHaveLength(0);
+    expect(refusedEvents(events1)).toEqual([
+      { type: "ceiling_refused", reason: "unreadable_verdict", turn: 2, round: 1 },
+    ]);
+    expect(events1.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 2 });
+    // The loop's history is non-empty: "go" + 2 (assistant, tool) pairs.
+    expect(loop.history.toMessages()).toHaveLength(1 + 2 * 2);
+
+    // (b) run 2 on the SAME loop, a new user prompt: the turn counter is
+    // per-run, so turn 1 starts fresh; the run completes before tripping the
+    // cap (no ceiling call at all — see (c)); and the history carries run 1's
+    // frames plus the new ones — nothing lost, nothing reset.
+    const events2 = await collect(loop.runTurn("continue please"));
+
+    expect(events2[0]).toEqual({ type: "turn_start", turn: 1 });
+    expect(events2.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
+    // 5 messages from run 1 + this run's user message + final assistant text.
+    expect(loop.history.toMessages()).toHaveLength(5 + 2);
+    const messages2 = loop.history.toMessages();
+    expect(messages2.filter((m) => m.role === "assistant")).toHaveLength(3); // 2 tool turns + 1 final
+    expect(messages2.at(-2)).toMatchObject({ role: "user" });
+    expect(messages2.at(-1)).toMatchObject({ role: "assistant" });
+
+    // (c) run 2 completed before tripping the ceiling — no second refusal.
+    expect(refusedEvents(events2)).toHaveLength(0);
+    expect(grantEvents(events2)).toHaveLength(0);
+  });
+
   it("MAX_CEILING_ROUNDS is a hard cap: a 4th round is refused with no model call, and the grant sum never exceeds maxTurns", async () => {
     const N = 8;
     const modelPort = new MockModelPort([

@@ -340,6 +340,34 @@ export function dispatchTryAgain(
   return "sent";
 }
 
+/**
+ * Taskana 4111: fixed continuation text — the click is the one action; the
+ * model sees it as an ordinary user message.
+ */
+export const CONTINUE_AFTER_CEILING_TEXT = "Continue from the turn limit — resume with the same history.";
+
+/**
+ * Taskana 4111 (TASK.124 remainder 1): the max_turns stop's one-action
+ * continue — the Try-again seam, minus the replay payload: the click sends
+ * ONE fixed user message, which restarts the turn budget over the intact
+ * history. No images on this path ⇒ no enqueue branch: the offer only
+ * exists while the turn is idle; if a race made the turn busy again, the
+ * host's `turn_rejected "busy"` path already restores order.
+ */
+export function dispatchContinue(
+  store: DesktopStoreApi,
+  sendToHost: (message: UiToHostMessage) => void,
+): "not_ready" | "no_offer" | "sent" {
+  if (store.getState().connection !== "ready") return "not_ready";
+  const offer = store.getState().consumeContinue();
+  if (offer === null) return "no_offer";
+  const requestId = crypto.randomUUID();
+  store.getState().appendUserText(requestId, CONTINUE_AFTER_CEILING_TEXT);
+  store.getState().recordSentMessage(CONTINUE_AFTER_CEILING_TEXT, []);
+  sendToHost({ type: "user_message", requestId, text: CONTINUE_AFTER_CEILING_TEXT });
+  return "sent";
+}
+
 export interface SessionSurfaceProps {
   tabId: string;
   /** R8: push one toast into the App-level queue (kind → tone/glyph in toasts.ts). */
@@ -370,9 +398,14 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
   // TASK.33 W8: the armed one-shot Try-again offer (null when nothing to
   // offer) — MessageList shows the button only on the loop_end block it names.
   const retry = useTabStore((state) => state.retry);
+  // Taskana 4111: the one-shot Continue offer armed by a max_turns loop_end;
+  // suppressed while the prompt queue holds anything (Resume is the continue then).
+  const continueOffer = useTabStore((s) => s.continueOffer);
+  const promptQueueLength = useTabStore((s) => s.promptQueue.length);
   const tabStoreApi = useTabStoreApi();
   const sendToHost = useTabSend();
   const handleTryAgain = useCallback(() => dispatchTryAgain(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
+  const handleContinue = useCallback(() => dispatchContinue(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
 
   // TASK.188 S12: this mount IS the replay's definition of "the root is in
   // frame". Every way the root transcript can leave the screen — another tab
@@ -416,6 +449,9 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
           connection={connection}
           retry={retry}
           onTryAgain={handleTryAgain}
+          continueOffer={continueOffer}
+          onContinue={handleContinue}
+          promptQueueLength={promptQueueLength}
         />
 
         <Composer />
@@ -1068,6 +1104,9 @@ function ChildHistoryContent({ parentSessionId, spawnToolCallId }: ChildHistoryC
             connection="host_exited"
             retry={null}
             onTryAgain={() => {}}
+            continueOffer={null}
+            onContinue={() => {}}
+            promptQueueLength={0}
             readOnly={true}
           />
         </div>

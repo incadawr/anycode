@@ -10,6 +10,7 @@ import {
   isTerminalStatus,
   needsSnap,
   showTryAgainButton,
+  showContinueButton,
   showStandaloneRetry,
   shouldShowJumpButton,
   shouldShowTranscriptEmpty,
@@ -454,6 +455,33 @@ describe("showTryAgainButton (TASK.33 W8 button-visibility truth-table)", () => 
     expect(showTryAgainButton(offer, "loop_end:turn-1", "host_exited")).toBe(false);
     expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_port")).toBe(false);
     expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_host_ready")).toBe(false);
+  });
+});
+
+describe("showContinueButton (Taskana 4111 — one-shot Continue on the max_turns loop_end row)", () => {
+  const offer = { loopEndBlockId: "loop_end:turn-1" };
+
+  it("shown when armed + matching block + ready connection + empty prompt queue", () => {
+    expect(showContinueButton(offer, "loop_end:turn-1", "ready", 0)).toBe(true);
+  });
+
+  it("hidden while the prompt queue is non-empty — the held queue's Resume banner is the one-action continue then", () => {
+    expect(showContinueButton(offer, "loop_end:turn-1", "ready", 1)).toBe(false);
+    expect(showContinueButton(offer, "loop_end:turn-1", "ready", 3)).toBe(false);
+  });
+
+  it("hidden on any other block — the offer names its own max_turns row", () => {
+    expect(showContinueButton(offer, "loop_end:turn-0", "ready", 0)).toBe(false);
+  });
+
+  it("hidden while the connection is not ready", () => {
+    expect(showContinueButton(offer, "loop_end:turn-1", "host_exited", 0)).toBe(false);
+    expect(showContinueButton(offer, "loop_end:turn-1", "awaiting_port", 0)).toBe(false);
+    expect(showContinueButton(offer, "loop_end:turn-1", "awaiting_host_ready", 0)).toBe(false);
+  });
+
+  it("hidden when nothing is armed (one-shot consumed / never armed)", () => {
+    expect(showContinueButton(null, "loop_end:turn-1", "ready", 0)).toBe(false);
   });
 });
 

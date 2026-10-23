@@ -5959,6 +5959,104 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
   });
 });
 
+describe("Taskana 4111 — max_turns end: Continue offer + held-queue reason", () => {
+  const HOST_READY = { type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" } as const;
+
+  function readyStore() {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage(HOST_READY);
+    return store;
+  }
+
+  /** Starts a turn (t1) so the loop_end handler has a live turn to close. */
+  function startTurn(store: ReturnType<typeof createDesktopStore>, turnId = "t1", requestId = "r1") {
+    store.getState().applyHostMessage({ type: "turn_started", requestId, turnId });
+  }
+
+  it("loop_end max_turns with an EMPTY queue arms the one-shot Continue offer keyed to the new block; queue not paused", () => {
+    const store = readyStore();
+    startTurn(store);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "max_turns", turns: 3 } });
+
+    expect(store.getState().queuePaused).toBe(false);
+    expect(store.getState().continueOffer).toEqual({ loopEndBlockId: "loop_end:t1" });
+    // The block itself landed with the stop reason intact.
+    const blocks = store.getState().transcript.filter((b) => b.kind === "loop_end");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ id: "loop_end:t1", reason: "max_turns", turns: 3 });
+  });
+
+  it("loop_end max_turns with a queued prompt holds the queue with reason max_turns and arms NO Continue (the Resume banner is the continue then)", () => {
+    const store = readyStore();
+    store.getState().enqueuePrompt({ text: "held", images: [] });
+    startTurn(store);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "max_turns", turns: 2 } });
+
+    expect(store.getState().queuePaused).toBe(true);
+    expect(store.getState().queuePauseReason).toBe("max_turns");
+    expect(store.getState().continueOffer).toBeNull();
+  });
+
+  it("held-queue reason follows the loop_end reason: error ⇒ error, cancelled ⇒ cancelled", () => {
+    const errored = readyStore();
+    errored.getState().enqueuePrompt({ text: "held", images: [] });
+    startTurn(errored);
+    errored.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "error", turns: 1 } });
+    expect(errored.getState().queuePaused).toBe(true);
+    expect(errored.getState().queuePauseReason).toBe("error");
+
+    const cancelled = readyStore();
+    cancelled.getState().enqueuePrompt({ text: "held", images: [] });
+    startTurn(cancelled);
+    cancelled.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "cancelled", turns: 1 } });
+    expect(cancelled.getState().queuePaused).toBe(true);
+    expect(cancelled.getState().queuePauseReason).toBe("cancelled");
+  });
+
+  it("loop_end completed with a queued prompt leaves the queue unpaused and arms no offer (regression guard for the drain path)", () => {
+    const store = readyStore();
+    store.getState().enqueuePrompt({ text: "drain-me", images: [] });
+    startTurn(store);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "completed", turns: 1 } });
+
+    expect(store.getState().queuePaused).toBe(false);
+    expect(store.getState().continueOffer).toBeNull();
+  });
+
+  it("a subsequent turn_started clears the Continue offer (one-shot — a stale button never reappears)", () => {
+    const store = readyStore();
+    startTurn(store);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "max_turns", turns: 2 } });
+    expect(store.getState().continueOffer).not.toBeNull();
+
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r2", turnId: "t2" });
+    expect(store.getState().continueOffer).toBeNull();
+  });
+
+  it("turn_rejected restoring an in-flight item sets the held reason to rejected", () => {
+    const store = readyStore();
+    store.getState().enqueuePrompt({ text: "drained", images: [] });
+    store.getState().takeQueueHead("req-1");
+
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "req-1", reason: "busy" });
+
+    expect(store.getState().queuePaused).toBe(true);
+    expect(store.getState().queuePauseReason).toBe("rejected");
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["drained"]);
+  });
+
+  it("consumeContinue returns the armed offer exactly once, then null", () => {
+    const store = readyStore();
+    startTurn(store);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "max_turns", turns: 2 } });
+
+    expect(store.getState().consumeContinue()).toEqual({ loopEndBlockId: "loop_end:t1" });
+    expect(store.getState().continueOffer).toBeNull();
+    expect(store.getState().consumeContinue()).toBeNull();
+  });
+});
+
 describe("desktop store — context_breakdown reducer (slice P7.17 · F12)", () => {
   it("stores the breakdown wholesale and clears it on a respawn host_ready reset", () => {
     const store = createDesktopStore();
