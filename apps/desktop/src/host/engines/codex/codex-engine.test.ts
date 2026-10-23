@@ -1602,6 +1602,76 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
   });
 });
 
+describe("Taskana 4078 — child boots untrusted (TASK.179)", () => {
+  it("carries the child-ask preset's untrusted posture on thread/start", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      presetId: "child-ask",
+      origin: "draft",
+    });
+
+    expect(server.threadStartParams).toEqual({
+      cwd: "/work",
+      approvalPolicy: "untrusted",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    });
+    expect(connected.presetId).toBe("child-ask");
+  });
+
+  it("re-asserts the untrusted posture on every turn (self-healing against the L8 echo)", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      presetId: "child-ask",
+      origin: "draft",
+    });
+
+    await runTurn(server, connected.engine);
+    await runTurn(server, connected.engine, "again");
+
+    const expected = {
+      approvalPolicy: "untrusted",
+      approvalsReviewer: "user",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/work"],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
+    };
+    const starts = server.turnStartParams();
+    expect(starts).toHaveLength(2);
+    expect(starts[0]).toMatchObject(expected);
+    expect(starts[1]).toMatchObject(expected);
+  });
+
+  it("still degrades an unknown preset id to the DEFAULT ask posture, with exactly one notice", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      presetId: "child-ask-v2-typo",
+      origin: "draft",
+    });
+
+    expect(server.threadStartParams).toEqual({
+      cwd: "/work",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    });
+
+    const events = await runTurn(server, connected.engine);
+    expect(notices(events).filter((message) => message.includes("unknown"))).toHaveLength(1);
+  });
+
+  it("selectPreset round-trips the child id in-session (strictly narrower than ask)", async () => {
+    const server = new FakeAppServer();
+    const { engine } = await createNativeCodexSession(server, "/work");
+
+    expect(engine.selectPreset("child-ask")).toEqual({ ok: true, model: "gpt-native", activePresetId: "child-ask" });
+  });
+});
+
 describe("TASK.39 — resume (cut §2(k).2/.4)", () => {
   // W3-review test (b): a host RESPAWN boots from the persisted posture, so
   // chosen === applied by design (cut §2(k).1) — the restored posture is not a

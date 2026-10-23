@@ -9,7 +9,10 @@
  *    be one of the forbidden print-mode/bypass postures (§4.2's "запрещённые
  *    постуры"), proven by resolving the id through the SAME frozen preset
  *    tables (`presets.ts`, read-only import) the engine boots actually
- *    consult — not by re-asserting the id strings alone.
+ *    consult — not by re-asserting the id strings alone. Since TASK.179
+ *    (Taskana 4078) this proof also covers the child-only `child-ask`
+ *    preset: `untrusted` is not a forbidden approval policy, and the
+ *    resolved preset ids are pinned to `read-only`/`child-ask` only.
  */
 
 import { PERMISSION_MODES } from "@anycode/core";
@@ -61,10 +64,10 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
   it("is total over every PermissionMode and matches the frozen table exactly", () => {
     expect(PERMISSION_MODES.map((mode) => [mode, codexChildPosture(mode)])).toEqual([
       ["plan", "read-only"],
-      ["build", "ask"],
-      ["edit", "ask"],
-      ["auto", "ask"],
-      ["yolo", "ask"],
+      ["build", "child-ask"],
+      ["edit", "child-ask"],
+      ["auto", "child-ask"],
+      ["yolo", "child-ask"],
     ]);
   });
 
@@ -77,6 +80,7 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
     for (const mode of PERMISSION_MODES) {
       const preset = findCodexPreset(codexChildPosture(mode));
       expect(preset).toBeDefined();
+      expect(["read-only", "child-ask"]).toContain(preset!.id);
       expect(FORBIDDEN_CODEX_APPROVAL_POLICIES).not.toContain(preset!.threadParams.approvalPolicy);
       expect(FORBIDDEN_CODEX_REVIEWERS).not.toContain(preset!.threadParams.approvalsReviewer);
       expect(FORBIDDEN_CODEX_SANDBOX_MODES).not.toContain(preset!.threadParams.sandbox);

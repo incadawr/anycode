@@ -11,17 +11,20 @@
  * | core mode | Claude child preset id | Codex child posture |
  * |---|---|---|
  * | `plan`  | `read-only` | `read-only` |
- * | `build` | `ask`       | `ask` |
- * | `edit`  | `workspace` | `ask` |
- * | `auto`  | `workspace` (clamped down, RS4-0-2) | `ask` (clamped down, RS4-0-2) |
- * | `yolo`  | `workspace` (clamped down, RS4-0-2) | `ask` (clamped down, RS4-0-2) |
+ * | `build` | `ask`       | `child-ask` |
+ * | `edit`  | `workspace` | `child-ask` |
+ * | `auto`  | `workspace` (clamped down, RS4-0-2) | `child-ask` (clamped down, RS4-0-2) |
+ * | `yolo`  | `workspace` (clamped down, RS4-0-2) | `child-ask` (clamped down, RS4-0-2) |
  *
  * `edit`/`auto`/`yolo` all land on Claude's OWN `workspace` preset
  * (`acceptEdits`) rather than a one-shot argv — that preset already asks for
  * anything outside the session cwd, so it is not a widened posture, only
- * Claude's already-frozen "workspace" interactive tier. Codex has no
- * narrower interactive tier than `ask` short of `read-only`, so everything
- * except `plan` lands on `ask`. Neither function can ever produce a
+ * Claude's already-frozen "workspace" interactive tier. Codex children land
+ * on the broker-mediated `child-ask` posture (TASK.179 / Taskana 4078):
+ * `untrusted` sends every command approval through
+ * CodexApprovalBridge -> IpcPermissionBroker instead of letting codex decide
+ * silently under `on-request`. The interactive `ask` tier stays menu-only
+ * for human-facing tabs. Neither function can ever produce a
  * print-mode invocation (`claude -p` / `codex exec`) or a bypass/auto-review
  * posture: their return type is a strict subset of the ids the frozen
  * `presets.ts` tables (read-only imports below) expose, and those tables
@@ -46,14 +49,16 @@ export function claudeChildPresetId(mode: PermissionMode): "read-only" | "ask" |
 }
 
 /**
- * Codex preset id an engine child boots with. `"read-only"` resolves through
- * `presets.ts`'s `findCodexPreset` legacy fallback (`LEGACY_READ_ONLY_PRESET`)
- * — deliberately reused here, and ONLY here: it is omitted from
- * `CODEX_PERMISSION_PRESETS`/`codexPresetChoices()` so a user can never pick
- * it from the menu, but it remains a valid, narrower-than-`ask` posture for
- * a `plan`-mode child.
+ * Codex preset id an engine child boots with. `plan` keeps the `read-only`
+ * legacy posture. Every other mode lands on `child-ask` (TASK.179 /
+ * Taskana 4078): a broker-mediated posture — `untrusted` sends EVERY command
+ * approval through CodexApprovalBridge -> IpcPermissionBroker instead of
+ * letting codex decide silently under `on-request`. The interactive `ask`
+ * tier stays menu-only for human-facing tabs. Like `read-only`, `child-ask`
+ * resolves through `findCodexPreset`'s fallback and is absent from
+ * `CODEX_PERMISSION_PRESETS`/`codexPresetChoices()`.
  */
-export function codexChildPosture(mode: PermissionMode): "read-only" | "ask" {
+export function codexChildPosture(mode: PermissionMode): "read-only" | "child-ask" {
   switch (mode) {
     case "plan":
       return "read-only";
@@ -61,6 +66,6 @@ export function codexChildPosture(mode: PermissionMode): "read-only" | "ask" {
     case "edit":
     case "auto":
     case "yolo":
-      return "ask";
+      return "child-ask";
   }
 }

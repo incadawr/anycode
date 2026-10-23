@@ -12,6 +12,11 @@
  * The public choices match Codex's permission menu. Renderer/host can only
  * ever pick a `presetId` from this table (host-authoritative membership check),
  * never a raw sandbox/policy object.
+ *
+ * One CHILD-ONLY preset (`child-ask`, TASK.179 / Taskana 4078) is resolvable
+ * through `findCodexPreset`'s fallback but deliberately absent from
+ * `CODEX_PERMISSION_PRESETS`/`codexPresetChoices()` — the public menu never
+ * shows it; only `codexChildPosture` resolves the id.
  */
 
 import type { EnginePermissionPreset } from "../../../shared/protocol.js";
@@ -106,11 +111,35 @@ const LEGACY_READ_ONLY_PRESET: CodexPermissionPresetDefinition = {
   turnOverride: () => ({ approvalPolicy: "on-request", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly", networkAccess: false } }),
 };
 
+/**
+ * TASK.179 (Taskana 4078): the posture an engine CHILD boots with. Identical
+ * sandbox to "ask", but `approvalPolicy: "untrusted"` — codex asks for
+ * approval on EVERY command, so every decision routes through
+ * CodexApprovalBridge -> IpcPermissionBroker instead of being decided inside
+ * codex (on-request lets read-only commands run silently and turns OS-sandbox
+ * rejections into plain command output the broker never sees). Deliberately
+ * NOT a member of CODEX_PERMISSION_PRESETS: a human-facing tab keeps "ask";
+ * only child-permission-map resolves this id.
+ */
+export const CODEX_CHILD_ASK_PRESET_ID = "child-ask";
+
+const CODEX_CHILD_ASK_PRESET: CodexPermissionPresetDefinition = {
+  id: CODEX_CHILD_ASK_PRESET_ID,
+  label: "Ask for approval (children)",
+  description: "Every command approval goes through the permission broker.",
+  threadParams: { approvalPolicy: "untrusted", approvalsReviewer: "user", sandbox: "workspace-write" },
+  turnOverride: (workspace) => ({ approvalPolicy: "untrusted", approvalsReviewer: "user", sandboxPolicy: workspaceWritePolicy(workspace) }),
+};
+
 /** Current default posture (cut §2(d): "ask (default = текущее поведение)") — matches the pre-existing `createNativeCodexSession` thread/start literals verbatim. */
 export const DEFAULT_CODEX_PRESET = "ask" as const;
 
 export function findCodexPreset(id: string): CodexPermissionPresetDefinition | undefined {
-  return CODEX_PERMISSION_PRESETS.find((preset) => preset.id === id) ?? (id === LEGACY_READ_ONLY_PRESET.id ? LEGACY_READ_ONLY_PRESET : undefined);
+  return (
+    CODEX_PERMISSION_PRESETS.find((preset) => preset.id === id) ??
+    (id === CODEX_CHILD_ASK_PRESET_ID ? CODEX_CHILD_ASK_PRESET : undefined) ??
+    (id === LEGACY_READ_ONLY_PRESET.id ? LEGACY_READ_ONLY_PRESET : undefined)
+  );
 }
 
 /** The wire projection consumed by `EnginePresentation.permissions.presets` — labels/descriptions only, never the policy objects. */
