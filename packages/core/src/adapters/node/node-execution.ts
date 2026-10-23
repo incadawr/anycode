@@ -6,11 +6,14 @@
  * and set the *Truncated flags on overflow. `run` and `runBinary` share the
  * same lifecycle tracking (timeout/abort/kill-sequence/output-capture); they
  * differ only in how the child is spawned (shell string vs argv, optional
- * stdin).
+ * stdin). The child env is sanitised (TASK.135): buildChildEnv drops proxy
+ * variables that carry credentials and the ANYCODE_*_PROXY_URL engine carriers
+ * from every non-engine child, without ever touching process.env.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TOOL_TIMEOUT_MS, SIGKILL_GRACE_MS } from "../../types/config.js";
+import { buildChildEnv } from "./child-env.js";
 import type {
   BinaryExecRequest,
   ExecRequest,
@@ -93,7 +96,7 @@ export class NodeExecutionAdapter implements ExecutionPort {
       () =>
         spawn(request.command, {
           cwd: request.cwd,
-          env: { ...process.env, ...request.env },
+          env: buildChildEnv(process.env, request.env),
           shell: true,
           detached: process.platform !== "win32",
           stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
@@ -120,7 +123,7 @@ export class NodeExecutionAdapter implements ExecutionPort {
       () =>
         spawn(request.file, request.args, {
           cwd: request.cwd ?? process.cwd(),
-          env: { ...process.env, ...request.env },
+          env: buildChildEnv(process.env, request.env),
           shell: false,
           detached: process.platform !== "win32",
           stdio: ["ignore", "pipe", "pipe"],
@@ -166,7 +169,7 @@ export class NodeExecutionAdapter implements ExecutionPort {
     try {
       child = spawn(request.file, request.args, {
         cwd: request.cwd ?? process.cwd(),
-        env: { ...process.env, ...request.env },
+        env: buildChildEnv(process.env, request.env),
         shell: false,
         detached: process.platform !== "win32",
         stdio: ["pipe", "pipe", "pipe"],

@@ -7,6 +7,15 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- A proxy URL that contains credentials (and the internal engine proxy
+  carriers) is no longer passed to the agent's shell commands, the terminal or
+  language servers; a credential-less proxy still is. Behind an authenticating
+  proxy those tools now connect directly, whichever side exported the
+  credential — the Claude/Codex engines and the model connection keep the full
+  URL by design.
+
 ## [0.0.35] — 2026-10-10
 
 ### Added

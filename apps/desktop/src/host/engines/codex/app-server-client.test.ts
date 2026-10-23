@@ -746,6 +746,33 @@ describe("buildCodexChildEnv — engine proxy carrier (TASK.139)", () => {
     expect(env.CODEX_HOME).toBe("/home/test/.anycode/codex/profile-personal");
     expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
   });
+
+  // TASK.135 / Taskana 4074: engines are the DELIBERATE exception to the
+  // child-env proxy scrub — the credentialed proxy must reach the CLI.
+  it("keeps the full credentialed proxy family from the source env (TASK.135 exemption)", () => {
+    const env = buildCodexChildEnv(
+      {
+        HOME: "/home/test",
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://u:s3cret@p:1",
+        https_proxy: "http://u:s3cret@p:1",
+      },
+      "linux",
+    );
+    expect(env.HTTPS_PROXY).toBe("http://u:s3cret@p:1");
+    expect(env.https_proxy).toBe("http://u:s3cret@p:1");
+  });
+
+  it("a carrier's credentialed url still lands in all four family vars (TASK.135 exemption)", () => {
+    const carrier = encodeEngineProxyCarrier({ kind: "proxy", url: "http://u:s3cret@p:2" }) as string;
+    const env = buildCodexChildEnv(
+      { HOME: "/home/test", PATH: "/usr/bin", [ENV_CODEX_PROXY_URL]: carrier },
+      "linux",
+    );
+    for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
+      expect(env[name]).toBe("http://u:s3cret@p:2");
+    }
+  });
 });
 
 describe("checkCodexBinaryTrustOnDisk — consent threading (TASK.103)", () => {

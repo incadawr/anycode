@@ -17,7 +17,11 @@
  *    term-port is only bound after `ready` (index.ts), so by the time any
  *    `term_open` can arrive the key is gone — the shell can never see it. The
  *    env is read at spawn time (not snapshotted at construction) precisely so it
- *    always reflects the post-scrub state.
+ *    always reflects the post-scrub state. TASK.135 adds a second scrub at the
+ *    same choke point: the env passes through `buildChildEnv`
+ *    (@anycode/core/child-env), so a proxy URL that carries credentials (and
+ *    the ANYCODE_*_PROXY_URL engine carriers) never reaches the interactive
+ *    shell either; the host's own `process.env` is not touched.
  *  - Ring buffer: pty output is retained up to TERM_REPLAY_MAX_BYTES (256 KiB),
  *    trimmed from the HEAD by bytes, and replayed on a reattach so a renderer
 
@@ -33,6 +37,7 @@
  */
 
 import { z } from "zod";
+import { buildChildEnv } from "@anycode/core/child-env";
 import type { WirePort } from "../shared/protocol.js";
 import { TERM_NAME, TERM_REPLAY_MAX_BYTES, type TermToUiMessage } from "../shared/terminal.js";
 import { describeError } from "./serialize.js";
@@ -272,8 +277,10 @@ export class TerminalManager {
         cols,
         rows,
         cwd: this.workspace,
-        // Read at spawn time so it is the LIVE post-scrub process.env in prod.
-        env: this.injectedEnv ?? process.env,
+        // Read at spawn time so it is the LIVE post-scrub process.env in prod,
+        // then scrubbed per child (TASK.135): a credentialed proxy URL and the
+        // engine proxy carriers never reach the interactive shell.
+        env: buildChildEnv(this.injectedEnv ?? process.env),
         name: TERM_NAME,
       });
     } catch (error) {

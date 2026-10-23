@@ -19,10 +19,11 @@
  * it — the editor learns only `passwordSet: boolean`, derived from the
  * snapshot's `SecretStatus` list — the draft never seeds the field from
  * anything, and no verdict/error string this file builds can carry it (every
- * URL that reaches text goes through `maskProxyUrl`). The one honesty this
- * slice does NOT buy is the in-env half: the composed `user:pass@` URL still
- * rides `HTTPS_PROXY` into every child (TASK.135's perimeter, owner pending) —
- * the hint says so rather than implying the password is now contained.
+ * URL that reaches text goes through `maskProxyUrl`). The in-env half is
+ * TASK.135's scrub: the engines and the model connection still receive the
+ * composed `user:pass@` URL (they need it), while the agent's shell commands,
+ * the terminal and language servers do not receive a proxy URL that contains
+ * credentials at all — the hint states exactly that split.
  */
 import { useState } from "react";
 import type { ProviderConnection, SecretStatus } from "../../../shared/settings.js";
@@ -662,9 +663,9 @@ export function ProxySection({
           onChange={(e) => patch({ password: e.target.value, passwordCleared: false })}
         />
         <span className="settings-field-hint">
-          Stored in the encrypted vault under this profile's id, never in settings.json. It is still composed into the
-          proxy URL that every child process receives in its environment, where a shell command can read it — that half
-          is not fixed by this screen.
+          Stored in the encrypted vault under this profile's id, never in settings.json. The full proxy URL goes to the
+          Claude/Codex engines and the model connection; the agent's shell commands, the terminal and language servers
+          do not receive a proxy URL that contains credentials, so they connect directly.
         </span>
       </label>
 

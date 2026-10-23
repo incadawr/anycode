@@ -209,6 +209,36 @@ describe("TerminalManager — fake pty", () => {
     expect(s.spawns[0]?.env.PATH).toBe("/bin");
   });
 
+  // TASK.135 / Taskana 4074: the terminal shell is a non-engine child, so a
+  // credentialed proxy URL and the engine proxy carriers are stripped from its
+  // env at the spawn choke point — while clean proxies/exemptions pass through
+  // and the injected env object itself is never mutated.
+  it("strips credentialed proxy vars and engine carriers from the shell env (TASK.135)", async () => {
+    const s = makeSpawner();
+    const ch = makeChannel();
+    const env: NodeJS.ProcessEnv = {
+      PATH: "/bin",
+      HTTPS_PROXY: "http://u:s3cret@p:1",
+      http_proxy: "http://p:1",
+      NO_PROXY: "localhost",
+      ANYCODE_CODEX_PROXY_URL: "direct",
+    };
+    const envSnapshot = { ...env };
+    const mgr = new TerminalManager({ workspace: "/ws", env, loadPty: s.loadPty });
+    mgr.bindPort(ch.port);
+
+    ch.send({ type: "term_open", cols: TERM_DEFAULT_COLS, rows: TERM_DEFAULT_ROWS });
+    await flush();
+
+    expect(s.spawns[0]?.env.HTTPS_PROXY).toBeUndefined();
+    expect(s.spawns[0]?.env.ANYCODE_CODEX_PROXY_URL).toBeUndefined();
+    expect(s.spawns[0]?.env.http_proxy).toBe("http://p:1");
+    expect(s.spawns[0]?.env.NO_PROXY).toBe("localhost");
+    expect(s.spawns[0]?.env.PATH).toBe("/bin");
+    // buildChildEnv never mutates its input.
+    expect(env).toEqual(envSnapshot);
+  });
+
   it("streams pty output as term_data", async () => {
     const s = makeSpawner();
     const ch = makeChannel();

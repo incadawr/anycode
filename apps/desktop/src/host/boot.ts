@@ -512,6 +512,15 @@ function toPermissionRule(rule: { toolName: string; pattern?: string }): { toolN
  * never got a session still leaks nothing. Idempotent. Non-secret `ANYCODE_*`
  * vars (MODEL/BASE_URL/DB_PATH/AUTOMATION/...) are untouched.
  *
+ * PROXY credentials are deliberately NOT scrubbed here (TASK.135): the
+ * host's own `process.env` must keep the proxy family and the
+ * `ANYCODE_*_PROXY_URL` carriers because the engine clients read the live
+ * `process.env` at spawn time (`sourceEnv: process.env`) and core's own model
+ * traffic uses the env proxy (`NODE_USE_ENV_PROXY=1`). The non-engine children
+ * are filtered instead, per child, by `@anycode/core/child-env`
+ * (`buildChildEnv` in node-execution.ts and terminal.ts): a proxy URL that
+ * carries credentials never reaches a Bash child, the terminal or an LSP.
+ *
  * Deliberate small duplication: main/host-env.ts exports the equivalent
  * one-liner for main's OWN process.env (ruling §3.3). Host does not import
  * main/* (that would be a host->main layering violation — see this module's

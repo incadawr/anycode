@@ -433,4 +433,16 @@ describe("stripEngineProxyCarriers — main is the sole author of the namespace 
       expect(env[key]).toBe(before[key]);
     }
   });
+
+  // TASK.135 / Taskana 4074: every carrier name THIS module will ever declare
+  // must satisfy core's carrier predicate, so the non-engine child-env scrub
+  // (@anycode/core/child-env) drops exactly the namespace main writes — a new
+  // carrier added here without widening that predicate would leak through the
+  // scrub by construction, and this pin fails first.
+  it("every ENGINE_PROXY_CARRIER_NAMES entry satisfies isEngineProxyCarrierName (TASK.135)", async () => {
+    const { isEngineProxyCarrierName } = await import("@anycode/core/child-env");
+    for (const name of ENGINE_PROXY_CARRIER_NAMES) {
+      expect(isEngineProxyCarrierName(name)).toBe(true);
+    }
+  });
 });

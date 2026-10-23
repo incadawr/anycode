@@ -698,6 +698,54 @@ describe("buildClaudeChildEnv — engine proxy carrier (TASK.139)", () => {
     );
     expect(env.HTTPS_PROXY).toBe(CONNECTION_PROXY);
   });
+
+  // TASK.135 / Taskana 4074: engines are the DELIBERATE exception to the
+  // child-env proxy scrub — the credentialed proxy must reach the CLI.
+  it("keeps the full credentialed proxy family from the source env (TASK.135 exemption)", () => {
+    const env = buildClaudeChildEnv(
+      {
+        HOME: "/home/test",
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://u:s3cret@p:1",
+        https_proxy: "http://u:s3cret@p:1",
+      },
+      undefined,
+      "linux",
+    );
+    expect(env.HTTPS_PROXY).toBe("http://u:s3cret@p:1");
+    expect(env.https_proxy).toBe("http://u:s3cret@p:1");
+  });
+
+  it("a carrier's credentialed url still lands in all four family vars (TASK.135 exemption)", () => {
+    const carrier = encodeEngineProxyCarrier({ kind: "proxy", url: "http://u:s3cret@p:2" }) as string;
+    const env = buildClaudeChildEnv(
+      { HOME: "/home/test", PATH: "/usr/bin", [ENV_CLAUDE_PROXY_URL]: carrier },
+      undefined,
+      "linux",
+    );
+    for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
+      expect(env[name]).toBe("http://u:s3cret@p:2");
+    }
+  });
+
+  it("sanitizing the source first does not change the outcome: the builder still receives the credentialed carrier (TASK.135 boundary)", async () => {
+    const { sanitizeChildEnv } = await import("@anycode/core/child-env");
+    const source: NodeJS.ProcessEnv = {
+      HOME: "/home/test",
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://u:s3cret@p:1",
+      https_proxy: "http://u:s3cret@p:1",
+      [ENV_CLAUDE_PROXY_URL]: encodeEngineProxyCarrier({ kind: "proxy", url: "http://u:s3cret@p:2" }) as string,
+    };
+    // Even if a non-engine consumer sanitized this env, the engine child-env
+    // builder is what runs for the CLI — and it still sees the credentialed
+    // URL in the carrier (here: from the unsanitized source, as in production).
+    const sanitized = sanitizeChildEnv(source);
+    expect(sanitized.HTTPS_PROXY).toBeUndefined();
+    expect(sanitized[ENV_CLAUDE_PROXY_URL]).toBeUndefined();
+    const env = buildClaudeChildEnv(source, undefined, "linux");
+    expect(env.HTTPS_PROXY).toBe("http://u:s3cret@p:2");
+  });
 });
 
 describe("redactHomePaths (custody C2)", () => {
