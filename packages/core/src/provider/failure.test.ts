@@ -243,6 +243,13 @@ describe("classifyProviderFailure", () => {
     expect(isRetryableStreamError(error)).toBe(true);
   });
 
+  it("classifies an undici mid-stream socket drop (UND_ERR_SOCKET) as network, retryable (Taskana 4705 review)", () => {
+    const error = Object.assign(new TypeError("terminated"), { cause: { code: "UND_ERR_SOCKET" } });
+
+    expect(classifyProviderFailure(error)).toMatchObject({ code: "network", retryable: true });
+    expect(isRetryableStreamError(error)).toBe(true);
+  });
+
   it("classifies a network-level fetch failure (ECONNRESET) as network, retryable", () => {
     const error = Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } });
 

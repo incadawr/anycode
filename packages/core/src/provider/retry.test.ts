@@ -247,3 +247,47 @@ describe("isQuotaExhaustion — quota never auto-retries (Taskana 4705)", () => 
     expect(isRetryableStreamError(error)).toBe(false);
   });
 });
+
+describe("isQuotaExhaustion — rate limits stay retryable (Taskana 4705 review)", () => {
+  it("a 429 'quota ... per minute' rate limit is NOT quota and stays retryable", () => {
+    const error = apiCallError({ statusCode: 429, isRetryable: false });
+    error.message = "RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'requests' per minute";
+    expect(isQuotaExhaustion(error)).toBe(false);
+    expect(isRetryableStreamError(error)).toBe(true);
+  });
+
+  it("a 429 quota-worded error carrying Retry-After is a rate limit, NOT quota, and stays retryable", () => {
+    const error = apiCallError({ statusCode: 429, isRetryable: false, responseHeaders: { "retry-after": "5" } });
+    error.message = "Quota exceeded for this key";
+    expect(isQuotaExhaustion(error)).toBe(false);
+    expect(isRetryableStreamError(error)).toBe(true);
+  });
+
+  it("a 429 'rate limit' message is NOT quota even when it names a quota", () => {
+    const error = apiCallError({ statusCode: 429, isRetryable: false });
+    error.message = "rate limit reached, quota window resets soon";
+    expect(isQuotaExhaustion(error)).toBe(false);
+    expect(isRetryableStreamError(error)).toBe(true);
+  });
+
+  it("a bare 1308 inside an arbitrary body is NOT a quota code", () => {
+    const error = apiCallError({ statusCode: 429, isRetryable: false });
+    error.message = "Too many requests; request offset 1308 in body";
+    expect(isQuotaExhaustion(error)).toBe(false);
+    expect(isRetryableStreamError(error)).toBe(true);
+  });
+
+  it("z.ai quota code 1308 in structured data stays quota even with Retry-After", () => {
+    const error = new APICallError({
+      message: "request failed",
+      url: "https://api.example.com/v1/messages",
+      requestBodyValues: {},
+      statusCode: 429,
+      isRetryable: false,
+      responseHeaders: { "retry-after": "5" },
+      data: { error: { code: "1308" } },
+    });
+    expect(isQuotaExhaustion(error)).toBe(true);
+    expect(isRetryableStreamError(error)).toBe(false);
+  });
+});

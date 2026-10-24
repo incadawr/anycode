@@ -30,7 +30,7 @@
 import { APICallError } from "ai";
 import { classifyNetworkConfigurationFailure } from "./network-failure.js";
 import type { ModelStreamEvent } from "../types/events.js";
-import { isRetryableStreamError, QUOTA_PATTERN, USAGE_LIMIT_PATTERN, matchesFailureText } from "./retry.js";
+import { isQuotaExhaustion, isRetryableStreamError, USAGE_LIMIT_PATTERN, matchesFailureText } from "./retry.js";
 
 /** True when `e` is model-generated output (content/reasoning/tool/finish), false for `start`/`error`/`stream_retry`. */
 export function isModelOutputEvent(e: ModelStreamEvent): boolean {
@@ -92,7 +92,8 @@ export interface ProviderFailureClassification {
    * `isRetryableStreamError` (retry.ts) and is observable via the terminal
    * metadata's `attemptsMade`; the two fields intentionally diverge (see
    * `classifyProviderFailure`).
-   */  retryable: boolean;
+   */
+  retryable: boolean;
   safe: ProviderFailureSafe;
 }
 
@@ -125,12 +126,13 @@ const RETRYABLE_NETWORK_CODES = new Set([
   "ENOTFOUND",
   "EAI_AGAIN",
   "EPIPE",
+  "UND_ERR_SOCKET",
 ]);
 
 /** The AI SDK's undici-backed connect failure (TASK.33 owner dogfood: `api.z.ai` unreachable). */
 const CONNECT_TIMEOUT_PATTERN = /connect timeout error|cannot connect to api/i;
 
-// Taskana 4705: QUOTA_PATTERN, USAGE_LIMIT_PATTERN and matchesFailureText now
+// Taskana 4705: the quota patterns, USAGE_LIMIT_PATTERN and matchesFailureText
 // live in retry.ts (single source) so isQuotaExhaustion — the AUTO-retry
 // refusal — and the classification below share the exact same detection.
 
@@ -169,11 +171,6 @@ function isNetworkFailure(error: unknown, message: string): boolean {
     RETRYABLE_NETWORK_CODES.has(extractErrorCode(error) ?? "") ||
     RETRYABLE_NETWORK_CODES.has(extractErrorCode((error as { cause?: unknown })?.cause) ?? "")
   );
-}
-
-/** Quota exhaustion rides as a 429 on some providers (z.ai code 1308), or arrives with no status code at all. */
-function isQuotaFailure(error: unknown, message: string): boolean {
-  return matchesFailureText(error, message, QUOTA_PATTERN);
 }
 
 /**
@@ -216,7 +213,9 @@ export function classifyProviderFailure(error: unknown): ProviderFailureClassifi
   // W11-FIX). This preserves the two documented quota cases — z.ai's 1308
   // riding as a 429, and a status-less quota message — while a 401/403/5xx
   // whose message happens to mention "quota" classifies on its actual status.
-  if ((statusCode === undefined || statusCode === 429) && isQuotaFailure(error, message)) {
+  // Quota rides as a 429 on some providers (z.ai code 1308) or arrives with no
+  // status code at all; isQuotaExhaustion also keeps a rate-limit 429 out of it.
+  if ((statusCode === undefined || statusCode === 429) && isQuotaExhaustion(error)) {
     return build("quota", false);
   }
   // The one 403 carve-out from M3: a kimi-class subscription reports REAL quota

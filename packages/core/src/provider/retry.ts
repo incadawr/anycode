@@ -36,10 +36,11 @@ export interface RetryPolicy {
    * Whole-step replays allowed after a MID-STREAM failure (real model output
    * was already delivered). The replay discards the partial output — tools of
    * the discarded attempt were never dispatched (dispatch runs after the
-   * step's stream ends), so a replay cannot double-execute a tool call. These
-   * replays increment the SAME attempt counter as pre-content retries and are
-   * additionally bounded by this number per streamText call. 0 disables
-   * (pre-4705 behavior). Default DEFAULT_MIDSTREAM_RETRIES.
+   * step's stream ends), so a replay cannot double-execute a tool call. Replays
+   * count INSIDE maxRetries (same attempt counter, same announced total) and
+   * this number caps how many of them one streamText call may spend. 0 disables
+   * (pre-4705 behavior). Default DEFAULT_MIDSTREAM_RETRIES. A completed step
+   * (a non-error finish was seen) is never replayed.
    */
   midStreamRetries: number;
 }
@@ -106,8 +107,18 @@ export function isRetryableStreamError(error: unknown): boolean {
   return hasRetryableStatusCode(extractStatusCode(error));
 }
 
-/** Matches a quota-exhaustion message, or the z.ai-class numeric quota error code (TASK.33 §W7b). */
-export const QUOTA_PATTERN = /\bquota\b|\b1308\b/i;
+/** Quota wording in a message (or stringified `data`). Also matches a rate limit that names a quota: see isQuotaExhaustion. */
+export const QUOTA_WORD_PATTERN = /\bquota\b/i;
+
+/**
+ * The z.ai-class numeric quota code (TASK.33 §W7b), only where it is named as a
+ * code: `code 1308`, `"code":"1308"`, `code: 1308`. A bare `1308` is not matched,
+ * so an unrelated number in an error body cannot refuse a retry (Taskana 4705 review).
+ */
+export const QUOTA_CODE_PATTERN = /\bcode\W{0,4}1308\b/i;
+
+/** Per-minute / rate-limit wording: a transient 429, even when it also says "quota". */
+export const RATE_LIMIT_PATTERN = /per[ _-]?minute|rate[ _-]?limit/i;
 
 /**
  * Kimi-class subscription exhaustion rides as a 403 whose message explicitly
@@ -136,13 +147,21 @@ export function matchesFailureText(error: unknown, message: string, pattern: Reg
  * pound the API. Mirrors classifyProviderFailure's quota branch (failure.ts)
  * but lives here so isRetryableStreamError — the AUTO-retry decision — can
  * refuse quota before the 429 status check classifies it retryable.
+ *
+ * A 429 that is really a transient rate limit stays retryable even when it
+ * says "quota" (Taskana 4705 review): a per-minute / rate-limit wording, or a
+ * Retry-After header. The explicit z.ai code 1308 always counts as quota.
  */
 export function isQuotaExhaustion(error: unknown): boolean {
   const statusCode = extractStatusCode(error);
   if (statusCode !== undefined && statusCode !== 429 && statusCode !== 403) return false;
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   if (statusCode === 403) return matchesFailureText(error, message, USAGE_LIMIT_PATTERN);
-  return matchesFailureText(error, message, QUOTA_PATTERN);
+  if (matchesFailureText(error, message, QUOTA_CODE_PATTERN)) return true;
+  if (!matchesFailureText(error, message, QUOTA_WORD_PATTERN)) return false;
+  const isRateLimit =
+    statusCode === 429 && (extractRetryAfterMs(error) !== undefined || matchesFailureText(error, message, RATE_LIMIT_PATTERN));
+  return !isRateLimit;
 }
 
 function hasRetryableStatusCode(statusCode: number | undefined): boolean {
