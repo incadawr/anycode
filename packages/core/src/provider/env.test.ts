@@ -12,6 +12,7 @@ import {
   ENV_IMAGE_INPUT,
   ENV_MAX_RETRIES,
   ENV_MAX_OUTPUT_TOKENS,
+  ENV_NETWORK_RETRY_BUDGET_MS,
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
   ENV_INCLUDE_USAGE,
@@ -207,6 +208,17 @@ describe("loadEnvConfig", () => {
     expect(config.contextWindowTokens).toBe(8000);
     expect(config.maxRetries).toBe(0);
     expect(config.dbPath).toBe("/tmp/anycode-test.sqlite");
+  });
+
+  it("ANYCODE_NETWORK_RETRY_BUDGET_MS (Taskana 4705): valid integer passes through; absent → undefined; non-integer throws naming the knob", () => {
+    const base = { [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" } as const;
+    expect(loadEnvConfig(envWith({ ...base, [ENV_NETWORK_RETRY_BUDGET_MS]: "90000" })).networkRetryBudgetMs).toBe(
+      90_000,
+    );
+    expect(loadEnvConfig(envWith({ ...base })).networkRetryBudgetMs).toBeUndefined();
+    expect(() => loadEnvConfig(envWith({ ...base, [ENV_NETWORK_RETRY_BUDGET_MS]: "soon" }))).toThrow(
+      /ANYCODE_NETWORK_RETRY_BUDGET_MS/,
+    );
   });
 
   it("parses ANYCODE_CONTEXT_WINDOW_MODEL as an optional string, trimmed (TASK.142)", () => {

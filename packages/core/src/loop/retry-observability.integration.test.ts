@@ -112,7 +112,9 @@ describe("AgentLoop terminal retry metadata over a real AiSdkModelPort (TASK.33 
       baseUrl,
       apiKey: "test-key",
       model: "claude-x",
-      retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0 },
+      // Taskana 4705: default policy now carries a 5-min network budget which
+      // an RST rides; pinned off so this stays a pure count-exhaustion pin.
+      retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0, networkRetryBudgetMs: 0 },
     };
     const loop = makeLoop(new AiSdkModelPort(config));
 
@@ -228,5 +230,119 @@ describe("AgentLoop terminal retry metadata over a real AiSdkModelPort (TASK.33 
     expect(events.some((e) => e.type === "stream_retry")).toBe(true);
     expect(events.some((e) => e.type === "error")).toBe(false);
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "cancelled" });
+  });
+
+  // ── Taskana 4705: bounded mid-stream whole-step replay + quota refusal ──
+
+  /** Serializes SSE chunks the way the stream-error-recovery harness does. */
+  function serializeSse(chunks: ReadonlyArray<Record<string, unknown>>): string {
+    return chunks.map((chunk) => `event: ${chunk.type}\ndata: ${JSON.stringify(chunk)}\n\n`).join("");
+  }
+
+  it("mid-stream replay recovers a socket cut after a text delta (Taskana 4705)", async () => {
+    let hits = 0;
+    server = createServer((req, res) => {
+      hits += 1;
+      req.resume();
+      if (hits === 1) {
+        // Hit 1: a real partial stream, then the socket is destroyed mid-text.
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+        res.write(
+          serializeSse([
+            {
+              type: "message_start",
+              message: { id: "msg_1", model: "glm-5.2", role: "assistant", usage: { input_tokens: 12 } },
+            },
+            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+            { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial prefix" } },
+          ]),
+        );
+        res.destroy();
+        return;
+      }
+      // Hit 2: a full valid stream.
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      res.end(
+        serializeSse([
+          {
+            type: "message_start",
+            message: { id: "msg_2", model: "glm-5.2", role: "assistant", usage: { input_tokens: 12 } },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "recovered whole step" } },
+          { type: "content_block_stop", index: 0 },
+          { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 9 } },
+          { type: "message_stop" },
+        ]),
+      );
+    });
+    const baseUrl = `${await listen(server)}/v1`;
+
+    const config: AnthropicEndpointConfig = {
+      transport: "anthropic-messages",
+      baseUrl,
+      apiKey: "test-key",
+      model: "glm-5.2",
+      retry: { maxRetries: 2, midStreamRetries: 2, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0 },
+    };
+    const loop = makeLoop(new AiSdkModelPort(config));
+
+    const events = await collect(loop.runTurn("hi"));
+
+    // The cut after the delta fired exactly one mid-stream replay...
+    expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(1);
+    // ...the replay recovered, the turn completed...
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    // ...and the assistant history carries ONLY the second attempt's text —
+    // the loop resets its accumulators on stream_retry, so the discarded
+    // attempt's partial prefix never doubles into the written history.
+    const messages = loop.history.toMessages();
+    const assistant = messages.find((m) => m.role === "assistant");
+    expect(assistant).toBeDefined();
+    const parts = assistant?.content as unknown as Array<{ type: string; text?: string }>;
+    const text = parts
+      .filter((p) => p.type === "text")
+      .map((p) => p.text)
+      .join("");
+    expect(text).toBe("recovered whole step");
+    expect(text).not.toContain("partial prefix");
+  });
+
+  it("quota 429 (z.ai code 1308) exhausts immediately: no retries, terminal quota error (Taskana 4705)", async () => {
+    server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        // Top-level type:"error" is required by the SDK's anthropic error
+        // schema — without it the message falls back to bare statusText.
+        res.writeHead(429, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            type: "error",
+            error: { type: "rate_limit_error", message: "Insufficient quota for this account (code 1308)" },
+          }),
+        );
+      });
+    });
+    const baseUrl = `${await listen(server)}/v1`;
+
+    const config: AnthropicEndpointConfig = {
+      transport: "anthropic-messages",
+      baseUrl,
+      apiKey: "test-key",
+      model: "glm-5.2",
+      retry: { maxRetries: 8, baseDelayMs: 1, maxDelayMs: 1 },
+    };
+    const loop = makeLoop(new AiSdkModelPort(config));
+
+    const events = await collect(loop.runTurn("hi"));
+
+    expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(0);
+    const errorEvent = findErrorEvent(events);
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent?.retry).toMatchObject({
+      code: "quota",
+      retryable: false,
+    });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
   });
 });

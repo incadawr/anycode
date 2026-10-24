@@ -141,6 +141,35 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(env.ANYCODE_MAX_TURNS).toBe("100");
   });
 
+  it("projects tools.maxRetries / tools.networkRetryBudgetMs into ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (Taskana 4705; env > settings)", async () => {
+    // settings fill when the boot env is blank
+    const fromSettings = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ tools: { maxRetries: 8, networkRetryBudgetMs: 300000 } }),
+      getSecret: noSecret,
+    });
+    expect(fromSettings.ANYCODE_MAX_RETRIES).toBe("8");
+    expect(fromSettings.ANYCODE_NETWORK_RETRY_BUDGET_MS).toBe("300000");
+
+    // a pre-set env wins over the settings value (fillFromSettings only fills blanks)
+    const fromEnv = await buildHostEnv({
+      bootEnv: { ANYCODE_MAX_RETRIES: "3", ANYCODE_NETWORK_RETRY_BUDGET_MS: "60000" },
+      settings: settings({ tools: { maxRetries: 8, networkRetryBudgetMs: 300000 } }),
+      getSecret: noSecret,
+    });
+    expect(fromEnv.ANYCODE_MAX_RETRIES).toBe("3");
+    expect(fromEnv.ANYCODE_NETWORK_RETRY_BUDGET_MS).toBe("60000");
+
+    // neither set → the variables stay absent (defaults apply inside the port)
+    const unset = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ tools: {} }),
+      getSecret: noSecret,
+    });
+    expect(unset.ANYCODE_MAX_RETRIES).toBeUndefined();
+    expect(unset.ANYCODE_NETWORK_RETRY_BUDGET_MS).toBeUndefined();
+  });
+
   it("projects tools.grepBackend into ANYCODE_GREP_BACKEND (Taskana 4160; env > settings)", async () => {
     // settings fill when the boot env is blank
     const fromSettings = await buildHostEnv({

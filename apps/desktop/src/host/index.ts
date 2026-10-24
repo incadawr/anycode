@@ -317,6 +317,7 @@ import { PROVIDER_QUOTA_EVENT_TYPE, type ProviderQuotaEvent } from "../shared/pr
 import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
 import { PREVIEW_ARTIFACTS_TYPE } from "../shared/preview.js";
 import type { PreviewEventMessage, PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
+import type { RetryPolicy } from "@anycode/core";
 import {
   WORKTREE_CLEANUP_ENV,
   WORKTREE_TRANSITION_MESSAGE_TYPE,
@@ -2377,6 +2378,12 @@ async function boot(): Promise<void> {
     // session meta resolves AFTER this factory is first used, so the flag
     // starts argv-only and is widened (with a port rebuild) once it is known.
     let childRetryBoot = args.child !== undefined;
+    // Taskana 4705: main sessions honor ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS
+    // (filled from settings.tools by host-env); children keep the Taskana 4226 budget policy.
+    const envRetry: Partial<RetryPolicy> = {
+      ...(envConfig.maxRetries !== undefined ? { maxRetries: envConfig.maxRetries } : {}),
+      ...(envConfig.networkRetryBudgetMs !== undefined ? { networkRetryBudgetMs: envConfig.networkRetryBudgetMs } : {}),
+    };
     const modelPortFactory = (m: string): ModelPort =>
       new AiSdkModelPort(
         {
@@ -2387,7 +2394,7 @@ async function boot(): Promise<void> {
           ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
-          ...(childRetryBoot ? { retry: childRetryPolicy(true) } : {}),
+          ...(childRetryBoot ? { retry: childRetryPolicy(true) } : Object.keys(envRetry).length > 0 ? { retry: envRetry } : {}),
           // Taskana 4090: setting an observer is what arms the factories'
           // wrapped fetch; the port itself captures the update and yields it
           // as a `provider_quota` event, so the host needs no state of its own.

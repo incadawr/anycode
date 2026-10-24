@@ -556,8 +556,10 @@ describe.each(KITS)("cross-transport contract: $transport", (kit) => {
     });
     const flakyBaseUrl = `${await listen(flakyServer)}/v1`;
     try {
+      // Taskana 4705: default policy now 8 retries + a 5-min network budget;
+      // budget pinned off so this test keeps asserting pure count-exhaustion.
       const port = new AiSdkModelPort(
-        kit.buildConfig(flakyBaseUrl, { retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0 } }),
+        kit.buildConfig(flakyBaseUrl, { retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0, networkRetryBudgetMs: 0 } }),
       );
       const events = await collect(port.streamText(kit.buildRequest()));
 

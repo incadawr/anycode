@@ -1,8 +1,14 @@
 /**
- * Stream retry policy (design §2.9). The AiSdkModelPort retries a failed step
- * ONLY while no model output has reached the consumer (connect/reset/HTTP-error-
- * before-content failures are safe to replay whole; mid-stream retry is Phase 2).
- * Backoff waits are abortable and each retry is announced with a stream_retry event.
+ * Stream retry policy (design §2.9, Taskana 4705). The AiSdkModelPort retries
+ * a failed step while no model output has reached the consumer (connect/reset/
+ * HTTP-error-before-content failures are safe to replay whole) AND — since
+ * Taskana 4705 — replays the whole step a bounded number of times after a
+ * MID-STREAM failure, discarding the partial output (the discarded attempt's
+ * tools were never dispatched: dispatch runs after the step's stream ends, so
+ * a replay cannot double-execute a tool call). A transient-network wall-clock
+ * budget (`networkRetryBudgetMs`) applies to every session by default and
+ * lets pre-content network retries outlive `maxRetries`. Backoff waits are
+ * abortable and each retry is announced with a stream_retry event.
  */
 
 import { APICallError } from "ai";
@@ -22,18 +28,32 @@ export interface RetryPolicy {
    * while a pre-content failure is `isTransientNetworkError` and less than
    * this much time has passed since the step's first failure, retrying goes on
    * past `maxRetries` (backoff still capped at `maxDelayMs`). HTTP-status
-   * failures never use it. 0 = off (default); ignored when `maxRetries` is 0.
+   * failures never use it. 0 = off; ignored when `maxRetries` is 0.
+   * Default 300 000 (Taskana 4705): applies to every session, not just children.
    */
   networkRetryBudgetMs: number;
+  /**
+   * Whole-step replays allowed after a MID-STREAM failure (real model output
+   * was already delivered). The replay discards the partial output — tools of
+   * the discarded attempt were never dispatched (dispatch runs after the
+   * step's stream ends), so a replay cannot double-execute a tool call. These
+   * replays increment the SAME attempt counter as pre-content retries and are
+   * additionally bounded by this number per streamText call. 0 disables
+   * (pre-4705 behavior). Default DEFAULT_MIDSTREAM_RETRIES.
+   */
+  midStreamRetries: number;
 }
 
+export const DEFAULT_MIDSTREAM_RETRIES = 2;
+
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
-  maxRetries: 3,
+  maxRetries: 8,
   baseDelayMs: 1_000,
-  maxDelayMs: 30_000,
+  maxDelayMs: 60_000,
   retryAfterCapMs: DEFAULT_RETRY_AFTER_CAP_MS,
   stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
-  networkRetryBudgetMs: 0,
+  networkRetryBudgetMs: 300_000,
+  midStreamRetries: DEFAULT_MIDSTREAM_RETRIES,
 };
 
 /** HTTP status codes worth retrying: request timeout, rate limit, and server-side 5xx (529 = Anthropic "overloaded"). */
@@ -70,9 +90,12 @@ export function isTransientNetworkError(error: unknown): boolean {
 /**
  * Retryable: APICallError.isRetryable, HTTP 408/429/500/502/503/504/529, and
  * network-level failures (fetch failed / ECONNRESET). 4xx auth/validation
- * errors are NOT retryable.
+ * errors are NOT retryable. Quota exhaustion is refused BEFORE the status
+ * check (Taskana 4705): a quota-429 would otherwise ride the retryable
+ * status set and pound an exhausted account.
  */
 export function isRetryableStreamError(error: unknown): boolean {
+  if (isQuotaExhaustion(error)) return false;
   if (classifyNetworkConfigurationFailure(error) !== undefined) return false;
   if (APICallError.isInstance(error)) {
     return error.isRetryable || hasRetryableStatusCode(error.statusCode);
@@ -81,6 +104,45 @@ export function isRetryableStreamError(error: unknown): boolean {
     return true;
   }
   return hasRetryableStatusCode(extractStatusCode(error));
+}
+
+/** Matches a quota-exhaustion message, or the z.ai-class numeric quota error code (TASK.33 §W7b). */
+export const QUOTA_PATTERN = /\bquota\b|\b1308\b/i;
+
+/**
+ * Kimi-class subscription exhaustion rides as a 403 whose message explicitly
+ * names a usage limit ("You've reached your usage limit for this billing
+ * cycle"). The phrase is deliberately narrower than QUOTA_PATTERN so a policy
+ * denial that merely mentions "quota" still classifies as forbidden (M3).
+ */
+export const USAGE_LIMIT_PATTERN = /usage limit|billing cycle/i;
+
+/** Tests the message, and — for structured provider errors — the stringified `data` payload too. */
+export function matchesFailureText(error: unknown, message: string, pattern: RegExp): boolean {
+  if (pattern.test(message)) return true;
+  if (APICallError.isInstance(error) && error.data !== undefined) {
+    try {
+      return pattern.test(JSON.stringify(error.data));
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Quota exhaustion (z.ai 1308-on-429 text, kimi 403 usage-limit, or the code
+ * carried only in structured `data`): retrying cannot succeed and must not
+ * pound the API. Mirrors classifyProviderFailure's quota branch (failure.ts)
+ * but lives here so isRetryableStreamError — the AUTO-retry decision — can
+ * refuse quota before the 429 status check classifies it retryable.
+ */
+export function isQuotaExhaustion(error: unknown): boolean {
+  const statusCode = extractStatusCode(error);
+  if (statusCode !== undefined && statusCode !== 429 && statusCode !== 403) return false;
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  if (statusCode === 403) return matchesFailureText(error, message, USAGE_LIMIT_PATTERN);
+  return matchesFailureText(error, message, QUOTA_PATTERN);
 }
 
 function hasRetryableStatusCode(statusCode: number | undefined): boolean {

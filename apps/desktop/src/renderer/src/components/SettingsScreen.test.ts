@@ -229,6 +229,18 @@ describe("buildToolsPatch", () => {
     expect(buildToolsPatch("4", "30000", "100")).toEqual({ tools: { concurrency: 4, stallTimeoutMs: 30000, maxTurns: 100 } });
   });
 
+  it("includes maxRetries / networkRetryBudgetMs when supplied (Taskana 4705)", () => {
+    expect(buildToolsPatch("4", "30000", "100", "", "8", "300000")).toEqual({
+      tools: { concurrency: 4, stallTimeoutMs: 30000, maxTurns: 100, maxRetries: 8, networkRetryBudgetMs: 300000 },
+    });
+  });
+
+  it("blank retry fields omit them entirely (Taskana 4705)", () => {
+    expect(buildToolsPatch("4", "30000", "100", "", "", "")).toEqual({
+      tools: { concurrency: 4, stallTimeoutMs: 30000, maxTurns: 100 },
+    });
+  });
+
   it("omits a blank/unparseable field entirely", () => {
     expect(buildToolsPatch("", "30000")).toEqual({ tools: { stallTimeoutMs: 30000 } });
     expect(buildToolsPatch("4", "")).toEqual({ tools: { concurrency: 4 } });

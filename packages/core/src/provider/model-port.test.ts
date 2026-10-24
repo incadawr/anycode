@@ -351,16 +351,17 @@ describe("AiSdkModelPort — retry before model output (thrown exception)", () =
   });
 });
 
-describe("AiSdkModelPort — no retry after model output", () => {
+describe("AiSdkModelPort — no retry after model output (midStreamRetries disabled)", () => {
   it("propagates a mid-stream thrown error without retrying once MODEL OUTPUT has been yielded", async () => {
     const error = retryableError();
     // start alone no longer closes the gate (W7a); a text_delta does — the
-    // subsequent throw must NOT retry (mid-stream replay could duplicate text).
+    // subsequent throw must NOT retry when replay is disabled
+    // (midStreamRetries: 0 = pre-4705 behavior).
     mockStreamText.mockImplementationOnce(() =>
       fakeResult([part(startPart), part({ type: "text-delta", id: "t1", text: "hi" }), throwsWith(error)]),
     );
 
-    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 0 }));
     const iterator = port.streamText(baseRequest)[Symbol.asyncIterator]();
 
     expect((await iterator.next()).value).toEqual({ type: "start" });
@@ -401,9 +402,12 @@ describe("AiSdkModelPort — retryable/non-retryable `error` stream parts", () =
   });
 });
 
-describe("AiSdkModelPort — W7a model-output retry gate", () => {
+describe("AiSdkModelPort — W7a model-output retry gate (midStreamRetries disabled)", () => {
   const textDelta = (text: string) => ({ type: "text-delta", id: "t1", text });
   const toolCallPart = { type: "tool-call", toolCallId: "call_1", toolName: "Read", input: { file_path: "/a.txt" } };
+  // Taskana 4705: these pin the gate for users who disable replay
+  // (midStreamRetries: 0); with replay on, a bounded mid-stream retry fires.
+  const gateConfig = () => baseConfig({ maxRetries: 3, midStreamRetries: 0 });
 
   it("start → text_delta → retryable error part ⇒ NO retry (content closed the gate)", async () => {
     const error = retryableError();
@@ -411,7 +415,7 @@ describe("AiSdkModelPort — W7a model-output retry gate", () => {
       fakeResult([part(startPart), part(textDelta("hi")), part({ type: "error", error })]),
     );
 
-    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const port = new AiSdkModelPort(gateConfig());
     const events = await collect(port.streamText(baseRequest));
 
     expect(events.some((e) => e.type === "stream_retry")).toBe(false);
@@ -429,7 +433,7 @@ describe("AiSdkModelPort — W7a model-output retry gate", () => {
       fakeResult([part(startPart), part(toolCallPart), part({ type: "error", error })]),
     );
 
-    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const port = new AiSdkModelPort(gateConfig());
     const events = await collect(port.streamText(baseRequest));
 
     expect(events.some((e) => e.type === "stream_retry")).toBe(false);
@@ -445,7 +449,7 @@ describe("AiSdkModelPort — W7a model-output retry gate", () => {
       fakeResult([part(startPart), part(finishPart), part({ type: "error", error })]),
     );
 
-    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const port = new AiSdkModelPort(gateConfig());
     const events = await collect(port.streamText(baseRequest));
 
     expect(events.some((e) => e.type === "stream_retry")).toBe(false);
@@ -725,7 +729,9 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     expect(retryEvent.value).toMatchObject({
       type: "stream_retry",
       attempt: 1,
-      maxAttempts: 3,
+      // Taskana 4705: a stall after real output is a mid-stream replay, so the
+      // announced headroom includes midStreamRetries (3 + 2).
+      maxAttempts: 5,
       // W7b-FIX #3: the stall timeout is LOCALLY generated (never provider
       // text), so it gets its own fixed whitelist reason instead of being
       // routed through classifyProviderFailure's generic "unknown" ->
@@ -1300,9 +1306,9 @@ describe("AiSdkModelPort — networkRetryBudgetMs (transient network outage)", (
     expect(events.at(-1)?.type).toBe("finish");
   });
 
-  it("with the default policy the same outage fails after 3 retries", async () => {
+  it("fails after 3 retries when maxRetries is an explicit 3 and the budget is off (Taskana 4705: default is now 8 + budget)", async () => {
     failThenSucceed(9, connectTimeout);
-    const port = new AiSdkModelPort(baseConfig(slow));
+    const port = new AiSdkModelPort(baseConfig({ ...slow, maxRetries: 3, networkRetryBudgetMs: 0 }));
     const result = await settle(collect(port.streamText(baseRequest)), 200_000);
     expect(result.ok).toBe(false);
     expect(mockStreamText).toHaveBeenCalledTimes(4);
@@ -1316,9 +1322,12 @@ describe("AiSdkModelPort — networkRetryBudgetMs (transient network outage)", (
     expect(mockStreamText.mock.calls.length).toBeLessThan(10);
   });
 
-  it.each([429, 401, 403, 500])("never extends an HTTP %i beyond maxRetries", async (status) => {
+  it.each([429, 401, 403, 500])(`never extends an HTTP %i beyond maxRetries`, async (status) => {
     failThenSucceed(9, () => statusError(status));
-    const port = new AiSdkModelPort(baseConfig({ ...slow, networkRetryBudgetMs: 180_000 }));
+    // Taskana 4705: maxRetries pinned to 3 (the new default is 8) so the
+    // <= 4 assertion keeps its original meaning: status errors never ride
+    // the network budget.
+    const port = new AiSdkModelPort(baseConfig({ ...slow, maxRetries: 3, networkRetryBudgetMs: 180_000 }));
     const result = await settle(collect(port.streamText(baseRequest)), 200_000);
     expect(result.ok).toBe(false);
     expect(mockStreamText.mock.calls.length).toBeLessThanOrEqual(4);
@@ -1479,5 +1488,120 @@ describe("AiSdkModelPort — provider_quota emission (Taskana 4090)", () => {
     const seen = mockCreateLanguageModel.mock.calls[0]![0] as EndpointConfig;
     expect(seen).toBe(config); // identity passthrough — no rewrap, no spread
     expect(seen.onQuotaHeaders).toBeUndefined();
+describe("AiSdkModelPort — mid-stream replay (Taskana 4705)", () => {
+  const textDelta = (text: string) => ({ type: "text-delta", id: "t1", text });
+  const toolCallPart = { type: "tool-call", toolCallId: "call_1", toolName: "Read", input: { file_path: "/a.txt" } };
+
+  it("midStreamRetries: 0 preserves pre-4705 behavior — an error part after a text_delta never retries", async () => {
+    const error = retryableError();
+    mockStreamText.mockImplementationOnce(() =>
+      fakeResult([part(startPart), part(textDelta("hi")), part({ type: "error", error })]),
+    );
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 0 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+    expect(events).toEqual([
+      { type: "start" },
+      { type: "text_delta", id: "t1", text: "hi" },
+      { type: "error", error },
+    ]);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("midStreamRetries: 2 replays the whole step after a mid-stream error part and recovers", async () => {
+    const error = retryableError();
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("hi")), part({ type: "error", error })]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("hi")), part(finishPart)]));
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 2 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    // maxAttempts = maxRetries(3) + midStreamRetries(2) — a mid-stream replay fired.
+    expect(events).toEqual([
+      { type: "start" },
+      { type: "text_delta", id: "t1", text: "hi" },
+      { type: "stream_retry", attempt: 1, maxAttempts: 5, delayMs: expect.any(Number), reason: expect.any(String) },
+      { type: "start" },
+      { type: "text_delta", id: "t1", text: "hi" },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+    ]);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
+  it("both attempts dying mid-stream yields exactly 2 stream_retry events, then a terminal error (3 calls)", async () => {
+    mockStreamText.mockImplementation(() =>
+      fakeResult([part(startPart), part(textDelta("hi")), part({ type: "error", error: retryableError() })]),
+    );
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 2 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    const retries = events.filter((e) => e.type === "stream_retry");
+    expect(retries).toHaveLength(2);
+    expect(events.at(-1)?.type).toBe("error");
+    expect(mockStreamText).toHaveBeenCalledTimes(3);
+  });
+
+  it("a tool-call mid-stream failure replays, and exactly ONE tool_call event follows the last stream_retry", async () => {
+    const error = retryableError();
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(toolCallPart), part({ type: "error", error })]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(toolCallPart), part(finishPart)]));
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 1 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    const lastRetryIndex = events.map((e) => e.type).lastIndexOf("stream_retry");
+    expect(lastRetryIndex).toBeGreaterThan(-1);
+    const afterRetry = events.slice(lastRetryIndex + 1);
+    expect(afterRetry.filter((e) => e.type === "tool_call")).toHaveLength(1);
+    // The pre-replay attempt's tool_call was delivered but its tools were never
+    // dispatched by the consumer (the loop resets accumulators on stream_retry);
+    // the replayed attempt re-yields the call and it alone reaches dispatch.
+    expect(events.filter((e) => e.type === "tool_call")).toHaveLength(2);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
+  it("a quota-429 error part never auto-retries, even mid-stream-disabled defaults aside (maxRetries 8, replay on)", async () => {
+    const quota = new APICallError({
+      message: "Insufficient quota for this account (code 1308)",
+      url: "https://api.example.com/v1/messages",
+      requestBodyValues: {},
+      statusCode: 429,
+      isRetryable: false,
+    });
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), part({ type: "error", error: quota })]));
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 8, midStreamRetries: 2 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+    expect(events).toEqual([{ type: "start" }, { type: "error", error: quota }]);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("honest counts: a pre-content failure reports maxAttempts 2, a later mid-stream failure reports 4 (Taskana 4705)", async () => {
+    mockStreamText
+      // Attempt 1 fails PRE-content: maxAttempts 2 (mid-stream headroom not yet visible).
+      .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(retryableError())]))
+      // Attempt 2 fails MID-stream: a replay is spent, so N grows to 2 + 2.
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("hi")), throwsWith(retryableError())]))
+      // Attempt 3 (the mid-stream replay) succeeds.
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 2, midStreamRetries: 2 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    const retries = events.filter((e) => e.type === "stream_retry");
+    expect(retries).toHaveLength(2);
+    expect(retries[0]).toMatchObject({ attempt: 1, maxAttempts: 2 });
+    expect(retries[1]).toMatchObject({ attempt: 2, maxAttempts: 4 });
+    expect(events.at(-1)?.type).toBe("finish");
+    expect(mockStreamText).toHaveBeenCalledTimes(3);
   });
 });

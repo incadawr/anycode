@@ -57,6 +57,12 @@ export interface CoreEnvConfig {
   contextWindowTokens?: number;
   /** Stream retry budget for the provider adapter; 0 disables retries (ANYCODE_MAX_RETRIES). */
   maxRetries?: number;
+  /**
+   * Transient-network retry wall-clock budget in ms (ANYCODE_NETWORK_RETRY_BUDGET_MS,
+   * Taskana 4705): pre-content NETWORK failures may retry past `maxRetries`
+   * while inside this budget; 0 disables the extension.
+   */
+  networkRetryBudgetMs?: number;
   /** SQLite database path override (ANYCODE_DB_PATH); default is ~/.anycode/anycode.sqlite. */
   dbPath?: string;
   /** Parallel cap override for read-only tool batches (ANYCODE_TOOL_CONCURRENCY). */

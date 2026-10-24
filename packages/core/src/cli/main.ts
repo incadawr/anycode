@@ -500,9 +500,11 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   const providerTransport: ProviderTransport =
     envConfig.providerTransport ?? catalogEntry?.defaultTransport ?? "anthropic-messages";
 
-  // (ANYCODE_MAX_RETRIES) and the per-attempt stall watchdog (ANYCODE_STALL_TIMEOUT_MS).
+  // (ANYCODE_MAX_RETRIES, ANYCODE_NETWORK_RETRY_BUDGET_MS) and the per-attempt
+  // stall watchdog (ANYCODE_STALL_TIMEOUT_MS).
   const retryOverride: Partial<RetryPolicy> = {
     ...(envConfig.maxRetries !== undefined ? { maxRetries: envConfig.maxRetries } : {}),
+    ...(envConfig.networkRetryBudgetMs !== undefined ? { networkRetryBudgetMs: envConfig.networkRetryBudgetMs } : {}),
     ...(envConfig.stallTimeoutMs !== undefined ? { stallTimeoutMs: envConfig.stallTimeoutMs } : {}),
   };
 

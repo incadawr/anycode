@@ -41,6 +41,13 @@ export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
 /** Model binding for ANYCODE_CONTEXT_WINDOW (TASK.142): the pair is model-specific. */
 export const ENV_CONTEXT_WINDOW_MODEL = "ANYCODE_CONTEXT_WINDOW_MODEL";
 export const ENV_MAX_RETRIES = "ANYCODE_MAX_RETRIES";
+/**
+ * Transient-network retry wall-clock budget in ms (Taskana 4705). While a
+ * pre-content failure is a transient NETWORK error and less than this much
+ * time has passed since the step's first failure, retrying continues past
+ * ANYCODE_MAX_RETRIES. 0 disables the extension.
+ */
+export const ENV_NETWORK_RETRY_BUDGET_MS = "ANYCODE_NETWORK_RETRY_BUDGET_MS";
 export const ENV_DB_PATH = "ANYCODE_DB_PATH";
 export const ENV_TOOL_CONCURRENCY = "ANYCODE_TOOL_CONCURRENCY";
 export const ENV_STALL_TIMEOUT_MS = "ANYCODE_STALL_TIMEOUT_MS";
@@ -104,6 +111,8 @@ export function parseImageInputModelOverride(
  * Reads ANYCODE_API_KEY, ANYCODE_BASE_URL (default: native Anthropic),
  * ANYCODE_MODEL (required), and the optional integers ANYCODE_MAX_TURNS /
  * ANYCODE_MAX_OUTPUT_TOKENS / ANYCODE_CONTEXT_WINDOW / ANYCODE_MAX_RETRIES /
+ * ANYCODE_NETWORK_RETRY_BUDGET_MS (Taskana 4705 — the transient-network retry
+ * wall-clock budget that extends past ANYCODE_MAX_RETRIES) /
  * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS / ANYCODE_SUBAGENT_STALL_MS
  * (TASK.148 slice 1 — the subagent silence detector, distinct from the stream
  * watchdog) / ANYCODE_TODO_REMINDER_EVERY (Taskana 4665 — the stale-plan
@@ -155,6 +164,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const contextWindowModel = env[ENV_CONTEXT_WINDOW_MODEL]?.trim() || undefined;
   const exploreModel = env[ENV_EXPLORE_MODEL]?.trim() || undefined;
   const maxRetries = readOptionalInteger(env, ENV_MAX_RETRIES);
+  const networkRetryBudgetMs = readOptionalInteger(env, ENV_NETWORK_RETRY_BUDGET_MS);
   const toolConcurrency = readOptionalInteger(env, ENV_TOOL_CONCURRENCY);
   const stallTimeoutMs = readOptionalInteger(env, ENV_STALL_TIMEOUT_MS);
   const todoReminderEvery = readOptionalInteger(env, ENV_TODO_REMINDER_EVERY);
@@ -180,6 +190,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     contextWindowModel,
     exploreModel,
     maxRetries,
+    networkRetryBudgetMs,
     dbPath,
     toolConcurrency,
     stallTimeoutMs,

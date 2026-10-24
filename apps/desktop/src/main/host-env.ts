@@ -49,6 +49,14 @@ export const ENV_BASE_URL = "ANYCODE_BASE_URL";
 export const ENV_TOOL_CONCURRENCY = "ANYCODE_TOOL_CONCURRENCY";
 export const ENV_STALL_TIMEOUT_MS = "ANYCODE_STALL_TIMEOUT_MS";
 export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
+/** Provider retry count (Taskana 4705); literal mirror of core's `provider/env.ts` ENV_MAX_RETRIES. */
+export const ENV_MAX_RETRIES = "ANYCODE_MAX_RETRIES";
+/**
+ * Transient-network retry wall-clock budget in ms (Taskana 4705); literal
+ * mirror of core's `provider/env.ts` ENV_NETWORK_RETRY_BUDGET_MS — pre-content
+ * NETWORK failures may retry past ANYCODE_MAX_RETRIES while inside it.
+ */
+export const ENV_NETWORK_RETRY_BUDGET_MS = "ANYCODE_NETWORK_RETRY_BUDGET_MS";
 /** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
@@ -396,6 +404,8 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_TOOL_CONCURRENCY,
   ENV_STALL_TIMEOUT_MS,
   ENV_MAX_TURNS,
+  ENV_MAX_RETRIES,
+  ENV_NETWORK_RETRY_BUDGET_MS,
   ENV_SUBAGENT_MAX_TURNS,
   ENV_SUBAGENT_STALL_MS,
   ENV_REASONING_EFFORT,
@@ -1145,6 +1155,9 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   fillFromSettings(env, ENV_TOOL_CONCURRENCY, numToStr(settings.tools.concurrency));
   fillFromSettings(env, ENV_STALL_TIMEOUT_MS, numToStr(settings.tools.stallTimeoutMs));
   fillFromSettings(env, ENV_MAX_TURNS, numToStr(settings.tools.maxTurns));
+  // Taskana 4705: provider retry knobs (env > settings, same convention).
+  fillFromSettings(env, ENV_MAX_RETRIES, numToStr(settings.tools.maxRetries));
+  fillFromSettings(env, ENV_NETWORK_RETRY_BUDGET_MS, numToStr(settings.tools.networkRetryBudgetMs));
   fillFromSettings(env, ENV_SUBAGENT_MAX_TURNS, numToStr(settings.tools.subagentMaxTurns));
   fillFromSettings(env, ENV_SUBAGENT_STALL_MS, numToStr(settings.tools.subagentStallTimeoutMs));
   // Grep backend selector (Taskana 4160): string enum, not a number — no

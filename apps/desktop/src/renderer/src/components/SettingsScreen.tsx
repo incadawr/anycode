@@ -292,12 +292,25 @@ export function buildToolsPatch(
   stallTimeoutText: string,
   maxTurnsText = "",
   subagentMaxTurnsText = "",
+  maxRetriesText = "",
+  networkRetryBudgetText = "",
 ): SettingsPatch {
-  const tools: { concurrency?: number; stallTimeoutMs?: number; maxTurns?: number; subagentMaxTurns?: number } = {};
+  const tools: {
+    concurrency?: number;
+    stallTimeoutMs?: number;
+    maxTurns?: number;
+    subagentMaxTurns?: number;
+    maxRetries?: number;
+    networkRetryBudgetMs?: number;
+  } = {};
   const concurrency = parseOptionalInt(concurrencyText);
   const stallTimeoutMs = parseOptionalInt(stallTimeoutText);
   const maxTurns = parseOptionalInt(maxTurnsText);
   const subagentMaxTurns = parseOptionalInt(subagentMaxTurnsText);
+  // Taskana 4705: provider retry knobs, mirrors of
+  // ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (env > settings).
+  const maxRetries = parseOptionalInt(maxRetriesText);
+  const networkRetryBudgetMs = parseOptionalInt(networkRetryBudgetText);
   if (concurrency !== undefined) {
     tools.concurrency = concurrency;
   }
@@ -306,6 +319,8 @@ export function buildToolsPatch(
   }
   if (maxTurns !== undefined) tools.maxTurns = maxTurns;
   if (subagentMaxTurns !== undefined) tools.subagentMaxTurns = subagentMaxTurns;
+  if (maxRetries !== undefined) tools.maxRetries = maxRetries;
+  if (networkRetryBudgetMs !== undefined) tools.networkRetryBudgetMs = networkRetryBudgetMs;
   return { tools };
 }
 
@@ -1294,6 +1309,10 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
   const [stallTimeoutMs, setStallTimeoutMs] = useState("");
   const [maxTurns, setMaxTurns] = useState("");
   const [subagentMaxTurns, setSubagentMaxTurns] = useState("");
+  // Taskana 4705: provider retry knobs (ANYCODE_MAX_RETRIES /
+  // ANYCODE_NETWORK_RETRY_BUDGET_MS mirrors; blank = default).
+  const [maxRetries, setMaxRetries] = useState("");
+  const [networkRetryBudget, setNetworkRetryBudget] = useState("");
   // TASK.119 / TASK.147 slice 2: live session-capacity limit fields.
   const [sessionMaxTabs, setSessionMaxTabs] = useState("");
   const [sessionPerParent, setSessionPerParent] = useState("");
@@ -1437,6 +1456,8 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
       setStallTimeoutMs(snapshot.settings.tools.stallTimeoutMs?.toString() ?? "");
       setMaxTurns(snapshot.settings.tools.maxTurns?.toString() ?? "");
       setSubagentMaxTurns(snapshot.settings.tools.subagentMaxTurns?.toString() ?? "");
+      setMaxRetries(snapshot.settings.tools.maxRetries?.toString() ?? "");
+      setNetworkRetryBudget(snapshot.settings.tools.networkRetryBudgetMs?.toString() ?? "");
       setSessionMaxTabs(snapshot.settings.sessionLimits?.maxTabs?.toString() ?? "");
       setSessionPerParent(snapshot.settings.sessionLimits?.childSessionsPerParentMax?.toString() ?? "");
       setSessionGlobal(snapshot.settings.sessionLimits?.childSessionsGlobalMax?.toString() ?? "");
@@ -1481,7 +1502,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
       return;
     }
     setSessionLimitsError(null);
-    const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns);
+    const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns, maxRetries, networkRetryBudget);
     const hasLimits = limits.patch.sessionLimits !== undefined
       && Object.keys(limits.patch.sessionLimits).length > 0;
     await store.getState().setPatch(
@@ -1722,6 +1743,30 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
                     disabled={readOnly}
                     placeholder="(default)"
                     onChange={(e) => setStallTimeoutMs(e.target.value)}
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field-label">Retry attempts</span>
+                  <input
+                    className="settings-field-input"
+                    type="text"
+                    inputMode="numeric"
+                    value={maxRetries}
+                    disabled={readOnly}
+                    placeholder="(default)"
+                    onChange={(e) => setMaxRetries(e.target.value)}
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field-label">Network retry budget (ms)</span>
+                  <input
+                    className="settings-field-input"
+                    type="text"
+                    inputMode="numeric"
+                    value={networkRetryBudget}
+                    disabled={readOnly}
+                    placeholder="(default)"
+                    onChange={(e) => setNetworkRetryBudget(e.target.value)}
                   />
                 </label>
                 <label className="settings-field">

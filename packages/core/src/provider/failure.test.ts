@@ -10,7 +10,7 @@ import { APICallError } from "ai";
 import { describe, expect, it } from "vitest";
 import type { ModelStreamEvent } from "../types/events.js";
 import { classifyProviderFailure, isModelOutputEvent } from "./failure.js";
-import { isRetryableStreamError } from "./retry.js";
+import { isQuotaExhaustion, isRetryableStreamError } from "./retry.js";
 
 const MODEL_OUTPUT: ModelStreamEvent[] = [
   { type: "text_start", id: "t1" },
@@ -46,9 +46,11 @@ describe("isModelOutputEvent", () => {
 
 /**
  * `classifyProviderFailure` (TASK.33 W7b) — layers over `isRetryableStreamError`
- * (retry.ts): known buckets never disagree with it (asserted per case below),
- * except `quota`, the one deliberate override (a 429 quota-exhaustion response
- * would otherwise fall into the generically-retryable rate-limit bucket).
+ * (retry.ts): known buckets never disagree with it (asserted per case below).
+ * Since Taskana 4705 quota no longer auto-retries: `isRetryableStreamError`
+ * refuses quota before the 429 status check, so quota's non-auto-retry
+ * behavior is pinned by retry.test.ts (`isQuotaExhaustion` describe); the
+ * divergence pins below cover the cases that still diverge.
  */
 function apiCallError(opts: {
   message: string;
@@ -191,9 +193,10 @@ describe("classifyProviderFailure", () => {
     const result = classifyProviderFailure(error);
 
     expect(result).toMatchObject({ code: "quota", retryable: false });
-    // The override: isRetryableStreamError sees a bare 429 as retryable, but a
-    // quota-exhaustion response can never succeed on retry.
-    expect(isRetryableStreamError(error)).toBe(true);
+    // Taskana 4705: quota no longer auto-retries — isRetryableStreamError now
+    // refuses quota (isQuotaExhaustion) before the 429 status check.
+    expect(isQuotaExhaustion(error)).toBe(true);
+    expect(isRetryableStreamError(error)).toBe(false);
   });
 
   it("classifies a quota error carrying the code only in structured `data`, not the message", () => {
@@ -260,24 +263,14 @@ describe("classifyProviderFailure", () => {
 });
 
 /**
- * The three cases where `retryable` (manual-retry worthiness — the Try-again
+ * The cases where `retryable` (manual-retry worthiness — the Try-again
  * gate) INTENTIONALLY diverges from `isRetryableStreamError` (the auto-retry
- * decision), per Fable ruling (D). Each is a DOUBLE assert so it goes red if
- * EITHER side is later "fixed" to match the other: the divergence is the
- * contract, not a bug (W7b-FIX #2).
+ * decision). Each is a DOUBLE assert so it goes red if EITHER side is later
+ * "fixed" to match the other: the divergence is the contract, not a bug
+ * (W7b-FIX #2). Taskana 4705 removed the quota divergence (quota no longer
+ * auto-retries — see isQuotaExhaustion in retry.test.ts); (b) and (c) remain.
  */
 describe("classifyProviderFailure — intentional divergence from isRetryableStreamError (W7b-FIX #2 pins)", () => {
-  it("(a) quota-429: manual retry is hopeless (retryable:false) yet the port auto-retries a 429 (isRetryableStreamError:true)", () => {
-    const error = apiCallError({
-      message: "request failed",
-      statusCode: 429,
-      data: { error: { code: "1308", message: "quota exceeded" } },
-    });
-
-    expect(classifyProviderFailure(error)).toMatchObject({ code: "quota", retryable: false });
-    expect(isRetryableStreamError(error)).toBe(true);
-  });
-
   it("(b) plain connect-timeout Error: transient so a manual retry may succeed (retryable:true) yet the port cannot auto-retry a shapeless Error (isRetryableStreamError:false)", () => {
     const error = new Error("Cannot connect to API: Connect Timeout Error");
 

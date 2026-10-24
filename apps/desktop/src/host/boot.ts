@@ -311,10 +311,12 @@ export function isChildSessionBoot(args: HostArgs, meta: SessionMeta): boolean {
 /**
  * Retry policy for a session's model port (Taskana 4226): a child session
  * (detached or in-process) keeps retrying a transient network outage for
- * CHILD_NETWORK_RETRY_BUDGET_MS past the normal retry count; a main session
- * keeps `retry` untouched. An explicit endpoint retry setting is preserved —
- * only the budget field is added. (maxRetries 0 still disables retrying: the
- * port ignores the budget then.)
+ * CHILD_NETWORK_RETRY_BUDGET_MS past the normal retry count. Taskana 4705:
+ * main sessions now default to a 5-min budget (DEFAULT_RETRY_POLICY), so the
+ * explicit 180 s constant here is what still distinguishes a child — it
+ * overrides any explicit budget on the child's policy. An explicit endpoint
+ * retry setting is preserved — only the budget field is forced.
+ * (maxRetries 0 still disables retrying: the port ignores the budget then.)
  */
 export function childRetryPolicy(
   isChild: boolean,

@@ -30,7 +30,7 @@
 import { APICallError } from "ai";
 import { classifyNetworkConfigurationFailure } from "./network-failure.js";
 import type { ModelStreamEvent } from "../types/events.js";
-import { isRetryableStreamError } from "./retry.js";
+import { isRetryableStreamError, QUOTA_PATTERN, USAGE_LIMIT_PATTERN, matchesFailureText } from "./retry.js";
 
 /** True when `e` is model-generated output (content/reasoning/tool/finish), false for `start`/`error`/`stream_retry`. */
 export function isModelOutputEvent(e: ModelStreamEvent): boolean {
@@ -92,8 +92,7 @@ export interface ProviderFailureClassification {
    * `isRetryableStreamError` (retry.ts) and is observable via the terminal
    * metadata's `attemptsMade`; the two fields intentionally diverge (see
    * `classifyProviderFailure`).
-   */
-  retryable: boolean;
+   */  retryable: boolean;
   safe: ProviderFailureSafe;
 }
 
@@ -131,16 +130,9 @@ const RETRYABLE_NETWORK_CODES = new Set([
 /** The AI SDK's undici-backed connect failure (TASK.33 owner dogfood: `api.z.ai` unreachable). */
 const CONNECT_TIMEOUT_PATTERN = /connect timeout error|cannot connect to api/i;
 
-/** Matches a quota-exhaustion message, or the z.ai-class numeric quota error code (TASK.33 §W7b). */
-const QUOTA_PATTERN = /\bquota\b|\b1308\b/i;
-
-/**
- * Kimi-class subscription exhaustion rides as a 403 whose message explicitly
- * names a usage limit ("You've reached your usage limit for this billing
- * cycle"). The phrase is deliberately narrower than QUOTA_PATTERN so a policy
- * denial that merely mentions "quota" still classifies as forbidden (M3).
- */
-const USAGE_LIMIT_PATTERN = /usage limit|billing cycle/i;
+// Taskana 4705: QUOTA_PATTERN, USAGE_LIMIT_PATTERN and matchesFailureText now
+// live in retry.ts (single source) so isQuotaExhaustion — the AUTO-retry
+// refusal — and the classification below share the exact same detection.
 
 function extractMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -179,18 +171,6 @@ function isNetworkFailure(error: unknown, message: string): boolean {
   );
 }
 
-function matchesFailureText(error: unknown, message: string, pattern: RegExp): boolean {
-  if (pattern.test(message)) return true;
-  if (APICallError.isInstance(error) && error.data !== undefined) {
-    try {
-      return pattern.test(JSON.stringify(error.data));
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
 /** Quota exhaustion rides as a 429 on some providers (z.ai code 1308), or arrives with no status code at all. */
 function isQuotaFailure(error: unknown, message: string): boolean {
   return matchesFailureText(error, message, QUOTA_PATTERN);
@@ -205,17 +185,16 @@ function isQuotaFailure(error: unknown, message: string): boolean {
  * `retryable` means whether a MANUAL retry has a chance of succeeding — it gates
  * W8's Try-again button. It is NOT the auto-retry decision: auto-retry is made
  * solely by `isRetryableStreamError` in the model port and is observable via the
- * terminal metadata's `attemptsMade`. The two INTENTIONALLY diverge in three
- * cases:
- *   (a) quota-429 — 429 is a retryable status code, so the port auto-retries, but
- *       a manual retry of a quota-exhausted account can never succeed ⇒ `false`.
- *   (b) a plain `Error` with connect-timeout text — it does NOT auto-retry (the
+ * terminal metadata's `attemptsMade`. The two INTENTIONALLY diverge in two
+ * cases (Taskana 4705 removed the third — quota — by making
+ * `isRetryableStreamError` refuse quota before the 429 status check):
+ *   (a) a plain `Error` with connect-timeout text — it does NOT auto-retry (the
  *       form carries no statusCode/errno/isRetryable for the port to act on), yet
  *       the class is transient and a manual retry may succeed ⇒ `true`.
- *   (c) `APICallError{statusCode:400, isRetryable:true}` — the port auto-retries
+ *   (b) `APICallError{statusCode:400, isRetryable:true}` — the port auto-retries
  *       on the provider flag, but the 400 class is deterministic for re-sending
  *       the same message ⇒ `false`.
- * These three divergences are pinned in failure.test.ts (double-assert pins).
+ * These divergences are pinned in failure.test.ts (double-assert pins).
  */
 export function classifyProviderFailure(error: unknown): ProviderFailureClassification {
   const statusCode = extractStatusCode(error);

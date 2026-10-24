@@ -6,7 +6,14 @@
 import { APICallError } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_RETRY_AFTER_CAP_MS, DEFAULT_STREAM_STALL_TIMEOUT_MS } from "../types/config.js";
-import { DEFAULT_RETRY_POLICY, isRetryableStreamError, isTransientNetworkError, retryDelayMs, type RetryPolicy } from "./retry.js";
+import {
+  DEFAULT_RETRY_POLICY,
+  isQuotaExhaustion,
+  isRetryableStreamError,
+  isTransientNetworkError,
+  retryDelayMs,
+  type RetryPolicy,
+} from "./retry.js";
 
 function apiCallError(opts: {
   statusCode?: number;
@@ -74,6 +81,8 @@ describe("isRetryableStreamError", () => {
 });
 
 describe("retryDelayMs", () => {
+  // Taskana 4705: midStreamRetries added to the policy shape; 0 here — these
+  // fixtures test delay math only, not replay accounting.
   const policy: RetryPolicy = {
     maxRetries: 3,
     baseDelayMs: 1_000,
@@ -81,6 +90,7 @@ describe("retryDelayMs", () => {
     retryAfterCapMs: DEFAULT_RETRY_AFTER_CAP_MS,
     networkRetryBudgetMs: 0,
     stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
+    midStreamRetries: 0,
   };
 
   beforeEach(() => {
@@ -137,14 +147,15 @@ describe("retryDelayMs", () => {
     expect(retryDelayMs(0, new Error("boom"), policy)).toBe(500);
   });
 
-  it("matches DEFAULT_RETRY_POLICY shape (maxRetries 3, base 1000ms, max 30000ms)", () => {
+  it("matches DEFAULT_RETRY_POLICY shape (Taskana 4705: maxRetries 8, max 60000ms, 5-min network budget, 2 mid-stream replays)", () => {
     expect(DEFAULT_RETRY_POLICY).toEqual({
-      maxRetries: 3,
+      maxRetries: 8,
       baseDelayMs: 1_000,
-      maxDelayMs: 30_000,
+      maxDelayMs: 60_000,
       retryAfterCapMs: DEFAULT_RETRY_AFTER_CAP_MS,
       stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
-      networkRetryBudgetMs: 0,
+      networkRetryBudgetMs: 300_000,
+      midStreamRetries: 2,
     });
   });
 });
@@ -157,6 +168,7 @@ describe("retryDelayMs — retry-after cap (design slice-2.3-cut.md, tail 4)", (
     retryAfterCapMs: 60_000,
     networkRetryBudgetMs: 0,
     stallTimeoutMs: DEFAULT_STREAM_STALL_TIMEOUT_MS,
+    midStreamRetries: 0,
   };
 
   it("caps a retry-after header well above the cap down to retryAfterCapMs", () => {
@@ -185,5 +197,53 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(Object.assign(new Error("auth"), { statusCode: 401 }))).toBe(false);
     expect(isTransientNetworkError(new Error("boom"))).toBe(false);
     expect(isTransientNetworkError("fetch failed")).toBe(false);
+  });
+});
+
+describe("isQuotaExhaustion — quota never auto-retries (Taskana 4705)", () => {
+  it("z.ai 429 with quota text (code 1308) is quota and NOT auto-retryable", () => {
+    const error = apiCallError({ statusCode: 429, isRetryable: false });
+    error.message = "Insufficient quota for this account (code 1308)";
+    expect(isQuotaExhaustion(error)).toBe(true);
+    expect(isRetryableStreamError(error)).toBe(false);
+  });
+
+  it("quota code carried only in structured `data`, statusless, is quota and NOT auto-retryable", () => {
+    const error = new APICallError({
+      message: "request failed",
+      url: "https://api.example.com/v1/messages",
+      requestBodyValues: {},
+      isRetryable: false,
+      data: { error: { code: "1308" } },
+    });
+    expect(isQuotaExhaustion(error)).toBe(true);
+    expect(isRetryableStreamError(error)).toBe(false);
+  });
+
+  it("kimi 403 usage-limit message is quota and NOT auto-retryable", () => {
+    const error = apiCallError({ statusCode: 403, isRetryable: false });
+    error.message = "You've reached your usage limit for this billing cycle";
+    expect(isQuotaExhaustion(error)).toBe(true);
+    expect(isRetryableStreamError(error)).toBe(false);
+  });
+
+  it("a plain rate-limit 429 (no quota text) is NOT quota and stays retryable", () => {
+    const error = apiCallError({ statusCode: 429, isRetryable: true });
+    expect(isQuotaExhaustion(error)).toBe(false);
+    expect(isRetryableStreamError(error)).toBe(true);
+  });
+
+  it("a 500 mentioning quota is NOT quota (status wins) and stays retryable", () => {
+    const error = apiCallError({ statusCode: 500, isRetryable: false });
+    error.message = "quota backend down";
+    expect(isQuotaExhaustion(error)).toBe(false);
+    expect(isRetryableStreamError(error)).toBe(true);
+  });
+
+  it("a 403 policy denial (no usage-limit phrase) is NOT quota; 403 is not in the retryable status set", () => {
+    const error = apiCallError({ statusCode: 403, isRetryable: false });
+    error.message = "quota policy denies this key";
+    expect(isQuotaExhaustion(error)).toBe(false);
+    expect(isRetryableStreamError(error)).toBe(false);
   });
 });

@@ -431,6 +431,13 @@ export interface AnycodeSettings {
     subagentMaxTurns?: number;
     subagentStallTimeoutMs?: number;
     /**
+     * Mirror of ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS
+     * (env > settings) — Taskana 4705 provider retry knobs: retry count and
+     * the transient-network wall-clock budget that extends past it.
+     */
+    maxRetries?: number;
+    networkRetryBudgetMs?: number;
+    /**
      * Grep backend selector (Taskana 4160): "rg" (default) or "tgrep"
      * (microsoft/tgrep trigram index; user must run `tgrep serve` themselves —
      * AnyCode never manages the daemon). Mirror of ANYCODE_GREP_BACKEND
