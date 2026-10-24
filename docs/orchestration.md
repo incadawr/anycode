@@ -238,3 +238,41 @@ both run on the Native engine).
 - No efficiency or perfect-reliability claims are made for this setup.
 - GLM-5.3 and GLM-5.3-Flash availability depends on your Z.AI plan's model
   access.
+
+## Deep research preset
+
+The deep-research direction ships as an orchestration preset: a bundled
+workflow definition rather than a separate agent. It lives at
+`examples/workflows/deep-research.json` and is discovered as a **bundled**
+workflow — a third root after project and user `.anycode/workflows`, so any
+definition you create with the same name `deep-research` shadows it.
+
+The bundled root is found relative to AnyCode's own source tree, so today the
+preset is discovered only when AnyCode runs from a source checkout. Packaged
+desktop builds do not include it yet: to use it there, copy
+`examples/workflows/deep-research.json` into your project's or your user
+`.anycode/workflows/` directory.
+
+The preset runs three steps over the built-in web tools: a wide `search-wide`
+sweep with several query variants, `fetch-sources` over the most promising
+URLs, and a `synthesize` step that writes one cited report from what was
+actually fetched.
+
+WebSearch is not part of any persona's default tool set — it reaches a child
+only when that child asks for it explicitly. The `search-wide` step does so
+through its own `tools: ["WebSearch"]` entry, the opt-in mechanism workflow
+steps use for extra tools; a step (or md-profile, via its `tools:` frontmatter)
+that names WebSearch gets the tool when a backend is configured.
+
+WebSearch requires a configured backend in the `webSearch` section of
+`.anycode/config.json` — `brave` (needs `apiKeyEnv`, the name of the
+environment variable holding the API key) or `searxng` (self-hosted, the free
+path: point `endpoint` at your instance). Without a backend the run degrades
+honestly: the `search-wide` child has WebFetch but no WebSearch and its prompt
+tells it to say so explicitly and list unverified URLs instead.
+
+Invoke it like any workflow:
+
+```json
+{ "name": "deep-research", "input": "How do vitest workspace projects share setup code?" }
+```

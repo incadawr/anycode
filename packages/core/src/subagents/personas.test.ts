@@ -24,6 +24,11 @@ describe("personas", () => {
     // REGISTRY level since Taskana 4162 (default off): the filter below keeps
     // holding even in a flag-on boot, where personas.ts still deliberately
     // does not grant it to children.
+    // WebSearch is NOT a default either (Taskana 4095 follow-up): it is
+    // factory-built at boot only when a search backend is configured, and
+    // handing it to every general-purpose child would make paid search a new
+    // silent default. A child gets it only when its persona/profile `tools:`
+    // list or the workflow step that spawned it names it explicitly.
     const expected = defaults.filter(
       (name) =>
         name !== "Agent" && name !== "Skill" && name !== "Workflow" && name !== "ArchMap",
@@ -33,6 +38,19 @@ describe("personas", () => {
     expect(PERSONAS["general-purpose"].tools).not.toContain("Skill");
     expect(PERSONAS["general-purpose"].tools).not.toContain("Workflow");
     expect(PERSONAS["general-purpose"].tools).not.toContain("ArchMap");
+    expect(PERSONAS["general-purpose"].tools).not.toContain("WebSearch");
+  });
+
+  it("general-purpose carries WebFetch; neither built-in persona carries WebSearch", () => {
+    // WebFetch stays a default (free, no backend). WebSearch is opt-in per
+    // child (Taskana 4095 follow-up): md-profile `tools:` frontmatter or a
+    // workflow step's `tools:` entry — the runner threads the boot tool in
+    // only then (see runner tests).
+    expect(PERSONAS["general-purpose"].tools).toContain("WebFetch");
+    expect(PERSONAS["general-purpose"].tools).not.toContain("WebSearch");
+    // Explore is deliberately unchanged: recon stays fetch-only, no search.
+    expect(PERSONAS.explore.tools).toContain("WebFetch");
+    expect(PERSONAS.explore.tools).not.toContain("WebSearch");
   });
 
   it("explore is a strict read-only subset with no Bash (design R7)", () => {
@@ -64,6 +82,10 @@ describe("personas", () => {
         expect(registry.has(name), `${persona.name} references unknown tool ${name}`).toBe(true);
       }
     }
+    // WebSearch is factory-built at boot only when a search backend is
+    // configured, so the bare default registry never carries it — and no
+    // built-in persona may list it (Taskana 4095 follow-up: opt-in per child).
+    expect(registry.has("WebSearch")).toBe(false);
   });
 
   it("the built-ins stay model-agnostic data (Taskana 4131 adds no hardcoded id)", () => {

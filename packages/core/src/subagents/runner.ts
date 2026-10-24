@@ -47,6 +47,7 @@ import {
   type ReasoningEffort,
 } from "../types/config.js";
 import { SubagentStallClock } from "./stall-clock.js";
+import type { AnyToolDefinition } from "../types/tools.js";
 import type {
   EngineChildSpec,
   EngineProfileInfo,
@@ -212,6 +213,19 @@ export interface SubagentRunnerOptions {
    * the env/default route rather than admitting a broken width.
    */
   maxConcurrent?: number;
+  /**
+   * The WebSearch tool instance (factory-built at boot when a search backend
+   * is configured) threaded into a child registry ONLY when that child's
+   * declared tool list names "WebSearch" explicitly (Taskana 4095 follow-up):
+   * an md-profile's `tools:` frontmatter, or a workflow step's `tools:` entry
+   * resolved onto the SubagentRequest. Absent — every existing wiring stays
+   * byte-compatible: the child registry simply has no WebSearch and a list
+   * naming it keeps the silent skip (same as any tool name missing from the
+   * default registry), so the deep-research preset degrades honestly on a
+   * site without a backend instead of erroring. The built-in personas no
+   * longer list WebSearch: paid search is opt-in per child, never a default.
+   */
+  webSearchTool?: AnyToolDefinition;
 }
 
 /**
@@ -221,6 +235,13 @@ export interface SubagentRunnerOptions {
  * — and never forced to yolo; the child inherits the parent's engine/broker/mode
  * so plan-mode stays honest and every effect re-passes the same gate.
  */
+/**
+ * Tool names a SubagentRequest (a workflow step's `tools:`) may add beyond the
+ * persona's own list (Taskana 4095 follow-up). Only backend-conditional,
+ * opt-in tools belong here; anything else in a request is ignored.
+ */
+export const REQUEST_OPT_IN_TOOLS: readonly string[] = ["WebSearch"];
+
 export function buildChildConfig(
   parent: AgentLoopConfig,
   persona: PersonaDefinition,
@@ -229,6 +250,13 @@ export function buildChildConfig(
     env?: SystemPromptEnv;
     memorySection?: string;
     modelPort?: ModelPort;
+    /**
+     * The boot-supplied WebSearch tool instance (SubagentRunnerOptions.
+     * webSearchTool threaded through run()); registered into the child registry
+     * when the persona's tool list names "WebSearch". Absent => the name keeps
+     * its silent skip in buildPersonaRegistry.
+     */
+    webSearchTool?: AnyToolDefinition;
     /**
      * Capability settings resolved for the CHILD's own model (TASK.162).
      * Present => WHOLESALE replacement of the three parent-derived rows below
@@ -256,10 +284,25 @@ export function buildChildConfig(
   },
 ): AgentLoopConfig {
   const tokenizer = parent.tokenizer ?? new HeuristicTokenizer();
+  // Taskana 4095 follow-up: the effective tool list is the persona's own plus
+  // the REQUEST's extras (SubagentRequest.tools — a workflow step's declared
+  // `tools:`). The only extra today is "WebSearch", which general-purpose no
+  // longer lists by default (paid search is opt-in per child); merging here
+  // keeps buildPersonaRegistry the single place that resolves names, so the
+  // extras get the same SPAWN_TOOLS skip and the same silent-skip miss path
+  // as persona-declared names. Deduped; order-stable for the registry build.
+  // Review fix: the request may opt a child into REQUEST_OPT_IN_TOOLS only.
+  // Without this allowlist a workflow step could widen any persona with any
+  // default tool (e.g. `agentType: "explore", tools: ["Bash", "Write"]`),
+  // silently breaking explore's read-only contract.
+  const requestTools = (req.tools ?? []).filter((name) => REQUEST_OPT_IN_TOOLS.includes(name));
+  const extraNames = requestTools.filter((name, index) => !persona.tools.includes(name) && requestTools.indexOf(name) === index);
+  const effectivePersona: PersonaDefinition =
+    extraNames.length > 0 ? { ...persona, tools: [...persona.tools, ...extraNames] } : persona;
   // NEW per-persona registry WITHOUT any spawn tool (structural non-recursion,
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
-  const registry = buildPersonaRegistry(persona);
+  const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
   // TASK.160 §2.2, reaffirmed by TASK.171: same precedence as the
   // model-override resolution in run() (request > persona default) — the
   // spawn identity stamped onto every telemetry record this child produces,
@@ -385,12 +428,29 @@ export function buildChildConfig(
  * persona lists one (lock #1): the child model never sees an Agent or Workflow
  * declaration, so it cannot even propose recursion. An md-profile that lists one
  * explicitly gets the same treatment (profiles.ts surfaces it as a problem).
+ *
+ * `webSearchTool` (optional): WebSearch is factory-built at boot only when a
+ * search backend is configured, so it is not in the default registry; when the
+ * caller threads it AND the persona's tool list names "WebSearch" — an
+ * md-profile's explicit `tools:` line, or a workflow step's declared `tools:`
+ * resolved onto the request — it is registered after the names sourced from
+ * the default registry. Absent tool + listed name keeps the generic miss
+ * path: a silent skip, never an error. The built-in general-purpose persona
+ * deliberately does NOT list it (Taskana 4095 follow-up: paid search must
+ * never become a silent default for every child).
  */
-function buildPersonaRegistry(persona: PersonaDefinition): ToolRegistry {
+function buildPersonaRegistry(
+  persona: PersonaDefinition,
+  webSearchTool?: AnyToolDefinition,
+): ToolRegistry {
   const source = createDefaultToolRegistry();
   const registry = new ToolRegistry();
   for (const name of persona.tools) {
     if (SPAWN_TOOLS.has(name)) {
+      continue;
+    }
+    if (name === "WebSearch" && webSearchTool) {
+      registry.register(webSearchTool, { silentDuplicateWarning: true });
       continue;
     }
     const tool = source.get(name);
@@ -962,6 +1022,7 @@ export function createSubagentRunner(
         const childConfig = buildChildConfig(parent, persona, req, {
           env: opts?.env,
           memorySection: opts?.memorySection,
+          ...(opts?.webSearchTool !== undefined ? { webSearchTool: opts.webSearchTool } : {}),
           // Wall-clock budget anchored at run() entry, i.e. BEFORE the semaphore
           // wait above: the dispatcher bills the Agent call from the moment the
           // handler was invoked, so time spent queued is time already spent.

@@ -87,7 +87,13 @@ export interface PersonaDefinition {
 
 /**
  * general-purpose: the nine non-Agent default tools (full access under the
- * parent's inherited permission gate). explore: strictly read-only tools, so a
+ * parent's inherited permission gate). WebSearch is deliberately NOT here
+ * (Taskana 4095 follow-up): it is factory-built at boot only when a search
+ * backend is configured, and handing it to EVERY general-purpose child would
+ * make paid search calls a new silent default. A child gets it only when its
+ * persona/profile `tools:` list — or a workflow step's `tools:` list — names
+ * "WebSearch" explicitly (the runner threads the boot tool in then; absent
+ * backend => silent skip). explore: strictly read-only tools, so a
  * child runs zero permission asks in build/plan — friction-free parallel
  * reconnaissance. Bash is deliberately excluded from explore (it is not
 

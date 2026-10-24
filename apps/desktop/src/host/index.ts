@@ -2540,8 +2540,10 @@ async function boot(): Promise<void> {
     } catch (error) {
       console.error(`[host] failed to load websearch config; continuing without WebSearch: ${describeError(error)}`);
     }
+    let webSearchTool: ReturnType<typeof createWebSearchTool> | undefined;
     if (webSearchBackend !== null) {
-      registry.register(createWebSearchTool(webSearchBackend));
+      webSearchTool = createWebSearchTool(webSearchBackend);
+      registry.register(webSearchTool);
     }
 
     // Telemetry config (slice 6.6, mirror of the websearch block above): opt-in,
@@ -3236,6 +3238,11 @@ async function boot(): Promise<void> {
           // effort even though the child's own model can honor the tier.
           resolveChildModelSettings: (id: string, profileEffort?: ReasoningEffort) =>
             settingsForChild(id, profileEffort ?? selectedEffort),
+          // WebSearch parity for children (Taskana 4095, mirror of the CLI):
+          // the SAME instance registered above when a backend resolved is
+          // threaded into every persona child registry that lists "WebSearch".
+          // Absent (no backend) keeps the runner byte-compatible.
+          ...(webSearchTool !== undefined ? { webSearchTool } : {}),
         }),
         ext.workflows,
       ),

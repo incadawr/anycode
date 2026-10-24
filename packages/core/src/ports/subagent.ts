@@ -19,6 +19,18 @@ export interface SubagentRequest {
   description: string;
   prompt: string;
   /**
+   * EXTRA tool names this request opts the child into beyond the persona's own
+   * list (Taskana 4095 follow-up). The only meaningful member today is
+   * "WebSearch" — factory-built at boot only when a search backend is
+   * configured — because WebSearch is NOT a general-purpose default: a child
+   * gets it only when its persona/profile `tools:` list or the workflow step
+   * that spawned it names it explicitly. The runner intersects this with what
+   * it can actually provide (a request naming WebSearch with no backend
+   * configured is a silent skip, never an error — the preset's degraded mode).
+   * Applies to the inline child tier; session-tier children ignore it.
+   */
+  tools?: readonly string[];
+  /**
    * Requested turn budget; wins over the host default, capped at
    * SUBAGENT_MAX_TURNS_CEILING. Turns are what ends a long child run;
    * SUBAGENT_LOOP_DEADLINE_MS only catches a hung one (TASK.148).

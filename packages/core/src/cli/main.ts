@@ -671,8 +671,10 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   } catch (error) {
     bootWrite(`[warn] websearch config failed to load; continuing without WebSearch: ${error instanceof Error ? error.message : String(error)}\n`);
   }
+  let webSearchTool: ReturnType<typeof createWebSearchTool> | undefined;
   if (webSearchBackend !== null) {
-    registry.register(createWebSearchTool(webSearchBackend));
+    webSearchTool = createWebSearchTool(webSearchBackend);
+    registry.register(webSearchTool);
   }
   // Telemetry config (slice 6.6, design slice-6.6-cut.md §2-C1): the SAME
   // .anycode/config.json section MCP/LSP/WebSearch already read (project wins
@@ -1367,6 +1369,12 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
                 settingsForChild(id, profileEffort ?? selectedReasoningEffort),
             }
           : {}),
+        // WebSearch parity for children (Taskana 4095): the SAME tool instance
+        // registered above when a backend resolved is threaded into every
+        // persona child registry that lists "WebSearch". Absent (no backend)
+        // keeps the runner byte-compatible: the child registry simply has no
+        // WebSearch and the name takes its silent-skip miss path.
+        ...(webSearchTool !== undefined ? { webSearchTool } : {}),
       },
     ),
     ext.workflows,

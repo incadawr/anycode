@@ -283,7 +283,11 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(child.permissionEngine).toBe(parent.permissionEngine);
     expect(child.permissionBroker).toBe(parent.permissionBroker);
 
-    // registry: NEW, the nine defaults minus Agent (lock #1, structural).
+    // registry: NEW, the defaults minus Agent (lock #1, structural). The
+    // persona list IS the expected set now: WebSearch is not a built-in
+    // persona tool (Taskana 4095 follow-up) — it reaches a child registry
+    // only through an explicit extras.requestTools (a workflow step's
+    // `tools:`) or an md-profile's own `tools:` line, pinned below.
     expect(child.registry).not.toBe(parent.registry);
     expect(child.registry.has("Agent")).toBe(false);
     expect(child.registry.list().sort()).toEqual([...PERSONAS["general-purpose"].tools].sort());
@@ -314,6 +318,86 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(child.history).toBeInstanceOf(ConversationHistory);
     expect(child.history?.items.length).toBe(0);
     expect(child.history).not.toBe(buildChildConfig(parent, getPersona("general-purpose"), REQ).history);
+  });
+
+  it("WebSearch reaches a child registry ONLY when the child asks for it by name (Taskana 4095 follow-up)", async () => {
+    const parent = makeParent();
+    const { createWebSearchTool } = await import("../tools/web-search.js");
+    const webSearch = createWebSearchTool({
+      kind: "searxng",
+      endpoint: "http://127.0.0.1:8888",
+      headers: {},
+      maxResults: 5,
+    });
+
+    // (1) DEFAULT, backend configured: a plain general-purpose spawn does NOT
+    // get WebSearch — the boot tool is AVAILABLE (threaded as
+    // extras.webSearchTool) but the persona no longer lists it, so paid
+    // search is never a silent default for every child.
+    const defaultChild = buildChildConfig(parent, getPersona("general-purpose"), REQ, {
+      webSearchTool: webSearch,
+    });
+    expect(defaultChild.registry.has("WebSearch")).toBe(false);
+    expect(defaultChild.registry.get("WebSearch")).toBeUndefined();
+    expect(defaultChild.registry.has("WebFetch")).toBe(true);
+
+    // (2) A persona that DECLARES WebSearch (an md-profile's `tools:` line)
+    // gets the boot instance threaded into its registry.
+    const declaring: PersonaDefinition = {
+      ...getPersona("general-purpose"),
+      tools: [...getPersona("general-purpose").tools, "WebSearch"],
+    };
+    const declaredChild = buildChildConfig(parent, declaring, REQ, { webSearchTool: webSearch });
+    expect(declaredChild.registry.get("WebSearch")).toBe(webSearch);
+
+    // (3) A REQUEST that names WebSearch (a workflow step's `tools:` entry —
+    // SubagentRequest.tools) opts the child in even though its persona does
+    // not list it: the runner merges the extras before building the registry.
+    const optedIn = buildChildConfig(parent, getPersona("general-purpose"), { ...REQ, tools: ["WebSearch"] }, {
+      webSearchTool: webSearch,
+    });
+    expect(optedIn.registry.get("WebSearch")).toBe(webSearch);
+    // Without the boot tool (no backend configured) the same request is a
+    // silent skip, never an error — the preset's degraded mode.
+    const noBackend = buildChildConfig(parent, getPersona("general-purpose"), { ...REQ, tools: ["WebSearch"] });
+    expect(noBackend.registry.has("WebSearch")).toBe(false);
+
+    // explore stays fetch-only BY DECLARATION: without an explicit request
+    // extra it never carries WebSearch — but a workflow step that names
+    // WebSearch explicitly can opt even a recon child in (WebSearch is
+    // readOnly, so the strictly-read-only invariant survives the widening).
+    const explorePlain = buildChildConfig(parent, getPersona("explore"), { ...REQ, agentType: "explore" }, {
+      webSearchTool: webSearch,
+    });
+    expect(explorePlain.registry.has("WebSearch")).toBe(false);
+    const exploreOptedIn = buildChildConfig(parent, getPersona("explore"), { ...REQ, agentType: "explore", tools: ["WebSearch"] }, {
+      webSearchTool: webSearch,
+    });
+    expect(exploreOptedIn.registry.get("WebSearch")).toBe(webSearch);
+    expect(exploreOptedIn.registry.has("Bash")).toBe(false);
+
+    // The merge goes through buildPersonaRegistry's resolution, so request
+    // extras can NEVER smuggle a spawn tool past the non-recursion lock.
+    const noRecursion = buildChildConfig(parent, getPersona("general-purpose"), {
+      ...REQ,
+      tools: ["Agent", "Workflow"],
+    });
+    expect(noRecursion.registry.has("Agent")).toBe(false);
+    expect(noRecursion.registry.has("Workflow")).toBe(false);
+
+    // Review fix: request extras are an allowlist (REQUEST_OPT_IN_TOOLS), not
+    // a widening seam — an explore step naming write/exec tools stays
+    // read-only, while WebSearch still opts in.
+    const widened = buildChildConfig(
+      parent,
+      getPersona("explore"),
+      { ...REQ, tools: ["Bash", "Write", "Edit", "WebSearch"] },
+      { webSearchTool: webSearch },
+    );
+    expect(widened.registry.has("Bash")).toBe(false);
+    expect(widened.registry.has("Write")).toBe(false);
+    expect(widened.registry.has("Edit")).toBe(false);
+    expect(widened.registry.get("WebSearch")).toBe(webSearch);
   });
 
   // Budget resolution: request > parent.subagentMaxTurns > DEFAULT, and ONLY

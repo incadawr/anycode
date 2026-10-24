@@ -689,11 +689,15 @@ describe("CLI extensions wiring (design slice-3.3-cut.md §6/slice-3.4-cut.md §
       expect(exitCode).toBe(0);
 
       const text = getText();
-      expect(text).not.toContain("Skills:");
-      expect(text).not.toContain("Agent profiles:");
-      expect(text).not.toContain("Workflows:");
+      // Taskana 4095: the bundled examples/workflows root contributes the
+      // deep-research preset in every dev checkout, so the extensions banner
+      // DOES print ("Workflows: 1") and /workflows lists exactly the bundled
+      // preset — the empty-world claim now holds for skills and agent
+      // profiles only (both counts stay 0, neither table renders).
+      expect(text).toContain("Skills: 0 · Agent profiles: 0 · Plugins: 0 · Workflows: 1");
       expect(text).toContain("[skills] no skills discovered");
-      expect(text).toContain("[workflows] no workflows discovered");
+      expect(text).toContain("deep-research");
+      expect(text).toContain("bundled");
     } finally {
       rmSync(cwd, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
@@ -754,11 +758,25 @@ describe("CLI extensions wiring (design slice-3.3-cut.md §6/slice-3.4-cut.md §
         isGitRepo: await new NodeFileSystemAdapter().exists(`${cwd}/.git`),
       };
       // buildSystemPrompt({toolNames, env}) + "" (memory) + "" (skills) +
-      // "" (workflows) === buildSystemPrompt({toolNames, env}) byte-for-byte —
-      // proving the concatenation point never mutates a boot with nothing
-      // discovered (prompts/system.ts's own section content is out of this lane).
+      // the bundled deep-research workflows section (Taskana 4095: the
+      // examples/workflows root exists in every dev checkout) ===
+      // buildSystemPrompt({toolNames, env}) + that section, byte-for-byte —
+      // proving the concatenation point never mutates a boot beyond what
+      // discovery actually found (prompts/system.ts's own section content is
+      // out of this lane).
+      const { buildWorkflowsPromptSection } = await import("../workflow/prompt-section.js");
+      const bundledWorkflowMeta = [
+        {
+          name: "deep-research",
+          description:
+            "Multi-step research on a question: parallel web sweeps, source fetches, then one cited report.",
+          stepCount: 3,
+          source: "bundled",
+        },
+      ];
       expect(modelPort.requests[0]?.system).toBe(
-        buildSystemPrompt({ toolNames: expectedToolNames, env: expectedEnv }),
+        buildSystemPrompt({ toolNames: expectedToolNames, env: expectedEnv }) +
+          buildWorkflowsPromptSection(bundledWorkflowMeta),
       );
     } finally {
       rmSync(cwd, { recursive: true, force: true });

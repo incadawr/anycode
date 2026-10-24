@@ -66,6 +66,12 @@ const stepSchema = z.object({
   agentType: z.string().min(1).max(128, { message: "exceeds 128 characters" }),
   promptTemplate: templateStringSchema,
   dependsOn: z.array(z.string()).optional(),
+  // Taskana 4095 follow-up: EXTRA tool names the step's child is opted into
+  // beyond its persona's own list (today: "WebSearch"). Shape-checked here —
+  // non-empty strings — and carried through verbatim; the RUNNER intersects
+  // it with what boot actually provides, so an unresolvable name is a silent
+  // skip in the child registry, never a parse failure.
+  tools: z.array(z.string().min(1)).optional(),
   maxTurns: z.number().int().min(1).max(SUBAGENT_MAX_TURNS_CEILING).optional(),
 });
 
@@ -194,6 +200,7 @@ export function parseWorkflowDefinition(
     agentType: step.agentType,
     promptTemplate: step.promptTemplate,
     ...(step.dependsOn !== undefined ? { dependsOn: step.dependsOn } : {}),
+    ...(step.tools !== undefined ? { tools: step.tools } : {}),
     ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
   }));
 
