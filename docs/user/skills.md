@@ -1,10 +1,8 @@
 # Skills
 
-A **skill** is a named instruction file the model loads on demand. Skills
-teach reusable procedures — "how we review code here", "how to write a commit
-message" — without spending prompt budget until needed.
-
-Requires AnyCode 0.0.35 or newer.
+A **skill** is a named instruction file the model loads on demand. Skills teach
+reusable procedures, such as how to review code here or how to write a commit
+message, without spending prompt budget until they are needed.
 
 ## Directory shape and frontmatter
 
@@ -17,78 +15,88 @@ A skill is a directory containing one `SKILL.md`:
 ```markdown
 ---
 name: commit-style
-description: How this repo writes commit messages — read before committing.
+description: How this repo writes commit messages. Read before committing.
 ---
-Write commits as `type(scope): summary` …
+Write commits as `type(scope): summary`.
 ```
 
-- `name` — optional; defaults to the directory name. Must match
+- `name` is optional and defaults to the directory name. It must match
   `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`.
-- `description` — **required**; this is the one line the model sees in the
-  skill list, so make it an accurate trigger.
-- The body after the closing `---` is the instruction text, capped at 64 KiB
-  (larger bodies are truncated when loaded, not hidden).
+- `description` is required. The model sees this one line in its skill list, so
+  make it an accurate trigger.
+- The body after the closing `---` is the instruction text. It is cut at 64 KiB
+  when loaded, not hidden.
+
+A file with invalid frontmatter, a bad name or no description is skipped. Its
+reason appears in the Skills pane (see troubleshooting).
 
 ## Roots and precedence
 
-Skills are discovered in this order — a same-name skill from a higher root
-**replaces** one from a lower root, silently:
+Skills are discovered from these roots, highest precedence first. A skill with
+the same name in a higher root replaces the one below it, silently:
 
 1. `<project>/.anycode/skills/`
 2. `<project>/.agents/skills/`
-3. `~/.anycode/skills/` and `~/.anycode/agents/skills/`
-4. plugin roots
-5. built-in skills shipped with the app
+3. `~/.anycode/skills/`
+4. `~/.agents/skills/`
+5. plugin skill roots
+6. built-in skills shipped with the app
 
-### Precedence worked example
+### Precedence example
 
-You create `<project>/.anycode/skills/creating-subagents/SKILL.md`. The app
-ships a built-in skill with that same name. From the next session on, **your
-file wins** — the built-in body is never loaded, and nothing announces the
-shadowing. Delete your file and the built-in returns. Same rule one level up:
-a same-name skill in the project root beats one in `~/.anycode/skills/`.
+You create `<project>/.anycode/skills/creating-subagents/SKILL.md`. That name
+belongs to a built-in skill. From the next session on, your file wins, the
+built-in body is never loaded, and nothing announces the shadowing. Delete your
+file and the built-in returns.
 
 ## Using a skill
 
-Two ways, both visible to the model:
+- **In the composer**: type `/` at the start of a line and pick a skill from the
+  list. This inserts `$skill-name`. The list offers enabled filesystem skills in
+  Native tabs.
+- **The model's side**: the model sees every loaded skill's name and
+  description, and calls the `Skill` tool with `name` to read a body. The Skill
+  tool accepts only names from that list; an unknown name returns the available
+  names.
 
-- **Chat reference** — mentioning `$commit-style` in a message points the
-  model at that skill.
-- **The `Skill` tool** — `Skill("commit-style")` loads the body into the
-  conversation. Only names from the session's skill list resolve; an unknown
-  name is an honest error listing what exists.
+Skills apply to Native tabs only. Codex and Claude tabs do not receive them.
 
 ## Disabling a skill
 
-Either toggle it off in **Settings → Skills**, or add its name to
-`skills.disabled` in the shared config (`.anycode/config.json`, project or
-user scope):
+- For a filesystem skill, switch it off in **Settings → Skills**. This writes
+  its name to `skills.disabled`.
+- Or add the name to `skills.disabled` in `.anycode/config.json` (project or user
+  file):
 
 ```json
 { "skills": { "disabled": ["commit-style"] } }
 ```
 
-Disabling frees a cap slot: at most **64 skills** per session after dedupe,
-lowest precedence dropped first.
+Built-in skills do not appear in the Skills pane, so disable them with
+`skills.disabled` as well.
+
+Disabled names do not count toward the cap. A session loads at most **64 skills**
+after deduplication; overflow drops from the lowest precedence first. The list of
+skills in the system prompt is capped at about **8,000 characters**. Lines that do
+not fit are dropped, and the prompt says how many.
 
 ## Built-in skills
 
-The app ships these built-ins, listed with source `builtin` in the session's
-skill list:
+The app ships these skills. They are in-memory, need no file, and are shadowed by
+any same-name filesystem skill.
 
-| Skill | Purpose |
-|---|---|
-| `using-git-worktrees` | When and how to use the EnterWorktree/ExitWorktree tools. |
-| `using-browser-preview` | Previewing local HTML/Markdown artifacts and localhost dev servers. |
-| `creating-subagents` | Authoring `.anycode/agents/*.md` profiles. |
-| `anycode-setup` | Read-only help configuring AnyCode itself (settings, MCP, permissions, …). |
-
-A same-name skill in any filesystem root replaces a built-in exactly as it
-would another filesystem skill (see the worked example above).
+| Skill | Available when | Purpose |
+|---|---|---|
+| `using-git-worktrees` | the worktree tools are registered | When and how to use EnterWorktree and ExitWorktree. |
+| `using-browser-preview` | the browser-preview tools are registered | Previewing local HTML and Markdown files and localhost dev servers. |
+| `creating-subagents` | always | Writing `.anycode/agents/*.md` profiles. |
+| `anycode-setup` | always | Read-only help with configuring AnyCode. It reads your files and explains the fix; any edit needs your approval. It never prints secrets. |
 
 ## How to verify it applied
 
-Skills are discovered at session boot: start a **new session**, then check
-Settings → Skills (lists every discovered skill with its source) or ask the
-model to list its skills. A skill that does not appear was skipped silently —
-see [troubleshooting.md](troubleshooting.md) for the checklist.
+The Skills pane has a scope bar at the top: **Global (user)** edits the user
+files, and **Project** edits the open workspace's files (its picker lists open
+project tabs). Skills are discovered when a session starts. Start a **new
+session** after adding or editing a skill. Then open **Settings → Skills**: filesystem skills are listed
+with their source, and a strip shows any skill that failed to load. If the skill
+is missing, see [troubleshooting.md](troubleshooting.md).

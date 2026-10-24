@@ -1,72 +1,86 @@
 # Configuration files
 
-AnyCode reads two unrelated kinds of configuration, stored in two different
-places. Mixing them up is the single most common setup mistake, so this page
-puts them side by side.
-
-Requires AnyCode 0.0.35 or newer.
+AnyCode reads two unrelated kinds of configuration, stored in different
+places. Mixing them up is the most common setup mistake, so this page puts them
+side by side.
 
 ## The two worlds at a glance
 
 | | App settings | Shared config |
 |---|---|---|
-| File(s) | `~/.anycode/settings.json` | `<project>/.anycode/config.json` and `~/.anycode/config.json` |
+| File | `~/.anycode/settings.json` | `<project>/.anycode/config.json` and `~/.anycode/config.json` |
 | Scope | The whole application | Per project (project file) and per machine (user file) |
-| Owns | Provider connections, permissions, tools, network/proxy, appearance, preview | MCP servers, disabled skills, telemetry, repo-map, web-search backend |
-| Written by | The Settings UI (and by hand) | By hand, or by the Skills/MCP panes for their own subtrees |
-| Precedence | One file, no merge | Project file wins over the user file |
-| Secrets | API keys go to `~/.anycode/secrets.json` (mode 0600), never inline | `${env:VAR}` references, never literal tokens |
+| Owns | Provider connections, permissions, tools, Vision, network and proxies, engine binary paths, session limits, appearance | MCP servers, disabled skills, telemetry, repo map, web search |
+| Written by | The Settings window (or by hand while the app is closed) | By hand, or by the MCP and Skills panes for their own entries |
+| Precedence | One file, no merge | The project file wins over the user file, key by key |
+| Secrets | API keys in `~/.anycode/secrets.json` (mode 0600), never inline | `${env:NAME}` references, never literal tokens |
 
-`~/.anycode/settings.json` is human-editable and diffable (mode 0644). Secrets
-of every kind — provider API keys, OAuth tokens, proxy passwords — live in
-`~/.anycode/secrets.json` (mode 0600, owner-only) and are referenced from
-settings, never inlined.
+`settings.json` is mode 0644 and human-editable. Secrets live in
+`~/.anycode/secrets.json` (mode 0600) and are referenced from settings, never
+inlined.
 
-**Precedence contract:** a project-local `.anycode/` beats the user
-`~/.anycode/` for everything that has both scopes — shared config keys, skills,
-and subagent profiles alike. Within the shared config, the project file wins
-over the user file.
+## App settings: `~/.anycode/settings.json`
 
-## App settings — `~/.anycode/settings.json`
-
-One file for the whole app. The Settings window is the owner surface for it;
-hand edits are fine while the app is not running.
+The file carries `"version": 2` and the provider block alongside the sections
+below; the snippet shows only the sections discussed here.
 
 ```json
 {
-  "provider": {
-    "activeConnectionId": "zai-main",
-    "connections": [
-      { "id": "zai-main", "providerId": "z-ai", "model": "glm-5.3" }
-    ]
-  },
-  "tools": { "concurrency": 4 },
   "permissions": {
-    "alwaysAllow": [{ "toolName": "Bash", "pattern": "git status*" }]
-  }
+    "alwaysAllow": [{ "toolName": "Bash", "pattern": "pnpm test*" }]
+  },
+  "tools": { "concurrency": 4, "maxRetries": 8 }
 }
 ```
 
-- **Provider/connections** — Settings → Provider. One or more named
-  connections (provider, model, base URL, per-connection proxy); the active
-  connection is the default for new sessions. Details and the engine-vs-
-  provider distinction: [engines.md](engines.md).
-- **Permissions** — Settings → Permissions. `permissions.alwaysAllow` rules of
-  shape `{ "toolName": ..., "pattern": ... }`. Details: [permissions.md](permissions.md).
-- **Tools** — Settings → Tools. `tools.concurrency`, `tools.stallTimeoutMs`,
-  `tools.maxTurns`, subagent budgets, `tools.grepBackend` (`"rg"` or `"tgrep"`).
-- **Network** — Settings → Network. `network.proxyProfiles` and
-  `network.proxyRef`. Details: [proxy.md](proxy.md).
+- **Provider** (Settings → Provider): `provider.connections`, one entry per
+  named connection (provider, model, base URL, transport, proxy, image input).
+  `provider.activeConnectionId` is the default for new sessions. Connection ids
+  are generated (`conn-…`) and the UI does not show them; read them from
+  `provider.connections[].id` when a profile or file needs one.
+  - **Image input** (in the connection drawer): Auto, On or Off, set per model.
+    On or Off overrides the catalog's own answer for the model it was set for.
+  - **Quota**: an HTTP provider that reports its subscription quota in response
+    headers shows the remaining quota on the connection card. AnyCode keeps the
+    last value for each connection.
+- **Permissions** (Settings → Permissions): `permissions.alwaysAllow`. See
+  [permissions.md](permissions.md).
+- **Tools** (Settings → Tools):
+  - `tools.concurrency`: parallel read-only tool calls (default 4).
+  - `tools.stallTimeoutMs`: per-attempt provider stream watchdog (default 90000 ms).
+  - `tools.maxTurns`: turn limit for the main agent (default 100).
+  - `tools.subagentMaxTurns`: turn limit for subagents (default 40).
+  - `tools.maxRetries`: provider retry attempts (the pane's "Retry attempts"; default 8).
+  - `tools.networkRetryBudgetMs`: wall-clock budget for riding out a network outage (the pane's "Network retry budget (ms)"; default 300000 ms, 5 minutes).
+  - `tools.grepBackend`: `"rg"` (default) or `"tgrep"`.
+  - `tools.archMap`: `true` opts into the read-only import-graph tool.
+  - `tools.subagentStallTimeoutMs`: silence limit for a running subagent.
+  - `sessionLimits`: open tabs (default 20), child sessions per parent (3) and app-wide (8). The pane accepts 4–40, 1–8 and 1–24.
+- **Vision** (Settings → Vision): `recognizer` `{ connectionId, modelId }`. When the
+  main model cannot see images, this connection and model answer `InspectImage`
+  calls. Unset means the fallback is off.
+- **Network** (Settings → Network): `network.proxyProfiles` and `network.proxyRef`.
+  See [proxy.md](proxy.md).
+- **Codex / Claude** (Settings → Codex, Settings → Claude): `codex` and `claude`
+  hold the chosen binary path, the last doctor check, and the engine's proxy.
+  Edit these through the panes.
 
-**How to verify it applied:** reopen Settings — every pane renders from the
-same file. Connection and permission changes reach *new* sessions; restart the
-app when in doubt.
+**Environment variables win over settings.** A matching variable in the app's
+launch environment overrides the settings value. The variables that do this are
+`ANYCODE_TOOL_CONCURRENCY`, `ANYCODE_STALL_TIMEOUT_MS`, `ANYCODE_MAX_RETRIES`,
+`ANYCODE_NETWORK_RETRY_BUDGET_MS`, `ANYCODE_GREP_BACKEND` and `ANYCODE_ARCHMAP`.
+If a setting seems to have no effect, check for one of these. The Provider pane
+shows an "Environment override" notice when a provider variable is set.
 
-## Shared config — `.anycode/config.json`
+**Verify it applied:** settings changes take effect in sessions you start
+afterwards. If a running tab still behaves the old way, start a new session.
+
+## Shared config: `.anycode/config.json`
 
 The project file `<project>/.anycode/config.json` and the user file
-`~/.anycode/config.json` share one schema. When both define the same key, the
-project file wins.
+`~/.anycode/config.json` share one schema. A project key wins over the same
+user key. Web search is the exception: `webSearch` is one object, so the project
+file replaces the user object wholesale.
 
 ```json
 {
@@ -84,39 +98,40 @@ project file wins.
 }
 ```
 
-- **MCP servers** — `mcpServers`, stdio or HTTP form, `${env:VAR}`
-  substitution everywhere a secret would go. Full walkthrough:
-  [mcp.md](mcp.md).
-- **Skills** — only the `skills.disabled` name list lives here (the Skills pane
-  toggles it for you). Details: [skills.md](skills.md).
-- **Subagent profiles** — not in this file at all: they are standalone
-  `.anycode/agents/*.md` files. Details: [subagents.md](subagents.md).
-- **Telemetry / repo-map** — per-workspace opt-ins. Status shows in
-  Settings → Environment.
-- **Web search backend** — `webSearch` selects `"brave"` (key by env-var name)
-  or `"searxng"` (self-hosted endpoint).
+- **MCP servers**: `mcpServers`, as a stdio or HTTP entry. See [mcp.md](mcp.md).
+- **Skills**: `skills.disabled` lists skill names to hide. The Skills pane
+  toggles it for filesystem skills. See [skills.md](skills.md).
+- **Subagent profiles** are not in this file. They are standalone
+  `.anycode/agents/*.md` files. See [subagents.md](subagents.md).
+- **Telemetry**: `telemetry.enabled: true` turns on a local JSONL sink, and
+  optional `dir` (an absolute path) changes where it writes. The variable
+  `ANYCODE_TELEMETRY=0` turns it off; no environment variable turns it on.
+- **Repo map**: `repoMap.enabled` and optional `maxTokens`.
+- **Web search**: `webSearch.backend` is `"brave"` (the key comes from the
+  environment variable named in `apiKeyEnv`) or `"searxng"` (set `endpoint` to
+  your instance).
 
-**How to verify it applied:** config is read at session boot — start a new
-session, then check the matching pane (Settings → MCP for servers,
-Settings → Environment for telemetry/repo-map).
+**Verify it applied:** shared config is read when a session starts. Start a new
+session, then check Settings → MCP for servers and Settings → Environment for
+telemetry and repo map.
 
 ## Which file do I edit?
 
-| I want to… | Edit |
+| I want to | Edit |
 |---|---|
-| Add a provider connection or switch models | Settings → Provider (`~/.anycode/settings.json`) |
-| Add or remove an MCP server | `<project>/.anycode/config.json` (or `~/.anycode/config.json`) |
-| Silence a skill | `skills.disabled` in the shared config, or Settings → Skills |
-| Add a subagent profile | `<project>/.anycode/agents/<name>.md` — never a JSON file |
-| Stop being asked for `git status` | `permissions.alwaysAllow` in Settings → Permissions |
+| Add a provider connection or switch models | Settings → Provider |
+| Add or remove an MCP server | Settings → MCP, or `mcpServers` in the shared config |
+| Hide a skill | Settings → Skills, or `skills.disabled` in the shared config |
+| Add a subagent profile | `<project>/.anycode/agents/<name>.md`, not a JSON file |
+| Stop being asked about a command | Settings → Permissions (always-allow rule) |
 | Route traffic through a proxy | Settings → Network |
-| Change tool concurrency / turn limits | `tools` in Settings → Tools |
-| Enable telemetry or repo-map | `telemetry`/`repoMap` in the shared config |
+| Change tool concurrency or turn limits | Settings → Tools |
+| Turn on telemetry or the repo map | `telemetry` or `repoMap` in the shared config |
 
 ## Related pages
 
-- [engines.md](engines.md) — the three engines and how they differ from providers.
-- [mcp.md](mcp.md) — the full MCP walkthrough.
-- [skills.md](skills.md) and [subagents.md](subagents.md) — extensibility surfaces.
-- [permissions.md](permissions.md) — the approval model.
-- [troubleshooting.md](troubleshooting.md) — when a change does not seem to apply.
+- [engines.md](engines.md): the three engines and how they differ from providers.
+- [mcp.md](mcp.md): the MCP walkthrough.
+- [skills.md](skills.md) and [subagents.md](subagents.md): extensibility surfaces.
+- [permissions.md](permissions.md): the approval model.
+- [troubleshooting.md](troubleshooting.md): when a change does not seem to apply.

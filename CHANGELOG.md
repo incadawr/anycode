@@ -9,6 +9,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- User documentation in `docs/user/`: configuration files, engines, subagents,
+  skills, MCP servers, permissions, proxy, orchestration and troubleshooting. The
+  app ships a copy, and `docs/user/README.md` indexes it.
+- Built-in `anycode-setup` skill for Native tabs: the model reads your AnyCode
+  settings and config, explains which one applies, and proposes the fix. It
+  changes nothing without your approval and never prints secrets. It is not
+  listed in Settings → Skills; to turn it off, add `anycode-setup` to
+  `skills.disabled`, or let a same-name project or user skill replace it.
 - While AnyCode's own engine is running a turn, a message you send is delivered
   into that turn between its steps instead of waiting for the next turn. It shows
   as a pending bubble and becomes an ordinary message in the transcript once the
@@ -62,19 +70,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ## [0.0.35] — 2026-10-24
 
 ### Added
-- User documentation tree `docs/user/`: configuration files and their
-  precedence, engines, subagent profiles, skills, MCP servers, permissions,
-  proxy, orchestration, and troubleshooting checklists. The tree ships with
-  releases (packed into the app bundle by electron-builder) and is indexed by
-  `docs/user/README.md`, which also maps every Settings pane to its page.
-- Built-in `anycode-setup` skill: helps configure AnyCode itself (settings,
-  connections, engines, MCP servers, skills, subagent profiles, permissions,
-  proxy). It summarizes the docs topics, diagnoses the current configuration
-  read-only (citing file paths), and defers every edit to Write/Edit calls
-  under the approval gate. It never prints API keys or secrets — they are
-  referred to by env-var name or vault slot only. A same-name project/user
-  skill shadows it and it can be disabled like every other skill.
-
 - The built-in `explore` recon subagent can run on a cheaper model: set
   `ANYCODE_EXPLORE_MODEL` (exact model id) and every inline explore child
   defaults to it. An explicit `Agent(model: …)` still wins, and unset keeps
