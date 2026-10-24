@@ -195,7 +195,6 @@ import {
   SwitchableModelPort,
   WriteBehindHistorySink,
   PREVIEW_BUILTIN_SKILLS,
-  SETUP_BUILTIN_SKILLS,
   SUBAGENT_BUILTIN_SKILLS,
   WORKTREE_BUILTIN_SKILLS,
   backgroundCapableBashTool,
@@ -297,6 +296,8 @@ import type {
 } from "@anycode/core";
 import { buildAgentProfileRoots } from "@anycode/core/subagents-admin";
 import { hasDurableTransitionResult } from "./worktree-recovery.js";
+import { anycodeSetupDocsForHost } from "./anycode-setup-docs.js";
+import { buildHostBuiltinSkills } from "./builtin-skills.js";
 import { ChildReportQueue } from "./child-report-queue.js";
 import {
   SUPERVISOR_IDLE_TERMINAL_MARKERS,
@@ -2900,22 +2901,18 @@ async function boot(): Promise<void> {
       repoMapFiles: [],
       problems: [],
     };
-    // Builtin skills combine every capability-gated set (worktree, preview, ...)
-    // into ONE array: discoverExtensions takes a single `builtinSkills` key, so
-    // two independent conditional spreads of that same key would silently
-    // overwrite each other instead of accumulating (each gate's own boolean
-    // still decides whether its skill is IN the combined list at all).
-    const builtinSkills: readonly BuiltinSkillDefinition[] = [
-      ...(worktreeAvailable ? WORKTREE_BUILTIN_SKILLS : []),
-      ...(previewAvailable ? PREVIEW_BUILTIN_SKILLS : []),
-      // Subagent port always attached, no capability boolean to mirror
-      // (withSubagents always attaches a SubagentPort and Write is always
-      // registered — night-track wave-2 cut §1.5).
-      ...SUBAGENT_BUILTIN_SKILLS,
-      // Taskana 4707: unconditional, same posture as subagents — the skill
-      // only reads config through normal tools; edits stay under the gate.
-      ...SETUP_BUILTIN_SKILLS,
-    ];
+    // Builtin skills: every capability-gated set plus the unconditional ones,
+    // composed by buildHostBuiltinSkills (host/builtin-skills.ts) into ONE
+    // array — discoverExtensions takes a single `builtinSkills` key, so two
+    // conditional spreads of that same key would silently overwrite each other.
+    // Taskana 4707: the anycode-setup skill's docs location is resolved from
+    // the app's own location (packaged resources, dev checkout, or the tagged
+    // GitHub URL), never from the workspace.
+    const builtinSkills: readonly BuiltinSkillDefinition[] = buildHostBuiltinSkills({
+      worktreeAvailable,
+      previewAvailable,
+      anycodeSetupDocs: anycodeSetupDocsForHost(),
+    });
     try {
       ext = await discoverExtensions(fsAdapter, {
         workspace,

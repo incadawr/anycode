@@ -2,29 +2,30 @@
  * Taskana 4707 — "docs in bundle sync with repo" as a SOURCE test. A true
  * asar-level test needs a package build (CI-only), so drift is caught here
  * instead: the anycode-setup skill's topic table and the docs/user/ index are
- * asserted against the real tree in every checkout, the same one §2.5's
- * electron-builder `files:` entries pack into the bundle. Since docs and
+ * asserted against the real tree in every checkout, the same tree that
+ * electron-builder's `extraResources` copies into the packaged app. Since docs and
  * skill are always committed together, any real drift (a renamed/removed
  * topic file, an orphan page, a stale table row, a broken link) fails this
  * file first.
  *
- * BUNDLED_WORKFLOWS_DIR precedent (extensions/bootstrap.ts): the docs dir is
- * resolved module-relative — skills → src → core → packages → repo root —
- * which is exactly how the packaged app's resolver will find it inside
- * app.asar (the follow-up card; here it only needs to exist in the checkout).
+ * The docs dir is resolved module-relative (skills → src → core → packages →
+ * repo root). The packaged app does NOT use this path: it reads
+ * process.resourcesPath/docs/user (host/anycode-setup-docs.ts).
  */
 
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ANYCODE_SETUP_SKILL } from "./builtin.js";
+import { anycodeSetupSkill } from "./builtin.js";
 
 /** Module-relative docs/user root (BUNDLED_WORKFLOWS_DIR resolution recipe). */
 const DOCS_USER_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../../../../docs/user",
 );
+
+const ANYCODE_SETUP_SKILL = anycodeSetupSkill({ kind: "local", dir: DOCS_USER_DIR });
 
 function readTopic(name: string): string {
   const path = resolve(DOCS_USER_DIR, name);

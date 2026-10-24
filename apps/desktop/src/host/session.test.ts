@@ -43,7 +43,6 @@ import {
   ModePermissionEngine,
   NodeHttpAdapter,
   RuleAwarePermissionEngine,
-  SETUP_BUILTIN_SKILLS,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SessionPermissionRules,
   SqlitePersistenceAdapter,
@@ -84,6 +83,7 @@ import type {
 } from "@anycode/core";
 import { SUBAGENT_WRAPUP_FAILED_NOTICE, childTurnLimitNotice } from "@anycode/core";
 import type { SessionEngine } from "./engines/session-engine.js";
+import { buildHostBuiltinSkills } from "./builtin-skills.js";
 import type {
   HostToUiMessage,
   ShellCapabilitiesProjection,
@@ -377,14 +377,20 @@ describe("Session — context breakdown wire (slice P7.17 · F12)", () => {
 
 describe("Session — builtin anycode-setup skill wire (Taskana 4707)", () => {
   it("advertises the skill in the system prompt's skills section and serves it through the Skill tool", async () => {
-    // The host's own registration shape (host/index.ts builtinSkills):
-    // discoverSkills over the registered builtin sets, one SkillPort, one
+    // The host's own builtin list (host/builtin-skills.ts, the same helper
+    // host/index.ts boots with): discoverSkills over it, one SkillPort, one
     // skills prompt section — replayed here over the in-memory harness fs.
     const fs = new MemFs();
-    const discovered = await discoverSkills(fs, [], { builtins: SETUP_BUILTIN_SKILLS });
+    // The host's own composition (host/builtin-skills.ts), not a re-typed list.
+    const setupBuiltins = buildHostBuiltinSkills({
+      worktreeAvailable: false,
+      previewAvailable: false,
+      anycodeSetupDocs: { kind: "remote", ref: "v0.0.35" },
+    });
+    const discovered = await discoverSkills(fs, [], { builtins: setupBuiltins });
     expect(discovered.problems).toEqual([]);
     const promptSection = buildSkillsPromptSection(discovered.metas);
-    const skills = createSkillPort(fs, discovered.metas, { builtins: SETUP_BUILTIN_SKILLS });
+    const skills = createSkillPort(fs, discovered.metas, { builtins: setupBuiltins });
 
     expect(promptSection).toContain("anycode-setup (builtin):");
 
@@ -412,7 +418,7 @@ describe("Session — builtin anycode-setup skill wire (Taskana 4707)", () => {
         .find((part) => part.text.includes("# AnyCode setup"));
       expect(skillResult).toBeDefined();
       expect(skillResult?.text).toContain("docs/user/mcp.md");
-      expect(skillResult?.text).toContain("NEVER print API keys, tokens or secrets");
+      expect(skillResult?.text).toContain("NEVER print, quote or summarize API keys");
     } finally {
       h.close();
     }

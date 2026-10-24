@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { createSkillPort, discoverSkills } from "./discovery.js";
 import {
-  ANYCODE_SETUP_SKILL,
   BUILTIN_SKILL_SOURCE,
   CREATING_SUBAGENTS_SKILL,
-  SETUP_BUILTIN_SKILLS,
   SUBAGENT_BUILTIN_SKILLS,
+  anycodeSetupBuiltinSkills,
+  anycodeSetupSkill,
   USING_BROWSER_PREVIEW_SKILL,
   USING_GIT_WORKTREES_SKILL,
   WORKTREE_BUILTIN_SKILLS,
@@ -167,6 +167,10 @@ describe("using-browser-preview builtin skill (night-track wave-1 fix cut §1.4,
   });
 });
 
+const SETUP_LOCAL = { kind: "local" as const, dir: "/repo/docs/user" };
+const ANYCODE_SETUP_SKILL = anycodeSetupSkill(SETUP_LOCAL);
+const SETUP_BUILTIN_SKILLS = anycodeSetupBuiltinSkills(SETUP_LOCAL);
+
 describe("anycode-setup builtin skill (Taskana 4707)", () => {
   it("discovers and lazily loads the always-on setup skill", async () => {
     const fs = fakeFs();
@@ -187,22 +191,31 @@ describe("anycode-setup builtin skill (Taskana 4707)", () => {
     expect(loaded?.truncated).toBe(false);
   });
 
-  it("matches the frozen name and description verbatim (Taskana 4707)", () => {
+  it("names the skill and carries the broadened trigger description (Taskana 4707)", () => {
     expect(ANYCODE_SETUP_SKILL.name).toBe("anycode-setup");
     expect(ANYCODE_SETUP_SKILL.description).toBe(
-      "Help configure AnyCode itself: settings, connections, engines, MCP servers, skills, subagent profiles, permissions, and proxy. Read-only diagnosis; edits only through approved Write/Edit. Never prints API keys or secrets.",
+      "Use when the user asks how to set up or configure AnyCode, or why an MCP server, skill, subagent profile, permission, provider, Vision, Codex/Claude engine or setting is not taking effect. Read-only diagnosis; edits only through approved Write/Edit. Never prints API keys or secrets.",
     );
   });
 
   it("carries both safety rules verbatim: never print secrets, edits only via approved Write/Edit", () => {
     expect(ANYCODE_SETUP_SKILL.body).toContain(
-      "NEVER print API keys, tokens or secrets — refer to them by env-var name or vault slot only.",
+      "NEVER print, quote or summarize API keys, tokens, passwords or other secret",
     );
-    expect(ANYCODE_SETUP_SKILL.body).toContain(
-      "edit config files only through Write/Edit with the user's approval; never shell out to write configs.",
-    );
+    expect(ANYCODE_SETUP_SKILL.body).toContain("Refer to a secret by its env-var name or vault slot only.");
+    expect(ANYCODE_SETUP_SKILL.body).toContain("Edit config only through Write/Edit after the user approves the change.");
+    expect(ANYCODE_SETUP_SKILL.body).toContain("NEVER read `~/.anycode/secrets.json`.");
+    expect(ANYCODE_SETUP_SKILL.body).toContain("Expand `~` to the absolute home directory before any Read, Write or Edit.");
     // Defensive, cheap: no key-shaped literal ever rides in the body.
     expect(ANYCODE_SETUP_SKILL.body).not.toMatch(/sk-[A-Za-z0-9]{8,}/);
+  });
+
+  it("embeds the resolved docs location: a local dir reads from disk, a remote ref fetches the pinned tag with master as fallback", () => {
+    expect(ANYCODE_SETUP_SKILL.body).toContain("/repo/docs/user/<topic>.md");
+    const remote = anycodeSetupSkill({ kind: "remote", ref: "v0.0.35" }).body;
+    expect(remote).toContain("raw.githubusercontent.com/incadawr/anycode/v0.0.35/docs/user/<topic>.md");
+    expect(remote).toContain("with `master` in place of `v0.0.35`");
+    expect(remote).not.toContain("/repo/docs/user");
   });
 
   it("names exactly the docs/user topic files in its topic table", () => {
