@@ -1575,11 +1575,11 @@ function realDockDom(): DockDom {
       return el ? Math.round(el.getBoundingClientRect().width) : null;
     },
     tabButton: (id: string) => {
-      const el = document.querySelector<HTMLButtonElement>(`.dock-tab[data-tab-id="${CSS.escape(id)}"]`);
+      const el = document.querySelector<HTMLButtonElement>(`.dock-tab[data-tab-id="${CSS.escape(id)}"] > .dock-tab-select`);
       return el ? { disabled: el.disabled } : null;
     },
     clickTab: (id: string) => {
-      const el = document.querySelector<HTMLButtonElement>(`.dock-tab[data-tab-id="${CSS.escape(id)}"]`);
+      const el = document.querySelector<HTMLButtonElement>(`.dock-tab[data-tab-id="${CSS.escape(id)}"] > .dock-tab-select`);
       if (!el) {
         return false;
       }
@@ -9277,9 +9277,15 @@ export function createAutomationFacade(
 
     dockTabSplit(id: string): FacadeResult {
       // The ⫿ driver: a REAL click on the tab's own split affordance, same
-      // posture as dockTabClick/Close — the button's own disabled contract
-      // (title-only when !canSplit) is enforced by the store refusing.
-      return dockDom.clickTabSplit(id) ? { ok: true } : { ok: false, reason: "tab_not_present" };
+      // posture as dockTabClick/Close. Cross-review D6: the click can be
+      // refused (store `splitRight` no-ops when the window is too narrow or
+      // the tab is not splittable) — report that honestly instead of ok:true,
+      // comparing the pinned tab before/after the click.
+      const before = dockStore.getState().splitTabId;
+      if (!dockDom.clickTabSplit(id)) {
+        return { ok: false, reason: "tab_not_present" };
+      }
+      return dockStore.getState().splitTabId !== before ? { ok: true } : { ok: false, reason: "split_refused" };
     },
 
     slashMenuState(tabId: string): SlashMenuState | FacadeErr {
