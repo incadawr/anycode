@@ -479,6 +479,10 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       concurrency: z.number().optional(),
       stallTimeoutMs: z.number().optional(),
       maxTurns: z.number().optional(),
+      // : provider retry knobs, mirrors of
+      // ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (env > settings).
+      maxRetries: z.number().optional(),
+      networkRetryBudgetMs: z.number().optional(),
       subagentMaxTurns: z.number().optional(),
       //  slice 1: subagent stall-detector silence threshold override
       // (ANYCODE_SUBAGENT_STALL_MS). Distinct from `stallTimeoutMs` above.
