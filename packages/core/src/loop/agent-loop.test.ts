@@ -4982,7 +4982,7 @@ describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
     expect(injectedItem?.step).toBe(1);
   });
 
-  it("last-value-wins overwrite: exactly ONE user_injected with the newer text; the superseded waiter resolves -1", async () => {
+  it("FIFO: several sends within one step are ALL delivered, in order, as separate frames (4110 rework)", async () => {
     const modelPort = new MockModelPort(steerScript());
     const parking = makeParkingTool();
     const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: parking.tool }) });
@@ -5003,20 +5003,160 @@ describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
       };
       check();
     });
-    const supersededSteps: number[] = [];
-    loop.queueInjection("A", (step) => {
-      supersededSteps.push(step);
-    });
-    loop.queueInjection("B");
+    const deliveredSteps: number[] = [];
+    loop.queueInjection("A", (step) => deliveredSteps.push(step));
+    loop.queueInjection("B", (step) => deliveredSteps.push(step));
     parking.release();
     await run;
 
+    // BOTH frames landed, in send order, one user_injected each.
     const injectedEvents = seen.filter((e) => e.type === "user_injected");
-    expect(injectedEvents).toEqual([{ type: "user_injected", step: 1, text: "B" }]);
-    expect(supersededSteps).toEqual([-1]);
+    expect(injectedEvents).toEqual([
+      { type: "user_injected", step: 1, text: "A" },
+      { type: "user_injected", step: 1, text: "B" },
+    ]);
+    expect(deliveredSteps).toEqual([1, 1]);
     expect(
       loop.history.items.filter((item) => item.message.role === "user").map((i) => i.message.content),
-    ).toEqual(["go", "B"]);
+    ).toEqual(["go", "A", "B"]);
+    // The second model request carries both frames after the c1 tool result.
+    const second = modelPort.requests[1];
+    expect(second?.messages.at(-1)).toEqual({ role: "user", content: "B" });
+    expect(second?.messages.at(-2)).toEqual({ role: "user", content: "A" });
+    expect(second?.messages.at(-3)?.role).toBe("tool");
+  });
+
+  it("an injection queued during the FINAL text-only step never flushes and is reported undelivered via takeUndeliveredInjections", async () => {
+    // Step 1 runs a tool; step 2 is the text-only finish. The steer is queued
+    // while step 2's stream is PARKED mid-delta — the sentinel exit returns
+    // before any seam could flush, so the frame must come back undelivered.
+    let releaseFinal!: () => void;
+    const finalGate = new Promise<void>((resolve) => {
+      releaseFinal = resolve;
+    });
+    const steps: ModelStreamEvent[][] = [
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [
+        { type: "start" },
+        { type: "text_delta", id: "t2", text: "done" },
+        { type: "finish", finishReason: "stop", usage: {} },
+      ],
+    ];
+    const port = new (class implements ModelPort {
+      step = 0;
+      readonly requests: ModelRequest[] = [];
+      /** Resolves once the FINAL step's stream is parked after its first delta. */
+      parked!: () => void;
+      readonly parkedFinal = new Promise<void>((resolve) => {
+        this.parked = resolve;
+      });
+      async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+        this.requests.push(request);
+        const events = steps[this.step] ?? [];
+        const isFinalStep = this.step === 1;
+        this.step += 1;
+        let index = 0;
+        for (const event of events) {
+          yield event;
+          if (isFinalStep && index === 1) {
+            // Park INSIDE the final step's stream, after its first delta.
+            this.parked();
+            await finalGate;
+          }
+          index += 1;
+        }
+      }
+    })();
+    const parking = makeParkingTool();
+    const loop = makeLoop({ modelPort: port, registry: makeRegistry({ Mock: parking.tool }) });
+
+    const seen: AgentEvent[] = [];
+    const run = (async () => {
+      for await (const event of loop.runTurn("go")) {
+        seen.push(event);
+      }
+    })();
+    await new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (seen.some((e) => e.type === "tool_execution_start")) {
+          resolve();
+        } else {
+          setTimeout(check, 0);
+        }
+      };
+      check();
+    });
+    // Step1's tool is parked mid-dispatch — release it so the final step runs.
+    parking.release();
+    // Wait until the FINAL step's stream delivered its first delta and parked.
+    await port.parkedFinal;
+    const deliveredSteps: number[] = [];
+    expect(loop.queueInjection("LATE", (step) => deliveredSteps.push(step))).toBe(true);
+    releaseFinal();
+    await run;
+
+    expect(seen.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    expect(seen.some((e) => e.type === "user_injected")).toBe(false);
+    expect(
+      loop.history.items.filter((item) => item.message.role === "user").map((i) => i.message.content),
+    ).toEqual(["go"]);
+    // The waiter was told -1 and the frame is recoverable for next-turn delivery.
+    expect(deliveredSteps).toEqual([-1]);
+  });
+
+  it("a frame flushed at the seam but never carried by a model request (max_turns refusal) reports -1 (4110 rework)", async () => {
+    // maxTurns: 1 — step 1 runs a tool (the steer queued mid-dispatch flushes
+    // at step 1's seam), then the ceiling check at iteration 2 REFUSES the
+    // continuation: no second model request ever carries the frame. The user_
+    // injected event fired and the frame IS in history, but the model never
+    // saw it — the waiter must be told -1 (undelivered), never a resolved
+    // delivery (4110: a frame the model never got to answer counts as
+    // undelivered → the UI re-queues it for the next turn).
+    const steps: ModelStreamEvent[][] = [
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+    ];
+    const parking = makeParkingTool();
+    const loop = makeLoop({
+      modelPort: new MockModelPort(steps),
+      registry: makeRegistry({ Mock: parking.tool }),
+      maxTurns: 1,
+    });
+
+    const seen: AgentEvent[] = [];
+    const run = (async () => {
+      for await (const event of loop.runTurn("go")) {
+        seen.push(event);
+      }
+    })();
+    await new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (seen.some((e) => e.type === "tool_execution_start")) {
+          resolve();
+        } else {
+          setTimeout(check, 0);
+        }
+      };
+      check();
+    });
+    const deliveredSteps: number[] = [];
+    loop.queueInjection("ANSWER ME", (step) => deliveredSteps.push(step));
+    parking.release();
+    await run;
+
+    // The seam DID append + emit (the frame is in history), but the ceiling
+    // refused the continuation — no model request ever saw it.
+    expect(seen.some((e) => e.type === "user_injected")).toBe(true);
+    expect(seen.at(-1)).toMatchObject({ type: "loop_end", reason: "max_turns", turns: 1 });
+    // …and the waiter was STILL told the truth: not delivered (-1).
+    expect(deliveredSteps).toEqual([-1]);
   });
 
   it("no flush on the sentinel exit: queueInjection after the loop settled returns false and nothing lands", async () => {

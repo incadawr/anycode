@@ -109,13 +109,16 @@ export class CoreEngine implements SessionEngine {
   }
 
   /**
-   * TASK.123 (Taskana 4110): pending steer waiters — one entry per in-flight
-   * `steer()` call, resolved with the step ordinal the loop delivered the
-   * frame after, or rejected when the frame never landed. Drained by
-   * `failUndeliveredSteers` from the engine's own turn generators' `finally`
-   * (a turn that ends before the flush kills its undelivered steers).
+   * TASK.123 (Taskana 4110 rework): pending steer waiters — one entry per
+   * in-flight `steer()` call, in send order, resolved with the step ordinal
+   * the loop delivered the frame after. A turn that ends before the seam
+   * flush kills its undelivered steers via `failUndeliveredSteers` from the
+   * engine's own turn generators' `finally`, rejecting each promise with
+   * "core turn ended before injection" — the HOST/RENDERER layer owns
+   * re-queuing the text for the next turn (an undelivered steer is never
+   * lost; the engine reports honestly and stays stateless across turns).
    */
-  private readonly pendingSteerWaiters = new Set<(step: number) => void>();
+  private readonly pendingSteerWaiters: ((step: number) => void)[] = [];
 
   /** Wraps a loop generator so undelivered steers fail when the turn ends. */
   private wrapSteerLifecycle(events: AsyncGenerator<AgentEvent>): AsyncGenerator<AgentEvent> {
@@ -129,11 +132,22 @@ export class CoreEngine implements SessionEngine {
     })();
   }
 
-  /** Rejects every waiter still registered at turn end (slot died with the turn). */
+  /**
+   * 4110 rework: every waiter still registered at turn end rejects ("the
+   * frame never landed in THIS turn" — the loop ended on an exit path before
+   * the seam could flush: sentinel, cancel, error, transition, ceiling,
+   * deadline). Idempotent with the loop's own `finally` callback (which
+   * fires the same waiters with -1): a waiter settles exactly once.
+   */
   private failUndeliveredSteers(): void {
-    for (const waiter of this.pendingSteerWaiters) {
-      this.pendingSteerWaiters.delete(waiter);
-      waiter(-1);
+    // Optional-chained: legacy test fixtures stub the loop without the 4110
+    // rework's undelivered-injection API; a real AgentLoop always has it.
+    void this.options.loop.takeUndeliveredInjections?.();
+    while (this.pendingSteerWaiters.length > 0) {
+      const waiter = this.pendingSteerWaiters.shift();
+      if (waiter !== undefined) {
+        waiter(-1);
+      }
     }
   }
 
@@ -143,13 +157,15 @@ export class CoreEngine implements SessionEngine {
 
   /**
    * TASK.123 (Taskana 4110): force-delivers `input` into the RUNNING turn via
-   * the loop's deferred-injection slot. Resolves only once the loop has
+   * the loop's deferred-injection queue. Resolves only once the loop has
    * actually flushed the frame at the legal seam — `{ turnId: "core:step:N" }`
    * names the step whose results the frame follows (self-describing, never
    * collides with host UUIDs; the engine does not own the host turnId).
-   * Rejects with "No active core turn" when called idle, and with "core turn
-   * ended before injection" / "superseded by a newer steer" when the frame
-   * never landed.
+   * FIFO by contract (4110 rework): several concurrent steers ALL land, in
+   * send order. Rejects with "No active core turn" when called idle (even
+   * then the caller — the host route — owns re-queueing for the next turn);
+   * a steer whose frame never landed in the turn rejects with "core turn
+   * ended before injection" (never lost: the caller re-queues).
    */
   async steer(input: string): Promise<{ turnId: string }> {
     return new Promise<{ turnId: string }>((resolve, reject) => {
@@ -157,21 +173,27 @@ export class CoreEngine implements SessionEngine {
       const registered = (step: number): void => {
         if (settled) return;
         settled = true;
-        this.pendingSteerWaiters.delete(registered);
+        const index = this.pendingSteerWaiters.indexOf(registered);
+        if (index !== -1) {
+          this.pendingSteerWaiters.splice(index, 1);
+        }
         if (step === -1) {
-          // The slot never delivered THIS frame — either a newer steer
-          // overwrote it (the loop's last-value-wins callback) or the turn
-          // ended first (failUndeliveredSteers). The engine treats both as
-          // "never landed"; the message keeps the brief's wording.
+          // The frame never landed in THIS turn (the loop's finally callback
+          // or failUndeliveredSteers reports the loss). The caller owns
+          // re-queuing the text for the next turn; this promise honestly
+          // reports "not delivered into the running turn".
           reject(new Error("core turn ended before injection"));
           return;
         }
         resolve({ turnId: `core:step:${step}` });
       };
-      this.pendingSteerWaiters.add(registered);
+      this.pendingSteerWaiters.push(registered);
       const queued = this.options.loop.queueInjection(input, registered);
       if (!queued) {
-        this.pendingSteerWaiters.delete(registered);
+        const index = this.pendingSteerWaiters.indexOf(registered);
+        if (index !== -1) {
+          this.pendingSteerWaiters.splice(index, 1);
+        }
         settled = true;
         reject(new Error("No active core turn"));
       }

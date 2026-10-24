@@ -7735,10 +7735,13 @@ describe("desktop store — provider usage audit (Taskana 4083 / TASK.34)", () =
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4110 (TASK.123) — user_injected & the pendingSteer lifecycle: the
-// injected frame renders as an ordinary user_text bubble (visually distinct
-// from the queue pill), the OLDEST pendingSteer retires FIFO on delivery, and
-// loop_end clears whatever never landed.
+// Taskana 4110 (TASK.123 + rework) — user_injected & the pendingSteer
+// lifecycle: the injected frame renders as an ordinary user_text bubble
+// (visually distinct from the queue pill), the OLDEST pendingSteer retires
+// FIFO on delivery, and loop_end re-queues this tab's OWN undelivered UI
+// steers into the prompt queue (never dropped) while CHILD-surface steers
+// survive untouched (they deliver at their own next turn_started — TASK.118
+// regression the rework must not reintroduce).
 
 describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
   /** Synchronous-flush store, host_ready'd, with a RUNNING turn (turn guard admits events). */
@@ -7751,8 +7754,8 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
 
   it("user_injected appends a user_text block and pops the OLDEST pendingSteer (FIFO)", () => {
     const store = runningStore();
-    store.getState().recordPendingSteer("r1", "held-first", { text: "held-first", images: [] });
-    store.getState().recordPendingSteer("r2", "held-second", { text: "held-second", images: [] });
+    store.getState().recordPendingSteer("r1", "held-first", undefined, { text: "held-first", images: [] });
+    store.getState().recordPendingSteer("r2", "held-second", undefined, { text: "held-second", images: [] });
 
     store.getState().applyHostMessage({
       type: "agent_event",
@@ -7768,10 +7771,33 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
     expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["r2"]);
   });
 
-  it("loop_end clears all remaining pendingSteers", () => {
+  it("FIFO: several user_injected events pop the pending steers in order", () => {
     const store = runningStore();
-    store.getState().recordPendingSteer("r1", "held", { text: "held", images: [] });
-    store.getState().recordPendingSteer("r2", "held-2", { text: "held-2", images: [] });
+    store.getState().recordPendingSteer("r1", "first", undefined, { text: "first", images: [] });
+    store.getState().recordPendingSteer("r2", "second", undefined, { text: "second", images: [] });
+
+    store.getState().applyHostMessage({
+      type: "agent_event", turnId: "t1", step: 1,
+      event: { type: "user_injected", step: 1, text: "first" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event", turnId: "t1", step: 1,
+      event: { type: "user_injected", step: 1, text: "second" },
+    });
+
+    expect(store.getState().pendingSteers).toEqual([]);
+    const texts = store.getState().transcript.filter((b) => b.kind === "user_text").map((b) => (b as { text: string }).text);
+    expect(texts).toEqual(["first", "second"]);
+  });
+
+  it("loop_end re-queues ONLY this tab's own UI steers — child-surface steers survive (TASK.118 regression)", () => {
+    const store = runningStore();
+    // r-ui is a UI steer (steer_message on a core session); r-child belongs to
+    // a child surface (user_message through the host steer queue — delivers at
+    // its own next turn_started, NOT at this loop_end).
+    store.getState().recordPendingSteer("r-ui", "held-ui", undefined, { text: "held-ui", images: [] });
+    store.getState().markUiSteer("r-ui");
+    store.getState().recordPendingSteer("r-child", "held-child", undefined, { text: "held-child", images: [] });
 
     store.getState().applyHostMessage({
       type: "agent_event",
@@ -7779,13 +7805,51 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
       event: { type: "loop_end", reason: "completed", turns: 1 },
     });
 
-    expect(store.getState().pendingSteers).toEqual([]);
     expect(store.getState().turn.status).toBe("idle");
+    // The UI steer was NOT dropped: it moved into the prompt queue.
+    expect(store.getState().promptQueue.map((q) => q.text)).toEqual(["held-ui"]);
+    expect(store.getState().uiSteerPending).toEqual([]);
+    // The child-surface steer is untouched — it still delivers at its own
+    // next turn_started (the pre-4110 TASK.118 contract).
+    expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["r-child"]);
+  });
+
+  it("loop_end after delivery re-queues nothing (a delivered steer is fully retired)", () => {
+    const store = runningStore();
+    store.getState().recordPendingSteer("r1", "held", undefined, { text: "held", images: [] });
+    store.getState().markUiSteer("r1");
+    store.getState().applyHostMessage({
+      type: "agent_event", turnId: "t1", step: 1,
+      event: { type: "user_injected", step: 1, text: "held" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      event: { type: "loop_end", reason: "completed", turns: 1 },
+    });
+    expect(store.getState().promptQueue).toEqual([]);
+    expect(store.getState().pendingSteers).toEqual([]);
+  });
+
+  it("steer_requeued moves the pending UI steer into the queue head; unknown ids are no-ops", () => {
+    const store = runningStore();
+    store.getState().recordPendingSteer("r1", "held", undefined, { text: "held", images: [] });
+    store.getState().markUiSteer("r1");
+
+    store.getState().applyHostMessage({ type: "steer_requeued", requestId: "r1", reason: "core turn ended before injection" });
+
+    expect(store.getState().pendingSteers).toEqual([]);
+    expect(store.getState().promptQueue.map((q) => q.text)).toEqual(["held"]);
+    expect(store.getState().notice?.kind).toBe("steer_requeued");
+
+    // A duplicate for an already-re-queued id must not double-send.
+    store.getState().applyHostMessage({ type: "steer_requeued", requestId: "r1", reason: "again" });
+    expect(store.getState().promptQueue).toHaveLength(1);
   });
 
   it("a user_injected from a stale turnId is dropped by the existing turn guard — no block, no pop", () => {
     const store = runningStore();
-    store.getState().recordPendingSteer("r1", "held", { text: "held", images: [] });
+    store.getState().recordPendingSteer("r1", "held", undefined, { text: "held", images: [] });
 
     store.getState().applyHostMessage({
       type: "agent_event",
@@ -7796,6 +7860,27 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
 
     expect(store.getState().transcript.filter((b) => b.kind === "user_text")).toHaveLength(0);
     expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["r1"]);
+  });
+
+  it("an agent_message from the local supervisor UI renders NOTHING (no Delivery block — Opus defect 3)", () => {
+    const store = runningStore();
+    store.getState().applyHostMessage({
+      type: "agent_event", turnId: "t1", step: 1,
+      event: { type: "user_injected", step: 1, text: "MY STEER" },
+    });
+    store.getState().applyHostMessage({
+      type: "agent_message",
+      delivery: {
+        envelope: { messageId: "r1", sender: "local-supervisor-ui", recipientSessionId: "s1", kind: "agent_message", payload: "MY STEER", mode: "steer", createdAt: "2026-01-01T00:00:00.000Z" },
+        state: "acknowledged",
+        detail: "injected into the running turn",
+      },
+    });
+    // The user_injected bubble is the ONLY record; no "Delivery:" prose was
+    // appended and the bubble was not removed.
+    const userBlocks = store.getState().transcript.filter((b) => b.kind === "user_text");
+    expect(userBlocks).toHaveLength(1);
+    expect((userBlocks[0] as { text: string }).text).toBe("MY STEER");
   });
 
   it("host_ready with steering sets the field; a legacy host_ready without it leaves steering null", () => {

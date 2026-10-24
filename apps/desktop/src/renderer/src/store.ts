@@ -633,7 +633,13 @@ export type NoticeKind =
    * session keeps running on the current engine — the refusal must be visible,
    * silence would read as a switch that happened (same family as rebind_failed).
    */
-  | "engine_switch_failed";
+  | "engine_switch_failed"
+  /**
+   * Taskana 4110 rework (Opus defect 1): a UI steer could not be delivered
+   * into the running turn — it was moved into the prompt queue for the next
+   * turn instead (never dropped), and the user must see that it happened.
+   */
+  | "steer_requeued";
 
 /** Status-bar projection of the `context_usage` event (design §2.5/§2.12) — last-known reading, minimal. */
 export interface ContextUsage {
@@ -1168,6 +1174,16 @@ export interface DesktopState {
    * appending. Part of the session slice — cleared by reset()/respawn.
    */
   pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage }[];
+  /**
+   * Taskana 4110 rework (Opus defects 1+2): requestIds of the entries in
+   * `pendingSteers` this tab's own core-engine `steer_message` path owns (a
+   * CHILD surface's `user_message` steers are host-queued and deliver at
+   * their own next `turn_started` — they are NOT in here). Only these
+   * entries are re-queued into `promptQueue` when the turn ends or the host
+   * reports `steer_requeued` without delivering; child-surface entries
+   * survive `loop_end` untouched (TASK.118 regression).
+   */
+  uiSteerPending: string[];
 
   /**
    * Prompt queue (slice P7.14 · F15): FIFO of prompts the user entered while a
@@ -1218,6 +1234,22 @@ export interface DesktopState {
    * outgoing text+images for `lastSentMessage` restore at delivery.
    */
   recordPendingSteer(requestId: string, text: string, images: readonly ImageAttachment[] | undefined, sentMessage: LastSentMessage): void;
+  /**
+   * Taskana 4110 rework (Opus defect 1): moves a still-pending UI steer
+   * (host could not deliver it into the running turn — steer_requeued, or
+   * the turn ended before delivery) into the prompt queue at the given
+   * index (default: tail), keeping its place among its own kind. The bubble
+   * stays visible as a queue item until the drainer delivers it as the next
+   * turn — the text is never lost. Core-engine UI steers only.
+   */
+  requeuePendingSteer(requestId: string, index?: number): void;
+  /**
+   * Taskana 4110 rework: marks a pendingSteer entry as this tab's own UI
+   * steer (sent via steer_message on a core session) — only UI-owned entries
+   * are re-queued at loop_end / steer_requeued; child-surface entries keep
+   * their TASK.118 turn_started delivery.
+   */
+  markUiSteer(requestId: string): void;
   /** Appends a renderer-only persisted provider diagnostic; never sent to the host/model. */
   appendUsageLimitNotice(notice: UsageLimitNotice): void;
   /**
@@ -1405,6 +1437,8 @@ interface SessionSlice {
   pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null;
   /** TASK.118: see DesktopState.pendingSteers. Part of the session slice. */
   pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage }[];
+  /** Taskana 4110: see DesktopState.uiSteerPending. Part of the session slice. */
+  uiSteerPending: string[];
 }
 
 function initialSessionSlice(): SessionSlice {
@@ -1439,6 +1473,7 @@ function initialSessionSlice(): SessionSlice {
     retry: null,
     pendingPrompt: null,
     pendingSteers: [],
+    uiSteerPending: [],
   };
 }
 
@@ -3341,16 +3376,32 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // state. A clean "completed" end leaves the queue unpaused so this
           // same set() drains it normally (FIFO) — the idle flip is what the
           // drainer watches for.
-          set((state) => ({
-            turn: { status: "idle", turnId: null, requestId: null },
-            // Taskana 4110 (TASK.123): a steer that never landed in the turn
-            // must not linger as a ghost bubble — the turn is over, the
-            // queue fallback (or the user's re-send) owns that text now.
-            pendingSteers: [],
-            ...(event.reason !== "completed" && state.promptQueue.length > 0
-              ? { queuePaused: true }
-              : {}),
-          }));
+          // Taskana 4110 rework (Opus defects 1+2): a still-pending HOST steer
+          // (this tab's own core-engine steer_message sends; a CHILD surface's
+          // user-message steers are not host-owned here) never landed in the
+          // turn — RE-QUEUE it instead of dropping it: the loop is over, so
+          // the prompt queue (drained at idle) is the honest next-turn owner
+          // of that text. Order among the survivors is preserved, and the
+          // entries keep their ORIGINAL sent text+images for the next send.
+          set((state) => {
+            const uiPending = get().uiSteerPending;
+            const requeue = state.pendingSteers.filter((entry) => uiPending.includes(entry.requestId));
+            const queueAdditions: QueuedPrompt[] = requeue.map((entry) => ({
+              id: crypto.randomUUID(),
+              text: entry.sentMessage.text,
+              images: entry.sentMessage.images,
+            }));
+            const nextQueue = [...state.promptQueue, ...queueAdditions];
+            return {
+              turn: { status: "idle", turnId: null, requestId: null },
+              pendingSteers: state.pendingSteers.filter((entry) => !uiPending.includes(entry.requestId)),
+              promptQueue: nextQueue,
+              uiSteerPending: [],
+              ...(event.reason !== "completed" && nextQueue.length > 0
+                ? { queuePaused: true }
+                : {}),
+            };
+          });
           return;
         }
 
@@ -3781,11 +3832,17 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             text: event.text,
             at: Date.now(),
           });
-          set((state) =>
-            state.pendingSteers.length > 0
-              ? { pendingSteers: state.pendingSteers.slice(1) }
-              : {},
-          );
+          // 4110 rework: retire the OLDEST pendingSteer FIFO AND forget its
+          // owner bookkeeping — a delivered steer must never be re-queued by
+          // a later loop_end / steer_requeued for the same requestId.
+          set((state) => {
+            const delivered = state.pendingSteers[0];
+            if (delivered === undefined) return {};
+            return {
+              pendingSteers: state.pendingSteers.slice(1),
+              uiSteerPending: state.uiSteerPending.filter((id) => id !== delivered.requestId),
+            };
+          });
           return;
 
         // Turn-ceiling grant (TASK.124 cut-1): the ladder extended the turn
@@ -4028,9 +4085,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               appendBlock({ kind: "user_text", id: steer.requestId, text: steer.text, ...(steer.images?.length ? { images: steer.images } : {}), at: Date.now() });
               set((state) => ({
                 pendingSteers: state.pendingSteers.filter((entry) => entry.requestId !== steer.requestId),
+                uiSteerPending: state.uiSteerPending.filter((id) => id !== steer.requestId),
                 lastSentMessage: steer.sentMessage,
               }));
             }
+            // Taskana 4110 rework: a NEW turn beginning means the previous
+            // turn's lifecycle is over — any UI steer ids still marked pending
+            // were delivered into a turn that ended without a matching
+            // user_injected (or are stale duplicates); they can never be
+            // re-queued after this point without double-sending. The loop_end
+            // handler owns the actual re-queue; this is just the owner-list
+            // reset for the fresh turn.
+            set((state) => ({ uiSteerPending: [] }));
             return;
           }
           case "turn_rejected": {
@@ -4062,9 +4128,30 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             });
             return;
           }
+          case "steer_requeued": {
+            // Taskana 4110 rework (Opus defect 1): the host could not deliver
+            // this UI steer into the running turn (idle/pre-loop, Stop raced,
+            // ceiling/deadline, superseded, shutting down). NEVER dropped: the
+            // pending bubble becomes a prompt-queue item — the existing
+            // drainer sends it as the next turn. An unknown requestId (already
+            // delivered/re-queued) is a no-op.
+            const known = get().uiSteerPending.includes(message.requestId);
+            if (known) {
+              get().requeuePendingSteer(message.requestId, 0);
+              set({ notice: { kind: "steer_requeued", text: "Steer not delivered into the running turn — queued for the next turn." } });
+            }
+            return;
+          }
           case "agent_message": {
             const d = message.delivery;
             const id = `agent-message:${d.envelope.messageId}`;
+            // Taskana 4110 rework (Opus defect 3): the LOCAL supervisor UI's
+            // own steers never render as agent-message delivery blocks — the
+            // user_injected bubble IS the transcript record for those, and a
+            // "Delivery: acknowledged…" block (Codex wording) would replace
+            // it. Skip the block AND the aggressive text-equality removal for
+            // the UI sender; agent-to-agent envelopes keep the full render.
+            if (d.envelope.sender === "local-supervisor-ui") return;
             const block: TranscriptBlock = { kind: "user_text", id, origin: "system", text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
             set((state) => ({ transcript: [...state.transcript.filter((b) => b.id !== id && !(b.kind === "user_text" && b.text === agentMessageText(d.envelope))), block] }));
             return;
@@ -4720,6 +4807,34 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // queued text never interleaves optimistically with the running turn's
         // streamed output.
         set((state) => ({ pendingSteers: [...state.pendingSteers, { requestId, text, ...(images?.length ? { images } : {}), sentMessage }] }));
+      },
+
+      requeuePendingSteer(requestId: string, index?: number): void {
+        // Taskana 4110 rework (Opus defect 1): the host could not deliver this
+        // UI steer into the running turn (steer_requeued, or the turn ended
+        // first) — move it into the prompt queue (never dropped; the drainer
+        // owns its next-turn delivery) and retire both the pending entry and
+        // its owner bookkeeping. The bubble keeps rendering as a QUEUE item.
+        set((state) => {
+          const entry = state.pendingSteers.find((e) => e.requestId === requestId);
+          if (entry === undefined) return {};
+          const queueItem: QueuedPrompt = { id: crypto.randomUUID(), text: entry.sentMessage.text, images: entry.sentMessage.images };
+          const at = index !== undefined && index >= 0 && index <= state.promptQueue.length ? index : state.promptQueue.length;
+          const promptQueue = [...state.promptQueue.slice(0, at), queueItem, ...state.promptQueue.slice(at)];
+          return {
+            pendingSteers: state.pendingSteers.filter((e) => e.requestId !== requestId),
+            uiSteerPending: state.uiSteerPending.filter((id) => id !== requestId),
+            promptQueue,
+          };
+        });
+      },
+
+      markUiSteer(requestId: string): void {
+        set((state) =>
+          state.uiSteerPending.includes(requestId)
+            ? {}
+            : { uiSteerPending: [...state.uiSteerPending, requestId] },
+        );
       },
 
       appendUsageLimitNotice(notice: UsageLimitNotice): void {

@@ -266,7 +266,7 @@ describe("CoreEngine.steer (Taskana 4110)", () => {
     await expect(steerPromise).rejects.toThrow("core turn ended before injection");
   });
 
-  it("superseded steer rejects, the newer one resolves", async () => {
+  it("FIFO: concurrent steers ALL resolve, in send order, each with its own frame (4110 rework)", async () => {
     const fx = makeEngineFixture(steerScript);
     const run = startParkedRun(fx, new AbortController().signal);
     while (!run.events.some((e) => e.type === "tool_execution_start")) {
@@ -277,7 +277,10 @@ describe("CoreEngine.steer (Taskana 4110)", () => {
     const second = fx.engine.steer("second");
     fx.release();
     await run.done;
-    await expect(first).rejects.toThrow();
+    await expect(first).resolves.toEqual({ turnId: "core:step:1" });
     await expect(second).resolves.toEqual({ turnId: "core:step:1" });
+    const secondRequest = fx.port.requests[1];
+    expect(secondRequest?.messages.at(-2)).toEqual({ role: "user", content: "first" });
+    expect(secondRequest?.messages.at(-1)).toEqual({ role: "user", content: "second" });
   });
 });

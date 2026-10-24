@@ -1357,13 +1357,16 @@ export function Composer() {
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       });
     } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported) {
-      // Taskana 4110 (TASK.123): a supported running core/Codex session takes
-      // the message as a mid-turn steer (optimistic pendingSteer bubble; the
+      // Taskana 4110 (TASK.123): a supported running CORE session takes the
+      // message as a mid-turn steer (optimistic pendingSteer bubble; the
       // user_injected event confirms delivery into the turn; the queue is the
       // honest fallback everywhere else). Images while running keep the queue
-      // path (engine.steer is text-only).
+      // path (engine.steer is text-only). 4110 rework: the steer is marked
+      // UI-owned (`markUiSteer`) so a turn end / steer_requeued without
+      // delivery re-queues it into the prompt queue — the text is never lost.
       const requestId = crypto.randomUUID();
-      tabStore.getState().recordPendingSteer(requestId, outgoing, { text: outgoing, images: [] });
+      tabStore.getState().recordPendingSteer(requestId, outgoing, undefined, { text: outgoing, images: [] });
+      tabStore.getState().markUiSteer(requestId);
       sendToHost({ type: "steer_message", requestId, text: outgoing });
     } else if (shouldEnqueue(turn.status, queueInFlight, childSurface)) {
       // NOT truly idle: either a turn is running, or a queued item was already

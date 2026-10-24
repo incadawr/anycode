@@ -1189,21 +1189,99 @@ describe("Session — core steer_message injection (Taskana 4110 / TASK.123)", (
     }
   });
 
-  it("steer_message while idle is still rejected", async () => {
+  it("FIFO: several steer_messages within one step ALL land, in send order (4110 rework)", async () => {
+    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      const req = await h.waitFor(isPermissionRequest);
+
+      h.send({ type: "steer_message", requestId: "r-a", text: "STEER-A" });
+      h.send({ type: "steer_message", requestId: "r-b", text: "STEER-B" });
+
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+      const injected = h.received.filter(agentEventOf("user_injected"));
+      expect(injected.map((m) => (m.event as { text: string }).text)).toEqual(["STEER-A", "STEER-B"]);
+      const model = h.config.modelPort as ScriptedModelPort;
+      const second = model.requests[1];
+      expect(second?.messages.at(-2)).toMatchObject({ role: "user", content: "STEER-A" });
+      expect(second?.messages.at(-1)).toMatchObject({ role: "user", content: "STEER-B" });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a busy UI steer renders NO agent_message delivery block (Opus defect 3)", async () => {
+    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      const req = await h.waitFor(isPermissionRequest);
+      h.send({ type: "steer_message", requestId: "r-steer", text: "STEERED-OK" });
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      // The UI steer produces user_injected (the transcript record) but ZERO
+      // agent_message envelopes on the wire — no "Delivery: acknowledged…"
+      // block can ever render for it.
+      expect(h.received.some((m) => m.type === "agent_message")).toBe(false);
+      expect(h.received.some(agentEventOf("user_injected"))).toBe(true);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("Stop re-queues a pending steer: steer_requeued, no injection, one turn (4110 rework)", async () => {
+    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      const req = await h.waitFor(isPermissionRequest);
+
+      // Steer while parked, then STOP the turn before the seam can flush.
+      h.send({ type: "steer_message", requestId: "r-stop", text: "NEVER-LANDED" });
+      h.send({ type: "cancel_turn" });
+      // Deny-all races the abort; release the ask either way.
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      // The steer never entered the turn…
+      expect(h.received.some(agentEventOf("user_injected"))).toBe(false);
+      // …and was not lost: the honest re-queue reply names it (may land a
+      // microtask after loop_end — the engine's steer promise rejects from
+      // the loop's teardown).
+      const requeued = await h.waitFor((m): m is Of<"steer_requeued"> => m.type === "steer_requeued" && m.requestId === "r-stop");
+      expect(requeued.reason).toBe("core turn ended before injection");
+      // Exactly ONE turn ran; no second turn was started for the steer.
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+      expect((h.config.modelPort as ScriptedModelPort).requests).toHaveLength(1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("steer_message while idle is re-queued, never dropped (4110 rework: pre-loop rejection path)", async () => {
     const h = createHarness({ steps: [finishStep()] });
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
 
       h.send({ type: "steer_message", requestId: "r-idle", text: "too late" });
-      // The FIRST agent_message for this id reports "queued" (published before
-      // the steer branch decides); the FINAL delivery settles rejected.
-      const settled = await h.waitUntil(() =>
-        h.received.some((m) => m.type === "agent_message" && m.delivery.state === "rejected"),
-      ).then(() =>
-        h.received.filter((m) => m.type === "agent_message").at(-1),
-      );
-      expect(settled?.delivery.state).toBe("rejected");
+      const requeued = await h.waitFor((m): m is Of<"steer_requeued"> => m.type === "steer_requeued" && m.requestId === "r-idle");
+      expect(requeued.reason).toContain("No active core turn");
+      // No turn ever ran and no agent_message delivery block was rendered for
+      // the UI steer (Opus defect 3 — the UI steer never goes through the
+      // agent_message transcript path).
+      expect(h.received.some((m) => m.type === "agent_message" && m.delivery.envelope.messageId === "r-idle")).toBe(false);
       expect((h.config.modelPort as ScriptedModelPort).requests).toHaveLength(0);
     } finally {
       h.close();
@@ -1216,6 +1294,46 @@ describe("Session — core steer_message injection (Taskana 4110 / TASK.123)", (
       h.send({ type: "ui_ready" });
       const ready = await h.waitFor(isHostReady);
       expect(ready.steering).toEqual({ supported: true, ready: false });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("host_ready NEVER advertises steering for codex, even with steeringStatus implemented (4110: codex unchanged)", async () => {
+    // The REAL CodexEngine implements steeringStatus; the gate must be the
+    // engine id, not the method's presence — codex keeps its pre-branch
+    // composer route and labels, so it must not see `steering`.
+    const engine: SessionEngine = {
+      id: "codex",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: true,
+        costAccounting: false,
+        supportsModelSelection: false,
+        supportsReasoningEffort: false,
+        supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+      mode: () => "build",
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(): AsyncIterable<AgentEvent> {},
+      historyItems: () => [],
+      dispose: async () => {},
+      steeringStatus: () => ({ supported: true, ready: true }),
+    };
+    const h = createHarness({ steps: [], engine, imageInputEnabled: true });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect("steering" in ready).toBe(false);
+      expect(ready.steering).toBeUndefined();
     } finally {
       h.close();
     }

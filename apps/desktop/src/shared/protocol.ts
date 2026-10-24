@@ -573,6 +573,16 @@ export type HostToUiMessage =
   // history is non-empty. The renderer mapping into transcript blocks is task
   // 2.1.5; task 2.1.1 adds only the type + a no-op reducer branch.
   | { type: "agent_message"; delivery: AgentDelivery }
+  /**
+   * Taskana 4110 rework (Opus defect 1): a UI steer_message whose frame
+   * could NOT be delivered into the running turn (idle/pre-loop, Stop,
+   * ceiling/deadline refusal, superseded, host shutting down). Core-engine
+   * UI steers only — never emitted for agent-to-agent envelopes. The
+   * renderer converts the pending bubble into a prompt-queue item; the
+   * existing drainer delivers it as the next turn, so the text is never
+   * lost. Absent on every other engine and on legacy hosts.
+   */
+  | { type: "steer_requeued"; requestId: string; reason: string }
   | { type: "session_history"; sessionId: string; items: WireHistoryItem[]; truncated: boolean }
   | { type: "worktree_notice"; message: string }
   /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */

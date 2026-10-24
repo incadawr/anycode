@@ -89,6 +89,10 @@ const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   // running / child attached / same engine / factory unavailable) — a
   // refusal, same tint family as rebind_failed/retry_blocked.
   engine_switch_failed: "danger",
+  // Taskana 4110 rework: a steer moved to the queue for the next turn — not
+  // lost, but not delivered mid-turn either; warning, same family as
+  // turn_rejected.
+  steer_requeued: "warning",
   shell_error: "danger",
   preview_transferred: "neutral",
 };
