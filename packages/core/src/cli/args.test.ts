@@ -57,6 +57,7 @@ describe("parseCliArgs — defaults", () => {
       modeExplicit: false,
       noCheckpoints: false,
       images: [],
+      tui: false,
     });
   });
 });
@@ -323,6 +324,7 @@ describe("parseCliArgs — unknown flags never throw or change the exit shape (d
       modeExplicit: false,
       noCheckpoints: false,
       images: [],
+      tui: false,
     });
   });
 
@@ -416,5 +418,31 @@ describe("formatUsage (design §3.3): only real flags, ANYCODE_* env, and the CO
   it("exits 0/no-throw shape: formatUsage never throws and always ends in a newline", () => {
     expect(() => formatUsage()).not.toThrow();
     expect(usage.endsWith("\n")).toBe(true);
+  });
+});
+
+describe("parseCliArgs — --tui (Taskana 4082, slice 1)", () => {
+  it("--tui parses to tui: true", () => {
+    expect(parseCliArgs(["--tui"]).tui).toBe(true);
+  });
+
+  it("absent --tui parses to tui: false", () => {
+    expect(parseCliArgs([]).tui).toBe(false);
+    expect(parseCliArgs(["--yolo"]).tui).toBe(false);
+  });
+
+  it("--tui --print still parses both (the interactive gate lives in main.ts)", () => {
+    const args = parseCliArgs(["--tui", "--print", "hello"]);
+    expect(args.tui).toBe(true);
+    expect(args.print).toBe(true);
+    expect(args.printPrompt).toBe("hello");
+  });
+
+  it("--tui is recognised, never an unknown flag", () => {
+    expect(collectUnknownFlags(["--tui"])).toEqual([]);
+  });
+
+  it("the --help synopsis mentions --tui", () => {
+    expect(formatUsage()).toContain("--tui");
   });
 });

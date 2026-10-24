@@ -47,6 +47,7 @@ import type { WorkflowDefinition, WorkflowMeta } from "../ports/workflow.js";
 import { resolveIncludeUsage } from "../provider/openai-compatible.js";
 import { buildSystemPrompt, type SystemPromptEnv } from "../prompts/identity.js";
 import type { PersonaDefinition } from "../subagents/personas.js";
+import type { TuiHandle } from "./tui.js";
 import { backgroundCapableBashTool, bashKillTool, bashOutputTool, createDefaultToolRegistry } from "../tools/index.js";
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import { SUBAGENT_MAX_OUTPUT_TOKENS } from "../types/config.js";
@@ -4926,5 +4927,202 @@ describe("CLI proxy-relay lifecycle (Taskana 4074 cross-review F5)", () => {
     const exitCode = await runPromise;
     expect(exitCode).toBe(2);
     expect(proxyRelayUrl()).toBeUndefined();
+  });
+});
+
+describe("--tui flag (Taskana 4082)", () => {
+  it("1. --tui with interactive:true boots the Ink composer, and a submitted line reaches the loop", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+    const modelPort = new CountingModelPort();
+
+    const tuiHandles: TuiHandle[] = [];
+    const runPromise = runCli({
+      argv: ["--tui"],
+      env: makeTitleTestEnv(dbPath),
+      input,
+      output,
+      modelPort,
+      cwd: workspace,
+      interactive: true,
+      onTuiHandle: (handle) => {
+        tuiHandles.push(handle);
+      },
+    });
+
+    // Wait for the TUI to mount (and the banner to land) before driving keys.
+    await vi.waitFor(() => {
+      if (tuiHandles.length === 0) {
+        throw new Error("tui handle has not been handed over yet");
+      }
+      if (!getText().includes("AnyCode CLI")) {
+        throw new Error("banner has not landed yet");
+      }
+    });
+
+    // Drive the composer through the same emit() pipeline the unit smoke uses:
+    // type a line, Enter, then /quit to leave the REPL cleanly.
+    tuiHandles[0]!.emit("input", "hello from tui");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tuiHandles[0]!.emit("input", "\r");
+    await vi.waitFor(() => {
+      if (modelPort.calls !== 1) {
+        throw new Error("submitted line has not reached the turn loop yet");
+      }
+    });
+    tuiHandles[0]!.emit("input", "/quit");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tuiHandles[0]!.emit("input", "\r");
+
+    expect(await runPromise).toBe(0);
+    // The submitted line became the session title (same proof the readline
+    // REPL tests use): the loop consumed it as a real turn.
+    const { title } = await readSessionTitle(dbPath, workspace);
+    expect(title).toBe("hello from tui");
+  });
+
+  it("1b. --tui banner renders and the readline '> ' prompt stays silent in TUI mode", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+
+    const tuiHandles: TuiHandle[] = [];
+    const runPromise = runCli({
+      argv: ["--tui"],
+      env: makeTitleTestEnv(dbPath),
+      input,
+      output,
+      modelPort: new CountingModelPort(),
+      cwd: workspace,
+      interactive: true,
+      onTuiHandle: (handle) => {
+        tuiHandles.push(handle);
+      },
+    });
+
+    await vi.waitFor(() => {
+      if (tuiHandles.length === 0) {
+        throw new Error("tui handle has not been handed over yet");
+      }
+    });
+    // Double Ctrl+C through the TUI's interrupt forwarding exits cleanly.
+    tuiHandles[0]!.emit("input", "");
+    tuiHandles[0]!.emit("input", "");
+
+    expect(await runPromise).toBe(0);
+    // The banner landed; the composer (not readline) owned the prompt — the
+    // raw "> " prompt bytes are written only by the Ink frame diff, which
+    // strips as ANSI-cleaned "> " lines with no trailing readline artifacts.
+    expect(getText()).toContain("AnyCode CLI");
+  });
+
+  it("1c. TUI defect regression: y/N confirm answers never leak into the prompt path", async () => {
+    // Reproduction of defect 2: /commit asks y/N via the prompter; with the
+    // rework the question renders INSIDE the TUI (confirm mode) and the "n"
+    // answer routes only to the confirm — the model port must never see a
+    // turn with prompt "n" (the pre-fix behavior double-captured the line).
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const gitWorkspace = mkdtempSync(join(tmpdir(), "anycode-cli-tui-git-"));
+    titleTestTempDirs.push(gitWorkspace);
+    // A real repo with a dirty file, so /commit reaches its y/N question
+    // (a clean or non-git workspace short-circuits before asking).
+    execFileSync("git", ["init", "-q"], { cwd: gitWorkspace });
+    writeFileSync(join(gitWorkspace, "dirty.txt"), "change\n");
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+    const modelPort = new CountingModelPort();
+
+    const tuiHandles: TuiHandle[] = [];
+    const runPromise = runCli({
+      argv: ["--tui"],
+      env: makeTitleTestEnv(dbPath),
+      input,
+      output,
+      modelPort,
+      cwd: gitWorkspace,
+      interactive: true,
+      onTuiHandle: (handle) => {
+        tuiHandles.push(handle);
+      },
+    });
+
+    await vi.waitFor(() => {
+      if (tuiHandles.length === 0) {
+        throw new Error("tui handle has not been handed over yet");
+      }
+    });
+    const tui = tuiHandles[0]!;
+    tui.emit("input", "/help");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tui.emit("input", "\r");
+    await vi.waitFor(() => {
+      if (!getText().includes("/exit       same as /quit")) {
+        throw new Error("help output has not landed yet");
+      }
+    });
+
+    tui.emit("input", "/commit testmsg");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tui.emit("input", "\r");
+    // The y/N confirm now renders in the TUI; answer "n" through the same
+    // key pipeline (this is exactly what a real "n" keypress does).
+    await vi.waitFor(() => {
+      if (!getText().includes("Esc = no)")) {
+        throw new Error("confirm question has not rendered yet");
+      }
+    });
+    tui.emit("input", "n");
+    await vi.waitFor(() => {
+      if (!getText().includes("[commit] cancelled")) {
+        throw new Error("commit cancellation has not landed yet");
+      }
+    });
+
+    // Leave cleanly, then prove no phantom turn ever started: every submitted
+    // line was a slash command, so the model port saw zero prompts — in
+    // particular no turn with prompt "n".
+    tui.emit("input", "/quit");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tui.emit("input", "\r");
+
+    expect(await runPromise).toBe(0);
+    expect(modelPort.calls).toBe(0);
+    // Defect 1 regression in the same harness: the help tail (a Static
+    // transcript line written BEFORE composer redraws) is still present in
+    // the output after all the composer activity above.
+    expect(getText()).toContain("/exit       same as /quit");
+  });
+
+  it("2. --tui with --print is silently ignored: byte-identical print output", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+
+    const runPrint = async (argv: string[]): Promise<{ code: number | undefined; text: string }> => {
+      const output = new PassThrough();
+      const errorOutput = new PassThrough();
+      const getText = collectOutput(output);
+      const code = await runCli({
+        argv,
+        env: makeTitleTestEnv(dbPath),
+        input: new PassThrough(),
+        output,
+        errorOutput,
+        modelPort: new SequencedModelPort([
+          [{ type: "start" }, { type: "text_delta", id: "t", text: "42" }, { type: "finish", finishReason: "stop", usage: {} }],
+        ]),
+        cwd: workspace,
+      });
+      return { code, text: getText() };
+    };
+
+    const plain = await runPrint(["-p", "compute six times seven"]);
+    const withTui = await runPrint(["--tui", "-p", "compute six times seven"]);
+    expect(withTui.code).toBe(plain.code);
+    // Byte-identical stdout: --tui never engaged (interactive gate rejects it
+    // alongside --print), so the print path is untouched.
+    expect(withTui.text).toBe(plain.text);
   });
 });
