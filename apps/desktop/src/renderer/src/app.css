@@ -7249,23 +7249,22 @@ body {
 
 /* ── Taskana 4091 (TASK.84): internal full-size image viewer ──
    Rendered by MessageList as a sibling of the role="log" column (not inside
-   it), fixed over the whole viewport. Internal-only by design: no
-   window.open / shell.openExternal — Esc or an outside click closes. */
-.image-viewer-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.72);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 80;
-}
-
+   it). Taskana 4091 follow-up: a real modal `<dialog>` (showModal) — the
+   browser supplies the focus trap and the dimmed ::backdrop (the old fixed
+   overlay div is gone). Internal-only by design: no window.open /
+   shell.openExternal — Esc or a backdrop click closes. */
 .image-viewer {
   max-width: min(96vw, 1200px);
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.image-viewer::backdrop {
+  background: rgba(0, 0, 0, 0.72);
 }
 
 .image-viewer-img {

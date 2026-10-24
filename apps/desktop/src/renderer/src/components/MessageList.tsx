@@ -930,9 +930,10 @@ export function MessageList({
         </button>
       )}
       {/* Taskana 4091 (TASK.84): the full-size internal viewer — last child of
-          the root, a SIBLING of the role="log" column. Its keydown listener is
-          capture-phase with preventDefault on Escape, so the shell's own
-          Esc-to-interrupt (App.tsx) never fires while the viewer is open. */}
+          the root, a SIBLING of the role="log" column. Taskana 4091 follow-up:
+          a real modal <dialog> (showModal) — App.tsx's global keydown ignores
+          both Esc and mod-combos while any dialog[open] exists, so the shell's
+          Esc-to-interrupt never fires while the viewer is open. */}
       {viewer !== null && viewedImages.length > 0 && (
         <ImageViewer
           images={viewedImages}
