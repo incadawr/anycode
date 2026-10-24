@@ -1993,6 +1993,54 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
     });
   });
 
+  it("TASK.4057: a live progress responseModel lands on the card, is kept across later progress without it, and a post-settle progress is a no-op", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-1", agentType: "general-purpose", description: "d", model: "opus" },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-1", turns: 1, toolCalls: 0 },
+    });
+    expect(findByToolCallId(store, "call-1")).not.toHaveProperty("subagent.responseModel");
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-1", turns: 2, toolCalls: 1, lastTool: "Read", responseModel: "glm-5.3" },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { responseModel: "glm-5.3", turns: 2 } });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-1", turns: 3, toolCalls: 2, lastTool: "Grep" },
+    });
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { responseModel: "glm-5.3", turns: 3 } });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-1", status: "completed", turns: 3, durationMs: 9, responseModel: "glm-5.3-final" },
+    });
+    const settled = store.getState().transcript;
+    expect(findByToolCallId(store, "call-1")).toMatchObject({ subagent: { final: { responseModel: "glm-5.3-final" } } });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_progress", toolCallId: "call-1", turns: 9, toolCalls: 9, responseModel: "late-claim" },
+    });
+    expect(store.getState().transcript).toEqual(settled);
+  });
+
   it("TASK.97 R5: subagent_start with an engine field seeds SubagentSubStatus.engine; absent field defaults to null", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

@@ -234,6 +234,13 @@ export interface SubagentSubStatus {
   activity: { toolName: string; summary: string }[];
   /** Count of activity rows dropped from the front of the ring once the cap was exceeded (honest overflow counter, not a wire field). */
   activityDropped: number;
+  /**
+   * TASK.4057: the provider's model claim as seen LIVE on `subagent_progress`
+   * (first response frame onward). Live-only: the persisted card and the
+   * settled `final.responseModel` supersede it once the run ends. Absent
+   * until observed; never erased by a later progress that lacks it.
+   */
+  responseModel?: string;
   final: {
     status: "completed" | "max_turns" | "cancelled" | "error";
     durationMs: number;
@@ -2366,7 +2373,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
      * settled canon already applied), a late/replayed progress event is
      * ALSO a no-op — the terminal record never regresses to "running".
      */
-    function patchSubagentProgress(toolCallId: string, turns: number, toolCalls: number, lastTool: string | null): void {
+    function patchSubagentProgress(
+      toolCallId: string,
+      turns: number,
+      toolCalls: number,
+      lastTool: string | null,
+      // TASK.4057: the provider's live claim. Stored when present; an absent
+      // value keeps the earlier known one (a progress frame without it must
+      // never erase the pill).
+      responseModel?: string,
+    ): void {
       flushDeltas();
       set((state) => ({
         transcript: state.transcript.map((block) => {
@@ -2376,6 +2392,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // Progress is a confirmed sign of life: any prior stall report is
           // stale the moment it lands (TASK.148 follow-up slice).
           const subagent = { ...block.subagent, turns, toolCalls, lastTool };
+          if (responseModel !== undefined) {
+            subagent.responseModel = responseModel;
+          }
           delete subagent.stalled;
           return { ...block, subagent };
         }),
@@ -3800,7 +3819,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           );
           return;
         case "subagent_progress":
-          patchSubagentProgress(event.toolCallId, event.turns, event.toolCalls, event.lastTool ?? null);
+          patchSubagentProgress(event.toolCallId, event.turns, event.toolCalls, event.lastTool ?? null, event.responseModel);
           return;
         case "subagent_end":
           patchSubagentEnd(
