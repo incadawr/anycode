@@ -32,7 +32,13 @@ import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { Markdown } from "./Markdown.js";
 import { ReasoningBlock } from "./ReasoningBlock.js";
 import { TodoPanel } from "./TodoPanel.js";
-import { TranscriptMinimap, activeMarkIndex, selectUserTurns, shouldShowMinimap } from "./TranscriptMinimap.js";
+import {
+  TranscriptMinimap,
+  activeMarkIndex,
+  createUserTurnsSelector,
+  shouldShowMinimap,
+  type UserTurnsSelector,
+} from "./TranscriptMinimap.js";
 import { PreviewConsoleRow } from "./PreviewConsoleRow.js";
 import { ToolCallCard } from "./ToolCallCard.js";
 import { ToolCallStack } from "./ToolCallStack.js";
@@ -394,6 +400,49 @@ export function showStandaloneRetry(
   return retry !== null && connection === "ready" && !blocks.some((b) => b.id === retry.loopEndBlockId);
 }
 
+/**
+ * Minimap scroll-spy core (TASK.48 / 4086 follow-up) — exported pure for unit
+ * tests. Given the monotone `top`s of the USER BUBBLES (`.message-user
+ * [data-block-id]`, one per non-system user turn, DOM order == mark order)
+ * and the container's box, returns the index of the last bubble whose top
+ * sits above the container's vertical midpoint (null when none exist).
+ * Binary search keeps a tick at O(log n) layout reads on a long transcript;
+ * the approximation is by design (brief §4.4).
+ */
+export function topmostVisibleUserIndex(
+  bubbleTops: readonly number[],
+  containerTop: number,
+  containerHeight: number,
+): number | null {
+  const midpoint = containerTop + containerHeight / 2;
+  if (bubbleTops.length === 0) {
+    return null;
+  }
+  let lo = 0;
+  let hi = bubbleTops.length - 1;
+  let candidate: number | null = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (bubbleTops[mid]! <= midpoint) {
+      candidate = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return candidate;
+}
+
+/** Read the user-bubble tops off the live DOM (query + rect per bubble, DOM order). */
+function readBubbleTops(el: HTMLElement): number[] {
+  const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id]");
+  const tops: number[] = new Array(bubbles.length);
+  for (let i = 0; i < bubbles.length; i += 1) {
+    tops[i] = bubbles[i]!.getBoundingClientRect().top;
+  }
+  return tops;
+}
+
 export function MessageList({
   blocks,
   turn,
@@ -454,9 +503,19 @@ export function MessageList({
   const [follow, setFollow] = useState(true);
 
   // Minimap (TASK.48 / Taskana 4086): pure projection over `blocks` — no new
-  // store state. The active-mark index is mirrored into state ONLY on edge
-  // changes (scroll-spy below), so a scroll tick never re-renders for nothing.
-  const minimapMarks = useMemo(() => selectUserTurns(blocks), [blocks]);
+  // store state. 4086 follow-up: the selector is INCREMENTAL — per-turn
+  // summaries are memoized by turn id + closing-block fingerprint, so a
+  // streaming delta to the tail reprojects only the turn being streamed
+  // instead of the whole transcript (see createUserTurnsSelector). One
+  // selector per mounted list, in a ref (never module state: two tabs must
+  // not share a cache). The active-mark index is mirrored into state ONLY on
+  // edge changes (scroll-spy below), so a scroll tick never re-renders for
+  // nothing.
+  const turnsSelectorRef = useRef<UserTurnsSelector | null>(null);
+  if (turnsSelectorRef.current === null) {
+    turnsSelectorRef.current = createUserTurnsSelector();
+  }
+  const minimapMarks = useMemo(() => turnsSelectorRef.current!(blocks), [blocks]);
   const [minimapActive, setMinimapActive] = useState<number | null>(null);
 
   // Finding 1 (codex P7.3-F): a jump-to-latest smooth scroll must not get
@@ -498,6 +557,23 @@ export function MessageList({
     }
   };
 
+  /**
+   * Minimap scroll-spy tick (shared by the scroll handler, the mount/turn-
+   * count effect and post-jump highlight — see topmostVisibleUserIndex for
+   * the pure core). Index-only state, written just on the edge.
+   */
+  const spyActiveMark = (): void => {
+    const el = containerRef.current;
+    if (!el || minimapMarks.length === 0) {
+      return;
+    }
+    const tops = readBubbleTops(el);
+    const candidate = topmostVisibleUserIndex(tops, el.getBoundingClientRect().top, el.clientHeight);
+    // Above the first bubble still highlights turn 1 (nothing earlier exists).
+    const nextActive = activeMarkIndex(minimapMarks, candidate ?? (tops.length > 0 ? 0 : null));
+    setMinimapActive((prev) => (prev === nextActive ? prev : nextActive));
+  };
+
   const handleScroll = (): void => {
     const el = containerRef.current;
     if (!el) {
@@ -508,31 +584,7 @@ export function MessageList({
       followRef.current = next;
       setFollow(next);
     }
-    // Minimap scroll-spy (TASK.48): the active mark is the last USER BUBBLE
-    // (`.message-user[data-block-id]`, one per non-system user turn, DOM order
-    // == mark order) whose top sits above the container's vertical midpoint.
-    // Binary search over the monotone tops keeps a scroll tick at O(log n)
-    // layout reads on a long transcript. Approximate by design (brief §4.4);
-    // index-only state, written just on the edge.
-    if (minimapMarks.length > 0) {
-      const midpoint = el.getBoundingClientRect().top + el.clientHeight / 2;
-      const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id]");
-      let lo = 0;
-      let hi = bubbles.length - 1;
-      let candidate: number | null = null;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (bubbles[mid]!.getBoundingClientRect().top <= midpoint) {
-          candidate = mid;
-          lo = mid + 1;
-        } else {
-          hi = mid - 1;
-        }
-      }
-      // Above the first bubble still highlights turn 1 (nothing earlier exists).
-      const nextActive = activeMarkIndex(minimapMarks, candidate ?? (bubbles.length > 0 ? 0 : null));
-      setMinimapActive((prev) => (prev === nextActive ? prev : nextActive));
-    }
+    spyActiveMark();
   };
 
   // Snap to bottom after every commit while following (design §3.1): streaming
@@ -569,6 +621,33 @@ export function MessageList({
     observer.observe(container);
     return () => observer.disconnect();
   }, []);
+
+  // 4086 follow-up: highlight the active dot from the START, not only after
+  // the first scroll. The same spy runs (a) when the minimap first mounts —
+  // a hydrated long session opens mid-transcript with the correct dot lit
+  // before any user scroll — and (b) whenever the TURN COUNT changes (a new
+  // question appends or a rewind drops turns; the count is the cheap edge —
+  // identity of the memoized marks array changes on every streaming flush,
+  // which is exactly what we do NOT want to re-spy on). rAF so the browser
+  // has laid the just-committed DOM out before the rects are read (and the
+  // sticky-follow snap for this same commit has settled).
+  const minimapTurnCount = minimapMarks.length;
+  useLayoutEffect(() => {
+    // Runs exactly when the minimap is visible: the 2→3 edge IS its mount
+    // (shouldShowMinimap gates the render below), and every later count
+    // change re-runs the spy; below 3 there is no pill to highlight.
+    if (!shouldShowMinimap(minimapTurnCount)) {
+      return;
+    }
+    const raf =
+      typeof requestAnimationFrame === "function" ? requestAnimationFrame(() => spyActiveMark()) : undefined;
+    return () => {
+      if (raf !== undefined) {
+        cancelAnimationFrame(raf);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- spyActiveMark closes over the CURRENT marks; re-running only on the count edge keeps streaming renders cheap (the brief's point) while still catching new turns.
+  }, [minimapTurnCount]);
 
   const jumpToLatest = (): void => {
     const el = containerRef.current;
@@ -639,13 +718,38 @@ export function MessageList({
         requestAnimationFrame(() => {
           const card = el.querySelector(`[data-block-id="${CSS.escape(blockId)}"]`);
           card?.scrollIntoView({ block: "center", behavior: "auto" });
+          // 4086 follow-up: the jump landed — re-run the scroll-spy so the
+          // active dot reflects the destination immediately (the plain
+          // scrollIntoView path fires no scrollend we can await portably).
+          spyActiveMark();
         });
       });
       return;
     }
     const reducedMotion =
       typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    target.scrollIntoView({ block: "center", behavior: reducedMotion ? "auto" : "smooth" });
+    if (reducedMotion) {
+      // Instant path: layout settles synchronously, spy right away.
+      target.scrollIntoView({ block: "center", behavior: "auto" });
+      spyActiveMark();
+      return;
+    }
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    // 4086 follow-up: re-run the scroll-spy once the smooth scroll settles —
+    // "scrollend" is not universally fired (older WebKit), so the timer
+    // fallback keeps the highlight from wedging; scrollend clears the timer.
+    let settled = false;
+    const settle = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      el.removeEventListener("scrollend", settle);
+      window.clearTimeout(fallbackTimer);
+      spyActiveMark();
+    };
+    el.addEventListener("scrollend", settle);
+    const fallbackTimer = window.setTimeout(settle, 700);
   };
 
   const isFirstRender = firstRenderRef.current;
