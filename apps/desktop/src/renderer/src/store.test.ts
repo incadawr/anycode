@@ -1109,6 +1109,31 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     expect(store.getState().turn.status).toBe("idle");
   });
 
+  it("Taskana 4098 cross-review F3: a fatal while compacting releases the session — no compaction_end will ever come", () => {
+    // The host emits `fatal` exactly when Session.onCompact's defensive catch
+    // fired (a compactNow contract violation) or the host died mid-compaction.
+    // Pre-fix, the fatal handler only set lastFatal, so a tab that had seen
+    // compaction_start kept turn.status "compacting" forever: Stop button
+    // active, queue blocked, model picker disabled — nothing but a
+    // compaction_end could clear it, and none would ever arrive.
+    const store = readyStore();
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: MANUAL_COMPACTION_TURN_ID,
+      event: { type: "compaction_start", trigger: "manual" },
+    });
+    expect(store.getState().turn.status).toBe("compacting");
+
+    store.getState().applyHostMessage({ type: "fatal", message: "compaction failed: engine closed" });
+
+    expect(store.getState().lastFatal).toBe("compaction failed: engine closed");
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().turn.turnId).toBeNull();
+    expect(store.getState().turn.requestId).toBeNull();
+    // The fatal semantics are unchanged: an empty queue is never paused.
+    expect(store.getState().queuePaused).toBe(false);
+  });
+
   it("TASK.146: a compaction event whose id mismatches an ACTIVE turn raises its notice but never touches turn state", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

@@ -4176,9 +4176,24 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // atomic set() so the drainer subscription (tab-registry
             // `maybeDrain`, fires synchronously per set()) never observes an
             // intermediate state (invariant shared with `loop_end`).
+            //
+            // cross-review F3 (Taskana 4098): a fatal while a MANUAL
+            // compaction claimed the session releases the `compacting` status
+            // too. The host emits `fatal` exactly when `Session.onCompact`'s
+            // defensive catch fired (a compactNow contract violation) or the
+            // host died mid-compaction — either way no `compaction_end` will
+            // ever arrive, and without this release the composer stays wedged
+            // (Stop button active, queue blocked, model picker disabled) for
+            // the rest of the renderer session. The still-running compaction
+            // card is NOT patched here: `fatal` carries no compaction
+            // verdict, and a `compaction_end` that arrives later (reconnect
+            // replay) still closes the newest open card by id.
             set((state) => ({
               lastFatal: message.message,
               ...(state.promptQueue.length > 0 ? { queuePaused: true } : {}),
+              ...(state.turn.status === "compacting"
+                ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
+                : {}),
             }));
             return;
           case "session_history":
