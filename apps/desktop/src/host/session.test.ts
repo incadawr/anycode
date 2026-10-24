@@ -1016,6 +1016,41 @@ describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
   });
 });
 
+describe("Session — provider quota reporting (Taskana 4090)", () => {
+  it("forwards the PRIMARY window + first header source of a provider_quota event; no primary -> no report", async () => {
+    const reports: Array<{ quota: unknown; source: string }> = [];
+    const h = createHarness({
+      steps: [
+        [
+          ...textStep("hello"),
+          {
+            type: "provider_quota",
+            quota: { primary: { usedPercent: 80, resetsAt: 1_789_999_999 }, sources: ["x-ratelimit-requests-remaining"] },
+            baseUrl: "https://api.example.com",
+          },
+        ],
+        [
+          ...textStep("again"),
+          { type: "provider_quota", quota: { sources: ["x-ratelimit-tokens-remaining"] }, baseUrl: "https://api.example.com" },
+        ],
+      ],
+      reportProviderQuota: (quota, source) => reports.push({ quota, source }),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "hi" });
+      await h.waitFor(agentEventOf("loop_end"));
+      h.send({ type: "user_message", requestId: "r2", text: "again" });
+      await h.waitUntil(() => h.received.filter((m) => m.type === "agent_event" && m.event.type === "loop_end").length >= 2);
+
+      expect(reports).toEqual([{ quota: { usedPercent: 80, resetsAt: 1_789_999_999 }, source: "x-ratelimit-requests-remaining" }]);
+    } finally {
+      h.close();
+    }
+  });
+});
+
 describe("Session — provider health reporting (TASK.45 W11)", () => {
   it("reports a failure with the core loop's OWN classified code (401 -> auth) on a stream error", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});

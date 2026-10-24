@@ -213,7 +213,9 @@ export async function recordConnectionQuota(
         if (pending === undefined) {
           return;
         }
-        void recordConnectionQuota(deps, connectionId, pending.quota, pending.source, onPersisted).catch(() => {});
+        void recordConnectionQuota(deps, connectionId, pending.quota, pending.source, onPersisted).catch((error) => {
+          deps.logger?.warn?.(`[main] failed to persist connection quota`, error);
+        });
       }, remaining);
       state.timer.unref?.();
     }
@@ -228,17 +230,21 @@ export async function recordConnectionQuota(
   state.inFlight = true;
   try {
     const persisted = await writeQuotaUnderLock(deps, connectionId, quota, source, now);
-    state.lastWriteMs = now();
     if (persisted) {
       onPersisted?.();
     }
     return persisted;
   } finally {
+    // Stamped on failure too: a write that keeps throwing (disk full, EACCES)
+    // must stay throttled, not retry a locked load+save on every response.
+    state.lastWriteMs = now();
     state.inFlight = false;
     const pending = state.pending;
     state.pending = undefined;
     if (pending !== undefined) {
-      void recordConnectionQuota(deps, connectionId, pending.quota, pending.source, onPersisted).catch(() => {});
+      void recordConnectionQuota(deps, connectionId, pending.quota, pending.source, onPersisted).catch((error) => {
+        deps.logger?.warn?.(`[main] failed to persist connection quota`, error);
+      });
     }
   }
 }

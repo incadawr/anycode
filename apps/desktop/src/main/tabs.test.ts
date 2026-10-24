@@ -15,6 +15,7 @@ import type { MessagePortMain, UtilityProcess } from "electron";
 import { CREDENTIAL_REQUEST_TYPE, CREDENTIAL_RESPONSE_TYPE } from "../shared/credentials.js";
 import { PORT_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
+import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
 import {
   PREVIEW_ARTIFACTS_TYPE,
@@ -1182,6 +1183,46 @@ describe("TabHostManager — provider health event binding (TASK.45 W11)", () =>
     expect(seen).toEqual([
       { connectionId: "conn-b", event: { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "success" } },
     ]);
+  });
+});
+
+describe("TabHostManager — provider quota event binding (Taskana 4090)", () => {
+  function quotaManager(seen: Array<{ connectionId: string; message: unknown }>) {
+    const rig = liveForkRig();
+    const manager = new TabHostManager({
+      fork: rig.fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      logger: silentLogger,
+      onProviderQuotaEvent: (connectionId, message) => {
+        seen.push({ connectionId, message });
+      },
+    });
+    return { manager, hosts: rig.hosts };
+  }
+  const quota = { type: PROVIDER_QUOTA_EVENT_TYPE, quota: { usedPercent: 42 }, source: "x-ratelimit-tokens-remaining" };
+
+  it("routes each tab's quota to its OWN pinned connectionId — never a sibling tab's", async () => {
+    const seen: Array<{ connectionId: string; message: unknown }> = [];
+    const { manager, hosts } = quotaManager(seen);
+    manager.createTab({ workspace: "/a", sessionId: "sa", resume: false, connectionId: "conn-a" });
+    manager.createTab({ workspace: "/b", sessionId: "sb", resume: false, connectionId: "conn-b" });
+    await flush();
+    hosts[1]!.emit("message", quota);
+    await flush();
+    expect(seen).toEqual([{ connectionId: "conn-b", message: quota }]);
+  });
+
+  it("drops a quota event from an unpinned (legacy) tab — no connection to persist onto", async () => {
+    const seen: Array<{ connectionId: string; message: unknown }> = [];
+    const { manager, hosts } = quotaManager(seen);
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+    await flush();
+    hosts[0]!.emit("message", quota);
+    await flush();
+    expect(seen).toEqual([]);
   });
 });
 

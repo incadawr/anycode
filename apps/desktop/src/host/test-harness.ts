@@ -452,6 +452,8 @@ export interface HarnessOptions {
   onContinuationComplete?: () => Promise<void>;
   /** TASK.45 W11: surfaced directly to Session; omitted -> no-op (every pre-existing test unaffected). */
   reportProviderHealth?: SessionOptions["reportProviderHealth"];
+  /** Taskana 4090: surfaced directly to Session; omitted -> no-op. */
+  reportProviderQuota?: SessionOptions["reportProviderQuota"];
   /**
    * TASK.27: opts this harness into the plan-exit contract EXACTLY as host boot
    * does — through the one `wirePlanExit` call, which both registers
@@ -740,6 +742,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.onContinuationReady !== undefined ? { onContinuationReady: options.onContinuationReady } : {}),
     ...(options.onContinuationComplete !== undefined ? { onContinuationComplete: options.onContinuationComplete } : {}),
     ...(options.reportProviderHealth !== undefined ? { reportProviderHealth: options.reportProviderHealth } : {}),
+    ...(options.reportProviderQuota !== undefined ? { reportProviderQuota: options.reportProviderQuota } : {}),
     ...(options.pendingChildReports !== undefined ? { pendingChildReports: options.pendingChildReports } : {}),
     ...(options.supervisorIdle !== undefined ? { supervisorIdle: options.supervisorIdle } : {}),
   });
