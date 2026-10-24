@@ -1387,6 +1387,128 @@ describe("host Codex boot private temp dir shape (Taskana 4682 rework)", () => {
 });
 
 /**
+ * Cross-review F2 (Taskana 4682): the private temp dir was created at the TOP
+ * of bootCodexSession but the `try {` guard only started AFTER the whole
+ * connect phase (`startCodexEngine` — app-server spawn, trust preflights,
+ * `--version` round-trip — the single most likely failure site of the boot).
+ * A throw in between propagated to boot()'s catch; the boot-side `finally`
+ * (which removes the dir when `session === null`) was never entered, so the
+ * dir leaked until a graceful shutdown message that a killed host never
+ * sends. index.ts is not importable (see file header) — same idiom as the
+ * 4682 shape block above: this mirrors the ORDERING invariant over the REAL
+ * helpers (the exact order index.ts must now keep), plus a source-order pin
+ * (the "read the real source" idiom of the model-override suite) so the
+ * production call site cannot silently drift back.
+ */
+describe("host Codex boot private temp dir leak guard (cross-review F2, Taskana 4682)", () => {
+  /**
+   * Mirrors bootCodexSession's ordering with injectable steps: the dir must be
+   * ENSURED immediately before the guarded window opens, and a throw from ANY
+   * step after the ensure must leave no dir behind (the finally-equivalent
+   * cleanup runs for `session === null`).
+   */
+  async function bootCodexTmpLifecycle(
+    homeDir: string,
+    steps: { mcp?: () => Promise<void>; connect: () => Promise<void>; afterGuard?: () => Promise<void> },
+  ): Promise<void> {
+    const bridgeRowId = "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a";
+    const child = { parentSessionId: "parent-1" };
+    const codexChildTempDir = resolveChildTempDir(bridgeRowId, homeDir);
+    const cleanupCodexChildTempDir = (): void => removeChildTempDir(codexChildTempDir);
+    const codexChildTempDirCleanup = cleanupCodexChildTempDir; // module-level slot, set right after derivation
+    let session: unknown = null;
+    try {
+      try {
+        // The connect phase (spawn + trust + version) and every pre-guard
+        // await run INSIDE the guarded window.
+        if (steps.mcp !== undefined) await steps.mcp();
+        await steps.connect();
+        session = {}; // engine objects exist
+        if (steps.afterGuard !== undefined) await steps.afterGuard();
+      } finally {
+        if (session === null) cleanupCodexChildTempDir();
+      }
+    } catch {
+      // boot()'s catch: initFailure, degraded mode — the host survives.
+    } finally {
+      // handleShutdown's last-safe-moment removal (idempotent).
+      codexChildTempDirCleanup();
+    }
+  }
+
+  it("a connect-phase throw (the spawn-failure case) must not leak the private dir", async () => {
+    const home = mkdtempSync(join(tmpdir(), "anycode-4682-f2-"));
+    try {
+      const dir = join(home, ".anycode", "tmp", "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a");
+      await bootCodexTmpLifecycle(home, {
+        mcp: async () => {},
+        connect: async () => {
+          ensureChildTempDir(dir); // ← the fix: ensure sits inside the guarded window
+          throw new Error("spawn failed: codex app-server --version timed out");
+        },
+      });
+      expect(existsSync(dir)).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("a post-guard throw (the already-covered case) still must not leak, and a successful boot keeps the dir until shutdown", async () => {
+    const home = mkdtempSync(join(tmpdir(), "anycode-4682-f2-"));
+    try {
+      const dir = join(home, ".anycode", "tmp", "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a");
+      await bootCodexTmpLifecycle(home, {
+        connect: async () => {
+          ensureChildTempDir(dir);
+        },
+        afterGuard: async () => {
+          throw new Error("plugin.boot threw");
+        },
+      });
+      expect(existsSync(dir)).toBe(false);
+
+      // Success path: the dir SURVIVES the boot-side finally (session !== null)
+      // and is removed exactly once at the shutdown moment.
+      await bootCodexTmpLifecycle(home, {
+        connect: async () => {
+          ensureChildTempDir(dir);
+        },
+      });
+      expect(existsSync(dir)).toBe(false); // shutdown-side removal ran
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Source-order pin (the "read the real source" idiom): in index.ts, the
+   * `ensureChildTempDir(...)` call must appear AFTER the last statement the
+   * guard comment names as pre-connect and BEFORE the `try {` that opens the
+   * guarded window — concretely: after `parseCodexEngineArgs` (the last
+   * synchronous pre-connect step) and before `startCodexEngine`'s containing
+   * expression. On the pre-F2 code the ensure sat ABOVE `prepareEngineMcpForward`
+   * (the first await of the leak window), which this pin rejects.
+   */
+  it("index.ts ensures the dir inside the guarded window: after parseCodexEngineArgs, before the connect expression", async () => {
+    const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+    const ensureIdx = source.indexOf("if (codexChildTempDir !== undefined) ensureChildTempDir(codexChildTempDir);");
+    expect(ensureIdx).toBeGreaterThan(-1);
+    const draftIdx = source.indexOf("const draft = parseCodexEngineArgs(process.argv.slice(2));");
+    expect(draftIdx).toBeGreaterThan(-1);
+    const connectIdx = source.indexOf("const connected = await (args.resume");
+    expect(connectIdx).toBeGreaterThan(-1);
+    // Order: draft → ensure → connected. (All three literals are unique in the file.)
+    expect(source.indexOf("if (codexChildTempDir !== undefined) ensureChildTempDir(codexChildTempDir);", ensureIdx + 1)).toBe(-1);
+    expect(draftIdx).toBeLessThan(ensureIdx);
+    expect(ensureIdx).toBeLessThan(connectIdx);
+    // And the ensure no longer sits above the first pre-guard await.
+    const mcpForwardIdx = source.indexOf("const codexMcpForward = await prepareEngineMcpForward({");
+    expect(mcpForwardIdx).toBeGreaterThan(-1);
+    expect(ensureIdx).toBeGreaterThan(mcpForwardIdx);
+  });
+});
+
+/**
  * Codex-profiles Q1.3 (cut §3.3, completes W3-F): bootCodexSession's
  * create-session seam persists the spawn's `--codex-profile` id into the
  * session row, so main's cross-restart resume (main/index.ts

@@ -909,9 +909,9 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   }
   // Taskana 4682 rework: a codex CHILD gets a PRIVATE temp dir,
   // `~/.anycode/tmp/<childSessionId>` (bridgeRowId = --session, the host
-  // minted UUID a child boot always carries), created here 0700 BEFORE the
-  // first spawn so both the app-server spawn env (TMPDIR/TMPPREFIX/TMP/TEMP)
-  // and the sandbox writableRoots can point at a dir that provably exists.
+  // minted UUID a child boot always carries), created 0700 BEFORE the first
+  // spawn so both the app-server spawn env (TMPDIR/TMPPREFIX/TMP/TEMP) and
+  // the sandbox writableRoots can point at a dir that provably exists.
   // It replaces the /tmp and $TMPDIR access a54b2f6d excluded — without it
   // every tmp consumer inside the child breaks (zsh heredocs, tsx cache,
   // mktemp, os.tmpdir()). Owner tabs (args.child undefined) get NOTHING here:
@@ -922,7 +922,6 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   // toolchain state.
   const bridgeRowId = args.sessionId ?? randomUUID();
   const codexChildTempDir = args.child !== undefined ? resolveChildTempDir(bridgeRowId, codexProfilesHomeOverride ?? homedir()) : undefined;
-  if (codexChildTempDir !== undefined) ensureChildTempDir(codexChildTempDir);
   /** Best-effort, idempotent removal — child finalize AND host shutdown both call it; never fatal. */
   const cleanupCodexChildTempDir = (): void => {
     if (codexChildTempDir !== undefined) removeChildTempDir(codexChildTempDir);
@@ -1040,6 +1039,18 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   // id reaches the wire; nothing here interprets it.
   const draft = parseCodexEngineArgs(process.argv.slice(2));
 
+  // Cross-review F2 (Taskana 4682): the dir is ENSURED only here, immediately
+  // before the connect phase — the single most likely failure site of the boot
+  // (app-server spawn, trust preflights, --version round-trip) and every await
+  // above. Creating it at the top of the function left a window where a connect
+  // throw propagated to boot()'s catch with the boot-side finally (which
+  // removes the dir while `session === null`) never entered — a force-killed
+  // host then leaked the 0700 scratch dir forever. The dir only needs to exist
+  // before the first spawn env is USED (buildCodexChildEnv runs inside
+  // startCodexEngine, below), so this is the last safe spot; every await from
+  // here on is inside the try below.
+  if (codexChildTempDir !== undefined) ensureChildTempDir(codexChildTempDir);
+
   const connected = await (args.resume
     ? (async () => {
         if (args.sessionId === undefined || args.sessionId.length === 0) {
@@ -1143,7 +1154,8 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   // The engine objects exist now: from here on a boot failure (below) must
   // clean the private temp dir up — the finally in boot() cannot, it lives in
   // another function scope. Every later await in this function body runs
-  // under this guard.
+  // under this guard — including (cross-review F2, above) the whole connect
+  // phase that produced `connected`.
   try {
   codexParentEngine = connected.engine;
   const booted = await plugin.boot({ codexEngine: connected.engine });
