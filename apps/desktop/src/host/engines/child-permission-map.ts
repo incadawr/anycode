@@ -115,11 +115,15 @@ export function codexChildAutoAcceptsWorkspacePatches(mode: PermissionMode): boo
  *    label is "Claude plans and reads files, but cannot execute the plan")
  *    spawns children whose Write/Edit/Bash are DENIED outright (`plan`), not
  *    children that merely ask;
- *  - fail-narrow on the unfamiliar: any wider or unknown preset id maps to
- *    `build` (ask-first), the same mid-ladder posture the codex door's
- *    default arm produces — a future preset id can never widen a child.
+ *  - fail-narrow on the unfamiliar, with the codex door's own allowlist
+ *    shape: an ALLOWLIST of known-wider presets (`ask`, `workspace` —
+ *    `workspace` is still Claude's own ask-outside-the-cwd tier) maps to
+ *    `build` (ask-first); every OTHER id — a future preset, a legacy id, a
+ *    malformed/empty string — fails narrow to `plan`, exactly like the codex
+ *    door's default arm. A preset id this build has never heard of can never
+ *    widen a child.
  */
 export function claudeAgentPermissionMode(presetId: string): PermissionMode {
-  if (presetId === "read-only") return "plan";
-  return "build";
+  if (presetId === "ask" || presetId === "workspace") return "build";
+  return "plan";
 }
