@@ -641,6 +641,10 @@ export class AiSdkModelPort implements ModelPort {
 
     for (;;) {
       let hadModelOutput = false;
+      // Taskana 4705 review: set once a non-error `finish` is yielded. The step
+      // is then complete; replaying it would re-bill the provider and drop the
+      // usage of the attempt the caller already received, so it is never replayed.
+      let completedFinish = false;
       let pendingRetryError: unknown = NO_RETRY;
       // TASK.168: set instead of pendingRetryError when this pass ends by
       // starting an include_usage probe — that retry is immediate (no
@@ -703,12 +707,15 @@ export class AiSdkModelPort implements ModelPort {
             const stallError = new StreamStallError(policy.stallTimeoutMs);
             // Actually cancel the underlying SDK call; it will never be read again.
             attemptController.abort(stallError);
-            // Stall is retryable regardless of hadModelOutput. Pre-content it
-            // rides the shared attempt budget; after real output it counts as
-            // a mid-stream replay instead (Taskana 4705).
+            // A stall after a completed step has nothing left to deliver: end
+            // the step as finished instead of replaying it (Taskana 4705 review).
+            if (completedFinish) break;
+            // Stall is retryable regardless of hadModelOutput. Replays — pre-
+            // content or mid-stream — count inside maxRetries through mayRetry,
+            // the same gate the error and thrown paths use (Taskana 4705 review);
+            // after real output a replay is also bounded by midStreamRetries.
             const stallRetryAllowed =
-              attempt < policy.maxRetries ||
-              (hadModelOutput && midStreamRetries < policy.midStreamRetries);
+              mayRetry(stallError) && (!hadModelOutput || midStreamRetries < policy.midStreamRetries);
             if (stallRetryAllowed) {
               if (hadModelOutput) midStreamRetries += 1;
               pendingRetryError = stallError;
@@ -795,6 +802,7 @@ export class AiSdkModelPort implements ModelPort {
           // mirroring the stall path.
           if (
             event.type === "error" &&
+            !completedFinish &&
             (hadModelOutput ? midStreamRetries < policy.midStreamRetries : true) &&
             isRetryableStreamError(event.error) &&
             mayRetry(event.error) &&
@@ -807,6 +815,9 @@ export class AiSdkModelPort implements ModelPort {
           }
           if (isModelOutputEvent(event)) {
             hadModelOutput = true;
+          }
+          if (event.type === "finish" && event.finishReason !== "error") {
+            completedFinish = true;
           }
           yield event;
           // Taskana 4090: emit the attempt's quota observation immediately
@@ -847,6 +858,7 @@ export class AiSdkModelPort implements ModelPort {
           // policy.midStreamRetries times (shared attempt counter). The
           // `!request.abortSignal?.aborted` guard makes an external abort always
           // win over retry, even when the thrown abort reason looks retryable.
+          !completedFinish &&
           (hadModelOutput ? midStreamRetries < policy.midStreamRetries : true) &&
           isRetryableStreamError(error) &&
           mayRetry(error) &&
@@ -931,17 +943,10 @@ export class AiSdkModelPort implements ModelPort {
 
       const delayMs = retryDelayMs(attempt, pendingRetryError, policy);
       attempt += 1;
-      // Taskana 4705: once a mid-stream replay has actually been spent this
-      // turn, the announced N reflects the visible headroom: pre-content
-      // retries alone report maxRetries (the budget-extended path already lets
-      // `attempt` grow past it), and mid-stream adds its own — so N =
-      // maxRetries + midStreamRetries only after a replay fired.
-      const announcedMaxAttempts =
-        midStreamRetries > 0 ? policy.maxRetries + policy.midStreamRetries : policy.maxRetries;
       yield {
         type: "stream_retry",
         attempt,
-        maxAttempts: announcedMaxAttempts,
+        maxAttempts: policy.maxRetries,
         delayMs,
         reason: describeRetryReason(pendingRetryError),
       };

@@ -729,9 +729,9 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     expect(retryEvent.value).toMatchObject({
       type: "stream_retry",
       attempt: 1,
-      // Taskana 4705: a stall after real output is a mid-stream replay, so the
-      // announced headroom includes midStreamRetries (3 + 2).
-      maxAttempts: 5,
+      // Taskana 4705 review: replays count inside maxRetries, so the announced
+      // total stays maxRetries even after a mid-stream stall replay.
+      maxAttempts: 3,
       // W7b-FIX #3: the stall timeout is LOCALLY generated (never provider
       // text), so it gets its own fixed whitelist reason instead of being
       // routed through classifyProviderFailure's generic "unknown" ->
@@ -1520,11 +1520,11 @@ describe("AiSdkModelPort — mid-stream replay (Taskana 4705)", () => {
     const events = await collect(port.streamText(baseRequest));
 
     expect(events.some((e) => e.type === "error")).toBe(false);
-    // maxAttempts = maxRetries(3) + midStreamRetries(2) — a mid-stream replay fired.
+    // maxAttempts = maxRetries(3): mid-stream replays count inside it.
     expect(events).toEqual([
       { type: "start" },
       { type: "text_delta", id: "t1", text: "hi" },
-      { type: "stream_retry", attempt: 1, maxAttempts: 5, delayMs: expect.any(Number), reason: expect.any(String) },
+      { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: expect.any(Number), reason: expect.any(String) },
       { type: "start" },
       { type: "text_delta", id: "t1", text: "hi" },
       { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
@@ -1585,11 +1585,11 @@ describe("AiSdkModelPort — mid-stream replay (Taskana 4705)", () => {
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 
-  it("honest counts: a pre-content failure reports maxAttempts 2, a later mid-stream failure reports 4 (Taskana 4705)", async () => {
+  it("honest counts: every retry announces maxRetries as the total, mid-stream replays included (Taskana 4705 review)", async () => {
     mockStreamText
       // Attempt 1 fails PRE-content: maxAttempts 2 (mid-stream headroom not yet visible).
       .mockImplementationOnce(() => fakeResult([part(startPart), throwsWith(retryableError())]))
-      // Attempt 2 fails MID-stream: a replay is spent, so N grows to 2 + 2.
+      // Attempt 2 fails MID-stream: the replay is a retry inside maxRetries (2).
       .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("hi")), throwsWith(retryableError())]))
       // Attempt 3 (the mid-stream replay) succeeds.
       .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
@@ -1600,8 +1600,122 @@ describe("AiSdkModelPort — mid-stream replay (Taskana 4705)", () => {
     const retries = events.filter((e) => e.type === "stream_retry");
     expect(retries).toHaveLength(2);
     expect(retries[0]).toMatchObject({ attempt: 1, maxAttempts: 2 });
-    expect(retries[1]).toMatchObject({ attempt: 2, maxAttempts: 4 });
+    expect(retries[1]).toMatchObject({ attempt: 2, maxAttempts: 2 });
     expect(events.at(-1)?.type).toBe("finish");
     expect(mockStreamText).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("AiSdkModelPort — Taskana 4705 review: replay gates", () => {
+  const textDelta = (text: string) => ({ type: "text-delta", id: "t1", text });
+
+  it("never replays a step once a non-error finish was seen, even with replay enabled (error part)", async () => {
+    const error = retryableError();
+    mockStreamText.mockImplementation(() =>
+      fakeResult([part(startPart), part(textDelta("hi")), part(finishPart), part({ type: "error", error })]),
+    );
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 2 }));
+    const events = await collect(port.streamText(baseRequest));
+
+    expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+    expect(events.at(-1)).toEqual({ type: "error", error });
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("never replays a step once a non-error finish was seen, even with replay enabled (thrown)", async () => {
+    const error = retryableError();
+    mockStreamText.mockImplementation(() =>
+      fakeResult([part(startPart), part(textDelta("hi")), part(finishPart), throwsWith(error)]),
+    );
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 2 }));
+    await expect(collect(port.streamText(baseRequest))).rejects.toThrow("overloaded");
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  describe("stall path", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("maxRetries: 0 disables a mid-stream replay on the stall path too (Taskana 4705 review)", async () => {
+      mockStreamText.mockImplementationOnce(() => ({
+        fullStream: (async function* () {
+          yield { type: "text-delta", id: "t1", text: "a" };
+          await new Promise(() => {});
+        })(),
+      }));
+
+      const port = new AiSdkModelPort(baseConfig({ maxRetries: 0, midStreamRetries: 2, stallTimeoutMs: 20 }));
+      const iterator = port.streamText(baseRequest)[Symbol.asyncIterator]();
+      expect((await iterator.next()).value).toMatchObject({ type: "text_delta", text: "a" });
+
+      const finalPromise = iterator.next();
+      const assertion = expect(finalPromise).rejects.toThrow(/stream stalled/);
+      await vi.advanceTimersByTimeAsync(20);
+      await assertion;
+      expect(mockStreamText).toHaveBeenCalledTimes(1);
+    });
+
+    it("a mid-stream stall counts inside maxRetries: after the pre-content stall spent it, the post-output stall throws", async () => {
+      mockStreamText
+        .mockImplementationOnce(() => ({
+          fullStream: (async function* () {
+            yield startPart;
+            await new Promise(() => {});
+          })(),
+        }))
+        .mockImplementationOnce(() => ({
+          fullStream: (async function* () {
+            yield startPart;
+            yield { type: "text-delta", id: "t1", text: "a" };
+            await new Promise(() => {});
+          })(),
+        }));
+
+      const port = new AiSdkModelPort(baseConfig({ maxRetries: 1, midStreamRetries: 2, stallTimeoutMs: 20 }));
+      const iterator = port.streamText(baseRequest)[Symbol.asyncIterator]();
+
+      expect((await iterator.next()).value).toEqual({ type: "start" });
+      const stallPromise = iterator.next();
+      await vi.advanceTimersByTimeAsync(20);
+      expect((await stallPromise).value).toMatchObject({ type: "stream_retry", attempt: 1, maxAttempts: 1 });
+
+      const afterRetry = iterator.next();
+      await vi.advanceTimersByTimeAsync(10);
+      expect((await afterRetry).value).toEqual({ type: "start" });
+      expect((await iterator.next()).value).toMatchObject({ type: "text_delta", text: "a" });
+
+      const finalPromise = iterator.next();
+      const assertion = expect(finalPromise).rejects.toThrow(/stream stalled/);
+      await vi.advanceTimersByTimeAsync(20);
+      await assertion;
+      expect(mockStreamText).toHaveBeenCalledTimes(2);
+    });
+
+    it("a stall after a non-error finish ends the step without replaying it (Taskana 4705 review)", async () => {
+      mockStreamText.mockImplementationOnce(() => ({
+        fullStream: (async function* () {
+          yield startPart;
+          yield { type: "text-delta", id: "t1", text: "hi" };
+          yield finishPart;
+          await new Promise(() => {});
+        })(),
+      }));
+
+      const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 2, stallTimeoutMs: 20 }));
+      const done = collect(port.streamText(baseRequest));
+      await vi.advanceTimersByTimeAsync(20);
+      const events = await done;
+
+      expect(events.some((e) => e.type === "stream_retry")).toBe(false);
+      expect(events.at(-1)?.type).toBe("finish");
+      expect(mockStreamText).toHaveBeenCalledTimes(1);
+    });
   });
 });
