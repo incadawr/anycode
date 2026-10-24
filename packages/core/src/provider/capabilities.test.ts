@@ -365,6 +365,23 @@ describe("Taskana 4118 — live capabilities supplement the catalog", () => {
     expect(mapForeignEffortLevels(["xhigh", "minimal", "none", "default"])).toEqual([]);
   });
 
+  it("mapForeignEffortLevels is immune to prototype-key poisoning (cross-review F1)", () => {
+    // Endpoint-controlled `supported_efforts` may carry inherited-property
+    // names ("constructor"/"toString"/"valueOf"/"hasOwnProperty" resolve to
+    // Object.prototype members, "__proto__" to the prototype itself) on a
+    // plain object-literal lookup. None is a ReasoningEffort — every one of
+    // them must drop, and the result must contain ONLY real enum values.
+    const mapped = mapForeignEffortLevels([
+      "constructor", "__proto__", "toString", "valueOf", "hasOwnProperty", "high",
+    ]);
+    expect(mapped).toEqual(["high"]);
+    expect(mapped.every((level) => typeof level === "string")).toBe(true);
+    // All-poison list maps to nothing ⇒ the live vocabulary is undefined
+    // (fail-closed), never an array of functions.
+    expect(mapForeignEffortLevels(["constructor", "__proto__", "toString"])).toEqual([]);
+    expect(liveEffortLevels({ reasoning: true, effortLevels: ["constructor"] })).toBeUndefined();
+  });
+
   it("liveEffortLevels: reasoning!==true ⇒ undefined; no efforts ⇒ legacy four; all-unknown ⇒ undefined", () => {
     expect(liveEffortLevels(undefined)).toBeUndefined();
     expect(liveEffortLevels({ reasoning: false })).toBeUndefined();

@@ -289,6 +289,17 @@ const liveCapsSchema = z.object({
 });
 
 /**
+ * Taskana 4118 cross-review F2: `modelCapabilities` is persisted as a
+ * `z.record(z.string().max(256), …)` key (settings/schema.ts) whose
+ * `.catch(undefined)` is WHOLE-map — one longer, endpoint-controlled id with
+ * reasoning meta would make every later `loadSettings` drop the connection's
+ * ENTIRE capability map (all legal models included). Capability meta is only
+ * ever kept for ids the schema can round-trip; the id itself survives in
+ * `models` (display-only, same discipline as garbage meta).
+ */
+const MODEL_CAPABILITY_ID_MAX = 256;
+
+/**
  * `{data:[{id}...]}` -> `{id, reasoning?, effortLevels?}[]`; undefined for any
  * other shape (fail-closed, never throws). Taskana 4118: per-item meta is kept
  * ONLY when the endpoint declares reasoning — `supported_parameters` contains
@@ -326,7 +337,10 @@ function extractModelIds(value: unknown): { id: string; reasoning?: boolean; eff
     const declared = meta.data.reasoning?.supported_efforts;
     const reasoning = meta.data.supported_parameters?.includes("reasoning") === true
       || (Array.isArray(declared) && declared.length > 0);
-    if (!reasoning) {
+    // Cross-review F2: ids the settings schema cannot accept as capability
+    // keys degrade to the bare id — keeping their meta would poison the whole
+    // stored map on the next read (`.catch` is whole-map, not per-key).
+    if (!reasoning || maybe.id.length > MODEL_CAPABILITY_ID_MAX) {
       models.push({ id: maybe.id });
       continue;
     }
@@ -836,6 +850,12 @@ async function handleConnectionFetchModels(
     // models leaves the stored map untouched (never deleted on empty).
     const caps: Record<string, { reasoning?: boolean; effortLevels?: string[] }> = {};
     for (const m of outcome.models) {
+      // Cross-review F2 (defense-in-depth): `fetchModels` is injectable, so
+      // this seam can see meta the extractor never produced — the same
+      // schema-legal key bound applies here too.
+      if (m.id.length > MODEL_CAPABILITY_ID_MAX) {
+        continue;
+      }
       if (m.reasoning === true || m.effortLevels !== undefined) {
         caps[m.id] = {
           ...(m.reasoning === true ? { reasoning: true } : {}),

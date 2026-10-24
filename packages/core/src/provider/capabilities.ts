@@ -199,16 +199,22 @@ export interface LiveModelCapabilities {
  * Foreign effort level → our closed enum, by EXACT name only (Taskana 4118).
  * `xhigh`/`minimal`/`none`/`default`/… are absent ⇒ dropped at mapping time —
  * never silently folded into a neighbouring level.
+ *
+ * A `Map` (NOT an object literal) so endpoint-controlled `supported_efforts`
+ * entries naming inherited properties ("constructor", "toString", "__proto__",
+ * …) resolve to `undefined` instead of the inherited `Object.prototype`
+ * member — an object-literal lookup would pass the `!== undefined` guard with
+ * a Function value inside a `ReasoningEffort[]` (cross-review finding 1).
  */
-const EFFORT_LEVEL_PASSTHROUGH: Readonly<Record<string, ReasoningEffort>> = {
-  off: "off", low: "low", medium: "medium", high: "high", max: "max",
-};
+const EFFORT_LEVEL_PASSTHROUGH: ReadonlyMap<string, ReasoningEffort> = new Map([
+  ["off", "off"], ["low", "low"], ["medium", "medium"], ["high", "high"], ["max", "max"],
+]);
 
 /** Maps foreign levels: keeps source order, drops unknowns, dedupes. */
 export function mapForeignEffortLevels(levels: readonly string[]): ReasoningEffort[] {
   const out: ReasoningEffort[] = [];
   for (const raw of levels) {
-    const mapped = EFFORT_LEVEL_PASSTHROUGH[raw];
+    const mapped = EFFORT_LEVEL_PASSTHROUGH.get(raw);
     if (mapped !== undefined && !out.includes(mapped)) out.push(mapped);
   }
   return out;

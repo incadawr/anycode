@@ -359,6 +359,31 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     });
   });
 
+  it("Taskana 4118 cross-review F2: an over-long id (>256 chars) with reasoning meta drops ONLY that item's meta — the bare id survives", async () => {
+    // An id longer than settings.json's `z.record(z.string().max(256), …)`
+    // key cap can never round-trip into modelCapabilities; keeping its meta
+    // would poison the whole connection's stored map on the next read. The
+    // id itself stays (display-only, same discipline as garbage meta).
+    const longId = "x".repeat(257);
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: [
+            { id: longId, supported_parameters: ["reasoning"], reasoning: { supported_efforts: ["high"] } },
+            { id: "or/glm-5.2", supported_parameters: ["reasoning"], reasoning: { supported_efforts: ["high"] } },
+            { id: "plain" },
+          ],
+        }),
+      );
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({
+      ok: true,
+      models: [{ id: longId }, { id: "or/glm-5.2", reasoning: true, effortLevels: ["high"] }, { id: "plain" }],
+    });
+  });
+
   // RED-PROOF: without `redirect: "error"`, a plain `fetch` follows this 302
   // and would both return the target's models AND leak the Authorization
   // header to a DIFFERENT origin than the one the user configured.
@@ -1297,6 +1322,35 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.connections[0]?.modelCapabilities).toEqual({
       "stale-model": { reasoning: true, effortLevels: ["low"] },
+    });
+  });
+
+  it("Taskana 4118 cross-review F2: an over-long id (>256 chars) with reasoning meta never poisons the stored capability map", async () => {
+    // settings.json's `z.record(z.string().max(256), …)` key cap is enforced
+    // by a WHOLE-map `.catch(undefined)`: one illegal key would silently kill
+    // the connection's entire capability map on every later load. The fix
+    // bounds the caps-record key set to schema-legal ids (at extraction AND at
+    // the merge seam — `fetchModels` is injectable), so the legal models' caps
+    // persist and a reload round-trips them back.
+    await seedConnection({ id: "conn-caps-long", providerId: "kimi" });
+    const { deps } = makeCatalogDeps({
+      fetchModels: async () => ({
+        ok: true,
+        models: [
+          { id: "x".repeat(257), reasoning: true, effortLevels: ["high"] }, // illegal key
+          { id: "or/glm-5.2", reasoning: true, effortLevels: ["high"] }, // legal
+          { id: "plain" },
+        ],
+      }),
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-caps-long" });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    // The over-long id survives in `models` (display-only); its meta is NOT a
+    // capability key. The legal model's caps persist and round-trip.
+    expect(reloaded.settings.provider.connections[0]?.models).toEqual(["x".repeat(257), "or/glm-5.2", "plain"]);
+    expect(reloaded.settings.provider.connections[0]?.modelCapabilities).toEqual({
+      "or/glm-5.2": { reasoning: true, effortLevels: ["high"] },
     });
   });
 
