@@ -22,6 +22,8 @@ import {
   OBSERVED_COMMAND_APPROVAL_METHOD,
   OBSERVED_FILE_CHANGE_APPROVAL_METHOD,
   SUPPORTED_CODEX_VERSION,
+  WINDOWS_SANDBOX_READINESS_METHOD,
+  WINDOWS_SANDBOX_SETUP_COMPLETED_METHOD,
   isSupportedCodexVersion,
   parseCodexVersion,
 } from "../protocol.js";
@@ -144,9 +146,43 @@ describe("contract-drift layer 1 (always-on)", () => {
       "account/login/start",
       "account/login/cancel",
       "account/logout",
+      "windowsSandbox/readiness",
     ]) {
       expect(client).toContain(method);
     }
+    expect(Object.keys(pinned.methods.serverNotifications)).toContain("windowsSandbox/setupCompleted");
+  });
+
+  it("the pinned windowsSandbox family matches protocol.ts constants (Taskana 4139)", () => {
+    // TASK.185 / Taskana 4139: Windows sandbox is a SEPARATE protocol family
+    // (not sandbox policy fields). readiness is probe-only; setupStart is
+    // deliberately NOT pinned (never sent). The refs are v2/-scoped because
+    // the 0.144.3 schema declares the whole family under definitions.v2.
+    expect(pinned.methods.clientRequests[WINDOWS_SANDBOX_READINESS_METHOD]).toEqual({
+      params: null,
+      result: "v2/WindowsSandboxReadinessResponse",
+    });
+    expect(pinned.methods.serverNotifications[WINDOWS_SANDBOX_SETUP_COMPLETED_METHOD]).toEqual({
+      params: "v2/WindowsSandboxSetupCompletedNotification",
+    });
+  });
+
+  it("the committed 0.144.3 reference schema re-extracts to exactly the pinned contract (offline layer-2 stand-in, Taskana 4139)", () => {
+    // Layer 2 needs a live binary; this offline stand-in holds the SAME
+    // invariant — extractor(schema) === pin — against the committed 0.144.3
+    // reference schema the pin was regenerated from, so a hand-edit of
+    // pinned-contract.json (or an extractor regression that changes the
+    // extract) fails on every plain `pnpm test` run.
+    const referencePath = join(FIXTURES_DIR, "schema-0.144.3", "codex_app_server_protocol.schemas.json");
+    // The fixture is committed alongside the pin: a missing file must FAIL,
+    // not skip (a skip would silently re-open the hand-edit hole).
+    const schema = JSON.parse(readFileSync(referencePath, "utf8"));
+    const result = runExtractor(schema, pinned.generatedFrom);
+    if ("error" in result) {
+      throw new Error(`extractor rejected the committed 0.144.3 reference schema:\n${result.error}`);
+    }
+    expect(result.contract.methods).toEqual(pinned.methods);
+    expect(result.contract.definitions).toEqual(pinned.definitions);
   });
 
   it("the translator digests every committed fixture line without an unknown-throw", () => {

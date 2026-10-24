@@ -50,6 +50,11 @@ import { CodexQuotaTracker } from "./quota.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
 import { TurnItemIndex } from "./turn-item-index.js";
 import type { JsonRpcNotification } from "./protocol.js";
+import {
+  WINDOWS_SANDBOX_READINESS_METHOD,
+  decodeWindowsSandboxReadiness,
+  type WindowsSandboxReadinessStatus,
+} from "./protocol.js";
 
 /** Resume-history projection cap (cut §2(e)); pagination of `thread/read` beyond this is a documented residual. */
 export const CODEX_HISTORY_MAX_ITEMS = 200;
@@ -57,6 +62,14 @@ export const CODEX_HISTORY_MAX_ITEMS = 200;
 const SHADOW_OUTPUT_HEAD_CAP = 8192;
 
 export const CODEX_NOT_SIGNED_IN = "Codex is not signed in — run `codex login` in a terminal, then start a new Codex session.";
+
+/**
+ * TASK.185 / Taskana 4139 (probe-only): the two Windows-sandbox readiness
+ * boot-notice messages (named so tests assert the exact text).
+ */
+export const WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE = "Codex Windows sandbox is not configured; commands may run unsandboxed.";
+export const WINDOWS_SANDBOX_UPDATE_REQUIRED_MESSAGE =
+  "Codex Windows sandbox needs a one-time setup (update required); commands may run unsandboxed until then.";
 
 /**
  * Backstop only. Notifications addressed to a foreign thread (or to no thread
@@ -472,7 +485,12 @@ async function pullQuotaSnapshot(client: CodexClient, timeoutMs: number): Promis
   return tracker;
 }
 
-async function initializeAndVerifyAccount(client: CodexClient, timeoutMs: number, experimentalApi = false): Promise<void> {
+export async function initializeAndVerifyAccount(
+  client: CodexClient,
+  timeoutMs: number,
+  experimentalApi = false,
+  platform: NodeJS.Platform = process.platform,
+): Promise<WindowsSandboxReadinessStatus | undefined> {
   await client.request("initialize", {
     clientInfo: { name: "anycode", title: "AnyCode", version: "0.0.0" },
     capabilities: { experimentalApi },
@@ -487,6 +505,41 @@ async function initializeAndVerifyAccount(client: CodexClient, timeoutMs: number
   if ((account.account === null || account.account === undefined) && requiresOpenaiAuth !== false) {
     throw new Error(CODEX_NOT_SIGNED_IN);
   }
+  // TASK.185 / Taskana 4139 (probe-only): on Windows, ask the app-server
+  // whether its SEPARATE Windows-sandbox protocol family is usable. Never
+  // fatal and never sends setupStart: a probe that errors or times out (old
+  // binary without the method) degrades to `undefined`, and a
+  // notConfigured/updateRequired answer is RETURNED (not thrown) so the
+  // caller surfaces it as a boot notice. Refusing the boot is an owner
+  // decision that waits for the live Windows measurement (TASK.185 step 2).
+  // Other platforms skip the probe entirely (no extra RPC).
+  if (platform !== "win32") return undefined;
+  const readiness = await client
+    .request(WINDOWS_SANDBOX_READINESS_METHOD, undefined, { timeoutMs })
+    .then(decodeWindowsSandboxReadiness)
+    .catch(() => undefined);
+  return readiness;
+}
+
+/**
+ * TASK.185 / Taskana 4139 (probe-only): Windows sandbox readiness. Never
+ * fatal, never sent setupStart — an error/timeout degrades to a notice, and
+ * non-win32 callers skip the probe entirely. macOS/Linux behavior unchanged.
+ * An UNANSWERED probe (`undefined` — old binary without the method) also
+ * stays silent: unknown is not "not configured", and a false alarm on every
+ * legacy Windows boot would train users to ignore the notice.
+ */
+export function windowsSandboxNotice(
+  platform: NodeJS.Platform,
+  status: WindowsSandboxReadinessStatus | undefined,
+): AgentEvent | null {
+  if (platform !== "win32") return null;
+  if (status === undefined || status === "ready") return null;
+  return {
+    type: "engine_notice",
+    level: "warning",
+    message: status === "updateRequired" ? WINDOWS_SANDBOX_UPDATE_REQUIRED_MESSAGE : WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE,
+  };
 }
 
 /**
@@ -510,9 +563,14 @@ export async function createNativeCodexSession(
   mcpForward?: { servers?: Record<string, unknown>; notices?: AgentEvent[] },
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
-  await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
+  const readiness = await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined, process.platform);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [...(bootNotices ?? [])];
+  // TASK.185 / Taskana 4139 (probe-only): a non-ready Windows sandbox rides
+  // the existing boot-notices drain (settings.notices, flushed on the first
+  // runTurn) — null on every non-win32 boot, so nothing changes elsewhere.
+  const sandboxNotice = windowsSandboxNotice(process.platform, readiness);
+  if (sandboxNotice !== null) notices.push(sandboxNotice);
   // TASK.182: controlled forwarding notices drain independently of the map.
   if (mcpForward?.notices !== undefined) notices.push(...mcpForward.notices);
   const preset = resolvePreset(selection, notices);
@@ -562,9 +620,13 @@ export async function resumeNativeCodexSession(
   mcpForward?: { servers?: Record<string, unknown>; notices?: AgentEvent[] },
 ): Promise<ConnectedCodexEngine> {
   const bounds = timeouts(overrides);
-  await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined);
+  const readiness = await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined, process.platform);
   const catalog = await CodexModelCatalog.load(client);
   const notices: AgentEvent[] = [...(bootNotices ?? [])];
+  // TASK.185 / Taskana 4139 (probe-only): same drain as thread/start — null
+  // on every non-win32 boot.
+  const sandboxNotice = windowsSandboxNotice(process.platform, readiness);
+  if (sandboxNotice !== null) notices.push(sandboxNotice);
   // TASK.182: same controlled-notices drain as thread/start — independent of
   // whether any server survived serialization.
   if (mcpForward?.notices !== undefined) notices.push(...mcpForward.notices);

@@ -112,6 +112,31 @@ export const OBSERVED_COMMAND_APPROVAL_METHOD = "item/commandExecution/requestAp
 export const OBSERVED_FILE_CHANGE_APPROVAL_METHOD = "item/fileChange/requestApproval";
 
 /**
+ * TASK.185 / Taskana 4139: Windows sandbox is its own protocol family — a
+ * SEPARATE set of wire methods from the sandbox POLICY fields the thread
+ * params already carry. Probe-only: `windowsSandbox/readiness` is sent on
+ * win32 boot and its status decoded; `windowsSandbox/setupStart` is
+ * deliberately NEVER sent (auto-setup is an owner decision that waits for
+ * the live Windows measurement).
+ */
+export const WINDOWS_SANDBOX_READINESS_METHOD = "windowsSandbox/readiness";
+/**
+ * Setup-completed notification; passively observed, never requested. AnyCode
+ * never starts a setup, so this can only echo an out-of-band one.
+ */
+export const WINDOWS_SANDBOX_SETUP_COMPLETED_METHOD = "windowsSandbox/setupCompleted";
+export type WindowsSandboxReadinessStatus = "ready" | "notConfigured" | "updateRequired";
+/**
+ * Decoder for the readiness result (`v2/WindowsSandboxReadinessResponse`):
+ * unknown shapes degrade to `undefined`, never throw — an old binary that
+ * predates the method answers with an arbitrary shape and must not crash boot.
+ */
+export function decodeWindowsSandboxReadiness(result: unknown): WindowsSandboxReadinessStatus | undefined {
+  const status = (result as { status?: unknown } | null)?.status;
+  return status === "ready" || status === "notConfigured" || status === "updateRequired" ? status : undefined;
+}
+
+/**
  * The only approval decisions AnyCode ever sends (live-evidenced, cut §2(c)):
  *
  *  - `accept`  — user allowed the request.
