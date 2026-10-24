@@ -78,8 +78,10 @@
  *    when no exit code was ever recorded (declined/interrupted before
  *    completion) — a documented coarser fidelity than the live path, which
  *    still distinguishes `denied` in real time (event-translator.ts).
- *  - `reasoning`/`plan` items surface their own summary/content text rather
- *    than degrading to a bare type label.
+ *  - `reasoning` items project to NOTHING (no block, no placeholder, summary
+ *    or not): live Codex hides reasoning entirely (event-translator.ts
+ *    `EXCLUDED_ITEM_TYPES`), so resume must match. `plan` items surface their
+ *    own text rather than degrading to a bare type label.
  *  - Every other item type has no HistoryItem counterpart in core's
  *    `ChatMessage` union — it degrades to a deterministic formatted text
  *    block (cut §3.6, "допустимая деградация, фиксируется в тесте голдом")
@@ -404,16 +406,6 @@ function projectPlan(turnId: string, item: CodexThreadReadItem, createdAt: numbe
   return textBlock(turnId, item, createdAt, `[Codex plan]\n${text}`);
 }
 
-/** `reasoning`: summary/content string arrays (schema `ReasoningThreadItem`) — surfaced, not reduced to a bare type label. */
-function projectReasoning(turnId: string, item: CodexThreadReadItem, createdAt: number): HistoryItem {
-  const content = Array.isArray(item.content) ? item.content : [];
-  const parts = [...(item.summary ?? []), ...content].filter(
-    (part): part is string => typeof part === "string" && part.length > 0,
-  );
-  const text = parts.length > 0 ? parts.join("\n\n") : "(no reasoning summary retained)";
-  return textBlock(turnId, item, createdAt, `[Codex reasoning]\n${text}`);
-}
-
 function projectFallback(turnId: string, item: CodexThreadReadItem, createdAt: number): HistoryItem {
   return textBlock(turnId, item, createdAt, `[Codex ${item.type} item — not represented in AnyCode's transcript format]`);
 }
@@ -453,8 +445,10 @@ function projectItem(
       return projectDynamicToolCall(turnId, item, createdAt, agentPresentations);
     case "plan":
       return [projectPlan(turnId, item, createdAt)];
+    // Hidden on purpose: live Codex never shows reasoning (event-translator.ts
+    // EXCLUDED_ITEM_TYPES), so a resumed transcript must not either.
     case "reasoning":
-      return [projectReasoning(turnId, item, createdAt)];
+      return [];
     default:
       return [projectFallback(turnId, item, createdAt)];
   }
