@@ -87,4 +87,12 @@ export interface CodexDoctorReport {
   trustRefusal?: { binaryPath: string; reason: string; staleConsent: boolean };
   /** Soft-allow warning (owner decision 10.10): the version ran without verification (patch-of-verified-minor or above the verified ceiling). In-memory report only — never persisted (lastCheckOf copies status/version/at only). */
   versionWarning?: string;
+  /**
+   * Taskana 4092 (TASK.85): present when the version preflight exited 127 on a
+   * `#!/usr/bin/env node` script — "the shim ran, node was not found in the
+   * child env". Structured diagnosis for the error card; the renderer renders
+   * from THIS, never from string-matching `error`. Never persisted (lastCheck
+   * copies status/version/at only — custody §4.4).
+   */
+  nodeUnavailable?: { binaryPath: string; exitCode: number; hint: string };
 }

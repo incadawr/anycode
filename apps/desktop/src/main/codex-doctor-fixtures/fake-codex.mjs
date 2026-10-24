@@ -45,6 +45,12 @@ if (args[0] === "--version") {
   } else if (flag("--hang-version")) {
     // Never exits on its own — the version-preflight timeout must end it.
     setInterval(() => {}, 1_000);
+  } else if (flag("--exit-127")) {
+    // Taskana 4092 (TASK.85): a nonzero preflight exit, used with a fake
+    // spawner against a path with NO real file bytes (the negative control
+    // for the 127/node-shebang classifier: exit code alone must not typed-
+    // diagnose a path the classifier cannot read).
+    process.exit(127);
   } else if (flag("--bad-version")) {
     process.stdout.write("codex-cli 0.99.0\n");
     process.exit(0);

@@ -298,7 +298,13 @@ describe("discoverCodexBinary", () => {
       platform: "darwin",
       identity: ME,
     });
-    expect(result).toEqual({ path: "/env/codex", source: "env" });
+    // Taskana 4092: /usr/local/bin/codex (path rung) also resolves — carried
+    // as an alternate, never as the winner.
+    expect(result).toEqual({
+      path: "/env/codex",
+      source: "env",
+      alternates: [{ path: "/usr/local/bin/codex", source: "path" }],
+    });
   });
 
   it("falls through to settings when the env override does not resolve (a stale dev override must not brick discovery)", () => {
@@ -374,7 +380,12 @@ describe("discoverCodexBinary", () => {
       arch: "arm64",
       identity: ME,
     });
-    expect(result).toEqual({ path: newest, source: "installed" });
+    // Taskana 4092: the older installed copy is the single alternate.
+    expect(result).toEqual({
+      path: newest,
+      source: "installed",
+      alternates: [{ path: older, source: "installed" }],
+    });
   });
 
   it("an earlier rung (PATH) still wins over an installed copy — the ladder order is unchanged", () => {
@@ -387,7 +398,12 @@ describe("discoverCodexBinary", () => {
       arch: "arm64",
       identity: ME,
     });
-    expect(result).toEqual({ path: "/usr/local/bin/codex", source: "path" });
+    // Taskana 4092: the installed copy remains an alternate under the PATH winner.
+    expect(result).toEqual({
+      path: "/usr/local/bin/codex",
+      source: "path",
+      alternates: [{ path: installed, source: "installed" }],
+    });
   });
 
   it("returns source none with a diagnostic reason when nothing on the ladder resolves", () => {
@@ -647,7 +663,13 @@ describe("BG8 explicit-rung hard-stop (D-S4-22)", () => {
       identity: ME,
       consents: [consentFor("/env/codex")],
     });
-    expect(result).toEqual({ path: "/env/codex", source: "env" });
+    // Taskana 4092: consent lifted the wall, and the settings rung (which
+    // resolves) rides along as an alternate.
+    expect(result).toEqual({
+      path: "/env/codex",
+      source: "env",
+      alternates: [{ path: "/settings/codex", source: "settings" }],
+    });
   });
 
   // Ambient side of PIN B.1's boundary: the guard at :339-351 above (a
@@ -692,5 +714,105 @@ describe("BG8 explicit-rung hard-stop (D-S4-22)", () => {
       identity: ME,
     });
     expect(result).toEqual({ path: "/usr/local/bin/codex", source: "path" });
+  });
+});
+
+// Taskana 4092 (TASK.85) — alternate-binary candidates on the discovery
+// result. The ladder's first-match semantics are pinned by every test above;
+// this block pins ONLY the new additive field: what it lists, in what order,
+// what it excludes, and how far it caps.
+describe("discoverCodexBinary — alternates (Taskana 4092)", () => {
+  it("lists the OTHER resolvable candidates in ladder order, winner excluded", () => {
+    const fs = fsWith(["/settings/codex", "/home/dev/.npm-global/bin/codex", "/on/path/codex"]);
+    const result = discoverCodexBinary({
+      settingsPath: "/settings/codex",
+      env: { PATH: "/on/path", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBe("/settings/codex");
+    expect(result.source).toBe("settings");
+    expect(result.alternates).toEqual([
+      { path: "/on/path/codex", source: "path" },
+      { path: "/home/dev/.npm-global/bin/codex", source: "common" },
+    ]);
+  });
+
+  it("never duplicates a candidate that resolves from two rungs (settings winner == a PATH entry)", () => {
+    const fs = fsWith(["/settings/codex", "/opt/homebrew/bin/codex"]);
+    const result = discoverCodexBinary({
+      settingsPath: "/settings/codex",
+      env: { PATH: "/settings", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBe("/settings/codex");
+    expect(result.source).toBe("settings");
+    expect(result.alternates).toEqual([{ path: "/opt/homebrew/bin/codex", source: "common" }]);
+  });
+
+  it("carries alternates on the D-S4-22 hard-stop return too — the resolvable lower rungs remain offerable", () => {
+    const fs = fakeFs(
+      { "/settings/codex": {}, "/usr/local/bin/codex": {} },
+      { "/settings": { mode: 0o777 } }, // settings candidate consent-refused
+    );
+    const result = discoverCodexBinary({
+      settingsPath: "/settings/codex",
+      env: { PATH: "/usr/local/bin" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect(result.trustRefusal?.binaryPath).toBe("/settings/codex");
+    expect(result.alternates).toEqual([{ path: "/usr/local/bin/codex", source: "path" }]);
+  });
+
+  it("omits the alternates key entirely when nothing else resolves (absent, not empty)", () => {
+    const fs = fsWith(["/on/path/codex"]);
+    const result = discoverCodexBinary({
+      env: { PATH: "/on/path", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBe("/on/path/codex");
+    expect("alternates" in result).toBe(false);
+  });
+
+  it("returns an empty alternates list when the ladder resolves nothing at all", () => {
+    const fs = fsWith([]);
+    const result = discoverCodexBinary({
+      env: { PATH: "/on/path", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBeNull();
+    expect(result.source).toBe("none");
+    expect((result.alternates ?? []).length).toBe(0);
+  });
+
+  it("caps the list at 5 entries against 6+ resolvable PATH candidates", () => {
+    const fs = fsWith(["/p1/codex", "/p2/codex", "/p3/codex", "/p4/codex", "/p5/codex", "/p6/codex", "/p7/codex"]);
+    const result = discoverCodexBinary({
+      env: { PATH: "/p1:/p2:/p3:/p4:/p5:/p6:/p7", HOME: "/home/dev" },
+      fs,
+      platform: "darwin",
+      identity: ME,
+    });
+    expect(result.path).toBe("/p1/codex");
+    expect(result.source).toBe("path");
+    expect(result.alternates?.length).toBe(5);
+    expect(result.alternates).toEqual([
+      { path: "/p2/codex", source: "path" },
+      { path: "/p3/codex", source: "path" },
+      { path: "/p4/codex", source: "path" },
+      { path: "/p5/codex", source: "path" },
+      { path: "/p6/codex", source: "path" },
+    ]);
   });
 });

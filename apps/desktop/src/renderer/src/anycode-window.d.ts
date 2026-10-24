@@ -175,11 +175,17 @@ export interface CodexOnboardingSnapshot {
   binaryPath: string | null;
   source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
+  /** Taskana 4092 (TASK.85): alternate-binary candidates the error card may offer — absent when the ladder found none. */
+  alternates?: Array<{ path: string; source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none" }>;
 }
 
 export type CodexPickBinaryResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
+
+export type CodexUseBinaryResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "invalid" | "unlisted" };
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
@@ -373,6 +379,11 @@ declare global {
         // cache (explicit "Recheck all"); omitted reuses a fresh cached verdict.
         recheck(profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot>;
         pickBinary(): Promise<CodexPickBinaryResult>;
+        // Taskana 4092 (TASK.85): adopt a path main itself listed as an
+        // alternate in its latest doctor report — the error card's
+        // "Use <path>" buttons. A user gesture per switch; never a silent
+        // substitution.
+        useBinary(binaryPath: string): Promise<CodexUseBinaryResult>;
         loginStart(profileId?: string, mode?: import("../../shared/codex-login.js").CodexLoginMode): Promise<CodexLoginStartResult>;
         onLoginProgress(callback: (progress: import("../../shared/codex-login.js").CodexDeviceCodeProgress) => void): () => void;
         loginCancel(): Promise<void>;

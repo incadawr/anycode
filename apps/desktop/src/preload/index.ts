@@ -238,6 +238,10 @@ import type { MdDocReadResult } from "../shared/md-preview.js";
 // itself IS a frozen `shared/**` type, imported (never edited) above.
 const CODEX_RECHECK_CHANNEL = "anycode:codex-recheck";
 const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
+// Taskana 4092 (TASK.85): the "use this alternate binary" invoke — the error
+// card's candidate buttons. main/codex-ipc.ts holds the byte-identical source
+// of truth, same duplicated-literal convention as the two channels above.
+const CODEX_USE_BINARY_CHANNEL = "anycode:codex-use-binary";
 const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
 import { CODEX_LOGIN_PROGRESS_CHANNEL, type CodexDeviceCodeProgress, type CodexLoginMode } from "../shared/codex-login.js";
 const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
@@ -320,11 +324,17 @@ export interface CodexOnboardingSnapshot {
   binaryPath: string | null;
   source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
+  /** Taskana 4092 (TASK.85): alternate-binary candidates the error card may offer — absent when the ladder found none. */
+  alternates?: Array<{ path: string; source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none" }>;
 }
 
 export type CodexPickBinaryResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
+
+export type CodexUseBinaryResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "invalid" | "unlisted" };
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
@@ -680,6 +690,8 @@ contextBridge.exposeInMainWorld("anycode", {
       ) as Promise<CodexOnboardingSnapshot>,
     pickBinary: (): Promise<CodexPickBinaryResult> =>
       ipcRenderer.invoke(CODEX_PICK_BINARY_CHANNEL) as Promise<CodexPickBinaryResult>,
+    useBinary: (binaryPath: string): Promise<CodexUseBinaryResult> =>
+      ipcRenderer.invoke(CODEX_USE_BINARY_CHANNEL, { binaryPath }) as Promise<CodexUseBinaryResult>,
     loginStart: (profileId?: string, mode: CodexLoginMode = "browser"): Promise<CodexLoginStartResult> =>
       ipcRenderer.invoke(CODEX_LOGIN_START_CHANNEL, { ...(profileId ? { profileId } : {}), mode }) as Promise<CodexLoginStartResult>,
     onLoginProgress: (callback: (progress: CodexDeviceCodeProgress) => void): (() => void) => {

@@ -17,6 +17,7 @@
  * for spawn/RPC/teardown timing is imported from there, never hand-rolled.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { closeSync, openSync, readSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import { ENV_CODEX_PROXY_URL, applyEngineProxyOverride } from "../shared/engines.js";
@@ -65,6 +66,41 @@ function parseCodexVersion(output: string): ParsedCodexVersion | null {
   const match = /^codex-cli (\d+)\.(\d+)\.(\d+)\s*$/.exec(output.trim());
   if (!match) return null;
   return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
+}
+
+/** Reads at most the first 64 bytes — a native codex binary is tens of MB, and only the shebang line matters. */
+function readHead(path: string): Buffer {
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.alloc(64);
+    const read = readSync(fd, buffer, 0, 64, 0);
+    return buffer.subarray(0, read);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Taskana 4092 (TASK.85): exit 127 on a node-shebang script means "the shim
+ * ran but `env: node` was not found in the child PATH" — the Finder-launchd
+ * PATH hole augmentPathForGui closes for THIS app, but a user shell or a
+ * non-standard node location can still reproduce it. Distinguishing it from
+ * other nonzero exits is diagnosis, not repair: the doctor never edits PATH
+ * beyond the fixed well-known list (deterministic, no user rc execution —
+ * TASK.85's own alternative note).
+ */
+export function isNodeShebangUnavailable(
+  binaryPath: string,
+  exitCode: number | null,
+  fs: { readFileSync(path: string): Buffer } = { readFileSync: readHead },
+): boolean {
+  if (exitCode !== 127) return false;
+  try {
+    const head = fs.readFileSync(binaryPath).subarray(0, 64).toString("utf8");
+    return /^#!.*\benv\s+node\b/.test(head.split("\n", 1)[0] ?? "");
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -421,6 +457,8 @@ export class CodexRpcClient {
 interface PreflightResult {
   version?: string;
   error?: string;
+  exitCode?: number | null;
+  isNodeShebang127?: boolean;
 }
 
 /** SIGKILLs the preflight child's whole process GROUP; an already-empty group raises ESRCH, which is the success case. */
@@ -499,7 +537,11 @@ function preflightVersion(
     child.once("error", (error) => settle({ error: `Codex version check failed: ${error.message}` }));
     child.once("close", (code) => {
       if (code !== 0) {
-        settle({ error: `Codex version check exited with code ${code ?? "null"}` });
+        settle({
+          error: `Codex version check exited with code ${code ?? "null"}`,
+          exitCode: code,
+          isNodeShebang127: isNodeShebangUnavailable(binaryPath, code),
+        });
         return;
       }
       settle({ version: stdout });
@@ -773,6 +815,17 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
       }
     }
     const preflight = await preflightVersion(binaryPath, childEnv, spawnImpl, versionTimeoutMs);
+    if (preflight.error !== undefined && preflight.isNodeShebang127 === true) {
+      return {
+        status: "error",
+        error: preflight.error, // unchanged raw diagnostic
+        nodeUnavailable: {
+          binaryPath,
+          exitCode: 127,
+          hint: "This codex is a node script (#!/usr/bin/env node), and `node` was not found on the PATH AnyCode gave it (your PATH plus /usr/local/bin and /opt/homebrew/bin). Choose another codex executable below, or install node into one of those folders.",
+        },
+      };
+    }
     if (preflight.error !== undefined) {
       return { status: "error", error: preflight.error };
     }

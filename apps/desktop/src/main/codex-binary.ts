@@ -224,6 +224,14 @@ export interface CodexBinaryDiscovery {
   trustRefusalSource?: CodexBinarySource;
   /** Present iff the ladder was terminated by an EXPLICIT-rung (env/settings) trust refusal whose refusal is NON-consentable (D-S4-13) — the consentable stop already speaks through `trustRefusal`/`trustRefusalSource` above (D-S4-22). */
   trustRefused?: true;
+  /**
+   * Taskana 4092 (TASK.85): every OTHER ladder candidate that resolved to an
+   * absolute, existing, executable file while the winning rung was chosen /
+   * the ladder failed — what the error card offers as "use this instead"
+   * buttons. Discovery deliberately still never EXECUTES a binary here
+   * (TOCTOU/trust, the `codex-binary.ts` header rationale) — liveness is the doctor's job.
+   */
+  alternates?: Array<{ path: string; source: CodexBinarySource }>;
 }
 
 /** `codex` on POSIX, `codex.exe` on Windows — the file name every ladder rung looks for. */
@@ -360,19 +368,44 @@ export function discoverCodexBinary(inputs: CodexDiscoveryInputs): CodexBinaryDi
   // reaching this capture.
   let firstTrustRefusal: { binaryPath: string; reason: string; staleConsent: boolean } | undefined;
   let firstTrustRefusalSource: CodexBinarySource | undefined;
+  // Taskana 4092 (TASK.85): alternate-candidate collection. The walk keeps
+  // the ladder's exact first-match semantics — `winner`/`hardStop` freeze the
+  // return the pre-collection ladder would have made at the moment it would
+  // have made it — but keeps walking to collect every OTHER resolvable
+  // candidate (ladder order, deduped by resolved path, winner excluded,
+  // capped at 5). `resolveCodexBinary` is a pure read, so the extra walk
+  // changes no observable outcome; the D-S4-22 stop still freezes the VERDICT
+  // at the explicit rung even while lower rungs contribute alternates.
+  let winner: { path: string; source: CodexBinarySource } | null = null;
+  let hardStop: CodexBinaryDiscovery | null = null;
+  const alternates: Array<{ path: string; source: CodexBinarySource }> = [];
+  const seenPaths = new Set<string>();
+  const settled = (): boolean => winner !== null || hardStop !== null;
   for (const rung of rungs) {
     for (const candidate of rung.candidates) {
       const resolved = resolveCodexBinary(candidate, fs, platform, identity, consents);
       if (resolved.path !== null) {
-        return { path: resolved.path, source: rung.source };
+        if (winner === null && hardStop === null) {
+          winner = { path: resolved.path, source: rung.source };
+          seenPaths.add(resolved.path);
+        } else if (!seenPaths.has(resolved.path)) {
+          seenPaths.add(resolved.path);
+          alternates.push({ path: resolved.path, source: rung.source });
+        }
+        continue;
       }
       // D-S4-22: an EXPLICIT rung (env/settings) that found its candidate and
       // had it trust-refused stops the ladder here — a lower rung's success
       // must never silently substitute for a binary the user explicitly
       // configured. Ambient rungs (path/common/installed) fall through
       // unchanged (S4/RES-16).
-      if (resolved.trustRefused === true && (rung.source === "env" || rung.source === "settings")) {
-        return {
+      if (
+        resolved.trustRefused === true &&
+        (rung.source === "env" || rung.source === "settings") &&
+        winner === null &&
+        hardStop === null
+      ) {
+        hardStop = {
           path: null,
           source: "none",
           ...(resolved.reason !== undefined ? { reason: resolved.reason } : {}),
@@ -380,20 +413,29 @@ export function discoverCodexBinary(inputs: CodexDiscoveryInputs): CodexBinaryDi
             ? { trustRefusal: resolved.trustRefusal, trustRefusalSource: rung.source }
             : { trustRefused: true }),
         };
+        continue;
       }
-      if (resolved.reason !== undefined) {
+      if (resolved.reason !== undefined && !settled()) {
         lastReason = resolved.reason;
       }
-      if (firstTrustRefusal === undefined && resolved.trustRefusal !== undefined) {
+      if (firstTrustRefusal === undefined && resolved.trustRefusal !== undefined && !settled()) {
         firstTrustRefusal = resolved.trustRefusal;
         firstTrustRefusalSource = rung.source;
       }
     }
+  }
+  const alternatesSuffix = alternates.length > 0 ? { alternates: alternates.slice(0, 5) } : {};
+  if (winner !== null) {
+    return { path: winner.path, source: winner.source, ...alternatesSuffix };
+  }
+  if (hardStop !== null) {
+    return { ...hardStop, ...alternatesSuffix };
   }
   return {
     path: null,
     source: "none",
     ...(lastReason !== undefined ? { reason: lastReason } : {}),
     ...(firstTrustRefusal !== undefined ? { trustRefusal: firstTrustRefusal, trustRefusalSource: firstTrustRefusalSource } : {}),
+    ...alternatesSuffix,
   };
 }
