@@ -161,6 +161,7 @@ import { registerMdDocIpc } from "./preview/md-doc-ipc.js";
 import type { MdDocDeps } from "./preview/md-doc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { registerProviderIpc } from "./provider-ipc.js";
+import { handleProviderQuotaMessage } from "./connection-quota.js";
 import {
   applyConnectionHealthEvent,
   handleSet,
@@ -243,6 +244,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // (preload/index.ts holds the byte-identical copy) — same "duplicated on
 // purpose" precedent as `ENGINES_CHANGED_CHANNEL`.
 const PROVIDER_HEALTH_CHANGED_CHANNEL = "anycode:provider-health-changed";
+/**
+ * Taskana 4090: payload-less push fired after a `lastQuota` write lands (the
+ * `PROVIDER_HEALTH_CHANGED_CHANNEL` precedent — quota writes deliberately
+ * never fire the settings `onMutation` broadcast). The renderer's listener
+ * re-invokes `settings.get()` and repaints from the persisted document.
+ */
+const PROVIDER_QUOTA_CHANGED_CHANNEL = "anycode:provider-quota-changed";
 
 /**
  * Normalizes a raw host-reported `ProviderHealthEvent` into the shape
@@ -2285,6 +2293,23 @@ void app.whenReady().then(async () => {
         .catch((error) => {
           console.error(`[main] failed to record connection health`, error);
         });
+    },
+    // Taskana 4090 follow-up: a core host's provider-reported quota for its
+    // pinned connection. `settingsIpcDeps` closes over the same deps bag as
+    // health above (same forward-reference precedent); the persister
+    // (connection-quota.ts) validates the raw parentPort payload itself,
+    // throttle-gates to one write per 30 s per connection, sparse-merges
+    // `lastQuota` under the settings lock and never fires `onMutation` — the
+    // push below is the renderer's only signal, exactly like health above.
+    onProviderQuotaEvent: (connectionId, message) => {
+      handleProviderQuotaMessage(
+        { settingsPath, logger: fileLogger },
+        connectionId,
+        message,
+        () => {
+          sendToMainWindow(win, PROVIDER_QUOTA_CHANGED_CHANNEL);
+        },
+      );
     },
     // Preview control plane (cut §2.3/§2.5): tabId-scoped delegates to the
     // PreviewHost constructed just above. Neither is awaited — `handleRequest`

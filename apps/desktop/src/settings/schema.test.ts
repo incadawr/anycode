@@ -219,7 +219,10 @@ describe("settingsSchema (v2)", () => {
     }
   });
 
-  it("rejects a malformed lastQuota (string percent)", () => {
+  // Taskana 4090 follow-up (Opus review): these two are `.catch(undefined)`
+  // DEGRADATIONS now, not document failures — the corrupt value reads back as
+  // absent while the rest of the document survives (pinned below).
+  it("degrades a malformed lastQuota (string percent) to absent, document survives", () => {
     const bad = {
       ...cloneDefaults(),
       provider: {
@@ -228,10 +231,14 @@ describe("settingsSchema (v2)", () => {
         ],
       },
     };
-    expect(settingsSchema.safeParse(bad).success).toBe(false);
+    const parsed = settingsSchema.safeParse(bad);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.lastQuota).toBeUndefined();
+    }
   });
 
-  it("rejects a lastQuota with usedPercent out of [0,100]", () => {
+  it("degrades a lastQuota with usedPercent out of [0,100] to absent, document survives", () => {
     const bad = {
       ...cloneDefaults(),
       provider: {
@@ -240,7 +247,33 @@ describe("settingsSchema (v2)", () => {
         ],
       },
     };
-    expect(settingsSchema.safeParse(bad).success).toBe(false);
+    const parsed = settingsSchema.safeParse(bad);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.lastQuota).toBeUndefined();
+    }
+  });
+
+  // Taskana 4090 follow-up (Opus review): `lastQuota` is `.catch(undefined)` at
+  // the whole-object boundary — a corrupt value must load as ABSENT, never
+  // fail the whole document (which would reset every other section to
+  // defaults over one bad advisory field).
+  it("degrades a corrupt lastQuota to absent without failing the document", () => {
+    const corrupt = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [
+          { id: "c1", providerId: "zai", model: "glm-4.7", lastQuota: { usedPercent: "80%", observedAt: "t", source: "x" } },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(corrupt);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.lastQuota).toBeUndefined();
+      expect(parsed.data.provider.connections[0]?.model).toBe("glm-4.7");
+    }
   });
 
   // ── Taskana 4118: modelCapabilities round-trips and reads back absent on corruption ──

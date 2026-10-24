@@ -78,6 +78,11 @@ export interface SettingsBridge {
   // request outcome updates a connection's advisory health — no payload,
   // same shape as `UpdatesBridge.onUpdateStatus` below.
   onProviderHealthChanged(callback: () => void): () => void;
+  // Taskana 4090: push fired after main's throttled `lastQuota` write lands
+  // (connection-quota.ts) — same payload-less shape as health above. The
+  // listener reloads the snapshot, which is what makes a snapshot refresh
+  // RE-SHOW the quota line from the persisted document.
+  onProviderQuotaChanged(callback: () => void): () => void;
 }
 
 /**
@@ -183,6 +188,14 @@ export interface SettingsAppState {
    * `SettingsScreen.tsx`'s `SettingsDialog`).
    */
   subscribeProviderHealth(): () => void;
+  /**
+   * Taskana 4090: same "re-fetch on notify" shape as
+   * `subscribeProviderHealth` above, wired to main's post-`lastQuota`-write
+   * push. This is what closes the loop the Opus review found: a settings
+   * snapshot refresh now carries the persisted quota line, so the renderer's
+   * live in-memory paint and the durable document agree.
+   */
+  subscribeProviderQuota(): () => void;
 
   // ── slice 2.6 (auto-updater, design §6) ──
   /** Last `UpdateStatus` pushed by main; `idle` until `subscribeUpdates` has wired the push channel (or nothing has happened yet in a dev build). */
@@ -441,6 +454,12 @@ export function createSettingsStore(bridge?: SettingsBridge, updatesBridge?: Upd
 
       subscribeProviderHealth(): () => void {
         return api().onProviderHealthChanged(() => {
+          void get().load();
+        });
+      },
+
+      subscribeProviderQuota(): () => void {
+        return api().onProviderQuotaChanged(() => {
           void get().load();
         });
       },

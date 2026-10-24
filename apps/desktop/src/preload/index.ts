@@ -287,6 +287,7 @@ const CLAUDE_SNAPSHOT_CHANGED_CHANNEL = "anycode:claude-snapshot-changed";
 // "duplicated on purpose" precedent as `ENGINES_CHANGED_CHANNEL` above
 // (main/index.ts holds the byte-identical source of truth).
 const PROVIDER_HEALTH_CHANGED_CHANNEL = "anycode:provider-health-changed";
+const PROVIDER_QUOTA_CHANGED_CHANNEL = "anycode:provider-quota-changed";
 // TASK.54 (cut §9.2/§13.1): the custom OpenAI-compatible model-provider CRUD
 // + guarded models-fetch channels — main/provider-ipc.ts holds the
 // byte-identical source of truth, same "duplicated on purpose" convention as
@@ -863,6 +864,18 @@ contextBridge.exposeInMainWorld("anycode", {
       }
       ipcRenderer.on(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
       return () => ipcRenderer.removeListener(PROVIDER_HEALTH_CHANGED_CHANNEL, listener);
+    },
+    // Taskana 4090: same payload-less push shape as `onProviderHealthChanged`
+    // above — fired after main's throttled `lastQuota` write lands
+    // (connection-quota.ts). The listener re-invokes `settings.get()`, so a
+    // snapshot refresh now RE-SHOWS the line from the persisted document
+    // instead of wiping the renderer's in-memory paint.
+    onProviderQuotaChanged: (callback: () => void): (() => void) => {
+      function listener(): void {
+        callback();
+      }
+      ipcRenderer.on(PROVIDER_QUOTA_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(PROVIDER_QUOTA_CHANGED_CHANNEL, listener);
     },
   },
   // TASK.54 (cut §9.2/§13.1): `customProvider.*` — four thin invoke wrappers

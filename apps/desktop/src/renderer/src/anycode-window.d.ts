@@ -467,6 +467,10 @@ declare global {
         // request outcome updates a connection's advisory health — no payload,
         // same shape as `onEnginesChanged` above.
         onProviderHealthChanged(callback: () => void): () => void;
+        // Taskana 4090: push fired after main's throttled `lastQuota` write
+        // lands (connection-quota.ts) — same payload-less shape as
+        // `onProviderHealthChanged` above.
+        onProviderQuotaChanged(callback: () => void): () => void;
         // TASK.141: the named proxy registry (shared/proxy.ts). `upsert`
         // without an id CREATES and reports the minted id back as
         // `createdProxyProfileId`; `delete` REFUSES while any scope still

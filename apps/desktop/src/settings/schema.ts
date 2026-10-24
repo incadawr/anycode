@@ -210,7 +210,12 @@ const connectionSchema = z.object({
     })
     .optional(),
   // Provider-reported quota cache (Taskana 4090 / TASK.71) — same
-  // optional/round-trip discipline as `lastHealth` above.
+  // optional/round-trip discipline as `lastHealth` above, plus the
+  // whole-object `.catch(undefined)` fail-soft (the `recognizer`/`network`
+  // precedent, NOT `lastHealth`'s bare `.optional()`): `lastQuota` is written
+  // by a runtime observer (connection-quota.ts), not a user form, and a
+  // hand-edited/corrupt value must read back as ABSENT — never fail the whole
+  // document and reset every other section to defaults over one bad field.
   lastQuota: z
     .object({
       usedPercent: z.number().min(0).max(100),
@@ -219,7 +224,8 @@ const connectionSchema = z.object({
       observedAt: z.string(),
       source: z.string(),
     })
-    .optional(),
+    .optional()
+    .catch(undefined),
 });
 
 // ── codex-profiles (cut §2.3/§2.6, amended §A1.1) ──

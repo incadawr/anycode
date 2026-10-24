@@ -313,6 +313,7 @@ import {
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
+import { PROVIDER_QUOTA_EVENT_TYPE, type ProviderQuotaEvent } from "../shared/provider-quota.js";
 import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
 import { PREVIEW_ARTIFACTS_TYPE } from "../shared/preview.js";
 import type { PreviewEventMessage, PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
@@ -3720,6 +3721,14 @@ async function boot(): Promise<void> {
           event.kind === "success"
             ? { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "success" }
             : { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "failure", code: event.code };
+        process.parentPort.postMessage(message);
+      },
+      // Taskana 4090 follow-up: same parentPort side channel as health above
+      // — main (tabs.ts) resolves THIS proc's pinned connectionId and does the
+      // throttled `lastQuota` write (main/connection-quota.ts). Core-only for
+      // the same reason as health: an engine broker owns its own account.
+      reportProviderQuota: (quota, source) => {
+        const message: ProviderQuotaEvent = { type: PROVIDER_QUOTA_EVENT_TYPE, quota, source };
         process.parentPort.postMessage(message);
       },
       onWorkspaceTransition: async (transition: WorkspaceTransition) => {

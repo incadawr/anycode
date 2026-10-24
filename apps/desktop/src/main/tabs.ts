@@ -63,6 +63,7 @@ import {
   type PreviewRequestMessage,
 } from "../shared/preview.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
+import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
 import { clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
 import { ENV_CONNECTION_ID, ENV_MODEL, ENV_REASONING_EFFORT } from "./host-env.js";
@@ -677,6 +678,15 @@ export interface TabHostManagerDeps {
    * with an undefined id. Absent = health tracking off (legacy tests unaffected).
    */
   onProviderHealthEvent?: (connectionId: string, event: ProviderHealthEvent) => void;
+  /**
+   * A core host's provider-reported quota observation for its pinned
+   * connection (Taskana 4090: response-header quota the model port parsed).
+   * Same custody rule as `onProviderHealthEvent` above — called ONLY for a
+   * tab with a `connectionId` (the RAW message; main/connection-quota.ts
+   * validates the payload at the process boundary before anything reaches
+   * settings.json). Absent = quota persistence off (legacy tests unaffected).
+   */
+  onProviderQuotaEvent?: (connectionId: string, message: unknown) => void;
   /**
    * Resolves the immutable providerId of a pinned connection for the tab-port
    * envelope (TASK.45 W10-FIX F2): main injects `(id) => connectionById(...)?.providerId`.
@@ -1317,6 +1327,16 @@ export class TabHostManager {
       // to paint, the event is dropped.
       if (tab.connectionId !== undefined) {
         this.deps.onProviderHealthEvent?.(tab.connectionId, message as ProviderHealthEvent);
+      }
+      return;
+    }
+    if (data.type === PROVIDER_QUOTA_EVENT_TYPE) {
+      // Taskana 4090: identical targeting rule to health above — the quota
+      // belongs to THIS proc's pinned connection (its key + endpoint), never
+      // to a sibling on the same host. An unpinned tab has no connection
+      // record to persist onto, so the event is dropped here.
+      if (tab.connectionId !== undefined) {
+        this.deps.onProviderQuotaEvent?.(tab.connectionId, message);
       }
       return;
     }

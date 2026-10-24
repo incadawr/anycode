@@ -2230,6 +2230,15 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
     return store.getState().subscribeProviderHealth();
   }, [store]);
 
+  // Taskana 4090: same one-time wiring as health above — main's throttled
+  // `lastQuota` write (connection-quota.ts) never fires the settings
+  // `onMutation` broadcast either, so without this a quota line painted live
+  // in the renderer's in-memory snapshot would vanish on the next snapshot
+  // refresh until the write happened to be followed by an unrelated mutation.
+  useEffect(() => {
+    return store.getState().subscribeProviderQuota();
+  }, [store]);
+
   // R17 a11y: capture the pre-open focus when the dialog opens and restore it
   // when it closes. SettingsDialog is unconditionally mounted (see the note
   // below), so this is keyed on `open`, not mount; on close the `if (!open)

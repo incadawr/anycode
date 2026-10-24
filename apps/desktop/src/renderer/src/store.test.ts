@@ -8353,4 +8353,56 @@ describe("desktop store — provider_quota (Taskana 4090)", () => {
     expect(store.getState().quota?.primary).toEqual({ usedPercent: 95 });
     expect(useSettingsStore.getState().snapshot?.settings.provider.connections[0]?.lastQuota).toBeUndefined();
   });
+
+  // Taskana 4090 follow-up (Opus review): the renderer's in-memory paint is
+  // one source of truth with the PERSISTED line — main's throttled write
+  // (main/connection-quota.ts) lands on disk and its push reloads the
+  // snapshot. A snapshot refresh (any later settings.get) must therefore
+  // RE-SHOW the line from the persisted document instead of wiping the
+  // in-memory paint. Simulated here: a fresh snapshot carrying the persisted
+  // lastQuota replaces the in-memory one wholesale.
+  it("a snapshot refresh carrying the persisted lastQuota keeps the line (no flicker)", () => {
+    const store = createDesktopStore();
+    store.getState().setPinnedConnection({ connectionId: "c1", providerId: "zai" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    const snapshot = {
+      settings: {
+        version: 2,
+        provider: { connections: [{ id: "c1", providerId: "zai", baseUrl: "https://api.z.ai/api/anthropic" }] },
+      } as never,
+      secrets: [],
+      providerReady: true,
+      envOverrides: [],
+      readOnly: false,
+    };
+    useSettingsStore.setState({ snapshot });
+
+    // Live observation painted in-memory.
+    store.getState().applyHostMessage(quotaEvent("https://api.z.ai/api/anthropic", 80));
+    expect(useSettingsStore.getState().snapshot?.settings.provider.connections[0]?.lastQuota?.usedPercent).toBe(80);
+
+    // Main's write landed; the snapshot reload carries the same line forward
+    // (fresh snapshot built from the persisted document, wholesale replace).
+    const refreshed = {
+      settings: {
+        version: 2,
+        provider: {
+          connections: [
+            {
+              id: "c1",
+              providerId: "zai",
+              baseUrl: "https://api.z.ai/api/anthropic",
+              lastQuota: { usedPercent: 80, observedAt: new Date().toISOString(), source: "x-ratelimit-requests-remaining" },
+            },
+          ],
+        },
+      } as never,
+      secrets: [],
+      providerReady: true,
+      envOverrides: [],
+      readOnly: false,
+    };
+    useSettingsStore.setState({ snapshot: refreshed });
+    expect(useSettingsStore.getState().snapshot?.settings.provider.connections[0]?.lastQuota?.usedPercent).toBe(80);
+  });
 });

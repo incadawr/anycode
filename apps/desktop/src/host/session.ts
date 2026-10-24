@@ -908,6 +908,24 @@ export interface SessionOptions {
    * connection-agnostic. Absent in every legacy test -> a silent no-op.
    */
   reportProviderHealth?: (event: { kind: "success" } | { kind: "failure"; code: string }) => void;
+  /**
+   * Taskana 4090 (TASK.71 follow-up): reports the PRIMARY window of a
+   * provider-reported quota observation (`provider_quota` ModelStreamEvent —
+   * response-header quota, parsed by core's provider/quota.ts) so MAIN can
+   * persist it onto the tab's pinned connection (`lastQuota`, throttled
+   * sparse write under the settings lock — main/connection-quota.ts). Same
+   * custody shape as `reportProviderHealth` above: host/index.ts wires this
+   * ONLY for the core engine, main (tabs.ts) resolves the CALLER's pinned
+   * connectionId, Session itself stays connection-agnostic, and absent in
+   * every legacy test the observer is a silent no-op. The renderer gets the
+   * live value through the agent-event stream itself; this side channel
+   * exists purely for the durable write (main is the sole settings writer).
+   */
+  reportProviderQuota?: (quota: {
+    usedPercent: number;
+    windowDurationMins?: number;
+    resetsAt?: number;
+  }, source: string) => void;
   /** Capability gate: false for a known catalog model without reasoning support. */
   reasoningSupported?: boolean;
   /** Effort levels the boot model supports (for the UI selector + set_reasoning_effort validation). */
@@ -1041,6 +1059,7 @@ export class Session {
   private readonly worktreeControl: SessionOptions["worktreeControl"];
   /** TASK.45 W11: undefined for Codex / every legacy test -> no-op. */
   private readonly reportProviderHealth: SessionOptions["reportProviderHealth"];
+  private readonly reportProviderQuota: SessionOptions["reportProviderQuota"];
   // Slice P7.15 (F14): mutable — a mid-session set_model updates the live model.
   private model: string;
   private readonly sessionId: string;
@@ -1410,6 +1429,7 @@ export class Session {
     this.onWorkspaceTransition = options.onWorkspaceTransition;
     this.worktreeControl = options.worktreeControl;
     this.reportProviderHealth = options.reportProviderHealth;
+    this.reportProviderQuota = options.reportProviderQuota;
     this.model = options.model;
     this.sessionId = options.sessionId;
     this.persistence = options.persistence;
@@ -4007,6 +4027,15 @@ export class Session {
           // verbatim — never reclassified here. Absent `safe` (a legacy/foreign
           // producer) defaults to "unknown" rather than dropping the signal.
           this.reportProviderHealth?.({ kind: "failure", code: event.safe?.code ?? "unknown" });
+        }
+        // Taskana 4090: forward the observation to main for the durable
+        // `lastQuota` write (the PRIMARY window is the tightest constraint —
+        // the one the connect card renders). The wire event above already
+        // carries the live value to the renderer; this side channel exists
+        // only for persistence, so it observes at emission time like the
+        // health signal and never mutates the event itself.
+        if (event.type === "provider_quota" && event.quota.primary !== undefined) {
+          this.reportProviderQuota?.(event.quota.primary, event.quota.sources[0] ?? "");
         }
         // TASK.117 control/accounting checkpoint: capture the wire state AT
         // EMISSION TIME (before any ring cap/cut could evict it). Core-only:
