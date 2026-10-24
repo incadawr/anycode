@@ -16,7 +16,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, HistoryItem } from "@anycode/core";
-import type { RunTurnOptions } from "../session-engine.js";
+import type { RunTurnOptions, SessionEngine } from "../session-engine.js";
 import {
   ClaudeShadowTranscriptEngine,
   projectClaudeTurn,
@@ -149,7 +149,10 @@ function fakeEngine(turnEvents: AgentEvent[][], resolved: { model: string | null
       supportsImages: false,
       supportsTasks: false,
       supportsFileSnapshots: false,
-      supportsManualCompact: false,
+      // TASK.92 cross-review F1: the fake mirrors a ROOT engine spawn (slash
+      // passthrough on) — the composition the wrapper actually ships in. The
+      // pre-fix value (false) hid the wrapper/capability gap this block pins.
+      supportsManualCompact: true,
     },
     mode: () => "build" as const,
     reasoningEffort: () => undefined,
@@ -259,5 +262,76 @@ describe("ClaudeShadowTranscriptEngine (cut §1.5 D1/D2)", () => {
     // ["user","user"] here, which hydrates two transcript blocks under one id.
     expect(new Set(userIds).size).toBe(2);
     expect(userIds).toEqual(["user:0", "user:1"]);
+  });
+
+  // ── TASK.92 cross-review F1: the wrapper must not swallow compactNow ──────
+  //
+  // The real product path composes `ClaudeShadowTranscriptEngine` OVER a
+  // `ClaudeEngine` (host/index.ts) and hands THAT to Session, whose
+  // `compact_request` rail gates on `engine.compactNow === undefined`
+  // (session.ts). A wrapper that forwards `capabilities` (advertising
+  // `supportsManualCompact: true`, so the renderer shows an enabled Compact
+  // row) but not the method itself makes the feature unreachable in the
+  // shipped composition: every root Claude session would silently drop the
+  // request. These tests pin the delegation through a STRUCTURAL host
+  // interface (`ClaudeShadowTranscriptHost`) — never `instanceof` — so the
+  // wrapper stays a decorator over anything engine-shaped.
+  describe("compactNow delegation (TASK.92 cross-review F1)", () => {
+    it("a wrapper over a compact-capable host EXPOSES compactNow — Session's engine gate sees the method through the composition", async () => {
+      const engine = fakeEngine([], { model: null, permissionMode: null }) as SessionEngine & { compactNow?: unknown };
+      engine.compactNow = async function* (options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {
+        expect(options.signal.aborted).toBe(false);
+        yield { type: "compaction_start", trigger: "manual" };
+        yield { type: "compaction_end", ok: true, preTokens: 12, durationMs: 3 };
+      };
+      const sink: ClaudeShadowTranscriptPort = { record: () => {}, list: async () => [] };
+      const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", []);
+
+      // The route()/onCompact gate itself, verbatim: method presence decides.
+      expect(wrapped.capabilities.supportsManualCompact).toBe(true);
+      expect(wrapped.compactNow).toBeDefined();
+      expect(wrapped.compactNow === undefined).toBe(false);
+
+      const events = await drain(wrapped.compactNow!({ signal: new AbortController().signal }));
+      expect(events.map((event) => event.type)).toEqual(["compaction_start", "compaction_end"]);
+      expect(events[1]).toMatchObject({ type: "compaction_end", ok: true, preTokens: 12 });
+    });
+
+    it("delegation is pass-through verbatim: inner aborts/cancellation surface unchanged, and a compaction records nothing in the mirror (no turn input to project)", async () => {
+      const innerError = new Error("terminal transport death");
+      const engine = fakeEngine([], { model: null, permissionMode: null }) as SessionEngine & { compactNow?: unknown };
+      engine.compactNow = async function* (): AsyncIterable<AgentEvent> {
+        yield { type: "compaction_start", trigger: "manual" };
+        throw innerError;
+      };
+      const recorded: { turnOrdinal: number }[] = [];
+      const sink: ClaudeShadowTranscriptPort = {
+        record: (_ref, items) => recorded.push(...items.map((i) => ({ turnOrdinal: i.turnOrdinal }))),
+        list: async () => [],
+      };
+      const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", []);
+
+      // The wrapper must not "protect" the caller: Session.onCompact's own
+      // catch (a documented defensive net, session.ts) relies on a genuine
+      // throw surfacing — and a wrapper that swallowed it would flip the
+      // renderer's `compacting` status with no compaction_end either.
+      const rejection = await drain(wrapped.compactNow!({ signal: new AbortController().signal })).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(rejection).toBe(innerError);
+      // A manual compaction is not a runTurn — no turn ordinal is consumed and
+      // nothing is projected into the mirror (compaction events have no
+      // HistoryItem shape; see compactNow forwarding comment).
+      expect(recorded).toEqual([]);
+      expect(wrapped.historyItems()).toEqual([]);
+    });
+
+    it("a wrapper over a host WITHOUT compactNow (child-shaped engine) exposes none — the engine gate keeps failing closed", () => {
+      const engine = fakeEngine([], { model: null, permissionMode: null });
+      const sink: ClaudeShadowTranscriptPort = { record: () => {}, list: async () => [] };
+      const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", []);
+      expect(wrapped.compactNow).toBeUndefined();
+    });
   });
 });
