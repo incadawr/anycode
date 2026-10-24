@@ -414,7 +414,10 @@ async function step9SplitLeg(ctx) {
   }
   await apiOk(ctx, 9, "POST", "/window/size", { width: 1800, height: 900 });
   await waitForDockState(ctx, 9, (s) => s.mode === "column", "column at 1800", 30_000);
-  const split = await apiOk(ctx, 9, "POST", `/dock/tabs/${encodeURIComponent(`preview:${ctx.htmlPreviewId}`)}/split`);
+  // Cross-review D1/D6: the pinned tab must NOT be the active (primary) tab,
+  // and a web preview is never splittable — the browser preview is the active
+  // primary here, so the split pins the Review (git) tab.
+  const split = await apiOk(ctx, 9, "POST", `/dock/tabs/${encodeURIComponent("git")}/split`);
   assert(9, split?.ok === true, `split failed: ${JSON.stringify(split)}`);
   // `split` is the pinned tab ID (string) or null — never a boolean.
   const splitState = await waitForDockState(ctx, 9, (s) => typeof s.split === "string", "split:<tabId>", 20_000);

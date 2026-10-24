@@ -114,4 +114,44 @@ describe("dock store", () => {
     expect(store.getState().splitTabId).toBe(null);
     expect(store.getState().tabs.map((t) => t.id)).toEqual(["git"]);
   });
+
+  it("openBackground appends without stealing focus from the active tab", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_GIT);
+    store.getState().openBackground(TAB_MD);
+    expect(store.getState().tabs.map((t) => t.id)).toEqual(["git", "preview:md"]);
+    expect(store.getState().activeTabId).toBe("git");
+  });
+
+  it("focusing the pinned tab unpins it (primary and split never show the same tab)", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_MD);
+    store.getState().open(TAB_GIT);
+    store.getState().splitRight("preview:md", true);
+    store.getState().focus("preview:md");
+    expect(store.getState().activeTabId).toBe("preview:md");
+    expect(store.getState().splitTabId).toBe(null);
+  });
+
+  it("neighbour focus after closing the primary never lands on the pinned tab", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_MD);
+    store.getState().open(TAB_GIT);
+    store.getState().focus("preview:md");
+    store.getState().splitRight("git", true);
+    store.getState().close("preview:md");
+    expect(store.getState().activeTabId).toBe("git");
+    expect(store.getState().splitTabId).toBe(null);
+  });
+
+  it("re-opening (focusing) the pinned tab unpins it", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_MD);
+    store.getState().open(TAB_GIT);
+    store.getState().focus("preview:md");
+    store.getState().splitRight("git", true);
+    store.getState().open(TAB_GIT);
+    expect(store.getState().activeTabId).toBe("git");
+    expect(store.getState().splitTabId).toBe(null);
+  });
 });

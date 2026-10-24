@@ -133,6 +133,45 @@ export function openTab(tabs: readonly DockTab[], tab: DockTab): { tabs: DockTab
 }
 
 /**
+ * Background open (cross-review D3): a NEW tab is appended WITHOUT moving
+ * focus — a preview the main side pushes while the user reads another tab
+ * (git, subagents) must not unmount that body. An empty dock has nothing to
+ * keep focused, so its first tab takes focus. An already-open tab is kept
+ * where it is and focus stays put.
+ */
+export function openTabInBackground(
+  tabs: readonly DockTab[],
+  activeTabId: string | null,
+  tab: DockTab,
+): { tabs: DockTab[]; activeTabId: string | null } {
+  const existing = tabs.some((candidate) => candidate.id === tab.id);
+  return {
+    tabs: existing ? [...tabs] : [...tabs, tab],
+    activeTabId: activeTabId ?? tab.id,
+  };
+}
+
+/**
+ * Split eligibility per tab (cross-review D1). The pinned tab must be a
+ * DIFFERENT tab from the primary (pinning the active tab would render one
+ * preview twice, two bounds publishers for one preview). A web preview renders
+ * in a main-side WebContentsView, and main positions ONE visible panel slot per
+ * tab over the primary body — a web preview pinned to the secondary pane could
+ * never be placed, so it is not splittable. Markdown previews (DOM), git and
+ * subagents are.
+ */
+export function isSplittableTab(
+  tab: DockTab,
+  activeTabId: string | null,
+  previewViewKind: "web" | "dom-md" | undefined,
+): boolean {
+  if (tab.id === activeTabId) {
+    return false;
+  }
+  return !(tab.kind === "preview" && previewViewKind === "web");
+}
+
+/**
  * Close semantics: remove the tab; if the closed one was active, focus its
  * nearest RIGHT neighbor, else the nearest LEFT neighbor; an emptied strip
  * has no active tab. Closing an inactive tab never moves focus.

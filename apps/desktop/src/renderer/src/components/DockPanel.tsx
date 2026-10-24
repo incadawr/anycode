@@ -19,7 +19,8 @@ import { useContext, type ReactNode } from "react";
 import { TabContext, useTabStoreApi } from "../tab-context.js";
 import { useDockStore } from "../dock/dock-store.js";
 import { childLayoutStore } from "../child-layout.js";
-import { DOCK_SPLIT_MIN_PX, type DockMode, type DockTab } from "../dock/dock-layout.js";
+import { DOCK_SPLIT_MIN_PX, isSplittableTab, type DockMode, type DockTab } from "../dock/dock-layout.js";
+import { usePreviewStore } from "../preview/preview-store.js";
 import type { ToastKind } from "../toasts.js";
 import { ChildSplitPane, type ChildSplitRow } from "./ChildSplitPane.js";
 import { GitPanel } from "./GitPanel.js";
@@ -71,6 +72,8 @@ function focusDockTab(tab: DockTab, tabId: string): void {
   }
 }
 
+const EMPTY_PREVIEWS: never[] = [];
+
 export function DockPanel({ mode, width, onResizeStart, onToast, subagents, canSplitNow, splitTabId }: DockPanelProps) {
   const ctx = useContext(TabContext);
   if (!ctx) {
@@ -79,6 +82,7 @@ export function DockPanel({ mode, width, onResizeStart, onToast, subagents, canS
   const { tabId } = ctx;
 
   const tabs = useDockStore((state) => state.tabs);
+  const previews = usePreviewStore((state) => state.byTab[tabId]?.previews ?? EMPTY_PREVIEWS);
   const activeTabId = useDockStore((state) => state.activeTabId);
   const focus = useDockStore((state) => state.focus);
   const close = useDockStore((state) => state.close);
@@ -101,13 +105,30 @@ export function DockPanel({ mode, width, onResizeStart, onToast, subagents, canS
     }
   }
 
-  /** The one body renderer both panes share (primary = active tab, secondary = pinned split tab). */
-  function renderTabBody(tab: DockTab | null): ReactNode {
+  /** Per-tab split gate: the window must afford a split AND the tab must be splittable (not the primary, not a web preview — isSplittableTab). */
+  function splitAllowedFor(tab: DockTab): boolean {
+    const viewKind = tab.kind === "preview" ? previews.find((preview) => preview.previewId === tab.id.slice("preview:".length))?.viewKind : undefined;
+    return canSplitNow && isSplittableTab(tab, activeTabId, viewKind);
+  }
+
+  /**
+   * The one body renderer both panes share (primary = active tab, secondary =
+   * pinned split tab). Only the PRIMARY body publishes preview bounds (D1).
+   */
+  function renderTabBody(tab: DockTab | null, publishBounds: boolean): ReactNode {
     if (tab === null) {
       return <div className="dock-empty">No side panel selected.</div>;
     }
     if (tab.kind === "preview") {
-      return <PreviewPanel key={tab.id} tabId={tab.id} previewId={tab.id.slice("preview:".length)} onToast={onToast} />;
+      return (
+        <PreviewPanel
+          key={tab.id}
+          tabId={tab.id}
+          previewId={tab.id.slice("preview:".length)}
+          onToast={onToast}
+          publishBounds={publishBounds}
+        />
+      );
     }
     if (tab.id === "subagents") {
       // The App.tsx:803-816 ChildSplitPane block, moved verbatim — props
@@ -139,62 +160,72 @@ export function DockPanel({ mode, width, onResizeStart, onToast, subagents, canS
       onKeyDown={handleKeyDown}
       aria-label="Side panels"
     >
-      <div className="dock-tab-strip" role="tablist" aria-label="Side panels">
+      <div className="dock-tab-strip" role="group" aria-label="Side panels">
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
+          const pinned = tab.id === splitTabId;
+          const splitAllowed = splitAllowedFor(tab);
+          // Cross-review D4: each affordance is its own real <button> (tab stop,
+          // Enter/Space) — the old <span role=button tabIndex=-1> nested inside
+          // a <button> was unreachable by keyboard.
           return (
-            <button
-              key={tab.id}
-              type="button"
-              className={"dock-tab" + (active ? " dock-tab-active" : "")}
-              data-tab-id={tab.id}
-              role="tab"
-              aria-selected={active}
-              title={tab.title}
-              onClick={() => {
-                focusDockTab(tab, tabId);
-                focus(tab.id);
-              }}
-            >
-              <span className="dock-tab-title">{tab.title}</span>
-              <span
-                role="button"
-                tabIndex={-1}
-                className={"dock-tab-split" + (tab.id === splitTabId ? " dock-tab-split-active" : "")}
+            <div key={tab.id} className={"dock-tab" + (active ? " dock-tab-active" : "")} data-tab-id={tab.id}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className="dock-tab-select"
+                title={tab.title}
+                onClick={() => {
+                  focusDockTab(tab, tabId);
+                  focus(tab.id);
+                }}
+              >
+                <span className="dock-tab-title">{tab.title}</span>
+              </button>
+              <button
+                type="button"
+                className={"dock-tab-split" + (pinned ? " dock-tab-split-active" : "")}
                 aria-label={`Split ${tab.title} right`}
-                title={tab.id === splitTabId ? "Pinned to split pane" : canSplitNow ? "Split right" : "Window too narrow to split"}
+                title={
+                  pinned
+                    ? "Pinned to split pane"
+                    : !splitAllowed
+                      ? canSplitNow
+                        ? "Web previews show in the main pane only"
+                        : "Window too narrow to split"
+                      : "Split right"
+                }
                 data-split-for={tab.id}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (tab.id === splitTabId) {
+                disabled={!pinned && !splitAllowed}
+                onClick={() => {
+                  if (pinned) {
                     mergeSplit();
                     return;
                   }
-                  splitRight(tab.id, canSplitNow);
+                  splitRight(tab.id, splitAllowed);
                 }}
               >
                 ⫿
-              </span>
-              <span
-                role="button"
-                tabIndex={-1}
+              </button>
+              <button
+                type="button"
                 className="dock-tab-close"
                 aria-label={`Close ${tab.title}`}
                 title={`Close ${tab.title}`}
-                onClick={(event) => {
-                  event.stopPropagation();
+                onClick={() => {
                   closeDockTab(tab, tabId);
                   close(tab.id);
                 }}
               >
                 <X />
-              </span>
-            </button>
+              </button>
+            </div>
           );
         })}
       </div>
       <div className="dock-body">
-        {renderTabBody(activeTab)}
+        {renderTabBody(activeTab, true)}
         {splitTab !== null && (
           // Stage 2 secondary pane: absolute right of the primary body inside
           // the dock, fixed DOCK_SPLIT_MIN_PX, border-left. NO drag between
@@ -213,7 +244,7 @@ export function DockPanel({ mode, width, onResizeStart, onToast, subagents, canS
                 <X />
               </button>
             </div>
-            <div className="dock-split-pane-body">{renderTabBody(splitTab)}</div>
+            <div className="dock-split-pane-body">{renderTabBody(splitTab, false)}</div>
           </div>
         )}
       </div>

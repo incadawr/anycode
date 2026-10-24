@@ -548,8 +548,17 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const transcript = useTabStore((state) => state.transcript);
 
   const reviewRootRef = useRef<HTMLDivElement>(null);
+  // The .session-content element as STATE: it is absent while a child view
+  // swaps the whole body (ActiveTabBody early-returns), so the measure effect
+  // below must re-attach when it mounts, not only on the first render.
+  const [reviewRootEl, setReviewRootEl] = useState<HTMLDivElement | null>(null);
+  const attachReviewRoot = useCallback((node: HTMLDivElement | null) => {
+    reviewRootRef.current = node;
+    setReviewRootEl(node);
+  }, []);
   // Taskana 4703: the ONE dock width + window-width tracking. `available` is
-  // the .session-content width (reviewRootRef measure), belt-window-resize.
+  // the .session-content width (reviewRootRef measure), kept live by a
+  // ResizeObserver so a sidebar collapse/expand (no window resize) re-clamps.
   const dockWidth = useDockStore((state) => state.width);
   const dockTabs = useDockStore((state) => state.tabs);
   const dockActiveTabId = useDockStore((state) => state.activeTabId);
@@ -640,18 +649,26 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
     window.addEventListener("pointerup", onUp, { once: true });
   }
 
-  // Window-width tracking: remeasure the session-content width on window
-  // resize (the belt; every intra-grid shift is itself driven by these
-  // numbers) so mode flips and re-clamps follow the actual available width.
+  // Available-width tracking: the .session-content width changes on window
+  // resize AND on sidebar collapse/expand (--sidebar-w), so observe the
+  // element itself; the window listener stays as the belt.
   useEffect(() => {
+    if (reviewRootEl === null) {
+      return;
+    }
     function remeasure(): void {
-      const rect = reviewRootRef.current?.getBoundingClientRect();
-      setAvailableWidth(rect && rect.width > 0 ? rect.width : window.innerWidth);
+      const rect = reviewRootEl!.getBoundingClientRect();
+      setAvailableWidth(rect.width > 0 ? rect.width : window.innerWidth);
     }
     remeasure();
+    const observer = new ResizeObserver(remeasure);
+    observer.observe(reviewRootEl);
     window.addEventListener("resize", remeasure);
-    return () => window.removeEventListener("resize", remeasure);
-  }, []);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", remeasure);
+    };
+  }, [reviewRootEl]);
 
   // Stage 2 (§3 item 4): an open split NEVER survives a window too narrow
   // for it — when `available` drops below canSplit's threshold the pinned
@@ -677,10 +694,19 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   useEffect(() => {
     const dock = useDockStore.getState();
     const wanted = new Map(previewTabs.map((tab) => [tab.id, tab]));
-    // Open new tabs (focus only the genuinely-new ones).
+    // Cross-review D3: a new preview takes focus only when the user is already
+    // on a preview (or the dock is empty). Reading git/subagents, a preview the
+    // main side pushes must not unmount that body — it lands in the strip.
+    const activeIsPreview = dock.tabs.some((candidate) => candidate.id === dock.activeTabId && candidate.kind === "preview");
+    const focusNew = dock.activeTabId === null || activeIsPreview;
+    // Open new tabs.
     for (const tab of previewTabs) {
       if (!dock.tabs.some((candidate) => candidate.id === tab.id)) {
-        useDockStore.getState().open(tab);
+        if (focusNew) {
+          useDockStore.getState().open(tab);
+        } else {
+          useDockStore.getState().openBackground(tab);
+        }
       }
     }
     // Drop tabs whose preview vanished.
@@ -691,7 +717,10 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
         if (wasActive) {
           const neighborTabId = useDockStore.getState().activeTabId;
           const neighbor = neighborTabId !== null ? useDockStore.getState().tabs.find((candidate) => candidate.id === neighborTabId) : undefined;
-          if (neighbor && neighbor.kind === "preview") {
+          // Cross-review P1: the dock store is global across conversation tabs,
+          // so the neighbour may be ANOTHER tab's preview — select only one that
+          // belongs to the tab this effect is for (`wanted`).
+          if (neighbor && neighbor.kind === "preview" && wanted.has(neighbor.id)) {
             window.anycode.previewPanel.select(tabId, neighbor.id.slice("preview:".length)).catch((error: unknown) => {
               console.warn("[ActiveTabBody] neighbor select failed", error);
             });
@@ -799,7 +828,7 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
       <SessionHeader sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} onToast={onToast} />
 
       <div
-        ref={reviewRootRef}
+        ref={attachReviewRoot}
         className={`session-content${splitOpen ? " session-content-split-open" : ""}`}
         style={
           splitOpen

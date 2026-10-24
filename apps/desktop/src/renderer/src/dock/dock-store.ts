@@ -15,10 +15,20 @@ import {
   DOCK_WIDTH_STORAGE_KEY,
   closeTab as closeTabAlgebra,
   openTab as openTabAlgebra,
+  openTabInBackground as openTabInBackgroundAlgebra,
   readDockWidth,
   type DockStorage,
   type DockTab,
 } from "./dock-layout.js";
+
+/**
+ * The pinned split tab is never the active (primary) tab: focusing it
+ * unpins it (its content would otherwise render twice, and two publishers
+ * would race the one main-side bounds channel — cross-review D1).
+ */
+function focusPatch(state: Pick<DockStoreState, "splitTabId">, activeTabId: string | null): { activeTabId: string | null; splitTabId: string | null } {
+  return { activeTabId, splitTabId: state.splitTabId !== null && state.splitTabId === activeTabId ? null : state.splitTabId };
+}
 
 export interface DockStoreState {
   tabs: DockTab[];
@@ -33,6 +43,8 @@ export interface DockStoreState {
    */
   splitTabId: string | null;
   open(tab: DockTab): void;
+  /** Appends a tab WITHOUT moving focus (cross-review D3). */
+  openBackground(tab: DockTab): void;
   close(id: string): void;
   focus(id: string): void;
   setWidth(width: number): void;
@@ -60,19 +72,27 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
     splitTabId: null,
 
     open(tab): void {
-      set((state) => openTabAlgebra(state.tabs, tab));
+      set((state) => {
+        const next = openTabAlgebra(state.tabs, tab);
+        return { tabs: next.tabs, ...focusPatch(state, next.activeTabId) };
+      });
+    },
+
+    openBackground(tab): void {
+      set((state) => openTabInBackgroundAlgebra(state.tabs, state.activeTabId, tab));
     },
 
     close(id): void {
       set((state) => {
         const { tabs, activeTabId } = closeTabAlgebra(state.tabs, state.activeTabId, id);
-        // A closed tab can never stay pinned to the secondary pane.
-        return state.splitTabId === id ? { tabs, activeTabId, splitTabId: null } : { tabs, activeTabId };
+        // A closed tab can never stay pinned; neighbour focus may land on the pinned tab.
+        const pinned = state.splitTabId === id ? null : state.splitTabId;
+        return { tabs, activeTabId, splitTabId: pinned === activeTabId ? null : pinned };
       });
     },
 
     focus(id): void {
-      set((state) => (state.tabs.some((tab) => tab.id === id) ? { activeTabId: id } : state));
+      set((state) => (state.tabs.some((tab) => tab.id === id) ? focusPatch(state, id) : state));
     },
 
     setWidth(width): void {

@@ -33,9 +33,16 @@ export interface PreviewPanelProps {
   previewId: string;
   /** P3 D14: raises the transfer state-loss toast (kind → tone/glyph in toasts.ts). */
   onToast(kind: ToastKind, text: string): void;
+  /**
+   * D9 bounds publisher ownership (cross-review D1). Only the dock's PRIMARY
+   * body publishes: main keeps one visible panel slot over one shared rect, so
+   * a second instance (the split pane) publishing would race the primary and
+   * position the web view over the wrong pane. Default true.
+   */
+  publishBounds?: boolean;
 }
 
-export function PreviewPanel({ tabId: _dockTabId, previewId, onToast }: PreviewPanelProps) {
+export function PreviewPanel({ tabId: _dockTabId, previewId, onToast, publishBounds = true }: PreviewPanelProps) {
   const ctx = useContext(TabContext);
   if (!ctx) {
     throw new Error("PreviewPanel must be used within a <TabContext.Provider>");
@@ -57,7 +64,7 @@ export function PreviewPanel({ tabId: _dockTabId, previewId, onToast }: PreviewP
   // report (panel-bridge.ts owns the coalescing/dedup).
   useEffect(() => {
     const body = bodyRef.current;
-    if (!body) {
+    if (!body || !publishBounds) {
       return;
     }
 
@@ -87,7 +94,7 @@ export function PreviewPanel({ tabId: _dockTabId, previewId, onToast }: PreviewP
       conversationObserver?.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, []);
+  }, [publishBounds]);
 
   function closePreview(target: string): void {
     window.anycode.previewPanel.close(tabId, target).catch((error: unknown) => {

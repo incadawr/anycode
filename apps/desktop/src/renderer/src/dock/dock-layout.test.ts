@@ -18,7 +18,9 @@ import {
   closeTab,
   computeDockMode,
   derivePreviewTabs,
+  isSplittableTab,
   openTab,
+  openTabInBackground,
   readDockWidth,
   type DockStorage,
   type DockTab,
@@ -203,5 +205,43 @@ describe("canSplit (Stage 2)", () => {
 
   it("DOCK_SPLIT_MIN_PX aliases the dock's own min", () => {
     expect(DOCK_SPLIT_MIN_PX).toBe(DOCK_WIDTH_MIN);
+  });
+});
+
+describe("background open + split eligibility (Taskana 4703 cross-review D1/D3)", () => {
+  const MD = { id: "preview:md", kind: "preview" as const, title: "doc.md" };
+  const GIT = { id: "git", kind: "git" as const, title: "Review" };
+
+  it("openTabInBackground appends a new tab but keeps the current focus", () => {
+    const result = openTabInBackground([GIT], "git", MD);
+    expect(result.tabs.map((t) => t.id)).toEqual(["git", "preview:md"]);
+    expect(result.activeTabId).toBe("git");
+  });
+
+  it("openTabInBackground on an empty dock focuses the first tab (nothing to keep)", () => {
+    const result = openTabInBackground([], null, MD);
+    expect(result.tabs.map((t) => t.id)).toEqual(["preview:md"]);
+    expect(result.activeTabId).toBe("preview:md");
+  });
+
+  it("openTabInBackground never duplicates an already-open tab and keeps focus", () => {
+    const result = openTabInBackground([GIT, MD], "git", MD);
+    expect(result.tabs.map((t) => t.id)).toEqual(["git", "preview:md"]);
+    expect(result.activeTabId).toBe("git");
+  });
+
+  it("a web preview is never split (its WebContentsView only fits the primary body)", () => {
+    expect(isSplittableTab({ id: "preview:w", kind: "preview", title: "web" }, "git", "web")).toBe(false);
+  });
+
+  it("the active (primary) tab is never split with itself", () => {
+    expect(isSplittableTab(GIT, "git", undefined)).toBe(false);
+    expect(isSplittableTab(MD, "preview:md", "dom-md")).toBe(false);
+  });
+
+  it("markdown previews, git and subagents remain splittable when not primary", () => {
+    expect(isSplittableTab(MD, "git", "dom-md")).toBe(true);
+    expect(isSplittableTab(MD, "git", undefined)).toBe(true);
+    expect(isSplittableTab(GIT, "preview:md", undefined)).toBe(true);
   });
 });

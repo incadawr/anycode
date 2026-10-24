@@ -92,3 +92,12 @@ an active mark; closing it or the header's merge button unpins. Shrinking
 below the threshold auto-calls `mergeSplit()` — no broken split survives.
 The `splitTabId` is not persisted (a boot never restores a split the window
 may no longer afford). No drag between panes (by scope decision).
+
+Split rules (cross-review 4703): the pinned tab is never the active (primary)
+tab — focusing or re-opening the pinned tab unpins it — so one preview is never
+rendered twice. A web preview is never splittable: its WebContentsView is
+positioned by main over the primary body only (one visible panel slot per tab),
+so a web preview in the secondary pane would have no place to render. Only the
+primary body publishes preview bounds (the D9 channel has one owner). A new
+preview that arrives while the user reads git or subagents lands in the strip
+without taking focus; an explicit open still focuses its tab.
