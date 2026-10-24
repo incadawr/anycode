@@ -41,6 +41,7 @@ export interface CoreEnvConfig {
    * Taskana 4665); 0 disables.
    */
   todoReminderEvery?: number;
+  /**
    * Supervisor idle-watchdog first-reminder threshold override in ms (taskana
    * 4181, ANYCODE_SUPERVISOR_IDLE_MS). NOT the subagent stall detector
    * (`subagentStallTimeoutMs` above, ANYCODE_SUBAGENT_STALL_MS) — this one
