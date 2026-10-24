@@ -7,6 +7,17 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- While AnyCode's own engine is running a turn, a message you send is delivered
+  into that turn between its steps instead of waiting for the next turn. It shows
+  as a pending bubble and becomes an ordinary message in the transcript once the
+  turn takes it. Messages with images, and turns on the Claude and Codex engines,
+  still wait in the queue as before.
+- A steer that cannot reach the running turn (you press Stop, the turn ends
+  first, or the host refuses it) is moved into the prompt queue for the next turn
+  instead of being lost.
+
 ### Security
 
 - A proxy URL that contains credentials (and the internal engine proxy
