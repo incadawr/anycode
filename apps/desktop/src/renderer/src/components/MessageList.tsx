@@ -406,24 +406,27 @@ export function showStandaloneRetry(
  * [data-block-id]`, one per non-system user turn, DOM order == mark order)
  * and the container's box, returns the index of the last bubble whose top
  * sits above the container's vertical midpoint (null when none exist).
- * Binary search keeps a tick at O(log n) layout reads on a long transcript;
- * the approximation is by design (brief §4.4).
+ * Binary search keeps a tick at O(log n) layout reads on a long transcript:
+ * `topAt` is called lazily, only for the probed indices, so the caller can
+ * pass a live `getBoundingClientRect` reader. The approximation is by design
+ * (brief §4.4).
  */
 export function topmostVisibleUserIndex(
-  bubbleTops: readonly number[],
+  count: number,
+  topAt: (index: number) => number,
   containerTop: number,
   containerHeight: number,
 ): number | null {
   const midpoint = containerTop + containerHeight / 2;
-  if (bubbleTops.length === 0) {
+  if (count === 0) {
     return null;
   }
   let lo = 0;
-  let hi = bubbleTops.length - 1;
+  let hi = count - 1;
   let candidate: number | null = null;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (bubbleTops[mid]! <= midpoint) {
+    if (topAt(mid) <= midpoint) {
       candidate = mid;
       lo = mid + 1;
     } else {
@@ -431,16 +434,6 @@ export function topmostVisibleUserIndex(
     }
   }
   return candidate;
-}
-
-/** Read the user-bubble tops off the live DOM (query + rect per bubble, DOM order). */
-function readBubbleTops(el: HTMLElement): number[] {
-  const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id]");
-  const tops: number[] = new Array(bubbles.length);
-  for (let i = 0; i < bubbles.length; i += 1) {
-    tops[i] = bubbles[i]!.getBoundingClientRect().top;
-  }
-  return tops;
 }
 
 export function MessageList({
@@ -504,7 +497,7 @@ export function MessageList({
 
   // Minimap (TASK.48 / Taskana 4086): pure projection over `blocks` — no new
   // store state. 4086 follow-up: the selector is INCREMENTAL — per-turn
-  // summaries are memoized by turn id + closing-block fingerprint, so a
+  // summaries are memoized by the identity of each turn's blocks, so a
   // streaming delta to the tail reprojects only the turn being streamed
   // instead of the whole transcript (see createUserTurnsSelector). One
   // selector per mounted list, in a ref (never module state: two tabs must
@@ -567,10 +560,15 @@ export function MessageList({
     if (!el || minimapMarks.length === 0) {
       return;
     }
-    const tops = readBubbleTops(el);
-    const candidate = topmostVisibleUserIndex(tops, el.getBoundingClientRect().top, el.clientHeight);
+    const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id]");
+    const candidate = topmostVisibleUserIndex(
+      bubbles.length,
+      (i) => bubbles[i]!.getBoundingClientRect().top,
+      el.getBoundingClientRect().top,
+      el.clientHeight,
+    );
     // Above the first bubble still highlights turn 1 (nothing earlier exists).
-    const nextActive = activeMarkIndex(minimapMarks, candidate ?? (tops.length > 0 ? 0 : null));
+    const nextActive = activeMarkIndex(minimapMarks, candidate ?? (bubbles.length > 0 ? 0 : null));
     setMinimapActive((prev) => (prev === nextActive ? prev : nextActive));
   };
 

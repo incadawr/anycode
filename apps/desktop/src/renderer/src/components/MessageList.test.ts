@@ -543,35 +543,46 @@ describe("compactionRowText (TASK.227)", () => {
 });
 
 describe("topmostVisibleUserIndex (TASK.48 minimap scroll-spy core, 4086 follow-up)", () => {
+  const spy = (tops: readonly number[], top: number, height: number): number | null =>
+    topmostVisibleUserIndex(tops.length, (i) => tops[i]!, top, height);
+
+  it("reads only O(log n) tops (lazy layout reads, not one rect per bubble)", () => {
+    const tops = Array.from({ length: 1024 }, (_, i) => i * 10);
+    let reads = 0;
+    const result = topmostVisibleUserIndex(tops.length, (i) => { reads += 1; return tops[i]!; }, 0, 5000);
+    expect(result).toBe(250);
+    expect(reads).toBeLessThanOrEqual(11);
+  });
+
   // Container top 100, height 500 -> midpoint 350.
   const tops = [120, 240, 360, 480, 600];
 
   it("returns the last bubble whose top is above the container midpoint", () => {
-    expect(topmostVisibleUserIndex(tops, 100, 500)).toBe(1); // 240 <= 350 < 360
+    expect(spy(tops, 100, 500)).toBe(1); // 240 <= 350 < 360
   });
 
   it("a bubble exactly on the midpoint counts as visible", () => {
-    expect(topmostVisibleUserIndex([100, 350, 500], 100, 500)).toBe(1);
+    expect(spy([100, 350, 500], 100, 500)).toBe(1);
   });
 
   it("all bubbles above the midpoint -> the last index", () => {
-    expect(topmostVisibleUserIndex([110, 120, 130], 100, 500)).toBe(2);
+    expect(spy([110, 120, 130], 100, 500)).toBe(2);
   });
 
   it("all bubbles below the midpoint -> the first index still wins (caller clamps to turn 1)", () => {
     // Binary search yields null only when NO top <= midpoint; with tops
     // starting above the window the candidate stays null…
-    expect(topmostVisibleUserIndex([400, 500, 600], 100, 500)).toBe(null);
+    expect(spy([400, 500, 600], 100, 500)).toBe(null);
     // …and MessageList's `candidate ?? (tops.length > 0 ? 0 : null)` maps
     // that to 0 so turn 1 is highlighted — nothing earlier exists.
   });
 
   it("an empty bubble list yields null", () => {
-    expect(topmostVisibleUserIndex([], 100, 500)).toBe(null);
+    expect(spy([], 100, 500)).toBe(null);
   });
 
   it("a single bubble above the midpoint is index 0", () => {
-    expect(topmostVisibleUserIndex([200], 100, 500)).toBe(0);
-    expect(topmostVisibleUserIndex([900], 100, 500)).toBe(null);
+    expect(spy([200], 100, 500)).toBe(0);
+    expect(spy([900], 100, 500)).toBe(null);
   });
 });

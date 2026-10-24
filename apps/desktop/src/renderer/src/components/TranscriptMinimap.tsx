@@ -18,9 +18,8 @@
  *    bodies of the turn are skipped, so the full answer string is never
  *    built (ids, files and tool counts still accrue — the cap bounds only
  *    the string).
- *  - `createUserTurnsSelector` memoizes per-turn summaries by turn id plus a
- *    fingerprint of the block that closes the turn (last block id + a cheap
- *    version stand-in), so a streaming update to the LAST turn reuses every
+ *  - `createUserTurnsSelector` memoizes per-turn summaries by the identity
+ *    of the turn's block objects (the store updates immutably), so a streaming update to the LAST turn reuses every
  *    earlier turn's cached summary and only the turn being streamed is
  *    recomputed. The per-call scan itself stays a light O(N) index walk —
  *    same cost class as MessageList's own `groupTranscriptBlocks`, and the
@@ -165,36 +164,6 @@ function userTurnStarts(blocks: TranscriptBlock[]): number[] {
 }
 
 /**
- * Cheap version stand-in for a block (no `version` field exists on
- * TranscriptBlock): the mutable-in-place fields that can affect a turn
- * summary are streaming text length and tool status, both O(1) to read.
- */
-function versionTagOf(block: TranscriptBlock): string {
-  switch (block.kind) {
-    case "assistant_text":
-    case "reasoning":
-      return `t${block.text.length}`;
-    case "tool_call":
-      return `s${block.status}`;
-    default:
-      return block.kind;
-  }
-}
-
-/**
- * Memo key companion to the turn id (4086 brief: "turn id plus the last
- * block id or version"): id + version tag of the block that CLOSES the turn's
- * range. The store's append-only + patch-in-place discipline makes this sound
- * — a streaming delta patches the open tail block (its length changes), an
- * append changes the closing block id, and a rewind/reshuffle shifts the
- * user block's index, which the selector also compares.
- */
-export function turnFingerprint(blocks: TranscriptBlock[], mark: UserTurnMark, endExclusive: number): string {
-  const closing = blocks[Math.max(mark.index, endExclusive - 1)]!;
-  return `${mark.id}|${closing.id}|${versionTagOf(closing)}`;
-}
-
-/**
  * Project the flat transcript into user turns (unmemoized reference path).
  * A turn starts at each `user_text` block whose `origin !== "system"` and
  * stays open until the next eligible `user_text` or the end of the array.
@@ -218,15 +187,36 @@ export interface UserTurnsSelector {
 }
 
 interface CachedTurn {
-  fingerprint: string;
+  /** The exact block objects of the turn's range when `mark` was built. */
+  range: TranscriptBlock[];
   mark: UserTurnMark;
+}
+
+/**
+ * Hit test for a cached turn: same start index and the SAME block objects
+ * across the whole range. The store updates blocks immutably (a streaming
+ * delta, a tool status change, an edit or a hydration replacement each yield
+ * a new object), so reference equality is exact — no content-derived
+ * fingerprint can miss an in-place edit of an earlier block or a same-length
+ * replacement. Cost: pointer compares only, O(turn length), no string work.
+ */
+function sameRange(cached: CachedTurn, blocks: TranscriptBlock[], start: number, end: number): boolean {
+  if (cached.mark.index !== start || cached.range.length !== end - start) {
+    return false;
+  }
+  for (let i = start; i < end; i += 1) {
+    if (blocks[i] !== cached.range[i - start]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
  * Factory for the memoized selector (one per mounted MessageList, held in a
  * ref — never module state, two tabs must not share a cache). Each call does
- * a light O(N) scan for turn starts, then per turn compares `turn id +
- * fingerprint` against the cached entry: a hit reuses the cached summary
+ * a light O(N) scan for turn starts, then per turn compares the turn's block
+ * objects (by reference, see `sameRange`) against the cached entry: a hit reuses the cached summary
  * verbatim, a miss reprojects ONLY that turn (`summarizeTurn` walks just its
  * range). In practice a streaming delta invalidates exactly the turn being
  * streamed; a rewind/hydration reshuffle invalidates from the first shifted
@@ -243,23 +233,15 @@ export function createUserTurnsSelector(): UserTurnsSelector {
     for (let t = 0; t < starts.length; t += 1) {
       const start = starts[t]!;
       const end = t + 1 < starts.length ? starts[t + 1]! : blocks.length;
-      // Identity probe before building anything: the cached user block must
-      // still sit at this index (append-only discipline keeps it there).
-      const userBlock = blocks[start] as Extract<TranscriptBlock, { kind: "user_text" }>;
       const cached = cache[t];
-      if (
-        cached !== undefined &&
-        cached.mark.id === userBlock.id &&
-        cached.mark.index === start &&
-        cached.fingerprint === turnFingerprint(blocks, cached.mark, end)
-      ) {
+      if (cached !== undefined && sameRange(cached, blocks, start, end)) {
         nextCache.push(cached);
         marks.push(cached.mark);
         continue;
       }
       const mark = summarizeTurn(blocks, start, end);
       recomputed.push(t);
-      nextCache.push({ fingerprint: turnFingerprint(blocks, mark, end), mark });
+      nextCache.push({ range: blocks.slice(start, end), mark });
       marks.push(mark);
     }
     cache = nextCache;

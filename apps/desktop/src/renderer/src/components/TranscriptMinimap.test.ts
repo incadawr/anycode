@@ -360,6 +360,35 @@ describe("createUserTurnsSelector (incremental memoization)", () => {
     expect(a.recomputed).toEqual([]);
   });
 
+  it("never serves a stale preview: non-closing edits, same-length replacements, question edits, rewinds", () => {
+    const selector = createUserTurnsSelector();
+    const blocks: TranscriptBlock[] = [
+      mkUser("u1", "first question"),
+      mkTool({ id: "t1", toolCallId: "t1", toolName: "Read", input: { file_path: "old.ts" } }),
+      mkAssistant("a1", "first answer"),
+      mkUser("u2", "second question"),
+      mkAssistant("a2", "abcd"),
+      mkUser("u3", "third question"),
+    ];
+    selector(blocks);
+    // A NON-closing block of turn 0 changes (its tool input): turn 0 must reproject.
+    const toolEdited = blocks.map((b) => (b.id === "t1" ? { ...b, input: { file_path: "new.ts" } } : b)) as TranscriptBlock[];
+    expect(selector(toolEdited)[0]!.files).toEqual(["new.ts"]);
+    // A same-length replacement of the closing text (no length change to key on).
+    const sameLength = toolEdited.map((b) => (b.id === "a2" ? { ...b, text: "wxyz" } : b)) as TranscriptBlock[];
+    expect(selector(sameLength)[1]!.answerExcerpt).toBe("wxyz");
+    // The open tail turn's QUESTION is edited in place (the turn has no answer, so the
+    // user block itself closes the range).
+    const questionEdited = sameLength.map((b) => (b.id === "u3" ? { ...b, text: "edited third" } : b)) as TranscriptBlock[];
+    expect(selector(questionEdited)[2]!.questionExcerpt).toBe("edited third");
+    // Rewind to turn 2 and ask again: the dropped turn's summary is gone.
+    const rewound = [...questionEdited.slice(0, 3), mkUser("u2b", "second, rephrased")];
+    const marks = selector(rewound);
+    expect(marks.map((m) => m.id)).toEqual(["u1", "u2b"]);
+    expect(marks[1]!.questionExcerpt).toBe("second, rephrased");
+    expect(selector(rewound)).toEqual(selectUserTurns(rewound));
+  });
+
   it("agrees with selectUserTurns on a mixed transcript (memoization is unobservable)", () => {
     const selector = createUserTurnsSelector();
     const blocks: TranscriptBlock[] = [
