@@ -35,7 +35,6 @@ import { BackgroundAgents } from "./BackgroundAgents.js";
 import { PromptQueue } from "./PromptQueue.js";
 import { SlashMenu } from "./SlashMenu.js";
 import { ArrowUp, ImageIcon, Stop, X } from "./icons.js";
-import { transcriptTextWithImages } from "../queue-format.js";
 // Reuse, not re-derive (R1 anti-clip lesson): the same fixed-position
 // viewport-clamp ModelPill's own popover uses to escape `.composer-footer-*`'s
 // `overflow:hidden` (see ModelPill.tsx's import comment) — the ctx-popover
@@ -1260,7 +1259,7 @@ export function Composer() {
       // position), recorded as a pending steer instead of an optimistic
       // append that would interleave with the running turn's output.
       const requestId = crypto.randomUUID();
-      tabStore.getState().recordPendingSteer(requestId, transcriptTextWithImages(outgoing, images.length), {
+      tabStore.getState().recordPendingSteer(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined, {
         text: outgoing,
         images,
       });
@@ -1288,8 +1287,10 @@ export function Composer() {
       // above (TASK.118). Goes through
 
       // owns all transcript writes, and appendBlock flushes pending deltas
-      // first so ordering stays consistent.
-      tabStore.getState().appendUserText(requestId, transcriptTextWithImages(outgoing, images.length));
+      // first so ordering stays consistent. Taskana 4091 (TASK.84): the raw
+      // text + attachments ride onto the block; the image count badge is no
+      // longer appended to the live echo (thumbnails render instead).
+      tabStore.getState().appendUserText(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined);
       // TASK.33 W8: snapshot what actually went on the wire so a later
       // terminal retryable failure can offer to replay this same content.
       tabStore.getState().recordSentMessage(outgoing, images);

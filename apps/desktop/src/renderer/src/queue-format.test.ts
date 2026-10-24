@@ -4,6 +4,11 @@
  * `imageAttachmentBadge` were extracted into `queue-format.ts` so both the
  * Composer send path and the prompt-queue drainer share one implementation;
  * the assertions themselves are unchanged (same function names, same output).
+ *
+ * Taskana 4091 (TASK.84): the transcript ECHO no longer uses this badge —
+ * live user_text blocks carry `images` and render thumbnails. The functions
+ * stay for the prompt-queue pill/preview; do not "restore" them onto echo
+ * paths.
  */
 import { describe, expect, it } from "vitest";
 import { imageAttachmentBadge, transcriptTextWithImages } from "./queue-format.js";

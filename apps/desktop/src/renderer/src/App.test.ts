@@ -213,7 +213,7 @@ describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/
     expect(store.getState().retry).toBeNull();
   });
 
-  it("carries the offer's images through onto the wire message", () => {
+  it("carries the offer's images through onto the wire message AND onto the appended user_text block (Taskana 4091: raw text, no badge)", () => {
     const store = createDesktopStore();
     const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
     armRetry(store, { loopEndBlockId: "loop_end:t1", text: "hello", images: [image] });
@@ -222,6 +222,9 @@ describe("dispatchTryAgain (TASK.33 W8 one-shot Try-again — normal send/queue/
     dispatchTryAgain(store, (m) => sent.push(m));
 
     expect(sent[0]).toMatchObject({ type: "user_message", text: "hello", images: [image.attachment] });
+    const echo = store.getState().transcript.find((b) => b.kind === "user_text");
+    expect(echo).toMatchObject({ kind: "user_text", text: "hello", images: [image.attachment] });
+    expect(echo?.kind === "user_text" && echo.text.includes("[1 image attached]")).toBe(false);
   });
 
   it("a turn already running ⇒ enqueues instead of direct-sending — busy is honored exactly like any other send", () => {

@@ -48,7 +48,6 @@ import {
   isSendBlockedByModelImages,
   sniffComposerImageMediaType,
 } from "./components/Composer.js";
-import { transcriptTextWithImages } from "./queue-format.js";
 import { confirmDialogCopy } from "./components/GitConfirmDialog.js";
 import { buildDiffRequest } from "./components/GitPanel.js";
 import { isAtBottom } from "./components/MessageList.js";
@@ -177,6 +176,16 @@ export function derivePendingForGitCommand(command: GitCommand): GitPendingReque
   }
 }
 
+/**
+ * Taskana 4091: `TranscriptBlock` with user_text images stripped of their
+ * base64 payload (`data`) and provenance extras (`ref`, `cssSize`) — media
+ * type + optional sourcePath only, the same shape `promptQueue`/`retryOffer`
+ * already expose. Every other block kind passes through unchanged.
+ */
+export type SnapshotTranscriptBlock =
+  | (Omit<Extract<TranscriptBlock, { kind: "user_text" }>, "images"> & { images?: readonly { mediaType: string; sourcePath?: string }[] })
+  | Exclude<TranscriptBlock, { kind: "user_text" }>;
+
 /** Projection of one tab's `DesktopState`, functions stripped (design §3.2 — must be JSON-safe for `executeJavaScript`'s return-value serialization). */
 export interface TabStateSnapshot {
   connection: ConnectionPhase;
@@ -184,7 +193,7 @@ export interface TabStateSnapshot {
   model: string | null;
   mode: PermissionMode | null;
   turn: TurnState;
-  transcript: TranscriptBlock[];
+  transcript: SnapshotTranscriptBlock[];
   permission: PermissionUiRequest | null;
   notice: Notice | null;
   contextUsage: ContextUsage | null;
@@ -231,6 +240,24 @@ export interface TabStateSnapshot {
    * verbatim in `transcript`'s matching `user_text` block.
    */
   retryOffer: { loopEndBlockId: string; text: string; imageCount: number } | null;
+}
+
+/**
+ * Strips base64 image payloads from user_text blocks (Taskana 4091): the live
+ * echo now carries `images` on the block (TASK.84), but snapshots must stay
+ * base64-free (the §5 invariant `promptQueue`/`retryOffer` already follow —
+ * media type + optional sourcePath only, no `data`, no `ref`, no `cssSize`).
+ * Non-user blocks and image-less user_text blocks pass through by reference.
+ */
+export function snapshotTranscript(blocks: readonly TranscriptBlock[]): SnapshotTranscriptBlock[] {
+  return blocks.map((b) =>
+    b.kind === "user_text" && b.images?.length
+      ? {
+          ...b,
+          images: b.images.map((i) => ({ mediaType: i.mediaType, ...(i.sourcePath !== undefined ? { sourcePath: i.sourcePath } : {}) })),
+        }
+      : b,
+  );
 }
 
 /** Return shape of `snapshot()` (design §3.2). */
@@ -6578,8 +6605,12 @@ export function createAutomationFacade(
           continue;
         }
         const state = store.getState();
-        const transcript =
-          transcriptTail !== undefined && transcriptTail >= 0 ? state.transcript.slice(-transcriptTail) : state.transcript;
+        // Taskana 4091: live user_text blocks may carry `images` (base64) —
+        // strip them to {mediaType, sourcePath?} so the snapshot stays
+        // base64-free (same discipline as promptQueue/retryOffer).
+        const transcript = snapshotTranscript(
+          transcriptTail !== undefined && transcriptTail >= 0 ? state.transcript.slice(-transcriptTail) : state.transcript,
+        );
         states[tab.tabId] = {
           connection: state.connection,
           workspace: state.workspace,
@@ -6689,7 +6720,7 @@ export function createAutomationFacade(
       // Composer-echo: the wire never echoes the user's own text back (§3
       // MVP) — appendUserText is the transcript write, same as the real
       // button.
-      state.appendUserText(requestId, transcriptTextWithImages(text, queuedImages.length));
+      state.appendUserText(requestId, text, queuedImages.length > 0 ? queuedImages.map((image) => image.attachment) : undefined);
       // TASK.33 W8: byte-parity with Composer.handleSend's direct-send
       // branch — records what actually went on the wire so a live smoke
       // driving turns through this facade can still exercise the Try-again

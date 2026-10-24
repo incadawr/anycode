@@ -44,7 +44,6 @@ import { WindowControls } from "./components/WindowControls.js";
 import { SessionHeader } from "./components/SessionHeader.js";
 import { MessageList } from "./components/MessageList.js";
 import { Composer, shouldEnqueue } from "./components/Composer.js";
-import { transcriptTextWithImages } from "./queue-format.js";
 import type { UiToHostMessage } from "../../shared/protocol.js";
 import { FOCUS_MODE_MENU_EVENT } from "./components/ModeMenu.js";
 import { RUN_ACTION_EVENT } from "./slash-menu.js";
@@ -329,7 +328,7 @@ export function dispatchTryAgain(
     return "queued";
   }
   const requestId = crypto.randomUUID();
-  state.appendUserText(requestId, transcriptTextWithImages(offer.text, offer.images.length));
+  state.appendUserText(requestId, offer.text, offer.images.length > 0 ? offer.images.map((image) => image.attachment) : undefined);
   state.recordSentMessage(offer.text, offer.images);
   sendToHost({
     type: "user_message",

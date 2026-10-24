@@ -25,6 +25,7 @@ import { COMPOSER_IMAGE_MAX_BYTES, COMPOSER_IMAGE_MAX_PER_MESSAGE } from "./comp
 import {
   createAutomationFacade,
   derivePendingForGitCommand,
+  snapshotTranscript,
   type AnycodeBridge,
   type TranscriptDom,
   type TodoPanelDom,
@@ -84,7 +85,7 @@ import {
 import { dispatchTryAgain } from "./App.js";
 import type { SkillScope } from "../../shared/skills-config.js";
 import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
-import type { GitDestructiveIntent, RetryOffer } from "./store.js";
+import type { GitDestructiveIntent, RetryOffer, TranscriptBlock } from "./store.js";
 import { createTabRegistry, type TabRegistry } from "./tab-registry.js";
 import { createTabsStore, type TabsStoreApi } from "./tabs-store.js";
 import { childLayoutStore, createChildLayoutStore, type ChildLayoutStoreApi } from "./child-layout.js";
@@ -412,6 +413,19 @@ describe("automation facade — sendPrompt with images (TASK.198 live-smoke faca
     for (const message of sentMessages) {
       expect(uiToHostMessageSchema.safeParse(message).success).toBe(true);
     }
+
+    // Taskana 4091 (TASK.84): the transcript echo carries the attachments on
+    // the block (thumbnails render) — raw text, no "[1 image attached]" badge.
+    const transcript = registry.getStore(tabId)!.getState().transcript;
+    expect(transcript).toEqual([
+      {
+        kind: "user_text",
+        id: result.requestId,
+        text: "why?",
+        images: [{ mediaType: "image/png", data: PNG_BASE64, sourcePath: "/tmp/shot.png" }],
+        at: expect.any(Number),
+      },
+    ]);
   });
 
   // The load-bearing test for this whole slice: a blind model with no fallback
@@ -485,6 +499,54 @@ describe("automation facade — sendPrompt with images (TASK.198 live-smoke faca
 
     expect(result).toEqual({ ok: false, reason: "busy" });
     expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
+  });
+
+  // Taskana 4091 (TASK.84): live user_text blocks now carry `images` (base64),
+  // but the snapshot invariant — base64 payloads NEVER enter a snapshot — must
+  // hold: media type + sourcePath only, nothing else.
+  it("snapshot after an image-bearing sendPrompt stays base64-free: images strip to {mediaType, sourcePath}", () => {
+    const { registry, tabsStore, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const result = facade.sendPrompt(tabId, "see", [{ data: PNG_BASE64, sourcePath: "/tmp/shot.png" }]);
+    expect(result.ok).toBe(true);
+
+    const snap = facade.snapshot();
+    const block = snap.states[tabId]?.transcript[0];
+    expect(block).toMatchObject({ kind: "user_text", text: "see" });
+    expect(block?.kind === "user_text" && block.images).toEqual([{ mediaType: "image/png", sourcePath: "/tmp/shot.png" }]);
+    // The whole snapshot serializes without the base64 payload anywhere.
+    expect(JSON.stringify(snap)).not.toContain(PNG_BASE64);
+    expect(JSON.stringify(snap)).not.toContain("\"data\"");
+  });
+});
+
+describe("snapshotTranscript (Taskana 4091 — snapshot stays base64-free)", () => {
+  it("strips data/ref/cssSize from user_text images, keeps sourcePath when present and omits it when absent", () => {
+    const withPath: TranscriptBlock = {
+      kind: "user_text",
+      id: "r1",
+      text: "hi",
+      images: [{ mediaType: "image/png", data: "AA==", sourcePath: "/tmp/a.png", ref: 7, cssSize: { width: 10, height: 20 } }],
+    };
+    const noPath: TranscriptBlock = { kind: "user_text", id: "r2", text: "hi", images: [{ mediaType: "image/png", data: "BB==" }] };
+    const stripped = snapshotTranscript([withPath, noPath]);
+    expect(stripped[0]).toMatchObject({
+      kind: "user_text",
+      id: "r1",
+      images: [{ mediaType: "image/png", sourcePath: "/tmp/a.png" }],
+    });
+    expect(stripped[1]).toMatchObject({ kind: "user_text", id: "r2", images: [{ mediaType: "image/png" }] });
+    expect(JSON.stringify(stripped)).not.toContain("AA==");
+    expect(JSON.stringify(stripped)).not.toContain("BB==");
+  });
+
+  it("preserves non-user blocks and image-less user_text blocks by reference identity (no clone)", () => {
+    const assistant: TranscriptBlock = { kind: "assistant_text", id: "a1", text: "ok" };
+    const plain: TranscriptBlock = { kind: "user_text", id: "u1", text: "no images here" };
+    const out = snapshotTranscript([assistant, plain]);
+    expect(out[0]).toBe(assistant);
+    expect(out[1]).toBe(plain);
   });
 });
 

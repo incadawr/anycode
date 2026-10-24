@@ -2687,6 +2687,23 @@ body {
   object-fit: contain;
 }
 
+/* Taskana 4091 (TASK.84): thumbnails are clickable — the wrapper button is a
+   plain passthrough (no chrome of its own) so the capped .message-image looks
+   identical; only the zoom-in cursor and focus ring signal interactivity. */
+.message-image-button {
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  border-radius: var(--r-sm);
+  display: block;
+}
+
+.message-image-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Assistant messages: no bubble — plain prose on the app background at the
    full column measure (design §1.3/§2.1's "assistant is just text"). */
 .message-assistant {
@@ -7232,4 +7249,50 @@ body {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+}
+
+/* ── Taskana 4091 (TASK.84): internal full-size image viewer ──
+   Rendered by MessageList as a sibling of the role="log" column (not inside
+   it). Taskana 4091 follow-up: a real modal `<dialog>` (showModal) — the
+   browser supplies the focus trap and the dimmed ::backdrop (the old fixed
+   overlay div is gone). Internal-only by design: no window.open /
+   shell.openExternal — Esc or a backdrop click closes. */
+.image-viewer {
+  max-width: min(96vw, 1200px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.image-viewer::backdrop {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.image-viewer-img {
+  max-width: 96vw;
+  max-height: 86vh;
+  object-fit: contain;
+  border-radius: var(--r-md);
+  background: var(--bg-inset);
+}
+
+.image-viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  color: var(--text-2);
+}
+
+.image-viewer-nav,
+.image-viewer-close {
+  background: var(--bg-inset);
+  color: var(--text-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-3);
+  cursor: pointer;
 }

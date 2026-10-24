@@ -1048,7 +1048,10 @@ describe("tab-registry — queueInitialPrompt images (TASK.81)", () => {
     expect(registry.getStore("tab-a")?.getState().lastSentMessage).toEqual({ text: "look at this", images: [IMAGE] });
 
     const transcript = registry.getStore("tab-a")?.getState().transcript ?? [];
-    expect(findBlock(transcript, "user_text")?.text).toBe("look at this\n\n[1 image attached]");
+    // Taskana 4091 (TASK.84): the live echo carries the attachments on the
+    // block (thumbnails render) — raw text, no "[1 image attached]" badge.
+    expect(findBlock(transcript, "user_text")?.text).toBe("look at this");
+    expect(findBlock(transcript, "user_text")?.images).toEqual([IMAGE.attachment]);
   });
 
   it("honest block: drops images and raises image_attach_rejected when the boot model cannot accept them — the text still sends", () => {
@@ -1070,7 +1073,10 @@ describe("tab-registry — queueInitialPrompt images (TASK.81)", () => {
     });
 
     const transcript = registry.getStore("tab-a")?.getState().transcript ?? [];
+    // Taskana 4091 parity with deliveredImages=[]: the blocked echo carries the
+    // raw text and NO images key (nothing to thumbnail — nothing was sent).
     expect(findBlock(transcript, "user_text")?.text).toBe("look at this");
+    expect(findBlock(transcript, "user_text")?.images).toBeUndefined();
   });
 
   it("TASK.198 срез D: a configured recognizer fallback on the boot host_ready delivers images to a blind model instead of honestly blocking them", () => {
@@ -1503,8 +1509,10 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     const drained = userMessages(port)[0]!;
     expect(drained.text).toBe("see this");
     expect(drained.images).toEqual([attachment]);
-    // The transcript echo carries the image badge (transcriptTextWithImages).
-    expect(findBlock(store.getState().transcript, "user_text")?.text).toBe("see this\n\n[1 image attached]");
+    // Taskana 4091 (TASK.84): the transcript echo carries the attachments on
+    // the block (thumbnails render) — raw text, no badge line.
+    expect(findBlock(store.getState().transcript, "user_text")?.text).toBe("see this");
+    expect(findBlock(store.getState().transcript, "user_text")?.images).toEqual([attachment]);
   });
 
   // T6 (fable-task56-w3-codex-ruling.md finding 1, PIN): the drainer does NOT

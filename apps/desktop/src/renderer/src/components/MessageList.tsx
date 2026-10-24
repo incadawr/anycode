@@ -29,6 +29,7 @@ import { TabContext } from "../tab-context.js";
 import { isReplaySurface, replayStore } from "../replay.js";
 import { ChildReportBlock } from "./ChildReportBlock.js";
 import { COMPOSER_INSERT_EVENT } from "./Composer.js";
+import { ImageViewer } from "./ImageViewer.js";
 import { Markdown } from "./Markdown.js";
 import { ReasoningBlock } from "./ReasoningBlock.js";
 import { TodoPanel } from "./TodoPanel.js";
@@ -452,6 +453,16 @@ export function MessageList({
   const followRef = useRef(true);
   const [follow, setFollow] = useState(true);
 
+  // Taskana 4091 (TASK.84): the internal full-size image viewer. Opened by a
+  // thumbnail click; the block id + clicked index are looked up from `blocks`
+  // at render time, so a store replacement of the block (or its images)
+  // while open is reflected without stale copies. Rendered as a SIBLING of
+  // the role="log" column (last child of the root), so the live region never
+  // announces viewer content.
+  const [viewer, setViewer] = useState<{ blockId: string; index: number } | null>(null);
+  const viewed = viewer !== null ? blocks.find((b) => b.id === viewer.blockId) : undefined;
+  const viewedImages = viewed !== undefined && viewed.kind === "user_text" ? viewed.images ?? [] : [];
+
   // Finding 1 (codex P7.3-F): a jump-to-latest smooth scroll must not get
   // stomped by the very next post-commit snap effect — while a smooth scroll
   // animates, the plain-effect/RO snap below is suppressed until the browser
@@ -730,12 +741,19 @@ export function MessageList({
                   {block.images?.length ? (
                     <div className="message-images">
                       {block.images.map((image, index) => (
-                        <img
+                        <button
                           key={`${image.mediaType}:${index}`}
-                          className="message-image"
-                          src={`data:${image.mediaType};base64,${image.data}`}
-                          alt={`Attached image ${index + 1}`}
-                        />
+                          type="button"
+                          className="message-image-button"
+                          onClick={() => setViewer({ blockId: block.id, index })}
+                          aria-label={`View attached image ${index + 1}`}
+                        >
+                          <img
+                            className="message-image"
+                            src={`data:${image.mediaType};base64,${image.data}`}
+                            alt={`Attached image ${index + 1}`}
+                          />
+                        </button>
                       ))}
                     </div>
                   ) : null}
@@ -910,6 +928,18 @@ export function MessageList({
         >
           ↓
         </button>
+      )}
+      {/* Taskana 4091 (TASK.84): the full-size internal viewer — last child of
+          the root, a SIBLING of the role="log" column. Taskana 4091 follow-up:
+          a real modal <dialog> (showModal) — App.tsx's global keydown ignores
+          both Esc and mod-combos while any dialog[open] exists, so the shell's
+          Esc-to-interrupt never fires while the viewer is open. */}
+      {viewer !== null && viewedImages.length > 0 && (
+        <ImageViewer
+          images={viewedImages}
+          startIndex={Math.min(viewer.index, viewedImages.length - 1)}
+          onClose={() => setViewer(null)}
+        />
       )}
     </div>
   );
