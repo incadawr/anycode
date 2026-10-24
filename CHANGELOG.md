@@ -9,6 +9,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The "provider reported" model note on a subagent card now appears as soon as
+  the first response arrives, not only after the run ends, so a mismatched
+  model is visible during a long run.
 - Workflow steps that use an engine role (claude/codex) now follow the role's
   fallback chain like Agent calls do: a cooling primary hands the step to the
   next healthy entry, or to the parent's model, with a visible notice. Engine
