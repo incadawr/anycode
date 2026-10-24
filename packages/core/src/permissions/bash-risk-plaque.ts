@@ -95,7 +95,7 @@ export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
   if (!isPlaqueCommandLineTool(toolName)) return { applies: false, plaque: null, binary: null };
   const record = input !== null && typeof input === "object" ? (input as { command?: unknown; kind?: unknown }) : undefined;
   const command = record?.command;
-  if (typeof command !== "string") return { applies: true, plaque: null, binary: null };
+  if (typeof command !== "string") return { applies: false, plaque: null, binary: null };
   // Cross-review D2: a `kind: "writeStdin"` ask is input sent to a command
   // that is ALREADY running, not a new run of it — the classifier never
   // reasoned about that interaction, and the Codex bridge's own TASK.184
