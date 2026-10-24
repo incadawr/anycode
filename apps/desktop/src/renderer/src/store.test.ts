@@ -8008,7 +8008,7 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
     // recovery path must recognize the id as already re-queued (exactly one
     // queue item — never two next-turn sends of the same words).
     const store = runningStore();
-    store.getState().recordPendingSteer("r-stop", "STOP-RACED", { text: "STOP-RACED", images: [] });
+    store.getState().recordPendingSteer("r-stop", "STOP-RACED", undefined, { text: "STOP-RACED", images: [] });
     store.getState().markUiSteer("r-stop");
 
     store.getState().applyHostMessage({
@@ -8036,7 +8036,7 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
     // path re-queues via requeuePendingSteer), and a replayed duplicate
     // carrying text must not add a second queue item.
     const store = runningStore();
-    store.getState().recordPendingSteer("r-s", "ONCE-ONLY", { text: "ONCE-ONLY", images: [] });
+    store.getState().recordPendingSteer("r-s", "ONCE-ONLY", undefined, { text: "ONCE-ONLY", images: [] });
     store.getState().markUiSteer("r-s");
 
     store.getState().applyHostMessage({ type: "steer_requeued", requestId: "r-s", reason: "No active core turn" });
@@ -8097,7 +8097,7 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
     const store = runningStore();
     // A was typed while running (queue); S was sent as a steer AFTER A.
     store.getState().enqueuePrompt({ text: "A-first", images: [] });
-    store.getState().recordPendingSteer("r-s", "S-later", { text: "S-later", images: [] });
+    store.getState().recordPendingSteer("r-s", "S-later", undefined, { text: "S-later", images: [] });
     store.getState().markUiSteer("r-s");
 
     store.getState().applyHostMessage({ type: "steer_requeued", requestId: "r-s", reason: "core turn ended before injection" });

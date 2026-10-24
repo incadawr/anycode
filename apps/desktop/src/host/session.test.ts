@@ -1341,6 +1341,7 @@ describe("Session — core steer_message injection (Taskana 4110 / TASK.123)", (
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,
