@@ -329,6 +329,7 @@ describe("proxy relay hardening (review follow-up)", () => {
       "proxy-authorization": "Basic client-supplied",
       upgrade: "websocket",
       te: "trailers",
+      trailer: "x-checksum", // cross-review F7 triage: Trailer IS stripped — no dangling trailer promise post-relay
       "x-secret-hop": "1",
       "transfer-encoding": "chunked",
       "content-type": "text/plain",
