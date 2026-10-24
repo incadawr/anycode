@@ -608,6 +608,41 @@ describe("ClaudeApprovalBridge — Taskana 4294 workspace facts on write tools",
     }
   });
 
+  it("review: a blanket NotebookEdit rule does NOT silent-allow an out-of-workspace notebook; an inside one stays silent-allow", async () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "NotebookEdit" });
+    const emitted: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, rules);
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", workspace: root });
+    writeFileSync(join(mainCheckout, "victim.ipynb"), "{}", "utf-8");
+    writeFileSync(join(root, "ok.ipynb"), "{}", "utf-8");
+
+    const inside = responderSpy();
+    await bridge.handle(
+      inbound({ tool_name: "NotebookEdit", tool_use_id: "toolu_nb_in", input: { notebook_path: join(root, "ok.ipynb"), new_source: "x" } }),
+      inside.responder,
+    );
+    expect(emitted).toEqual([]);
+    expect((inside.success.mock.calls[0]?.[0] as { behavior: string }).behavior).toBe("allow");
+
+    const outside = responderSpy();
+    const handled = bridge.handle(
+      inbound({ tool_name: "NotebookEdit", tool_use_id: "toolu_nb_out", input: { notebook_path: join(mainCheckout, "victim.ipynb"), new_source: "x" } }),
+      outside.responder,
+    );
+    const ask = await vi.waitFor(
+      () => {
+        const found = emitted.find((m) => m.type === "permission_request");
+        if (!found) throw new Error("permission_request not emitted yet");
+        return found;
+      },
+      { timeout: 2_000, interval: 10 },
+    );
+    if (ask.type === "permission_request") broker.handleResponse(ask.requestId, "deny");
+    await handled;
+    expect((outside.success.mock.calls[0]?.[0] as { behavior: string }).behavior).toBe("deny");
+  });
+
   it("F1 end-to-end, inside: the same blanket rule stays silent-allow for a proven-inside write", async () => {
     const rules = new SessionPermissionRules();
     rules.add({ toolName: "Write" });

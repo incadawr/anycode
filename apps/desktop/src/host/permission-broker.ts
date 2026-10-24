@@ -72,7 +72,10 @@ export const PERMISSION_ASK_TIMEOUT_MS = 120_000;
  * from), and core's engine-side set is load-bearing for other consumers.
  */
 export function brokerConfinedWriteTool(toolName: string): boolean {
-  return toolName === "CodexApplyPatch" || WORKSPACE_CONFINED_WRITE_TOOLS.has(toolName);
+  // Taskana 4294 review: Claude's NotebookEdit is a file write too (target in
+  // `notebook_path`, no rule subject => only the blanket `{toolName}` rule shape
+  // exists for it); the claude approval bridge mints facts for it.
+  return toolName === "CodexApplyPatch" || toolName === "NotebookEdit" || WORKSPACE_CONFINED_WRITE_TOOLS.has(toolName);
 }
 
 /**

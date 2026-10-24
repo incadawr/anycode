@@ -284,7 +284,7 @@ export class ClaudeApprovalBridge {
       mode: "build",
     };
     if (!claudeNeedsWorkspaceFacts(approval.toolName, input, this.options.workspace)) return request;
-    const workspace = await this.mintWorkspaceFacts(this.options.workspace as string, input.file_path);
+    const workspace = await this.mintWorkspaceFacts(this.options.workspace as string, claudeWriteTarget(approval.toolName, input));
     return workspace === undefined ? request : { ...request, workspace };
   }
 
@@ -316,5 +316,16 @@ function claudeNeedsWorkspaceFacts(
   input: Record<string, unknown>,
   workspace: string | undefined,
 ): boolean {
-  return workspace !== undefined && WORKSPACE_CONFINED_WRITE_TOOLS.has(toolName) && typeof input.file_path === "string";
+  return workspace !== undefined && typeof claudeWriteTarget(toolName, input) === "string";
+}
+
+/**
+ * The target path of a Claude file-write approval: `file_path` for
+ * Write/Edit/MultiEdit, `notebook_path` for NotebookEdit (Taskana 4294 review —
+ * the broker confines NotebookEdit rules too). Undefined for anything else.
+ */
+function claudeWriteTarget(toolName: string, input: Record<string, unknown>): unknown {
+  if (WORKSPACE_CONFINED_WRITE_TOOLS.has(toolName)) return input.file_path;
+  if (toolName === "NotebookEdit") return input.notebook_path;
+  return undefined;
 }

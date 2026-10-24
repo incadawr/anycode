@@ -424,6 +424,64 @@ describe("CodexApprovalBridge — Taskana 4294 workspace facts on file changes",
     expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
   });
 
+  it("review: an update whose kind.move_path lands OUTSIDE => no facts => the bare rule must NOT silent-allow", async () => {
+    writeFileSync(join(root, "a.ts"), "orig", "utf-8");
+    const items = new TurnItemIndex();
+    items.record({
+      type: "fileChange",
+      id: "item-file",
+      status: "inProgress",
+      changes: [{ path: join(root, "a.ts"), kind: { type: "update", move_path: join(elsewhere, "moved.ts") }, diff: "+a" }],
+    });
+    const { bridge, broker, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
+    const response = responder();
+    bridge.handle(file({ itemId: "item-file" }), response);
+    await settle();
+
+    const presented = ask(emitted);
+    broker.handleResponse(presented.requestId, "deny");
+    await settle();
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("review: an inside move_path keeps the bare rule honoured (no over-blocking)", async () => {
+    writeFileSync(join(root, "a.ts"), "orig", "utf-8");
+    const items = new TurnItemIndex();
+    items.record({
+      type: "fileChange",
+      id: "item-file",
+      status: "inProgress",
+      changes: [{ path: join(root, "a.ts"), kind: { type: "update", move_path: join(root, "b.ts") }, diff: "+a" }],
+    });
+    const { bridge, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
+    const response = responder();
+    bridge.handle(file({ itemId: "item-file" }), response);
+    await settle();
+
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
+    expect(response.result).toHaveBeenCalledWith({ decision: "accept" });
+  });
+
+  it("review: a grantRoot request never rides the bare rule even when every change is inside", async () => {
+    writeFileSync(join(root, "a.ts"), "orig", "utf-8");
+    const items = new TurnItemIndex();
+    items.record({
+      type: "fileChange",
+      id: "item-file",
+      status: "inProgress",
+      changes: [{ path: join(root, "a.ts"), kind: { type: "update" }, diff: "+a" }],
+    });
+    const { bridge, broker, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
+    const response = responder();
+    bridge.handle(file({ itemId: "item-file", grantRoot: "/" }), response);
+    await settle();
+
+    const presented = ask(emitted);
+    broker.handleResponse(presented.requestId, "deny");
+    await settle();
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
   it("no indexed changes => nothing provable => a bare CodexApplyPatch rule must NOT silent-allow (fail-closed)", async () => {
     const { bridge, broker, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }]);
     const response = responder();

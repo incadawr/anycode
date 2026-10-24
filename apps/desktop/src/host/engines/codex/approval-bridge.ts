@@ -249,12 +249,21 @@ export class CodexApprovalBridge {
    * vouch, and the ask reaches a human. Never throws. Guarded by
    * codexNeedsWorkspaceFacts so unaffected approvals stay fully synchronous.
    */
-  private async withWorkspaceFacts(request: PermissionRequest): Promise<PermissionRequest> {
+  private async withWorkspaceFacts(
+    request: PermissionRequest,
+    item: Record<string, unknown> | undefined,
+  ): Promise<PermissionRequest> {
     if (this.options.workspace === undefined) return request;
     if (request.toolName !== "CodexApplyPatch") return request;
-    const paths = Array.isArray((request.input as Record<string, unknown> | null)?.paths)
-      ? ((request.input as Record<string, unknown>).paths as unknown[])
-      : [];
+    // Taskana 4294 review: a grantRoot request asks for a write root beyond the
+    // change set itself — never provable from the paths, so no facts.
+    if ((request.input as Record<string, unknown> | null)?.grantRoot != null) return request;
+    // Taskana 4294 review: enumerate targets from the RAW indexed item, not the
+    // display projection — `paths` drops `kind.move_path`, so an update that
+    // MOVES an inside file to an outside destination would otherwise be proved
+    // "inside" and ride a bare rule.
+    const paths = fileChangeTargets(item);
+    if (paths === null) return request;
     let first: PermissionRequest["workspace"];
     for (const entry of paths) {
       // Unshapely (non-string / empty) => unprovable => no facts at all.
@@ -293,7 +302,7 @@ export class CodexApprovalBridge {
       // every other approval keeps the original fully-synchronous path into
       // the broker, preserving emit ordering for existing consumers.
       const request = codexNeedsWorkspaceFacts(decoded.request, this.options.workspace)
-        ? await this.withWorkspaceFacts(decoded.request)
+        ? await this.withWorkspaceFacts(decoded.request, decoded.request.toolCallId === undefined ? undefined : active.items?.get(decoded.request.toolCallId))
         : decoded.request;
       const decision = await this.options.broker.requestPermission(request);
       const answer: CodexApprovalDecision =
@@ -321,4 +330,34 @@ function codexNeedsWorkspaceFacts(request: PermissionRequest, workspace: string 
   if (request.toolName !== "CodexApplyPatch") return false;
   const paths = (request.input as Record<string, unknown> | null)?.paths;
   return Array.isArray(paths) && paths.length > 0;
+}
+
+/**
+ * Taskana 4294 review: every path a raw `fileChange` item would touch — each
+ * change's `path` plus any string field of its `kind` (e.g. `move_path`, the
+ * rename destination) — or null when the set cannot be enumerated with
+ * certainty (malformed entry, non-string kind field). Fail-closed: null => no
+ * facts => a bare rule cannot vouch.
+ */
+function fileChangeTargets(item: Record<string, unknown> | undefined): string[] | null {
+  if (item === undefined || item.type !== "fileChange" || !Array.isArray(item.changes) || item.changes.length === 0) return null;
+  const targets: string[] = [];
+  for (const entry of item.changes) {
+    if (entry === null || typeof entry !== "object") return null;
+    const change = entry as Record<string, unknown>;
+    if (typeof change.path !== "string" || change.path.length === 0) return null;
+    targets.push(change.path);
+    const kind = change.kind;
+    if (kind === undefined || kind === null) continue;
+    if (typeof kind !== "object") return null;
+    for (const [key, value] of Object.entries(kind as Record<string, unknown>)) {
+      if (key === "type" || value === null || value === undefined) continue;
+      if (typeof value === "string" && value.length > 0) {
+        targets.push(value);
+        continue;
+      }
+      return null;
+    }
+  }
+  return targets;
 }
