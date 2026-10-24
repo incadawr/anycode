@@ -57,6 +57,10 @@ export type { CodexShadowCommandItem } from "./adapters/node/sqlite-persistence.
 // (host/engines/claude/shadow-transcript.ts), which wraps this same
 // SqlitePersistenceAdapter — never a hand-duplicated row shape.
 export type { ClaudeTranscriptItem } from "./adapters/node/sqlite-persistence.js";
+// Provider usage audit row (Taskana 4083 / TASK.34, migration v19):
+// re-exported for the desktop host's write-behind recorder + hydration
+// summary seam (host/session.ts), which wraps this same SqlitePersistenceAdapter.
+export type { ProviderUsageRecord } from "./adapters/node/sqlite-persistence.js";
 // Pure string helper (no I/O, no auto-run block — the NOTE about cli/main.ts
 // below does not apply): re-exported for the desktop host's notice injection
 // (slice 6.DP-2), so both wiring paths append byte-identical reminder blocks.

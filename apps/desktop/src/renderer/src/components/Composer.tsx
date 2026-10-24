@@ -21,7 +21,7 @@ import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeybo
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { isSessionBusy, type ContextUsage, type DesktopState, type SessionTokens, type TurnState } from "../store.js";
-import type { WireContextBreakdown } from "../../../shared/protocol.js";
+import type { WireContextBreakdown, WireUsageAuditStep, WireUsageAuditTotals } from "../../../shared/protocol.js";
 import {
   makePasteMarker,
   reconstitutePasteMarkers,
@@ -542,6 +542,52 @@ export function formatLatestCacheHitLine(tokens: SessionTokens | null): string |
   return `Latest cache hit: ${percent}% (${formatCtxTokenCount(tokens.latestCacheRead)}/${formatCtxTokenCount(tokens.latestCacheInput)} input)`;
 }
 
+/**
+ * Taskana 4083 / TASK.34: the DURABLE audit lines. `session` is null when no
+ * totals exist (nothing audited yet); `lastStep` is null when no step was
+ * captured. The last-step cache % is computed ONLY from that step's own
+ * numbers (never from session sums — TASK.34 invariant 6), and an absent
+ * cache field is the honest "not reported by provider" line, never 0%.
+ * Never renders cost/quota — the provider did not report it. Exported for
+ * unit testing.
+ */
+export function formatUsageAuditLines(a: {
+  lastStep: WireUsageAuditStep | null;
+  totals: WireUsageAuditTotals | null;
+}): { session: string | null; lastStep: string | null } {
+  let session: string | null = null;
+  if (a.totals !== null) {
+    session = `Audited (${a.totals.stepsReported} steps, ${a.totals.stepsWithCache} with cache): in ${formatCtxTokenCount(
+      a.totals.input,
+    )} · out ${formatCtxTokenCount(a.totals.output)} · total ${formatCtxTokenCount(a.totals.total)}`;
+  }
+  let lastStep: string | null = null;
+  if (a.lastStep !== null) {
+    if (
+      a.lastStep.cachedInputTokens === undefined ||
+      a.lastStep.inputTokens === undefined ||
+      a.lastStep.inputTokens <= 0
+    ) {
+      lastStep = "Last audited step: cache not reported by provider";
+    } else {
+      const percent = Math.round((a.lastStep.cachedInputTokens / a.lastStep.inputTokens) * 100);
+      lastStep = `Last audited step: ${percent}% cache (${formatCtxTokenCount(a.lastStep.cachedInputTokens)}/${formatCtxTokenCount(
+        a.lastStep.inputTokens,
+      )} input)`;
+    }
+  }
+  return { session, lastStep };
+}
+
+/** Taskana 4083 / TASK.34: one popover row per audited step, omitting absent cache/retry parts. */
+export function formatUsageAuditStepRow(step: WireUsageAuditStep): string {
+  const inPart = step.inputTokens !== undefined ? `in ${formatCtxTokenCount(step.inputTokens)}` : null;
+  const cachedPart = step.cachedInputTokens !== undefined ? `cached ${formatCtxTokenCount(step.cachedInputTokens)}` : null;
+  const outPart = step.outputTokens !== undefined ? `out ${formatCtxTokenCount(step.outputTokens)}` : null;
+  const retryPart = step.transportRetries > 0 ? `retry ${step.transportRetries}` : null;
+  return ["step " + step.step, inPart, cachedPart, outPart, retryPart].filter((part) => part !== null).join(" · ");
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Codex subscription-quota lines (TASK.51, cut §6): additive to the ctx
 // popover, shown alongside — never instead of — the session-tokens lines
@@ -692,6 +738,7 @@ function CtxPopover({
   contextUsage,
   contextBreakdown,
   sessionTokens,
+  usageAudit,
   quota,
   percent,
   tint,
@@ -701,6 +748,13 @@ function CtxPopover({
   contextUsage: ContextUsage | null;
   contextBreakdown: WireContextBreakdown | null;
   sessionTokens: SessionTokens | null;
+  /** Taskana 4083 / TASK.34: the durable audit slice (see DesktopState.usageAudit). */
+  usageAudit: {
+    lastStep: WireUsageAuditStep | null;
+    totals: WireUsageAuditTotals | null;
+    totalSteps: number;
+    list: WireUsageAuditStep[] | null;
+  };
   quota: CodexRateLimitsWire | null;
   percent: number;
   tint: string;
@@ -740,6 +794,10 @@ function CtxPopover({
   // the request entirely when the engine has no breakdown at all
   // (codex-profiles cut §5.2) — asking would only ever get dropped, and the
   // popover still needs its anchor to show the session-tokens/quota lines.
+  // Taskana 4083 / TASK.34: the SAME transition also fires the twin
+  // `usage_audit_request` — UNCONDITIONALLY, because the audit is a core
+  // feature independent of supportsContextBreakdown; a foreign host that
+  // never answers leaves the list null (lazy-load skeleton posture).
   useEffect(() => {
     if (!open) {
       setAnchor(null);
@@ -748,6 +806,7 @@ function CtxPopover({
     if (supportsContextBreakdown) {
       sendToHost({ type: "context_breakdown_request" });
     }
+    sendToHost({ type: "usage_audit_request" });
     const rect = triggerRef.current?.getBoundingClientRect();
     setAnchor(rect ? ctxPopoverAnchorFromRect(rect, window.innerWidth, window.innerHeight) : null);
   }, [open, sendToHost, supportsContextBreakdown]);
@@ -833,6 +892,15 @@ function CtxPopover({
   const bodyState = ctxPopoverBodyState(supportsContextBreakdown, loading, timedOut);
   const sessionLine = formatSessionTokensLine(sessionTokens);
   const cacheHitLine = formatLatestCacheHitLine(sessionTokens);
+  // Taskana 4083 / TASK.34: the durable audit view. When the live
+  // sessionTokens died with a restart but the audit survived, the audited
+  // session line still renders (restored-after-restart case) — the LIVE
+  // sessionTokens keeps priority whenever present.
+  const auditLines = formatUsageAuditLines({
+    lastStep: usageAudit.lastStep,
+    totals: sessionTokens !== null ? null : usageAudit.totals,
+  });
+  const auditRows = usageAudit.list !== null ? usageAudit.list.slice(0, 10) : [];
   const quotaView = buildQuotaPopoverView(quota, Date.now());
   const fillPercent = Math.min(100, Math.max(0, percent));
 
@@ -905,6 +973,17 @@ function CtxPopover({
               {cacheHitLine !== null && <div className="ctx-popover-session">{cacheHitLine}</div>}
             </>
           )}
+          {usageAudit.list === null && usageAudit.totalSteps > 0 && (
+            <div className="ctx-popover-session">Audit: {usageAudit.totalSteps} steps recorded — reopen to load</div>
+          )}
+          {auditLines.session !== null && <div className="ctx-popover-session">{auditLines.session}</div>}
+          {auditLines.lastStep !== null && <div className="ctx-popover-session">{auditLines.lastStep}</div>}
+          {auditRows.length > 0 &&
+            auditRows.map((step) => (
+              <div className="ctx-popover-session" key={`${step.turnId}:${step.step}`}>
+                {formatUsageAuditStepRow(step)}
+              </div>
+            ))}
           {quotaView !== null && (
             <>
               {quotaView.primaryLine !== null && <div className="ctx-popover-session">{quotaView.primaryLine}</div>}
@@ -995,6 +1074,7 @@ export function Composer() {
   const contextBreakdown = useTabStore((state) => state.contextBreakdown);
   const contextWindowAssumed = useTabStore((state) => state.contextWindowAssumed);
   const sessionTokens = useTabStore((state) => state.sessionTokens);
+  const usageAudit = useTabStore((state) => state.usageAudit);
   const quota = useTabStore((state) => state.quota);
   const engine = useTabStore((state) => state.engine);
   const pendingEngineChange = useTabStore((state) => state.pendingEngineChange);
@@ -1628,6 +1708,7 @@ export function Composer() {
               contextUsage={contextUsage}
               contextBreakdown={contextBreakdown}
               sessionTokens={sessionTokens}
+              usageAudit={usageAudit}
               quota={quota}
               percent={ctxPercent}
               tint={ctxTint}

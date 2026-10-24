@@ -7637,3 +7637,73 @@ describe("desktop store — TASK.95 Codex collab feed", () => {
     expect(cardBlocks(store, "r1")).toHaveLength(0);
   });
 });
+
+/**
+ * Taskana 4083 / TASK.34: the durable provider-usage audit slice. The
+ * session_checkpoint.usageAudit field REPLACE-merges lastStep/totals/
+ * totalSteps (list survives); the usage_audit reply sets the list; the
+ * host_ready reset (performReset) restores the initial shape.
+ */
+describe("desktop store — provider usage audit (Taskana 4083 / TASK.34)", () => {
+  const { scheduler } = { scheduler: { schedule: () => {} } as FrameScheduler };
+
+  const auditStep = {
+    turnId: "t1",
+    step: 1,
+    createdAt: 1000,
+    model: "m1",
+    reasoningEffort: "low",
+    inputTokens: 10,
+    outputTokens: 4,
+    totalTokens: 14,
+    finishReason: "stop",
+    transportRetries: 0,
+  };
+
+  const totals = { input: 10, output: 4, total: 14, stepsReported: 1, stepsWithCache: 0 };
+
+  it("fresh store: usageAudit starts at the initial empty shape", () => {
+    const store = createDesktopStore(scheduler);
+    expect(store.getState().usageAudit).toEqual({ lastStep: null, totals: null, totalSteps: 0, list: null });
+  });
+
+  it("session_checkpoint with usageAudit REPLACEs lastStep/totals/totalSteps and keeps list", () => {
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "usage_audit", steps: [auditStep], totals });
+    expect(store.getState().usageAudit.list).toEqual([auditStep]);
+    store.getState().applyHostMessage({
+      type: "session_checkpoint",
+      usageAudit: { lastStep: auditStep, totals, totalSteps: 1 },
+    });
+    expect(store.getState().usageAudit).toEqual({ lastStep: auditStep, totals, totalSteps: 1, list: [auditStep] });
+  });
+
+  it("session_checkpoint WITHOUT the field changes nothing", () => {
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "session_checkpoint" });
+    expect(store.getState().usageAudit).toEqual({ lastStep: null, totals: null, totalSteps: 0, list: null });
+  });
+
+  it("usage_audit message sets the list newest-first as delivered; a null totals keeps the prior", () => {
+    const store = createDesktopStore(scheduler);
+    const newer = { ...auditStep, step: 2, createdAt: 2000 };
+    store.getState().applyHostMessage({ type: "usage_audit", steps: [newer, auditStep], totals });
+    expect(store.getState().usageAudit.list).toEqual([newer, auditStep]);
+    expect(store.getState().usageAudit.lastStep).toEqual(newer); // the reply refreshes the stale checkpoint lastStep
+    expect(store.getState().usageAudit.totals).toEqual(totals);
+    store.getState().applyHostMessage({ type: "usage_audit", steps: [newer], totals: null });
+    expect(store.getState().usageAudit.list).toEqual([newer]);
+    expect(store.getState().usageAudit.totals).toEqual(totals); // kept
+  });
+
+  it("host_ready (performReset path) restores the initial shape", () => {
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "usage_audit", steps: [auditStep], totals });
+    store.getState().applyHostMessage({
+      type: "session_checkpoint",
+      usageAudit: { lastStep: auditStep, totals, totalSteps: 1 },
+    });
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    expect(store.getState().usageAudit).toEqual({ lastStep: null, totals: null, totalSteps: 0, list: null });
+  });
+});

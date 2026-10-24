@@ -129,6 +129,8 @@ import type {
   WireGitStatus,
   WireHistoryItem,
   WireToolMeta,
+  WireUsageAuditStep,
+  WireUsageAuditTotals,
   EnginePresentation,
   ShellCapabilitiesProjection,
 } from "../../shared/protocol.js";
@@ -1083,6 +1085,20 @@ export interface DesktopState {
    */
   sessionTokens: SessionTokens | null;
   /**
+   * Taskana 4083 / TASK.34: the DURABLE provider-usage audit slice, restored
+   * from SQLite via `session_checkpoint.usageAudit` (REPLACE-merge: the
+   * host's lastStep/totals/totalSteps win) and the `usage_audit` list reply
+   * (fetched when the ctx-popover opens). `list: null` = never loaded /
+   * foreign host that never answers. Part of the session slice so a
+   * respawn/reset clears it. The ctx-popover's sole reader.
+   */
+  usageAudit: {
+    lastStep: WireUsageAuditStep | null;
+    totals: WireUsageAuditTotals | null;
+    totalSteps: number;
+    list: WireUsageAuditStep[] | null;
+  };
+  /**
    * Codex subscription-quota snapshot (codex-profiles cut §3.4/§6, TASK.51):
    * seeded from `host_ready.engine.quota` and REPLACED wholesale by every
    * `engine_quota` AgentEvent — the sparse merge (null never wipes a known
@@ -1349,6 +1365,13 @@ interface SessionSlice {
   envStatus: WireEnvStatus | null;
   contextBreakdown: WireContextBreakdown | null;
   sessionTokens: SessionTokens | null;
+  /** Taskana 4083 / TASK.34: durable audit slice; see `DesktopState.usageAudit`'s own doc. */
+  usageAudit: {
+    lastStep: WireUsageAuditStep | null;
+    totals: WireUsageAuditTotals | null;
+    totalSteps: number;
+    list: WireUsageAuditStep[] | null;
+  };
   /** Codex subscription-quota snapshot (codex-profiles cut §3.4/§6, TASK.51); see `DesktopState.quota`'s own doc comment. */
   quota: CodexRateLimitsWire | null;
   /** On-demand checkpoint-timeline snapshot (slice P7.26/R2); replaced wholesale on each `checkpoint_list`. */
@@ -1398,6 +1421,7 @@ function initialSessionSlice(): SessionSlice {
     envStatus: null,
     contextBreakdown: null,
     sessionTokens: null,
+    usageAudit: { lastStep: null, totals: null, totalSteps: 0, list: null },
     quota: null,
     checkpoints: [],
     lastRewindResult: null,
@@ -4177,6 +4201,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             set({
               ...(message.sessionTokens !== undefined ? { sessionTokens: message.sessionTokens } : {}),
               ...(message.contextUsage !== undefined ? { contextUsage: message.contextUsage } : {}),
+              // Taskana 4083 / TASK.34: REPLACE-merge the durable audit slice
+              // — lastStep/totals/totalSteps from the host win; `list`
+              // survives (served separately by usage_audit).
+              ...(message.usageAudit !== undefined ? { usageAudit: { ...get().usageAudit, ...message.usageAudit } } : {}),
               ...(message.permission !== undefined
                 ? {
                     permission: {
@@ -4521,6 +4549,23 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // Full snapshot replacement, pushed on ui_ready and on every
             // admit/terminal of a detached child (host/session.ts).
             set({ backgroundChildren: message.children });
+            return;
+          case "usage_audit":
+            // Taskana 4083 / TASK.34: the durable audit list, served ONLY in
+            // response to a usage_audit_request (newest-first, last 50). The
+            // host's totals win when present; the list slot is REPLACE-set
+            // (list: null = never loaded / foreign host that never answers).
+            // The reply's newest row also refreshes lastStep: the checkpoint's
+            // copy is only re-read per ui_ready, so it goes stale as live
+            // turns add rows within one connection.
+            set({
+              usageAudit: {
+                ...get().usageAudit,
+                list: message.steps,
+                lastStep: message.steps[0] ?? get().usageAudit.lastStep,
+                totals: message.totals ?? get().usageAudit.totals,
+              },
+            });
             return;
           case "background_child_cancel_result":
             // The host re-pushes background_children right after a cancel, so
