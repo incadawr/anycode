@@ -246,3 +246,217 @@ describe("ChildReportQueue.upsert (TASK.148 slice 2 — coalesces repeat notices
     expect(outbound.sent).toEqual([]);
   });
 });
+
+describe("ChildReportQueue snapshot/restore/onChange (Taskana 4123)", () => {
+  it("empty queue: snapshot() is {reports: [], droppedSinceNotice: 0}; onChange fires on nothing until a mutation", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const listener = vi.fn();
+
+    expect(queue.snapshot()).toEqual({ reports: [], droppedSinceNotice: 0 });
+    const unsubscribe = queue.onChange(listener);
+    // No mutation happened — the listener must stay silent.
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("add() two reports -> snapshot() deep-equals both rows; mutating the snapshot does not affect the queue (copy check)", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const meta = { status: "completed" as const, durationMs: 42, finalTurnFinishReason: "length" as const };
+
+    queue.add("report-1", "first", meta);
+    queue.add("report-2", "second");
+
+    expect(queue.snapshot()).toEqual({
+      reports: [
+        { id: "report-1", text: "first", childTerminal: meta },
+        { id: "report-2", text: "second" },
+      ],
+      droppedSinceNotice: 0,
+    });
+
+    // Copy check: mutating the returned snapshot (rows, childTerminal, counter) never touches the queue.
+    const snap = queue.snapshot();
+    snap.reports[0]!.id = "hacked";
+    snap.reports[0]!.text = "hacked";
+    snap.reports[0]!.childTerminal!.durationMs = 999;
+    snap.droppedSinceNotice = 77;
+    const fresh = queue.snapshot();
+    expect(fresh.reports[0]).toEqual({ id: "report-1", text: "first", childTerminal: meta });
+    expect(fresh.droppedSinceNotice).toBe(0);
+  });
+
+  it("ack(one) fires the listener and leaves the other row in the snapshot", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const listener = vi.fn();
+    queue.onChange(listener);
+
+    queue.add("report-1", "first");
+    queue.add("report-2", "second");
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    queue.ack("report-1");
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(queue.snapshot().reports).toEqual([{ id: "report-2", text: "second" }]);
+  });
+
+  it("listener fires for every mutation path: add admit, add overflow (cap-notice sentinel row), upsert new id, upsert existing id, ack (incl. unknown-id no-op)", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const listener = vi.fn();
+    queue.onChange(listener);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // add admit
+    for (let i = 0; i < CHILD_REPORT_QUEUE_MAX_PENDING; i += 1) {
+      queue.add(`report-${i}`, `text-${i}`);
+    }
+    expect(listener).toHaveBeenCalledTimes(CHILD_REPORT_QUEUE_MAX_PENDING);
+
+    // add overflow -> upsertCapNotice path (sentinel row present in snapshot)
+    queue.add("overflow-1", "lost");
+    expect(listener).toHaveBeenCalledTimes(CHILD_REPORT_QUEUE_MAX_PENDING + 1);
+    const snap = queue.snapshot();
+    expect(snap.reports).toHaveLength(CHILD_REPORT_QUEUE_MAX_PENDING + 1);
+    expect(snap.reports.some((r) => r.id === "__child_report_cap_notice__")).toBe(true);
+    expect(snap.droppedSinceNotice).toBe(1);
+
+    // upsert existing id (the cap notice row itself is not needed here — use a real pending id)
+    queue.upsert("report-0", "updated text");
+    expect(listener).toHaveBeenCalledTimes(CHILD_REPORT_QUEUE_MAX_PENDING + 2);
+
+    // ack an unknown id — unconditional contract: still notifies
+    queue.ack("ghost");
+    expect(listener).toHaveBeenCalledTimes(CHILD_REPORT_QUEUE_MAX_PENDING + 3);
+
+    // ack a real id to free a slot, then upsert a brand-new id (fall-through-to-add path)
+    queue.ack("report-1");
+    expect(listener).toHaveBeenCalledTimes(CHILD_REPORT_QUEUE_MAX_PENDING + 4);
+    queue.upsert("stall:new-child", "brand new notice");
+    expect(listener).toHaveBeenCalledTimes(CHILD_REPORT_QUEUE_MAX_PENDING + 5);
+
+    errSpy.mockRestore();
+  });
+
+  it("restore() round-trips: snapshot() deep-equals the input; resendAll() sends exactly the restored rows in order; a later add() appends after them", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const meta = { status: "error" as const, durationMs: 7 };
+
+    queue.restore({
+      reports: [
+        { id: "r1", text: "hello" },
+        { id: "r2", text: "world", childTerminal: meta },
+      ],
+      droppedSinceNotice: 0,
+    });
+
+    expect(queue.snapshot()).toEqual({
+      reports: [
+        { id: "r1", text: "hello" },
+        { id: "r2", text: "world", childTerminal: meta },
+      ],
+      droppedSinceNotice: 0,
+    });
+
+    // restore() itself sends NOTHING — the outbound spy stays empty until resendAll().
+    expect(outbound.sent).toEqual([]);
+    queue.resendAll();
+    expect(outbound.sent).toEqual([
+      { type: "child_report", id: "r1", text: "hello" },
+      { type: "child_report", id: "r2", text: "world", childTerminal: meta },
+    ]);
+
+    // A later add() appends after the restored rows.
+    outbound.sent.length = 0;
+    queue.add("r3", "appended");
+    expect(outbound.sent.at(-1)).toEqual({ type: "child_report", id: "r3", text: "appended" });
+    outbound.sent.length = 0;
+    queue.resendAll();
+    expect(outbound.sent.map((m) => m.id)).toEqual(["r1", "r2", "r3"]);
+  });
+
+  it("restored droppedSinceNotice survives: restore with a pending cap-notice row + counter N, one more overflow updates the SAME notice to N+1", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // A snapshot from a host that had hit the cap once: MAX real rows + the notice row + counter 3.
+    queue.restore({
+      reports: [
+        ...Array.from({ length: CHILD_REPORT_QUEUE_MAX_PENDING }, (_, i) => ({
+          id: `report-${i}`,
+          text: `text-${i}`,
+        })),
+        { id: "__child_report_cap_notice__", text: "stale notice text (3)" },
+      ],
+      droppedSinceNotice: 3,
+    });
+
+    // One more overflow: the existing-notice path of upsertCapNotice must update the SAME row to count 4.
+    queue.add("overflow-after-restore", "lost");
+    const snap = queue.snapshot();
+    expect(snap.reports).toHaveLength(CHILD_REPORT_QUEUE_MAX_PENDING + 1);
+    const notice = snap.reports.find((r) => r.id === "__child_report_cap_notice__")!;
+    expect(notice.text).toContain("4 background child session reports could not be delivered");
+    expect(snap.droppedSinceNotice).toBe(4);
+
+    errSpy.mockRestore();
+  });
+
+  it("defensive restore: malformed rows dropped, negative counter clamped to 0, > MAX+1 rows truncated with a console.error naming the discarded count", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    // Malformed rows: missing id, empty id, non-string text, non-object row.
+    queue.restore({
+      reports: [
+        { text: "no id" } as unknown as { id: string; text: string },
+        { id: "", text: "empty id" },
+        { id: "bad-text", text: 42 } as unknown as { id: string; text: string },
+        null as unknown as { id: string; text: string },
+        { id: "good-1", text: "kept" },
+      ],
+      droppedSinceNotice: -5,
+    });
+    expect(queue.snapshot()).toEqual({ reports: [{ id: "good-1", text: "kept" }], droppedSinceNotice: 0 });
+
+    // Truncation: MAX+2 valid rows -> keep the first MAX+1, console.error the 1 discarded.
+    errSpy.mockClear();
+    const tooMany = Array.from({ length: CHILD_REPORT_QUEUE_MAX_PENDING + 2 }, (_, i) => ({
+      id: `r-${i}`,
+      text: `t-${i}`,
+    }));
+    queue.restore({ reports: tooMany, droppedSinceNotice: 0 });
+    const snap = queue.snapshot();
+    expect(snap.reports).toHaveLength(CHILD_REPORT_QUEUE_MAX_PENDING + 1);
+    expect(snap.reports[0]!.id).toBe("r-0");
+    expect(snap.reports.at(-1)!.id).toBe(`r-${CHILD_REPORT_QUEUE_MAX_PENDING}`);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("discarding 1"));
+
+    errSpy.mockRestore();
+  });
+
+  it("restore() sends NOTHING (outbound stays empty until resendAll) and onChange's unsubscribe stops notifications", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const listener = vi.fn();
+
+    const unsubscribe = queue.onChange(listener);
+    queue.restore({ reports: [{ id: "r1", text: "hello" }], droppedSinceNotice: 0 });
+    // restore() is initial state replacement, not a delivery: nothing goes out...
+    expect(outbound.sent).toEqual([]);
+    // ...and restore() itself does not fire change listeners (only mutations do).
+    expect(listener).not.toHaveBeenCalled();
+
+    queue.resendAll();
+    expect(outbound.sent).toEqual([{ type: "child_report", id: "r1", text: "hello" }]);
+
+    unsubscribe();
+    queue.add("r2", "after unsubscribe");
+    expect(listener).not.toHaveBeenCalled();
+  });
+});

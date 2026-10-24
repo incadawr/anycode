@@ -741,7 +741,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -812,7 +812,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -865,7 +865,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -943,7 +943,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
     migrated.close();
   });
 
@@ -998,7 +998,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
@@ -1272,7 +1272,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
     migrated.close();
   });
 
@@ -3310,5 +3310,65 @@ describe("SqlitePersistenceAdapter — session delete (TASK.114)", () => {
     expect(summary.removedIds.sort()).toEqual(["child", "root"]);
     expect(summary.counts).toEqual({ historyItems: 1, checkpoints: 1, claudeTranscriptItems: 1, codexThreadItems: 1 });
     expect(await adapter.listRootSessions()).toEqual([]);
+  });
+});
+
+describe("pending child reports durability (Taskana 4123)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("migration v19 applied: save then load round-trips the snapshot; save(null) clears it back to null", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+
+    const json = '{"reports":[],"droppedSinceNotice":0}';
+    await adapter.savePendingChildReports("s1", json);
+    expect(await adapter.loadPendingChildReports("s1")).toBe(json);
+
+    await adapter.savePendingChildReports("s1", null);
+    expect(await adapter.loadPendingChildReports("s1")).toBeNull();
+
+    await adapter.close();
+  });
+
+  it("unknown id: load returns null and save does not throw", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    expect(await adapter.loadPendingChildReports("nope")).toBeNull();
+    await expect(adapter.savePendingChildReports("nope", "x")).resolves.toBeUndefined();
+    await adapter.close();
+  });
+
+  it("savePendingChildReports does NOT bump updated_at — sidebar last-activity order is untouched (touchSession contrast)", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    expect((await adapter.getRootSession("s1"))!.updatedAt).toBe(1_000);
+
+    vi.setSystemTime(5_000);
+    await adapter.savePendingChildReports("s1", '{"reports":[],"droppedSinceNotice":0}');
+    // The durability write is bookkeeping, not activity: updatedAt must stay at create time.
+    expect((await adapter.getRootSession("s1"))!.updatedAt).toBe(1_000);
+
+    // Contrast: a real activity touch at the same t=5000 DOES move it — proves the read above is live.
+    await adapter.touchSession("s1", { title: "renamed" });
+    expect((await adapter.getRootSession("s1"))!.updatedAt).toBe(5_000);
+
+    await adapter.close();
+  });
+
+  it("deleteSessionTree removes the row — loadPendingChildReports returns null afterwards", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    await adapter.savePendingChildReports("s1", '{"reports":[{"id":"r1","text":"hello"}],"droppedSinceNotice":0}');
+    expect(await adapter.loadPendingChildReports("s1")).not.toBeNull();
+
+    await adapter.deleteSessionTree("s1");
+    expect(await adapter.loadPendingChildReports("s1")).toBeNull();
+
+    await adapter.close();
   });
 });

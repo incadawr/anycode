@@ -289,6 +289,7 @@ import type {
 import { buildAgentProfileRoots } from "@anycode/core/subagents-admin";
 import { hasDurableTransitionResult } from "./worktree-recovery.js";
 import { ChildReportQueue } from "./child-report-queue.js";
+import { attachChildReportDurability } from "./child-report-durability.js";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
@@ -3101,6 +3102,15 @@ async function boot(): Promise<void> {
     };
 
     const sessionId = sessionMeta.id;
+    // Taskana 4123 (TASK.145 residual): a host restart must not lose a detached
+    // child's still-unacknowledged report — restore the persisted queue BEFORE
+    // this Session's first ui_ready can resendAll() it. Codex/claude boots return
+    // long before this point and keep today's in-memory posture (their
+    // deliverDetachedChildReport still enqueues; nothing persists). A child-mode
+    // boot never spawns detached children of its own, so its column stays null.
+    if (!isChildSessionBoot(args, sessionMeta)) {
+      await attachChildReportDurability({ queue: childReportQueue, persistence: persistence!, sessionId });
+    }
     // Slice P7.15 (F14, design §2.1): the narrow mid-session model-switch
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
