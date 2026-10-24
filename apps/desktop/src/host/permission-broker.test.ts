@@ -513,9 +513,18 @@ describe("IpcPermissionBroker always-allow rules (TASK.144)", () => {
   }
 
   it("answers a matching ask with allow, without a permission_request and without parking it", async () => {
+    // Taskana 4294: the shared `request` fixture is a Write WITHOUT workspace
+    // facts, which the rule seam now correctly refuses to auto-allow — so this
+    // suite's own Write asks carry facts proving an inside-workspace target
+    // (the shape every real Write approval now arrives with via the dispatcher
+    // / approval-bridge fact minting).
+    const inside: PermissionRequest = {
+      ...request,
+      workspace: { root: "/workspace", resolvedPath: "/workspace/a.txt" },
+    };
     const { broker, emitted, seen } = makeRuledBroker(() => true);
 
-    await expect(broker.requestPermission(request)).resolves.toEqual({ behavior: "allow" });
+    await expect(broker.requestPermission(inside)).resolves.toEqual({ behavior: "allow" });
     // Nothing reached the UI at all — neither the ask nor a settle it would
     // have to reconcile against an ask it never saw.
     expect(emitted).toEqual([]);
@@ -525,14 +534,18 @@ describe("IpcPermissionBroker always-allow rules (TASK.144)", () => {
     // untranslated. (TASK.184 later added ONE scoped exception: an unmatched
     // CodexExec command approval retries as Bash/{command} — see the TASK.184
     // suite below. This Write-tool case remains untranslated.)
-    expect(seen).toEqual([{ toolName: "Write", input: request.input }]);
+    expect(seen).toEqual([{ toolName: "Write", input: inside.input }]);
   });
 
   it("arms no deadline for a rule-allowed ask", async () => {
     vi.useFakeTimers();
+    const inside: PermissionRequest = {
+      ...request,
+      workspace: { root: "/workspace", resolvedPath: "/workspace/a.txt" },
+    };
     const { broker, emitted } = makeRuledBroker(() => true);
 
-    await expect(broker.requestPermission(request)).resolves.toEqual({ behavior: "allow" });
+    await expect(broker.requestPermission(inside)).resolves.toEqual({ behavior: "allow" });
     await vi.advanceTimersByTimeAsync(PERMISSION_ASK_TIMEOUT_MS * 2);
     expect(settled(emitted)).toEqual([]);
   });
@@ -733,5 +746,112 @@ describe("IpcPermissionBroker CodexExec->Bash rule translation (TASK.184)", () =
     expect(broker.pendingCount).toBe(1);
     broker.handleResponse(requestId(emitted), "deny");
     await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+  });
+});
+
+/**
+ * Taskana 4294 (cross-review F1): the ENGINE-boot rule seam must honour the
+ * same workspace confinement the core boot enforces. A persisted
+ * `{toolName:"Write"}` rule (global settings.json, TASK.144 seeding) may not
+ * silently allow a Write whose target cannot be PROVEN inside the session
+ * workspace — on a claude/codex boot the broker is the only gate, so an
+ * unconfined matcher here reproduces the 4294 incident verbatim (child
+ * worktree session writes into the main checkout, no modal, no supervisor
+ * visibility).
+ */
+describe("IpcPermissionBroker rules vs workspace confinement (Taskana 4294)", () => {
+  function makeConfinedBroker(rules: { toolName: string; pattern?: string }[]): {
+    broker: IpcPermissionBroker;
+    emitted: HostToUiMessage[];
+  } {
+    const emitted: HostToUiMessage[] = [];
+    const store = new SessionPermissionRules();
+    for (const rule of rules) store.add(rule);
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, store);
+    return { broker, emitted };
+  }
+
+  const inside: PermissionRequest = {
+    toolName: "Write",
+    input: { file_path: "/ws/a.txt", content: "hi" },
+    metadata: writeTool.metadata,
+    mode: "build",
+    workspace: { root: "/ws", resolvedPath: "/ws/a.txt" },
+  };
+  const outside: PermissionRequest = {
+    toolName: "Write",
+    input: { file_path: "/main-checkout/a.txt", content: "hi" },
+    metadata: writeTool.metadata,
+    mode: "build",
+    workspace: { root: "/repo/.anycode/worktrees/x", resolvedPath: "/main-checkout/a.txt" },
+  };
+
+  it("a blanket Write rule still allows a target PROVEN inside the workspace (no modal)", async () => {
+    const { broker, emitted } = makeConfinedBroker([{ toolName: "Write" }]);
+    await expect(broker.requestPermission(inside)).resolves.toEqual({ behavior: "allow" });
+    expect(emitted).toEqual([]);
+  });
+
+  it("F1 reproduce: a blanket Write rule does NOT silently allow a target outside the workspace — the ask is presented", async () => {
+    const { broker, emitted } = makeConfinedBroker([{ toolName: "Write" }]);
+    const decision = broker.requestPermission(outside);
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(1);
+    expect(broker.pendingCount).toBe(1);
+    broker.handleResponse(requestId(emitted), "deny");
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("F1 reproduce: absent facts (unprovable) never ride a Write/Edit/MultiEdit rule — the ask is presented", async () => {
+    const { broker, emitted } = makeConfinedBroker([{ toolName: "Write" }]);
+    const noFacts: PermissionRequest = {
+      toolName: "Write",
+      input: { file_path: "/main-checkout/a.txt", content: "hi" },
+      metadata: writeTool.metadata,
+      mode: "build",
+    };
+    const decision = broker.requestPermission(noFacts);
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(1);
+    broker.handleResponse(requestId(emitted), "deny");
+    await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("a PATTERNED Write rule (`/ws/**`) stays silent-allow for a proven-inside match", async () => {
+    const { broker, emitted } = makeConfinedBroker([{ toolName: "Write", pattern: "/ws/**" }]);
+    await expect(broker.requestPermission(inside)).resolves.toEqual({ behavior: "allow" });
+    expect(emitted).toEqual([]);
+  });
+
+  it("Edit and MultiEdit are confined like Write; a non-write tool (Read) is untouched by the confinement", async () => {
+    const { broker, emitted } = makeConfinedBroker([{ toolName: "Edit" }, { toolName: "Read" }]);
+    const editOutside: PermissionRequest = {
+      toolName: "Edit",
+      input: { file_path: "/elsewhere/a.txt", old_string: "a", new_string: "b" },
+      metadata: writeTool.metadata,
+      mode: "build",
+      workspace: { root: "/ws", resolvedPath: "/elsewhere/a.txt" },
+    };
+    const editDecision = broker.requestPermission(editOutside);
+    broker.handleResponse(requestId(emitted), "deny");
+    await expect(editDecision).resolves.toMatchObject({ behavior: "deny" });
+
+    const readAnywhere: PermissionRequest = {
+      toolName: "Read",
+      input: { file_path: "/elsewhere/a.txt" },
+      metadata: writeTool.metadata,
+      mode: "build",
+    };
+    await expect(broker.requestPermission(readAnywhere)).resolves.toEqual({ behavior: "allow" });
+  });
+
+  it("the CodexExec->Bash retry (TASK.184) is unaffected — command-line tools carry no workspace facts", async () => {
+    const { broker, emitted } = makeConfinedBroker([{ toolName: "Bash", pattern: "git *" }]);
+    const codexExec: PermissionRequest = {
+      toolName: "CodexExec",
+      input: { command: "git status" },
+      metadata: { ...writeTool.metadata, name: "CodexExec" },
+      mode: "build",
+    };
+    await expect(broker.requestPermission(codexExec)).resolves.toEqual({ behavior: "allow" });
+    expect(emitted).toEqual([]);
   });
 });

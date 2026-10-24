@@ -6,11 +6,14 @@
  * degrades silently rather than failing loudly.
  */
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NodeFileSystemAdapter, SessionPermissionRules, resolveWorkspaceWriteFacts } from "@anycode/core";
 import type { PermissionDecision, PermissionRequest } from "@anycode/core";
-import type { IpcPermissionBroker } from "../../permission-broker.js";
+import type { HostToUiMessage } from "../../../shared/protocol.js";
+import { IpcPermissionBroker } from "../../permission-broker.js";
 import type { ControlRequestResponder, InboundControlRequest } from "./claude-client.js";
 import { ClaudeApprovalBridge, allowResponse, decodeCanUseTool, denyResponse } from "./approval-bridge.js";
 import type { ClaudeMcpBridge } from "./mcp-bridge.js";
@@ -397,6 +400,10 @@ describe("ClaudeApprovalBridge — a CLI-side cancellation settles the handler, 
     const cancel = new AbortController();
 
     const handled = bridge.handle(inbound(request, "can_use_tool", cancel.signal), responder);
+    // toPermissionRequest is async (Taskana 4294 fact minting), so the ask
+    // parks after a microtask boundary — flush a couple of them.
+    await Promise.resolve();
+    await Promise.resolve();
     await Promise.resolve();
     // Parked, exactly as a real modal awaiting the user.
     expect(parking.asks).toBe(1);
@@ -417,13 +424,18 @@ describe("ClaudeApprovalBridge — a CLI-side cancellation settles the handler, 
     const first = responderSpy();
     const firstHandled = bridge.handle(inbound(request, "can_use_tool", cancel.signal), first.responder);
     await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
     cancel.abort();
     await firstHandled;
 
     // A second, unrelated approval on the same live session.
     const second = responderSpy();
     const secondHandled = bridge.handle(inbound(request), second.responder);
-    await Promise.resolve();
+    // toPermissionRequest is async (Taskana 4294 fact minting does real fs
+    // I/O) — the W0 probe fixture writes to /tmp, which resolves, so a short
+    // settle wait suffices before the ask count is asserted.
+    await new Promise((resolve) => setTimeout(resolve, 25));
     expect(parking.asks).toBe(2);
     // NOT the "another approval is already pending" refusal a leaked latch produces.
     expect(second.error).not.toHaveBeenCalled();
@@ -448,5 +460,257 @@ describe("ClaudeApprovalBridge — a CLI-side cancellation settles the handler, 
     // Pairing rule: a withdrawn request is never answered.
     expect(success).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Taskana 4294 (cross-review F1) — the claude-engine half. `supportsCorePermissions`
+ * is false for the claude boot, so the ONLY gates between a persisted always-allow
+ * rule (TASK.144 global-settings seeding) and the CLI's Write/Edit are (a) the
+ * approval bridge minting workspace facts and (b) IpcPermissionBroker's
+ * confinement check. The 4294 incident, replayed on this engine: a child session
+ * rooted at a `.anycode/worktrees/<x>` worktree asks to Write an absolute path
+ * in the MAIN checkout; a once-remembered blanket `{toolName:"Write"}` rule must
+ * NOT answer it — the ask must reach a human (here: the broker stub).
+ *
+ * Facts are minted over the REAL filesystem (realpath/lstat semantics — the
+ * same resolver the dispatcher uses), so these tests build real tmp dirs.
+ */
+describe("ClaudeApprovalBridge — Taskana 4294 workspace facts on write tools", () => {
+  let root: string;
+  let mainCheckout: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "claude-4294-"));
+    mainCheckout = mkdtempSync(join(tmpdir(), "main-checkout-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(mainCheckout, { recursive: true, force: true });
+  });
+
+  function recordingBroker(): { broker: IpcPermissionBroker; asked: PermissionRequest[] } {
+    const asked: PermissionRequest[] = [];
+    const broker = {
+      requestPermission: (request: PermissionRequest) => {
+        asked.push(request);
+        return Promise.resolve({ behavior: "deny" as const, reason: "no" });
+      },
+      denyAll: vi.fn(),
+    } as unknown as IpcPermissionBroker;
+    return { broker, asked };
+  }
+
+  it("a Write can_use_tool carries dispatcher-equivalent workspace facts (root = session cwd, resolved target)", async () => {
+    const { broker, asked } = recordingBroker();
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", workspace: root });
+    const { responder } = responderSpy();
+
+    await bridge.handle(
+      inbound({ tool_name: "Write", tool_use_id: "toolu_w", input: { file_path: join(root, "src", "a.ts"), content: "x" } }),
+      responder,
+    );
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.toolName).toBe("Write");
+    // The bridge delegates to the SAME resolver the dispatcher uses, with
+    // root = the wired workspace and the approval's file_path verbatim.
+    expect(asked[0]?.workspace).toEqual(
+      await resolveWorkspaceWriteFacts(new NodeFileSystemAdapter(), root, join(root, "src", "a.ts")),
+    );
+  });
+
+  it("an Edit can_use_tool carries workspace facts too; non-write tools (Read) never do", async () => {
+    const { broker, asked } = recordingBroker();
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", workspace: root });
+
+    await bridge.handle(inbound({ tool_name: "Edit", tool_use_id: "toolu_e", input: { file_path: join(root, "b.ts") } }), responderSpy().responder);
+    await bridge.handle(inbound({ tool_name: "Read", tool_use_id: "toolu_r", input: { file_path: join(root, "b.ts") } }), responderSpy().responder);
+
+    expect(asked).toHaveLength(2);
+    expect(asked[0]?.toolName).toBe("Edit");
+    expect(asked[0]?.workspace).toEqual(
+      await resolveWorkspaceWriteFacts(new NodeFileSystemAdapter(), root, join(root, "b.ts")),
+    );
+    expect(asked[1]?.toolName).toBe("Read");
+    expect(asked[1]?.workspace).toBeUndefined();
+  });
+
+  it("no workspace seam wired (legacy construction) => NO facts => the broker's own confinement gate applies (fail-closed)", async () => {
+    const { broker, asked } = recordingBroker();
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+
+    await bridge.handle(inbound({ tool_name: "Write", tool_use_id: "toolu_w", input: { file_path: join(root, "a.ts"), content: "x" } }), responderSpy().responder);
+
+    expect(asked).toHaveLength(1);
+    // No seam => the bridge cannot prove anything => no facts => a rule can
+    // never vouch (isProvablyInsideWorkspace(undefined) === false).
+    expect(asked[0]?.workspace).toBeUndefined();
+  });
+
+  it("relative / ..-bearing / non-string file_path write inputs mint NO facts (unprovable, fail-closed)", async () => {
+    const { broker, asked } = recordingBroker();
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", workspace: root });
+
+    await bridge.handle(inbound({ tool_name: "Write", tool_use_id: "t1", input: { file_path: "src/a.ts", content: "x" } }), responderSpy().responder);
+    await bridge.handle(inbound({ tool_name: "Write", tool_use_id: "t2", input: { file_path: `${root}/../escape.ts`, content: "x" } }), responderSpy().responder);
+    await bridge.handle(inbound({ tool_name: "Write", tool_use_id: "t3", input: { content: "no path at all" } }), responderSpy().responder);
+    await bridge.handle(inbound({ tool_name: "Write", tool_use_id: "t4", input: { file_path: 123 } }), responderSpy().responder);
+
+    expect(asked.map((r) => r.workspace)).toEqual([undefined, undefined, undefined, undefined]);
+  });
+
+  it("F1 end-to-end: a seeded blanket Write rule does NOT silent-allow an out-of-workspace Write — the ask reaches the broker", async () => {
+    // The store the engine boots seed from settings.json (TASK.144).
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write" });
+    const emitted: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, rules);
+    // A child worktree session: workspace root under <repo>/.anycode/worktrees/x,
+    // the write targets a file in the MAIN checkout.
+    const repo = mkdtempSync(join(tmpdir(), "repo-4294-"));
+    try {
+      const worktree = join(repo, ".anycode", "worktrees", "x");
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(join(repo, "victim.ts"), "orig", "utf-8");
+      const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", workspace: worktree });
+
+      const outcome = responderSpy();
+      const handled = bridge.handle(
+        inbound({ tool_name: "Write", tool_use_id: "toolu_pwn", input: { file_path: join(repo, "victim.ts"), content: "PWN" } }),
+        outcome.responder,
+      );
+      // The fact minting does REAL fs I/O (realpath/lstat); settle it with a
+      // short real-time wait for the permission_request to surface.
+      const ask = await vi.waitFor(
+        () => {
+          const found = emitted.find((m) => m.type === "permission_request");
+          if (!found) throw new Error("permission_request not emitted yet");
+          return found;
+        },
+        { timeout: 2_000, interval: 10 },
+      );
+      expect(ask).toBeDefined();
+      // ...and the human (test) denies it.
+      if (ask.type === "permission_request") {
+        broker.handleResponse(ask.requestId, "deny");
+      }
+      await handled;
+      // The CLI's answer is a deny control_response (never a transport error).
+      expect(outcome.error).not.toHaveBeenCalled();
+      expect(outcome.success).toHaveBeenCalledTimes(1);
+      expect((outcome.success.mock.calls[0]?.[0] as { behavior: string }).behavior).toBe("deny");
+      // And the main checkout is untouched.
+      expect(readFileSync(join(repo, "victim.ts"), "utf-8")).toBe("orig");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("F1 end-to-end, inside: the same blanket rule stays silent-allow for a proven-inside write", async () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write" });
+    const emitted: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, rules);
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", workspace: root });
+    const { responder, success } = responderSpy();
+
+    const handled = bridge.handle(
+      inbound({ tool_name: "Write", tool_use_id: "toolu_ok", input: { file_path: join(root, "inside.ts"), content: "OK" } }),
+      responder,
+    );
+    await handled;
+
+    // Silent-allow: the rule answered, nothing reached the UI, and the CLI
+    // got its allow control_response.
+    expect(emitted).toEqual([]);
+    expect(success).toHaveBeenCalledTimes(1);
+    expect((success.mock.calls[0]?.[0] as { behavior: string }).behavior).toBe("allow");
+  });
+});
+
+/**
+ * Taskana 4294 (cross-review F2): the persistence path. A human approves (with
+ * "Always allow") a child's one deliberate out-of-workspace write after the
+ * modal — Session.maybeRemember persists `{toolName:"Write"}` into the store
+ * the engine boots seed from GLOBAL settings.json. This must not arm a
+ * silent-allow for any LATER out-of-workspace write in ANY engine session:
+ * the remembered rule is honoured only with proof, exactly like a seeded one.
+ */
+describe("ClaudeApprovalBridge — Taskana 4294 F2: a remembered rule does not unconfine later asks", () => {
+  it("remember-armed store (post-modal allow) still refuses the next out-of-workspace Write; approves an inside one", async () => {
+    // The store Session.maybeRemember appended to mid-session (the same
+    // instance an engine boot hands its broker).
+    const rules = new SessionPermissionRules();
+    const emitted: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, rules);
+    const repo = mkdtempSync(join(tmpdir(), "repo-f2-"));
+    try {
+      const worktree = join(repo, ".anycode", "worktrees", "x");
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(join(repo, "main.ts"), "orig", "utf-8");
+      const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", workspace: worktree });
+
+      // 1. The first out-of-workspace ask: the confinement escalates it to a
+      //    human, who allows WITH remember (Session.maybeRemember then adds
+      //    the bare rule to this very store).
+      const first = responderSpy();
+      const firstHandled = bridge.handle(
+        inbound({ tool_name: "Write", tool_use_id: "toolu_1", input: { file_path: join(repo, "main.ts"), content: "EDIT" } }),
+        first.responder,
+      );
+      const firstAsk = await vi.waitFor(
+        () => {
+          const found = emitted.find((m) => m.type === "permission_request");
+          if (!found) throw new Error("first ask not presented");
+          return found;
+        },
+        { timeout: 2_000, interval: 10 },
+      );
+      if (firstAsk.type === "permission_request") {
+        broker.handleResponse(firstAsk.requestId, "allow");
+      }
+      await firstHandled;
+      // The store now holds the remembered bare rule.
+      rules.add({ toolName: "Write" });
+      expect(rules.list()).toEqual([{ toolName: "Write" }]);
+
+      // 2. The NEXT identical out-of-workspace Write: the remembered rule
+      //    must NOT silent-allow it — the ask is presented again.
+      const second = responderSpy();
+      const secondHandled = bridge.handle(
+        inbound({ tool_name: "Write", tool_use_id: "toolu_2", input: { file_path: join(repo, "main.ts"), content: "EDIT2" } }),
+        second.responder,
+      );
+      const secondAsk = await vi.waitFor(
+        () => {
+          const found = emitted.filter((m) => m.type === "permission_request").at(-1);
+          if (!found || (found as { requestId: string }).requestId === (firstAsk as { requestId: string }).requestId) {
+            throw new Error("second ask not presented");
+          }
+          return found;
+        },
+        { timeout: 2_000, interval: 10 },
+      );
+      if (secondAsk.type === "permission_request") {
+        broker.handleResponse(secondAsk.requestId, "deny");
+      }
+      await secondHandled;
+      expect((second.success.mock.calls[0]?.[0] as { behavior: string }).behavior).toBe("deny");
+
+      // 3. An INSIDE-workspace write on the same remembered rule: silent-allow.
+      const third = responderSpy();
+      const thirdHandled = bridge.handle(
+        inbound({ tool_name: "Write", tool_use_id: "toolu_3", input: { file_path: join(worktree, "ok.ts"), content: "OK" } }),
+        third.responder,
+      );
+      await thirdHandled;
+      expect((third.success.mock.calls[0]?.[0] as { behavior: string }).behavior).toBe("allow");
+      const presented = emitted.filter((m) => m.type === "permission_request");
+      expect(presented).toHaveLength(2); // first + second only
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

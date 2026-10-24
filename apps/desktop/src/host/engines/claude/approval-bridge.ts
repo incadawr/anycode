@@ -23,6 +23,7 @@
  */
 
 import type { PermissionRequest, ToolMetadata } from "@anycode/core";
+import { NodeFileSystemAdapter, resolveWorkspaceWriteFacts, WORKSPACE_CONFINED_WRITE_TOOLS } from "@anycode/core";
 import type { IpcPermissionBroker, SettleOrigin } from "../../permission-broker.js";
 import type { ControlRequestResponder, InboundControlRequest } from "./claude-client.js";
 import { CLAUDE_ANYCODE_MCP_TOOL_PREFIX, type ClaudeMcpBridge } from "./mcp-bridge.js";
@@ -123,8 +124,22 @@ export interface ClaudeApprovalBridgeOptions {
   broker: IpcPermissionBroker;
   /** The session's active permission preset id; `read-only` refuses ExitPlanMode escalation. */
   activePresetId(): string;
-  /** TASK.226 S3: when set, `mcp_message` is routed here instead of the fail-closed default, and the owned `mcp__anycode__agent` tool is auto-allowed (plan §2.6). Absent for engines/tests that never announce the door. */
+  /**
+   * TASK.226 S3: when set, `mcp_message` is routed here instead of the fail-closed default, and the owned `mcp__anycode__agent` tool is auto-allowed (plan §2.6). Absent for engines/tests that never announce the door. */
   bridge?: ClaudeMcpBridge;
+  /**
+   * Taskana 4294 (cross-review F1): the session's workspace root (the
+   * host boot's `workspace`, i.e. the process cwd the `claude` CLI was
+   * spawned with). When set, Write/Edit/MultiEdit `can_use_tool` requests
+   * carry dispatcher-equivalent `workspace` facts (realpath-resolved) so
+   * IpcPermissionBroker's rule seam can apply the SAME workspace
+   * confinement the core boot enforces — without facts a persisted
+   * always-allow rule can never vouch for a write, which is exactly the
+   * fail-closed posture required. Absent (legacy construction / tests):
+   * no facts are minted, and the broker's own gate refuses to auto-allow
+   * unprovable writes.
+   */
+  workspace?: string;
 }
 
 export class ClaudeApprovalBridge {
@@ -225,7 +240,9 @@ export class ClaudeApprovalBridge {
     };
     request.signal.addEventListener("abort", releaseOnCancel, { once: true });
     try {
-      const decision = await this.options.broker.requestPermission(this.toPermissionRequest(approval));
+      const decision = await this.options.broker.requestPermission(
+        await this.toPermissionRequest(approval),
+      );
       // Both outcomes are a control_response SUCCESS envelope: a denial is a
       // normal answer whose payload says "deny", never a protocol error
       // (hazard (б)). If the CLI already withdrew this request via
@@ -245,9 +262,19 @@ export class ClaudeApprovalBridge {
     }
   }
 
-  private toPermissionRequest(approval: ClaudeApprovalRequest): PermissionRequest {
+  /**
+   * Taskana 4294 (cross-review F1): mints the SAME dispatch-site workspace
+   * facts the core dispatcher mints (resolveWorkspaceWriteFacts — realpath
+   * root + symlink-resolved target, refusing relative/`..`/NUL-bearing
+   * paths) for Write/Edit/MultiEdit approvals, so the broker's rule seam can
+   * prove containment before an always-allow rule answers. Fail-closed to
+   * "no facts" (never throws): an unprovable write simply cannot ride a
+   * rule — the ask stands. Guarded by claudeNeedsWorkspaceFacts so
+   * unaffected approvals keep the original fully-synchronous path.
+   */
+  private async toPermissionRequest(approval: ClaudeApprovalRequest): Promise<PermissionRequest> {
     const input = record(approval.input) ?? { value: approval.input };
-    return {
+    const request: PermissionRequest = {
       toolName: approval.toolName,
       toolCallId: approval.toolUseId,
       input: approval.description === undefined ? input : { ...input, description: approval.description },
@@ -256,5 +283,38 @@ export class ClaudeApprovalBridge {
       // (`supportsCorePermissions` is false); posture lives in presets.ts.
       mode: "build",
     };
+    if (!claudeNeedsWorkspaceFacts(approval.toolName, input, this.options.workspace)) return request;
+    const workspace = await this.mintWorkspaceFacts(this.options.workspace as string, input.file_path);
+    return workspace === undefined ? request : { ...request, workspace };
   }
+
+  private async mintWorkspaceFacts(
+    workspace: string,
+    filePath: unknown,
+  ): Promise<PermissionRequest["workspace"]> {
+    if (typeof filePath !== "string") return undefined;
+    try {
+      // One adapter per ask: minting is rare (one Write/Edit approval at a
+      // time — the pending latch above serialises them), and reusing a
+      // long-lived instance would keep fs handles alive for a session
+      // lifetime for no benefit.
+      return await resolveWorkspaceWriteFacts(new NodeFileSystemAdapter(), workspace, filePath);
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+/**
+ * Taskana 4294 (cross-review F1): true only for the approval shapes that
+ * need workspace facts — a Write/Edit/MultiEdit with a wired workspace root
+ * and a string `file_path`. Everything else keeps the original synchronous
+ * path into the broker, preserving emit ordering for existing consumers.
+ */
+function claudeNeedsWorkspaceFacts(
+  toolName: string,
+  input: Record<string, unknown>,
+  workspace: string | undefined,
+): boolean {
+  return workspace !== undefined && WORKSPACE_CONFINED_WRITE_TOOLS.has(toolName) && typeof input.file_path === "string";
 }

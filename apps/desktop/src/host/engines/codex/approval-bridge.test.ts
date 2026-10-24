@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionPermissionRules } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CODEX_APPROVAL_ERROR_CODE, CodexApprovalBridge, STDIN_WRITE_REASON, type ActiveCodexTurn } from "./approval-bridge.js";
@@ -47,6 +51,11 @@ async function flush(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
   await Promise.resolve();
+}
+
+/** Taskana 4294 suite: fact minting does REAL fs I/O (realpath/lstat), which settles on macrotasks. */
+async function settle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
 function rig(timeoutMs?: number, active: ActiveCodexTurn = ACTIVE) {
@@ -315,5 +324,153 @@ describe("CodexApprovalBridge — classifier-derived metadata (TASK.184)", () =>
     expect(ask(emitted).metadata.name).toBe("CodexExec");
     broker.handleResponse(ask(emitted).requestId, "deny");
     await flush();
+  });
+});
+
+/**
+ * Taskana 4294 (cross-review F1) — the codex-engine half. A codex session's
+ * approvals never pass through core's permission engine, so IpcPermissionBroker
+ * (TASK.144 rule seam) is the ONLY gate a persisted always-allow rule passes
+ * through. A fileChange approval (`CodexApplyPatch`) is a FILE WRITE whose
+ * only possible rule shape is the bare tool-level `{toolName}` (permission-
+ * pattern.ts: its `paths[]` input has no single subject, so it deliberately
+ * keeps the Edit/Write-style bare rule) — exactly the blanket shape the 4294
+ * confinement exists for. The bridge must therefore mint workspace facts for
+ * it, and the broker must refuse to auto-allow an unprovable one.
+ *
+ * The command approval (`CodexExec`) is a command line, not a path: it keeps
+ * the TASK.184 Bash translation and is out of 4294's scope (documented
+ * residual — a Bash rule is an owner grant that cannot be path-analysed).
+ */
+describe("CodexApprovalBridge — Taskana 4294 workspace facts on file changes", () => {
+  let root: string;
+  let elsewhere: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "codex-4294-"));
+    elsewhere = mkdtempSync(join(tmpdir(), "codex-elsewhere-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  function indexedItems(): TurnItemIndex {
+    const items = new TurnItemIndex();
+    items.record({ type: "fileChange", id: "item-file", status: "inProgress", changes: [] });
+    return items;
+  }
+
+  function ruledRig(rules: { toolName: string; pattern?: string }[], items: TurnItemIndex = indexedItems()) {
+    const emitted: HostToUiMessage[] = [];
+    const store = new SessionPermissionRules();
+    for (const rule of rules) store.add(rule);
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, store);
+    const bridge = new CodexApprovalBridge({
+      broker,
+      activeTurn: () => ({ ...ACTIVE, items }),
+      workspace: root,
+    });
+    return { bridge, broker, emitted };
+  }
+
+  it("a fileChange whose paths are ALL inside: a bare CodexApplyPatch rule DOES silent-allow (facts proved containment)", async () => {
+    writeFileSync(join(root, "a.ts"), "orig", "utf-8");
+    writeFileSync(join(root, "b.ts"), "orig", "utf-8");
+    const items = new TurnItemIndex();
+    items.record({
+      type: "fileChange",
+      id: "item-file",
+      status: "inProgress",
+      changes: [
+        { path: join(root, "a.ts"), kind: { type: "update" }, diff: "+a" },
+        { path: join(root, "b.ts"), kind: { type: "update" }, diff: "+b" },
+      ],
+    });
+    const { bridge, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
+    const response = responder();
+    bridge.handle(file({ itemId: "item-file" }), response);
+    await settle();
+
+    // The rule answered: nothing was presented to a human, the codex answer is accept.
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
+    expect(response.result).toHaveBeenCalledWith({ decision: "accept" });
+  });
+
+  it("F1 reproduce: ANY path outside the workspace => NO facts => a bare CodexApplyPatch rule must NOT silent-allow; the ask is presented", async () => {
+    writeFileSync(join(elsewhere, "victim.ts"), "orig", "utf-8");
+    const items = new TurnItemIndex();
+    items.record({
+      type: "fileChange",
+      id: "item-file",
+      status: "inProgress",
+      changes: [
+        { path: join(root, "a.ts"), kind: { type: "update" }, diff: "+a" },
+        { path: join(elsewhere, "victim.ts"), kind: { type: "update" }, diff: "+v" },
+      ],
+    });
+    const { bridge, broker, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
+    const response = responder();
+    bridge.handle(file({ itemId: "item-file" }), response);
+    await settle();
+
+    // The rule did NOT answer — a permission_request reached the UI and the
+    // human (test) denies it. (The wire message carries no workspace field by
+    // design; the confinement is observable purely as rule-vs-modal behavior.)
+    const presented = ask(emitted);
+    broker.handleResponse(presented.requestId, "deny");
+    await settle();
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("no indexed changes => nothing provable => a bare CodexApplyPatch rule must NOT silent-allow (fail-closed)", async () => {
+    const { bridge, broker, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }]);
+    const response = responder();
+    bridge.handle(file({ itemId: "item-file" }), response);
+    await settle();
+
+    // Degraded (no indexed paths) but still fail-closed on the rule: the ask
+    // is presented and the human (test) denies it.
+    const presented = ask(emitted);
+    broker.handleResponse(presented.requestId, "deny");
+    await settle();
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("no workspace seam wired (legacy construction) => same fail-closed refusal under a bare rule", async () => {
+    writeFileSync(join(root, "a.ts"), "orig", "utf-8");
+    const items = new TurnItemIndex();
+    items.record({
+      type: "fileChange",
+      id: "item-file",
+      status: "inProgress",
+      changes: [{ path: join(root, "a.ts"), kind: { type: "update" }, diff: "+a" }],
+    });
+    const emitted: HostToUiMessage[] = [];
+    const store = new SessionPermissionRules();
+    store.add({ toolName: "CodexApplyPatch" });
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, store);
+    const bridge = new CodexApprovalBridge({ broker, activeTurn: () => ({ ...ACTIVE, items }) });
+    const response = responder();
+    bridge.handle(file({ itemId: "item-file" }), response);
+    await settle();
+
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(1);
+    const presented = ask(emitted);
+    broker.handleResponse(presented.requestId, "deny");
+    await settle();
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("a CodexExec command approval never carries workspace facts (command line, not a path — 4294 out of scope)", async () => {
+    const { bridge, emitted } = ruledRig([{ toolName: "CodexExec", pattern: "git *" }]);
+    const response = responder();
+    bridge.handle(command({ command: "git status" }), response);
+    await flush();
+
+    // TASK.184 translation stays: the rule answered silently, nothing was presented.
+    expect(emitted).toEqual([]);
+    expect(response.result).toHaveBeenCalledWith({ decision: "accept" });
   });
 });

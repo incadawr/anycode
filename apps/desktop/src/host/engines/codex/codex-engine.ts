@@ -628,6 +628,9 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   const approvals = new CodexApprovalBridge({
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
+    // Taskana 4294 (cross-review F1): the thread's cwd is the boot workspace,
+    // so fileChange approvals mint containment facts against that root.
+    workspace: options.workspace,
   });
   const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
     const owner = engine?.activeTurnDetails ?? null;
@@ -653,6 +656,9 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
   const approvals = new CodexApprovalBridge({
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
+    // Taskana 4294 (cross-review F1): the thread's cwd is the boot workspace,
+    // so fileChange approvals mint containment facts against that root.
+    workspace: options.workspace,
   });
   const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
     const owner = engine?.activeTurnDetails ?? null;

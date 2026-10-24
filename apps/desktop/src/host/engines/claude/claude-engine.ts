@@ -427,6 +427,10 @@ async function connectClaudeEngine(
   const approvals = new ClaudeApprovalBridge({
     broker: options.broker,
     activePresetId: () => engine?.activePresetId ?? preset.id,
+    // Taskana 4294 (cross-review F1): the CLI is spawned at `options.cwd`
+    // (host/index.ts passes the boot workspace), so that same directory is
+    // the workspace root the approval bridge's fact minting anchors against.
+    workspace: options.cwd,
     ...(options.mcpBridge !== undefined ? { bridge: options.mcpBridge } : {}),
   });
   // The catalog is not known until after the handshake, so a draft model cannot
