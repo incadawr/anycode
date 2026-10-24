@@ -25,6 +25,7 @@
  * zero DOM/Electron — same isolation discipline as tab-registry.test.ts.
  */
 import type { ImageAttachment, ImageMediaType, PermissionMode, ReasoningEffort } from "@anycode/core";
+import { flushSync } from "react-dom";
 import type {
   ConnectionPhase,
   ContextUsage,
@@ -4929,7 +4930,7 @@ function realSettingsDom(): SettingsDom {
  * than the human-readable label text, so a live smoke can assert exact state
  * transitions.
  */
-function realLspPanelDom(): LspPanelDom {
+export function realLspPanelDom(): LspPanelDom {
   function aside(): HTMLElement | null {
     return document.querySelector<HTMLElement>("aside.lsp-panel:not(.hooks-panel)");
   }
@@ -4960,7 +4961,12 @@ function realLspPanelDom(): LspPanelDom {
         el.querySelector<HTMLButtonElement>(".lsp-panel-close")?.click();
         return;
       }
-      document.querySelector<HTMLButtonElement>(".environment-trigger")?.click();
+      // Taskana 4711 cross-review F1: React 19 commits a click-driven update in
+      // a microtask, AFTER .click() returns. flushSync commits the menu now so
+      // its Details action exists for the query below (without it the click
+      // was silently lost).
+      const trigger = document.querySelector<HTMLButtonElement>(".environment-trigger");
+      if (trigger) flushSync(() => trigger.click());
       document.querySelector<HTMLButtonElement>('[data-environment-action="lsp-details"]')?.click();
     },
   };
@@ -4975,7 +4981,7 @@ function realLspPanelDom(): LspPanelDom {
  * `formatHookEvent`, whose labels are byte-identical to the raw `HookEvent`
  * enum values), so this is a real `HookEvent` string, not a re-derived guess.
  */
-function realHooksPanelDom(): HooksPanelDom {
+export function realHooksPanelDom(): HooksPanelDom {
   function aside(): HTMLElement | null {
     return document.querySelector<HTMLElement>("aside.hooks-panel");
   }
@@ -5003,7 +5009,12 @@ function realHooksPanelDom(): HooksPanelDom {
         el.querySelector<HTMLButtonElement>('button[aria-label="Close hooks"]')?.click();
         return;
       }
-      document.querySelector<HTMLButtonElement>(".environment-trigger")?.click();
+      // Taskana 4711 cross-review F1: React 19 commits a click-driven update in
+      // a microtask, AFTER .click() returns. flushSync commits the menu now so
+      // its Details action exists for the query below (without it the click
+      // was silently lost).
+      const trigger = document.querySelector<HTMLButtonElement>(".environment-trigger");
+      if (trigger) flushSync(() => trigger.click());
       document.querySelector<HTMLButtonElement>('[data-environment-action="hooks-details"]')?.click();
     },
   };
