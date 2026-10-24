@@ -208,6 +208,17 @@ const connectionSchema = z.object({
       safeCode: z.string().optional(),
     })
     .optional(),
+  // Provider-reported quota cache ( / ) — same
+  // optional/round-trip discipline as `lastHealth` above.
+  lastQuota: z
+    .object({
+      usedPercent: z.number().min(0).max(100),
+      windowDurationMins: z.number().optional(),
+      resetsAt: z.number().optional(),
+      observedAt: z.string(),
+      source: z.string(),
+    })
+    .optional(),
 });
 
 // ── codex-profiles (cut §2.3/§2.6, amended §A1.1) ──

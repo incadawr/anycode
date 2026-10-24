@@ -50,6 +50,9 @@ export function isModelOutputEvent(e: ModelStreamEvent): boolean {
     case "start":
     case "error":
     case "stream_retry":
+    // : a quota observation is transport telemetry, not model
+    // output — it must never close the replay gate.
+    case "provider_quota":
       return false;
     default: {
       // Compile-time exhaustiveness: a new ModelStreamEvent variant must be

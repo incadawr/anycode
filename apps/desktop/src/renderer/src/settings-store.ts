@@ -279,14 +279,23 @@ export function withoutRule(
   return rules.filter((r) => !(r.toolName === rule.toolName && r.pattern === rule.pattern));
 }
 
-/** The real `window.anycode.settings` bridge, resolved lazily (only read when a caller omits the `bridge` DI parameter at actual call time — never at module load or store creation, so this file stays importable from a plain Node test context with no `window`). */
+/**
+ * The real `window.anycode.settings` bridge, resolved lazily (only read when a
+ * caller omits the `bridge` DI parameter at actual call time — never at module
+ * load or store creation, so this file stays importable from a plain Node test
+ * context with no `window`). Read through `globalThis` (narrowed by the
+ * anycode-window ambient type on the renderer side) rather than the `window`
+ * literal: host-side test programs (`tsconfig.node.json` pulls this file in
+ * via store.ts import chains, no DOM lib) must still typecheck the reference —
+ * the function only ever RUNS in the renderer, where the bridge exists.
+ */
 function realBridge(): SettingsBridge {
-  return window.anycode.settings;
+  return (globalThis as unknown as { window: { anycode: { settings: SettingsBridge } } }).window.anycode.settings;
 }
 
 /** The real `window.anycode.updates` bridge, resolved with the same lazy discipline as `realBridge`. */
 function realUpdatesBridge(): UpdatesBridge {
-  return window.anycode.updates;
+  return (globalThis as unknown as { window: { anycode: { updates: UpdatesBridge } } }).window.anycode.updates;
 }
 
 /**
