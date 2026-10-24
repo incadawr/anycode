@@ -665,6 +665,12 @@ describe("host subagent model-override wiring", () => {
     // child's id instead of a silent "retrying" with no follow-up.
     expect(source).toContain("admit.status === \"error\"");
     expect(source).toContain("was refused");
+    // R3 (cross-review): that honest refusal/failure report rides a DISTINCT
+    // queue id — never the failed child's spawnToolCallId, which the
+    // "retrying" notice already claimed (renderer dedupes child_report by
+    // originId; a same-id follow-up would be silently dropped).
+    expect(source).toContain("`${req.spawnToolCallId}:respawn-refused`");
+    expect(source).toContain("`${req.spawnToolCallId}:respawn-failed`");
     // The respawn request stamps ONLY the next entry's fields (a stale
     // engine/connection of the failed hop never leaks through `...req`).
     expect(source).not.toContain("...req,\n    spawnToolCallId: respawnId");
