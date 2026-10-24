@@ -948,12 +948,11 @@ export class ClaudeEngine implements SessionEngine {
         // from a prior CLI turn, or a detach whose report events raced the
         // next owner turn) flush here — before the owner input is sent, same
         // re-run discipline notices use.
+        // Both batches are yielded before re-running the barrier: a batch
+        // drained here and not yielded would be lost.
         const queued = this.drainBridgeEvents();
-        if (notices.length > 0) {
+        if (notices.length > 0 || queued.length > 0) {
           for (const notice of notices) yield notice;
-          continue barrier;
-        }
-        if (queued.length > 0) {
           for (const ev of queued) yield ev;
           continue barrier;
         }

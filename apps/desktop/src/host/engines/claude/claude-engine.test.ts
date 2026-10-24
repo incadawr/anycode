@@ -573,6 +573,22 @@ describe("ClaudeEngine — Taskana 4056: bridge events surface mid-turn", () => 
     expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
   });
 
+  it("a queued notice and queued bridge events in the same barrier pass are ALL yielded (neither batch dropped)", async () => {
+    const transport = new FakeTransport({
+      frames: ownerFrames("plain"),
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    const engine = engineWith(transport);
+    engine.queueNotice({ type: "engine_notice", level: "info", message: "checkpoint" });
+    engine.pushBridgeEvent({ type: "subagent_start", toolCallId: "t1", agentType: "explore", description: "first" });
+
+    const events = await collect(engine.runTurn("plain", { signal: new AbortController().signal }));
+
+    expect(events.filter((event) => event.type === "engine_notice")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "subagent_start")).toHaveLength(1);
+    expect(transport.sent).toEqual(["plain"]);
+  });
+
   it("dispose wakes parked bridge waiters without hanging the turn loop", async () => {
     const toolResult = userToolResultFrame("toolu_bridge");
     const result = resultFrame157("completed");
