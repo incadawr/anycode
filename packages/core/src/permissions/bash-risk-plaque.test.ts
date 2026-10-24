@@ -120,6 +120,29 @@ describe("bash-risk-plaque — writeStdin asks never get a plaque (cross-review 
 });
 
 /**
+ * Cross-review D4: a quote-spelled leading binary (`"sudo" rm -rf /`,
+ * `'git' push`) must not fall through to the softer unknown-binary note —
+ * the 4ebfbe12 hardening exists exactly so write-capable binaries are named.
+ * Presentation-only: the classifier still calls every quoted spelling
+ * unknown (pinned in safe-command.test.ts), and the plaque names the
+ * quote-stripped binary.
+ */
+describe("bash-risk-plaque — quote-spelled binaries keep the write-capable plaque (cross-review D4)", () => {
+  it("matched surrounding quotes are stripped before the basename lookup", () => {
+    expect(bashRiskPlaque("Bash", { command: '"sudo" rm -rf /' })).toBe(bashWriteCapablePlaque("sudo"));
+    expect(bashRiskPlaque("Bash", { command: "'git' push origin main" })).toBe(bashWriteCapablePlaque("git"));
+    expect(bashRiskPlaque("Bash", { command: '"/bin/rm" -rf /' })).toBe(bashWriteCapablePlaque("/bin/rm"));
+  });
+
+  it("unmatched quotes are the shell hint's case alone (shellExpression true, no plaque)", () => {
+    // An UNTERMINATED quote is a shell expression by the classifier's own
+    // screen — the plaque never renders there, so quote-stripping cannot.
+    expect(bashRiskPlaque("Bash", { command: '"sudo rm -rf /' })).toBeNull();
+    expect(bashRiskPlaque("Bash", { command: "'git push origin main" })).toBeNull();
+  });
+});
+
+/**
  * Cross-review D3: an empty/whitespace command has no binary at all — the
  * plaque must not assert a fact ("this command's binary is not on the
  * read-only list") about something that does not exist. Same fail-closed
