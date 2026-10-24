@@ -54,6 +54,11 @@ export function createMdPreviewWindow(
   const win = new BrowserWindow({
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
+    // Taskana 4100 stage 4 (TASK.96 «Этап 4»: always-on-top для
+    // превью-окон): a dom-md window is the same passive artifact viewer as
+    // electron-adapter.ts's preview window — same constructor option, same
+    // rationale ('floating' above the main window without fighting focus).
+    alwaysOnTop: true,
     title: "Markdown Preview",
     webPreferences: {
       preload: deps.preloadPath,

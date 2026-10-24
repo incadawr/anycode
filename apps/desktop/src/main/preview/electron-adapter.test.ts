@@ -65,6 +65,8 @@ type OnBeforeRequestListener = (
 
 class FakeWebContents extends EventEmitter {
   loadURLCalls: string[] = [];
+  /** Taskana 4100 stage 4: reload() passthrough recorder. */
+  reloadCalls = 0;
   executeJavaScriptCalls: string[] = [];
   backgroundThrottlingCalls: boolean[] = [];
   webRTCIPHandlingPolicyCalls: string[] = [];
@@ -105,6 +107,11 @@ class FakeWebContents extends EventEmitter {
 
   loadURL(url: string): Promise<void> {
     this.loadURLCalls.push(url);
+    return Promise.resolve();
+  }
+  /** Taskana 4100 stage 4: plain counter — reload() takes no arguments. */
+  reload(): Promise<void> {
+    this.reloadCalls += 1;
     return Promise.resolve();
   }
   isDestroyed(): boolean {
@@ -670,5 +677,40 @@ describe("createElectronPanelView — WebContentsView construction (panel-track 
     const state = { entries: [{ url: "file:///a.html", title: "A" }], index: 0 };
     await panel.webContents.restoreNavigationHistory(state);
     expect(view.webContents.navigationHistory.restoreCalls).toEqual([state]);
+  });
+});
+
+/**
+ * Taskana 4100 stage 4 (TASK.96 «Этап 4»): preview windows open
+ * always-on-top, and `wrapWebContents` maps the live-reload `reload()` onto
+ * the real webContents. The frozen security webPreferences/partition stay
+ * byte-identical (pinned again here — an alwaysOnTop addition must not
+ * disturb them).
+ */
+describe("createElectronPreviewWindow — Taskana 4100 stage 4", () => {
+  it("constructs the window with alwaysOnTop: true", () => {
+    createElectronPreviewWindow({ previewId: "aot-1" });
+    const win = latestWindow();
+    expect(win.opts.alwaysOnTop).toBe(true);
+  });
+
+  it("wrapWebContents maps reload() to the real webContents reload (exactly one call)", async () => {
+    const win = createElectronPreviewWindow({ previewId: "reload-1" });
+    const fake = latestWindow();
+    expect(fake.webContents.reloadCalls).toBe(0);
+    await win.webContents.reload();
+    expect(fake.webContents.reloadCalls).toBe(1);
+  });
+
+  it("regression pin: the frozen triple + partition unchanged alongside alwaysOnTop", () => {
+    createElectronPreviewWindow({ previewId: "aot-pin" });
+    const win = latestWindow();
+    expect(win.opts.webPreferences).toMatchObject({
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: "preview-aot-pin",
+    });
+    expect(win.opts.webPreferences).not.toHaveProperty("preload");
   });
 });
