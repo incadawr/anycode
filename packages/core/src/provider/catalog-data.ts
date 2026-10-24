@@ -25,7 +25,12 @@ export type {
 } from "./catalog.js";
 export { resolveEndpoint } from "./catalog.js";
 
-import { assertTransportContract, type CatalogProviderEntry, type ProviderCatalog } from "./catalog.js";
+import {
+  assertBrandContract,
+  assertTransportContract,
+  type CatalogProviderEntry,
+  type ProviderCatalog,
+} from "./catalog.js";
 
 /** Sentinel id for the user-supplied endpoint whose baseUrl lives in settings. */
 export const CUSTOM_PROVIDER_ID = "custom";
@@ -145,7 +150,11 @@ const ENTRIES: CatalogProviderEntry[] = [
   },
   {
     id: "moonshot",
+    // TASK.70 (Taskana 4089): one brand = one card; this entry is the platform
+    // API mode of the Kimi brand card.
     name: "Moonshot (Kimi, platform API)",
+    brand: "Kimi",
+    modeLabel: "Platform API (moonshot.ai)",
     baseUrl: "https://api.moonshot.ai/anthropic",
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
@@ -184,7 +193,11 @@ const ENTRIES: CatalogProviderEntry[] = [
     // (32_768, TASK.150) — now observable via `onStubFallback` (TASK.170)
     // instead of silently.
     id: "kimi",
+    // TASK.70 (Taskana 4089): one brand = one card; this entry is the
+    // subscription mode of the Kimi brand card.
     name: "Kimi (kimi.com subscription)",
+    brand: "Kimi",
+    modeLabel: "Subscription (kimi.com)",
     baseUrl: "https://api.kimi.com/coding",
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
@@ -263,6 +276,7 @@ const ENTRIES: CatalogProviderEntry[] = [
 for (const entry of ENTRIES) {
   assertTransportContract(entry);
 }
+assertBrandContract(ENTRIES);
 
 const CATALOG: ProviderCatalog = {
   schemaVersion: "anycode.model-providers.v1",

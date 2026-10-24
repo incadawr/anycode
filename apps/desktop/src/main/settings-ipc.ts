@@ -536,6 +536,9 @@ const recognizerSetSchema = z
 export interface CatalogEntryShape {
   id: string;
   name: string;
+  /** TASK.70 (Taskana 4089): brand/mode fields for one-brand-one-card grouping; optional + `string`-typed to keep this module core-import-free. */
+  brand?: string;
+  modeLabel?: string;
   auth: { kind: string };
   baseUrl: string;
   /** `reasoning`/`effortLevels` (TASK.131), `maxOutputTokens` (TASK.159) and `imageInput` (TASK.198) ride along for the draft-time effort picker / ceiling display / vision-model suggestions; `string[]`-typed to keep this module core-import-free. */
@@ -596,6 +599,10 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
     })),
     ...(entry.baseUrl === "" ? { needsBaseUrl: true } : {}),
     ...(entry.isCustom === true ? { isCustom: true } : {}),
+    // TASK.70 (Taskana 4089): only when declared, same conditional-spread
+    // precedent as above — legacy fixtures stay byte-identical.
+    ...(entry.brand !== undefined ? { brand: entry.brand } : {}),
+    ...(entry.modeLabel !== undefined ? { modeLabel: entry.modeLabel } : {}),
     ...(entry.defaultTransport !== undefined ? { defaultTransport: entry.defaultTransport as ProviderTransportId } : {}),
     ...(entry.supportedTransports !== undefined
       ? { supportedTransports: entry.supportedTransports as ProviderTransportId[] }

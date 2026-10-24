@@ -202,6 +202,20 @@ export function connectionDisplayName(
   return index <= 0 ? catalogName : `${catalogName} ${index + 1}`;
 }
 
+/**
+ * TASK.70 (Taskana 4089): one brand = one card — a brand-grouped connection
+ * shows the brand plus its mode, not the long parenthesised entry name.
+ * Pure so tests cover the real selection (same discipline as
+ * `tileStatusPresentation`); a brandless entry keeps its exact `name`, and a
+ * missing catalog entry falls back to "Custom".
+ */
+export function connectionTileProviderLabel(catalogEntry: CatalogSummaryEntry | undefined): string {
+  const providerName = catalogEntry?.name ?? "Custom";
+  return catalogEntry?.brand !== undefined && catalogEntry.modeLabel !== undefined
+    ? `${catalogEntry.brand} · ${catalogEntry.modeLabel}`
+    : providerName;
+}
+
 export interface ConnectionTileProps {
   connection: ProviderConnection;
   /** The catalog entry for `connection.providerId`; `undefined` for the bare/custom bucket (no catalog pick). */
@@ -311,7 +325,9 @@ export function ConnectionTile({
     checking ? undefined : observeLastHealth(connection.lastHealth, now),
     checking,
   );
-  const providerName = catalogEntry?.name ?? "Custom";
+  // TASK.70 (Taskana 4089): one brand = one card — the label the tile header
+  // actually renders (pure helper, tested directly).
+  const providerLabel = connectionTileProviderLabel(catalogEntry);
   const authKind = catalogEntry?.authKind ?? "api_key";
   const replaceKeyLabel = authKind === "oauth" ? (credentialStatus?.set ? "Sign out" : "Sign in") : "Replace key";
 
@@ -387,7 +403,7 @@ export function ConnectionTile({
         onKeyDown={onKeyDownRoving}
       >
         <div className="connection-tile-header">
-          <span className="connection-tile-provider">{providerName}</span>
+          <span className="connection-tile-provider">{providerLabel}</span>
           {selected && (
             <span className="connection-tile-selected-marker" title="Default for new sessions">
               <Check className="connection-tile-selected-icon" aria-hidden="true" />

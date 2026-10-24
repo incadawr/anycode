@@ -756,6 +756,30 @@ export function providerSelectDisplayValue(effectiveProviderId: string, template
   return catalog.find((entry) => entry.isCustom)?.id ?? "";
 }
 
+/**
+ * TASK.70 (Taskana 4089): template options grouped one-brand-one-card. A
+ * brand-grouped entry renders as an <optgroup> labelled with the brand whose
+ * options are the member modes (`modeLabel`); single-mode entries render as
+ * plain options exactly as before, byte-identical for catalogs without brands.
+ * Catalog order is preserved within and across groups.
+ */
+export interface ProviderOptionGroup { label: string; options: { id: string; label: string }[] }
+export function providerOptionGroups(catalog: readonly CatalogSummaryEntry[]): ProviderOptionGroup[] {
+  const groups: ProviderOptionGroup[] = [];
+  const brandIndex = new Map<string, ProviderOptionGroup>();
+  for (const entry of catalog) {
+    const ownLabel = entry.isCustom ? "Custom endpoint…" : entry.name;
+    if (entry.brand === undefined || entry.modeLabel === undefined) {
+      groups.push({ label: "", options: [{ id: entry.id, label: ownLabel }] });
+      continue;
+    }
+    let group = brandIndex.get(entry.brand);
+    if (group === undefined) { group = { label: entry.brand, options: [] }; brandIndex.set(entry.brand, group); groups.push(group); }
+    group.options.push({ id: entry.id, label: entry.modeLabel });
+  }
+  return groups;
+}
+
 export interface ConnectionDrawerFieldsProps {
   mode: "add" | "edit";
   /** The connection being edited; required for `mode: "edit"`. */
@@ -1366,11 +1390,19 @@ export function ConnectionDrawerFields({
           <option value="" disabled>
             Choose a provider…
           </option>
-          {catalog.map((entry) => (
-            <option key={entry.id} value={entry.id}>
-              {entry.isCustom ? "Custom endpoint…" : entry.name}
-            </option>
-          ))}
+          {/* TASK.70 (Taskana 4089): one brand = one card — brand-grouped entries
+              render as a single <optgroup> (the brand card) whose options are the
+              member modes; brandless entries render exactly as before. The option
+              value is still the entry id, so selection/prefill is unchanged. */}
+          {providerOptionGroups(catalog).map((group, gi) =>
+            group.label === "" ? (
+              group.options.map((o) => (<option key={o.id} value={o.id}>{o.label}</option>))
+            ) : (
+              <optgroup key={`${gi}-${group.label}`} label={group.label}>
+                {group.options.map((o) => (<option key={o.id} value={o.id}>{o.label}</option>))}
+              </optgroup>
+            ),
+          )}
         </select>
       </label>
 

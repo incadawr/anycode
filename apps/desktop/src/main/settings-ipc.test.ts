@@ -849,6 +849,52 @@ describe("projectCatalogSummary — value-only projection", () => {
     expect(custom?.needsBaseUrl).toBe(true);
     expect(custom?.isCustom).toBe(true);
   });
+
+  it("4089: projects brand/modeLabel only when declared, legacy fixtures byte-identical", () => {
+    const summary = projectCatalogSummary([
+      {
+        id: "moonshot",
+        name: "Moonshot (Kimi, platform API)",
+        auth: { kind: "api_key" },
+        baseUrl: "https://m",
+        brand: "kimi",
+        modeLabel: "Platform API (moonshot.ai)",
+        models: [],
+      },
+      {
+        id: "kimi",
+        name: "Kimi (kimi.com subscription)",
+        auth: { kind: "api_key" },
+        baseUrl: "https://k",
+        brand: "kimi",
+        modeLabel: "Subscription (kimi.com)",
+        models: [],
+      },
+      { id: "z-ai", name: "Z.AI", auth: { kind: "api_key" }, baseUrl: "https://z", models: [] },
+    ]);
+    // Conditional spread, same precedent as the transport fields above: only
+    // the declaring entries gain the keys; the brandless fixture stays
+    // byte-identical (toEqual proves the absence of the keys, not just falsy).
+    expect(summary).toEqual([
+      {
+        id: "moonshot",
+        name: "Moonshot (Kimi, platform API)",
+        authKind: "api_key",
+        models: [],
+        brand: "kimi",
+        modeLabel: "Platform API (moonshot.ai)",
+      },
+      {
+        id: "kimi",
+        name: "Kimi (kimi.com subscription)",
+        authKind: "api_key",
+        models: [],
+        brand: "kimi",
+        modeLabel: "Subscription (kimi.com)",
+      },
+      { id: "z-ai", name: "Z.AI", authKind: "api_key", models: [] },
+    ]);
+  });
 });
 
 describe("snapshot — auth-policy + unsupported-transport readiness (TASK.43 W5, cut Risk #3)", () => {

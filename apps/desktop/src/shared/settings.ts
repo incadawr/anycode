@@ -703,6 +703,16 @@ export type CatalogAuthKind = "api_key" | "oauth";
 export interface CatalogSummaryEntry {
   id: string;
   name: string;
+  /**
+   * TASK.70 (Taskana 4089): the brand this entry belongs to when several
+   * catalog entries are the SAME vendor sold via different endpoints (Kimi:
+   * kimi.com subscription vs the moonshot platform API). Projected only when
+   * the catalog declares it (conditional spread), optional/additive so legacy
+   * fixtures stay byte-identical — same rule as `imageInput` above.
+   */
+  brand?: string;
+  /** TASK.70 (Taskana 4089): short selector label naming THIS entry's mode inside its brand card; projected only when declared (see `brand`). */
+  modeLabel?: string;
   authKind: CatalogAuthKind;
   /**
    * TASK.131: `reasoning`/`effortLevels` join the projection so a picker with

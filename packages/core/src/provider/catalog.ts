@@ -69,6 +69,22 @@ export type CatalogAuth =
 export interface CatalogProviderEntry {
   id: string;
   name: string;
+  /**
+   * TASK.70 (Taskana 4089): the brand this entry belongs to when several
+   * catalog entries are the SAME vendor sold via different endpoints (Kimi:
+   * kimi.com subscription vs the moonshot platform API). Entries that share a
+   * `brand` render as ONE card with a mode selector; the pair below is data,
+   * not a merge. Absent on every single-mode brand. It is also the
+   * user-visible card label (optgroup / tile header), so it is display-cased.
+   */
+  brand?: string;
+  /**
+   * TASK.70 (Taskana 4089): short selector label naming THIS entry's mode
+   * inside its brand card (e.g. "Subscription (kimi.com)"). Rendering pairs
+   * `brand` + `modeLabel`; `modeLabel` without `brand` must not occur and is
+   * guarded by `assertBrandContract`.
+   */
+  modeLabel?: string;
   /** Full endpoint base (may be empty for `custom`, which sources it from settings). */
   baseUrl: string;
   /**
@@ -164,5 +180,22 @@ export function assertTransportContract(entry: CatalogProviderEntry): void {
     throw new Error(
       `Catalog entry "${entry.id}": defaultTransport "${entry.defaultTransport}" is not in its own supportedTransports [${entry.supportedTransports.join(", ")}]`,
     );
+  }
+}
+
+/**
+ * Dev-time invariant (TASK.70): an entry may declare `modeLabel` only together
+ * with `brand`, and a brand group needs ≥2 declared modes to be a group at all.
+ */
+export function assertBrandContract(entries: readonly CatalogProviderEntry[]): void {
+  const brands = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.modeLabel !== undefined && entry.brand === undefined) {
+      throw new Error(`Provider "${entry.id}" declares modeLabel without brand`);
+    }
+    if (entry.brand !== undefined) brands.set(entry.brand, (brands.get(entry.brand) ?? 0) + 1);
+  }
+  for (const [brand, count] of brands) {
+    if (count < 2) throw new Error(`Brand "${brand}" has a single entry — it is not a group`);
   }
 }

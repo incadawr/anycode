@@ -22,6 +22,7 @@ import {
   modelSaveBlocked,
   preflightModelId,
   providerSelectDisplayValue,
+  providerOptionGroups,
   resolveCreatedConnectionId,
   resolveCreatedCustomProviderId,
   resolveDrawerOAuthStartArgs,
@@ -323,6 +324,56 @@ describe("providerSelectDisplayValue (dogfood 16.07: add-mode must show the plac
 
   it("edit-mode fallback fails soft to empty when the catalog carries no custom sentinel", () => {
     expect(providerSelectDisplayValue("", true, [CATALOG[0]!])).toBe("");
+  });
+});
+
+// TASK.70 (Taskana 4089): one brand = one card. The Provider select's options
+// come from this pure projection; brandless catalogs must stay byte-identical
+// to the old flat list (the byte-compat proof for every existing fixture).
+describe("providerOptionGroups (TASK.70: one brand = one card)", () => {
+  const BRANDLESS: CatalogSummaryEntry[] = [
+    { id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] },
+    { id: "custom", name: "Custom endpoint", authKind: "api_key", models: [], needsBaseUrl: true, isCustom: true },
+  ];
+
+  it("brandless catalog → all groups have an empty label and options labelled entry.name (or Custom endpoint… for isCustom)", () => {
+    expect(providerOptionGroups(BRANDLESS)).toEqual([
+      { label: "", options: [{ id: "z-ai", label: "Z.AI (GLM)" }] },
+      { label: "", options: [{ id: "custom", label: "Custom endpoint…" }] },
+    ]);
+  });
+
+  it("kimi+moonshot branded + brandless others → exactly one kimi group (catalog order preserved) and the brandless entries as empty-label groups", () => {
+    const catalog: CatalogSummaryEntry[] = [
+      { id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] },
+      { id: "moonshot", name: "Moonshot (Kimi, platform API)", authKind: "api_key", models: [], brand: "kimi", modeLabel: "Platform API (moonshot.ai)" },
+      { id: "kimi", name: "Kimi (kimi.com subscription)", authKind: "api_key", models: [], brand: "kimi", modeLabel: "Subscription (kimi.com)" },
+      { id: "custom", name: "Custom endpoint", authKind: "api_key", models: [], needsBaseUrl: true, isCustom: true },
+    ];
+    expect(providerOptionGroups(catalog)).toEqual([
+      { label: "", options: [{ id: "z-ai", label: "Z.AI (GLM)" }] },
+      {
+        label: "kimi",
+        options: [
+          { id: "moonshot", label: "Platform API (moonshot.ai)" },
+          { id: "kimi", label: "Subscription (kimi.com)" },
+        ],
+      },
+      { label: "", options: [{ id: "custom", label: "Custom endpoint…" }] },
+    ]);
+  });
+
+  it("an entry with brand but NO modeLabel degrades to a plain option labelled entry.name (defensive)", () => {
+    const catalog: CatalogSummaryEntry[] = [
+      { id: "half-branded", name: "Half-branded", authKind: "api_key", models: [], brand: "kimi" },
+      { id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] },
+    ];
+    // assertBrandContract forbids this shape in the real catalog; the renderer
+    // must not crash or hide the entry if a future projection ever ships it.
+    expect(providerOptionGroups(catalog)).toEqual([
+      { label: "", options: [{ id: "half-branded", label: "Half-branded" }] },
+      { label: "", options: [{ id: "z-ai", label: "Z.AI (GLM)" }] },
+    ]);
   });
 });
 
