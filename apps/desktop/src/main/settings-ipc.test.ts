@@ -2426,6 +2426,39 @@ describe("handleConnectionUpdate — re-point clears lastQuota (Taskana 4090 fol
     resetConnectionQuotaThrottles();
   });
 
+  // Taskana 4090 cross-review A3: "Remove key" is the third variant of key
+  // replacement (removal), so it drops the superseded key's quota line too.
+  it("clearing the connection's key clears lastQuota (the line belongs to the removed key)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    await seedLastQuota(95);
+
+    const res = await handleClearSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.connection.conn-1.apiKey",
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect("lastQuota" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+    expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("unchecked");
+  });
+
+  it("clearing the key drops a coalesced pending observation (no write-back by the trailing timer)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    resetConnectionQuotaThrottles();
+    const quotaDeps = { settingsPath, writeIntervalMs: 20 };
+    expect(await recordConnectionQuota(quotaDeps, "conn-1", { usedPercent: 80 }, "x-ratelimit-requests-remaining")).toBe(true);
+    expect(await recordConnectionQuota(quotaDeps, "conn-1", { usedPercent: 90 }, "x-ratelimit-requests-remaining")).toBe(false);
+
+    const res = await handleClearSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.connection.conn-1.apiKey",
+    });
+    expect(res.ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const loaded = await loadSettings(settingsPath);
+    expect("lastQuota" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+    resetConnectionQuotaThrottles();
+  });
+
   it("a label-only edit (or resending the SAME baseUrl) keeps the line", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",

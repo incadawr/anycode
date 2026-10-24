@@ -1112,20 +1112,7 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
       // quota exactly like it invalidates health — the line belongs to the
       // superseded key. Deleted (optional on disk), and any coalesced pending
       // observation from the old key is dropped so it cannot be written back.
-      finalSettings = {
-        ...withHealth,
-        provider: {
-          ...withHealth.provider,
-          connections: withHealth.provider.connections.map((connection) => {
-            if (connection.id !== conn.id || connection.lastQuota === undefined) {
-              return connection;
-            }
-            const cleared = { ...connection };
-            delete cleared.lastQuota;
-            return cleared;
-          }),
-        },
-      };
+      finalSettings = withoutConnectionQuota(withHealth, conn.id);
       discardPendingConnectionQuota(conn.id);
       await saveSettings(deps.settingsPath, finalSettings);
     }
@@ -1133,6 +1120,28 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
     await emitMutation(deps, snapshot);
     return { ok: true, snapshot };
   });
+}
+
+/**
+ * Taskana 4090: drops one connection's persisted `lastQuota` (DELETED, not
+ * zeroed — the field is optional on disk). Used whenever the connection's key
+ * is replaced or removed: the line was observed against the superseded key.
+ */
+function withoutConnectionQuota(settings: AnycodeSettings, connectionId: string): AnycodeSettings {
+  return {
+    ...settings,
+    provider: {
+      ...settings.provider,
+      connections: settings.provider.connections.map((connection) => {
+        if (connection.id !== connectionId || connection.lastQuota === undefined) {
+          return connection;
+        }
+        const cleared = { ...connection };
+        delete cleared.lastQuota;
+        return cleared;
+      }),
+    },
+  };
 }
 
 /**
@@ -1205,7 +1214,11 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
       at: (deps.now ?? defaultNowIso)(),
     });
     if (withHealth !== undefined) {
-      finalSettings = withHealth;
+      // Taskana 4090 cross-review A3: "Remove key" is a key replacement too —
+      // the provider-reported quota line (and any coalesced pending observation)
+      // belonged to the removed key, exactly as in handleSetSecret.
+      finalSettings = withoutConnectionQuota(withHealth, connMatch[1] as string);
+      discardPendingConnectionQuota(connMatch[1] as string);
       await saveSettings(deps.settingsPath, finalSettings);
     }
     const snapshot = await snapshotFrom(deps, finalSettings, false);
