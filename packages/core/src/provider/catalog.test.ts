@@ -90,11 +90,11 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
     });
     // TASK.70 (Taskana 4089): both Kimi entries belong to one brand card.
     expect(findCatalogEntry("moonshot")).toMatchObject({
-      brand: "kimi",
+      brand: "Kimi",
       modeLabel: "Platform API (moonshot.ai)",
     });
     expect(findCatalogEntry("kimi")).toMatchObject({
-      brand: "kimi",
+      brand: "Kimi",
       modeLabel: "Subscription (kimi.com)",
     });
     expect(kimi?.authOptional).toBeUndefined();
@@ -363,7 +363,7 @@ describe("modelsUrl (4244)", () => {
 // brand; every other entry stays brandless so the flat list is byte-identical.
 describe("brand grouping (TASK.70, Taskana 4089)", () => {
   it("4089: the Kimi brand declares exactly two modes and no other entry declares a brand", () => {
-    const branded = getBuiltinCatalog().providers.filter((entry) => entry.brand === "kimi");
+    const branded = getBuiltinCatalog().providers.filter((entry) => entry.brand === "Kimi");
     // Catalog order: moonshot (index 3) precedes kimi (index 4) — same order
     // the drawer's brand group must preserve.
     expect(branded.map((entry) => entry.id)).toEqual(["moonshot", "kimi"]);

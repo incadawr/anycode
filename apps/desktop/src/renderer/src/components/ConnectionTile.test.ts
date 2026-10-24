@@ -383,20 +383,20 @@ describe("connectionTileProviderLabel (TASK.70: one brand = one card)", () => {
         name: "Kimi (kimi.com subscription)",
         authKind: "api_key",
         models: [],
-        brand: "kimi",
+        brand: "Kimi",
         modeLabel: "Subscription (kimi.com)",
       }),
-    ).toBe("kimi · Subscription (kimi.com)");
+    ).toBe("Kimi · Subscription (kimi.com)");
     expect(
       connectionTileProviderLabel({
         id: "moonshot",
         name: "Moonshot (Kimi, platform API)",
         authKind: "api_key",
         models: [],
-        brand: "kimi",
+        brand: "Kimi",
         modeLabel: "Platform API (moonshot.ai)",
       }),
-    ).toBe("kimi · Platform API (moonshot.ai)");
+    ).toBe("Kimi · Platform API (moonshot.ai)");
   });
 
   it("a brandless entry still renders its exact entry name", () => {

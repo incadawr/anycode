@@ -153,7 +153,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     // TASK.70 (Taskana 4089): one brand = one card; this entry is the platform
     // API mode of the Kimi brand card.
     name: "Moonshot (Kimi, platform API)",
-    brand: "kimi",
+    brand: "Kimi",
     modeLabel: "Platform API (moonshot.ai)",
     baseUrl: "https://api.moonshot.ai/anthropic",
     defaultTransport: "anthropic-messages",
@@ -196,7 +196,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     // TASK.70 (Taskana 4089): one brand = one card; this entry is the
     // subscription mode of the Kimi brand card.
     name: "Kimi (kimi.com subscription)",
-    brand: "kimi",
+    brand: "Kimi",
     modeLabel: "Subscription (kimi.com)",
     baseUrl: "https://api.kimi.com/coding",
     defaultTransport: "anthropic-messages",
