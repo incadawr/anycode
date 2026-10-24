@@ -1321,6 +1321,7 @@ export class ClaudeEngine implements SessionEngine {
     let preTokens = 0;
     let terminal = false;
     let abortObserved = false;
+    let cancelledBeforeSend = false;
     let settle: SettleDeadline | null = null;
     const cancelSettle = (): void => settle?.cancel();
 
@@ -1361,8 +1362,14 @@ export class ClaudeEngine implements SessionEngine {
           ),
         ]);
         if (raced.kind === "abort") {
-          // The user's Stop outranks the wait: break to the owner loop, where
-          // the already-armed abort fires first (interrupt + settle deadline).
+          // The user's Stop outranks the wait — and, exactly like runTurn's
+          // barrier, it means NEVER send: the compaction never started, so
+          // nothing is interrupted (the foreign turn is the CLI's own and
+          // keeps running; the idle reader restarted below absorbs it). A
+          // /compact sent after Stop would queue behind the foreign turn and
+          // run a compaction the user cancelled, unobserved (Taskana 4098
+          // review).
+          cancelledBeforeSend = true;
           break;
         }
         if (raced.kind === "foreign-done") continue; // re-check: an adjacent foreign turn may have opened
@@ -1380,7 +1387,12 @@ export class ClaudeEngine implements SessionEngine {
       // between the engine's idle checks and this send; the catch below turns
       // that into an honest compaction_end{ok:false} instead of a throw out
       // of the generator after compaction_start was already yielded.)
-      this.client.sendUserMessage(CLAUDE_SLASH_ALLOWLIST[0]);
+      if (cancelledBeforeSend) {
+        terminal = true; // ok stays false
+        error = "cancelled";
+      } else {
+        this.client.sendUserMessage(CLAUDE_SLASH_ALLOWLIST[0]);
+      }
 
       while (!terminal) {
         const raced = await Promise.race([

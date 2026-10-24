@@ -2244,3 +2244,58 @@ describe("ClaudeEngine.compactNow — TASK.92 allowlisted /compact passthrough",
     expect(transport.sent[1]).toBe("/anything /at /all");
   });
 });
+
+// ── Taskana 4098 review: compactNow through the REAL composition ───────────
+// host/index.ts hands Session a ClaudeShadowTranscriptEngine wrapping a real
+// ClaudeEngine; Session's compact_request rail gates on method presence. This
+// pins the shipped composition (real engine, real wrapper), not a fake.
+describe("ClaudeEngine under ClaudeShadowTranscriptEngine — Taskana 4098 review (F1 end-to-end)", () => {
+  it("the wrapper over a real root ClaudeEngine exposes compactNow, sends the allowlisted frame, and hands the stream back", async () => {
+    const { ClaudeShadowTranscriptEngine } = await import("./shadow-transcript.js");
+    const transport = new FakeTransport({
+      frames: [resultFrame157("completed")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+    const recorded: unknown[] = [];
+    const wrapped = new ClaudeShadowTranscriptEngine(engine, { record: (_ref, items) => recorded.push(...items), list: async () => [] }, "session-ref-1", []);
+
+    expect(wrapped.capabilities.supportsManualCompact).toBe(true);
+    expect(wrapped.compactNow).toBeDefined();
+    const events = await collect(wrapped.compactNow!({ signal: new AbortController().signal }));
+    expect(transport.sent).toEqual(["/compact"]);
+    expect(events.find((event) => event.type === "compaction_end")).toMatchObject({ type: "compaction_end", ok: true });
+    expect(recorded).toEqual([]);
+  });
+});
+
+describe("ClaudeEngine.compactNow — Taskana 4098 review (Stop during the foreign-turn barrier)", () => {
+  it("a Stop while waiting out a foreign turn never sends /compact, never interrupts the CLI's own turn, and ends ok:false cancelled", async () => {
+    const transport = new FakeTransport({
+      frames: [foreignAssistantFrame("m-turn1", "first owner turn"), foreignResultFrame("first result")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("first", { signal: new AbortController().signal }));
+    transport.push(foreignAssistantFrame("m-foreign-open", "a cross-session notice is being handled"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const controller = new AbortController();
+    const collecting = collect(engine.compactNow({ signal: controller.signal }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    const events = await collecting;
+
+    expect(transport.sent).toEqual(["first"]);
+    expect(transport.interrupts).toBe(0);
+    expect(events.find((event) => event.type === "compaction_end")).toMatchObject({ type: "compaction_end", ok: false, error: "cancelled" });
+
+    // The foreign turn still settles through the restarted idle reader, and a
+    // later owner turn is not wedged behind it.
+    transport.push(foreignResultFrame("foreign result"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    transport.enqueue(resultFrame157("completed"));
+    await collect(engine.runTurn("after", { signal: new AbortController().signal }));
+    expect(transport.sent).toEqual(["first", "after"]);
+  });
+});
