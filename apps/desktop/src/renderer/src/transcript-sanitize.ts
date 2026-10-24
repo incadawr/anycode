@@ -9,7 +9,7 @@
 // processing order — renderer code cannot value-import from @anycode/core
 // (only `import type`, see ModeMenu.tsx), so this list is intentionally
 // duplicated.
-const PAIRED_REMINDER_TAGS = ["hook-context", "plan-mode-reminder", "system-reminder"] as const;
+const PAIRED_REMINDER_TAGS = ["hook-context", "plan-mode-reminder", "orchestrate-reminder", "system-reminder"] as const;
 
 /**
  * Removes every non-overlapping `<tag>...</tag>` occurrence for a single

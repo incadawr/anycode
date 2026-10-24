@@ -126,6 +126,28 @@ export interface KeybindingOverride {
 }
 
 /**
+ * Taskana 4704 §3.5: one hop of a role's model route. Exactly ONE of
+ * `engine` / `connection` / `provider` may be set (the settings schema
+ * enforces the XOR per element; a bad element drops alone). Absent routing
+ * keys means "this entry only names a model on the session's connection".
+ */
+export interface RoleRouteEntry {
+  engine?: "codex" | "claude";
+  /** Exact connection id; mutually exclusive with engine. */
+  connection?: string;
+  /** Catalog provider id; mutually exclusive with engine and connection. */
+  provider?: string;
+  model?: string;
+  effort?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
+}
+
+/** A role's ordered route: primary first, fallbacks after (parent model is the implicit last resort). */
+export interface RoleConfig {
+  primary: RoleRouteEntry;
+  fallbacks?: RoleRouteEntry[];
+}
+
+/**
  * Wire protocol a provider selection speaks (TASK.43, mirrors core's
  * `ProviderTransport`). Redeclared here — not imported from `@anycode/core` —
  * so this value-only module keeps its zero-import rule (same precedent as
@@ -655,6 +677,24 @@ export interface AnycodeSettings {
   recognizer?: {
     connectionId: string;
     modelId: string;
+  };
+  /**
+   * Taskana 4704 §3.5: orchestration roles (additive-optional, version NOT
+   * bumped — same forward-compat reasoning as `preview`/`recognizer` above:
+   * an existing settings.json with no `roles` key round-trips byte-identically
+   * and means "built-in defaults"). Each role carries an ordered route chain:
+   * `primary` first, then `fallbacks`; the parent model stays the implicit
+   * last resort (host stamps no route fields when every entry is skipped).
+   * `maxParallelChildren` caps an orchestrate session's live detached
+   * children (default 4, honest refusal at the cap — no queueing).
+   */
+  roles?: {
+    orchestrator?: RoleConfig;
+    planner?: RoleConfig;
+    executor?: RoleConfig;
+    reviewer?: RoleConfig;
+    explore?: RoleConfig;
+    maxParallelChildren?: number;
   };
   /**
    * Live session-capacity limits (TASK.119 / TASK.147 slice 2; additive-optional,

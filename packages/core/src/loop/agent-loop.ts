@@ -435,6 +435,15 @@ export interface AgentLoopConfig {
    */
   planExitMode?: Exclude<PermissionMode, "plan" | "yolo">;
   /**
+   * Taskana 4704 §3.3: true while this session tab runs in orchestrate mode.
+   * The loop copies it into the DispatchContext; the dispatcher copies it into
+   * every ToolContext; the Agent tool reads it (sole consumer) to default a
+   * `tier:"session"` call with no explicit detach/send_to/continue_session to
+   * `detach:true`. NOT copied by buildChildConfig — a child loop is never
+   * orchestrate (children do work; only the orchestrator tab delegates).
+   */
+  orchestrate?: boolean;
+  /**
    * Notifies the client of a mode change made by the exit arc (CLI:
    * touchSession; desktop: since TASK.27). Never fired by setMode() — a
    * user-initiated mid-turn mode change (TASK.37) owns its own notification
@@ -1082,6 +1091,14 @@ export class AgentLoop {
       preview: this.config.preview,
       artifacts: this.config.artifacts,
     };
+    // Taskana 4704 §3.3: orchestrate rides the dispatch context (read at
+    // dispatch time so a between-turns toggle lands next turn, same
+    // discipline as mode above). Copied into ToolContext by the dispatcher.
+    // Set as a plain assignment (not a spread) — the prologue guard requires
+    // this stretch to stay a single synchronous job with no spreads.
+    if (this.config.orchestrate === true) {
+      dispatchCtx.orchestrate = true;
+    }
 
     // Plan-mode exit arc (design slice-4.3-cut.md §2.3): built ONLY when the
     // wiring opted in via planExitMode. exitPlan is ONE of the two sanctioned

@@ -28,6 +28,8 @@ import {
   CURRENT_SETTINGS_VERSION,
   DEFAULT_SETTINGS,
   cloneDefaults,
+  roleRouteEntrySchema,
+  rolesSchema,
   isHttpsOrLocalhostUrl,
   isLoopbackUrl,
   mergeSettings,
@@ -1829,5 +1831,107 @@ describe("tools.grepBackend (Taskana 4160, additive-optional)", () => {
     if (parsed.success) {
       expect(parsed.data.tools.grepBackend).toBeUndefined();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4704 §3.5: the `roles` section — additive-optional, version NOT
+// bumped (preview/recognizer precedent). Absent means "built-in defaults";
+// a corrupt roles value degrades alone (whole-object catch); a bad fallback
+// element drops alone (per-element tolerance); engine+connection in one
+// entry is rejected.
+
+describe("roles (Taskana 4704 §3.5, additive-optional)", () => {
+  it("reads a file with no roles field, round-tripping byte-identically (v2)", () => {
+    const legacy = cloneDefaults();
+    const before = JSON.stringify(legacy);
+    const result = parseSettings(JSON.parse(before));
+    expect(result.status).toBe("ok");
+    expect(result.settings.roles).toBeUndefined();
+    expect(JSON.stringify(result.settings)).toBe(before);
+  });
+
+  it("round-trips a full roles section (chains + cap)", () => {
+    const withRoles: AnycodeSettings = {
+      ...cloneDefaults(),
+      roles: {
+        orchestrator: { primary: { engine: "claude" } },
+        planner: { primary: { engine: "claude" }, fallbacks: [{ connection: "conn-main" }] },
+        executor: {
+          primary: { engine: "codex" },
+          fallbacks: [{ connection: "conn-main" }, { provider: "z-ai", model: "glm-5.3" }],
+        },
+        reviewer: { primary: { engine: "claude", effort: "high" } },
+        explore: { primary: { connection: "conn-main", model: "glm-5.3-air", effort: "low" } },
+        maxParallelChildren: 6,
+      },
+    };
+    const reloaded = parseSettings(JSON.parse(JSON.stringify(withRoles)));
+    expect(reloaded.status).toBe("ok");
+    const roles = reloaded.settings.roles;
+    expect(roles?.executor?.primary.engine).toBe("codex");
+    expect(roles?.executor?.fallbacks).toHaveLength(2);
+    expect(roles?.explore?.primary.model).toBe("glm-5.3-air");
+    expect(roles?.maxParallelChildren).toBe(6);
+  });
+
+  it("a corrupt roles value degrades to undefined alone — siblings survive", () => {
+    const bad = { ...cloneDefaults(), roles: "not an object", preview: { autoOpen: true } };
+    const reloaded = parseSettings(JSON.parse(JSON.stringify(bad)));
+    expect(reloaded.status).toBe("ok");
+    expect(reloaded.settings.roles).toBeUndefined();
+    expect(reloaded.settings.preview?.autoOpen).toBe(true);
+  });
+
+  it("a bad fallback element drops alone; the primary and good siblings survive", () => {
+    const withRoles: AnycodeSettings = {
+      ...cloneDefaults(),
+      roles: {
+        executor: {
+          primary: { engine: "codex" },
+          fallbacks: [
+            // The first element is intentionally invalid (engine+connection
+            // conflict) — exercising the runtime per-element tolerance.
+            { engine: "claude", connection: "conflict" } as unknown as { connection: string },
+            { connection: "conn-main" },
+          ],
+        },
+      },
+    };
+    const reloaded = parseSettings(JSON.parse(JSON.stringify(withRoles)));
+    expect(reloaded.status).toBe("ok");
+    expect(reloaded.settings.roles?.executor?.fallbacks).toEqual([{ connection: "conn-main" }]);
+  });
+
+  it("engine+connection in ONE entry is rejected (mutual exclusion)", () => {
+    // The whole-object catch degrades the SECTION to undefined rather than
+    // failing the document — a bad primary costs the whole roles section
+    // (the recognizer precedent), a bad FALLBACK element drops alone (the
+    // per-element tolerance test above).
+    const bad1 = rolesSchema.safeParse({ planner: { primary: { engine: "claude", connection: "c" } } });
+    expect(bad1.success === true && bad1.data).toBeUndefined();
+    const bad2 = rolesSchema.safeParse({ planner: { primary: { connection: "c", provider: "p" } } });
+    expect(bad2.success === true && bad2.data).toBeUndefined();
+    // Direct entry-level rejection is visible on the entry schema itself.
+    expect(roleRouteEntrySchema.safeParse({ engine: "claude", connection: "c" }).success).toBe(false);
+    expect(roleRouteEntrySchema.safeParse({ connection: "c", provider: "p" }).success).toBe(false);
+    expect(roleRouteEntrySchema.safeParse({ engine: "claude" }).success).toBe(true);
+    expect(roleRouteEntrySchema.safeParse({ connection: "c" }).success).toBe(true);
+    expect(roleRouteEntrySchema.safeParse({ provider: "p" }).success).toBe(true);
+    expect(roleRouteEntrySchema.safeParse({ model: "m", effort: "xhigh" }).success).toBe(true);
+  });
+
+  it("maxParallelChildren clamps its vocabulary (1..16 int)", () => {
+    expect(rolesSchema.safeParse({ maxParallelChildren: 4 }).data).toEqual({ maxParallelChildren: 4 });
+    expect(rolesSchema.safeParse({ maxParallelChildren: 16 }).data).toEqual({ maxParallelChildren: 16 });
+    // Out-of-range catches to undefined ALONE (per-field catch), the section
+    // and its roles survive.
+    const zero = rolesSchema.safeParse({ maxParallelChildren: 0, planner: { primary: { engine: "claude" } } });
+    expect(zero.success === true ? zero.data : undefined).toEqual({ planner: { primary: { engine: "claude" } } });
+    const huge = rolesSchema.safeParse({ maxParallelChildren: 17 });
+    expect(huge.success === true ? huge.data : undefined).toEqual({});
+    // A wrong-typed value catches to undefined the same way.
+    const bad = rolesSchema.safeParse({ maxParallelChildren: "four" });
+    expect(bad.success === true && bad.data?.maxParallelChildren).toBeUndefined();
   });
 });

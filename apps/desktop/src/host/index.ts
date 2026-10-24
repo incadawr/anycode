@@ -261,6 +261,13 @@ import {
   REPO_MAP_WINDOW_FRACTION,
   withSubagents,
   withWorkflows,
+  // Taskana 4704 §3.1/§3.6: role personas, their turn budgets, and the
+  // role-route chain plumbing (host-side resolver below).
+  PERSONAS,
+  ROLE_TURN_BUDGETS,
+  isRoleRouteName,
+  type PersonaDefinition,
+  type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
@@ -287,6 +294,7 @@ import type {
   RepoMapConfig,
   SessionSubagentOutcome,
   SessionSubagentRequest,
+  SubagentRunOptions,
   SubagentStallReport,
   SystemPromptEnv,
   TelemetryPort,
@@ -306,6 +314,9 @@ import {
   type SupervisorIdleReport,
 } from "./supervisor-idle-watchdog.js";
 import { attachChildReportDurability, attachEngineChildReportDurability } from "./child-report-durability.js";
+import { RoleHealthCache, decideRoutedTerminal, entryLabel, pickEntry, toCoreEntry } from "./role-route.js";
+import { parseSettings } from "../settings/schema.js";
+import { readFileSync } from "node:fs";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
@@ -486,6 +497,75 @@ const emit = (message: HostToUiMessage): void => {
 // ui_ready and persist every mutation back to it.
 const childReportQueue = new ChildReportQueue(outbound);
 
+// ── Taskana 4704 §3.6: host-side role-route state ──
+//
+// One RoleHealthCache per host process (process-local by design, §9-Q3: a
+// restart re-probes naturally — never persisted). `resolveRoleRoute` (wired
+// into withSubagents + the session-tier Agent path via the SubagentPort)
+// reads settings `roles` and consults this cache; the detached-terminal
+// respawn path marks failures/successes here.
+//
+// A ROLE persona (planner/executor/reviewer/explore) with configured roles
+// resolves to `{ entries, skipped, turnBudget }`; everything else returns
+// null (built-in defaults apply). The parent model remains the implicit last
+// resort: when every entry is skipped/unhealthy, `entries` comes back EMPTY
+// and no route fields are stamped anywhere.
+const roleHealth = new RoleHealthCache();
+type RolesSettings = NonNullable<import("../shared/settings.js").AnycodeSettings["roles"]>;
+
+/**
+ * Live roles settings cell (Taskana 4704 §3.6). Synchronous read of the
+ * settings document (fail-soft): the `resolveRoleRoute` port method is sync,
+ * so the cell is refreshed eagerly — once at boot and again whenever main
+ * signals a settings change (same notification the always-allow rules use).
+ * Absent roles means "built-in defaults".
+ */
+let rolesSettings: RolesSettings | undefined;
+function refreshRolesSettings(): void {
+  try {
+    const raw = JSON.parse(readFileSync(defaultSettingsPath(), "utf8"));
+    const parsed = parseSettings(raw);
+    rolesSettings = parsed.status === "ok" ? parsed.settings.roles : undefined;
+  } catch {
+    rolesSettings = undefined;
+  }
+}
+refreshRolesSettings();
+
+/**
+ * Taskana 4704 §3.6: the host-side role-route resolver — the ONE port method
+ * core uses for role chains (runner inline walk + Agent session-tier
+ * stamping). Reads settings `roles[agentType]`, builds [primary, ...
+ * fallbacks], consults the health cache, and returns the still-healthy tail
+ * (spawn-time selection skips cooldown/known-dead entries). The parent model
+ * is the implicit last resort: every entry skipped => empty `entries`, and no
+ * route fields are stamped anywhere downstream.
+ *
+ * `turnBudget` rides only the three ROLE personas (ROLE_TURN_BUDGETS);
+ * explore keeps DEFAULT_SUBAGENT_MAX_TURNS (§2.9).
+ */
+function resolveRoleRouteImpl(agentType: string): RoleRouteResolution | null {
+  if (!isRoleRouteName(agentType)) return null;
+  const config = rolesSettings?.[agentType as "planner" | "executor" | "reviewer" | "explore"];
+  if (config === undefined) return null;
+  const chain = [config.primary, ...(config.fallbacks ?? [])].map(toCoreEntry);
+  const now = Date.now();
+  const picked = pickEntry(chain, roleHealth.snapshot(), now, agentType);
+  if (picked === null) {
+    // Whole chain unhealthy — the parent model is the implicit last resort.
+    return { entries: [], skipped: [] };
+  }
+  const budget =
+    agentType === "planner" || agentType === "executor" || agentType === "reviewer"
+      ? ROLE_TURN_BUDGETS[agentType]
+      : undefined;
+  return {
+    entries: [picked.entry, ...chain.slice(picked.index + 1)],
+    skipped: picked.skipped,
+    ...(budget !== undefined ? { turnBudget: budget } : {}),
+  };
+}
+
 // Credential broker (design §3.3, slice 2.5.3): CredentialResponse messages
 // arrive on the same parentPort "message" event as the port-handoff/shutdown
 // control messages below; MainCredentialProvider instances (one per
@@ -529,6 +609,99 @@ function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel | C
 }
 
 /**
+ * Taskana 4704 §3.6: per-spawn record of the role entry a DETACHED spawn
+ * actually ran on (the host stamped it at spawn time via the Agent tool's
+ * roleRoute). Keyed by `spawnToolCallId` — the stable id a terminal outcome
+ * carries back. Removed at every terminal (the port's onDetachedTerminal
+ * fires exactly once per detached child).
+ */
+interface RoutedSpawnRecord {
+  role: string;
+  /** The entry this child is running on (already core-shaped). */
+  entry: import("@anycode/core").RoleRouteEntry;
+  /** The REMAINING chain after `entry` (health re-checked at respawn). */
+  rest: import("@anycode/core").RoleRouteEntry[];
+  /** True once this spawn already ran on a non-primary entry (visibility §3.6). */
+  usedFallback: boolean;
+  /** The reason the primary was skipped (for the visibility line); undefined when the primary was used. */
+  skipReason?: string;
+}
+const routedSpawns = new Map<string, RoutedSpawnRecord>();
+
+/**
+ * Taskana 4704 §3.6: registers a detached spawn's route facts at ADMIT time.
+ * Called by the host wrapper around the child port (see the spawnTap seam in
+ * createCoreChildSessionPort) — pure bookkeeping, no I/O.
+ */
+function noteRoutedSpawn(req: SessionSubagentRequest, resolution: RoleRouteResolution): void {
+  const first = resolution.entries[0];
+  if (first === undefined || !isRoleRouteName(req.agentType)) return;
+  routedSpawns.set(req.spawnToolCallId, {
+    role: req.agentType,
+    entry: first,
+    rest: resolution.entries.slice(1),
+    usedFallback: resolution.skipped.length > 0,
+    ...(resolution.skipped.length > 0 ? { skipReason: resolution.skipped[0]!.reason } : {}),
+  });
+}
+
+/**
+ * Taskana 4704 §3.6 — the visibility line for a terminal report: names the
+ * role, the NON-PRIMARY entry it ran on, and why (spawn-time skip reason or
+ * respawn cause). Undefined for primary-entry runs (the common case — no
+ * noise). MUST run before respawnRoutedRoleChild (which consumes the record).
+ */
+function detachedRouteNotice(req: SessionSubagentRequest): string | undefined {
+  const record = routedSpawns.get(req.spawnToolCallId);
+  if (record === undefined || !record.usedFallback || record.skipReason === undefined) {
+    return undefined;
+  }
+  return `Role ${record.role} ran on ${entryLabel(record.entry)} because ${record.skipReason}.`;
+}
+
+/**
+ * Taskana 4704 §3.6 — the detached-terminal respawn decision (pure logic in
+ * role-route.ts's decideRoutedTerminal; this wrapper performs the I/O: the
+ * re-spawn through the port and the short report). Returns true when the
+ * terminal was CONSUMED by a respawn (the caller must NOT deliver the child's
+ * error report). False => deliver the outcome unchanged (possibly with the
+ * appended exhausted-chain line).
+ */
+function respawnRoutedRoleChild(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): boolean {
+  const record = routedSpawns.get(req.spawnToolCallId);
+  routedSpawns.delete(req.spawnToolCallId);
+  const decision = decideRoutedTerminal(record, outcome.status, outcome.finalText, roleHealth, Date.now());
+  if (decision.action === "deliver") {
+    return false;
+  }
+  if (decision.action === "deliver_exhausted") {
+    outcome.finalText = `${outcome.finalText}\n[role ${record!.role}: all route entries failed]`;
+    return false;
+  }
+  // Respawn the same prompt/description on the next healthy entry: a FRESH
+  // spawnToolCallId, description prefixed "[fallback] ", and the report the
+  // orchestrator sees for THIS terminal is the short retrying notice.
+  const respawnId = randomUUID();
+  const respawnReq: SessionSubagentRequest = {
+    ...req,
+    spawnToolCallId: respawnId,
+    description: `[fallback] ${req.description}`,
+    provider: decision.entry.provider,
+    connectionId: decision.entry.connection,
+    model: decision.entry.model,
+    effort: decision.entry.effort,
+    detach: true,
+  };
+  routedSpawns.set(respawnId, { ...decision.next, rest: [...decision.next.rest] });
+  childSessionPortForRespawn?.run(respawnReq, {});
+  childReportQueue.add(respawnId, decision.notice, { status: "completed", durationMs: 0 });
+  return true;
+}
+
+/** The core boot's child port — set once constructed, used ONLY by the respawn path above. */
+let childSessionPortForRespawn: ChildSessionPort | undefined;
+
+/**
  * TASK.145 срез 1/2: builds and delivers a detached child's terminal report
  * to its parent tab. Wired as `createChildSessionPort`'s `onDetachedTerminal`
  * seam above — called ONLY for a `detach:true` session-tier spawn, strictly
@@ -545,6 +718,27 @@ function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel | C
  * renderer's (store.ts's `child_report` case).
  */
 function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): void {
+  // Taskana 4704 §3.6 — visibility: whenever a spawn actually ran on a
+  // NON-PRIMARY entry (spawn-time health skip recorded at admit, or a
+  // respawn), the delivered report text gains a first line naming the role,
+  // the entry it ran on, and why. Reports are the orchestrator's input; the
+  // child card already shows the model id (subagent_start.model). PEEKED
+  // here, BEFORE the respawn decision below (which consumes the record).
+  const routeNotice = detachedRouteNotice(req);
+  // Taskana 4704 §3.6 — detached respawn (fallback point 2). An
+  // infrastructure-class failure of a ROUTED role child marks its entry dead
+  // and re-spawns the SAME prompt on the next healthy entry (a fresh child
+  // session; the original error report is REPLACED by a short retrying
+  // notice — the eventual real terminal delivers normally). An exhausted
+  // chain delivers the original error with an appended failure line. A
+  // completed routed child marks its entry healthy. Ordinary task failures
+  // (classify => "none") NEVER fall back — they deliver unchanged.
+  if (respawnRoutedRoleChild(outcome, req)) {
+    return;
+  }
+  if (routeNotice !== undefined) {
+    outcome.finalText = `${routeNotice}\n${outcome.finalText}`;
+  }
   const fullReportPath = childNotificationSummaryOverflows(outcome.finalText)
     ? saveFullChildReport(defaultChildReportDir(), outcome.childSessionId, outcome.finalText)
     : undefined;
@@ -3432,10 +3626,29 @@ async function boot(): Promise<void> {
     // further down. `undefined` for a child-session boot or a claude/codex
     // master, exactly mirroring `config.sessionSubagents`'s own absence.
     let childSessionPortHandle: ChildSessionPort | undefined;
+    // A1 (Taskana 4704 review): late-binding cell for the child spawn
+    // permission mode. The child port (below) exists BEFORE the Session, so
+    // it reads through this cell; the Session binds its `get` to its own
+    // live `childSpawnMode()` once constructed. Unbound (pre-bind, or a boot
+    // that never reaches the Session) falls back to the live config.mode —
+    // identical to the pre-4704 wiring.
+    const rootSessionChildSpawnModeCell: {
+      value?: undefined;
+      get?: () => PermissionMode;
+    } = {};
     if (!isChildSessionBoot(args, sessionMeta)) {
       childSessionPortHandle = createChildSessionPort({
         parentSessionId: sessionMeta.id,
-        getPermissionMode: () => config.mode,
+        // A1 (Taskana 4704 review): children inherit the mode the ORCHESTRATOR
+        // had BEFORE orchestrate was enabled — never `plan` (an orchestrate
+        // parent sits in plan, but its executor children MUST be able to
+        // write) and never `yolo` unless the user was already in yolo. The
+        // Session exposes this as `childSpawnMode()`; non-orchestrate sessions
+        // return the live mode (byte-identical pre-4704 behavior — the child
+        // inherits the parent's mode at the moment Agent was invoked, cut
+        // §0.8). Late-bound through the cell below because the port exists
+        // before the Session is constructed.
+        getPermissionMode: () => rootSessionChildSpawnModeCell.get?.() ?? config.mode,
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
         // TASK.145 срез 1: the detach-delivery seam. Fires strictly AFTER
@@ -3453,8 +3666,28 @@ async function boot(): Promise<void> {
         // when the env/setting is unset. Now governs BOTH the sync and
         // detached stall clocks (slice 2 wires the detached one too).
         stallTimeoutMs: envConfig.subagentStallTimeoutMs,
+        // Taskana 4704 §2.8/§3.6: the parallel-children cap (live cell —
+        // `roles.maxParallelChildren ?? 4`; undefined only when the settings
+        // read failed, which keeps the pre-4704 unlimited posture).
+        maxDetachedChildren: () => rolesSettings?.maxParallelChildren ?? 4,
       });
       config.sessionSubagents = childSessionPortHandle;
+      // Taskana 4704 §3.6: the respawn path re-spawns through THIS port, and
+      // every detached spawn's route facts are recorded at admit so a
+      // terminal can classify + respawn. The wrapper records ONLY routed
+      // role spawns (noteRoutedSpawn no-ops otherwise) and never alters the
+      // outcome — the port itself stays byte-identical.
+      childSessionPortForRespawn = childSessionPortHandle;
+      const innerRun = childSessionPortHandle.run.bind(childSessionPortHandle);
+      childSessionPortHandle.run = (req: SessionSubagentRequest, opts: SubagentRunOptions) => {
+        if (req.detach === true && isRoleRouteName(req.agentType)) {
+          const resolution = resolveRoleRouteImpl(req.agentType);
+          if (resolution !== null) {
+            noteRoutedSpawn(req, resolution);
+          }
+        }
+        return innerRun(req, opts);
+      };
     }
     // taskana 4181: the supervisor idle watchdog for a CORE root boot — the
     // engine-agnostic twin of the codex boot's construction above (same
@@ -3524,7 +3757,37 @@ async function boot(): Promise<void> {
     const loop = new AgentLoop(
       withWorkflows(
         withSubagents(config, {
-          profiles: () => ext.profiles,
+          // Taskana 4704 §3.6: settings-derived role personas. For each of
+          // planner/executor/reviewer NOT claimed by md-discovery, a derived
+          // PersonaDefinition is appended carrying the settings
+          // roles[role].primary fields (engine/connection/provider/model/
+          // effort) and ROLE_TURN_BUDGETS' turn budget. Precedence (§2.1):
+          // md-profile > settings-derived > built-in — md-discovery's own
+          // list stays FIRST and untouched; the derived entries trail it, and
+          // the runner's profile-wins resolution handles the rest.
+          profiles: () => {
+            const claimed = new Set(ext.profiles.map((p) => p.name));
+            const derived: PersonaDefinition[] = [];
+            for (const role of ["planner", "executor", "reviewer"] as const) {
+              if (claimed.has(role)) continue;
+              const primary = rolesSettings?.[role]?.primary;
+              if (primary === undefined) continue;
+              const builtIn = PERSONAS[role];
+              derived.push({
+                name: role,
+                description: builtIn.description,
+                tools: builtIn.tools,
+                systemPrompt: builtIn.systemPrompt,
+                turnBudget: ROLE_TURN_BUDGETS[role],
+                ...(primary.model !== undefined ? { model: primary.model } : {}),
+                ...(primary.effort !== undefined ? { effort: primary.effort } : {}),
+                ...(primary.engine !== undefined ? { engine: primary.engine } : {}),
+                ...(primary.connection !== undefined ? { connection: primary.connection } : {}),
+                ...(primary.provider !== undefined ? { provider: primary.provider } : {}),
+              });
+            }
+            return derived.length > 0 ? [...ext.profiles, ...derived] : ext.profiles;
+          },
           env: systemPromptEnv,
           memorySection: ext.memorySection,
           // Taskana 4131: cheap-model default for inline explore children
@@ -3551,6 +3814,10 @@ async function boot(): Promise<void> {
           // threaded into every persona child registry that lists "WebSearch".
           // Absent (no backend) keeps the runner byte-compatible.
           ...(webSearchTool !== undefined ? { webSearchTool } : {}),
+          // Taskana 4704 §3.6: the host-side role-route resolver — settings
+          // roles + health cache are HOST state; the runner walks the
+          // returned chain for ROLE personas (§3.2) and nothing else.
+          resolveRoleRoute: resolveRoleRouteImpl,
         }),
         ext.workflows,
       ),
@@ -3927,6 +4194,51 @@ async function boot(): Promise<void> {
             },
           }
         : {}),
+      // A1 (Taskana 4704 review): the Session exposes the mode CHILD spawns
+      // should run under — the pre-orchestrate mode while orchestrate is on
+      // (plan is coerced to build: an executor child must be able to write;
+      // yolo only if the user was already yolo), else the live mode. The
+      // child port's getPermissionMode reads it through the late-binding
+      // cell declared next to its construction above.
+      childSpawnMode: (): PermissionMode => rootSessionChildSpawnModeCell.get?.() ?? config.mode,
+      // Taskana 4704 §3.7: orchestrate transitions land on the AgentLoopConfig
+      // (config.orchestrate), which the loop threads into the dispatch context
+      // and the dispatcher into every ToolContext — the Agent tool reads it for
+      // orchestrate default-detach (§3.3).
+      onOrchestrateChanged: (enabled: boolean) => {
+        if (enabled) {
+          config.orchestrate = true;
+        } else {
+          delete config.orchestrate;
+        }
+      },
+      // Taskana 4704 §3.6: turn-start orchestrator-route check — the host
+      // owns the health cache AND switchModelImpl. Applies model+effort ONLY
+      // on the tab's active connection (§9-Q2: connection switching stays
+      // manual). Returns the engine_notice line when a switch happened.
+      orchestratorRouteCheck: (): string | undefined => {
+        const orchestrator = rolesSettings?.orchestrator;
+        if (orchestrator === undefined) return undefined;
+        const chain = [orchestrator.primary, ...(orchestrator.fallbacks ?? [])].map(toCoreEntry);
+        const picked = pickEntry(chain, roleHealth.snapshot(), Date.now(), "orchestrator");
+        if (picked === null || picked.index === 0) {
+          // Primary healthy (or nothing to switch to) — no notice.
+          return undefined;
+        }
+        // The primary was skipped for a health reason and a fallback exists.
+        // Only a fallback carrying a model on THIS connection can switch
+        // here (an engine/connection entry is a different connection —
+        // manual, surfaced as the reason line only when it has a model).
+        const reason = picked.skipped[0]?.reason ?? "unhealthy";
+        if (picked.entry.model === undefined) {
+          return `Orchestrator: primary route unhealthy (${reason}); configure a model fallback to switch automatically.`;
+        }
+        const effort = picked.entry.effort === undefined || picked.entry.effort === "xhigh"
+          ? undefined
+          : picked.entry.effort;
+        switchModelImpl(picked.entry.model, effort ?? selectedEffort ?? "medium");
+        return `Orchestrator: primary route unhealthy (${reason}), running on ${picked.entry.model}.`;
+      },
       // Slice P7.8 (design slice-P7.8-cut.md §3.2, mirror of the `lsp` seam
       // above): telemetry reads live counters on every push; repo-map is
       // boot-frozen (computed once above, right after buildRepoMapPromptSection).
@@ -4007,6 +4319,14 @@ async function boot(): Promise<void> {
           }
         : {}),
     });
+    // A1 (Taskana 4704 review): bind the child-port's late-binding spawn-mode
+    // cell to the Session's own `childSpawnMode()` LIVE getter — while
+    // orchestrate is on, children run under the PRE-orchestrate mode (plan
+    // coerced to build); otherwise the live mode (the pre-4704
+    // inherit-parent contract). Bound as a thunk (not a snapshot) so a
+    // set_mode/set_orchestrate between spawns is picked up on the next call.
+    const rootSession = session;
+    rootSessionChildSpawnModeCell.get = () => rootSession.childSpawnMode();
 
     console.log(
       `[host] initialized. workspace=${workspace} model=${envConfig.model} session=${sessionId}` +

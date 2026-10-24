@@ -78,6 +78,7 @@ import {
   summarizeChildToolCall,
   withBackgroundTaskNotices,
   withPlanModeReminder,
+  withOrchestrateReminder,
 } from "@anycode/core";
 import { randomUUID } from "node:crypto";
 import type {
@@ -821,6 +822,35 @@ export interface SessionOptions {
     noteTurnStarted(): void;
   };
   /**
+   * A1 (Taskana 4704 review): the mode CHILD spawns should run under. While
+   * orchestrate is on, this is the PRE-orchestrate mode with `plan` coerced
+   * to `build` (an executor child must be able to write; yolo only if the
+   * user was already yolo); otherwise the LIVE mode (the pre-4704
+   * inherit-parent contract, cut §0.8). The host's child-session port reads
+   * it per spawn via its getPermissionMode seam. Absent => the live mode.
+   */
+  childSpawnMode?: () => PermissionMode;
+  /**
+   * Taskana 4704 §3.6: the orchestrator-route turn-start check. Called at
+   * turn accept (before busy=true) ONLY while orchestrate is on and
+   * roles.orchestrator.primary targets the tab's ACTIVE connection: the host
+   * checks the entry's health and, when it is unhealthy and a healthy
+   * fallback exists, performs the model switch itself and returns the
+   * engine_notice line to surface. Null/undefined return => no notice, no
+   * switch. Absent seam (legacy tests) => byte-identical turns.
+   */
+  orchestratorRouteCheck?: () => string | undefined;
+  /**
+   * Taskana 4704 §3.7: host callback fired on every orchestrate TRANSITION
+   * (after the mode switch + ack emit). The host copies the flag onto the
+   * AgentLoopConfig (`config.orchestrate`), which the loop threads into the
+   * dispatch context and the dispatcher into every ToolContext — the Agent
+   * tool reads it for orchestrate default-detach (§3.3). Absent (legacy
+   * tests) => the loop flag never flips; the tab simply runs without the
+   * detach default.
+   */
+  onOrchestrateChanged?: (enabled: boolean) => void;
+  /**
    * Renderer Panels sub-slice A: narrow read-only LSP status seam. Slice
    * P7.25/F3 adds an optional `onStatusChange` subscription so the host can
    * live-push `lsp_status` on every server state transition (coalesced upstream
@@ -1075,7 +1105,12 @@ export class Session {
   private readonly uiTaskOutputCursors = new Map<string, number>();
   /** TASK.145 срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
   private readonly backgroundChildren: SessionOptions["backgroundChildren"];
-  /** taskana 4181: see SessionOptions.supervisorIdle's own doc. */
+  /** A1 (Taskana 4704 review): optional override of the child spawn permission mode; absent => the live engine mode. */
+  private readonly childSpawnModeOverride: SessionOptions["childSpawnMode"];
+  /** Taskana 4704 §3.7: host callback on every orchestrate transition (loop-config copy). */
+  private readonly onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
+  /** Taskana 4704 §3.6: turn-start orchestrator-route health check (host-owned health cache). */
+  private readonly orchestratorRouteCheck: SessionOptions["orchestratorRouteCheck"];  /** taskana 4181: see SessionOptions.supervisorIdle's own doc. */
   private readonly supervisorIdle: SessionOptions["supervisorIdle"];
   /**
    * taskana 4181: the latest turn's final assistant text, captured in
@@ -1148,6 +1183,17 @@ export class Session {
   private readonly sendPreviewArtifacts: SessionOptions["postPreviewArtifacts"];
 
   private busy = false;
+  /**
+   * Taskana 4704 §2.2/§3.7: per-session orchestrate flag — a TAB-level state,
+   * never a PermissionMode. Enabling it (a) switches the mode to `plan` (the
+   * orchestrator's own tools become read-only via the existing engine), (b)
+   * sets this flag, (c) replaces the plan-mode reminder with the orchestrate
+   * reminder. `preOrchestrateMode` remembers the mode the user had before, so
+   * a disable restores it and child spawns keep running under it (A1).
+   */
+  private orchestrate = false;
+  /** The mode the user had BEFORE orchestrate was enabled; null while off. */
+  private preOrchestrateMode: PermissionMode | null = null;
   /** Permanent source-host latch once a durable relocation handoff begins. */
   private relocating = false;
   private abort: AbortController | null = null;
@@ -1439,6 +1485,9 @@ export class Session {
     this.shell = options.shell;
     this.tasks = options.tasks;
     this.backgroundChildren = options.backgroundChildren;
+    this.childSpawnModeOverride = options.childSpawnMode;
+    this.onOrchestrateChanged = options.onOrchestrateChanged;
+    this.orchestratorRouteCheck = options.orchestratorRouteCheck;
     this.supervisorIdle = options.supervisorIdle;
     this.lsp = options.lsp;
     this.hooksList = options.hooksList;
@@ -2163,6 +2212,13 @@ export class Session {
         break;
       case "set_mode":
         this.onSetMode(message.mode);
+        break;
+      case "set_orchestrate":
+        // Taskana 4704 §3.7: between-turns only (busy => silent drop inside
+        // onSetOrchestrate, the set_mode discipline). The orchestrate flag
+        // drives the reminder swap (acceptUserMessage) and the Agent tool's
+        // default-detach via the loop config copy.
+        this.onSetOrchestrate(message.enabled);
         break;
       case "set_reasoning_effort":
         // Validate against the model's declared effort levels (when known) so a
@@ -3263,8 +3319,31 @@ export class Session {
     // on its own. Gated on supportsCorePermissions because that is precisely
     // the set of engines whose plan mode WE run — Claude and Codex own their
     // own plan handling and must never be handed our tool's rules.
+    //
+    // Taskana 4704 §3.7: while the tab is orchestrate, the ORCHESTRATE
+    // reminder replaces the plan reminder entirely (never both) — an
+    // orchestrate parent sits in plan mode, but its discipline is delegation,
+    // not planning.
     if (this.engine.capabilities.supportsCorePermissions && this.engine.mode() === "plan") {
-      turnInput = withPlanModeReminder(turnInput);
+      turnInput = this.orchestrate
+        ? withOrchestrateReminder(turnInput)
+        : withPlanModeReminder(turnInput);
+    }
+    // Taskana 4704 §3.6/§2.6: the orchestrator role resolves at turn START
+    // only (never mid-turn). While orchestrate is on and the configured
+    // primary targets the tab's ACTIVE connection, the host checks entry
+    // health HERE — strictly before busy=true — and switches to the first
+    // healthy fallback when the primary is down, surfacing an engine_notice
+    // line. The check runs ONLY in this idle accept path.
+    if (this.orchestrate) {
+      const notice = this.orchestratorRouteCheck?.();
+      if (notice !== undefined) {
+        this.outbound.emit({
+          type: "agent_event",
+          turnId: this.turnId ?? "orchestrate-route",
+          event: { type: "engine_notice", level: "info", message: notice },
+        });
+      }
     }
     const carriesWorktreeExitNotice = this.worktreeExitNoticePending;
     if (this.engine.capabilities.supportsTasks && this.tasks) {
@@ -4390,6 +4469,63 @@ export class Session {
     // Persist the mode so a resume restores it (design §4.2); fire-and-forget.
     this.persistence?.touch({ mode });
     this.outbound.emit({ type: "mode_changed", mode });
+  }
+
+  /**
+   * A1 (Taskana 4704 review): the permission mode CHILD sessions run under.
+   * While orchestrate is on: the PRE-orchestrate mode, with `plan` coerced to
+   * `build` (an orchestrate parent sits in plan, but its executor children
+   * MUST be able to write) and `yolo` preserved only if the user was already
+   * yolo. Otherwise: the LIVE mode — the pre-4704 inherit-parent contract
+   * (cut §0.8 "a snapshot of the parent's mode at the moment Agent was
+   * invoked"). The host's child-session port reads this per spawn through its
+   * getPermissionMode seam; the deps' optional childSpawnMode thunk
+   * (host/index.ts) delegates here.
+   */
+  childSpawnMode(): PermissionMode {
+    if (this.childSpawnModeOverride !== undefined) {
+      return this.childSpawnModeOverride();
+    }
+    if (!this.orchestrate) {
+      return this.engine.mode();
+    }
+    const pre = this.preOrchestrateMode ?? "build";
+    return pre === "plan" ? "build" : pre;
+  }
+
+  /**
+   * Taskana 4704 §2.2/§3.7: `set_orchestrate` — between-turns only (busy =>
+   * silent drop, the set_mode/set_model discipline). On enable: remember the
+   * current mode (preOrchestrateMode), switch the mode to `plan` (the
+   * orchestrator's own tools become read-only via the existing engine), set
+   * the flag. On disable: restore preOrchestrateMode ?? "build", clear the
+   * flag (and the remembered mode). Both branches ack with
+   * `orchestrate_changed` so the renderer keeps tab-scoped state in sync.
+   */
+  private onSetOrchestrate(enabled: boolean): void {
+    if (this.busy) {
+      // Silent drop, exactly like a mid-turn set_mode/set_model — the
+      // authoritative host-side refusal; the renderer disables the row too.
+      return;
+    }
+    if (enabled === this.orchestrate) {
+      this.outbound.emit({ type: "orchestrate_changed", enabled: this.orchestrate });
+      return;
+    }
+    if (enabled) {
+      this.preOrchestrateMode = this.engine.mode();
+      this.orchestrate = true;
+      this.onSetMode("plan");
+    } else {
+      this.orchestrate = false;
+      const restore = this.preOrchestrateMode ?? "build";
+      this.preOrchestrateMode = null;
+      this.onSetMode(restore);
+    }
+    // §3.7: the host copies the flag onto the AgentLoopConfig (the dispatcher
+    // threads it into every ToolContext — the Agent tool's default-detach).
+    this.onOrchestrateChanged?.(this.orchestrate);
+    this.outbound.emit({ type: "orchestrate_changed", enabled: this.orchestrate });
   }
 
   /**

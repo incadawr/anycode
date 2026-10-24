@@ -30,7 +30,7 @@ export const SESSION_TITLE_TIMEOUT_MS = 10_000;
 
  * second layer against a future caller that forwards already-wrapped text.
  */
-const PAIRED_REMINDER_TAGS = ["hook-context", "plan-mode-reminder", "system-reminder"] as const;
+const PAIRED_REMINDER_TAGS = ["hook-context", "plan-mode-reminder", "orchestrate-reminder", "system-reminder"] as const;
 
 /**
  * Strips paired `<tag>...</tag>` blocks for the known reminder/context tags.

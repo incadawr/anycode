@@ -59,9 +59,11 @@ import type {
 import {
   getPersona,
   isKnownPersona,
+  isReservedPersonaName,
   listPersonaNames,
   type PersonaDefinition,
 } from "./personas.js";
+import { isRoleRouteName, type RoleRouteEntry, type RoleRouteResolution } from "./role-route.js";
 import type { CeilingRefusalReason, TokenUsage } from "../types/events.js";
 import { summarizeChildToolCall } from "./summarize-tool.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
@@ -150,6 +152,21 @@ export interface SubagentRunnerOptions {
    * still errors, exactly as before.
    */
   exploreModel?: string;
+  /**
+   * Taskana 4704 §3.2: resolves the ROLE route chain (planner/executor/
+   * reviewer/explore) host-side — settings `roles` + health cache are HOST
+   * state. The runner walks the returned entries in order (via the existing
+   * resolveChildModelPort/resolveChildModelSettings resolvers) ONLY when the
+   * caller named no explicit `req.model` and the resolved persona carries no
+   * `model` of its own (an md-profile keeps its own frontmatter defaults).
+   * The FIRST entry that resolves wins; every skipped entry collects the
+   * thrown error as its `reason`; if ALL entries fail, the child falls back
+   * to the parent's model with a notice riding the outcome's finalText. An
+   * entry carrying `connection`/`engine` cannot run inline — it is skipped
+   * with reason "needs session tier" (never an error). Absent => no chain,
+   * byte-identical legacy behavior.
+   */
+  resolveRoleRoute?: (agentType: string) => RoleRouteResolution | null;
   /**
    * Resolves an Agent-tool `model` override (slice 4.6, design §2.5) to a
    * fixed ModelPort for one child spawn. Additive-optional, same shape as
@@ -615,14 +632,25 @@ export function createSubagentRunner(
 
   return {
     listAgentTypes(): string[] {
-      return [...listPersonaNames(), ...currentProfiles().keys()];
+      // Taskana 4704: dedupe — an overridable role name (planner/executor/
+      // reviewer) can now appear both as a built-in and as a profile; the
+      // callable set lists it once. Hard-reserved built-ins never share a name
+      // with a discovered profile (parse-time lock), so no shadowing here.
+      const names = new Set<string>(listPersonaNames());
+      for (const name of currentProfiles().keys()) {
+        names.add(name);
+      }
+      return [...names];
     },
     // TASK.102 CUT-S4 §2.1: resolves an md-profile's `engine:` frontmatter for
     // tools/agent.ts's routing branch. Reads the SAME thunk (currentProfiles())
     // as listAgentTypes above — no second list/cache, so a profile rescanned
     // mid-session is visible here too. Built-ins are never engine profiles.
     engineProfile(agentType: string): EngineProfileInfo | null {
-      if (isKnownPersona(agentType)) {
+      // Taskana 4704: overridable role personas consult the md-profile map
+      // FIRST (profile wins); hard-reserved built-ins still short-circuit to
+      // null immediately.
+      if (isKnownPersona(agentType) && isReservedPersonaName(agentType)) {
         return null;
       }
       const persona = currentProfiles().get(agentType);
@@ -652,7 +680,9 @@ export function createSubagentRunner(
     // and engine profiles never route (engine children run on their own CLI account;
     // engine+routing is parse-fatal anyway).
     profileRouting(agentType: string): { provider?: string; connection?: string } | null {
-      if (isKnownPersona(agentType)) {
+      // Taskana 4704: same flip as engineProfile — overridable role personas
+      // consult the profile map first; hard-reserved built-ins never route.
+      if (isKnownPersona(agentType) && isReservedPersonaName(agentType)) {
         return null;
       }
       const persona = currentProfiles().get(agentType);
@@ -672,12 +702,20 @@ export function createSubagentRunner(
       const { signal, onProgress } = runOpts;
       const profileMap = currentProfiles();
 
-      // Resolve the persona: built-in wins, else an md-profile. The Agent tool
+      // Resolve the persona (Taskana 4704 resolution order): md-profile WINS
+      // for overridable role names (planner/executor/reviewer) and for any
+      // non-builtin name; the BUILT-IN wins for the hard-reserved names
+      // (general-purpose/explore), keeping the second rubicon structural —
+      // not just guaranteed by discovery's parse-time lock. The Agent tool
       // validates agent_type before calling, but the port is public (workflow
       // 3.4 calls it too) — an unknown type is an error-outcome, never a throw.
-      const persona = isKnownPersona(req.agentType)
-        ? getPersona(req.agentType)
-        : profileMap.get(req.agentType);
+      const profile = profileMap.get(req.agentType);
+      const persona =
+        profile !== undefined && (!isKnownPersona(req.agentType) || !isReservedPersonaName(req.agentType))
+          ? profile
+          : isKnownPersona(req.agentType)
+            ? getPersona(req.agentType)
+            : profile;
       if (!persona) {
         const available = [...listPersonaNames(), ...profileMap.keys()].join(", ");
         return {
@@ -730,27 +768,68 @@ export function createSubagentRunner(
       }
 
       // Precedence: an explicit `Agent(model: …)` request outranks the profile's
-      // own `model:` frontmatter, which outranks inheriting the parent's port (or,
-      // for an engine persona, the engine's own default). Shared by both the
-      // engine and in-process paths below.
-      // Taskana 4131: the built-in explore persona may carry a HOST-CONFIGURED
-      // default (cheaper recon). Only when the caller named no model (an explicit
-      // Agent(model:) always wins) and only for the built-in explore — md-profiles
-      // keep their own frontmatter default, general-purpose keeps inheriting.
+      // own `model:` frontmatter, which outranks the ROLE ROUTE chain, which
+      // outranks inheriting the parent's port (or, for an engine persona, the
+      // engine's own default). Shared by both the engine and in-process paths.
+      //
+      // Taskana 4704 §3.2: the 4131 explore default folds into the GENERIC
+      // role chain. A route is consulted only when the caller named no model
+      // (an explicit Agent(model:) always wins) and the persona carries no
+      // `model` of its own (md-profile frontmatter keeps its default). The
+      // chain head for explore remains opts.exploreModel for hosts that pass
+      // only it (compat); when the host also wires resolveRoleRoute, the
+      // resolver's entries are walked and exploreModel is prepended as the
+      // chain head only for the built-in explore persona.
       const exploreDefault =
         req.model === undefined && persona.model === undefined && persona.name === "explore"
           ? opts?.exploreModel
           : undefined;
+      // The chain candidates in order: [exploreDefault (explore only, compat)]
+      // + resolveRoleRoute entries (when the agent_type is a role persona).
+      // Entries carrying connection/engine cannot run INLINE — they are kept
+      // out of the walkable list and reported as skipped "needs session tier".
+      let chainEntries: RoleRouteEntry[] = [];
+      const chainSkipped: { entry: RoleRouteEntry; reason: string }[] = [];
+      if (req.model === undefined && persona.model === undefined && isRoleRouteName(req.agentType)) {
+        const resolution = opts?.resolveRoleRoute?.(req.agentType) ?? null;
+        const walkable: RoleRouteEntry[] = [];
+        if (exploreDefault !== undefined) {
+          walkable.push({ model: exploreDefault });
+        }
+        if (resolution !== null) {
+          for (const entry of resolution.entries) {
+            if (entry.connection !== undefined || entry.engine !== undefined) {
+              chainSkipped.push({ entry, reason: "needs session tier" });
+            } else if (entry.model !== undefined) {
+              walkable.push(entry);
+            } else {
+              // An entry without a model names nothing the inline path can
+              // resolve — it is a pure provider/connection hop for the
+              // session tier. Skip it the same honest way.
+              chainSkipped.push({ entry, reason: "needs session tier" });
+            }
+          }
+          for (const skip of resolution.skipped) {
+            chainSkipped.push(skip);
+          }
+        }
+        chainEntries = walkable;
+      }
       let requestedModel: string | undefined = req.model ?? persona.model ?? exploreDefault;
-      // Taskana 4131 follow-up: the explore default is a HOST-CONFIGURED
-      // convenience, not the caller's intent. If resolving it fails (the id is
-      // disallowed/unknown on the ACTIVE connection — e.g. the owner switched
-      // the session from GLM to Anthropic while ANYCODE_EXPLORE_MODEL still
-      // names a GLM id), fall back to the parent's model instead of failing
-      // every explore call. Only the FALLBACK PATH sets this notice; it rides
-      // the outcome's finalText (the existing wrap-up-notice channel) so the
-      // parent model sees it exactly once, with the child's own report.
-      let exploreFallbackNotice: string | undefined;
+      // Taskana 4704 §3.2 (generalised from the 4131 follow-up): route entries
+      // are HOST-CONFIGURED conveniences, not the caller's intent. If resolving
+      // a chain entry fails (the id is disallowed/unknown on the ACTIVE
+      // connection), the walk moves to the next entry; if ALL entries fail, the
+      // child runs on the parent's model with a notice listing every reason.
+      // Only the FALLBACK PATH sets this notice; it rides the outcome's
+      // finalText (the existing wrap-up-notice channel) so the parent model
+      // sees it exactly once, with the child's own report.
+      let roleFallbackNotice: string | undefined;
+      // Taskana 4704 §3.10: route visibility fields for the start progress —
+      // `route` (the entry identity the walk settled on: "role|target|model")
+      // and `fallbackReason` (why an earlier entry was skipped). Filled by the
+      // chain walk below; undefined for every non-routed spawn.
+      let roleRouteStart: { route: string; fallbackReason?: string } | undefined;
 
       // Engine persona (md-profile `engine:`): the whole in-process path
       // (buildChildConfig/AgentLoop/resolveChildModelPort) is bypassed in favor
@@ -832,9 +911,9 @@ export function createSubagentRunner(
 
       let childModelPort: ModelPort | undefined;
       let childSettings: ResolvedChildModelSettings | undefined;
-      if (requestedModel !== undefined) {
+      if (requestedModel !== undefined || chainEntries.length > 0) {
         const resolve = opts?.resolveChildModelPort;
-        if (resolve === undefined) {
+        if (resolve === undefined && requestedModel !== undefined) {
           return {
             status: "error",
             finalText:
@@ -847,41 +926,88 @@ export function createSubagentRunner(
             durationMs: Date.now() - startedAt,
           };
         }
-        // Taskana 4131 follow-up: the explore default is the ONE id here that
-        // no caller asked for (host env, not req.model, not a profile's own
-        // frontmatter). When exactly that id is rejected below, degrade to
-        // the parent's model with a notice instead of failing every explore
-        // call on a connection where the id is disallowed/unknown (e.g. the
-        // owner switched the session from GLM to Anthropic while
-        // ANYCODE_EXPLORE_MODEL still names a GLM id). An explicit
-        // Agent(model:) or a profile `model:` keeps the honest error —
-        // including an explicit id that COINCIDENTALLY equals the default:
-        // `exploreDefault` above is undefined whenever req.model is set.
-        const degradeExploreDefault = exploreDefault !== undefined && requestedModel === exploreDefault;
-        const degrade = (): void => {
-          exploreFallbackNotice =
-            `Agent: explore default model "${exploreDefault}" is not available on this connection; ran on the parent's model.`;
-          requestedModel = undefined;
-          childModelPort = undefined;
-          childSettings = undefined;
-        };
-        // The resolver owns the id→port mapping and may reject an id this
-        // module cannot validate (no catalogue here). The port contract is
-        // outcomes-not-throws, so a rejection becomes an error outcome.
-        try {
-          childModelPort = resolve(requestedModel);
-        } catch (error) {
-          if (degradeExploreDefault) {
-            degrade();
-          } else {
-            return {
-              status: "error",
-              finalText: `Agent: model "${requestedModel}" could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
-              truncated: false,
-              turns: 0,
-              toolCalls: 0,
-              durationMs: Date.now() - startedAt,
-            };
+        // Taskana 4704 §3.2: chain walking (generalised from the 4131 explore
+        // degrade). A chain entry is the ONE kind of id here that no caller
+        // asked for (host settings, not req.model, not a profile's own
+        // frontmatter). Walk entries in order via the existing resolvers; the
+        // FIRST entry that resolves wins; every rejected entry collects the
+        // thrown message as its skip reason. If ALL entries (and the compat
+        // exploreModel head) fail, degrade to the parent's model with a notice
+        // listing every reason. An explicit Agent(model:) or a profile
+        // `model:` keeps the honest error — the chain is only consulted when
+        // neither is set (see `chainEntries` construction above), so an
+        // explicit id that COINCIDENTALLY equals an entry never enters this
+        // branch as a chain walk.
+        const isExplicitId = req.model !== undefined || persona.model !== undefined;
+        if (!isExplicitId && chainEntries.length > 0 && resolve !== undefined) {
+          const failures: string[] = [];
+          for (const entry of chainEntries) {
+            const candidate = entry.model!;
+            try {
+              childModelPort = resolve(candidate);
+              // TASK.162 (F6): capabilities re-resolved for the child's OWN
+              // model. The entry's own effort (role-configured tier) is passed
+              // as profileEffort, mirroring the persona.effort path below.
+              try {
+                childSettings = opts?.resolveChildModelSettings?.(
+                  candidate,
+                  entry.effort === undefined
+                    ? undefined
+                    : entry.effort === "xhigh"
+                      ? "max"
+                      : entry.effort,
+                );
+              } catch (error) {
+                // Settings resolution failure is a skip for this entry, same
+                // posture as the port resolver rejection above.
+                childModelPort = undefined;
+                failures.push(error instanceof Error ? error.message : String(error));
+                continue;
+              }
+              requestedModel = candidate;
+              // Taskana 4704 §3.10: the entry the walk settled on + the first
+              // skip reason (if any entry was rejected before it).
+              roleRouteStart = {
+                route: `${req.agentType}|${entry.engine ?? entry.connection ?? entry.provider ?? ""}|${candidate}`,
+                ...(failures.length > 0 ? { fallbackReason: failures[0]! } : {}),
+              };
+              break;
+            } catch (error) {
+              failures.push(error instanceof Error ? error.message : String(error));
+            }
+          }
+          if (childModelPort === undefined) {
+            roleFallbackNotice = `Agent: role "${req.agentType}" ran on the parent's model (all route entries failed: ${failures.join("; ")})`;
+            requestedModel = undefined;
+            childSettings = undefined;
+          }
+        } else if (requestedModel !== undefined && resolve !== undefined) {
+          // The legacy single-id path (explicit req.model or persona.model).
+          // The resolver owns the id→port mapping and may reject an id this
+          // module cannot validate (no catalogue here). The port contract is
+          // outcomes-not-throws, so a rejection becomes an error outcome.
+          // (Taskana 4704: the 4131 exploreDefault degrade case is subsumed —
+          // exploreModel now rides the chain walk above; when the walk is not
+          // applicable (no resolver), the explicit-path error texts below
+          // keep their byte-compat wording including the exploreDefault case.)
+          try {
+            childModelPort = resolve(requestedModel);
+          } catch (error) {
+            if (exploreDefault !== undefined && requestedModel === exploreDefault) {
+              roleFallbackNotice = `Agent: explore default model "${exploreDefault}" is not available on this connection; ran on the parent's model.`;
+              requestedModel = undefined;
+              childModelPort = undefined;
+              childSettings = undefined;
+            } else {
+              return {
+                status: "error",
+                finalText: `Agent: model "${requestedModel}" could not be resolved in this host: ${error instanceof Error ? error.message : String(error)}`,
+                truncated: false,
+                turns: 0,
+                toolCalls: 0,
+                durationMs: Date.now() - startedAt,
+              };
+            }
           }
         }
 
@@ -896,18 +1022,28 @@ export function createSubagentRunner(
         // A throw is an error-outcome, same posture as the port resolver
         // right above: falling back to the parent's already-resolved values
         // would silently reinstate the very defect this resolver removes.
-        // (Taskana 4131 follow-up: the guard skips this entirely when the
-        // port fallback above already degraded — the child then inherits the
-        // parent's port AND its already-resolved parent settings.)
-        if (requestedModel !== undefined) {
+        // (Taskana 4704 §3.2: the chain walk above already resolved settings
+        // for its winning entry; this branch now serves only the legacy
+        // single-id path (explicit req.model / persona.model) and the 4131
+        // exploreDefault compat case. When the port fallback above already
+        // degraded (requestedModel cleared), the guard skips this entirely —
+        // the child then inherits the parent's port AND its already-resolved
+        // parent settings.)
+        if (
+          requestedModel !== undefined &&
+          childSettings === undefined
+        ) {
           try {
             childSettings = opts?.resolveChildModelSettings?.(
               requestedModel,
               persona.effort === undefined ? undefined : persona.effort === "xhigh" ? "max" : persona.effort,
             );
           } catch (error) {
-            if (degradeExploreDefault) {
-              degrade();
+            if (exploreDefault !== undefined && requestedModel === exploreDefault) {
+              roleFallbackNotice = `Agent: explore default model "${exploreDefault}" is not available on this connection; ran on the parent's model.`;
+              requestedModel = undefined;
+              childModelPort = undefined;
+              childSettings = undefined;
             } else {
               return {
                 status: "error",
@@ -980,6 +1116,11 @@ export function createSubagentRunner(
           // `responseModel` on the end event below — see that comment for why
           // it is deliberately NOT merged into this field.
           ...(requestedModel !== undefined ? { model: requestedModel } : {}),
+          // Taskana 4704 §3.10: the inline chain walk's route identity +
+          // fallback reason (the chain head won, an earlier entry was skipped
+          // — infrastructure rejects or "needs session tier" hops). Absent
+          // for every non-routed spawn and when the walk never ran.
+          ...(roleRouteStart !== undefined ? roleRouteStart : {}),
         });
 
         // TASK.148 slice 1: measures SILENCE (time since the child's last
@@ -1349,8 +1490,8 @@ export function createSubagentRunner(
           // through outcomeToResult, and capped so it can never crowd out the
           // child's own text.
           finalText:
-            exploreFallbackNotice !== undefined
-              ? `${exploreFallbackNotice}\n\n${capped.text}`
+            roleFallbackNotice !== undefined
+              ? `${roleFallbackNotice}\n\n${capped.text}`
               : capped.text,
           truncated: capped.truncated,
           turns,

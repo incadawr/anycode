@@ -1281,7 +1281,7 @@ describe("agent profiles as personas (§3.5, §5.2-7)", () => {
   it("listAgentTypes returns the built-ins plus the discovered profiles", async () => {
     const persona = await makeProfile("reviewer", { body: "P" });
     const runner = createSubagentRunner(makeParent(), { profiles: [persona] });
-    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore", "reviewer"]);
+    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore", "planner", "executor", "reviewer"]);
   });
 
   it("two-level e2e: the parent spawns Agent(agent_type=<profile>) and the outcome reaches it", async () => {
@@ -1413,12 +1413,12 @@ describe("opts.profiles as a live source (thunk)", () => {
     let live: PersonaDefinition[] = [];
     const runner = createSubagentRunner(makeParent(), { profiles: () => live });
 
-    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore"]);
+    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore", "planner", "executor", "reviewer"]);
 
-    const persona = await makeProfile("reviewer", { body: "P" });
+    const persona = await makeProfile("latecomer", { body: "P" });
     live = [persona];
 
-    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore", "reviewer"]);
+    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore", "planner", "executor", "reviewer", "latecomer"]);
   });
 
   it("a profile added to the thunk's result AFTER the runner was created is runnable via run()", async () => {
@@ -1429,22 +1429,22 @@ describe("opts.profiles as a live source (thunk)", () => {
     });
 
     // Not yet visible: the thunk still returns an empty array at this point.
-    const early = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+    const early = await runner.run({ ...REQ, agentType: "latecomer" }, {});
     expect(early.status).toBe("error");
     expect(early.finalText).toContain("Unknown agent_type");
 
-    const persona = await makeProfile("reviewer", { body: "P" });
+    const persona = await makeProfile("latecomer", { body: "P" });
     live = [persona];
 
-    const late = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+    const late = await runner.run({ ...REQ, agentType: "latecomer" }, {});
     expect(late.status).toBe("completed");
     expect(late.finalText).toBe("late profile ran");
   });
 
   it("an array source still behaves as a fixed boot-time snapshot (unchanged behavior)", async () => {
-    const persona = await makeProfile("reviewer", { body: "P" });
+    const persona = await makeProfile("latecomer", { body: "P" });
     const runner = createSubagentRunner(makeParent(), { profiles: [persona] });
-    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore", "reviewer"]);
+    expect(runner.listAgentTypes?.()).toEqual(["general-purpose", "explore", "planner", "executor", "reviewer", "latecomer"]);
   });
 });
 
@@ -2144,9 +2144,11 @@ describe("explore default model (Taskana 4131)", () => {
     expect(resolved).toEqual(["glm-cheap"]);
     // The run happened on the PARENT's port, exactly once.
     expect(parentModel.calls).toBe(1);
-    // The notice rides the outcome's finalText, above the child's own report.
+    // Taskana 4704 §3.2: the notice now rides the GENERIC role-chain wording —
+    // the 4131 explore default is a one-entry chain, so the all-entries-failed
+    // notice names the role and lists the resolver's rejection reason.
     expect(outcome.finalText).toContain(
-      'Agent: explore default model "glm-cheap" is not available on this connection; ran on the parent\'s model.',
+      'Agent: role "explore" ran on the parent\'s model (all route entries failed: This model is not available on the selected connection.)',
     );
     expect(outcome.finalText).toContain("parent-report");
     expect(outcome.finalText.indexOf("ran on the parent's model.")).toBeLessThan(
@@ -4974,5 +4976,253 @@ describe("inline Agent admission interplay (TASK.229 I1)", () => {
     } finally {
       await drainInterplay(model, consumed);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4704 §3.1: resolution flip for OVERRIDABLE role personas. A same-named
+// md-profile now WINS over the built-in persona (planner/executor/reviewer);
+// without a profile the built-in runs; general-purpose/explore keep their
+// guarantees (a same-named md-profile cannot exist — parse-time lock).
+
+describe("role persona resolution flip (Taskana 4704 §3.1)", () => {
+  it("(a) an md-profile named planner WINS over the built-in persona", async () => {
+    const persona = await makeProfile("planner", { body: "OVERRIDE PLANNER BODY" });
+    const model = new ScriptedModelPort(() => textStep("override-ran"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }), {
+      profiles: [persona],
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "planner" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("override-ran");
+    // The PROFILE body (not the built-in planner prompt) reached the child.
+    expect(model.calls).toBeGreaterThan(0);
+    const childSystem = model.requests[0]?.system ?? "";
+    expect(childSystem).toContain("OVERRIDE PLANNER BODY");
+    expect(childSystem).not.toContain("read-only senior engineer");
+  });
+
+  it("(b) without a profile the BUILT-IN role persona runs (its own prompt + budget)", async () => {
+    const model = new ScriptedModelPort(() => textStep("builtin-ran"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }), {});
+
+    const outcome = await runner.run({ ...REQ, agentType: "executor" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("builtin-ran");
+    const childSystem = model.requests[0]?.system ?? "";
+    expect(childSystem).toContain("implement a written brief literally");
+    // Built-in turn budget rides the persona (ROLE_TURN_BUDGETS).
+    expect(PERSONAS.executor.turnBudget).toBe(80);
+  });
+
+  it("(c) a settings-shaped profile (connection) on the inline tier keeps the honest 4269 error", async () => {
+    const settingsShaped: PersonaDefinition = {
+      name: "planner",
+      description: "settings-derived planner",
+      tools: PERSONAS.planner.tools,
+      systemPrompt: "SETTINGS PLANNER",
+      connection: "conn-claude",
+    };
+    const runner = createSubagentRunner(makeParent(), { profiles: [settingsShaped] });
+
+    const outcome = await runner.run({ ...REQ, agentType: "planner" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe(
+      'Agent: profile "planner" selects its own connection and runs only as a session-tier child; this caller has no session tier.',
+    );
+  });
+
+  it("engineProfile consults the profile FIRST for overridable names", () => {
+    const routed: PersonaDefinition = {
+      name: "reviewer",
+      description: "engine reviewer",
+      tools: ["Read"],
+      systemPrompt: "ENGINE REVIEWER",
+      engine: "claude",
+    };
+    const runner = createSubagentRunner(makeParent(), { profiles: [routed] });
+    expect(runner.engineProfile?.("reviewer")).toMatchObject({ engine: "claude" });
+    // Hard-reserved built-ins still short-circuit to null even with a
+    // (hypothetical) same-named profile in the map.
+    const hostile: PersonaDefinition = {
+      ...routed,
+      name: "explore",
+    };
+    const hostileRunner = createSubagentRunner(makeParent(), { profiles: [hostile] });
+    expect(hostileRunner.engineProfile?.("explore")).toBeNull();
+    // And a bare role persona (no profile) still has no engine.
+    const bareRunner = createSubagentRunner(makeParent(), {});
+    expect(bareRunner.engineProfile?.("planner")).toBeNull();
+  });
+
+  it("profileRouting consults the profile FIRST for overridable names", () => {
+    const routed: PersonaDefinition = {
+      name: "executor",
+      description: "routed executor",
+      tools: PERSONAS.executor.tools,
+      systemPrompt: "ROUTED",
+      connection: "conn-codex",
+    };
+    const runner = createSubagentRunner(makeParent(), { profiles: [routed] });
+    expect(runner.profileRouting?.("executor")).toEqual({ connection: "conn-codex" });
+    const bareRunner = createSubagentRunner(makeParent(), {});
+    expect(bareRunner.profileRouting?.("executor")).toBeNull();
+    expect(bareRunner.profileRouting?.("general-purpose")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4704 §3.2: the generic role chain (generalises the 4131 explore
+// default). Entries walk in order through the existing resolvers; first
+// resolver-wins; all-fail degrades to the parent model with a notice listing
+// every reason; an explicit req.model bypasses the chain; exploreModel-only
+// hosts keep working via a one-entry chain.
+
+describe("role route chain walk (Taskana 4704 §3.2)", () => {
+  it("(d) two entries, first resolver throws → second used, no notice", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const goodModel = new ScriptedModelPort(() => textStep("entry2-report"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      resolveRoleRoute: (agentType) =>
+        agentType === "planner"
+          ? {
+              entries: [{ model: "bad-1" }, { model: "good-2" }],
+              skipped: [],
+              turnBudget: 30,
+            }
+          : null,
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        if (modelId === "bad-1") throw new Error("not available on this connection");
+        return goodModel;
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "planner" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("entry2-report");
+    expect(resolved).toEqual(["bad-1", "good-2"]);
+    expect(parentModel.calls).toBe(0);
+    expect(outcome.finalText).not.toContain("all route entries failed");
+  });
+
+  it("(d) all entries fail → parent model + notice listing both reasons", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      resolveRoleRoute: () => ({
+        entries: [{ model: "bad-1" }, { model: "bad-2" }],
+        skipped: [],
+      }),
+      resolveChildModelPort: (modelId) => {
+        throw new Error(`${modelId} unavailable`);
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "executor" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(parentModel.calls).toBe(1);
+    expect(outcome.finalText).toContain(
+      'Agent: role "executor" ran on the parent\'s model (all route entries failed: bad-1 unavailable; bad-2 unavailable)',
+    );
+    expect(outcome.finalText).toContain("parent-report");
+    // Notice first, child report after.
+    expect(outcome.finalText.indexOf("all route entries failed")).toBeLessThan(
+      outcome.finalText.indexOf("parent-report"),
+    );
+  });
+
+  it("entries carrying connection/engine are skipped as 'needs session tier', never errors", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      resolveRoleRoute: () => ({
+        entries: [{ engine: "codex" }, { connection: "conn-x", model: "m-x" }, { model: "inline-1" }],
+        skipped: [],
+      }),
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        return new ScriptedModelPort(() => textStep("inline-report"));
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+
+    expect(outcome.status).toBe("completed");
+    // Only the inline-runnable entry was walked.
+    expect(resolved).toEqual(["inline-1"]);
+    expect(outcome.finalText).toBe("inline-report");
+  });
+
+  it("(e) an explicit req.model bypasses the chain entirely", async () => {
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent(), {
+      resolveRoleRoute: () => ({ entries: [{ model: "chain-1" }], skipped: [] }),
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        return new ScriptedModelPort(() => textStep("resolved"));
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "planner", model: "explicit-1" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(resolved).toEqual(["explicit-1"]);
+    expect(outcome.finalText).not.toContain("route entries");
+  });
+
+  it("(f) an exploreModel-only host still works (one-entry chain, no resolver route)", async () => {
+    const cheapModel = new ScriptedModelPort(() => textStep("cheap-report"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent(), {
+      exploreModel: "cheap-1",
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        return cheapModel;
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("cheap-report");
+    expect(resolved).toEqual(["cheap-1"]);
+  });
+
+  it("a chain entry's effort rides the child settings resolution (entry tier wins)", async () => {
+    const seenEfforts: Array<string | undefined> = [];
+    const runner = createSubagentRunner(makeParent(), {
+      resolveRoleRoute: () => ({ entries: [{ model: "m-1", effort: "high" }], skipped: [] }),
+      resolveChildModelPort: () => new ScriptedModelPort(() => textStep("r")),
+      resolveChildModelSettings: (modelId, profileEffort) => {
+        seenEfforts.push(profileEffort);
+        return { contextWindowTokens: 8192 };
+      },
+    });
+
+    await runner.run({ ...REQ, agentType: "planner" }, {});
+
+    expect(seenEfforts).toEqual(["high"]);
+  });
+
+  it("no chain (resolveRoleRoute absent) keeps the inherit-parent path byte-identical", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      resolveChildModelPort: () => {
+        throw new Error("must not be called");
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "planner" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("parent-report");
+    expect(parentModel.calls).toBe(1);
   });
 });

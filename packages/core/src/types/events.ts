@@ -290,6 +290,22 @@ export type AgentEvent =
        * engine from `agentType` (TASK.97 R5, wave2-cut §5.4).
        */
       engine?: "codex" | "claude";
+      /**
+       * Taskana 4704 §3.10: set when the spawn used a ROLE ROUTE entry — the
+       * host's entryKey(role, entry) identity (e.g. "executor|codex|"). Lets
+       * telemetry correlate a spawn with its route chain position without
+       * carrying the whole entry. Additive-optional: absent for every
+       * non-routed spawn (the overwhelming majority) and on replay from
+       * before this field existed.
+       */
+      route?: string;
+      /**
+       * Taskana 4704 §3.10: set when the spawn ran on a NON-PRIMARY route
+       * entry (spawn-time health skip or a respawn) — the short skip reason
+       * (e.g. "quota"). Absent on primary-entry runs; never task-failure
+       * text (fallbacks are infrastructure-only, §2.7).
+       */
+      fallbackReason?: string;
     }
   | {
       type: "subagent_progress";

@@ -70,6 +70,28 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ## [0.0.35] — 2026-10-24
 
 ### Added
+- Built-in `planner`/`executor`/`reviewer` role personas for orchestration
+  (read-only planner briefs, literal executor implementation, adversarial
+  reviewer verdicts), overridable by a same-named user md-profile in
+  `.anycode/agents/` (the profile wins; `general-purpose`/`explore` stay
+  reserved). Each role carries its own turn budget (planner 30, executor 80,
+  reviewer 40).
+- Orchestrate tab mode and `/orchestrate <task>`: enabling orchestrate puts
+  the tab's session in plan permission with an orchestration reminder instead
+  of the plan reminder, and an Agent call with `tier:"session"` and no explicit
+  `detach` defaults to `detach:true` (reports arrive as new turns). Child
+  sessions spawned by an orchestrate parent run under the permission mode the
+  user had before enabling orchestrate (never `plan`; `yolo` only if it was
+  already `yolo`).
+- Roles settings (`roles` section, additive-optional): per role an ordered
+  engine/connection+model+effort fallback chain with a process-local health
+  cache (exponential cooldown, infrastructure failures only — quota/auth/
+  unreachable/model-not-found after retries; ordinary task failures never
+  fall back), detached role children respawn on the next healthy entry,
+  per-role turn budgets, and a parallel-children cap
+  (`roles.maxParallelChildren`, default 4, honest refusal — never queued).
+  The 4131 explore default folds into the same generic chain
+  (`ANYCODE_EXPLORE_MODEL` still feeds the chain head).
 - The built-in `explore` recon subagent can run on a cheaper model: set
   `ANYCODE_EXPLORE_MODEL` (exact model id) and every inline explore child
   defaults to it. An explicit `Agent(model: …)` still wins, and unset keeps

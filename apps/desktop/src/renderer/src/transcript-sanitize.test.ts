@@ -14,6 +14,10 @@ describe("stripReminderBlocks", () => {
     expect(stripReminderBlocks("hello\n<plan-mode-reminder>ignored</plan-mode-reminder>")).toBe("hello");
   });
 
+  it("strips a single orchestrate-reminder block (Taskana 4704)", () => {
+    expect(stripReminderBlocks("hello\n<orchestrate-reminder>ignored</orchestrate-reminder>")).toBe("hello");
+  });
+
   it("strips multiple blocks independently", () => {
     const text =
       "before\n<system-reminder>one</system-reminder>\nmiddle\n<hook-context>two</hook-context>\nafter";
@@ -43,9 +47,9 @@ describe("stripReminderBlocks", () => {
     expect(stripReminderBlocks(text)).toBe(text);
   });
 
-  it("strips all three known tags in one message", () => {
+  it("strips all four known tags in one message", () => {
     const text =
-      "<system-reminder>a</system-reminder>\n<hook-context>b</hook-context>\n<plan-mode-reminder>c</plan-mode-reminder>done";
+      "<system-reminder>a</system-reminder>\n<hook-context>b</hook-context>\n<plan-mode-reminder>c</plan-mode-reminder>\n<orchestrate-reminder>d</orchestrate-reminder>done";
     expect(stripReminderBlocks(text)).toBe("done");
   });
 

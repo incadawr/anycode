@@ -6,13 +6,27 @@
 
 import { describe, expect, it } from "vitest";
 import { createDefaultToolRegistry } from "../tools/registry.js";
-import { PERSONAS, getPersona, isKnownPersona, listPersonaNames } from "./personas.js";
+import {
+  OVERRIDABLE_PERSONAS,
+  PERSONAS,
+  ROLE_TURN_BUDGETS,
+  getPersona,
+  isKnownPersona,
+  isReservedPersonaName,
+  listPersonaNames,
+} from "./personas.js";
 
 describe("personas", () => {
   const registry = createDefaultToolRegistry();
 
-  it("exposes exactly general-purpose and explore", () => {
-    expect(listPersonaNames().sort()).toEqual(["explore", "general-purpose"]);
+  it("exposes exactly the two legacy built-ins plus the three role personas (Taskana 4704)", () => {
+    expect(listPersonaNames().sort()).toEqual([
+      "executor",
+      "explore",
+      "general-purpose",
+      "planner",
+      "reviewer",
+    ]);
   });
 
   it("general-purpose is exactly the default tools minus Agent, Skill, and Workflow (spawn/child locks)", () => {
@@ -74,6 +88,43 @@ describe("personas", () => {
     expect(isKnownPersona("general-purpose")).toBe(true);
     expect(isKnownPersona("nope")).toBe(false);
     expect(getPersona("explore").name).toBe("explore");
+  });
+
+  // Taskana 4704 §5: the three role personas exist with expected
+  // tools/turnBudgets/prompt substrings.
+  it("planner exists with explore-equal read-only tools, budget 30, and its prompt body", () => {
+    const planner = PERSONAS.planner;
+    expect([...planner.tools]).toEqual([...PERSONAS.explore.tools]);
+    expect(planner.tools).not.toContain("Bash");
+    expect(planner.turnBudget).toBe(30);
+    expect(ROLE_TURN_BUDGETS.planner).toBe(30);
+    expect(planner.systemPrompt).toContain("read-only senior engineer");
+  });
+
+  it("executor exists with general-purpose-equal tools, budget 80, and its prompt body", () => {
+    const executor = PERSONAS.executor;
+    expect([...executor.tools]).toEqual([...PERSONAS["general-purpose"].tools]);
+    expect(executor.turnBudget).toBe(80);
+    expect(ROLE_TURN_BUDGETS.executor).toBe(80);
+    expect(executor.systemPrompt).toContain("implement a written brief literally");
+  });
+
+  it("reviewer exists with read-only tools plus Bash, budget 40, and its prompt body", () => {
+    const reviewer = PERSONAS.reviewer;
+    expect([...reviewer.tools]).toEqual([...PERSONAS.explore.tools, "Bash"]);
+    expect(reviewer.turnBudget).toBe(40);
+    expect(ROLE_TURN_BUDGETS.reviewer).toBe(40);
+    expect(reviewer.systemPrompt).toContain("CLEAN, MINOR, or DEFECTS");
+  });
+
+  it("OVERRIDABLE_PERSONAS is exactly the three role personas; the legacy built-ins stay reserved", () => {
+    expect([...OVERRIDABLE_PERSONAS].sort()).toEqual(["executor", "planner", "reviewer"]);
+    expect(isReservedPersonaName("planner")).toBe(false);
+    expect(isReservedPersonaName("executor")).toBe(false);
+    expect(isReservedPersonaName("reviewer")).toBe(false);
+    expect(isReservedPersonaName("general-purpose")).toBe(true);
+    expect(isReservedPersonaName("explore")).toBe(true);
+    expect(isReservedPersonaName("nope")).toBe(false);
   });
 
   it("every persona tool is a real registered tool", () => {

@@ -992,6 +992,12 @@ export interface DesktopState {
   workspace: string | null;
   model: string | null;
   mode: PermissionMode | null;
+  /**
+   * Taskana 4704 §3.7 (part A): tab-scoped orchestrate flag, kept from the
+   * host's `orchestrate_changed` acks (same pattern as `mode`). Part B (UI
+   * steps 8–11) renders the ModeMenu row/dialog; part A only keeps state.
+   */
+  orchestrateActive: boolean;
   /** Host-authoritative external-engine projection; null means historical core wire. */
   engine: EnginePresentation | null;
   /**
@@ -1482,6 +1488,11 @@ interface SessionSlice {
   pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage }[];
   /** Taskana 4110: see DesktopState.uiSteerPending. Part of the session slice. */
   uiSteerPending: string[];
+  /**
+   * Taskana 4704 §3.7 (part A): tab-scoped orchestrate flag from the host's
+   * `orchestrate_changed` ack. Part B renders the ModeMenu row/dialog.
+   */
+  orchestrateActive: boolean;
 }
 
 function initialSessionSlice(): SessionSlice {
@@ -1517,6 +1528,7 @@ function initialSessionSlice(): SessionSlice {
     pendingPrompt: null,
     pendingSteers: [],
     uiSteerPending: [],
+    orchestrateActive: false,
   };
 }
 
@@ -4209,6 +4221,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             return;
           case "mode_changed":
             set({ mode: message.mode });
+            return;
+          case "orchestrate_changed":
+            // Taskana 4704 §3.7: tab-scoped orchestrate flag from the host ack
+            // (same pattern as mode). Part A: store sync only; the ModeMenu
+            // row/dialog ride in part B (UI steps 8–11 are out of scope here).
+            set({ orchestrateActive: message.enabled });
             return;
           case "reasoning_effort_changed":
             set({

@@ -21,7 +21,7 @@ import { dirname } from "node:path";
 import { isDangerousKey, atomicWriteText, serializeConfigWrite } from "../util/config-file.js";
 import { isUnderOwnRootsResolved } from "../util/path-containment.js";
 import { AGENT_PROFILE_PROMPT_MAX_BYTES } from "../types/config.js";
-import { isKnownPersona } from "./personas.js";
+import { isReservedPersonaName } from "./personas.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
 import { AGENT_PROFILE_MODEL_RE, AGENT_PROFILE_NAME_RE, parseAgentProfileMd } from "./profiles.js";
 import { DEFAULT_TOOL_NAMES, type SubagentProfileDraft } from "./preview.js";
@@ -47,12 +47,15 @@ export type ValidateAgentProfileResult =
 export function validateAgentProfileDraft(draft: SubagentProfileDraft): ValidateAgentProfileResult {
   const name = draft.name.trim();
 
-  // Reserved built-in — distinct typed refusal.
-  if (isKnownPersona(name)) {
+  // Reserved built-in — distinct typed refusal. Taskana 4704: only the
+  // hard-reserved names (general-purpose/explore) refuse up front; the role
+  // personas (planner/executor/reviewer) are overridable and a same-named
+  // profile parses, so the editor accepts them too (matching discovery).
+  if (isReservedPersonaName(name)) {
     return {
       ok: false,
       reason: "reserved_name",
-      issues: [`name "${name}" is reserved by a built-in persona`],
+      issues: [`name "${name}" is reserved by a built-in persona (general-purpose/explore)`],
     };
   }
 

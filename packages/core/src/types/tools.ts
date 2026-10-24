@@ -247,6 +247,16 @@ export interface ToolContext {
    * `strategy: "artifact"` degrade to truncation.
    */
   artifacts?: ArtifactContext;
+  /**
+   * Taskana 4704 §3.3: true ONLY while this session tab runs in orchestrate
+   * mode (the host sets the loop flag; the dispatcher copies it here next to
+   * cwd/ports). Read SOLELY by the Agent tool — an orchestrate session
+   * defaults a `tier:"session"` call with no explicit detach/send_to/
+   * continue_session to `detach:true` (the orchestrator delegates and keeps
+   * talking; the report arrives as a new turn). Absent everywhere else:
+   * behavior is byte-identical to pre-4704.
+   */
+  orchestrate?: boolean;
 }
 
 /** Handler-level result. Dispatcher-level failures (denied/timeout/...) live on ToolCallOutcome. */

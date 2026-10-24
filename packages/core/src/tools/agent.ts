@@ -54,6 +54,7 @@
 
 import type { ToolContext, ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
 import type { EngineProfileInfo } from "../ports/subagent.js";
+import type { RoleRouteResolution } from "../subagents/role-route.js";
 import type { SessionSubagentRequest } from "../ports/session-subagent.js";
 import { SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS } from "../types/config.js";
 import { listPersonaNames } from "../subagents/personas.js";
@@ -301,8 +302,48 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
+      // Taskana 4704 §3.2/§3.6: role-route resolution (settings roles +
+      // host health cache). Returns null for everything but a ROLE persona
+      // with configured roles — built-in defaults apply then.
+      const roleRoute = ctx.subagents?.resolveRoleRoute?.(agentType) ?? null;
+      if (roleRoute !== null) {
+        // An entry carrying connection/engine selects its own connection —
+        // the inline tier cannot honor it (same 4269 refusal shape).
+        if (
+          tier !== "session" &&
+          roleRoute.entries.some(
+            (entry) => entry.connection !== undefined || entry.engine !== undefined,
+          )
+        ) {
+          return {
+            ok: false,
+            errorKind: "invalid_input",
+            error: `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`,
+          };
+        }
+      }
+
+      // Taskana 4704 §2.3: detach-by-default is MECHANICAL. In an orchestrate
+      // session, a tier:"session" Agent call with no explicit detach/send_to/
+      // continue_session defaults to detach:true. An explicit detach:false is
+      // honored (the spread below keys on === true, so a false never rides).
+      const defaultDetach =
+        ctx.orchestrate === true &&
+        tier === "session" &&
+        input.detach === undefined &&
+        input.send_to === undefined &&
+        input.continue_session === undefined;
+
       if (tier === "session") {
-        return runSessionTier(input, ctx, agentType, undefined, routing ?? undefined);
+        return runSessionTier(
+          input,
+          ctx,
+          agentType,
+          undefined,
+          routing ?? undefined,
+          roleRoute ?? undefined,
+          defaultDetach,
+        );
       }
       return runInlineTier(input, ctx, agentType);
     },
@@ -392,6 +433,8 @@ async function runSessionTier(
   agentType: string,
   engineProfile?: EngineProfileInfo,
   routing?: { provider?: string; connection?: string },
+  roleRoute?: RoleRouteResolution,
+  defaultDetach?: boolean,
 ): Promise<ToolResult<AgentOutput>> {
   if (!ctx.sessionSubagents) {
     return {
@@ -489,12 +532,37 @@ async function runSessionTier(
     // handler above refused a routed profile with an explicit `provider`.
     ...(resumeChildSessionId === undefined && routing?.provider !== undefined ? { provider: routing.provider } : {}),
     ...(resumeChildSessionId === undefined && routing?.connection !== undefined ? { connectionId: routing.connection } : {}),
+    // Taskana 4704 §3.3: the role route's resolved FIRST entry stamps the
+    // fresh spawn exactly like `routing` above — provider/connection/model/
+    // effort and (closing the gap that only engine profiles stamped it)
+    // maxTurns from roleRoute.turnBudget. An explicit Agent(model:) still
+    // wins over the entry's model (existing precedence — buildSessionSub-
+    // agentRequest applies input.model first; the entry model only rides as
+    // a default when the caller passed none).
+    ...(resumeChildSessionId === undefined && roleRoute !== undefined && roleRoute.entries.length > 0
+      ? {
+          ...(input.provider === undefined && input.model === undefined && roleRoute.entries[0]!.provider !== undefined
+            ? { provider: roleRoute.entries[0]!.provider }
+            : {}),
+          ...(input.provider === undefined && roleRoute.entries[0]!.connection !== undefined
+            ? { connectionId: roleRoute.entries[0]!.connection }
+            : {}),
+          ...(input.model === undefined && roleRoute.entries[0]!.model !== undefined
+            ? { model: roleRoute.entries[0]!.model }
+            : {}),
+          ...(roleRoute.entries[0]!.effort !== undefined ? { effort: roleRoute.entries[0]!.effort } : {}),
+          ...(roleRoute.turnBudget !== undefined && engineProfile?.turnBudget === undefined
+            ? { maxTurns: roleRoute.turnBudget }
+            : {}),
+        }
+      : {}),
     // TASK.145 срез 1: only ever `true` here — the validation check above
     // already refused `detach:true` on any tier but "session", and `false`/
     // absent is dropped rather than riding the wire as an explicit `false`
     // (byte-compatible default, same discipline as every other optional
-    // field on this request).
-    ...(input.detach === true ? { detach: true } : {}),
+    // field on this request). Taskana 4704 §2.3: an orchestrate session's
+    // default-detach ALSO lands here (mechanical, not prose).
+    ...(input.detach === true || defaultDetach === true ? { detach: true } : {}),
   };
 
   // Same accumulation/bridge discipline as the inline tier above — the

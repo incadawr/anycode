@@ -15,11 +15,17 @@ export {
 } from "../prompts/subagent.js";
 export {
   PERSONAS,
+  ROLE_TURN_BUDGETS,
   getPersona,
   isKnownPersona,
+  isReservedPersonaName,
   listPersonaNames,
 } from "./personas.js";
-export type { PersonaDefinition, PersonaName } from "./personas.js";
+export type { PersonaDefinition, PersonaName, RolePersonaName } from "./personas.js";
+// Taskana 4704: the role-route chain types shared between the host resolver
+// and core's chain walkers (runner inline walk + Agent session-tier stamping).
+export { isRoleRouteName } from "./role-route.js";
+export type { RoleRouteEntry, RoleRouteName, RoleRouteResolution, RoleRouteSkip } from "./role-route.js";
 export { discoverAgentProfiles } from "./profiles.js";
 export type { AgentProfileRoot, AgentProfilesResult } from "./profiles.js";
 export {

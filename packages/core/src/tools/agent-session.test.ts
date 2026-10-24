@@ -1558,3 +1558,226 @@ describe("agentTool handler — profile routing (Taskana 4269)", () => {
     expect(seen() !== undefined && "provider" in seen()!).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4704 §2.3/§3.3: orchestrate default-detach + role-route stamping.
+// An orchestrate session defaults tier:"session" (no explicit detach/send_to/
+// continue_session) to detach:true — mechanical, not prose. The role route
+// (settings roles + host health) stamps provider/connection/model/effort/
+// maxTurns on fresh spawns; explicit model still wins; a connection-carrying
+// route refuses the inline tier.
+
+describe("agentTool handler — orchestrate default-detach (Taskana 4704 §2.3)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  function capturingPort(): { port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
+    let seen: SessionSubagentRequest | undefined;
+    return {
+      seen: () => seen,
+      port: {
+        run: async (req) => {
+          seen = req;
+          return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+        },
+      },
+    };
+  }
+
+  it("orchestrate + tier session + no detach => request carries detach:true", async () => {
+    const { port, seen } = capturingPort();
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session" },
+      makeCtx({ orchestrate: true, sessionSubagents: port }),
+    );
+    expect(seen()?.detach).toBe(true);
+  });
+
+  it("an explicit detach:false is honored — no detach key rides the wire", async () => {
+    const { port, seen } = capturingPort();
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", detach: false },
+      makeCtx({ orchestrate: true, sessionSubagents: port }),
+    );
+    expect(seen() !== undefined && "detach" in seen()!).toBe(false);
+  });
+
+  it("non-orchestrate sessions unchanged: no detach key without the flag", async () => {
+    const { port, seen } = capturingPort();
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(seen() !== undefined && "detach" in seen()!).toBe(false);
+  });
+
+  it("inline tier is unaffected by the orchestrate flag", async () => {
+    let inlineReached = false;
+    const inlinePort: SubagentPort = {
+      run: async () => {
+        inlineReached = true;
+        return {
+          status: "completed",
+          finalText: "inline ok",
+          truncated: false,
+          turns: 1,
+          toolCalls: 0,
+          durationMs: 1,
+        };
+      },
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ orchestrate: true, subagents: inlinePort }),
+    );
+    expect(result.ok).toBe(true);
+    expect(inlineReached).toBe(true);
+  });
+
+  it("send_to suppresses the default-detach (a delivery detaches nothing)", async () => {
+    let delivered = false;
+    const port: SessionSubagentPort = {
+      run: async () => {
+        throw new Error("run must not be reached for send_to");
+      },
+      send: async () => {
+        delivered = true;
+        return { ok: true };
+      },
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-7" },
+      makeCtx({ orchestrate: true, sessionSubagents: port }),
+    );
+    expect(result.ok).toBe(true);
+    expect(delivered).toBe(true);
+  });
+
+  it("continue_session suppresses the default-detach (a resume keeps sync-join semantics)", async () => {
+    const { port, seen } = capturingPort();
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", continue_session: "child-9" },
+      makeCtx({ orchestrate: true, sessionSubagents: port }),
+    );
+    expect(seen()?.resumeChildSessionId).toBe("child-9");
+    expect(seen() !== undefined && "detach" in seen()!).toBe(false);
+  });
+});
+
+describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  function roleCtx(
+    route: { entries: Array<Record<string, string | number>>; turnBudget?: number } | null,
+  ): { ctx: ToolContext; port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["general-purpose", "explore", "planner", "executor", "reviewer"],
+      resolveRoleRoute: (agentType: string) =>
+        route === null
+          ? null
+          : ({
+              entries: route.entries as never,
+              skipped: [],
+              ...(route.turnBudget !== undefined ? { turnBudget: route.turnBudget } : {}),
+            } as never),
+    };
+    return { ctx: makeCtx({ sessionSubagents: port, subagents }), port, seen: () => seen };
+  }
+
+  it("a role route stamps provider/model/effort/maxTurns on a FRESH spawn", async () => {
+    const { ctx, seen } = roleCtx({
+      entries: [{ provider: "conn-glm", model: "glm-5.3", effort: "high" }],
+      turnBudget: 80,
+    });
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "executor" },
+      ctx,
+    );
+    expect(seen()).toMatchObject({
+      model: "glm-5.3",
+      effort: "high",
+      maxTurns: 80,
+      provider: "conn-glm",
+    });
+  });
+
+  it("NOT stamped on resumes (a resumed child keeps its own pin)", async () => {
+    const { ctx, seen } = roleCtx({
+      entries: [{ provider: "conn-glm", model: "glm-5.3" }],
+      turnBudget: 30,
+    });
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "planner", continue_session: "child-4" },
+      ctx,
+    );
+    expect(seen()?.resumeChildSessionId).toBe("child-4");
+    expect(seen() !== undefined && "model" in seen()!).toBe(false);
+    expect(seen() !== undefined && "provider" in seen()!).toBe(false);
+    expect(seen() !== undefined && "maxTurns" in seen()!).toBe(false);
+  });
+
+  it("an explicit model beats the route's model (existing precedence)", async () => {
+    const { ctx, seen } = roleCtx({ entries: [{ model: "route-model" }] });
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "planner", model: "explicit-model" },
+      ctx,
+    );
+    expect(seen()?.model).toBe("explicit-model");
+  });
+
+  it("an entry carrying connection stamps connectionId", async () => {
+    const { ctx, seen } = roleCtx({ entries: [{ connection: "conn-claude", model: "claude-opus-5" }] });
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "reviewer" },
+      ctx,
+    );
+    expect(seen()).toMatchObject({ connectionId: "conn-claude", model: "claude-opus-5" });
+  });
+
+  it("an inline-tier call of a role whose route carries connection/engine is refused (4269 shape)", async () => {
+    const { ctx } = roleCtx({ entries: [{ connection: "conn-claude", model: "m" }] });
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "reviewer" },
+      ctx,
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok === false && result.error).toContain(
+      'Agent: profile "reviewer" selects its own connection and runs as a child session; call it with tier "session".',
+    );
+  });
+
+  it("an inline-tier call of a role whose route is model-only runs inline (no refusal)", async () => {
+    let inlineSeen: unknown;
+    const subagents: SubagentPort = {
+      run: async (req) => {
+        inlineSeen = req;
+        return {
+          status: "completed",
+          finalText: "inline role ok",
+          truncated: false,
+          turns: 1,
+          toolCalls: 0,
+          durationMs: 1,
+        };
+      },
+      listAgentTypes: () => ["general-purpose", "explore", "planner", "executor", "reviewer"],
+      resolveRoleRoute: () =>
+        ({ entries: [{ model: "m-1" }], skipped: [] }) as never,
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "planner" },
+      makeCtx({ subagents }),
+    );
+    expect(result.ok).toBe(true);
+    expect(inlineSeen).toBeDefined();
+  });
+});

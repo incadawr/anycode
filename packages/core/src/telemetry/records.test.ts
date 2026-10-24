@@ -149,6 +149,36 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect(telemetryRecordFor(event)).toEqual({ t: "subagent_start", agentType: "sonnet" });
   });
 
+  it("subagent_start with route+fallbackReason (Taskana 4704 §3.10) copies both field-by-field", () => {
+    const event: AgentEvent = {
+      type: "subagent_start",
+      toolCallId: "call-r",
+      agentType: "executor",
+      description: SENTINEL,
+      route: "executor|codex|",
+      fallbackReason: "quota",
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "subagent_start",
+      agentType: "executor",
+      route: "executor|codex|",
+      fallbackReason: "quota",
+    });
+  });
+
+  it("subagent_start route fields absent on a primary-entry run (no fallbackReason key)", () => {
+    const event: AgentEvent = {
+      type: "subagent_start",
+      toolCallId: "call-r2",
+      agentType: "executor",
+      description: "d",
+      route: "executor|codex|",
+    };
+    const record = telemetryRecordFor(event);
+    expect(record).toMatchObject({ t: "subagent_start", route: "executor|codex|" });
+    expect(record).not.toHaveProperty("fallbackReason");
+  });
+
   it("subagent_start with model+engine (toolCallId + description still dropped)", () => {
     const event: AgentEvent = {
       type: "subagent_start",

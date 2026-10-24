@@ -435,6 +435,16 @@ export interface HarnessOptions {
   /** Replaces the built-in CoreEngine for neutral Session seam tests. */
   engine?: SessionEngine;
   /**
+   * Taskana 4704 (part A): the A1 child-spawn-mode seam, threaded DIRECTLY
+   * to Session. Omitted -> Session falls back to its own orchestrate-aware
+   * derivation (engine mode / pre-orchestrate mode).
+   */
+  childSpawnMode?: SessionOptions["childSpawnMode"];
+  /** Taskana 4704 §3.7: host callback on orchestrate transitions; omitted -> absent seam. */
+  onOrchestrateChanged?: SessionOptions["onOrchestrateChanged"];
+  /** Taskana 4704 §3.6: turn-start orchestrator-route health check; omitted -> absent seam. */
+  orchestratorRouteCheck?: SessionOptions["orchestratorRouteCheck"];
+  /**
    * 6.DP-2: overrides the config `cwd` (default "/workspace"). Needed ONLY by
    * the bg-tasks e2e: a background task is a REAL child spawned by the manager's
    * own NodeExecutionAdapter with `cwd` = config.cwd, and spawn(2) fails ENOENT
@@ -554,6 +564,12 @@ export interface Harness {
    * nonpublic access confined to this seam; the entry is never simulated.
    */
   armContinuation(): void;
+  /**
+   * Taskana 4704 part A (A1): the Session's childSpawnMode() — the mode child
+   * sessions run under (pre-orchestrate mode with plan coerced to build while
+   * orchestrate is on; the live engine mode otherwise).
+   */
+  sessionChildSpawnMode(): PermissionMode;
   /** Posts a UiToHostMessage from the UI side to the host. */
   send(message: UiToHostMessage): void;
   /** Resolves with the first received message matching the predicate (rejects on timeout). */
@@ -702,6 +718,9 @@ export function createHarness(options: HarnessOptions): Harness {
   const session = new Session({
     outbound,
     engine,
+    ...(options.childSpawnMode !== undefined ? { childSpawnMode: options.childSpawnMode } : {}),
+    ...(options.onOrchestrateChanged !== undefined ? { onOrchestrateChanged: options.onOrchestrateChanged } : {}),
+    ...(options.orchestratorRouteCheck !== undefined ? { orchestratorRouteCheck: options.orchestratorRouteCheck } : {}),
     ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),
     broker,
     fs: toolFs,
@@ -829,6 +848,9 @@ export function createHarness(options: HarnessOptions): Harness {
     pendingPromptSlot(): { turnId: string; requestId: string; text: string } | null {
       const internal = session as unknown as { pendingPrompt: { turnId: string; requestId: string; text: string } | null };
       return internal.pendingPrompt === null ? null : { ...internal.pendingPrompt };
+    },
+    sessionChildSpawnMode(): PermissionMode {
+      return session.childSpawnMode();
     },
     armContinuation(): void {
       const internal = session as unknown as { continuationPending: boolean };

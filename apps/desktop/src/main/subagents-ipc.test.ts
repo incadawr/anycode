@@ -227,19 +227,19 @@ describe("handleSubagentsSave", () => {
   it("saves an in-place edit, round-tripping through list", async () => {
     const ws = await tmp();
     const home = await tmp();
-    const path = join(ws, ".anycode/agents/reviewer.md");
-    await seed(path, md({ name: "reviewer", description: "Reviews code" }, "old body"));
+    const path = join(ws, ".anycode/agents/auditor.md");
+    await seed(path, md({ name: "auditor", description: "Reviews code" }, "old body"));
     const deps = makeDeps(ws, home);
 
     const result = await handleSubagentsSave(deps, {
       tabId: TAB_ID,
-      name: "reviewer",
+      name: "auditor",
       sourceKind: "project",
-      draft: { name: "reviewer", description: "Reviews code better", body: "new body" },
+      draft: { name: "auditor", description: "Reviews code better", body: "new body" },
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.snapshot.rows.find((r) => r.name === "reviewer")?.description).toBe("Reviews code better");
+    expect(result.snapshot.rows.find((r) => r.name === "auditor")?.description).toBe("Reviews code better");
 
     const onDisk = await readFile(path, "utf-8");
     expect(onDisk).toContain("new body");
@@ -375,14 +375,14 @@ describe("handleSubagentsSave", () => {
   it("renames — moves the file, old path gone, new path present", async () => {
     const ws = await tmp();
     const home = await tmp();
-    const oldPath = join(ws, ".anycode/agents/reviewer.md");
+    const oldPath = join(ws, ".anycode/agents/auditor.md");
     const newPath = join(ws, ".anycode/agents/critic.md");
-    await seed(oldPath, md({ name: "reviewer", description: "Reviews code" }, "body"));
+    await seed(oldPath, md({ name: "auditor", description: "Reviews code" }, "body"));
     const deps = makeDeps(ws, home);
 
     const result = await handleSubagentsSave(deps, {
       tabId: TAB_ID,
-      name: "reviewer",
+      name: "auditor",
       sourceKind: "project",
       draft: { name: "critic", description: "Reviews code", body: "body" },
     });
@@ -391,7 +391,7 @@ describe("handleSubagentsSave", () => {
     expect(await exists(newPath)).toBe(true);
     if (!result.ok) return;
     expect(result.snapshot.rows.find((r) => r.name === "critic")).toBeDefined();
-    expect(result.snapshot.rows.find((r) => r.name === "reviewer")).toBeUndefined();
+    expect(result.snapshot.rows.find((r) => r.name === "auditor" && r.source === "project")).toBeUndefined();
   });
 
   it("refuses a builtin/plugin identity with read_only_source, file untouched", async () => {

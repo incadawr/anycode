@@ -1903,3 +1903,120 @@ describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
     emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4704 §2.8/§3.6: the parallel-children cap — an honest refusal at
+// the detach ADMIT (never a queue). Only detach requests consume slots;
+// sync-join spawns are untouched; `undefined` cap = unlimited (pre-4704).
+
+describe("child-session-port — maxDetachedChildren cap (Taskana 4704 §2.8)", () => {
+  const { spawns } = { spawns: (sent: SentMessage[]) => sent.filter((m): m is Extract<SentMessage, { type: typeof CHILD_SPAWN_REQUEST_TYPE }> => m.type === CHILD_SPAWN_REQUEST_TYPE) };
+
+  function capHarness(cap: () => number | undefined) {
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    let nextId = 0;
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => `req-${++nextId}`,
+      maxDetachedChildren: cap,
+    });
+    return {
+      port,
+      sent,
+      emit: (event: ChildRunEvent) => listener?.(event),
+    };
+  }
+
+  function admit(emit: (e: ChildRunEvent) => void, sent: SentMessage[], i: number): void {
+    const requestId = spawns(sent)[i]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: `child-cap-${i}`, childTabId: "t1", model: "m" });
+  }
+
+  it("refuses a detach admit at N live children with the honest refusal text", async () => {
+    const { port, sent, emit } = capHarness(() => 2);
+    const p1 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-cap-1", detach: true }, {});
+    const p2 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-cap-2", detach: true }, {});
+    admit(emit, sent, 0);
+    admit(emit, sent, 1);
+    await p1;
+    await p2;
+
+    const third = await port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-cap-3", detach: true }, {});
+    expect(third.status).toBe("error");
+    expect(third.finalText).toBe("Agent: child limit reached (2 running). Wait for a report or stop a child before delegating more.");
+    // Nothing was posted for the refused spawn.
+    expect(spawns(sent)).toHaveLength(2);
+  });
+
+  it("admits under the cap", async () => {
+    const { port, sent, emit } = capHarness(() => 4);
+    const p1 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-cap-a", detach: true }, {});
+    admit(emit, sent, 0);
+    const outcome = await p1;
+    expect(outcome.status).toBe("completed");
+    expect(spawns(sent)).toHaveLength(1);
+  });
+
+  it("the cap does NOT touch sync-join spawns (no detach flag)", async () => {
+    const { port, sent } = capHarness(() => 1);
+    // Two sync spawns at cap 1 — both post (no admit yet, both pending).
+    void port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-sync-1" }, {});
+    void port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-sync-2" }, {});
+    expect(spawns(sent)).toHaveLength(2);
+  });
+
+  it("a child reaching terminal releases its slot", async () => {
+    const { port, sent, emit } = capHarness(() => 1);
+    const p1 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-rel-1", detach: true }, {});
+    admit(emit, sent, 0);
+    await p1;
+    const requestId = spawns(sent)[0]!.requestId;
+    emit(
+      {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId,
+        kind: "terminal",
+        status: "completed",
+        finalText: "done",
+        turns: 1,
+        durationMs: 5,
+        childSessionId: "child-cap-0",
+      } as ChildRunEvent,
+    );
+    const p2 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-rel-2", detach: true }, {});
+    admit(emit, sent, 1);
+    const second = await p2;
+    expect(second.status).toBe("completed");
+  });
+
+  it("cap undefined => unlimited (byte-identical pre-4704)", async () => {
+    const { port, sent, emit } = capHarness(() => undefined);
+    for (let i = 0; i < 3; i++) {
+      void port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: `spawn-unl-${i}`, detach: true }, {});
+      admit(emit, sent, i);
+    }
+    expect(spawns(sent)).toHaveLength(3);
+  });
+
+  it("the cap is read LIVE — raising it mid-session admits the next child", async () => {
+    let cap = 1;
+    const { port, sent, emit } = capHarness(() => cap);
+    const p1 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-live-1", detach: true }, {});
+    admit(emit, sent, 0);
+    await p1;
+    const refused = await port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-live-2", detach: true }, {});
+    expect(refused.status).toBe("error");
+    cap = 2;
+    const p3 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-live-3", detach: true }, {});
+    admit(emit, sent, 1);
+    const admitted = await p3;
+    expect(admitted.status).toBe("completed");
+  });
+});

@@ -391,6 +391,15 @@ export interface CreateChildSessionPortOptions {
    * 2 wires the detached one too — see `run()`'s own comment).
    */
   stallTimeoutMs?: number;
+  /**
+   * Taskana 4704 §2.8/§3.6: cap on THIS parent's simultaneously-live detached
+   * children, enforced at the detach ADMIT as an honest refusal (no queueing
+   * — queueing risks unbounded hidden state, §9-Q5). Read at admit time (a
+   * live cell, not a snapshot) so settings changes land on the next spawn.
+   * Absent/undefined => unlimited (byte-identical pre-4704 behavior; the
+   * host passes `roles.maxParallelChildren ?? 4`).
+   */
+  maxDetachedChildren?: () => number | undefined;
 }
 
 /**
@@ -493,6 +502,29 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         parentSessionId: options.parentSessionId,
         spawnToolCallId: req.spawnToolCallId,
       });
+    }
+
+    // Taskana 4704 §2.8/§3.6: the parallel-children cap. A detach ADMIT that
+    // would exceed this parent's live-detached count is refused HONESTLY,
+    // here in the port (never queued — queueing risks unbounded hidden
+    // state, §9-Q5). Only detach requests consume slots; sync-join spawns
+    // are untouched. Read as a live cell (the getter) so a settings change
+    // lands on the very next spawn. `undefined` => unlimited (pre-4704).
+    if (req.detach === true) {
+      const cap = options.maxDetachedChildren?.();
+      if (cap !== undefined && backgroundChildren.size >= cap) {
+        return Promise.resolve({
+          status: "error",
+          finalText: `Agent: child limit reached (${backgroundChildren.size} running). Wait for a report or stop a child before delegating more.`,
+          truncated: false,
+          turns: 0,
+          toolCalls: 0,
+          durationMs: 0,
+          childSessionId: "",
+          parentSessionId: options.parentSessionId,
+          spawnToolCallId: req.spawnToolCallId,
+        });
+      }
     }
 
     // F9 (review finding, found independently by all three reviewers): a

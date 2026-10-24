@@ -112,6 +112,7 @@ export const recognizerSchema = z
   .optional()
   .catch(undefined);
 
+
 /**
  * Strict-shape validator for a settings object. `.passthrough()` at the top
  * level keeps unknown keys from a future version alive across a read-modify-write
@@ -290,6 +291,59 @@ function parseElementsTolerantly<T>(schema: z.ZodType<T>, raw: unknown): T[] {
   }
   return out;
 }
+
+// ── roles (Taskana 4704 §3.5) ──
+
+/**
+ * One role-route hop. The engine XOR connection/provider rule is enforced by
+ * a PER-ELEMENT refine (not a whole-object catch): a bad element must drop
+ * ALONE (the `parseElementsTolerantly` granularity the codex-profiles cut
+ * established), never blank its siblings. Effort is the settings-side
+ * vocabulary including "xhigh" (carried verbatim for engine children).
+ */
+export const roleRouteEntrySchema = z
+  .object({
+    engine: z.enum(["codex", "claude"]).optional(),
+    connection: z.string().min(1).optional(),
+    provider: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    effort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]).optional(),
+  })
+  // engine XOR (connection|provider): an engine child runs on its own CLI
+  // account and cannot also select a core connection/provider.
+  .refine((entry) => !(entry.engine !== undefined && (entry.connection !== undefined || entry.provider !== undefined)), {
+    message: "engine and connection/provider are mutually exclusive within one route entry",
+  })
+  .refine((entry) => !(entry.connection !== undefined && entry.provider !== undefined), {
+    message: "connection and provider are mutually exclusive within one route entry",
+  });
+
+/** One role: primary required, fallbacks optional (per-element tolerant). */
+export const roleConfigSchema = z.object({
+  primary: roleRouteEntrySchema,
+  fallbacks: z.preprocess(
+    (raw) => parseElementsTolerantly(roleRouteEntrySchema, raw),
+    z.array(roleRouteEntrySchema),
+  ).optional(),
+});
+
+/**
+ * The `roles` settings section — additive-optional, version NOT bumped (the
+ * `preview`/`recognizer` precedent): absent means "built-in defaults". The
+ * WHOLE-OBJECT `.catch(undefined)` (the `recognizer` precedent) keeps one
+ * corrupt roles value from resetting the whole document to defaults.
+ */
+export const rolesSchema = z
+  .object({
+    orchestrator: roleConfigSchema.optional(),
+    planner: roleConfigSchema.optional(),
+    executor: roleConfigSchema.optional(),
+    reviewer: roleConfigSchema.optional(),
+    explore: roleConfigSchema.optional(),
+    maxParallelChildren: z.number().int().min(1).max(16).optional().catch(undefined),
+  })
+  .optional()
+  .catch(undefined);
 
 const codexProfilesArraySchema = z.preprocess(
   (raw) => parseElementsTolerantly(codexProfileSchema, raw),
@@ -660,6 +714,11 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // Declared explicitly (not left to `.passthrough()`) so it validates and
     // survives a read-modify-write cycle.
     recognizer: recognizerSchema,
+    // Orchestration roles (Taskana 4704 §3.5, additive-optional; version NOT
+    // bumped, same forward-compat reasoning as `recognizer` above). Absent
+    // means "built-in defaults"; the whole-object catch degrades a corrupt
+    // value alone.
+    roles: rolesSchema,
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
 

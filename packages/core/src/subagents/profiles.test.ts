@@ -662,3 +662,51 @@ describe("discoverAgentProfiles — profile connection/provider routing (Taskana
     expect(problems[0]).toContain('"connection" and "provider" are mutually exclusive');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4704 §2.1: the three role personas became OVERRIDABLE built-ins. A
+// same-named md-profile now PARSES and is registered (it wins at resolution);
+// general-purpose/explore remain reserved. Engine+connection inside a role
+// profile stays fatal (unchanged claim-set semantics).
+
+describe("parseAgentProfileMd — role persona names (Taskana 4704)", () => {
+  it("planner/executor/reviewer profiles parse and register (previously reserved_name)", async () => {
+    for (const name of ["planner", "executor", "reviewer"]) {
+      const res = parseAgentProfileMd(md({ name, description: `${name} override` }, "BODY"), "f");
+      expect("ok" in res, `parse ${name}`).toBe(true);
+      if (!("ok" in res)) continue;
+      expect(res.ok.name).toBe(name);
+      expect(res.ok.body).toBe("BODY");
+    }
+
+    const fs = new FakeFs({
+      [WS]: {
+        "planner.md": md({ name: "planner", description: "custom planner" }, "CUSTOM PLANNER"),
+        "executor.md": md({ name: "executor", description: "custom executor" }, "CUSTOM EXECUTOR"),
+        "reviewer.md": md({ name: "reviewer", description: "custom reviewer" }, "CUSTOM REVIEWER"),
+      },
+    });
+    const { profiles, problems } = await discoverAgentProfiles(fs, ROOTS);
+    expect(problems).toEqual([]);
+    expect(profiles.find((p) => p.name === "planner")?.systemPrompt).toBe("CUSTOM PLANNER");
+    expect(profiles.find((p) => p.name === "executor")?.systemPrompt).toBe("CUSTOM EXECUTOR");
+    expect(profiles.find((p) => p.name === "reviewer")?.systemPrompt).toBe("CUSTOM REVIEWER");
+  });
+
+  it("general-purpose/explore remain reserved_name", () => {
+    expect(parseAgentProfileMd(md({ name: "general-purpose", description: "d" }, "b"), "f")).toEqual({
+      error: { kind: "reserved_name", name: "general-purpose" },
+    });
+    expect(parseAgentProfileMd(md({ name: "explore", description: "d" }, "b"), "f")).toEqual({
+      error: { kind: "reserved_name", name: "explore" },
+    });
+  });
+
+  it("engine+connection inside a role-named profile is still fatal", () => {
+    const res = parseAgentProfileMd(
+      md({ name: "planner", description: "d", engine: "claude", connection: "conn-a" }, "b"),
+      "f",
+    );
+    expect(res).toEqual({ error: { kind: "engine_connection_conflict", name: "planner", engine: "claude" } });
+  });
+});

@@ -8075,3 +8075,186 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4704 part A (§3.7 + A1): set_orchestrate — the tab-level orchestrate
+// state. Enabling switches the mode to plan and swaps the plan-mode reminder
+// for the orchestrate reminder; disabling restores the remembered mode; a
+// busy turn silently drops the toggle. childSpawnMode(): while orchestrate is
+// on, children inherit the PRE-orchestrate mode (plan coerced to build — an
+// executor child must be able to write); non-orchestrate sessions return the
+// live mode.
+
+describe("Session — set_orchestrate (Taskana 4704 §3.7 / A1)", () => {
+  it("enabling: mode -> plan, turn input carries <orchestrate-reminder> and NOT <plan-mode-reminder>", async () => {
+    const seenInputs: string[] = [];
+    const h = createHarness({ steps: [], engine: orchestrateEngine({ onRunTurn: (input) => seenInputs.push(input) }) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      const changed = await h.waitFor((m): m is Of<"mode_changed"> => m.type === "mode_changed");
+      expect(changed.mode).toBe("plan");
+      const ack = await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed");
+      expect(ack.enabled).toBe(true);
+
+      h.send({ type: "user_message", requestId: "t1", text: "delegate the work" });
+      await h.waitFor(isTurnStarted);
+      await h.flush();
+      expect(seenInputs.some((t) => t.includes("<orchestrate-reminder>"))).toBe(true);
+      expect(seenInputs.some((t) => t.includes("<plan-mode-reminder>"))).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("disabling restores the remembered pre-orchestrate mode", async () => {
+    const h = createHarness({ steps: [], engine: orchestrateEngine({}) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && m.enabled);
+      h.send({ type: "set_orchestrate", enabled: false });
+      const changed = await h.waitFor((m): m is Of<"mode_changed"> => m.type === "mode_changed" && m.mode === "build");
+      expect(changed.mode).toBe("build");
+      const ack = await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && !m.enabled);
+      expect(ack.enabled).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a busy turn silently drops the toggle (no mode change, no ack)", async () => {
+    let release: (() => void) | undefined;
+    const h = createHarness({ steps: [], engine: orchestrateEngine({ park: () => new Promise<void>((r) => { release = r; }) }) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "busy", text: "work" });
+      await h.waitFor(isTurnStarted);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.flush();
+      expect(h.received.some((m) => m.type === "orchestrate_changed")).toBe(false);
+      expect(h.received.some((m) => m.type === "mode_changed")).toBe(false);
+      release?.();
+      await h.flush();
+    } finally {
+      h.close();
+    }
+  });
+
+  it("childSpawnMode(): orchestrate + preOrchestrateMode=build -> children get build; plan -> build; yolo -> yolo; off -> live mode", async () => {
+    // Build one harness per case through the Session directly: mode transitions
+    // need the engine's mode() to reflect setMode, which orchestrateEngine does.
+    const cases: Array<{ pre: "build" | "plan" | "yolo"; expected: "build" | "yolo" }> = [
+      { pre: "build", expected: "build" },
+      { pre: "plan", expected: "build" },
+      { pre: "yolo", expected: "yolo" },
+    ];
+    for (const { pre, expected } of cases) {
+      const h = createHarness({ steps: [], mode: pre, engine: orchestrateEngine({ initialMode: pre }) });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+        h.send({ type: "set_orchestrate", enabled: true });
+        await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && m.enabled);
+        // The harness exposes the Session? No — assert through the deps seam
+        // shape instead: childSpawnMode via session.childSpawnMode() is host-
+        // internal; here we assert the DEP override path (host/index.ts wires
+        // the same getter), driven through the engine mode the Session sees.
+        expect(h.sessionChildSpawnMode()).toBe(expected);
+      } finally {
+        h.close();
+      }
+    }
+    // Non-orchestrate: the live mode (unchanged child = parent mode).
+    const h2 = createHarness({ steps: [], mode: "edit", engine: orchestrateEngine({ initialMode: "edit" }) });
+    try {
+      h2.send({ type: "ui_ready" });
+      await h2.waitFor(isHostReady);
+      expect(h2.sessionChildSpawnMode()).toBe("edit");
+    } finally {
+      h2.close();
+    }
+  });
+
+  it("the loop config copy fires onOrchestrateChanged (host copies config.orchestrate)", async () => {
+    const onOrchestrateChanged = vi.fn();
+    const h = createHarness({ steps: [], engine: orchestrateEngine({}), onOrchestrateChanged });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && m.enabled);
+      expect(onOrchestrateChanged).toHaveBeenCalledWith(true);
+      h.send({ type: "set_orchestrate", enabled: false });
+      await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && !m.enabled);
+      expect(onOrchestrateChanged).toHaveBeenCalledWith(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("turn-start fallback: an unhealthy primary surfaces the engine_notice (via orchestratorRouteCheck)", async () => {
+    const h = createHarness({
+      steps: [],
+      engine: orchestrateEngine({}),
+      orchestratorRouteCheck: () => "Orchestrator: primary route unhealthy (quota), running on glm-5.3.",
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && m.enabled);
+      h.send({ type: "user_message", requestId: "t9", text: "go" });
+      await h.waitFor(isTurnStarted);
+      await h.flush();
+      const notice = h.received.find(
+        (m) => m.type === "agent_event" && "event" in m && (m.event as { type?: string }).type === "engine_notice",
+      );
+      expect(notice).toBeDefined();
+    } finally {
+      h.close();
+    }
+  });
+});
+
+/** Local engine double honoring setMode for orchestrate tests (mode() is live). */
+function orchestrateEngine(opts: {
+  onRunTurn?: (input: string) => void;
+  park?: () => Promise<void>;
+  initialMode?: PermissionMode;
+}): SessionEngine {
+  let mode: PermissionMode = opts.initialMode ?? "build";
+  return {
+    id: "core",
+    capabilities: {
+      supportsCorePermissions: true,
+      supportsRewind: true,
+      supportsWorkflow: true,
+      supportsGitMutations: true,
+      supportsContextUsage: true,
+      supportsContextBreakdown: true,
+      supportsInteractiveApprovals: true,
+      costAccounting: true,
+      supportsModelSelection: true,
+      supportsReasoningEffort: true,
+      supportsImages: true,
+      supportsTasks: true,
+      supportsFileSnapshots: true,
+      supportsManualCompact: true,
+    },
+    mode: () => mode,
+    setMode: (next) => { mode = next; },
+    reasoningEffort: () => undefined,
+    setReasoningEffort: () => {},
+    async *runTurn(input): AsyncIterable<AgentEvent> {
+      opts.onRunTurn?.(input);
+      await opts.park?.();
+      yield { type: "turn_end", turn: 1, finishReason: "stop" };
+    },
+    historyItems: () => [],
+    dispose: async () => {},
+  };
+}

@@ -446,6 +446,9 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         description: progress.description,
         ...(progress.model !== undefined ? { model: progress.model } : {}),
         ...(progress.engine !== undefined ? { engine: progress.engine } : {}),
+        // Taskana 4704 §3.10: role-route visibility rides the start event.
+        ...(progress.route !== undefined ? { route: progress.route } : {}),
+        ...(progress.fallbackReason !== undefined ? { fallbackReason: progress.fallbackReason } : {}),
       };
     case "progress":
       return {

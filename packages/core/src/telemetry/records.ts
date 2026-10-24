@@ -60,11 +60,16 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         source: event.source,
       };
     case "subagent_start":
+      // Taskana 4704 §3.10: `route` (the host's entryKey identity) and
+      // `fallbackReason` (why a non-primary entry ran) copied field-by-field,
+      // same whitelist discipline — absent for every non-routed spawn.
       return {
         t: "subagent_start",
         agentType: event.agentType,
         ...(event.model !== undefined ? { model: event.model } : {}),
         ...(event.engine !== undefined ? { engine: event.engine } : {}),
+        ...(event.route !== undefined ? { route: event.route } : {}),
+        ...(event.fallbackReason !== undefined ? { fallbackReason: event.fallbackReason } : {}),
       };
     case "subagent_end":
       // TASK.171: closes the known gap where a completed child's model

@@ -791,6 +791,20 @@ const sessionLimitsSchema = z.object({
   childSessionsGlobalMax: z.number().int().min(SESSION_LIMIT_RANGES.childSessionsGlobalMax.min).max(SESSION_LIMIT_RANGES.childSessionsGlobalMax.max).optional(),
 }).strict();
 
+// Taskana 4704 §3.5: strict shape gate for the `roles` section — the roles
+// settings (role route chains + parallel-children cap) ride the generic patch
+// channel like `sessionLimits`, but a wrong-shaped section is refused loudly,
+// never persisted (a hand-edited file degrades fail-soft at READ time via the
+// schema's whole-object catch). Reuses the schema module's own schemas.
+const rolesPatchSchema = z.object({
+  orchestrator: z.unknown().optional(),
+  planner: z.unknown().optional(),
+  executor: z.unknown().optional(),
+  reviewer: z.unknown().optional(),
+  explore: z.unknown().optional(),
+  maxParallelChildren: z.number().int().min(1).max(16).optional(),
+}).strict();
+
 // ── snapshot projection ──
 
 /**
@@ -942,6 +956,15 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   // hand-edited file is tolerated fail-soft at READ time via readSessionLimits).
   if ("sessionLimits" in rawPatch) {
     if (!sessionLimitsSchema.safeParse((rawPatch as Record<string, unknown>).sessionLimits).success) {
+      return { ok: false, reason: "invalid" };
+    }
+  }
+
+  // Taskana 4704 §3.5: `roles` rides the generic patch channel under the same
+  // discipline — wrong shape is refused loudly, never persisted. The per-role
+  // route configs are validated by rolesSchema at the whole-document gate.
+  if ("roles" in rawPatch) {
+    if (!rolesPatchSchema.safeParse((rawPatch as Record<string, unknown>).roles).success) {
       return { ok: false, reason: "invalid" };
     }
   }

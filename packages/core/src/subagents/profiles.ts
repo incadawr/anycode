@@ -32,7 +32,7 @@ import {
   SUBAGENT_MAX_TURNS_CEILING,
   type ReasoningEffort,
 } from "../types/config.js";
-import { PERSONAS, isKnownPersona, type AgentProfileEffort, type PersonaDefinition } from "./personas.js";
+import { PERSONAS, isReservedPersonaName, type AgentProfileEffort, type PersonaDefinition } from "./personas.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
 
 /** One directory to scan for `*.md` profiles, tagged with its provenance. */
@@ -217,10 +217,12 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
     return { error: { kind: "bad_name", name } };
   }
 
-  // Built-in names are reserved: a profile can never override
+  // Reserved names are parse-fatal: a profile can never override
   // general-purpose/explore (discovery is the first rubicon; runner resolution is
-  // the second, design §2.5/§3.5).
-  if (isKnownPersona(name)) {
+  // the second, design §2.5/§3.5). Taskana 4704 narrows the reserved set to
+  // exactly those two — the role personas (planner/executor/reviewer) became
+  // OVERRIDABLE built-ins, so a same-named md-profile now parses and wins.
+  if (isReservedPersonaName(name)) {
     return { error: { kind: "reserved_name", name } };
   }
 
@@ -474,7 +476,7 @@ export async function discoverAgentProfiles(
             break;
           case "reserved_name":
             problems.push(
-              `Agent profile ${path}: name "${err.name}" is reserved by a built-in persona — ignored`,
+              `Agent profile ${path}: name "${err.name}" is reserved by a built-in persona (general-purpose/explore) — ignored`,
             );
             break;
           case "missing_description":

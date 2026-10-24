@@ -435,6 +435,13 @@ export type UiToHostMessage =
       remember?: { pattern?: string };
     } // MVP UI only ever sends allow/deny (no input editing); 2.2 adds optional `remember`
   | { type: "set_mode"; mode: PermissionMode } // valid between turns AND mid-turn (TASK.37): applies to the next not-yet-taken permission decision; an already-open ask completes under its snapshotted mode
+  // Taskana 4704 §3.7: toggle this tab's orchestrate state (a TAB-level flag,
+  // NOT a PermissionMode — enabling switches the mode to plan + swaps the
+  // plan-mode reminder for the orchestrate reminder; disabling restores the
+  // remembered pre-orchestrate mode). Between-turns only (busy => silent
+  // drop, the set_mode discipline); acked by `orchestrate_changed`. Untrusted
+  // -> validated by `setOrchestrateSchema` below (fail-closed).
+  | { type: "set_orchestrate"; enabled: boolean }
   | { type: "set_reasoning_effort"; effort: ReasoningEffort }
   // Slice P7.15 (F14): mid-session model switch (mirror of the CLI `/model`
   // re-budget, host-side switch not a respawn). Untrusted -> validated by
@@ -806,6 +813,10 @@ export type HostToUiMessage =
       totals: WireUsageAuditTotals | null;
     }
   | { type: "mode_changed"; mode: PermissionMode }
+  // Taskana 4704 §3.7: host ack for `set_orchestrate` (trusted, no zod,
+  // precedent mode_changed). Carries the resulting state so the renderer's
+  // tab-scoped orchestrateActive stays in sync even across a reconnect.
+  | { type: "orchestrate_changed"; enabled: boolean }
   | { type: "reasoning_effort_changed"; effort: ReasoningEffort; availableEffortLevels?: ReasoningEffort[] }
   // Slice P7.15 (F14): host acknowledges a `set_model` switch (trusted, no zod,
   // precedent mode_changed/reasoning_effort_changed). `reasoningEffort` is the
@@ -1075,6 +1086,15 @@ export const setReasoningEffortSchema = z.object({
   effort: z.enum(["off", "low", "medium", "high", "max"]),
 }).strict();
 
+// Taskana 4704 §3.7: untrusted set_orchestrate. Mirror of setModeSchema —
+// literal + boolean, strict; nothing else rides. Fail-closed in route().
+export const setOrchestrateSchema = z
+  .object({
+    type: z.literal("set_orchestrate"),
+    enabled: z.boolean(),
+  })
+  .strict();
+
 // Slice P7.15 (F14): untrusted set_model. Mirror of the CLI /model ambiguity
 // rules — a non-empty id with no internal whitespace; the Session route applies
 // the trim + whitespace check too (defense in depth), but bounding length here
@@ -1291,6 +1311,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   permissionResponseSchema,
   setModeSchema,
   setReasoningEffortSchema,
+  setOrchestrateSchema,
   setModelSchema,
   setEnginePresetSchema,
   setEngineEffortSchema,

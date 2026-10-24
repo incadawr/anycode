@@ -11,6 +11,7 @@
 
 import type { CeilingRefusalReason, FinishReason, TokenUsage } from "../types/events.js";
 import type { ReasoningEffort } from "../types/config.js";
+import type { RoleRouteResolution } from "../subagents/role-route.js";
 
 export interface SubagentRequest {
   /** 3.1 personas: "general-purpose" | "explore"; 3.3 widens with md-profiles. */
@@ -147,7 +148,7 @@ export type SubagentProgress =
   // `engine` is set only for an engine persona (md-profile `engine:`) — a
   // one-shot foreign CLI run (Codex or Claude Code) in place of an in-process
   // child.
-  | { kind: "start"; agentType: string; description: string; model?: string; engine?: "codex" | "claude" }
+  | { kind: "start"; agentType: string; description: string; model?: string; engine?: "codex" | "claude"; route?: string; fallbackReason?: string }
   // `usage` (TASK.191 slice S2) is CUMULATIVE from the start of the run, not a
   // per-turn delta: the receiver REPLACES rather than adds, so a dropped or
   // duplicated progress event cannot corrupt the total. Same discipline as
@@ -267,4 +268,13 @@ export interface SubagentPort {
   engineProfile?(agentType: string): EngineProfileInfo | null;
   /** Resolves an md-profile's `connection:`/`provider:` frontmatter; null for built-ins, engine profiles, and unrouted profiles. */
   profileRouting?(agentType: string): { provider?: string; connection?: string } | null;
+  /**
+   * Taskana 4704 §3.6: resolves the HOST-side role route chain for a ROLE
+   * persona (planner/executor/reviewer/explore) from settings `roles` + the
+   * process-local health cache. Returns `null` for everything else (no roles
+   * configured, or a non-role agent_type) — built-in defaults then apply.
+   * Optional and additive: a port without it keeps today's behavior
+   * byte-identically (no chain, no route stamping).
+   */
+  resolveRoleRoute?(agentType: string): RoleRouteResolution | null;
 }

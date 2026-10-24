@@ -617,7 +617,7 @@ describe("agentTool — listAgentTypes-driven validation (slice 3.3.3)", () => {
     // throwingPort has no listAgentTypes: a profile name is unknown against the
     // built-in fallback and is rejected BEFORE run() is ever reached.
     const result = await agentTool.handler(
-      { description: "x", prompt: "y", agent_type: "reviewer" },
+      { description: "x", prompt: "y", agent_type: "triager" },
       makeCtx({ subagents: throwingPort }),
     );
     expect(result.errorKind).toBe("invalid_input");

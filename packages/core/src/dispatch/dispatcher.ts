@@ -166,6 +166,12 @@ export interface DispatchContext {
    * which is correct because tool-call ids are globally unique.
    */
   artifacts?: ArtifactContext;
+  /**
+   * Taskana 4704 §3.3: true while the owning session tab runs in orchestrate
+   * mode. Threaded into every ToolContext (the Agent tool is the sole
+   * consumer). Optional: absent => byte-identical pre-4704 behavior.
+   */
+  orchestrate?: boolean;
 }
 
 /**
@@ -372,6 +378,8 @@ export async function executeToolCall(
         worktrees: ctx.worktrees,
         preview: ctx.preview,
         artifacts: ctx.artifacts,
+        // Taskana 4704 §3.3: present-only copy, same discipline as the ports.
+        ...(ctx.orchestrate === true ? { orchestrate: true } : {}),
         emit,
       };
 
