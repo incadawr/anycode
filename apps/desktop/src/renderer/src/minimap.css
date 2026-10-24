@@ -2,10 +2,11 @@
    deliberately — same precedent as transcript-follow.css / chrome-select.css.
    Residual: fold into app.css if that lock ever lifts. */
 
-/* Sticky positioning wrapper: pins to the RIGHT edge of the scroll
-   container, vertically centered. height:0 + pointer-events:none keep it
-   fully out of .message-column's layout — the transcript's own geometry
-   never shifts when the minimap appears. */
+/* Sticky positioning wrapper: FIRST child of the scroll container (a
+   top-sticky box is only pushed down to its inset, never pulled up), pinned
+   to the RIGHT edge; align-items:center centers the pill on the 0-height
+   line at 50%. height:0 + pointer-events:none keep it fully out of
+   .message-column's layout — the transcript's own geometry never shifts. */
 .minimap-slot {
   position: sticky;
   top: 50%;
@@ -14,6 +15,7 @@
   overflow: visible;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   pointer-events: none;
 }
 

@@ -165,7 +165,7 @@ export function TranscriptMinimap({
           key={mark.id}
           className={"minimap-mark" + (i === activeIndex ? " minimap-mark-active" : "")}
           data-mark-index={i}
-          data-block-id={mark.id}
+          data-mark-block-id={mark.id}
           aria-label={`Turn ${i + 1}: ${mark.questionExcerpt}`}
           onMouseEnter={() => setHovered(i)}
           onMouseLeave={() => setHovered(null)}
