@@ -7212,6 +7212,11 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
         usageStep({ inputTokens: 20, outputTokens: 6, totalTokens: 26 }, "done"),
       ],
       rules,
+      // 4294 confines always-allow Write rules to realpath-provable workspace
+      // facts; the default MemFs cannot mint them, so the auto-allow would
+      // never fire and the turn would park at the ask. RealpathMemFs (identity
+      // realpath + lstat, the 4294 test seam) mints them.
+      toolFs: new RealpathMemFs(),
       usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
     });
     try {
@@ -7254,6 +7259,11 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     const h = createHarness({
       steps: [retryStep({ inputTokens: 5, outputTokens: 2, totalTokens: 7 }, 2), usageStep({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "final")],
       rules,
+      // 4294 confines always-allow Write rules to realpath-provable workspace
+      // facts; the default MemFs cannot mint them, so the auto-allow would
+      // never fire and the turn would park at the ask. RealpathMemFs (identity
+      // realpath + lstat, the 4294 test seam) mints them.
+      toolFs: new RealpathMemFs(),
       usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) },
     });
     try {
@@ -7303,6 +7313,11 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
         usageStep({ inputTokens: 20, outputTokens: 6, totalTokens: 26 }, "done"),
       ],
       rules,
+      // 4294 confines always-allow Write rules to realpath-provable workspace
+      // facts; the default MemFs cannot mint them, so the auto-allow would
+      // never fire and the turn would park at the ask. RealpathMemFs (identity
+      // realpath + lstat, the 4294 test seam) mints them.
+      toolFs: new RealpathMemFs(),
       usageAudit,
     });
     try {
