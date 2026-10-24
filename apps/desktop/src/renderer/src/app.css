@@ -1543,6 +1543,13 @@ body {
   font-size: var(--fs-xs);
 }
 
+.environment-menu-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .environment-menu-chevron {
   transition: transform var(--dur-1) var(--ease-out);
 }
