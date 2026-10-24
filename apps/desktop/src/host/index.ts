@@ -1055,17 +1055,10 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         if (existing.engineId !== "codex" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
           throw new Error(`Codex session ${args.sessionId} has no resumable native thread`);
         }
-        // Taskana 4682 rework: a CHILD being resumed re-derives its private
-        // temp dir from its own persisted id (`parentSessionId` on the row is
-        // the durable child marker — the same authority boot.ts's
-        // non-recursion locks use) and re-includes it in writableRoots. A
-        // kill -9 between finalize and shutdown can orphan the old dir; the
-        // mkdir here is idempotent. A root/owner resume keeps NOTHING tmp-
-        // related (a54b2f6d deliberately does not persist the flag).
-        const resumeChildTempDir = existing.parentSessionId !== undefined
-          ? resolveChildTempDir(existing.id, codexProfilesHomeOverride ?? homedir())
-          : undefined;
-        if (resumeChildTempDir !== undefined) ensureChildTempDir(resumeChildTempDir);
+        // Taskana 4682 rework: no tmp posture on this branch. getRootSession
+        // filters `parent_session_id IS NULL` and codex children never resume
+        // (main reaps them on terminal; follow-ups are core-only), so a resume
+        // is always an owner tab: no private temp dir, no exclusion.
         const resumed = await resumeCodexEngine({
           ...options,
           externalSessionRef: existing.externalSessionRef,
@@ -1078,10 +1071,6 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
             model: existing.model,
             presetId: existing.mode,
             origin: "persisted",
-            // Taskana 4682: a resumed child re-asserts its tmp posture. The
-            // thread/boot string stays undecorated; only the per-turn
-            // override carries these.
-            ...(existing.parentSessionId !== undefined ? { excludeTmpRoots: true, childTempDir: resumeChildTempDir! } : {}),
           },
         });
         // Persist whatever the resume actually settled on (the stored model may
