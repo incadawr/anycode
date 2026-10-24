@@ -997,6 +997,13 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
       },
       deliverSupervisorIdleReminder,
     );
+    // The background-children feed is what makes the watchdog's supervising
+    // state reachable at all: it exists ONLY when the child port does (the
+    // `if (catalog.length)` gate above — an empty profile catalog means no
+    // port, no detachable children, and an inert, correctly-silent
+    // watchdog). Any future change that arms supervision without the port
+    // must first give this feed another source, or settle-time state
+    // (liveChildren) goes stale.
     if (codexChildPort !== undefined) {
       codexChildPort.onBackgroundChildrenChanged(() => {
         codexSupervisorIdleWatchdog?.noteBackgroundChildrenChanged(codexChildPort!.listBackgroundChildren().length);
