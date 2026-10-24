@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 
 export interface ViewerImage {
   mediaType: string;
@@ -20,11 +21,10 @@ export function nextIndex(current: number, delta: 1 | -1, count: number): number
  * Taskana 4091 follow-up — pure Esc routing for the viewer's native "cancel"
  * (Esc) event. The dialog's `onCancel` prevents the browser's own close so
  * the caller's state (not the DOM) stays the single source of truth for
- * visibility (same intent-not-DOM discipline as ConfirmDialog/PermissionModal)
- * AND marks the event handled, so the shell's bubble-phase Esc-to-interrupt
- * (App.tsx) never sees it — Esc closes the viewer without cancelling a
- * running turn. A stopped-propagation isn't needed on top of preventDefault:
- * the shell's listener ignores defaultPrevented Esc outright.
+ * visibility (same intent-not-DOM discipline as ConfirmDialog/PermissionModal).
+ * Esc never cancels a running turn because the Escape keydown (dispatched
+ * before this cancel event) reaches App.tsx's global listener while the
+ * dialog is still `[open]`, and that listener bails on any `dialog[open]`.
  */
 export function runViewerCancel(
   event: { preventDefault(): void; defaultPrevented?: boolean },
@@ -85,6 +85,10 @@ export function ImageViewer({ images, startIndex, onClose }: {
   const [index, setIndex] = useState(startIndex);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  // D8 overlay wiring (same as ConfirmDialog/PermissionModal): the preview
+  // WebContentsView is a native view painted above the DOM — it must hide
+  // while this modal is up or it would cover the image.
+  useOverlayFlag(true);
 
   // Capture the pre-modal focus (the clicked thumbnail) BEFORE showModal()
   // steals it, restore it on unmount — the caller clears the viewer state,

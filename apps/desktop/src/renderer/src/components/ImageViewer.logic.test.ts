@@ -67,6 +67,10 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
+vi.mock("../preview/overlay-flag.js", () => ({
+  useOverlayFlag: vi.fn(),
+}));
+
 const images: readonly ViewerImage[] = [
   { mediaType: "image/png", data: "AA==" },
   { mediaType: "image/png", data: "BB==" },
@@ -99,6 +103,13 @@ describe("ImageViewer SSR render — it IS a modal dialog (Taskana 4091 follow-u
     expect(html).toContain("Close (Esc)");
     expect(html).toContain("1 / 3");
     expect(html).toContain("Attached image 1 of 3");
+  });
+
+  it("raises the preview overlay flag so the native preview view hides under the modal (D8)", async () => {
+    const { useOverlayFlag } = await import("../preview/overlay-flag.js");
+    vi.mocked(useOverlayFlag).mockClear();
+    renderViewer();
+    expect(useOverlayFlag).toHaveBeenCalledWith(true);
   });
 
   it("a single image hides the prev/next pair (nothing to navigate)", () => {
@@ -236,7 +247,7 @@ describe("ImageViewer modal wiring (Taskana 4091 follow-up)", () => {
 });
 
 describe("runViewerCancel — Esc routing without stopping the turn", () => {
-  it("preventDefaults (browser close suppressed, App keydown sees handled Esc) and closes once", () => {
+  it("preventDefaults (browser close suppressed, caller state stays the source of truth) and closes once", () => {
     const preventDefault = vi.fn();
     const onClose = vi.fn();
     runViewerCancel({ preventDefault }, onClose);
