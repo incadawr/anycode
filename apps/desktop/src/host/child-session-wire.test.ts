@@ -75,6 +75,7 @@ import {
   parseChildSpawnRequest,
   type ChildRunCancel,
   type ChildRunEvent,
+  type ChildRunSend,
   type ChildSpawnRequest,
 } from "../shared/child-sessions.js";
 import { isChildSessionBoot, type HostArgs } from "./boot.js";
@@ -92,7 +93,7 @@ const isToolResult = (id: string) => (e: AgentEvent): e is Of<"tool_result"> =>
 
 interface FakeParentPort {
   /** host-side DI for createChildSessionPort (mirrors index.ts's sendChildSessionMessage). */
-  hostSend(message: ChildSpawnRequest | ChildRunCancel): void;
+  hostSend(message: ChildSpawnRequest | ChildRunCancel | ChildRunSend): void;
   /** host-side DI for createChildSessionPort (mirrors index.ts's subscribeChildRunEvents). */
   hostSubscribe(listener: (event: ChildRunEvent) => void): () => void;
   /** main-side: registers the scripted responder over whatever the host sent. */
