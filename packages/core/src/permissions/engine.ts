@@ -24,9 +24,8 @@
  * re-escalated to ask by the block above.
  */
 
-import { dirname, isAbsolute, resolve } from "node:path";
 import type { PermissionEngine, PermissionRequest, PermissionRuling } from "../types/permissions.js";
-import { isWithinWorkspace } from "./workspace-policy.js";
+import { isProvablyInsideWorkspace } from "./workspace-policy.js";
 
 export class ModePermissionEngine implements PermissionEngine {
   check(request: PermissionRequest): PermissionRuling {
@@ -110,24 +109,14 @@ const WORKSPACE_WRITE_TOOLS: ReadonlySet<string> = new Set(["Write", "Edit"]);
 
 function isContainedWorkspaceWrite(request: PermissionRequest): boolean {
   if (!WORKSPACE_WRITE_TOOLS.has(request.toolName)) return false;
-  const ws = request.workspace;
-  if (ws === undefined) return false;
-  // Defensive fail-closed (D-S1-9): isWithinWorkspace resolves a relative
-  // candidate AGAINST the root, which would turn a sloppy caller's relative
-  // resolvedPath into a false "inside". Facts must be absolute real paths.
-  if (!isAbsolute(ws.root) || !isAbsolute(ws.resolvedPath)) return false;
-  // Degenerate-root refusal (ARBITRATION-S1-W1 N2, widened W2-MAJOR-2): a
-  // workspace root that is the filesystem root — its own dirname: POSIX "/",
-  // a Windows drive/UNC root — makes lexical containment vacuously true for
-  // EVERY absolute path, so it proves nothing; edit mode must not widen on
-  // it. The check runs on the RESOLVED root, not the raw string: non-canonical
-  // vacuous forms ("//", "///", "/.", "/..", "/x/..") all resolve to "/" but
-  // do not equal their own raw dirname, so a raw-string comparison lets them
-  // slip through and reach isWithinWorkspace's vacuous "allow" below — the
-  // same class of degenerate root this guard was built to refuse, closed on
-  // the incidental canonicalization of the string instead of by this guard.
-  // Fail-closed to the ordinary edit-mode ask.
-  const r = resolve(ws.root);
-  if (dirname(r) === r) return false;
-  return isWithinWorkspace(ws.resolvedPath, ws.root);
+  // The fact proof lives in workspace-policy (shared with the always-allow
+  // rule confinement, Taskana 4294): facts must be absolute real paths
+  // (fail-closed against a sloppy caller's relative resolvedPath), a
+  // degenerate root — its own dirname, POSIX "/", "//", "/x/..", a Windows
+  // drive/UNC root — proves nothing (lexical containment would be vacuously
+  // true for EVERY absolute path), and containment itself is the lexical
+  // isWithinWorkspace over the realpath-resolved facts. Symlinks were
+  // resolved upstream by the dispatcher; unprovable => false => the ordinary
+  // edit-mode ask stands.
+  return isProvablyInsideWorkspace(request.workspace);
 }

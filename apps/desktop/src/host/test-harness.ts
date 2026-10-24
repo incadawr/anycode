@@ -186,6 +186,36 @@ export class MemFs implements FileSystemPort {
   }
 }
 
+/** MemFs with identity realpath + lstat so the dispatcher can mint workspace facts (Taskana 4294). */
+export class RealpathMemFs extends MemFs {
+  constructor(private readonly dirs: readonly string[] = ["/", "/workspace"]) {
+    super();
+  }
+
+  async realpath(path: string): Promise<string> {
+    return path;
+  }
+
+  async lstat(path: string): Promise<FileStat> {
+    const value = this.files.get(path);
+    if (value !== undefined) {
+      return {
+        size: Buffer.byteLength(value, "utf-8"),
+        mtimeMs: 0,
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        nlink: 1,
+      };
+    }
+    const prefix = path.endsWith("/") ? path : `${path}/`;
+    if (this.dirs.includes(path) || [...this.files.keys()].some((k) => k.startsWith(prefix))) {
+      return { size: 0, mtimeMs: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
+    }
+    throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+  }
+}
+
 /** FileSystemPort whose every method rejects — used to prove the snapshot observer swallows errors. */
 export class ThrowingFs implements FileSystemPort {
   async readFile(): Promise<string> {

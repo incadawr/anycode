@@ -21,7 +21,7 @@
  * as a denial, and nothing is ever auto-approved.
  */
 
-import { classifyBashCommandLine } from "@anycode/core";
+import { classifyBashCommandLine, isProvablyInsideWorkspace, NodeFileSystemAdapter, resolveWorkspaceWriteFacts } from "@anycode/core";
 import type { PermissionRequest, ToolMetadata } from "@anycode/core";
 import type { SettleOrigin } from "../../permission-broker.js";
 import type { IpcPermissionBroker } from "../../permission-broker.js";
@@ -50,6 +50,18 @@ export interface ActiveCodexTurn {
 export interface CodexApprovalBridgeOptions {
   broker: IpcPermissionBroker;
   activeTurn(): ActiveCodexTurn | null;
+  /**
+   * Taskana 4294 (cross-review F1): the session's workspace root (the host
+   * boot's `workspace` — the cwd the codex thread was started with). When
+   * set, a `CodexApplyPatch` approval carries `workspace` facts proving
+   * whether the change set is confined, so IpcPermissionBroker's rule seam
+   * can apply the same confinement the core boot enforces. Facts are minted
+   * ONLY when EVERY changed path resolves inside; any outside/unprovable
+   * path => no facts => the bare tool-level rule (the only shape possible
+   * for this tool) can never vouch — fail-closed. Absent (legacy
+   * construction / tests): no facts, same broker-side gate.
+   */
+  workspace?: string;
 }
 
 type DecodedApproval = {
@@ -225,6 +237,46 @@ export class CodexApprovalBridge {
     this.options.broker.denyAll(reason, origin);
   }
 
+  /**
+   * Taskana 4294 (cross-review F1): mints dispatcher-equivalent workspace
+   * facts for a codex fileChange approval when — and only when — EVERY changed
+   * path resolves PROVABLY inside the session workspace. The facts carry the
+   * first change's path as the representative resolved target (the modal shows
+   * the full change set anyway), but containment of every path is proven
+   * independently — one outside path anywhere in the set makes the whole
+   * approval unprovable, and NO facts are attached (fail-closed): the broker's
+   * rule seam then refuses to let a bare `{toolName:"CodexApplyPatch"}` rule
+   * vouch, and the ask reaches a human. Never throws. Guarded by
+   * codexNeedsWorkspaceFacts so unaffected approvals stay fully synchronous.
+   */
+  private async withWorkspaceFacts(
+    request: PermissionRequest,
+    item: Record<string, unknown> | undefined,
+  ): Promise<PermissionRequest> {
+    if (this.options.workspace === undefined) return request;
+    if (request.toolName !== "CodexApplyPatch") return request;
+    // Taskana 4294 review: a grantRoot request asks for a write root beyond the
+    // change set itself — never provable from the paths, so no facts.
+    if ((request.input as Record<string, unknown> | null)?.grantRoot != null) return request;
+    // Taskana 4294 review: enumerate targets from the RAW indexed item, not the
+    // display projection — `paths` drops `kind.move_path`, so an update that
+    // MOVES an inside file to an outside destination would otherwise be proved
+    // "inside" and ride a bare rule.
+    const paths = fileChangeTargets(item);
+    if (paths === null) return request;
+    let first: PermissionRequest["workspace"];
+    for (const entry of paths) {
+      // Unshapely (non-string / empty) => unprovable => no facts at all.
+      if (typeof entry !== "string" || entry.length === 0) return request;
+      const facts = await resolveWorkspaceWriteFacts(new NodeFileSystemAdapter(), this.options.workspace, entry);
+      // Outside / relative / .. / symlink escape / unresolvable => no facts at all.
+      if (facts === undefined || !isProvablyInsideWorkspace(facts)) return request;
+      first ??= facts;
+    }
+    if (first === undefined) return request; // no indexed changes => nothing provable
+    return { ...request, workspace: first };
+  }
+
   private async route(serverRequest: JsonRpcServerRequest, responder: ServerRequestResponder): Promise<void> {
     const active = this.options.activeTurn();
     const decoded = decode(serverRequest, active?.items);
@@ -245,7 +297,14 @@ export class CodexApprovalBridge {
     this.pending = true;
     this.cancelling = false;
     try {
-      const decision = await this.options.broker.requestPermission(decoded.request);
+      // Taskana 4294 (cross-review F1): facts are minted ONLY for the shape
+      // that needs them (workspace wired + CodexApplyPatch + indexed paths);
+      // every other approval keeps the original fully-synchronous path into
+      // the broker, preserving emit ordering for existing consumers.
+      const request = codexNeedsWorkspaceFacts(decoded.request, this.options.workspace)
+        ? await this.withWorkspaceFacts(decoded.request, decoded.request.toolCallId === undefined ? undefined : active.items?.get(decoded.request.toolCallId))
+        : decoded.request;
+      const decision = await this.options.broker.requestPermission(request);
       const answer: CodexApprovalDecision =
         decision.behavior === "allow" ? "accept" : this.cancelling ? "cancel" : "decline";
       responder.result({ decision: answer });
@@ -257,4 +316,48 @@ export class CodexApprovalBridge {
       this.cancelling = false;
     }
   }
+}
+
+/**
+ * Taskana 4294 (cross-review F1): true only for the approval shapes that
+ * need workspace facts — the codex fileChange approval with a wired
+ * workspace root and an indexed `paths[]` to prove. Command approvals
+ * (CodexExec) and degraded shapes take the original synchronous path into
+ * the broker, preserving emit ordering for existing consumers.
+ */
+function codexNeedsWorkspaceFacts(request: PermissionRequest, workspace: string | undefined): boolean {
+  if (workspace === undefined) return false;
+  if (request.toolName !== "CodexApplyPatch") return false;
+  const paths = (request.input as Record<string, unknown> | null)?.paths;
+  return Array.isArray(paths) && paths.length > 0;
+}
+
+/**
+ * Taskana 4294 review: every path a raw `fileChange` item would touch — each
+ * change's `path` plus any string field of its `kind` (e.g. `move_path`, the
+ * rename destination) — or null when the set cannot be enumerated with
+ * certainty (malformed entry, non-string kind field). Fail-closed: null => no
+ * facts => a bare rule cannot vouch.
+ */
+function fileChangeTargets(item: Record<string, unknown> | undefined): string[] | null {
+  if (item === undefined || item.type !== "fileChange" || !Array.isArray(item.changes) || item.changes.length === 0) return null;
+  const targets: string[] = [];
+  for (const entry of item.changes) {
+    if (entry === null || typeof entry !== "object") return null;
+    const change = entry as Record<string, unknown>;
+    if (typeof change.path !== "string" || change.path.length === 0) return null;
+    targets.push(change.path);
+    const kind = change.kind;
+    if (kind === undefined || kind === null) continue;
+    if (typeof kind !== "object") return null;
+    for (const [key, value] of Object.entries(kind as Record<string, unknown>)) {
+      if (key === "type" || value === null || value === undefined) continue;
+      if (typeof value === "string" && value.length > 0) {
+        targets.push(value);
+        continue;
+      }
+      return null;
+    }
+  }
+  return targets;
 }

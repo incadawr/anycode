@@ -5,7 +5,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { isWithinWorkspace } from "./workspace-policy.js";
+import {
+  WORKSPACE_CONFINED_WRITE_TOOLS,
+  isProvablyInsideWorkspace,
+  isWithinWorkspace,
+} from "./workspace-policy.js";
 
 describe("isWithinWorkspace", () => {
   it("returns true for a nested path inside the workspace root", () => {
@@ -47,5 +51,68 @@ describe("isWithinWorkspace", () => {
     // (5.2, Seatbelt resolves actual inodes). No symlinks are created on disk for this
     // test; it fixes the *lexical* behavior only.
     expect(isWithinWorkspace("/ws/link", "/ws")).toBe(true);
+  });
+});
+
+describe("isProvablyInsideWorkspace (Taskana 4294)", () => {
+  it("returns false for absent facts (unprovable => fail-closed)", () => {
+    expect(isProvablyInsideWorkspace(undefined)).toBe(false);
+  });
+
+  it("returns true for a resolved target inside the root", () => {
+    expect(isProvablyInsideWorkspace({ root: "/ws", resolvedPath: "/ws/a.ts" })).toBe(true);
+  });
+
+  it("returns true when the resolved target IS the root", () => {
+    expect(isProvablyInsideWorkspace({ root: "/ws", resolvedPath: "/ws" })).toBe(true);
+  });
+
+  it("returns false for a resolved target outside the root", () => {
+    expect(isProvablyInsideWorkspace({ root: "/ws", resolvedPath: "/other/a.ts" })).toBe(false);
+  });
+
+  it("returns false for a relative root (facts must be absolute real paths)", () => {
+    expect(isProvablyInsideWorkspace({ root: "ws", resolvedPath: "/ws/a" })).toBe(false);
+  });
+
+  it("returns false for a relative target (isWithinWorkspace would resolve it against the root — a sloppy caller must not get a false inside)", () => {
+    expect(isProvablyInsideWorkspace({ root: "/ws", resolvedPath: "a.ts" })).toBe(false);
+  });
+
+  it("returns false for a degenerate root: filesystem root", () => {
+    expect(isProvablyInsideWorkspace({ root: "/", resolvedPath: "/etc/hosts" })).toBe(false);
+  });
+
+  it("returns false for a degenerate root: '//' (resolves to '/')", () => {
+    expect(isProvablyInsideWorkspace({ root: "//", resolvedPath: "/etc/hosts" })).toBe(false);
+  });
+
+  it("returns false for a degenerate root: '/x/..' (resolves to '/')", () => {
+    expect(isProvablyInsideWorkspace({ root: "/x/..", resolvedPath: "/etc/hosts" })).toBe(false);
+  });
+
+  it("returns false when the parent repo contains the worktree (target in main checkout, root is the worktree)", () => {
+    expect(
+      isProvablyInsideWorkspace({ root: "/repo/.anycode/worktrees/x", resolvedPath: "/repo/src/f.ts" }),
+    ).toBe(false);
+  });
+
+  it("returns true when the root contains the worktree (target inside the worktree)", () => {
+    expect(
+      isProvablyInsideWorkspace({ root: "/repo", resolvedPath: "/repo/.anycode/worktrees/x/f.ts" }),
+    ).toBe(true);
+  });
+
+  it("returns false for the sibling-prefix trap (x2 shares the string prefix of x)", () => {
+    expect(
+      isProvablyInsideWorkspace({
+        root: "/repo/.anycode/worktrees/x",
+        resolvedPath: "/repo/.anycode/worktrees/x2/f.ts",
+      }),
+    ).toBe(false);
+  });
+
+  it("WORKSPACE_CONFINED_WRITE_TOOLS is exactly Write/Edit/MultiEdit", () => {
+    expect([...WORKSPACE_CONFINED_WRITE_TOOLS].sort()).toEqual(["Edit", "MultiEdit", "Write"]);
   });
 });

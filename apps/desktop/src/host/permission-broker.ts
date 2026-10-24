@@ -44,6 +44,11 @@
  */
 
 import { randomUUID } from "node:crypto";
+import {
+  WORKSPACE_CONFINED_WRITE_TOOLS,
+  isProvablyInsideWorkspace,
+  NodeFileSystemAdapter,
+} from "@anycode/core";
 import type {
   PermissionBroker,
   PermissionDecision,
@@ -54,6 +59,24 @@ import type { HostToUiMessage, WireToolMeta } from "../shared/protocol.js";
 
 /** Ask deadline; a request with no answer by then is denied (fail-closed). */
 export const PERMISSION_ASK_TIMEOUT_MS = 120_000;
+
+/**
+ * Taskana 4294 (cross-review F1): tools whose always-allow rules the BROKER's
+ * rule seam confines to the session workspace. Core's
+ * WORKSPACE_CONFINED_WRITE_TOOLS (Write/Edit/MultiEdit) plus the codex bridge's
+ * CodexApplyPatch — a file write whose input carries a `paths[]` array and no
+ * single subject, so the only rule a user can create for it is the bare
+ * tool-level `{toolName}` (permission-pattern.ts), i.e. exactly the blanket
+ * shape the confinement exists for. It is not added to core's set: the core
+ * dispatcher never dispatches CodexApplyPatch (no subject field to mint facts
+ * from), and core's engine-side set is load-bearing for other consumers.
+ */
+export function brokerConfinedWriteTool(toolName: string): boolean {
+  // Taskana 4294 review: Claude's NotebookEdit is a file write too (target in
+  // `notebook_path`, no rule subject => only the blanket `{toolName}` rule shape
+  // exists for it); the claude approval bridge mints facts for it.
+  return toolName === "CodexApplyPatch" || toolName === "NotebookEdit" || WORKSPACE_CONFINED_WRITE_TOOLS.has(toolName);
+}
 
 /**
  * Deny reasons for the two "nobody answered" paths (TASK.138). These strings are
@@ -236,6 +259,22 @@ export class IpcPermissionBroker implements PermissionBroker {
    */
   private ruleAllows(request: PermissionRequest): boolean {
     if (this.rules === null) return false;
+    // Taskana 4294 (cross-review F1): a persisted rule never authorises a
+    // file write the caller could not PROVE lands inside the session
+    // workspace. On a core boot this is already enforced upstream by
+    // RuleAwarePermissionEngine (packages/core rules.ts, dispatcher-minted
+    // facts); on an engine boot (claude/codex, `supportsCorePermissions`
+    // false) this broker is the ONLY gate, so the identical confinement is
+    // applied here: Write/Edit/MultiEdit (and the codex bridge's
+    // CodexApplyPatch — a file write whose only rule shape is the bare
+    // tool-level one) ride a rule only when `request.workspace` proves
+    // containment, facts minted the same way the dispatcher does. Outside or
+    // unprovable => the rule cannot vouch: the ask stands (interactive ->
+    // modal, unattended/no-client -> deny). Never invents a deny — a
+    // non-matching rule was already an ask.
+    if (brokerConfinedWriteTool(request.toolName) && !isProvablyInsideWorkspace(request.workspace)) {
+      return false;
+    }
     if (this.rules.matches(request.toolName, request.input)) return true;
     if (request.toolName !== "CodexExec") return false;
     const input = request.input;

@@ -46,9 +46,10 @@ describe("RuleAwarePermissionEngine", () => {
 
     const ruling = engine.check({
       toolName: "Write",
-      input: { file_path: "/tmp/x", content: "y" },
+      input: { file_path: "/ws/x", content: "y" },
       metadata: writeTool.metadata,
       mode: "build",
+      workspace: { root: "/ws", resolvedPath: "/ws/x" },
     });
     expect(ruling.decision).toBe("allow");
   });
@@ -480,6 +481,149 @@ describe("RuleAwarePermissionEngine", () => {
       mode: "build",
     });
     expect(ruling).toEqual({ decision: "allow" });
+  });
+});
+
+describe("Taskana 4294 — always-allow rules are confined to the session workspace", () => {
+  // Rules seeded exactly like the orchestration lab: bare per-tool always-allow.
+  const labRules = (): SessionPermissionRules => {
+    const rules = new SessionPermissionRules();
+    ["Agent", "Read", "Glob", "Grep", "Bash", "Write", "Edit", "MultiEdit"].forEach((t) =>
+      rules.add({ toolName: t }),
+    );
+    return rules;
+  };
+  const multiEditMetadata: ToolMetadata = { ...editTool.metadata, name: "MultiEdit" };
+  const WS = "/repo/.anycode/worktrees/c1";
+  const MAIN = "/repo/packages/core/src/claude-engine.ts";
+
+  it.each(["Write", "Edit", "MultiEdit"] as const)(
+    "%s: facts prove inside the workspace -> allow (build mode)",
+    (toolName) => {
+      const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
+      const ruling = engine.check({
+        toolName,
+        input: { file_path: `${WS}/src/a.ts` },
+        metadata: toolName === "Write" ? writeTool.metadata : toolName === "Edit" ? editTool.metadata : multiEditMetadata,
+        mode: "build",
+        workspace: { root: WS, resolvedPath: `${WS}/src/a.ts` },
+      });
+      expect(ruling.decision).toBe("allow");
+    },
+  );
+
+  it.each(["Write", "Edit", "MultiEdit"] as const)(
+    "%s: facts resolve outside the workspace (main checkout) -> ask stands",
+    (toolName) => {
+      const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
+      const ruling = engine.check({
+        toolName,
+        input: { file_path: MAIN },
+        metadata: toolName === "Write" ? writeTool.metadata : toolName === "Edit" ? editTool.metadata : multiEditMetadata,
+        mode: "build",
+        workspace: { root: WS, resolvedPath: MAIN },
+      });
+      expect(ruling.decision).toBe("ask");
+      expect(ruling.reason).toContain("outside the session workspace");
+    },
+  );
+
+  it.each(["Write", "Edit", "MultiEdit"] as const)(
+    "%s: no workspace facts (unprovable) -> ask stands even under a blanket rule",
+    (toolName) => {
+      const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
+      const ruling = engine.check({
+        toolName,
+        input: { file_path: `${WS}/src/a.ts` },
+        metadata: toolName === "Write" ? writeTool.metadata : toolName === "Edit" ? editTool.metadata : multiEditMetadata,
+        mode: "build",
+      });
+      expect(ruling.decision).toBe("ask");
+    },
+  );
+
+  it("edit mode: Edit outside the workspace -> the containment ask is NOT downgraded to allow", () => {
+    const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
+    const ruling = engine.check({
+      toolName: "Edit",
+      input: { file_path: MAIN },
+      metadata: editTool.metadata,
+      mode: "edit",
+      workspace: { root: WS, resolvedPath: MAIN },
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("edit mode: Edit inside the workspace -> allow (containment widening, then rule)", () => {
+    const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
+    const ruling = engine.check({
+      toolName: "Edit",
+      input: { file_path: `${WS}/src/a.ts` },
+      metadata: editTool.metadata,
+      mode: "edit",
+      workspace: { root: WS, resolvedPath: `${WS}/src/a.ts` },
+    });
+    expect(ruling.decision).toBe("allow");
+  });
+
+  it("a PATTERNED rule is confined too: {Edit, '/repo/**'} does not cover the main-checkout target from the worktree", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Edit", pattern: "/repo/**" });
+    const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), rules);
+    const ruling = engine.check({
+      toolName: "Edit",
+      input: { file_path: MAIN },
+      metadata: editTool.metadata,
+      mode: "build",
+      workspace: { root: WS, resolvedPath: MAIN },
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("plan mode: a matching rule with inside facts never overrides the deny", () => {
+    const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
+    const ruling = engine.check({
+      toolName: "Write",
+      input: { file_path: `${WS}/src/a.ts`, content: "x" },
+      metadata: writeTool.metadata,
+      mode: "plan",
+      workspace: { root: WS, resolvedPath: `${WS}/src/a.ts` },
+    });
+    expect(ruling.decision).toBe("deny");
+  });
+
+  it("degenerate root ('/') proves nothing: Edit with facts {root:'/', resolvedPath:'/etc/hosts'} -> ask", () => {
+    const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
+    const ruling = engine.check({
+      toolName: "Edit",
+      input: { file_path: "/etc/hosts" },
+      metadata: editTool.metadata,
+      mode: "build",
+      workspace: { root: "/", resolvedPath: "/etc/hosts" },
+    });
+    expect(ruling.decision).toBe("ask");
+  });
+
+  it("Bash stays out of scope: a blanket Bash rule still allows a sed -i touching the repo (residual documented in Taskana 4294)", () => {
+    const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
+    const ruling = engine.check({
+      toolName: "Bash",
+      input: { command: "sed -i s/a/b/ /repo/src/f.ts" },
+      metadata: bashTool.metadata,
+      mode: "build",
+    });
+    expect(ruling.decision).toBe("allow");
+  });
+
+  it("Read outside the workspace in build mode is unaffected -> allow", () => {
+    const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), labRules());
+    const ruling = engine.check({
+      toolName: "Read",
+      input: { file_path: MAIN },
+      metadata: readTool.metadata,
+      mode: "build",
+    });
+    expect(ruling.decision).toBe("allow");
   });
 });
 
