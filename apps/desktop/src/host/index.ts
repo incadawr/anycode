@@ -2376,17 +2376,6 @@ async function boot(): Promise<void> {
     // session meta resolves AFTER this factory is first used, so the flag
     // starts argv-only and is widened (with a port rebuild) once it is known.
     let childRetryBoot = args.child !== undefined;
-    // Taskana 4090 (TASK.71): in-memory latest quota observation for the
-    // session's provider connection. The model port forwards every wrapped-
-    // fetch header parse here; the value crosses to the renderer LIVE via
-    // the `provider_quota` agent event the port itself yields (nothing is
-    // written to disk from the host — persistence to the connection record
-    // is main's settings-file territory, sparse-merged under its lock).
-    let lastProviderQuota: import("@anycode/core/provider/quota").ProviderQuotaUpdate | null = null;
-    const forwardQuotaUpdate = (update: import("@anycode/core/provider/quota").ProviderQuotaUpdate | null): void => {
-      lastProviderQuota = update;
-    };
-    void lastProviderQuota;
     const modelPortFactory = (m: string): ModelPort =>
       new AiSdkModelPort(
         {
@@ -2398,9 +2387,10 @@ async function boot(): Promise<void> {
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
           ...(childRetryBoot ? { retry: childRetryPolicy(true) } : {}),
-          // Taskana 4090: response-header quota observer — dormant for the
-          // port unless set; the factories wrap the SDK fetch on its behalf.
-          onQuotaHeaders: (update, _baseUrl) => forwardQuotaUpdate(update),
+          // Taskana 4090: setting an observer is what arms the factories'
+          // wrapped fetch; the port itself captures the update and yields it
+          // as a `provider_quota` event, so the host needs no state of its own.
+          onQuotaHeaders: () => {},
         },
         hostDiagnosticSink,
       );

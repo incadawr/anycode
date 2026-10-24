@@ -8250,7 +8250,7 @@ describe("desktop store — provider_quota (Taskana 4090)", () => {
     expect(typeof quota?.observedAt).toBe("string");
   });
 
-  it("updates the matching connection's lastQuota in the settings snapshot (baseUrl prefix match, sparse merge)", () => {
+  it("updates the matching connection's lastQuota in the settings snapshot (exact unique baseUrl on an unpinned tab)", () => {
     const store = createDesktopStore();
     store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
     // Seed the global settings store's snapshot with a matching connection.
@@ -8272,13 +8272,65 @@ describe("desktop store — provider_quota (Taskana 4090)", () => {
       },
     });
 
-    store.getState().applyHostMessage(quotaEvent("https://api.z.ai/api/anthropic/v1/messages", 80));
+    store.getState().applyHostMessage(quotaEvent("https://api.z.ai/api/anthropic/", 80));
 
     const connections = useSettingsStore.getState().snapshot?.settings.provider.connections;
     expect(connections?.[0]?.lastQuota?.usedPercent).toBe(80);
     expect(connections?.[0]?.lastQuota?.source).toBe("x-ratelimit-requests-remaining");
     // Sibling untouched.
     expect(connections?.[1]?.lastQuota).toBeUndefined();
+  });
+
+  it("a pinned tab paints ITS connection only — never a sibling on the same host (two keys, one provider)", () => {
+    const store = createDesktopStore();
+    store.getState().setPinnedConnection({ connectionId: "c2", providerId: "zai" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    useSettingsStore.setState({
+      snapshot: {
+        settings: {
+          version: 2,
+          provider: {
+            connections: [
+              { id: "c1", providerId: "zai", baseUrl: "https://api.z.ai/api/anthropic" },
+              { id: "c2", providerId: "zai", baseUrl: "https://api.z.ai/api/anthropic" },
+            ],
+          },
+        } as never,
+        secrets: [],
+        providerReady: true,
+        envOverrides: [],
+        readOnly: false,
+      },
+    });
+    store.getState().applyHostMessage(quotaEvent("https://api.z.ai/api/anthropic", 40));
+    const connections = useSettingsStore.getState().snapshot?.settings.provider.connections;
+    expect(connections?.[0]?.lastQuota).toBeUndefined();
+    expect(connections?.[1]?.lastQuota?.usedPercent).toBe(40);
+  });
+
+  it("an unpinned tab with two connections on the same baseUrl paints neither (no guessing)", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    useSettingsStore.setState({
+      snapshot: {
+        settings: {
+          version: 2,
+          provider: {
+            connections: [
+              { id: "c1", providerId: "zai", baseUrl: "https://api.z.ai/api/anthropic" },
+              { id: "c2", providerId: "zai", baseUrl: "https://api.z.ai/api/anthropic" },
+            ],
+          },
+        } as never,
+        secrets: [],
+        providerReady: true,
+        envOverrides: [],
+        readOnly: false,
+      },
+    });
+    store.getState().applyHostMessage(quotaEvent("https://api.z.ai/api/anthropic", 40));
+    const connections = useSettingsStore.getState().snapshot?.settings.provider.connections;
+    expect(connections?.every((c) => c.lastQuota === undefined)).toBe(true);
   });
 
   it("leaves connections untouched for an unknown provider base URL (defensive) but still sets quota", () => {

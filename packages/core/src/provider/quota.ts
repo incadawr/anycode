@@ -82,9 +82,9 @@ function parseIntField(value: string | null): number | undefined {
   if (value === null) return undefined;
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed)) return undefined;
-  return parsed;
+  // Strict: `20abc` / `1.5` are not counts (parseInt would accept them).
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  return Number.parseInt(trimmed, 10);
 }
 
 /**
@@ -97,9 +97,20 @@ function parseResetField(value: string | null, now: number): number | undefined 
   if (value === null) return undefined;
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
-  if (/^-?\d+$/.test(trimmed)) {
-    return Number.parseInt(trimmed, 10);
+  if (/^\d+$/.test(trimmed)) {
+    const value = Number.parseInt(trimmed, 10);
+    // Below ~2001-09 as epoch seconds is not a real reset time: it is a
+    // delta in seconds (several providers send `reset: 60`).
+    return value >= 1_000_000_000 ? value : Math.round(now / 1000 + value);
   }
+  // OpenAI-style Go duration: `1s`, `6m0s`, `1h2m3.5s`, `20ms`.
+  const duration = /^(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+)ms)?$/.exec(trimmed);
+  if (duration !== null && trimmed !== "") {
+    const [, h, m, sec, ms] = duration;
+    const seconds = Number(h ?? 0) * 3600 + Number(m ?? 0) * 60 + Number(sec ?? 0) + Number(ms ?? 0) / 1000;
+    return Math.round(now / 1000 + seconds);
+  }
+  if (!/^(?:\d{4}-\d{2}-\d{2}|[a-z]{3},)/i.test(trimmed)) return undefined;
   const parsed = Date.parse(trimmed);
   if (Number.isNaN(parsed)) return undefined;
   return Math.round(parsed / 1000);
@@ -138,17 +149,19 @@ export function providerQuotaFromHeaders(headers: QuotaHeaderBag, now: number): 
   for (const family of FAMILIES) {
     const acc: FamilyAccumulator = {};
 
-    const limit = canonical.get(`ratelimit-${family}-limit`);
+    // Two de-facto orders: `ratelimit-<family>-limit` (Anthropic) and
+    // `ratelimit-limit-<family>` (OpenAI and most OpenAI-compatible hosts).
+    const limit = canonical.get(`ratelimit-${family}-limit`) ?? canonical.get(`ratelimit-limit-${family}`);
     if (limit !== undefined) {
       acc.limitName = limit.original;
       acc.limitValue = parseIntField(limit.value);
     }
-    const remaining = canonical.get(`ratelimit-${family}-remaining`);
+    const remaining = canonical.get(`ratelimit-${family}-remaining`) ?? canonical.get(`ratelimit-remaining-${family}`);
     if (remaining !== undefined) {
       acc.remainingName = remaining.original;
       acc.remainingValue = parseIntField(remaining.value);
     }
-    const reset = canonical.get(`ratelimit-${family}-reset`);
+    const reset = canonical.get(`ratelimit-${family}-reset`) ?? canonical.get(`ratelimit-reset-${family}`);
     if (reset !== undefined) {
       acc.resetName = reset.original;
       acc.resetValue = parseResetField(reset.value, now);
