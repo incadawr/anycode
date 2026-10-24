@@ -7,15 +7,20 @@ import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge } from "./approval-bridge.js";
 import type { JsonRpcNotification, JsonRpcServerRequest } from "./protocol.js";
+import { decodeWindowsSandboxReadiness } from "./protocol.js";
 import { NATIVE_PERSISTED, type ShadowCommandItem } from "./history-projection.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
 import {
   CODEX_NOT_SIGNED_IN,
   CodexEngine,
+  WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE,
+  WINDOWS_SANDBOX_UPDATE_REQUIRED_MESSAGE,
   createNativeCodexSession,
+  initializeAndVerifyAccount,
   resumeNativeCodexSession,
   startCodexEngine,
   resumeCodexEngine,
+  windowsSandboxNotice,
   type CodexClient,
 } from "./codex-engine.js";
 
@@ -256,6 +261,15 @@ class FakeAppServer implements CodexClient {
   };
   /** Quota pull failure mode: the boot must survive it (no quota block, session usable). */
   rateLimitsReadFails = false;
+  /**
+   * TASK.185 / Taskana 4139: `windowsSandbox/readiness` result. The default
+   * mirrors a Windows boot that never had a setup — the probe-only status the
+   * engine turns into a boot notice (or a boot-time throw when it comes from
+   * `initializeAndVerifyAccount` on win32).
+   */
+  windowsReadinessResult: unknown = { status: "notConfigured" };
+  /** Readiness failure mode: an old binary without the method (request rejects). */
+  windowsReadinessFails = false;
   /** The effective-settings echo appended to thread/start and thread/resume responses. */
   threadEcho: Record<string, unknown> = {
     approvalPolicy: "on-request",
@@ -323,6 +337,10 @@ class FakeAppServer implements CodexClient {
     if (method === "account/rateLimits/read") {
       if (this.rateLimitsReadFails) return Promise.reject(new Error("app-server request failed: rate limits unavailable"));
       return Promise.resolve(this.rateLimitsResult as T);
+    }
+    if (method === "windowsSandbox/readiness") {
+      if (this.windowsReadinessFails) return Promise.reject(new Error("app-server request failed: readiness unavailable"));
+      return Promise.resolve(this.windowsReadinessResult as T);
     }
     if (method === "model/list") return this.answerModelList<T>(params);
     if (method === "thread/start") {
@@ -501,6 +519,83 @@ describe("CodexEngine — native session boot", () => {
 
     await expect(createNativeCodexSession(server, "/work", undefined, { bootRpcMs: 5 }))
       .rejects.toThrow(/timed out: initialize/);
+  });
+});
+
+describe("CodexEngine — Windows sandbox readiness probe (Taskana 4139 / TASK.185)", () => {
+  it("windowsSandboxNotice stays silent on non-win32 platforms and on a ready sandbox", () => {
+    expect(windowsSandboxNotice("darwin", "notConfigured")).toBeNull();
+    expect(windowsSandboxNotice("linux", undefined)).toBeNull();
+    expect(windowsSandboxNotice("win32", "ready")).toBeNull();
+    // Old binary — the probe could not be answered; no false alarm.
+    expect(windowsSandboxNotice("win32", undefined)).toBeNull();
+  });
+
+  it("windowsSandboxNotice warns on win32 with the exact notConfigured/updateRequired messages", () => {
+    expect(windowsSandboxNotice("win32", "notConfigured")).toEqual({
+      type: "engine_notice",
+      level: "warning",
+      message: WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE,
+    });
+    expect(windowsSandboxNotice("win32", "updateRequired")).toEqual({
+      type: "engine_notice",
+      level: "warning",
+      message: WINDOWS_SANDBOX_UPDATE_REQUIRED_MESSAGE,
+    });
+  });
+
+  it("decodeWindowsSandboxReadiness decodes the three statuses and degrades to undefined on junk", () => {
+    expect(decodeWindowsSandboxReadiness({ status: "ready" })).toBe("ready");
+    expect(decodeWindowsSandboxReadiness({ status: "notConfigured" })).toBe("notConfigured");
+    expect(decodeWindowsSandboxReadiness({ status: "updateRequired" })).toBe("updateRequired");
+    expect(decodeWindowsSandboxReadiness({ status: "weird" })).toBeUndefined();
+    expect(decodeWindowsSandboxReadiness({})).toBeUndefined();
+    expect(decodeWindowsSandboxReadiness(null)).toBeUndefined();
+    expect(decodeWindowsSandboxReadiness("string")).toBeUndefined();
+  });
+
+  it("initializeAndVerifyAccount probes readiness on win32 and throws the exact boot messages for a non-ready sandbox", async () => {
+    const server = new FakeAppServer();
+    server.windowsReadinessResult = { status: "notConfigured" };
+    await expect(initializeAndVerifyAccount(server, 1000, false, "win32"))
+      .rejects.toThrow(WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE);
+    expect(server.calls.map((call) => call.method)).toEqual(["initialize", "account/read", "windowsSandbox/readiness"]);
+
+    const update = new FakeAppServer();
+    update.windowsReadinessResult = { status: "updateRequired" };
+    await expect(initializeAndVerifyAccount(update, 1000, false, "win32"))
+      .rejects.toThrow(WINDOWS_SANDBOX_UPDATE_REQUIRED_MESSAGE);
+
+    const ready = new FakeAppServer();
+    ready.windowsReadinessResult = { status: "ready" };
+    await expect(initializeAndVerifyAccount(ready, 1000, false, "win32")).resolves.toBe("ready");
+  });
+
+  it("initializeAndVerifyAccount stays silent when the probe cannot be answered (old binary) and skips it entirely on darwin", async () => {
+    const failing = new FakeAppServer();
+    failing.windowsReadinessFails = true;
+    await expect(initializeAndVerifyAccount(failing, 1000, false, "win32")).resolves.toBeUndefined();
+    expect(failing.calls.map((call) => call.method)).toEqual(["initialize", "account/read", "windowsSandbox/readiness"]);
+
+    const darwin = new FakeAppServer();
+    darwin.windowsReadinessResult = { status: "notConfigured" };
+    await expect(initializeAndVerifyAccount(darwin, 1000, false, "darwin")).resolves.toBeUndefined();
+    expect(darwin.calls.map((call) => call.method)).toEqual(["initialize", "account/read"]);
+    expect(darwin.calls.some((call) => call.method === "windowsSandbox/readiness")).toBe(false);
+  });
+
+  it("a default (darwin) boot sends NO readiness RPC — the exact 5-method create sequence is unchanged", async () => {
+    const server = new FakeAppServer();
+    server.windowsReadinessResult = { status: "notConfigured" };
+    const created = await createNativeCodexSession(server, "/work");
+    expect(created).toMatchObject({ threadId: "fresh-thread" });
+    expect(server.calls.map((call) => call.method)).toEqual([
+      "initialize",
+      "account/read",
+      "model/list",
+      "thread/start",
+      "account/rateLimits/read",
+    ]);
   });
 });
 
