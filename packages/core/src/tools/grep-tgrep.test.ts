@@ -230,6 +230,16 @@ describe("resolveTgrepPath (Taskana 4160 follow-up: probe, cache, abort, refusal
     expect(runBinary).toHaveBeenCalledWith(expect.objectContaining({ abortSignal: controller.signal }));
   });
 
+  it("an aborted probe resolves undefined and is NOT cached — the next call re-probes", async () => {
+    let n = 0;
+    const { ctx, runBinary } = ctxWithRunBinary(() => (n++ === 0 ? statusResult("cancelled") : completedResult("tgrep 0.1.0")));
+    const controller = new AbortController();
+    controller.abort();
+    await expect(resolveTgrepPath(ctx.ports.exec, { PATH: "/usr/bin" }, { abortSignal: controller.signal })).resolves.toBeUndefined();
+    await expect(resolveTgrepPath(ctx.ports.exec, { PATH: "/usr/bin" })).resolves.toBe("/usr/bin/tgrep");
+    expect(runBinary).toHaveBeenCalledTimes(2);
+  });
+
   it("the probe honours its own short timeout budget, not the tool timeout", async () => {
     const { ctx, runBinary } = ctxWithRunBinary(() => completedResult("tgrep 0.1.0"));
     await resolveTgrepPath(ctx.ports.exec, { PATH: "/usr/bin" });

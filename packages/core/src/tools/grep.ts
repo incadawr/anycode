@@ -229,8 +229,8 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
     // rg scan matches. Re-run every zero-match tgrep answer through the rg
     // tier below (always a fresh scan) and prefer rg's result when rg runs;
     // a non-zero tgrep match count is returned as-is. If rg itself is
-    // unavailable/fails, tgrep's zero-match answer stands (the JS path below
-    // would return the same emptiness over the same tree).
+    // unavailable/fails, the JS path below answers (also a fresh scan), so a
+    // zero-match tgrep answer is never returned directly.
     if (tgrepOutput && tgrepOutput.totalMatches > 0) return { ok: true, output: tgrepOutput };
 
     const rgOutput = await tryRipgrep(input, ctx, root, rootStat.isDirectory);

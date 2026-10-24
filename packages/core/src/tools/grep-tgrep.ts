@@ -18,9 +18,9 @@
  * Zero-match re-check (Taskana 4160 follow-up): a trigram index can be
  * STALE — files written moments ago may not be in it yet — so "no matches"
  * from tgrep is not a final answer. tools/grep.ts re-runs every zero-match
- * tgrep result through the rg tier (always a fresh scan) and only falls to
- * tgrep's answer if rg agrees (or fails); a non-zero tgrep match count is
- * returned as-is.
+ * tgrep result through the rg tier (always a fresh scan), then the JS path
+ * if rg is unavailable — a zero-match tgrep answer is never returned
+ * directly; a non-zero tgrep match count is returned as-is.
  *
  * Fallback contract (card, mandatory): `undefined` — NEVER a partial result —
  * on: resolution failure, spawn error, timeout, cancellation, or any exit
