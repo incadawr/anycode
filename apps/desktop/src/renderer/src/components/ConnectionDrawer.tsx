@@ -675,6 +675,19 @@ export function imageInputToPayload(selection: ImageInputSelection): "on" | "off
 }
 
 /**
+ * Taskana 4088 (cross-review): an explicit on/off override is bound to the
+ * model the save will SEND, and main refuses a non-empty override with a blank
+ * effective model with a bare `reason: "invalid"` — the generic save failure.
+ * Shared by create and update so both name the field. Returns the specific
+ * message, or null when the selection may be saved. Exported for direct testing.
+ */
+export function imageInputModelPreflightError(selection: ImageInputSelection, model: string): string | null {
+  return selection !== "auto" && model.trim() === ""
+    ? "Enter a model before forcing image input — the override is saved for one model."
+    : null;
+}
+
+/**
  * Taskana 4088: the select value the drawer starts with for a saved
  * connection — the `contextWindowInitialRaw` rule: the saved override is
  * prefilled ONLY when it binds to the model now shown; a pair saved for
@@ -1234,8 +1247,9 @@ export function ConnectionDrawerFields({
     // Taskana 4088: an explicit on/off override needs the model this create
     // will actually SEND (main derives the binding and refuses otherwise) —
     // same specific-message pre-flight as the context window above.
-    if (imageInput !== "auto" && createModel === "") {
-      setError("Enter a model before forcing image input — the override is saved for one model.");
+    const imageInputError = imageInputModelPreflightError(imageInput, createModel);
+    if (imageInputError !== null) {
+      setError(imageInputError);
       return;
     }
     setCreating(true);
@@ -1343,6 +1357,14 @@ export function ConnectionDrawerFields({
     }
     if (cw.value !== "" && model.trim() === "") {
       setError(CONTEXT_WINDOW_ERROR_MODEL);
+      return;
+    }
+    // Taskana 4088 (cross-review): the same blank-model refusal on UPDATE — the
+    // sent model is `selectedModelId ?? model`, and main would otherwise reject
+    // the whole save with the generic "couldn't be saved" message.
+    const imageInputError = imageInputModelPreflightError(imageInput, selectedModelId ?? model);
+    if (imageInputError !== null) {
+      setError(imageInputError);
       return;
     }
     setSaving(true);

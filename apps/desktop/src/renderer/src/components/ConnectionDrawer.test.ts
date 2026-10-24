@@ -41,6 +41,7 @@ import {
   imageInputInitialValue,
   imageInputEffectiveHint,
   imageInputEnvHint,
+  imageInputModelPreflightError,
 } from "./ConnectionDrawer.js";
 import { providerModelsFor, modelMenuItems } from "./ModelPill.js";
 import { buildStartModelGroups } from "./start-model-picker.js";
@@ -1501,5 +1502,18 @@ describe("imageInputEnvHint (Taskana 4088: the per-model override rides the env)
     expect(imageInputEnvHint([])).toBeNull();
     expect(imageInputEnvHint(["ANYCODE_IMAGE_INPUT_MODELS"])).toBeNull();
     expect(imageInputEnvHint(["ANYCODE_IMAGE_INPUT_MODELS_X"])).toBeNull();
+  });
+});
+
+describe("imageInputModelPreflightError (Taskana 4088 cross-review: an explicit override needs a model on BOTH create and update)", () => {
+  it("refuses an explicit on/off override with a blank model, on create and update alike", () => {
+    expect(imageInputModelPreflightError("on", "")).toEqual(expect.any(String));
+    expect(imageInputModelPreflightError("off", "   ")).toEqual(expect.any(String));
+  });
+
+  it("allows auto with a blank model, and an explicit override with a real model", () => {
+    expect(imageInputModelPreflightError("auto", "")).toBeNull();
+    expect(imageInputModelPreflightError("on", "glm-5.3v")).toBeNull();
+    expect(imageInputModelPreflightError("off", "glm-5.2")).toBeNull();
   });
 });
