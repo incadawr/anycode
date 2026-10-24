@@ -11,7 +11,7 @@
  *   itself writes to the terminal.
  * - Confirm mode (defect 2): y/N questions (permission asks, /commit, /rewind)
  *   render INSIDE the TUI as a dedicated composer mode — Enter answers with
- *   the highlighted default, y/n pick directly, Esc cancels. The answer is
+ *   the default, y/n pick directly, Esc cancels (answers "n"). The answer is
  *   produced by the TUI itself, so it can never leak into the prompt path the
  *   way a double-captured rl.question line did.
  * - Multiline + cursor editing (defect 4): Enter submits, a trailing
@@ -29,8 +29,8 @@
  *   more than one visible item — then Enter commits the selection — or (b)
  *   the input ends with a backslash — then it continues onto a new line.
  * - ArrowUp/Down navigate the popup while it is open, history while closed.
- * - Esc clears the input (or answers a confirm with the default "no" side:
- *   cancels to the non-default answer); Ctrl+C is forwarded to
+ * - Esc clears the input (or answers a confirm with "n": Esc is a cancel and
+ *   never approves, whatever the default); Ctrl+C is forwarded to
  *   opts.onInterrupt (main.ts maps it onto the existing SIGINT logic).
  * - While a confirm question is pending, every key is routed to the confirm
  *   handler — the composer is suspended, nothing can reach onSubmit.
@@ -334,7 +334,9 @@ function Composer({
         return;
       }
       if (key.escape) {
-        confirmLive.current.answer("esc");
+        // Esc cancels: always the "no" side, never an approval (review fix —
+        // flipping a [y/N] default turned Esc into "allow"/"commit").
+        confirmLive.current.answer("n");
         return;
       }
       if (key.backspace || key.delete) {
@@ -431,7 +433,22 @@ function Composer({
     }
   };
 
-  useInput(handleToken, { isActive: isRawModeSupported });
+  // Ink delivers a multi-byte read as ONE text chunk ("/quit\r" from a fast
+  // burst or a paste), so an embedded Enter/Backspace/Tab would be inserted
+  // verbatim instead of acting. Split such chunks into tokens (review fix).
+  useInput(
+    (input, key) => {
+      if (input.length > 1 && /[\r\n\t\u007f\b\u0003]/.test(input)) {
+        for (const token of tokenizeInput(input.replace(/\r?\n/g, "\r"))) {
+          const parsed = parseTokenKey(token);
+          handleToken(parsed.input, parsed.key);
+        }
+        return;
+      }
+      handleToken(input, key);
+    },
+    { isActive: isRawModeSupported },
+  );
 
   // Non-TTY stdin: handle.emit() feeds raw tokens through the exact same
   // parseKeypress + handler path real keypresses take (the parser is a tiny
@@ -458,14 +475,7 @@ function Composer({
       {confirm !== null ? (
         <>
           <Text>{confirm.question}</Text>
-          <Text>
-            {"answer ["}
-            <Text bold={confirm.defaultAnswer === "y"}>Y</Text>
-            {"/"}
-            <Text bold={confirm.defaultAnswer === "n"}>n</Text>
-            {"] "}
-            <Text dimColor>(Enter = {confirm.defaultAnswer === "y" ? "yes" : "no"} · Esc = {confirm.defaultAnswer === "y" ? "no" : "yes"})</Text>
-          </Text>
+          <Text dimColor>(Enter = {confirm.defaultAnswer === "y" ? "yes" : "no"} · Esc = no)</Text>
         </>
       ) : (
         <>
@@ -515,6 +525,10 @@ export function startTui(opts: StartTuiOptions): TuiHandle {
   };
   const guardedSubmit = (line: string): void => {
     if (openRef.current) {
+      // Echo the submitted line into the transcript (readline parity: the
+      // composer clears on submit, so without this the prompt vanishes).
+      breakPartial();
+      append(`> ${line}\n`);
       opts.onSubmit(line);
     }
   };
@@ -527,8 +541,14 @@ export function startTui(opts: StartTuiOptions): TuiHandle {
   // ---- Shared stores (mutated by the handle, read by the shell component) ----
   // Transcript store (defect 1): strings are immutable once appended; the
   // array itself is swapped so React sees a new reference per append.
-  const store: { transcript: string[]; confirm: ConfirmEntry | null; closed: boolean } = {
+  // Review fix: the store is LINE-buffered. Writers emit arbitrary chunks
+  // (streamed text_delta fragments, "\n"-terminated notices); only complete
+  // lines go to <Static> (one item = one terminal row, appended once), and the
+  // unterminated tail renders live above the composer until its newline
+  // arrives. Without this every streamed delta became its own row.
+  const store: { transcript: string[]; partial: string; confirm: ConfirmEntry | null; closed: boolean } = {
     transcript: [],
+    partial: "",
     confirm: null,
     closed: false,
   };
@@ -536,6 +556,20 @@ export function startTui(opts: StartTuiOptions): TuiHandle {
   const notify = (): void => {
     for (const listener of [...wake.listeners]) {
       listener();
+    }
+  };
+  const append = (text: string): void => {
+    const parts = (store.partial + text).split("\n");
+    store.partial = parts.pop() ?? "";
+    if (parts.length > 0) {
+      store.transcript = [...store.transcript, ...parts];
+    }
+    notify();
+  };
+  /** Ends an unterminated tail so the next append starts on a fresh row. */
+  const breakPartial = (): void => {
+    if (store.partial !== "") {
+      append("\n");
     }
   };
   // LIVE confirm source: read synchronously by the key handler (outside
@@ -550,18 +584,11 @@ export function startTui(opts: StartTuiOptions): TuiHandle {
         if (entry === null) {
           return;
         }
-        const normalized =
-          answer === ""
-            ? entry.defaultAnswer
-            : answer === "esc"
-              ? entry.defaultAnswer === "y"
-                ? "n"
-                : "y"
-              : answer;
+        const normalized = answer === "" ? entry.defaultAnswer : answer;
         store.confirm = null;
         confirmLive.current.entry = null;
-        store.transcript = [...store.transcript, `${entry.question} ${normalized}`];
-        notify();
+        breakPartial();
+        append(`${entry.question} ${normalized}\n`);
         entry.resolve(normalized);
       },
     },
@@ -581,9 +608,11 @@ export function startTui(opts: StartTuiOptions): TuiHandle {
       <>
         <Static items={items}>
           {(line, index) => (
-            <Text key={index}>{line}</Text>
+            // An empty Text has zero height in Ink; a space keeps blank rows.
+            <Text key={index}>{line === "" ? " " : line}</Text>
           )}
         </Static>
+        {store.partial !== "" ? <Text>{store.partial}</Text> : null}
         <Composer
           completionsSource={completionsSource}
           onSubmit={guardedSubmit}
@@ -620,6 +649,11 @@ export function startTui(opts: StartTuiOptions): TuiHandle {
       store.confirm?.abort();
       confirmLive.current.entry = null;
       instance.unmount();
+      if (store.partial !== "") {
+        // The tail never reached <Static>; keep it on screen below the frame.
+        opts.output.write(`${store.partial}\n`);
+        store.partial = "";
+      }
       notify();
     },
     emit(_key: string, data: string): void {
@@ -641,8 +675,7 @@ export function startTui(opts: StartTuiOptions): TuiHandle {
       if (store.closed) {
         return;
       }
-      store.transcript = [...store.transcript, text];
-      notify();
+      append(text);
     },
     ask(question: string, askOpts?: { signal?: AbortSignal }): Promise<string> {
       if (store.closed) {

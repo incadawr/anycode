@@ -185,6 +185,23 @@ describe("startTui Static transcript (Taskana 4082 rework, defect 1)", () => {
     expect(h.text()).toContain("[help] the very last help line");
   });
 
+  it("5b. streamed fragments join into one row; only complete lines are separate rows (review fix)", async () => {
+    const h = harness();
+    for (const fragment of ["Hel", "lo wor", "ld.", "\n", "next line\n"]) {
+      h.handle.print(fragment);
+    }
+    await h.waitForText("Hello world.");
+    await h.waitForText("next line");
+    expect(h.text()).not.toMatch(/Hel\s*\n\s*lo wor/);
+  });
+
+  it("5c. a submitted line is echoed into the transcript (review fix)", async () => {
+    const h = harness();
+    h.key("hello\r");
+    await h.waitForText("> hello");
+    expect(h.submit).toHaveBeenLastCalledWith("hello");
+  });
+
   it("6. multiline rendering: trailing backslash + Enter continues the line", async () => {
     const h = harness();
     h.key("line1\\\r"); // trailing backslash: Enter continues (backslash dropped, newline inserted)
@@ -236,6 +253,22 @@ describe("startTui confirm mode (Taskana 4082 rework, defect 2)", () => {
     await h.waitForText("approve plan?");
     h.key("\u001b"); // Esc: flips the [Y/n] default -> "n"
     await expect(answer).resolves.toBe("n");
+  });
+
+  it("10b. Esc on a [y/N] question answers \"n\" — Esc never approves (review fix)", async () => {
+    const h = harness();
+    const answer = h.handle.ask("[permission] Bash (risk: high)\nanswer [y/n/a]: ");
+    await h.waitForText("answer [y/n/a]:");
+    h.key("\u001b");
+    await expect(answer).resolves.toBe("n");
+  });
+
+  it("10c. [Y/n] Enter answers the yes default", async () => {
+    const h = harness();
+    const answer = h.handle.ask("approve plan? [Y/n]");
+    await h.waitForText("approve plan?");
+    h.key("\r");
+    await expect(answer).resolves.toBe("y");
   });
 
   it("11. a confirm answer typed during the question never starts a model turn", async () => {

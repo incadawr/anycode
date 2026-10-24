@@ -4895,7 +4895,7 @@ describe("--tui flag (Taskana 4082)", () => {
     // The y/N confirm now renders in the TUI; answer "n" through the same
     // key pipeline (this is exactly what a real "n" keypress does).
     await vi.waitFor(() => {
-      if (!getText().includes("answer [")) {
+      if (!getText().includes("Esc = no)")) {
         throw new Error("confirm question has not rendered yet");
       }
     });
