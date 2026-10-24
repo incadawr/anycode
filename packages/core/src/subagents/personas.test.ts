@@ -20,8 +20,10 @@ describe("personas", () => {
     // Agent and Workflow are withheld by the non-recursion lock (SPAWN_TOOLS);
     // Skill is withheld because a child subagent inherits no SkillPort in v1
     // (design §2.7 — persona tool lists are unchanged by slices 3.3/3.4).
-    // ArchMap (TASK.233 S1) is a parent-session tool: personas.ts keeps its
-    // explicit lists and deliberately does not grant it to children.
+    // ArchMap (TASK.233 S1) is a parent-session tool that is opt-in at the
+    // REGISTRY level since Taskana 4162 (default off): the filter below keeps
+    // holding even in a flag-on boot, where personas.ts still deliberately
+    // does not grant it to children.
     const expected = defaults.filter(
       (name) =>
         name !== "Agent" && name !== "Skill" && name !== "Workflow" && name !== "ArchMap",

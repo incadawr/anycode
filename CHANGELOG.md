@@ -7,6 +7,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- New optional ArchMap tool: scans a TypeScript/JavaScript tree and returns
+  its import graph (modules with line counts, import edges with type-only and
+  dynamic flags, external package counts). It is opt-in and off by default —
+  enable it with `ANYCODE_ARCHMAP=1` or `"tools": { "archMap": true }` in
+  `~/.anycode/settings.json` (the env var wins; new sessions only).
+
 ## [0.0.35] — 2026-10-10
 
 ### Added

@@ -8,6 +8,11 @@
  * Known limitation: non-relative specs (bare names, `@scope/pkg` workspace
  * aliases, tsconfig `paths`) are counted as EXTERNAL. Barrel/aliased imports
  * therefore never appear as edges; that is a documented S1 trade-off.
+ *
+ * OPT-IN (Taskana 4162): ArchMap is NOT in the default registry until the
+ * architecture-map GUI panel exists — its schema would tax every session's
+ * prompt on every turn and invalidate the prompt cache once. Boot wirings
+ * register it only when the opt-in flag says so (`loadArchMapEnabled` below).
  */
 
 import { z } from "zod";
@@ -82,6 +87,74 @@ const NODE_BUILTINS = new Set([
 const EXCLUDED_DIR_SEGMENTS = new Set(["test-harness", "__fixtures__", "__mocks__"]);
 
 const UNRESOLVED_CAP = 50;
+
+// ---------------------------------------------------------------------------
+// Opt-in flag (Taskana 4162): ANYCODE_ARCHMAP=1/true/on or true, else
+// `tools.archMap: true` in ~/.anycode/settings.json. The default is OFF, and
+// the env var wins over the setting (the `loadRepoMapConfig` / `fillFromSettings`
+// convention: env > settings > fail-closed default).
+
+/** Env var that enables ArchMap; literal, kept local to this module. */
+export const ENV_ARCHMAP = "ANYCODE_ARCHMAP";
+
+const ARCHMAP_ENABLE_VALUES = new Set(["1", "true", "on"]);
+const ARCHMAP_DISABLE_VALUES = new Set(["0", "false", "off"]);
+
+/**
+ * Env-only read of the ArchMap flag: `true`/`false` for an explicit 1/0-style
+ * value, `undefined` when the var is absent or blank (fall through to the
+ * settings rung). An UNRECOGNIZED value also returns undefined — a typo must
+ * degrade to the fail-closed default, never kill the boot (`readImageInputOverride`
+ * style warn-and-ignore, not `readProviderTransport`'s throw).
+ */
+export function archMapEnabledFromEnv(env: NodeJS.ProcessEnv): boolean | undefined {
+  const raw = env[ENV_ARCHMAP]?.toLowerCase();
+  if (raw === undefined || raw.trim() === "") return undefined;
+  if (ARCHMAP_ENABLE_VALUES.has(raw)) return true;
+  if (ARCHMAP_DISABLE_VALUES.has(raw)) return false;
+  console.warn(`Invalid ${ENV_ARCHMAP}: "${raw}" is not 1/true/on or 0/false/off — ignoring`);
+  return undefined;
+}
+
+/**
+ * The settings.json rung: reads `tools.archMap` from the SAME
+ * ~/.anycode/settings.json the permission rules come from. Strictly boolean —
+ * anything else (absent, wrong type, unparseable file) reads as "not enabled";
+ * a corrupt file must never keep a session from booting. Never throws.
+ */
+export async function archMapEnabledFromSettings(fs: FileSystemPort, settingsPath: string): Promise<boolean> {
+  let text: string;
+  try {
+    text = await fs.readFile(settingsPath);
+  } catch {
+    return false;
+  }
+  try {
+    const json: unknown = JSON.parse(text);
+    if (!json || typeof json !== "object" || Array.isArray(json)) return false;
+    const tools = (json as { tools?: unknown }).tools;
+    if (!tools || typeof tools !== "object" || Array.isArray(tools)) return false;
+    return (tools as { archMap?: unknown }).archMap === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolves the ArchMap opt-in: `ANYCODE_ARCHMAP` wins over the settings rung,
+ * which wins over the fail-closed `false` default. This is the ONLY resolver
+ * boot wirings need — the CLI and the desktop host both call it with their own
+ * fs port, settings path, and env.
+ */
+export async function loadArchMapEnabled(
+  fs: FileSystemPort,
+  settingsPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const fromEnv = archMapEnabledFromEnv(env);
+  if (fromEnv !== undefined) return fromEnv;
+  return archMapEnabledFromSettings(fs, settingsPath);
+}
 
 export const archMapInputSchema = z.object({
   path: z.string().min(1).optional().describe("Root directory to scan (default: working directory)"),

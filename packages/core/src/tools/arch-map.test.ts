@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
@@ -10,7 +10,11 @@ import type { ToolContext } from "../types/tools.js";
 import type { ArchMapEdge, ArchMapOutput } from "./arch-map.js";
 import {
   ARCH_MAP_MODEL_EDGE_LIMIT,
+  ENV_ARCHMAP,
+  archMapEnabledFromEnv,
+  archMapEnabledFromSettings,
   archMapTool,
+  loadArchMapEnabled,
   scanImportGraph,
 } from "./arch-map.js";
 
@@ -335,5 +339,64 @@ describe("ArchMap scanner + tool", () => {
     const result = await archMapTool.handler({}, { ...ctxFor(dir), abortSignal: controller.signal });
     expect(result.ok).toBe(false);
     expect(result.error).toContain("aborted");
+  });
+});
+
+describe("ArchMap opt-in flag (Taskana 4162)", () => {
+  let tmpDir: string;
+
+  afterEach(async () => {
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined as unknown as string;
+  });
+
+  async function settingsFile(content: string): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-archmap-flag-"));
+    tmpDir = dir;
+    const path = join(dir, "settings.json");
+    await writeFile(path, content);
+    return path;
+  }
+
+  describe("archMapEnabledFromEnv", () => {
+    it("accepts 1/true/on, rejects 0/false/off, ignores absent/blank/unknown", () => {
+      expect(archMapEnabledFromEnv({ [ENV_ARCHMAP]: "1" })).toBe(true);
+      expect(archMapEnabledFromEnv({ [ENV_ARCHMAP]: "TRUE" })).toBe(true); // case-insensitive
+      expect(archMapEnabledFromEnv({ [ENV_ARCHMAP]: "on" })).toBe(true);
+      expect(archMapEnabledFromEnv({ [ENV_ARCHMAP]: "0" })).toBe(false);
+      expect(archMapEnabledFromEnv({ [ENV_ARCHMAP]: "false" })).toBe(false);
+      expect(archMapEnabledFromEnv({ [ENV_ARCHMAP]: "off" })).toBe(false);
+      expect(archMapEnabledFromEnv({})).toBeUndefined();
+      expect(archMapEnabledFromEnv({ [ENV_ARCHMAP]: "   " })).toBeUndefined();
+      // A typo degrades to undefined (fall through to settings), never a throw.
+      expect(archMapEnabledFromEnv({ [ENV_ARCHMAP]: "yes" })).toBeUndefined();
+    });
+  });
+
+  describe("archMapEnabledFromSettings", () => {
+    it("reads tools.archMap === true; absent/wrong-typed/corrupt files are off", async () => {
+      expect(await archMapEnabledFromSettings(fs, await settingsFile(JSON.stringify({ version: 2, tools: { archMap: true } })))).toBe(true);
+      expect(await archMapEnabledFromSettings(fs, await settingsFile(JSON.stringify({ version: 2, tools: { archMap: false } })))).toBe(false);
+      expect(await archMapEnabledFromSettings(fs, await settingsFile(JSON.stringify({ version: 2, tools: {} })))).toBe(false);
+      // Truthy-but-not-boolean must NOT enable (strict === true).
+      expect(await archMapEnabledFromSettings(fs, await settingsFile(JSON.stringify({ version: 2, tools: { archMap: "true" } })))).toBe(false);
+      expect(await archMapEnabledFromSettings(fs, await settingsFile("not json at all"))).toBe(false);
+      expect(await archMapEnabledFromSettings(fs, join(tmpdir(), "anycode-archmap-missing-settings.json"))).toBe(false);
+    });
+  });
+
+  describe("loadArchMapEnabled (env wins over the setting; default off)", () => {
+    it("env=1 beats settings=false; env=0 beats settings=true; neither set follows the setting", async () => {
+      const enabledPath = await settingsFile(JSON.stringify({ version: 2, tools: { archMap: true } }));
+      expect(await loadArchMapEnabled(fs, enabledPath, { [ENV_ARCHMAP]: "1" })).toBe(true);
+      expect(await loadArchMapEnabled(fs, enabledPath, { [ENV_ARCHMAP]: "0" })).toBe(false);
+
+      const disabledPath = await settingsFile(JSON.stringify({ version: 2, tools: { archMap: false } }));
+      expect(await loadArchMapEnabled(fs, disabledPath, { [ENV_ARCHMAP]: "1" })).toBe(true);
+      expect(await loadArchMapEnabled(fs, disabledPath, {})).toBe(false);
+
+      // No env, no settings file, no section: the default is OFF.
+      expect(await loadArchMapEnabled(fs, join(tmpdir(), "anycode-archmap-nothing.json"), {})).toBe(false);
+    });
   });
 });

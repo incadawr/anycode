@@ -212,6 +212,7 @@ import {
   createMediaProjectionPort,
   createSkillPort,
   createWebSearchTool,
+  loadArchMapEnabled,
   buildAgentBridgeToolDecl,
   decodeAgentBridgeCallInput,
   discoverAgentProfiles,
@@ -396,7 +397,7 @@ import { createEngineChildRunner } from "./engine-children.js";
 // TASK.103: the host-side consent reader. Host never WRITES settings.json
 // (main is the sole writer, host/boot.ts:239-245) — this is the sanctioned
 // fail-soft read, same standing custody as seedAlwaysAllowRules above.
-import { readTrustedBinaryConsentsSync } from "../settings/files.js";
+import { defaultSettingsPath, readTrustedBinaryConsentsSync } from "../settings/files.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
 import { Outbound, Session, tapChildPermissions, type ChildSessionOptions } from "./session.js";
@@ -2043,12 +2044,26 @@ async function boot(): Promise<void> {
     // entirely): a model talking to a child cannot even DISCOVER the session
     // tier exists, let alone reach it — a child structurally cannot spawn its
     // own child session.
-    const registry =
-      args.child === undefined
-        ? createDefaultToolRegistry({ agent: { sessionTier: true } })
-        : createDefaultToolRegistry();
     const fsAdapter = new NodeFileSystemAdapter();
     const execAdapter = new NodeExecutionAdapter();
+
+    // ArchMap opt-in (Taskana 4162), mirror of cli/main.ts: ANYCODE_ARCHMAP=1
+    // wins, else `tools.archMap: true` in the same ~/.anycode/settings.json
+    // seedAlwaysAllowRules reads (the dev-profile override env var included),
+    // else OFF — the default registry and the host's tool-discipline section
+    // stay byte-identical to the pre-ArchMap baseline. Fail-soft:
+    // loadArchMapEnabled never throws, so a corrupt settings file only costs
+    // the flag, never the boot.
+    const archMapEnabled = await loadArchMapEnabled(
+      fsAdapter,
+      hostSettingsPathOverride() ?? defaultSettingsPath(),
+      process.env,
+    );
+
+    const registry =
+      args.child === undefined
+        ? createDefaultToolRegistry({ agent: { sessionTier: true }, ...(archMapEnabled ? { archMap: true } : {}) })
+        : createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
 
 
     // session from argv — create (`--session`) or load (`--resume`, mirror of
