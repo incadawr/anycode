@@ -9,6 +9,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Adaptive turn budget, off by default: turn on `tools.adaptiveTurnBudget` in
+  Settings (or `ANYCODE_ADAPTIVE_TURN_BUDGET=1`). Subagents then get extra turns
+  while their work makes real progress, and the base subagent budget is learned
+  from finished tasks that were accepted (completed, or declared done at the
+  limit). Your explicit turn limits still win, and the learned value stays within
+  fixed bounds.
 - User documentation in `docs/user/`: configuration files, engines, subagents,
   skills, MCP servers, permissions, proxy, orchestration and troubleshooting. The
   app ships a copy, and `docs/user/README.md` indexes it.
