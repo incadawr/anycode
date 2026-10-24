@@ -1341,6 +1341,7 @@ describe("Session — core steer_message injection ( / )", () => {
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,
