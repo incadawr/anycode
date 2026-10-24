@@ -356,6 +356,15 @@ const MIGRATIONS: readonly Migration[] = [
       `CREATE INDEX idx_provider_usage_session ON provider_usage (session_id, created_at ASC)`,
     ],
   },
+  {
+    // Taskana 4123 (TASK.145 residual): durable pending detached-child reports.
+    // The host snapshots ChildReportQueue's whole state here on every mutation
+    // and restores it before the Session's first ui_ready. Nullable: NULL (every
+    // pre-v20 row, and every session with nothing pending) = nothing to restore.
+    // Renumbered v19 -> v20 at release integration: 4083's provider_usage took v19.
+    version: 20,
+    statements: ["ALTER TABLE sessions ADD COLUMN pending_child_reports_json TEXT"],
+  },
 ];
 
 /**
@@ -466,6 +475,7 @@ interface SessionRow {
   parent_session_id: string | null;
   spawn_tool_call_id: string | null;
   next_image_ref: number;
+  pending_child_reports_json: string | null;
 }
 
 function parseWorktreeTransitionJson(raw: string | null): SessionMeta["worktreeTransition"] {
@@ -1278,6 +1288,26 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       throw new Error(`reserveImageRef: unknown session ${sessionId}`);
     }
     return row.reserved;
+  }
+
+  /**
+   * Taskana 4123 (TASK.145 residual): writes the parent session's pending
+   * detached-child-report queue snapshot. Deliberately does NOT touch
+   * updated_at — that column is the sidebar's LAST-ACTIVITY order
+   * (touchSessionActivity's contract) and a durability bookkeeping write
+   * is not activity.
+   */
+  async savePendingChildReports(id: string, json: string | null): Promise<void> {
+    const db = this.open();
+    db.prepare("UPDATE sessions SET pending_child_reports_json = ? WHERE id = ?").run(json, id);
+  }
+
+  /** Reads the snapshot back; null for an unknown id or a never-written row. */
+  async loadPendingChildReports(id: string): Promise<string | null> {
+    const db = this.open();
+    const row = db.prepare("SELECT pending_child_reports_json AS json FROM sessions WHERE id = ?")
+      .get(id) as { json: string | null } | undefined;
+    return row?.json ?? null;
   }
 
   // -------------------------------------------------------------------------

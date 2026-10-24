@@ -46,18 +46,26 @@ export const CHILD_REPORT_QUEUE_MAX_PENDING = 20;
 /** Sentinel id for the coalesced overflow notice — never collides with a real report's id (spawnToolCallId is always a randomUUID-shaped tool_call id). */
 const CAP_NOTICE_ID = "__child_report_cap_notice__";
 
+/** Terminal metadata a detached child's report carries onto the wire (child_report.childTerminal). */
+export interface ChildReportTerminalMeta {
+  status: "completed" | "max_turns" | "cancelled" | "error";
+  durationMs: number;
+  finalTurnFinishReason?: "length";
+}
+
+/** Serializable state of the queue (Taskana 4123): everything a host restart needs to resume delivery. */
+export interface ChildReportQueueSnapshot {
+  reports: Array<{ id: string; text: string; childTerminal?: ChildReportTerminalMeta }>;
+  /** Dropped-since-notice counter, restored so a recovered cap-notice keeps an honest count. */
+  droppedSinceNotice: number;
+}
+
 export class ChildReportQueue {
-  private readonly pending: Array<{
-    id: string;
-    text: string;
-    childTerminal?: {
-      status: "completed" | "max_turns" | "cancelled" | "error";
-      durationMs: number;
-      finalTurnFinishReason?: "length";
-    };
-  }> = [];
+  private readonly pending: Array<{ id: string; text: string; childTerminal?: ChildReportTerminalMeta }> = [];
   /** Reports dropped since the current cap-notice entry (if any) was created; reset when that notice is acked. */
   private droppedSinceNotice = 0;
+  /** Taskana 4123: durability listeners — fire at the END of every mutation path (add/upsert/ack/upsertCapNotice). */
+  private readonly changeListeners = new Set<() => void>();
 
   constructor(private readonly outbound: ChildReportOutbound) {}
 
@@ -68,15 +76,7 @@ export class ChildReportQueue {
    * once) — the refused report's own content is lost, but its occurrence is
    * never silent (see `upsertCapNotice`).
    */
-  add(
-    id: string,
-    text: string,
-    childTerminal?: {
-      status: "completed" | "max_turns" | "cancelled" | "error";
-      durationMs: number;
-      finalTurnFinishReason?: "length";
-    },
-  ): void {
+  add(id: string, text: string, childTerminal?: ChildReportTerminalMeta): void {
     if (this.pending.length >= CHILD_REPORT_QUEUE_MAX_PENDING) {
       this.droppedSinceNotice += 1;
       console.error(
@@ -92,6 +92,7 @@ export class ChildReportQueue {
       text,
       ...(childTerminal !== undefined ? { childTerminal } : {}),
     });
+    this.notifyChanged();
   }
 
   /**
@@ -112,6 +113,7 @@ export class ChildReportQueue {
     if (existing) {
       existing.text = text;
       this.outbound.sendDirect({ type: "child_report", id, text });
+      this.notifyChanged();
       return;
     }
     this.add(id, text);
@@ -139,6 +141,7 @@ export class ChildReportQueue {
     if (index !== -1) {
       this.pending.splice(index, 1);
     }
+    this.notifyChanged();
   }
 
   /** Re-posts every still-unacknowledged report — called on every `ui_ready` (Session). */
@@ -169,5 +172,86 @@ export class ChildReportQueue {
       this.pending.push({ id: CAP_NOTICE_ID, text });
     }
     this.outbound.sendDirect({ type: "child_report", id: CAP_NOTICE_ID, text });
+    this.notifyChanged();
+  }
+
+  /**
+   * Taskana 4123: deep-copies the queue's whole state for persistence. The
+   * cap notice rides as its sentinel-id row (`CAP_NOTICE_ID`) — no special
+   * casing; `droppedSinceNotice` travels alongside so a recovered notice
+   * keeps counting honestly. Mutating the returned snapshot can never affect
+   * the queue (every row, and each row's `childTerminal`, is a fresh copy).
+   */
+  snapshot(): ChildReportQueueSnapshot {
+    return {
+      reports: this.pending.map((report) => ({
+        id: report.id,
+        text: report.text,
+        ...(report.childTerminal !== undefined ? { childTerminal: { ...report.childTerminal } } : {}),
+      })),
+      droppedSinceNotice: this.droppedSinceNotice,
+    };
+  }
+
+  /**
+   * Taskana 4123: replaces the queue's state from a persisted snapshot
+   * (called once, at boot, BEFORE the Session's first `ui_ready` — whose
+   * `resendAll` then delivers the recovered reports exactly like
+   * live-queued ones). Sends NOTHING here: delivery stays the Session's
+   * `ui_ready` contract. Defensive against a corrupt/foreign snapshot:
+   * rows without a non-empty string `id` or with a non-string `text` are
+   * dropped, a negative `droppedSinceNotice` is clamped to 0, and an
+   * implausibly long row list (past `MAX_PENDING + 1`, the cap notice's one
+   * extra slot) is truncated with a loud discarded-count error.
+   */
+  restore(snapshot: ChildReportQueueSnapshot): void {
+    const rows = Array.isArray(snapshot?.reports) ? snapshot.reports : [];
+    const kept: ChildReportQueueSnapshot["reports"] = [];
+    for (const row of rows) {
+      if (row === null || typeof row !== "object") continue;
+      if (typeof row.id !== "string" || row.id.length === 0) continue;
+      if (typeof row.text !== "string") continue;
+      kept.push({
+        id: row.id,
+        text: row.text,
+        ...(row.childTerminal !== null && typeof row.childTerminal === "object"
+          ? { childTerminal: { ...row.childTerminal } }
+          : {}),
+      });
+    }
+    const limit = CHILD_REPORT_QUEUE_MAX_PENDING + 1;
+    if (kept.length > limit) {
+      console.error(
+        `[host] restored detached-child report snapshot had ${kept.length} rows (cap ${limit}); discarding ${kept.length - limit} and keeping the first ${limit}`,
+      );
+      kept.length = limit;
+    }
+    this.pending.length = 0;
+    this.pending.push(...kept);
+    this.droppedSinceNotice =
+      typeof snapshot?.droppedSinceNotice === "number" && snapshot.droppedSinceNotice > 0
+        ? snapshot.droppedSinceNotice
+        : 0;
+  }
+
+  /**
+   * Taskana 4123: subscribes a durability listener fired at the END of every
+   * mutation path (`add` admit AND overflow, `upsert` existing-id AND
+   * fall-through-to-add, `ack`, `upsertCapNotice`) — unconditionally per
+   * method call, so a no-op ack re-persisting an identical snapshot is
+   * harmless and the persistence contract stays deterministic. Returns an
+   * unsubscribe fn; mirrors the port's `onBackgroundChildrenChanged` shape.
+   */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => {
+      this.changeListeners.delete(listener);
+    };
+  }
+
+  private notifyChanged(): void {
+    for (const listener of this.changeListeners) {
+      listener();
+    }
   }
 }

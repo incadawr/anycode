@@ -304,6 +304,7 @@ import {
   SupervisorIdleWatchdog,
   type SupervisorIdleReport,
 } from "./supervisor-idle-watchdog.js";
+import { attachChildReportDurability, attachEngineChildReportDurability } from "./child-report-durability.js";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
@@ -466,7 +467,10 @@ const emit = (message: HostToUiMessage): void => {
 // `outbound.sendDirect` (срез 1) is not reconnect-safe on its own. Wired into
 // `deliverDetachedChildReport` below and, once the root Session exists, into
 // its own `pendingChildReports` seam (resendAll on ui_ready, ack on
-// child_report_ack).
+// child_report_ack). Taskana 4123 follow-up: all three root boots (core via
+// attachChildReportDurability, codex/claude via attachEngineChildReportDurability)
+// restore this queue from the session row before their Session's first
+// ui_ready and persist every mutation back to it.
 const childReportQueue = new ChildReportQueue(outbound);
 
 // Credential broker (design §3.3, slice 2.5.3): CredentialResponse messages
@@ -1358,6 +1362,20 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   }
 
   const codexHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
+  // Taskana 4123 follow-up: restore the persisted detached-child report queue
+  // BEFORE this Session's first ui_ready can resendAll() it — the same
+  // restore-before-first-ui_ready ordering the core tail holds. Codex's row
+  // always exists by now (the create seam above ran strictly before Session),
+  // so the adapter's own column read/write is the whole seam. A child-mode
+  // boot never spawns detached children of its own, so it keeps the in-memory
+  // posture and its column stays null.
+  const codexPendingChildReports = args.child === undefined
+    ? await attachEngineChildReportDurability({
+        queue: childReportQueue,
+        loadJson: () => persistence!.loadPendingChildReports(connected.sessionMeta.id),
+        saveJson: (json) => persistence!.savePendingChildReports(connected.sessionMeta.id, json),
+      })
+    : undefined;
   session = new Session({
     outbound,
     engine: booted.engine,
@@ -1401,6 +1419,10 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     // TASK.188 S4: dev/automation-ONLY replay-recording override, resolved
     // here (the composition root) and never inside Session itself.
     ...(codexHistoryMaxItems !== null ? { historyMaxItems: codexHistoryMaxItems } : {}),
+    // Taskana 4123 follow-up: the restored queue's delivery path — resendAll
+    // on every ui_ready, ack on child_report_ack. Present only for a root
+    // boot (a child-mode codex session has no detached children of its own).
+    ...(codexPendingChildReports !== undefined ? { pendingChildReports: codexPendingChildReports } : {}),
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
     // TASK.144: the SAME store the broker above matches against, so an
     // in-session "Always allow" starts working from the very next ask instead
@@ -1798,6 +1820,13 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
       create: (id, row) => persistence!.createSession({ id, ...row } as Parameters<SqlitePersistenceAdapter["createSession"]>[0]),
       touch: (id, patch) => persistence!.touchSession(id, patch as { title?: string; mode?: PermissionMode; model?: string }),
     },
+    // Taskana 4123 follow-up: the pending-child-reports column writer — the
+    // same `pending_child_reports_json` column the core/codex boots use, kept
+    // OFF the touch/touchSession path so a durability write never stamps
+    // updated_at (the sidebar's last-activity order).
+    pendingChildReportsPort: {
+      savePendingChildReports: (id, json) => persistence!.savePendingChildReports(id, json),
+    },
     onError: (error, stage) => {
       console.error(`[host] claude session row ${stage} failed: ${describeError(error)}`);
     },
@@ -1935,6 +1964,27 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   }
 
   const claudeHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
+  // Taskana 4123 follow-up: restore the persisted detached-child report queue
+  // BEFORE this Session's first ui_ready can resendAll() it — the same
+  // restore-before-first-ui_ready ordering the core tail holds. Unlike codex
+  // (row always exists by now), a FRESH claude boot still has no row at this
+  // point (native-first: nothing exists until the first turn-scoped
+  // system/init fires rowWriter.materialize), so both seams ride the row's
+  // own existence gate: load reads through `materialized` (null — nothing
+  // restorable — until the row appears), and save is serialized behind the
+  // CREATE through the same write chain `rowWriter.touch` uses, so a report
+  // queued before the row exists is neither dropped nor able to conjure the
+  // row early. A resume always has its row. A child-mode boot never spawns
+  // detached children of its own, so it keeps the in-memory posture and its
+  // column stays null.
+  const claudePendingChildReports = args.child === undefined
+    ? await attachEngineChildReportDurability({
+        queue: childReportQueue,
+        loadJson: () => (rowWriter.materialized ? persistence!.loadPendingChildReports(rowId) : Promise.resolve(null)),
+        saveJson: (json) =>
+          rowWriter.savePendingChildReports(json).then(() => undefined),
+      })
+    : undefined;
   session = new Session({
     outbound,
     engine: booted.engine,
@@ -1952,6 +2002,10 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // TASK.188 S4: dev/automation-ONLY replay-recording override, resolved
     // here (the composition root) and never inside Session itself.
     ...(claudeHistoryMaxItems !== null ? { historyMaxItems: claudeHistoryMaxItems } : {}),
+    // Taskana 4123 follow-up: the restored queue's delivery path — resendAll
+    // on every ui_ready, ack on child_report_ack. Present only for a root
+    // boot (a child-mode claude session has no detached children of its own).
+    ...(claudePendingChildReports !== undefined ? { pendingChildReports: claudePendingChildReports } : {}),
     hasTitle: connected.sessionMeta?.title !== undefined && connected.sessionMeta.title.length > 0,
     // TASK.144: the SAME store the broker above matches against, so an
     // in-session "Always allow" starts working from the very next ask instead
@@ -3413,6 +3467,15 @@ async function boot(): Promise<void> {
     };
 
     const sessionId = sessionMeta.id;
+    // Taskana 4123 (TASK.145 residual): a host restart must not lose a detached
+    // child's still-unacknowledged report — restore the persisted queue BEFORE
+    // this Session's first ui_ready can resendAll() it. (The codex/claude boots
+    // wire their own equivalent, attachEngineChildReportDurability, at their
+    // own Session construction sites.) A child-mode boot never spawns detached
+    // children of its own, so its column stays null.
+    if (!isChildSessionBoot(args, sessionMeta)) {
+      await attachChildReportDurability({ queue: childReportQueue, persistence: persistence!, sessionId });
+    }
     // Slice P7.15 (F14, design §2.1): the narrow mid-session model-switch
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
