@@ -174,13 +174,9 @@ describe("contract-drift layer 1 (always-on)", () => {
     // pinned-contract.json (or an extractor regression that changes the
     // extract) fails on every plain `pnpm test` run.
     const referencePath = join(FIXTURES_DIR, "schema-0.144.3", "codex_app_server_protocol.schemas.json");
-    let raw: string;
-    try {
-      raw = readFileSync(referencePath, "utf8");
-    } catch {
-      return it.skip(`reference schema fixture missing: ${referencePath}`);
-    }
-    const schema = JSON.parse(raw);
+    // The fixture is committed alongside the pin: a missing file must FAIL,
+    // not skip (a skip would silently re-open the hand-edit hole).
+    const schema = JSON.parse(readFileSync(referencePath, "utf8"));
     const result = runExtractor(schema, pinned.generatedFrom);
     if ("error" in result) {
       throw new Error(`extractor rejected the committed 0.144.3 reference schema:\n${result.error}`);

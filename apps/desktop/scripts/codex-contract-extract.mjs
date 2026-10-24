@@ -108,8 +108,9 @@ const SERVER_NOTIFICATION_METHODS = [
   // added to the pre-turn benign list so it never counts toward
   // PRE_TURN_NOTIFICATION_LIMIT.
   { method: "remoteControl/status/changed" },
-  //  / : setup-completed echo; consumed passively (logged
-  // as a boot notice if it ever arrives — AnyCode never starts a setup).
+  //  / : setup-completed echo; pinned for drift only —
+  // AnyCode never starts a setup, so a thread-less arrival is dropped by the
+  // foreign-notification backstop like any other.
   { method: "windowsSandbox/setupCompleted" },
 ];
 
