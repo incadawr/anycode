@@ -228,6 +228,20 @@ describe("buildCreateRequest / buildPreviewRequest", () => {
     expect(preview).toEqual({ draft });
     expect(Object.keys(preview)).toEqual(["draft"]);
   });
+
+  // Taskana 4706: the editor's create-mode scope radio is gone — the pane
+  // seeds the editor scope from the resolved scope-bar mode. The builder
+  // contract is unchanged; both write targets pinned.
+
+  it("Taskana 4706 Global mode: no tabId + 'user' — the profile lands in personal subagents", () => {
+    const draft: SubagentProfileDraft = { name: "new-one", description: "d", body: "b" };
+    expect(buildCreateRequest(undefined, "user", draft)).toEqual({ tabId: undefined, scope: "user", draft });
+  });
+
+  it("Taskana 4706 Project mode: tabId + 'project' — the profile lands in the chosen tab's workspace", () => {
+    const draft: SubagentProfileDraft = { name: "new-one", description: "d", body: "b" };
+    expect(buildCreateRequest("t1", "project", draft)).toEqual({ tabId: "t1", scope: "project", draft });
+  });
 });
 
 // ── editor: name/tools validation, draft round-trip, dirty check ──

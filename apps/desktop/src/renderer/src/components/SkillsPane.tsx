@@ -346,8 +346,15 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills }: SkillsPane
   const [importOpen, setImportOpen] = useState(false);
   const [importScanResult, setImportScanResult] = useState<SkillsImportScanResult | null>(null);
   const [importSelection, setImportSelection] = useState<Record<string, boolean>>({});
-  const [importScope, setImportScope] = useState<SkillScope>("user");
   const [importResults, setImportResults] = useState<SkillsImportApplyResultItem[] | null>(null);
+
+  // Taskana 4706: the pane's WRITE target follows the header scope bar — a
+  // tabId present means the bar resolved Project mode (SettingsScreen passes
+  // the chosen tab); absent means Global. The create dialog and the import
+  // wizard no longer carry their own scope radios; they seed from this mode
+  // and show a one-line hint instead, so a write can never land somewhere
+  // other than the visibly selected area.
+  const scopeMode: SkillScope = tabId !== undefined ? "project" : "user";
 
   useEffect(() => {
     let cancelled = false;
@@ -398,7 +405,9 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills }: SkillsPane
   function openCreate(): void {
     setCreateError(null);
     setCreatedRow(null);
-    setCreateFields(blankSkillCreateFields());
+    // Taskana 4706: seeded from the pane's resolved write target — the blank
+    // helper's "user" default is just the pre-override scaffold.
+    setCreateFields({ ...blankSkillCreateFields(), scope: scopeMode });
     setCreateOpen(true);
   }
 
@@ -425,7 +434,6 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills }: SkillsPane
   async function openImport(): Promise<void> {
     setImportOpen(true);
     setImportResults(null);
-    setImportScope("user");
     const scan = await bridge.importScan({ tabId });
     setImportScanResult(scan);
     setImportSelection(defaultImportSelection(scan.candidates));
@@ -445,7 +453,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills }: SkillsPane
     if (selectedImportIds(importSelection).length === 0) {
       return;
     }
-    const result = await bridge.importApply(buildSkillsImportApplyRequest(tabId, importScope, importSelection));
+    const result = await bridge.importApply(buildSkillsImportApplyRequest(tabId, scopeMode, importSelection));
     if (result.ok) {
       setSnapshot(result.snapshot);
       setImportResults(result.results);
@@ -583,6 +591,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills }: SkillsPane
           fields={createFields}
           error={createError}
           createdRow={createdRow}
+          scopeMode={scopeMode}
           onChange={setCreateFields}
           onCancel={closeCreate}
           onSubmit={() => void submitCreate()}
@@ -594,10 +603,9 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills }: SkillsPane
         <SkillImportDialog
           scan={importScanResult}
           selection={importSelection}
-          scope={importScope}
+          scopeMode={scopeMode}
           results={importResults}
           onToggleRow={toggleImportRow}
-          onScopeChange={setImportScope}
           onApply={() => void applyImport()}
           onClose={closeImport}
         />
@@ -692,13 +700,15 @@ interface SkillCreateDialogProps {
   fields: SkillCreateFields;
   error: string | null;
   createdRow: SkillRowView | null;
+  /** Taskana 4706: the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
+  scopeMode: SkillScope;
   onChange: (fields: SkillCreateFields) => void;
   onCancel: () => void;
   onSubmit: () => void;
   onReveal: () => void;
 }
 
-function SkillCreateDialog({ fields, error, createdRow, onChange, onCancel, onSubmit, onReveal }: SkillCreateDialogProps) {
+function SkillCreateDialog({ fields, error, createdRow, scopeMode, onChange, onCancel, onSubmit, onReveal }: SkillCreateDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -763,18 +773,12 @@ function SkillCreateDialog({ fields, error, createdRow, onChange, onCancel, onSu
                 onChange={(e) => set("description", e.target.value)}
               />
             </label>
-            <div className="settings-field">
-              <span className="settings-field-label">Scope</span>
-              <div className="mcp-radio-row">
-                <label>
-                  <input type="radio" name="skill-scope" checked={fields.scope === "user"} onChange={() => set("scope", "user")} />
-                  Personal
-                </label>
-                <label>
-                  <input type="radio" name="skill-scope" checked={fields.scope === "project"} onChange={() => set("scope", "project")} />
-                  Workspace
-                </label>
-              </div>
+            {/* Taskana 4706: the scope radio is gone — the write target is the
+                pane's header scope bar (ScopeSwitcher), restated here as a
+                hint so the dialog itself names where the scaffold will land.
+                `fields.scope` still carries the seeded mode into the request. */}
+            <div className="mcp-row-hint">
+              {scopeMode === "project" ? "Creating in this project's workspace" : "Creating in your personal skills"}
             </div>
             {error && <div className="settings-env-warning">{error}</div>}
           </>
@@ -799,15 +803,15 @@ function SkillCreateDialog({ fields, error, createdRow, onChange, onCancel, onSu
 interface SkillImportDialogProps {
   scan: SkillsImportScanResult | null;
   selection: Record<string, boolean>;
-  scope: SkillScope;
+  /** Taskana 4706: the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
+  scopeMode: SkillScope;
   results: SkillsImportApplyResultItem[] | null;
   onToggleRow: (id: string) => void;
-  onScopeChange: (scope: SkillScope) => void;
   onApply: () => void;
   onClose: () => void;
 }
 
-function SkillImportDialog({ scan, selection, scope, results, onToggleRow, onScopeChange, onApply, onClose }: SkillImportDialogProps) {
+function SkillImportDialog({ scan, selection, scopeMode, results, onToggleRow, onApply, onClose }: SkillImportDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -886,17 +890,12 @@ function SkillImportDialog({ scan, selection, scope, results, onToggleRow, onSco
               </div>
             ))}
 
+            {/* Taskana 4706: the "Import into" radio is gone — the write target
+                is the pane's header scope bar (ScopeSwitcher), restated here as
+                a hint so the dialog itself names where imports will land. */}
             <div className="mcp-import-scope">
-              <span className="settings-field-label">Import into</span>
-              <div className="mcp-radio-row">
-                <label data-skills-import-scope="user">
-                  <input type="radio" name="skills-import-scope" checked={scope === "user"} onChange={() => onScopeChange("user")} />
-                  Personal
-                </label>
-                <label data-skills-import-scope="project">
-                  <input type="radio" name="skills-import-scope" checked={scope === "project"} onChange={() => onScopeChange("project")} />
-                  Workspace
-                </label>
+              <div className="mcp-row-hint">
+                {scopeMode === "project" ? "Importing into this project's workspace" : "Importing into your personal skills"}
               </div>
             </div>
 

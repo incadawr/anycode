@@ -2916,3 +2916,7 @@
   font-size: var(--fs-sm);
   color: var(--text-2);
 }
+
+/* Taskana 4706: explicit global-vs-project scope bar for Skills/MCP/Subagents panes. */
+.settings-scope-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.settings-scope-bar .settings-field-select { max-width: 260px; }

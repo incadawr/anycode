@@ -611,9 +611,14 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
 
   function openCreate(): void {
     const blank = blankSubagentEditorFields();
+    // Taskana 4706: the create scope follows the pane's resolved write target
+    // (the header scope bar) instead of a hardcoded "user" — a tabId present
+    // means Project mode, absent means Global. The editor's own scope radio is
+    // gone; this seeded value rides into `buildCreateRequest` unchanged.
+    const scopeMode: SubagentScope = tabId !== undefined ? "project" : "user";
     setEditorMode("create");
     setEditorOriginal(null);
-    setEditorScope("user");
+    setEditorScope(scopeMode);
     setFields(blank);
     setInitialFields(blank);
     setEditorTab("edit");
@@ -935,7 +940,6 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
           parentCatalogModels={parentCatalogModels}
           engineModels={engineModels}
           onChange={setFields}
-          onScopeChange={setEditorScope}
           onEditTab={() => setEditorTab("edit")}
           onPreviewTab={() => void openPreviewTab()}
           onCancel={closeEditor}
@@ -965,7 +969,6 @@ interface SubagentEditorDialogProps {
   /** Lazily-fetched per-engine model list (component-cached; see SubagentsPane's own effect). */
   engineModels: Partial<Record<SubagentEngine, EngineModelChoice[]>>;
   onChange: (fields: SubagentEditorFields) => void;
-  onScopeChange: (scope: SubagentScope) => void;
   onEditTab: () => void;
   onPreviewTab: () => void;
   onCancel: () => void;
@@ -986,7 +989,6 @@ function SubagentEditorDialog({
   parentCatalogModels,
   engineModels,
   onChange,
-  onScopeChange,
   onEditTab,
   onPreviewTab,
   onCancel,
@@ -1075,19 +1077,15 @@ function SubagentEditorDialog({
           </span>
         </label>
 
+        {/* Taskana 4706: the create-mode scope radio is gone — the write
+            target is the pane's header scope bar (ScopeSwitcher), restated
+            here as a hint so the dialog itself names where the profile will
+            land; `scope` still rides into `buildCreateRequest` unchanged. */}
         {mode === "create" && (
-          <div className="settings-field">
-            <span className="settings-field-label">Scope</span>
-            <div className="mcp-radio-row">
-              <label>
-                <input type="radio" name="subagent-scope" checked={scope === "user"} onChange={() => onScopeChange("user")} />
-                Personal
-              </label>
-              <label title={workspace}>
-                <input type="radio" name="subagent-scope" checked={scope === "project"} onChange={() => onScopeChange("project")} />
-                {workspaceScopeBadgeLabel(workspace)}
-              </label>
-            </div>
+          <div className="mcp-row-hint" title={workspace}>
+            {scope === "project"
+              ? `Creating in this project's workspace · ${workspaceScopeBadgeLabel(workspace)}`
+              : "Creating in your personal subagents"}
           </div>
         )}
 

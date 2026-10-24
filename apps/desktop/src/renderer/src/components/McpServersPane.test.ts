@@ -22,7 +22,6 @@ import {
   buildDeleteRequest,
   canManageMcpEntry,
   canSubmitMcpForm,
-  defaultMcpScope,
   mcpEmptyKind,
   defaultImportSelection,
   describeMcpConfigRow,
@@ -401,16 +400,6 @@ describe("buildDeleteRequest / buildFormUpsertRequest", () => {
 
 // ── import scan/select/group ──
 
-describe("defaultMcpScope", () => {
-  it("yields project when main reports a resolvable workspace", () => {
-    expect(defaultMcpScope(true)).toBe("project");
-  });
-
-  it("yields user when it does not — tabId presence is never the proxy (the removed bug)", () => {
-    expect(defaultMcpScope(false)).toBe("user");
-  });
-});
-
 describe("mcpEmptyKind", () => {
   it("reads none when nothing is configured and no query is active", () => {
     expect(mcpEmptyKind(0, 0, "")).toBe("none");
@@ -496,6 +485,21 @@ describe("buildImportApplyRequest (forced-disabled import flow, consent off/on)"
     expect(request).toEqual({ tabId: "tab-1", scope: "project", ids: ["a", "b"], includeEnvValues: true });
   });
 
+  // ── Taskana 4706: the scope radios are gone from the dialog — the pane now
+  // feeds the resolved scope-bar mode straight into the builder. Both write
+  // targets pinned: Global mode (no tabId ⇒ scopeMode "user") writes the USER
+  // config; Project mode (tabId present ⇒ "project") writes the project's. ──
+
+  it("Taskana 4706 Global mode: no tabId + 'user' scope — the write goes to the user (global) config", () => {
+    const request = buildImportApplyRequest(undefined, "user", { a: true }, false);
+    expect(request).toEqual({ tabId: undefined, scope: "user", ids: ["a"], includeEnvValues: false });
+  });
+
+  it("Taskana 4706 Project mode: tabId + 'project' scope — the write goes to the chosen tab's project config", () => {
+    const request = buildImportApplyRequest("t1", "project", { a: true }, false);
+    expect(request).toEqual({ tabId: "t1", scope: "project", ids: ["a"], includeEnvValues: false });
+  });
+
   it("an entry returned by import-apply is ALWAYS written disabled (W1/W2 guarantee) — the pane's join renders it 'off' either way", () => {
     // W1/W2 force `enabled:false` unconditionally on every applied entry
     // regardless of consent (config-write.ts's buildImportEntry) — this test
@@ -506,5 +510,37 @@ describe("buildImportApplyRequest (forced-disabled import flow, consent off/on)"
     const importedWithConsent = entry({ name: "codex-srv", enabled: false, envKeys: ["API_KEY"] });
     expect(describeMcpConfigRow(importedNoConsent, undefined)).toEqual({ kind: "off", detail: "disabled" });
     expect(describeMcpConfigRow(importedWithConsent, undefined)).toEqual({ kind: "off", detail: "disabled" });
+  });
+});
+
+// ── Taskana 4706: Global mode degradation — what the pane renders when
+// SettingsScreen passes `servers: []` (Global mode, or a non-active project
+// tab chosen). No new harness: the pure join/partition helpers ARE the
+// render's data path, so exercising them with an empty status list pins
+// exactly what the rows show. ──
+
+describe("Global mode degradation (Taskana 4706)", () => {
+  it("an enabled project entry with no runtime statuses renders neutral — 'applies to newly started tasks', never another tab's live dots", () => {
+    const rows = joinMcpRows([entry({ name: "ozon", source: "project", enabled: true })], []);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.dotKind).toBe("neutral");
+    expect(rows[0]!.detail).toBe("applies to newly started tasks");
+    expect(rows[0]!.status).toBeUndefined();
+    expect(toolsBadgeText(rows[0]!)).toBeUndefined();
+  });
+
+  it("user + compat entries still partition into configured/compat sections in Global mode", () => {
+    const rows = joinMcpRows(
+      [entry({ name: "mine", source: "user", enabled: true }), entry({ name: "legacy", source: "compat", enabled: true })],
+      [],
+    );
+    const { configured, compat } = partitionMcpRows(rows);
+    expect(configured.map((r) => r.entry.name)).toEqual(["mine"]);
+    expect(compat.map((r) => r.entry.name)).toEqual(["legacy"]);
+    // Both stay neutral in the statusless join — no stale/foreign dots leak in.
+    for (const row of [...configured, ...compat]) {
+      expect(row.dotKind).toBe("neutral");
+      expect(row.detail).toBe("applies to newly started tasks");
+    }
   });
 });

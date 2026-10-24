@@ -446,11 +446,7 @@ export function importFooterLabel(selection: Record<string, boolean>): string {
   return `Import ${n} server${n === 1 ? "" : "s"} (disabled until you enable them)`;
 }
 
-export function defaultMcpScope(projectAvailable: boolean): "project" | "user" {
-  return projectAvailable ? "project" : "user";
-}
-export type McpEmptyKind = "none" | "no_match" | null;
-/**
+export type McpEmptyKind = "none" | "no_match" | null;/**
  * "no_match" = the active query hid every configured row (or there are none but a query is active);
  * "none" = nothing configured and no active query (CTA state); null = rows visible.
  */
@@ -489,8 +485,15 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
   const [importScanResult, setImportScanResult] = useState<McpImportScanResult | null>(null);
   const [importSelection, setImportSelection] = useState<Record<string, boolean>>({});
   const [importConsent, setImportConsent] = useState(false);
-  const [importScope, setImportScope] = useState<"project" | "user">("user");
   const [importResults, setImportResults] = useState<McpImportApplyResultItem[] | null>(null);
+
+  // Taskana 4706: the pane's WRITE target follows the header scope bar — a
+  // tabId present means the bar resolved Project mode (SettingsScreen passes
+  // the chosen tab); absent means Global (user-only snapshot). The add form
+  // and the import dialog no longer carry their own scope radios; they seed
+  // from this mode and show a one-line hint instead, so a write can never
+  // land somewhere other than the visibly selected area.
+  const scopeMode = tabId !== undefined ? "project" : "user";
 
   useEffect(() => {
     let cancelled = false;
@@ -510,12 +513,11 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
   const { configured, compat } = partitionMcpRows(filtered);
   const allConfigured = partitionMcpRows(rows).configured;
   const emptyKind = mcpEmptyKind(allConfigured.length, configured.length, searchQuery);
-  const projectAvailable = snapshot?.projectAvailable ?? false; // never a tabId proxy; user-safe pre-snapshot
   const visibleProblems = (snapshot?.problems ?? []).filter((p) => !dismissedProblems.has(p));
 
   function openAddForm(): void {
     setFormError(null);
-    setForm({ mode: "add", fields: blankMcpFormFields(defaultMcpScope(projectAvailable)) });
+    setForm({ mode: "add", fields: blankMcpFormFields(scopeMode) });
   }
 
   function openEditForm(entry: McpConfigEntryView): void {
@@ -572,7 +574,6 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
     setImportOpen(true);
     setImportResults(null);
     setImportConsent(false);
-    setImportScope(defaultMcpScope(projectAvailable));
     const scan = await bridge.importScan({ tabId });
     setImportScanResult(scan);
     setImportSelection(defaultImportSelection(scan.candidates));
@@ -592,7 +593,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
     if (selectedImportIds(importSelection).length === 0) {
       return;
     }
-    const result = await bridge.importApply(buildImportApplyRequest(tabId, importScope, importSelection, importConsent));
+    const result = await bridge.importApply(buildImportApplyRequest(tabId, scopeMode, importSelection, importConsent));
     if (result.ok) {
       setSnapshot(result.snapshot);
       setImportResults(result.results);
@@ -708,7 +709,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
           mode={form.mode}
           fields={form.fields}
           error={formError}
-          projectAvailable={projectAvailable}
+          scopeMode={scopeMode}
           onChange={(fields) => setForm({ mode: form.mode, fields })}
           onCancel={() => setForm(null)}
           onSubmit={() => void submitForm()}
@@ -720,12 +721,10 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
           scan={importScanResult}
           selection={importSelection}
           consent={importConsent}
-          scope={importScope}
-          projectAvailable={projectAvailable}
+          scopeMode={scopeMode}
           results={importResults}
           onToggleRow={toggleImportRow}
           onConsentChange={setImportConsent}
-          onScopeChange={setImportScope}
           onApply={() => void applyImport()}
           onClose={closeImportDialog}
         />
@@ -830,13 +829,14 @@ interface McpFormDialogProps {
   mode: "add" | "edit";
   fields: McpFormFields;
   error: string | null;
-  projectAvailable: boolean;
+  /** Taskana 4706: the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
+  scopeMode: "project" | "user";
   onChange: (fields: McpFormFields) => void;
   onCancel: () => void;
   onSubmit: () => void;
 }
 
-function McpFormDialog({ mode, fields, error, projectAvailable, onChange, onCancel, onSubmit }: McpFormDialogProps) {
+function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCancel, onSubmit }: McpFormDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -905,26 +905,14 @@ function McpFormDialog({ mode, fields, error, projectAvailable, onChange, onCanc
           />
         </label>
 
+        {/* Taskana 4706: the scope radio is gone — the write target is the
+            pane's header scope bar (ScopeSwitcher), restated here as a hint so
+            the dialog itself names where the entry will land. Add mode only:
+            an EDIT keeps the row's own source (badge-visible), while an add's
+            scope is exactly the pane mode that seeded these fields. */}
         {mode === "add" && (
-          <div className="settings-field">
-            <span className="settings-field-label">Scope</span>
-            <div className="mcp-radio-row">
-              <label>
-                <input
-                  type="radio"
-                  name="mcp-scope"
-                  checked={fields.scope === "project"}
-                  disabled={!projectAvailable}
-                  onChange={() => set("scope", "project")}
-                />
-                Project
-              </label>
-              <label>
-                <input type="radio" name="mcp-scope" checked={fields.scope === "user"} onChange={() => set("scope", "user")} />
-                User
-              </label>
-            </div>
-            {!projectAvailable && <div className="mcp-row-hint">No workspace open — project scope unavailable.</div>}
+          <div className="mcp-row-hint">
+            Adding to {scopeMode === "project" ? "this project's config" : "your global (user) config"}
           </div>
         )}
 
@@ -1065,12 +1053,11 @@ interface McpImportDialogProps {
   scan: McpImportScanResult | null;
   selection: Record<string, boolean>;
   consent: boolean;
-  scope: "project" | "user";
-  projectAvailable: boolean;
+  /** Taskana 4706: the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
+  scopeMode: "project" | "user";
   results: McpImportApplyResultItem[] | null;
   onToggleRow: (id: string) => void;
   onConsentChange: (checked: boolean) => void;
-  onScopeChange: (scope: "project" | "user") => void;
   onApply: () => void;
   onClose: () => void;
 }
@@ -1079,12 +1066,10 @@ function McpImportDialog({
   scan,
   selection,
   consent,
-  scope,
-  projectAvailable,
+  scopeMode,
   results,
   onToggleRow,
   onConsentChange,
-  onScopeChange,
   onApply,
   onClose,
 }: McpImportDialogProps) {
@@ -1160,25 +1145,13 @@ function McpImportDialog({
               </div>
             ))}
 
+            {/* Taskana 4706: the "Add to" radio is gone — the write target is
+                the pane's header scope bar (ScopeSwitcher), restated here as a
+                hint so the dialog itself names where imports will land. */}
             <div className="mcp-import-scope">
-              <span className="settings-field-label">Add to</span>
-              <div className="mcp-radio-row">
-                <label>
-                  <input type="radio" name="mcp-import-scope" checked={scope === "user"} onChange={() => onScopeChange("user")} />
-                  User
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="mcp-import-scope"
-                    checked={scope === "project"}
-                    disabled={!projectAvailable}
-                    onChange={() => onScopeChange("project")}
-                  />
-                  Project
-                </label>
+              <div className="mcp-row-hint">
+                Adding to {scopeMode === "project" ? "this project's config" : "your global (user) config"}
               </div>
-              {!projectAvailable && <div className="mcp-row-hint">No workspace open — project scope unavailable.</div>}
             </div>
 
             <label className="mcp-consent-row">
