@@ -292,7 +292,15 @@ export async function getState(
   return { snapshot, tabs: deps.manager.listTabs(), childRuns: deps.manager.listChildRuns?.() ?? [] };
 }
 
-/** `GET /state/:tabId`: same, narrowed to one tab on both planes. `childRuns` stays UN-narrowed (the projection's own fields have no `tabId` to filter on — see `ChildRunSummary`'s doc). */
+/**
+ * `GET /state/:tabId`: same, narrowed to one tab on both planes. `childRuns`
+ * stays UN-narrowed (the projection's own fields have no `tabId` to filter
+ * on — see `ChildRunSummary`'s doc). Taskana 4265: a facade snapshot carrying
+ * `childStates` narrows them too — a ROOT tabId also returns its children
+ * (matched by `child.parentTabId`), a CHILD tabId returns just itself in
+ * `childStates`; a pre-4265 facade snapshot (no `childStates`) is passed
+ * through untouched (no key added).
+ */
 export async function getStateForTab(
   deps: HandlerDeps,
   tabId: string,
@@ -302,12 +310,16 @@ export async function getStateForTab(
     tabs: unknown;
     activeTabId: unknown;
     states: Record<string, unknown>;
+    childStates?: Record<string, { child?: { parentTabId?: string } }>;
   };
   const state = full.states?.[tabId];
   const narrowed = {
     tabs: full.tabs,
     activeTabId: full.activeTabId,
     states: state !== undefined ? { [tabId]: state } : {},
+    ...(full.childStates !== undefined
+      ? { childStates: Object.fromEntries(Object.entries(full.childStates).filter(([id, s]) => id === tabId || s.child?.parentTabId === tabId)) }
+      : {}),
   };
   return {
     snapshot: narrowed,
@@ -1606,8 +1618,13 @@ export async function waitFor(
   const start = now();
 
   for (;;) {
-    const snapshot = (await deps.callFacade("snapshot", [])) as { states: Record<string, WaitTabState> };
-    const state = snapshot.states?.[tabId];
+    // Taskana 4265: a child tab's state lives in `childStates`, never in
+    // `states` — `/wait` accepts a child tabId too, so both are consulted.
+    const snapshot = (await deps.callFacade("snapshot", [])) as {
+      states: Record<string, WaitTabState>;
+      childStates?: Record<string, WaitTabState>;
+    };
+    const state = snapshot.states?.[tabId] ?? snapshot.childStates?.[tabId];
     if (matchesUntil(state, until)) {
       return { matched: true, elapsedMs: now() - start, state: state ?? null };
     }

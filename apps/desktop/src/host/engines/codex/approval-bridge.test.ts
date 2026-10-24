@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BASH_RISK_PLAQUE, SessionPermissionRules, bashRiskPlaque, bashWriteCapablePlaque } from "@anycode/core";
+import { BASH_RISK_PLAQUE, NodeFileSystemAdapter, SessionPermissionRules, bashRiskPlaque, bashWriteCapablePlaque } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import {
@@ -12,6 +13,7 @@ import {
   quoteArgvElement,
   type ActiveCodexTurn,
 } from "./approval-bridge.js";
+import type { CodexPatchAutoApprovalContext } from "./patch-auto-approval.js";
 import type { JsonRpcServerRequest } from "./protocol.js";
 import { TurnItemIndex } from "./turn-item-index.js";
 
@@ -659,5 +661,184 @@ describe("CodexApprovalBridge — risk plaque for commandExecution approvals (Ta
     expect(bashRiskPlaque("CodexExec", presented.input)).toBeNull(); // plaque agrees with the metadata
     broker.handleResponse(presented.requestId, "deny");
     await flush();
+  });
+});
+
+/**
+ * Taskana 4265: a file change whose every target is realpath-provably inside
+ * the session workspace — under a policy that already allows workspace
+ * writes — is accepted without asking. Everything else still asks, exactly
+ * as before. Real tmp workspace (realpath containment), async fs settled via
+ * vi.waitFor.
+ */
+describe("CodexApprovalBridge — workspace patch auto-accept (Taskana 4265)", () => {
+  let WS = "";
+  let OUTSIDE = "";
+  const patchFs = new NodeFileSystemAdapter();
+
+  beforeEach(async () => {
+    WS = await fsp.realpath(await fsp.mkdtemp(join(tmpdir(), "p4265-bridge-")));
+    OUTSIDE = await fsp.realpath(await fsp.mkdtemp(join(tmpdir(), "p4265-out-")));
+    await fsp.writeFile(join(WS, "a.ts"), "a\n", "utf8");
+  });
+
+  afterEach(async () => {
+    for (const dir of [WS, OUTSIDE]) {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  function fileItem(path: string): TurnItemIndex {
+    const items = new TurnItemIndex();
+    items.record({
+      type: "fileChange",
+      id: "item-file",
+      status: "inProgress",
+      changes: [{ path, kind: { type: "add" }, diff: "x" }],
+    });
+    return items;
+  }
+
+  function patchCtx(over: Partial<CodexPatchAutoApprovalContext> = {}): CodexPatchAutoApprovalContext {
+    return { fs: patchFs, workspace: WS, workspaceWritesAllowed: true, rules: null, activePresetId: () => "ask", ...over };
+  }
+
+  function rig4265(
+    items: TurnItemIndex,
+    options: { patchAutoApproval?: CodexPatchAutoApprovalContext; activeTurn?: () => ActiveCodexTurn | null } = {},
+  ) {
+    const emitted: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message));
+    const activeTurn = options.activeTurn ?? (() => ({ ...ACTIVE, items }));
+    const bridge = new CodexApprovalBridge({
+      broker,
+      activeTurn,
+      ...(options.patchAutoApproval !== undefined ? { patchAutoApproval: options.patchAutoApproval } : {}),
+    });
+    return { bridge, broker, emitted };
+  }
+
+  it("accepts a provably in-workspace patch without asking", async () => {
+    const { bridge, broker, emitted } = rig4265(fileItem(join(WS, "a.ts")), { patchAutoApproval: patchCtx() });
+    const response = responder();
+    bridge.handle(file(), response);
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
+    expect(response.result).toHaveBeenCalledWith({ decision: "accept" });
+    expect(response.error).not.toHaveBeenCalled();
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  // Cross-review M1 (Taskana 4265): a delete-kind patch asks even inside the
+  // workspace — core's edit-mode containment widens only Write/Edit and
+  // Claude's workspace tier is acceptEdits, so the codex child must not become
+  // the only posture that silently deletes contained files.
+  it("asks for a delete-kind patch even inside the workspace", async () => {
+    const items = new TurnItemIndex();
+    items.record({
+      type: "fileChange",
+      id: "item-file",
+      status: "inProgress",
+      changes: [{ path: join(WS, "a.ts"), kind: { type: "delete" }, diff: "-a" }],
+    });
+    const { bridge, broker, emitted } = rig4265(items, { patchAutoApproval: patchCtx() });
+    const response = responder();
+    bridge.handle(file(), response);
+    await vi.waitFor(() => expect(emitted.some((m) => m.type === "permission_request")).toBe(true));
+    expect(ask(emitted).toolName).toBe("CodexApplyPatch");
+    expect(response.result).not.toHaveBeenCalled();
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("still asks for a patch outside the workspace, and a deny settles it as decline", async () => {
+    const { bridge, broker, emitted } = rig4265(fileItem(join(OUTSIDE, "x.ts")), { patchAutoApproval: patchCtx() });
+    const response = responder();
+    bridge.handle(file(), response);
+    await vi.waitFor(() => expect(emitted.some((m) => m.type === "permission_request")).toBe(true));
+    expect(ask(emitted).toolName).toBe("CodexApplyPatch");
+    expect(response.result).not.toHaveBeenCalled();
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("asks when the policy does not pre-authorise workspace writes and no rule covers it", async () => {
+    const { bridge, broker, emitted } = rig4265(fileItem(join(WS, "a.ts")), {
+      patchAutoApproval: patchCtx({ workspaceWritesAllowed: false, rules: null }),
+    });
+    const response = responder();
+    bridge.handle(file(), response);
+    await vi.waitFor(() => expect(emitted.some((m) => m.type === "permission_request")).toBe(true));
+    expect(response.result).not.toHaveBeenCalled();
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("asks when no patchAutoApproval option is supplied (pre-4265 behaviour)", async () => {
+    const { bridge, broker, emitted } = rig4265(fileItem(join(WS, "a.ts")), {});
+    const response = responder();
+    bridge.handle(file(), response);
+    await vi.waitFor(() => expect(emitted.some((m) => m.type === "permission_request")).toBe(true));
+    expect(response.result).not.toHaveBeenCalled();
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("errors Stale (never accepts) when the active turn changes during the containment await", async () => {
+    let calls = 0;
+    const activeTurn = (): ActiveCodexTurn | null => {
+      calls += 1;
+      return calls <= 1 ? { ...ACTIVE, items: fileItem(join(WS, "a.ts")) } : null;
+    };
+    const { bridge, emitted } = rig4265(fileItem(join(WS, "a.ts")), { patchAutoApproval: patchCtx(), activeTurn });
+    const response = responder();
+    bridge.handle(file(), response);
+    await vi.waitFor(() => expect(response.error).toHaveBeenCalled());
+    expect(response.error).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("Stale") }));
+    expect(response.result).not.toHaveBeenCalled();
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
+  });
+
+  it.each([[""], [42], [{}]])("treats a non-null grantRoot %j as a grant request and asks", async (grantRoot) => {
+    const { bridge, broker, emitted } = rig4265(fileItem(join(WS, "a.ts")), { patchAutoApproval: patchCtx() });
+    const response = responder();
+    bridge.handle(file({ grantRoot }), response);
+    await vi.waitFor(() => expect(emitted.some((m) => m.type === "permission_request")).toBe(true));
+    expect(response.result).not.toHaveBeenCalled();
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
+  it("errors Stale (never parks an ask) when the turn ends during the await of a non-accepted patch", async () => {
+    let calls = 0;
+    const items = fileItem(join(OUTSIDE, "x.ts"));
+    const activeTurn = (): ActiveCodexTurn | null => {
+      calls += 1;
+      return calls <= 1 ? { ...ACTIVE, items } : null;
+    };
+    const { bridge, broker, emitted } = rig4265(items, { patchAutoApproval: patchCtx(), activeTurn });
+    const response = responder();
+    bridge.handle(file(), response);
+    await vi.waitFor(() => expect(response.error).toHaveBeenCalled());
+    expect(response.error).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("Stale") }));
+    expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it("a command approval still asks even with the policy present", async () => {
+    const { bridge, broker, emitted } = rig4265(new TurnItemIndex(), { patchAutoApproval: patchCtx() });
+    const response = responder();
+    bridge.handle(command({ command: "npm install", cwd: WS }), response);
+    await vi.waitFor(() => expect(emitted.some((m) => m.type === "permission_request")).toBe(true));
+    expect(ask(emitted).toolName).toBe("CodexExec");
+    expect(response.result).not.toHaveBeenCalled();
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
   });
 });

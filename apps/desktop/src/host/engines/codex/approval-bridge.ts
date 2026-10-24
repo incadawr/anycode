@@ -18,7 +18,11 @@
  * terminal transport failure (TASK.38 §4).
  *
  * Fail-closed still holds: every path that is not an explicit user allow ends
- * as a denial, and nothing is ever auto-approved.
+ * as a denial, and nothing is auto-approved except a file change that
+ * `shouldAutoAcceptPatch` (patch-auto-approval.ts, Taskana 4265) proves inside
+ * the workspace under a policy that already allows workspace writes — add/update
+ * changes only, a delete still asks (cross-review M1); without
+ * `patchAutoApproval` the bridge never auto-approves.
  */
 
 import { classifyBashCommandLine, isProvablyInsideWorkspace, NodeFileSystemAdapter, resolveWorkspaceWriteFacts } from "@anycode/core";
@@ -32,6 +36,7 @@ import {
   type JsonRpcError,
   type JsonRpcServerRequest,
 } from "./protocol.js";
+import { patchTargetPaths, shouldAutoAcceptPatch, type CodexPatchAutoApprovalContext } from "./patch-auto-approval.js";
 import { commandOf, fileChangesOf, type TurnItemIndex } from "./turn-item-index.js";
 import type { ServerRequestResponder } from "./app-server-client.js";
 
@@ -62,6 +67,13 @@ export interface CodexApprovalBridgeOptions {
    * construction / tests): no facts, same broker-side gate.
    */
   workspace?: string;
+  /**
+   * Taskana 4265: when supplied, a file-change approval whose every target is
+   * realpath-provably inside the session workspace — under a policy that
+   * already allows workspace writes — is accepted without asking. Absent =
+   * the bridge asks for every patch (the pre-4265 behaviour).
+   */
+  patchAutoApproval?: CodexPatchAutoApprovalContext;
 }
 
 type DecodedApproval = {
@@ -291,7 +303,7 @@ export class CodexApprovalBridge {
     // display projection — `paths` drops `kind.move_path`, so an update that
     // MOVES an inside file to an outside destination would otherwise be proved
     // "inside" and ride a bare rule.
-    const paths = fileChangeTargets(item);
+    const paths = patchTargetPaths(item);
     if (paths === null) return request;
     let first: PermissionRequest["workspace"];
     for (const entry of paths) {
@@ -317,6 +329,31 @@ export class CodexApprovalBridge {
     if (active === null || active.threadId !== decoded.threadId || active.turnId !== decoded.turnId) {
       responder.error(denial("Stale Codex approval request"));
       return;
+    }
+    const ctx = this.options.patchAutoApproval;
+    if (ctx !== undefined && serverRequest.method === OBSERVED_FILE_CHANGE_APPROVAL_METHOD) {
+      const params = record(serverRequest.params);
+      // Fail closed: anything but an absent/null grantRoot (incl. "" or a non-string) is a grant request.
+      const rawGrantRoot = params?.grantRoot;
+      const grantRoot = rawGrantRoot === undefined || rawGrantRoot === null ? null : typeof rawGrantRoot === "string" ? rawGrantRoot : "<non-string>";
+      const itemId = decoded.request.toolCallId;
+      let accept = false;
+      try {
+        accept = await shouldAutoAcceptPatch(ctx, itemId === undefined ? undefined : active.items?.get(itemId), grantRoot);
+      } catch {
+        accept = false;
+      }
+      // Re-check after the fs await either way: a turn stopped meanwhile must not
+      // be accepted, nor park a fresh ask (denyAll already ran with nothing pending).
+      const still = this.options.activeTurn();
+      if (still === null || still.threadId !== decoded.threadId || still.turnId !== decoded.turnId) {
+        responder.error(denial("Stale Codex approval request"));
+        return;
+      }
+      if (accept) {
+        responder.result({ decision: "accept" });
+        return;
+      }
     }
     if (this.pending) {
       responder.error(denial("Codex approval request rejected: another approval is pending"));
@@ -359,34 +396,4 @@ function codexNeedsWorkspaceFacts(request: PermissionRequest, workspace: string 
   if (request.toolName !== "CodexApplyPatch") return false;
   const paths = (request.input as Record<string, unknown> | null)?.paths;
   return Array.isArray(paths) && paths.length > 0;
-}
-
-/**
- * Taskana 4294 review: every path a raw `fileChange` item would touch — each
- * change's `path` plus any string field of its `kind` (e.g. `move_path`, the
- * rename destination) — or null when the set cannot be enumerated with
- * certainty (malformed entry, non-string kind field). Fail-closed: null => no
- * facts => a bare rule cannot vouch.
- */
-function fileChangeTargets(item: Record<string, unknown> | undefined): string[] | null {
-  if (item === undefined || item.type !== "fileChange" || !Array.isArray(item.changes) || item.changes.length === 0) return null;
-  const targets: string[] = [];
-  for (const entry of item.changes) {
-    if (entry === null || typeof entry !== "object") return null;
-    const change = entry as Record<string, unknown>;
-    if (typeof change.path !== "string" || change.path.length === 0) return null;
-    targets.push(change.path);
-    const kind = change.kind;
-    if (kind === undefined || kind === null) continue;
-    if (typeof kind !== "object") return null;
-    for (const [key, value] of Object.entries(kind as Record<string, unknown>)) {
-      if (key === "type" || value === null || value === undefined) continue;
-      if (typeof value === "string" && value.length > 0) {
-        targets.push(value);
-        continue;
-      }
-      return null;
-    }
-  }
-  return targets;
 }

@@ -261,11 +261,30 @@ export function snapshotTranscript(blocks: readonly TranscriptBlock[]): Snapshot
   );
 }
 
+/**
+ * Taskana 4265: a live child tab's state (never in tabsStore) plus its
+ * relation to the parent. A child session's store exists only in the tab
+ * registry (tab-registry.ts's child registration path deliberately skips
+ * `addTab`), so the facade snapshot carries children separately — `states`
+ * stays root-only (smokes assert that).
+ */
+export interface ChildTabStateSnapshot extends TabStateSnapshot {
+  child: { parentTabId: string; parentSessionId: string; spawnToolCallId: string; childSessionId: string };
+}
+
 /** Return shape of `snapshot()` (design §3.2). */
 export interface SnapshotJson {
   tabs: TabInfo[];
   activeTabId: string | null;
   states: Record<string, TabStateSnapshot>;
+  /**
+   * Taskana 4265: keyed by childTabId; `states` stays root-only (smokes
+   * assert that). Each entry is the child tab's own state projection plus the
+   * `child` relation meta (parent/spawn/child session ids), so a supervisor
+   * can discover a codex child's pending approval and answer it precisely
+   * with `respondPermission(childTabId, …, requestId)`.
+   */
+  childStates: Record<string, ChildTabStateSnapshot>;
   /**
    * Reference copy of tabs-store's hidden-projects set (design/slice-GUI-P1-cut.md
    * §2F.5/§2F.1). Shell-level, NOT per-tab — `TabStateSnapshot` stays unchanged;
@@ -6796,22 +6815,17 @@ export function createAutomationFacade(
     snapshot(transcriptTail?: number): SnapshotJson {
       const { tabs, activeTabId, hiddenWorkspaces } = tabsStore.getState();
       const states: Record<string, TabStateSnapshot> = {};
-      for (const tab of tabs) {
-        const store = registry.getStore(tab.tabId);
-        if (!store) {
-          // Defensive only: registerPort/disposeTab keep the tabs-store row
-          // and the registry entry in lockstep, so this should never happen
-          // in practice (tab-registry.ts's own invariant).
-          continue;
-        }
-        const state = store.getState();
+      // Taskana 4265: the one per-tab projection both loops share — a child
+      // tab's store lives only in the registry, so `childStates` reuses the
+      // exact same field set on its own state.
+      const project = (state: ReturnType<DesktopStoreApi["getState"]>): TabStateSnapshot => {
         // Taskana 4091: live user_text blocks may carry `images` (base64) —
         // strip them to {mediaType, sourcePath?} so the snapshot stays
         // base64-free (same discipline as promptQueue/retryOffer).
         const transcript = snapshotTranscript(
           transcriptTail !== undefined && transcriptTail >= 0 ? state.transcript.slice(-transcriptTail) : state.transcript,
         );
-        states[tab.tabId] = {
+        return {
           connection: state.connection,
           workspace: state.workspace,
           model: state.model,
@@ -6842,8 +6856,27 @@ export function createAutomationFacade(
               ? { id: state.engine.id, model: state.engine.model?.current, activePresetId: state.engine.permissions?.activePresetId }
               : undefined,
         };
+      };
+      for (const tab of tabs) {
+        const store = registry.getStore(tab.tabId);
+        if (!store) {
+          // Defensive only: registerPort/disposeTab keep the tabs-store row
+          // and the registry entry in lockstep, so this should never happen
+          // in practice (tab-registry.ts's own invariant).
+          continue;
+        }
+        states[tab.tabId] = project(store.getState());
       }
-      return { tabs, activeTabId, states, hiddenWorkspaces };
+      // Taskana 4265: children were never in tabsStore (the child
+      // registration path skips addTab by design), so they are enumerated
+      // through the registry's own child seam instead.
+      const childStates: Record<string, ChildTabStateSnapshot> = {};
+      for (const { tabId, child } of registry.listChildTabs()) {
+        const store = registry.getStore(tabId);
+        if (!store) continue;
+        childStates[tabId] = { ...project(store.getState()), child: { ...child } };
+      }
+      return { tabs, activeTabId, states, childStates, hiddenWorkspaces };
     },
 
     steerPrompt(tabId: string, text: string): { ok: true; requestId: string } | FacadeErr {

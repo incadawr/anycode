@@ -34,6 +34,7 @@ import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../session-engine.js";
 import type { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js";
+import type { CodexPatchAutoApprovalPolicy } from "./patch-auto-approval.js";
 import { AppServerClient, type AppServerClientOptions } from "./app-server-client.js";
 import { CodexModelCatalog } from "./catalog.js";
 import { TurnTranslator } from "./event-translator.js";
@@ -378,6 +379,8 @@ export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "
   bootstrap: EngineBootstrap;
   workspace: string;
   broker: IpcPermissionBroker;
+  /** Taskana 4265: policy for accepting a provably in-workspace file change without asking; absent = always ask. */
+  patchAutoApproval?: CodexPatchAutoApprovalPolicy;
   timeouts?: Partial<CodexEngineTimeouts>;
   /** Draft (new session) or persisted (resume) model/preset choice; validated host-side, never trusted. */
   selection?: CodexSessionSelection;
@@ -697,6 +700,9 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
     // Taskana 4294 (cross-review F1): the thread's cwd is the boot workspace,
     // so fileChange approvals mint containment facts against that root.
     workspace: options.workspace,
+    ...(options.patchAutoApproval !== undefined
+      ? { patchAutoApproval: { ...options.patchAutoApproval, workspace: options.workspace, activePresetId: () => engine?.snapshot().activePresetId ?? null } }
+      : {}),
   });
   const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
     const owner = engine?.activeTurnDetails ?? null;
@@ -725,6 +731,9 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
     // Taskana 4294 (cross-review F1): the thread's cwd is the boot workspace,
     // so fileChange approvals mint containment facts against that root.
     workspace: options.workspace,
+    ...(options.patchAutoApproval !== undefined
+      ? { patchAutoApproval: { ...options.patchAutoApproval, workspace: options.workspace, activePresetId: () => engine?.snapshot().activePresetId ?? null } }
+      : {}),
   });
   const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
     const owner = engine?.activeTurnDetails ?? null;

@@ -64,3 +64,26 @@ export function codexChildPosture(mode: PermissionMode): "read-only" | "ask" {
       return "ask";
   }
 }
+
+/**
+ * Taskana 4265: whether a codex child's boot policy pre-authorises EDITS
+ * inside its own workspace — mirroring Claude's `workspace` tier
+ * (acceptEdits, `claudeChildPresetId` above) and core edit-mode containment
+ * (Write/Edit only). The auto-accept this gates is edit-parity, not a broader
+ * licence: a delete-kind patch still asks (cross-review M1 — neither core's
+ * Write/Edit-only containment nor acceptEdits silently deletes; the codex
+ * child must not become the only posture that does). `build`/`plan`
+ * deliberately keep asking for every patch (same posture a core build-mode
+ * child gets).
+ */
+export function codexChildAutoAcceptsWorkspacePatches(mode: PermissionMode): boolean {
+  switch (mode) {
+    case "plan":
+    case "build":
+      return false;
+    case "edit":
+    case "auto":
+    case "yolo":
+      return true;
+  }
+}
