@@ -1917,6 +1917,22 @@ describe("AgentLoop.runTurn — TASK.4055 adaptive budget", () => {
     expect(modelPort.requests).toHaveLength(5);
   });
 
+  it("a round-1 read-only verdict with an empty remaining list is verdict_rejected, not stalled", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1", "Reader"),
+      toolTurnStep("c2", "Reader"),
+      verdictStep([]), // not done, nothing remaining: a bad verdict, not a stall
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry, ceiling: { adaptive: true } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "verdict_rejected", turn: 2, round: 1 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 2 });
+  });
+
   it("a stalled round with a productive MIX still refuses stalled only when nothing productive happened; productive progress without shortening grants", async () => {
     // Round 2 with productive work and an UNSHORTENED remaining list: the
     // adaptive gate must grant (the old ladder's strict-shortening would not).

@@ -771,6 +771,35 @@ describe("parseChildTerminal", () => {
     expect("declaredDoneAtCeiling" in (parseChildRunEvent(plain) ?? {})).toBe(false);
   });
 
+  it("round-trips a ceiling summary on ChildTerminal and ChildRunEvent terminal; rejects malformed ones (TASK.240/4055)", () => {
+    const ceiling = { rounds: 2, grantedTurns: 6, lastRefusal: "stalled" as const };
+    const withCeiling = { ...valid, status: "max_turns" as const, ceiling };
+    expect(parseChildTerminal(withCeiling)).toEqual(withCeiling);
+    expect(parseChildTerminal({ ...withCeiling, ceiling: { rounds: 1, grantedTurns: 2 } })).toEqual({
+      ...withCeiling,
+      ceiling: { rounds: 1, grantedTurns: 2 },
+    });
+    expect(parseChildTerminal({ ...withCeiling, ceiling: { ...ceiling, lastRefusal: "bogus" } })).toBeNull();
+    expect(parseChildTerminal({ ...withCeiling, ceiling: { ...ceiling, remaining: ["a"] } })).toBeNull();
+    expect(parseChildTerminal({ ...withCeiling, ceiling: { rounds: -1, grantedTurns: 0 } })).toBeNull();
+    expect("ceiling" in (parseChildTerminal(valid) ?? {})).toBe(false);
+    const event = {
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "terminal" as const,
+      status: "max_turns" as const,
+      finalText: "done",
+      truncated: false,
+      turns: 3,
+      toolCalls: 9,
+      durationMs: 1200,
+      childSessionId: "sess-1",
+      ceiling,
+    };
+    expect(parseChildRunEvent(event)).toEqual(event);
+    expect(parseChildRunEvent({ ...event, ceiling: "x" })).toBeNull();
+  });
+
   // TASK.219: additive model/responseModel on terminal payloads — legacy
   // payloads without them parse unchanged (keys stay absent); invalid types,
   // empty strings, and over-cap values are rejected with the same
