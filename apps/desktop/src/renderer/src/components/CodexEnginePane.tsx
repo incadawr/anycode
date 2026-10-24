@@ -51,11 +51,17 @@ export interface CodexOnboardingSnapshot {
   binaryPath: string | null;
   source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
+  /** Taskana 4092 (TASK.85): alternate-binary candidates the error card may offer — absent when the ladder found none. */
+  alternates?: Array<{ path: string; source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none" }>;
 }
 
 export type CodexPickBinaryResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
+
+export type CodexUseBinaryResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "invalid" };
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
@@ -142,7 +148,14 @@ export function describeCodexReportStatus(report: CodexDoctorReport | undefined)
     case "not_installed":
       return { headline: "Not installed", detail: "No Codex CLI was found on PATH or in common install locations.", tone: "muted" };
     case "error":
-      return { headline: "Error", detail: report.error ?? "Codex could not be checked.", tone: "error" };
+      // Taskana 4092 (TASK.85): the typed 127/node-shebang diagnosis carries
+      // its own hint — rendered from the STRUCTURED field, never from
+      // string-matching `error` (the same D-S4-6 rule the trust card follows).
+      return {
+        headline: "Error",
+        detail: report.nodeUnavailable !== undefined ? report.nodeUnavailable.hint : report.error ?? "Codex could not be checked.",
+        tone: "error",
+      };
     default: {
       const exhaustive: never = report.status;
       return exhaustive;
@@ -184,6 +197,17 @@ export function formatBinarySourceLabel(source: CodexOnboardingSnapshot["source"
  */
 export function canSignIn(report: CodexDoctorReport | undefined, profile?: CodexProfileRecord): boolean {
   return report?.status === "signed_out" && profile?.authLink === undefined;
+}
+
+/** True iff this error report is the typed 127/node-shebang diagnosis (Taskana 4092) — structured field only, never string-matching `error`. */
+export function isNodeUnavailableReport(report: CodexDoctorReport | undefined): boolean {
+  return report?.status === "error" && report.nodeUnavailable !== undefined;
+}
+
+/** The alternate-binary list a card may offer: snapshot alternates minus the currently-saved path, max 3, winner-shaped. */
+export function alternateBinaryChoices(snapshot: CodexOnboardingSnapshot | null): Array<{ path: string; source: CodexOnboardingSnapshot["source"] }> {
+  const current = snapshot?.binaryPath ?? null;
+  return (snapshot?.alternates ?? []).filter((alt) => alt.path !== current).slice(0, 3);
 }
 
 /**
@@ -472,6 +496,8 @@ export interface CodexBridge {
   /** TASK.65: `force` bypasses main's doctor TTL cache (the explicit "Recheck all"); a mount-time refresh omits it so a re-check inside the TTL reuses the cached verdict. */
   recheck(profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
+  /** Taskana 4092 (TASK.85): adopt one of the snapshot's alternates (or any explicit path) — the error card's "Use <path>" buttons. A user gesture per switch; never a silent substitution. */
+  useBinary(binaryPath: string): Promise<CodexUseBinaryResult>;
   loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
   onLoginProgress?(callback: (progress: CodexDeviceCodeProgress) => void): () => void;
   loginCancel(): Promise<void>;
@@ -710,6 +736,27 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     }
   }
 
+  // Taskana 4092 (TASK.85): adopt one of the snapshot's alternate candidates.
+  // An EXPLICIT user gesture per click — never a silent substitution (the
+  // TASK.85 trust invariant): main persists it as source "picker", the same
+  // rung a file-dialog choice lands on.
+  async function useAlternate(path: string): Promise<void> {
+    setNotice(null);
+    setBusy(true);
+    try {
+      const result = await bridge.useBinary(path);
+      if (result.ok) {
+        setBinarySnapshot(result.snapshot);
+        setReportsById((prev) => ({ ...prev, [SYSTEM_PROFILE_ID]: result.snapshot.report }));
+        await refreshAll();
+      } else {
+        setNotice(result.reason === "busy" ? "A check is already running — try again in a moment." : "That file is not a usable codex executable.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function installBinary(version?: string): Promise<void> {
     setNotice(null);
     setBusy(true);
@@ -944,6 +991,18 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
         <p className="settings-page-description">
           <code>{binarySnapshot.binaryPath}</code> ({formatBinarySourceLabel(binarySnapshot.source)})
         </p>
+      )}
+      {isNodeUnavailableReport(binarySnapshot?.report) && binarySnapshot?.report.nodeUnavailable && (
+        <div className="settings-notice" role="alert">{binarySnapshot.report.nodeUnavailable.hint}</div>
+      )}
+      {alternateBinaryChoices(binarySnapshot).length > 0 && (binarySnapshot?.report.status === "error" || binarySnapshot?.report.status === "update_required") && (
+        <div className="settings-field-row">
+          {alternateBinaryChoices(binarySnapshot).map((alt) => (
+            <button key={alt.path} type="button" className="settings-button" disabled={busy} onClick={() => void useAlternate(alt.path)}>
+              Use {alt.path}
+            </button>
+          ))}
+        </div>
       )}
       {support && (
         <p className="settings-page-description">

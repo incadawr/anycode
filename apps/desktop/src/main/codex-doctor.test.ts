@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { CodexRpcClient, augmentPathForGui, buildDoctorChildEnv, projectCodexRateLimits, runCodexDoctor } from "./codex-doctor.js";
+import { CodexRpcClient, augmentPathForGui, buildDoctorChildEnv, isNodeShebangUnavailable, projectCodexRateLimits, runCodexDoctor } from "./codex-doctor.js";
 import { manifestSupportedRange, resetActiveCodexVersionPolicy, setActiveCodexVersionPolicy } from "./codex-manifest.js";
 import { BUNDLED_CODEX_MANIFEST, type CodexSupportManifest } from "../shared/codex-support.js";
 
@@ -208,6 +208,44 @@ describe("augmentPathForGui", () => {
   });
 });
 
+describe("isNodeShebangUnavailable (Taskana 4092 — typed 127 verdict)", () => {
+  /** Scratch shim under the suite's own scratchDir — only file BYTES matter here, the exec bit never does (the classifier reads, never execs). */
+  const writeShim = (name: string, firstLine: string): string => {
+    const path = join(scratchDir, name);
+    writeFileSync(path, `${firstLine}\nprocess.exit(127);\n`);
+    return path;
+  };
+
+  it("returns false for a non-127 exit code (126)", () => {
+    const shim = writeShim("shim-126", "#!/usr/bin/env node");
+    expect(isNodeShebangUnavailable(shim, 126)).toBe(false);
+  });
+
+  it("returns false for a null exit code (killed/spawn-error lane)", () => {
+    const shim = writeShim("shim-null", "#!/usr/bin/env node");
+    expect(isNodeShebangUnavailable(shim, null)).toBe(false);
+  });
+
+  it("returns true for exit 127 on a #!/usr/bin/env node script", () => {
+    const shim = writeShim("shim-node", "#!/usr/bin/env node");
+    expect(isNodeShebangUnavailable(shim, 127)).toBe(true);
+  });
+
+  it("returns true for a spaced env shebang on 127 (env -S forms stay in scope)", () => {
+    const shim = writeShim("shim-node-spaced", "#!/usr/bin/env node");
+    expect(isNodeShebangUnavailable(shim, 127)).toBe(true);
+  });
+
+  it("returns false for exit 127 on a non-node shebang (#!/bin/sh)", () => {
+    const shim = writeShim("shim-sh", "#!/bin/sh");
+    expect(isNodeShebangUnavailable(shim, 127)).toBe(false);
+  });
+
+  it("returns false for exit 127 when the file cannot be read (missing path)", () => {
+    expect(isNodeShebangUnavailable(join(scratchDir, "no-such-shim-127"), 127)).toBe(false);
+  });
+});
+
 describe("runCodexDoctor", () => {
   it("reports ready with account + paginated models on a compatible, signed-in CLI", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn() });
@@ -400,6 +438,34 @@ describe("runCodexDoctor", () => {
       versionTimeoutMs: 150 });
     expect(report.status).toBe("error");
     expect(report.error).toMatch(/timed out/i);
+  });
+
+  // Taskana 4092 (TASK.85): the typed 127 verdict. A REAL scratch shim with
+  // node-shebang bytes + a spawner that exits 127 must diagnose
+  // nodeUnavailable. The classifier keys on FILE bytes + exitCode only — the
+  // shim needs no exec bit because nothing here ever execve's it.
+  it("diagnoses nodeUnavailable when a node-shebang binary exits 127 in the version preflight", async () => {
+    const shimPath = join(scratchDir, "shim-codex");
+    writeFileSync(shimPath, "#!/usr/bin/env node\nprocess.exit(127);\n");
+    const spawnImpl = (_command: string, _args: readonly string[], options: SpawnOptions): ChildProcess =>
+      spawn(process.execPath, ["-e", "process.exit(127)"], options);
+    const report = await runCodexDoctor(shimPath, { trust: TRUSTED, spawnImpl });
+    expect(report.status).toBe("error");
+    expect(report.error).toBe("Codex version check exited with code 127");
+    expect(report.nodeUnavailable).toBeDefined();
+    expect(report.nodeUnavailable?.binaryPath).toBe(shimPath);
+    expect(report.nodeUnavailable?.exitCode).toBe(127);
+    expect(report.nodeUnavailable?.hint).toContain("node");
+  });
+
+  // Negative control: the fixture path has NO real file bytes for the
+  // classifier to read — exit code 127 alone must NOT produce the typed
+  // diagnosis; the report stays the raw legacy shape.
+  it("keeps the raw error (no nodeUnavailable) for a 127 exit on a path with no readable shebang bytes", async () => {
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--exit-127"]) });
+    expect(report.status).toBe("error");
+    expect(report.error).toBe("Codex version check exited with code 127");
+    expect(report.nodeUnavailable).toBeUndefined();
   });
 
   it("caps model/list pagination at the configured page limit against a server that never stops paginating", async () => {

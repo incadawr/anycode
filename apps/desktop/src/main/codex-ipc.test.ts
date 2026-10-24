@@ -217,6 +217,55 @@ describe("createCodexOnboardingController.pickBinary", () => {
   });
 });
 
+describe("createCodexOnboardingController.useBinary (Taskana 4092)", () => {
+  it("adopts an explicit absolute path: doctor run against it, picker-source persistence, one snapshot event", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "ready" as const, version: "0.144.3" }));
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    const result = await controller.useBinary("/x/codex");
+    expect(result).toMatchObject({ ok: true });
+    expect(runDoctor).toHaveBeenCalledWith("/x/codex", expect.anything());
+    expect(deps.writtenPatches).toEqual([
+      { binaryPath: "/x/codex", lastCheck: { status: "ready", version: "0.144.3", at: expect.any(String) } },
+    ]);
+    expect(deps.snapshots).toHaveLength(1);
+    expect(result.ok && result.snapshot.source).toBe("picker");
+  });
+
+  it("returns invalid for a relative path — zero doctor runs, zero writes", async () => {
+    const runDoctor = vi.fn();
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    const result = await controller.useBinary("relative/codex");
+    expect(result).toEqual({ ok: false, reason: "invalid" });
+    expect(runDoctor).not.toHaveBeenCalled();
+    expect(deps.writtenPatches).toEqual([]);
+  });
+
+  it("returns invalid for an empty/whitespace path via the controller", async () => {
+    const runDoctor = vi.fn();
+    const deps = makeDeps({ runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    const result = await controller.useBinary("   ");
+    expect(result).toEqual({ ok: false, reason: "invalid" });
+    expect(runDoctor).not.toHaveBeenCalled();
+  });
+
+  it("stamps the deps seam's alternates onto a recheck snapshot", async () => {
+    const deps = makeDeps({ discoverAlternates: () => [{ path: "/alt/codex", source: "common" }] });
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect(snapshot.alternates).toEqual([{ path: "/alt/codex", source: "common" }]);
+  });
+
+  it("a deps WITHOUT the seam keeps the legacy snapshot shape — no alternates key", async () => {
+    const deps = makeDeps();
+    const controller = createCodexOnboardingController(deps);
+    const snapshot = await controller.recheck();
+    expect("alternates" in snapshot).toBe(false);
+  });
+});
+
 describe("createCodexOnboardingController.loginStart / loginCancel", () => {
   it("refuses unsupported when no binary is discoverable", async () => {
     const deps = makeDeps({ bootEnv: { PATH: "", HOME: "" }, fs: noBinaryFs });

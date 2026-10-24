@@ -53,6 +53,7 @@ import type { CodexProfileRecord, TrustedBinaryConsent } from "../shared/setting
 
 export const CODEX_RECHECK_CHANNEL = "anycode:codex-recheck";
 export const CODEX_PICK_BINARY_CHANNEL = "anycode:codex-pick-binary";
+export const CODEX_USE_BINARY_CHANNEL = "anycode:codex-use-binary";
 export const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
 export const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
 export const CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL = "anycode:codex-login-open-device-page";
@@ -76,11 +77,21 @@ export interface CodexOnboardingSnapshot {
   source: CodexBinarySource;
   /** ISO timestamp of this check. */
   checkedAt: string;
+  /**
+   * Taskana 4092 (TASK.85): the OTHER resolvable ladder candidates a card may
+   * offer as explicit "use this instead" buttons. Absent when the ladder found
+   * none (or the caller passed none) — never persisted, snapshot-only.
+   */
+  alternates?: Array<{ path: string; source: CodexBinarySource }>;
 }
 
 export type CodexPickBinaryResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
+
+export type CodexUseBinaryResult =
+  | { ok: true; snapshot: CodexOnboardingSnapshot }
+  | { ok: false; reason: "busy" | "invalid" };
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
@@ -172,6 +183,15 @@ export interface CodexIpcDeps {
    * once). Absent = legacy behavior, byte-identical.
    */
   refreshPolicyBeforeRefusal?: () => Promise<boolean>;
+  /**
+   * Taskana 4092 (TASK.85): supplies the alternate-binary candidates stamped
+   * onto snapshots. Optional so every existing deps object stays valid — absent
+   * means no `alternates` key on the snapshot (byte-identical legacy shape).
+   * `registerCodexIpc` wires the production default: the same discovery-ladder
+   * inputs `discoverAndCheck` uses, run through `discoverCodexBinary`'s
+   * alternates payload.
+   */
+  discoverAlternates?: () => Array<{ path: string; source: CodexBinarySource }>;
 }
 
 export interface CodexOnboardingController {
@@ -195,6 +215,14 @@ export interface CodexOnboardingController {
    */
   ensureChecked(profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
+  /**
+   * Taskana 4092 (TASK.85): adopts one of the snapshot's `alternates` (or any
+   * explicit user-supplied path) as the codex binary — the "Use <path>" button
+   * behind the error card's candidate list. A user gesture per switch, exactly
+   * like `pickBinary`, just without the file dialog; the run is serialized on
+   * the same `runExclusive` seam and persists through the same `picker` source.
+   */
+  useBinary(binaryPath: string): Promise<CodexUseBinaryResult>;
   /** Runs the native login INTO a profile's home (TASK.50 п.2); an authLink profile refuses `unsupported` (amended §A1). */
   loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
   loginCancel(): void;
@@ -574,6 +602,14 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
      * `trustRefusal` payload below is never synthesized for it).
      */
     discoveryTrustRefusal?: { binaryPath?: string; reason: string; staleConsent?: boolean; offerTrust: boolean },
+    /**
+     * Taskana 4092 (TASK.85): alternate-binary candidates stamped onto the
+     * returned snapshot. `undefined` (or an empty array) keeps the legacy
+     * snapshot shape — no `alternates` key. Callers thread the deps seam's
+     * value; `discoverAndCheck` passes it only when the seam is present, so a
+     * deps without `discoverAlternates` is byte-identical to before.
+     */
+    alternates?: Array<{ path: string; source: CodexBinarySource }>,
   ): Promise<CodexOnboardingSnapshot> {
     // The choke point every doctor spawn in this module funnels through, and
     // therefore where the shutdown gate has to be re-read — an entrance check is
@@ -639,7 +675,13 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
         });
       }
     }
-    const snapshot: CodexOnboardingSnapshot = { report: effectiveReport, binaryPath, source, checkedAt: new Date().toISOString() };
+    const snapshot: CodexOnboardingSnapshot = {
+      report: effectiveReport,
+      binaryPath,
+      source,
+      checkedAt: new Date().toISOString(),
+      ...(alternates !== undefined && alternates.length > 0 ? { alternates } : {}),
+    };
     // TASK.65: stamp the numeric TTL clock alongside the snapshot. Only a real
     // doctor run reaches here, so a cache entry always means "a verdict landed"
     // — a resolution refusal returns resolutionErrorSnapshot without caching,
@@ -691,6 +733,11 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
           discovery.trustRefused === true && discovery.reason !== undefined
           ? { reason: discovery.reason, offerTrust: false }
           : undefined,
+      // Taskana 4092: thread ONLY the deps seam here. The ladder's own
+      // alternates payload is deliberately NOT used as an implicit default —
+      // a deps without the seam keeps the legacy snapshot shape, and
+      // `registerCodexIpc` injects the production default explicitly.
+      deps.discoverAlternates?.(),
     );
   }
 
@@ -792,7 +839,20 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       const profile = resolution.ok ? resolution.profile : SYSTEM_CODEX_PROFILE;
       // Same `id:<id>` namespace as recheck (F2) so a pick and a recheck of the
       // same profile still share one key (coalesce), never split across domains.
-      const snapshot = await runExclusive(`id:${profile.id}`, () => checkPath(confirmedPath, "picker", profile));
+      const snapshot = await runExclusive(`id:${profile.id}`, () => checkPath(confirmedPath, "picker", profile, undefined, []));
+      return { ok: true, snapshot };
+    },
+
+    async useBinary(binaryPath: string): Promise<CodexUseBinaryResult> {
+      if (shuttingDown) return { ok: false, reason: "busy" };
+      // Validation identical to pickBinary's post-dialog gate: consents NOT
+      // passed here — the doctor's own gate is the consent authority (D-S4-21).
+      const resolved = resolveCodexBinary(binaryPath, deps.fs, deps.platform ?? process.platform, deps.identity);
+      if (resolved.path === null && resolved.trustRefused !== true) return { ok: false, reason: "invalid" };
+      const confirmedPath = resolved.path ?? binaryPath.trim();
+      const resolution = await resolveProfile(undefined);
+      const profile = resolution.ok ? resolution.profile : SYSTEM_CODEX_PROFILE;
+      const snapshot = await runExclusive(`id:${profile.id}`, () => checkPath(confirmedPath, "picker", profile, undefined, []));
       return { ok: true, snapshot };
     },
 
@@ -1021,10 +1081,39 @@ function forceArg(args: unknown): boolean {
 }
 
 /** Wires the invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check (TASK.41 п.1: discovery must run without the user visiting Settings first) and read `readyFor()` as the per-profile tab gate. */
+/**
+ * Taskana 4092 (TASK.85): the production default for the alternates seam —
+ * the same discovery-ladder inputs `discoverAndCheck` walks (env override,
+ * PATH/common/installed rungs; the settings rung is a fresh read there and is
+ * deliberately the caller's to thread), projected through
+ * `discoverCodexBinary`'s alternates payload. Exists OUTSIDE the controller so
+ * `registerCodexIpc` can inject it while `createCodexOnboardingController`
+ * alone (tests, direct drives) keeps the legacy snapshot shape.
+ */
+function ladderAlternates(deps: CodexIpcDeps): Array<{ path: string; source: CodexBinarySource }> {
+  return discoverCodexBinary({
+    envOverride: deps.bootEnv[ENV_CODEX_BIN],
+    env: codexDoctorSourceEnv(deps.bootEnv, deps.engineProxyUrl),
+    ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
+    ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
+    ...(deps.identity !== undefined ? { identity: deps.identity } : {}),
+    consents: deps.readTrustedBinaries?.() ?? [],
+  }).alternates ?? [];
+}
+
 export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController {
-  const controller = createCodexOnboardingController(deps);
+  // Taskana 4092: production default for the alternates seam (see
+  // `ladderAlternates`). An explicitly injected seam always wins.
+  const controller = createCodexOnboardingController({
+    ...deps,
+    discoverAlternates: deps.discoverAlternates ?? (() => ladderAlternates(deps)),
+  });
   ipcMain.handle(CODEX_RECHECK_CHANNEL, (_event, args?: unknown) => controller.recheck(profileIdArg(args), { force: forceArg(args) }));
   ipcMain.handle(CODEX_PICK_BINARY_CHANNEL, () => controller.pickBinary());
+  ipcMain.handle(CODEX_USE_BINARY_CHANNEL, (_event, args?: unknown) => {
+    const binaryPath = (args as { binaryPath?: unknown } | undefined)?.binaryPath;
+    return typeof binaryPath === "string" && binaryPath.trim() !== "" ? controller.useBinary(binaryPath) : { ok: false, reason: "invalid" };
+  });
   ipcMain.handle(CODEX_LOGIN_START_CHANNEL, (_event, args?: unknown) => {
     const mode = (args as { mode?: unknown } | undefined)?.mode;
     if (mode !== undefined && mode !== "browser" && mode !== "device") return { ok: false, reason: "failed" };

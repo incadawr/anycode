@@ -12,6 +12,7 @@ import type { CodexQuotaCredits, CodexRateLimits } from "../../../shared/codex-q
 import type { CodexProfileRecord } from "../../../shared/settings.js";
 import { binaryTrustRefusalOf } from "./BinaryTrustDialog.js";
 import {
+  alternateBinaryChoices,
   canRepairLink,
   canSignIn,
   codexQuotaLines,
@@ -27,6 +28,7 @@ import {
   formatCodexQuotaWindowLine,
   hasMainAuthLinkProfile,
   isCodexVersionWithinSupportedRange,
+  isNodeUnavailableReport,
   loginFailureMessage,
   manifestRefreshNotice,
   pickBinaryFailureMessage,
@@ -639,5 +641,87 @@ describe("binary-trust wiring (TASK.103)", () => {
     expect(describeCodexReportStatus(trustRefused)).toEqual(describeCodexReportStatus(plainError));
     expect(describeCodexReportStatus(trustRefused).tone).toBe("error");
     expect(describeCodexReportStatus(trustRefused).detail).toBe("Codex binary's directory (/tmp/s4-trust) is world-writable");
+  });
+});
+
+// ── Taskana 4092 (TASK.85): typed 127 verdict + alternate binary choices ──
+
+describe("Taskana 4092 — 127 diagnosis + alternate binary choices", () => {
+  const nodeUnavailableReport: CodexDoctorReport = {
+    status: "error",
+    error: "Codex version check exited with code 127",
+    nodeUnavailable: { binaryPath: "/b", exitCode: 127, hint: "HINT" },
+  };
+
+  describe("isNodeUnavailableReport", () => {
+    it("is false for undefined, ready, and a plain error report", () => {
+      expect(isNodeUnavailableReport(undefined)).toBe(false);
+      expect(isNodeUnavailableReport({ status: "ready", version: "0.144.3" })).toBe(false);
+      expect(isNodeUnavailableReport({ status: "error", error: "Codex version check exited with code 127" })).toBe(false);
+    });
+
+    it("is true for an error report carrying the structured nodeUnavailable field", () => {
+      expect(isNodeUnavailableReport(nodeUnavailableReport)).toBe(true);
+    });
+  });
+
+  describe("alternateBinaryChoices", () => {
+    const snapshotWith = (overrides: Partial<CodexOnboardingSnapshot> = {}): CodexOnboardingSnapshot => ({
+      report: { status: "error", error: "x" },
+      binaryPath: "/current/codex",
+      source: "path",
+      checkedAt: "2026-10-24T00:00:00.000Z",
+      ...overrides,
+    });
+
+    it("is empty for a null snapshot and for one without alternates", () => {
+      expect(alternateBinaryChoices(null)).toEqual([]);
+      expect(alternateBinaryChoices(snapshotWith())).toEqual([]);
+    });
+
+    it("filters out the currently-saved binaryPath and passes source labels through", () => {
+      const snapshot = snapshotWith({
+        alternates: [
+          { path: "/current/codex", source: "path" },
+          { path: "/alt/codex", source: "common" },
+        ],
+      });
+      expect(alternateBinaryChoices(snapshot)).toEqual([{ path: "/alt/codex", source: "common" }]);
+    });
+
+    it("caps the offered list at 3 entries", () => {
+      const snapshot = snapshotWith({
+        alternates: [
+          { path: "/a/codex", source: "path" },
+          { path: "/b/codex", source: "path" },
+          { path: "/c/codex", source: "common" },
+          { path: "/d/codex", source: "common" },
+          { path: "/e/codex", source: "installed" },
+        ],
+      });
+      expect(alternateBinaryChoices(snapshot)).toHaveLength(3);
+      expect(alternateBinaryChoices(snapshot)).toEqual([
+        { path: "/a/codex", source: "path" },
+        { path: "/b/codex", source: "path" },
+        { path: "/c/codex", source: "common" },
+      ]);
+    });
+  });
+
+  describe("describeCodexReportStatus — nodeUnavailable detail", () => {
+    it("uses the structured hint as the error detail when present", () => {
+      const result = describeCodexReportStatus(nodeUnavailableReport);
+      expect(result.headline).toBe("Error");
+      expect(result.detail).toBe("HINT");
+      expect(result.tone).toBe("error");
+    });
+
+    it("keeps the raw error string for an error report WITHOUT the typed field (unchanged legacy shape)", () => {
+      const legacy: CodexDoctorReport = { status: "error", error: "Codex version check exited with code 127" };
+      const result = describeCodexReportStatus(legacy);
+      expect(result.headline).toBe("Error");
+      expect(result.detail).toBe("Codex version check exited with code 127");
+      expect(result.tone).toBe("error");
+    });
   });
 });
