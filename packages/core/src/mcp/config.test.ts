@@ -308,7 +308,9 @@ describe("loadMcpServerSpecs — stdio env assembly", () => {
     const savedEnv = process.env;
     const RELAY = "http://127.0.0.1:47557";
     const relayModule = await import("../adapters/node/proxy-relay.js");
-    const relayUrlSpy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY);
+    // Taskana 4685 rework: the per-value relay lookup (a minted relay URL
+    // would carry `anycode:<token>@` userinfo — the one @ the scrub permits).
+    const relayUrlSpy = vi.spyOn(relayModule, "proxyRelayLookup").mockReturnValue(() => RELAY);
     process.env = {
       PATH: "/usr/bin",
       HTTPS_PROXY: "http://user:s3cret@proxy.corp:3128",

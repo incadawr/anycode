@@ -24,6 +24,7 @@
  * (shared/claude-doctor.ts) never carries it, and this file never logs it.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { proxyValueCarriesCredential } from "@anycode/core/child-env";
 import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
 import { ENV_CLAUDE_PROXY_URL, applyEngineProxyOverride } from "../shared/engines.js";
@@ -139,17 +140,19 @@ export function buildClaudeDoctorChildEnv(
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
-  // Taskana 4685: a credentialed proxy never reaches the doctor CLI — swap it
-  // for MAIN's credential-free relay (main cannot read the host fork's one).
-  // Fail-closed without a relay. Unlike the codex doctor this builder's
-  // allowlist names NO proxy var (the pinned asymmetry), so the swap reads the
-  // SOURCE: only a CREDENTIALED value crosses, and only as the relay URL — a
-  // credential-less shell proxy keeps not reaching this child at all. The
-  // engine carrier below still wins for an engine-scoped profile; `direct`
-  // still clears everything.
+  // Taskana 4685 rework: a credentialed proxy never reaches the doctor CLI —
+  // `relayUrl` is the relay of THIS source env's own credentialed upstream
+  // (main's `doctorRelayUrl` resolves it per value — blocker B2), so the swap
+  // never substitutes a relay fronting a different proxy. Fail-closed without
+  // a relay. Unlike the codex doctor this builder's allowlist names NO proxy
+  // var (the pinned asymmetry), so the swap reads the SOURCE: only a
+  // CREDENTIALED value crosses, and only as the relay URL — a credential-less
+  // shell proxy keeps not reaching this child at all. The engine carrier
+  // below still wins for an engine-scoped profile; `direct` still clears
+  // everything.
   for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
     const value = source[name];
-    if (typeof value === "string" && value.includes("@")) {
+    if (typeof value === "string" && proxyValueCarriesCredential(value)) {
       if (relayUrl !== undefined) env[name] = relayUrl;
       else delete env[name];
     }

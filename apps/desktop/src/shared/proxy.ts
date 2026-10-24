@@ -454,15 +454,19 @@ export interface ProxyMaterializationDeps {
    */
   targetUrl?: string;
   /**
-   * Main's own credential-free loopback relay URL (Taskana 4685). When the
-   * materialised proxy carries userinfo, the ENGINE-CARRIER consumers
-   * (`engineProxyOutcome` and its delegators) swap it for this URL — a
-   * credentialed carrier must never reach an engine child when a relay can
-   * carry the credential for it. Absent ⇒ a credentialed carrier degrades to
-   * `direct` (fail-closed: never hand `user:pass@` across the child boundary).
-   * Every other consumer ignores this field.
+   * Taskana 4685 rework: main's relay REGISTRY lookup — resolves the
+   * credential-free loopback relay URL for ONE credentialed upstream (the
+   * value the caller is about to swap out). Injected as a FUNCTION (not the
+   * single string the first 4685 cut had) because main can hold SEVERAL
+   * upstreams at once: a settings proxy profile's upstream and a shell
+   * proxy, or distinct HTTP_PROXY vs HTTPS_PROXY upstreams. A swap site must
+   * receive the relay of the value IT named — a relay fronting a DIFFERENT
+   * upstream silently re-routes the child's traffic through the wrong proxy
+   * (review B2). `undefined` (registry miss / cannot serve / bind failed)
+   * means the caller keeps its fail-closed behaviour; `sync` is the
+   * already-started-relay-only view the sync carrier materialisation needs.
    */
-  relayUrl?: string;
+  relayFor?: (upstreamUrl: string) => string | undefined;
 }
 
 /**

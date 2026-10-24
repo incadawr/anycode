@@ -381,7 +381,11 @@ const connectionCreateSchema = z
     // HTTP(S) proxy (TASK.132). The strict `isProxyUrl` gate lives HERE, at the
     // trust boundary — the persisted schema stays lenient so one hand-edited
     // value can never corrupt the whole document (settings/schema.ts).
-    proxyUrl: z.string().refine(isProxyUrl).optional(),
+    // Taskana 4685 rework: a CREDENTIALED url is refused outright — a proxy
+    // password belongs in a registry profile (`login` + vault), never in the
+    // 0644 settings.json. Existing legacy strings keep working (read-side
+    // fail-soft; `proxyRef: "legacy"` converts them into a profile).
+    proxyUrl: z.string().refine((value) => isProxyUrl(value) && !value.includes("@")).optional(),
     // Proxy-registry reference (TASK.141). Shape only here — `"direct"` or an
     // existing profile id is checked in the handler, which is where the registry
     // is in hand. Carried on CREATE so a new connection's proxy choice is saved
@@ -409,8 +413,10 @@ const connectionUpdateSchema = z
     baseUrl: z.string().optional(),
     // HTTP(S) proxy (TASK.132) with the same `""` clear-sentinel convention as
     // `transport` above; a non-empty value must pass the strict `isProxyUrl`
-    // gate before it can reach disk.
-    proxyUrl: z.union([z.string().refine(isProxyUrl), z.literal("")]).optional(),
+    // gate before it can reach disk. Taskana 4685 rework: a CREDENTIALED url
+    // is refused outright (see the create schema's note) — the password home
+    // is a registry profile + vault, never settings.json.
+    proxyUrl: z.union([z.string().refine((value) => isProxyUrl(value) && !value.includes("@")), z.literal("")]).optional(),
     // Proxy-registry reference (TASK.141) with the same `""` clear sentinel;
     // `"legacy"` additionally requests the one-shot conversion of this
     // connection's own legacy `proxyUrl` into a real profile.

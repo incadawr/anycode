@@ -263,7 +263,7 @@ import {
   withWorkflows,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { closeProxyRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
+import { closeProxyRelay, credentialedProxyValueForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
 import type {
   AgentBridgeCatalogEntry,
   AgentEvent,
@@ -2286,7 +2286,13 @@ async function boot(): Promise<void> {
     // shell, LSP and MCP stdio server already see the relay URL (the
     // NodeExecutionAdapter/terminal spawn sites re-read it per spawn).
     // No-op (settled, no server) when no proxy var carries credentials.
-    await resolveProxyRelay();
+    // Taskana 4685 rework: one relay PER upstream (the registry is keyed by
+    // the normalized credentialed URL); the boot scan starts the relay for
+    // this fork's first credentialed env value, later callers may add more.
+    const bootUpstream = credentialedProxyValueForRelay(process.env);
+    if (bootUpstream !== undefined) {
+      await resolveProxyRelay(bootUpstream);
+    }
     // Selection/probe is deliberately before loadEnvConfig: an external engine
     // must never require AnyCode provider credentials merely to fail/boot.
     const plugin = selectEnginePlugin(process.env);

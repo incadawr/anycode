@@ -24,10 +24,13 @@
  * `http://127.0.0.1:<port>`: children regain the network, still see no
  * credential, and the `ANYCODE_*_PROXY_URL` carriers stay removed. Callers
  * that have not resolved a relay pass nothing and keep the plain drop.
- * Taskana 4685: that relay URL embeds a per-process random token as a PATH
- * SEGMENT (`http://127.0.0.1:<port>/<token>`); pass it through verbatim —
- * the token is the relay's cross-user auth boundary and contains no `@`, so
- * `proxyValueHasUserinfo` never trips on it.
+ * Taskana 4685 rework: that relay URL embeds the per-relay random auth token
+ * as USERINFO (`http://anycode:<token>@127.0.0.1:<port>`) — curl/git/npm and
+ * node's undici all turn userinfo into a `Proxy-Authorization: Basic` header
+ * on CONNECT and plain-HTTP alike, so the token rides the standard proxy-URL
+ * channel children already speak. The relay-URL exemption below is what lets
+ * exactly this URL through the `@`-detector unchanged: the ONE loopback,
+ * our port, user `anycode` — nothing else (see `isCredentialFreeProxyValue`).
  *
  * Why a literal-`@` rule and not `maskProxyCredentials` (main/proxy-probe.ts):
  * that regex needs `//` and `:` separators, so it misses user-only
@@ -58,6 +61,50 @@ export function proxyValueHasUserinfo(value: string): boolean {
 }
 
 /**
+ * Taskana 4685 rework: the relay URL's own userinfo shape — `anycode` is the
+ * fixed user every relay URL carries (`http://anycode:<token>@127.0.0.1:<port>`),
+ * the token being the relay's cross-user auth boundary.
+ */
+const RELAY_URL_USER = "anycode";
+
+/**
+ * Taskana 4685 rework: true ONLY for a relay URL this host minted —
+ * `http://anycode:<token>@127.0.0.1:<port>` (loopback host, our fixed user, a
+ * non-empty token password). This is the exact exemption the `@`-detectors
+ * grant: a relay URL is the one value whose `@` is not a leaked upstream
+ * credential but the relay's own token, so `sanitizeChildEnv` passes it
+ * through verbatim and every "swap a credentialed value for its relay" site
+ * recognises it back. Anything else with an `@` — a different host, a
+ * different user, an empty password, a non-loopback address — is NOT exempt
+ * and keeps the TASK.135 drop/swap treatment.
+ */
+export function isCredentialFreeRelayUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === "http:" && url.hostname === "127.0.0.1" && url.username === RELAY_URL_USER && url.password !== "";
+}
+
+/**
+ * The `@`-detector every scrub/swap site uses: a value is "credentialed"
+ * when it carries userinfo that is NOT the relay's own token userinfo.
+ */
+export function proxyValueCarriesCredential(value: string): boolean {
+  return value.includes("@") && !isCredentialFreeRelayUrl(value);
+}
+
+/**
+ * Taskana 4685 rework (blocker B2): the per-value relay resolver swap sites
+ * use — given the CREDENTIALED upstream value about to be swapped out, the
+ * credential-free relay URL fronting THAT upstream (never a relay fronting a
+ * different one), or undefined when no relay serves it (fail-closed drop).
+ */
+export type RelayUrlLookup = (upstreamUrl: string) => string | undefined;
+
+/**
  * Returns a SANITISED COPY of `env`: every proxy-family variable whose value
  * contains a literal `@` is dropped (credential-less proxies and both
  * `NO_PROXY` spellings pass through verbatim, as does everything else), and so
@@ -82,26 +129,38 @@ export function proxyValueHasUserinfo(value: string): boolean {
  * `ANYCODE_*_PROXY_URL` carriers are STILL removed — the relay replaces the
  * value, never the carrier machinery.
  */
-export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string): NodeJS.ProcessEnv {
+export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string | RelayUrlLookup): NodeJS.ProcessEnv {
+  // Taskana 4685 rework (B2): a STRING relayUrl remains the one-relay shape
+  // callers with a single known upstream use; a LOOKUP resolves the relay of
+  // EACH dropped value's own upstream — never a relay fronting a different
+  // proxy, which would silently re-route the child through the wrong path.
+  const relayFor: RelayUrlLookup | undefined = typeof relayUrl === "string" ? () => relayUrl : relayUrl;
   const out: NodeJS.ProcessEnv = {};
   /** The four-case HTTP(S)_PROXY names the scrub actually removed (cross-review F3). */
   const droppedNames = new Set<string>();
+  /** The four-case HTTP(S)_PROXY swap decisions per name (Taskana 4685 rework): the relay of THAT name's dropped value, or undefined to leave it dropped. */
+  const swapForName = new Map<string, string | undefined>();
+  /** The relay of the first dropped NON-four-name value (ALL_PROXY, npm_config_proxy, …): the F4 remedy for wholly-absent pairs — those names' remedy lands in the four HTTP(S)_PROXY names because that is where proxy-aware children read. */
+  let familyFallback: string | undefined;
   /** True when ANY credentialed proxy-family member was dropped, four-name or not (cross-review F4). */
   let droppedAny = false;
   for (const [name, value] of Object.entries(env)) {
     if (isEngineProxyCarrierName(name)) {
       continue;
     }
-    if (typeof value === "string" && isProxyVarName(name) && proxyValueHasUserinfo(value)) {
+    if (typeof value === "string" && isProxyVarName(name) && proxyValueCarriesCredential(value)) {
       droppedAny = true;
       if (name === "HTTPS_PROXY" || name === "https_proxy" || name === "HTTP_PROXY" || name === "http_proxy") {
         droppedNames.add(name);
+        swapForName.set(name, relayFor?.(value));
+      } else if (familyFallback === undefined) {
+        familyFallback = relayFor?.(value);
       }
       continue;
     }
     out[name] = value;
   }
-  if (relayUrl !== undefined && droppedAny) {
+  if (relayFor !== undefined && droppedAny) {
     // Per protocol pair: an ABSENT spelling is filled only when its case
     // sibling did not survive clean — otherwise `HTTP_PROXY=clean` +
     // relay-filled `http_proxy` re-routes every lowercase-preferring consumer
@@ -110,9 +169,17 @@ export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string): Nod
     for (const [upper, lower] of [["HTTPS_PROXY", "https_proxy"], ["HTTP_PROXY", "http_proxy"]] as const) {
       // Dropped names never reached `out`, so presence here means clean.
       const cleanSibling = upper in out || lower in out;
+      // A pair whose BOTH spellings were dropped swaps to ONE relay: the
+      // pair's upper-case value is the routing decision (case siblings of one
+      // protocol carry the same upstream in every real configuration).
+      const pairSwap = swapForName.get(upper) ?? swapForName.get(lower) ?? familyFallback;
       for (const name of [upper, lower]) {
-        if (droppedNames.has(name) || (!(name in out) && !cleanSibling)) {
-          out[name] = relayUrl;
+        if (droppedNames.has(name)) {
+          if (pairSwap !== undefined) {
+            out[name] = pairSwap;
+          }
+        } else if (!(name in out) && !cleanSibling && pairSwap !== undefined) {
+          out[name] = pairSwap;
         }
       }
     }
@@ -137,7 +204,7 @@ export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string): Nod
 export function buildChildEnv(
   base: NodeJS.ProcessEnv,
   overlay?: Record<string, string | undefined>,
-  relayUrl?: string,
+  relayUrl?: string | RelayUrlLookup,
 ): NodeJS.ProcessEnv {
   return sanitizeChildEnv(overlay === undefined ? { ...base } : { ...base, ...overlay }, relayUrl);
 }

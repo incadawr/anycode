@@ -27,7 +27,7 @@ import type { McpHttpServerSpec, McpServerSpec, McpStdioServerSpec } from "../po
 // The stdio env scrub + relay URL live in adapters/node (TASK.135 / Taskana
 // 4074); neither module imports this loader back, so the graph stays acyclic.
 import { sanitizeChildEnv } from "../adapters/node/child-env.js";
-import { proxyRelayUrl } from "../adapters/node/proxy-relay.js";
+import { proxyRelayLookup } from "../adapters/node/proxy-relay.js";
 
 export interface LoadedMcpServerSpecs {
   specs: McpServerSpec[];
@@ -171,7 +171,7 @@ function buildStdioEnv(configEnv: Record<string, string>, inheritEnv: boolean): 
     // TASK.135 follow-up: scrub + relay-rewrite the inherited half. The
     // config env still applies ON TOP (an explicit `env` entry can override
     // even the relay URL — a server that must not be proxied at all).
-    const sanitized = sanitizeChildEnv(base, proxyRelayUrl());
+    const sanitized = sanitizeChildEnv(base, proxyRelayLookup());
     const out: Record<string, string> = {};
     for (const [key, value] of Object.entries(sanitized)) {
       if (typeof value === "string") {

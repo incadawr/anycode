@@ -57,7 +57,7 @@ import { NodeGitAdapter } from "@anycode/core/node-git";
 // sanctioned route for these two symbols — see core/src/index.ts).
 import { ARTIFACT_MAX_AGE_MS, NodeArtifactStore } from "@anycode/core";
 import { artifactsRootFor } from "../shared/artifacts-root.js";
-import { resolveProxyRelay } from "@anycode/core/proxy-relay";
+import { proxyRelayUrl, resolveProxyRelay, credentialedProxyValueForRelay } from "@anycode/core/proxy-relay";
 import {
   catalogProviderIds,
   findCatalogEntry,
@@ -80,6 +80,7 @@ import {
   applyCodexProfilesHomeOverride,
   applySubagentsHomeOverride,
   buildHostEnv,
+  resolveProxyFor,
   computeProviderReady,
   computeProviderReadiness,
   connectionSecretKey,
@@ -176,7 +177,7 @@ import { readSessionLimits } from "../shared/session-limits.js";
 // NAMES are no longer needed here — the doctor/login deps below read their value
 // through `engineProxyCarrierValue`, which is also where shell-wins is decided.
 import { stripEngineProxyCarriers } from "../shared/engines.js";
-import { proxyProfileSecretKey, hostForkProxyChain, type SystemProxyResolver } from "../shared/proxy.js";
+import { proxyProfileSecretKey, hostForkProxyChain, engineProxyChain, type MaterializedProxy, type SystemProxyResolver } from "../shared/proxy.js";
 import {
   ENGINES_CHANGED_CHANNEL,
   codexDoctorSourceEnv,
@@ -1058,22 +1059,84 @@ const systemProxyDelegate: SystemProxyResolver = {
 const proxyMaterialization: ProxyMaterializationDeps = {
   systemProxy: systemProxyDelegate,
   proxyPassword: (profileId) => proxyPasswords.get(profileId),
-  // Taskana 4685: main's OWN loopback relay URL (started at boot, refreshed on
-  // every provider-state rebuild). Engine carriers materialised through these
-  // deps swap a credentialed url for it — fail-closed to `direct` without one.
-  get relayUrl() {
-    return mainRelayUrl;
+  // Taskana 4685 rework: main's per-upstream relay REGISTRY lookup. Engine
+  // carriers materialised through these deps swap a credentialed url for the
+  // relay OF THAT VALUE (blocker B2: a relay fronting a different upstream
+  // would silently re-route the child's traffic) — fail-closed to `direct`
+  // when no relay serves that upstream.
+  get relayFor() {
+    return relayUrlForUpstream;
   },
 };
 
 /**
- * Taskana 4685: main's own credential-free relay URL, or undefined while no
- * relay is warranted (no credentialed proxy in main's env / cannot serve / bind
- * failed — `resolveProxyRelay` has exactly one undefined outcome for all).
- * Lives at module scope because the `proxyMaterialization` deps object is a
- * boot-time const consumed by sync call sites that cannot await a bind.
+ * Taskana 4685 rework: the relay URL for ONE credentialed upstream, from the
+ * core registry (`@anycode/core/proxy-relay`). SYNC by necessity — the engine
+ * carriers materialise on the spawn path — so it answers only relays the
+ * prewarm already started; `prewarmProxyRelays` is the async half that keeps
+ * the registry ahead of the sync reads.
  */
-let mainRelayUrl: string | undefined;
+function relayUrlForUpstream(upstreamUrl: string): string | undefined {
+  if (!upstreamUrl.includes("@")) {
+    return undefined;
+  }
+  return proxyRelayUrl(upstreamUrl);
+}
+
+/**
+ * Taskana 4685 rework: starts relays for every credentialed upstream the
+ * CURRENT settings + boot env can materialise, BEFORE any spawn reads the
+ * registry through `relayUrlForUpstream`. Distinct upstreams (a profile's
+ * proxy and a shell proxy, or two profiles on two scopes) each get their own
+ * lazily-cached relay (`resolveProxyRelay` is idempotent per upstream);
+ * refused upstreams (https://, no port, bind failure) warn once each and the
+ * corresponding carriers degrade fail-closed to `direct`. Fire-and-forget on
+ * boot; awaited inside `refreshProviderState` so a settings change re-warms
+ * before the mutation event reaches the renderer.
+ */
+async function prewarmProxyRelays(current: AnycodeSettings): Promise<void> {
+  const upstreams = new Set<string>();
+  const collect = (proxy: MaterializedProxy | undefined): void => {
+    if (proxy !== undefined && proxy.url.includes("@")) {
+      upstreams.add(proxy.url);
+    }
+  };
+  // The shell's own credentialed proxy (if any) needs its relay too: the
+  // doctor/login children main spawns read `bootEnv`'s proxy family through
+  // the passthrough allowlist, and `doctorRelayUrl` below swaps exactly this
+  // value for its relay.
+  const shellUpstream = credentialedProxyValueForRelay(bootEnv);
+  if (shellUpstream !== undefined) {
+    upstreams.add(shellUpstream);
+  }
+  // Every scope the ladder can resolve for the CURRENT document: the app
+  // rung, both engine rungs (engine-only and engine+app), and every
+  // connection's rung (engine chains are covered by the engine+app pass).
+  collect(resolveProxyFor(current, [{ kind: "app" }], proxyMaterializationFor(undefined)));
+  for (const engine of ["codex", "claude"] as const) {
+    collect(resolveProxyFor(current, engineProxyChain(engine, false), proxyMaterializationFor(undefined)));
+    collect(resolveProxyFor(current, engineProxyChain(engine, true), proxyMaterializationFor(undefined)));
+  }
+  for (const connection of current.provider.connections) {
+    collect(resolveProxyFor(current, hostForkProxyChain(connection.id), proxyMaterializationFor(undefined)));
+  }
+  await Promise.all(
+    [...upstreams].map((upstream) => resolveProxyRelay(upstream).catch(() => undefined)),
+  );
+}
+
+/**
+ * Taskana 4685 rework: the relay URL the doctor/login children's env builder
+ * swaps a credentialed proxy for. Their source env is `bootEnv` (the engine
+ * carrier, when one applies, is already de-credentialised through
+ * `relayFor` before it ever reaches them), so the value being swapped is the
+ * SHELL's credentialed proxy — and per blocker B2 the swap must be THAT
+ * value's relay, never a relay fronting some other upstream.
+ */
+function doctorRelayUrl(): string | undefined {
+  const upstream = credentialedProxyValueForRelay(bootEnv);
+  return upstream === undefined ? undefined : proxyRelayUrl(upstream);
+}
 
 /**
  * Reloads the plaintext proxy-password cache `proxyMaterialization.proxyPassword`
@@ -1397,13 +1460,13 @@ async function refreshProviderState(): Promise<void> {
   // about, or a vault read that fails, must leave the app running on its last
   // good answer rather than leaving `currentHostEnv` stale forever.
   await refreshProxyPasswordCache().catch(() => undefined);
-  // Taskana 4685: main's own relay, (re)resolved before the env below is
-  // composed. Idempotent per process (`resolveProxyRelay` caches); the URL is
-  // only re-read so a later boot phase sees a settled value. Fail-soft: a bind
-  // failure leaves `mainRelayUrl` undefined and the engine carriers go
+  // Taskana 4685 rework: prewarm the per-upstream relay registry before the
+  // env below is composed, so the engine carriers `buildHostEnv` materialises
+  // through `relayFor` find their relays already started (the sync lookup
+  // answers only started relays). Fail-soft per upstream: a refusal (https://,
+  // no port, bind failure) warns once and that upstream's carriers go
   // fail-closed `direct` — never a credentialed URL across the boundary.
-  const mainRelay = await resolveProxyRelay().catch(() => undefined);
-  mainRelayUrl = mainRelay?.url;
+  await prewarmProxyRelays(current).catch(() => undefined);
   await (systemProxyCache?.refreshAll() ?? Promise.resolve());
   currentHostEnv = await buildHostEnvFor(current);
   const transportInfo = selectedTransportInfo(current);
@@ -2557,9 +2620,10 @@ void app.whenReady().then(async () => {
     // TASK.139: the doctor and `codex login` are children main spawns itself, so
     // they get the engine proxy through the same carrier the tab children use.
     engineProxyUrl: codexEngineProxyUrl,
-    // Taskana 4685: the same children get a credentialed proxy swapped for
-    // main's own credential-free relay URL (fail-closed drop without one).
-    relayUrl: () => mainRelayUrl,
+    // Taskana 4685 rework: the same children get a credentialed shell proxy
+    // swapped for THAT value's relay (`doctorRelayUrl` — B2: never a relay
+    // fronting a different upstream); fail-closed drop without one.
+    relayUrl: doctorRelayUrl,
     ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
     readBinaryPathSetting: async () => settings?.codex?.binaryPath,
     // TASK.103: fresh read of settings.security.trustedBinaries per gate
@@ -2634,9 +2698,10 @@ void app.whenReady().then(async () => {
     // env builder declares itself a mirror of the session child's builder, and
     // that declaration has to stay true.
     engineProxyUrl: claudeEngineProxyUrl,
-    // Taskana 4685: mirror of the codex dep above — the doctor child's env
-    // builder swaps a credentialed proxy for main's relay URL.
-    relayUrl: () => mainRelayUrl,
+    // Taskana 4685 rework: mirror of the codex dep above — the doctor
+    // child's env builder swaps a credentialed shell proxy for THAT value's
+    // relay (`doctorRelayUrl`).
+    relayUrl: doctorRelayUrl,
     readBinaryPathSetting: async () => settings?.claude?.binaryPath,
     // TASK.103: fresh read of settings.security.trustedBinaries per gate
     // check — mirror of readBinaryPathSetting's dep shape.
@@ -2688,7 +2753,7 @@ void app.whenReady().then(async () => {
     // lives, and would ignore `settings.codex.proxyUrl` while the onboarding
     // recheck and `codex login` honour it.
     doctorSourceEnv: () => codexDoctorSourceEnv(bootEnv, codexEngineProxyUrl),
-    relayUrl: () => mainRelayUrl,
+    relayUrl: doctorRelayUrl,
     readRiskAcceptedVersions: async () => settings?.codex?.riskAcceptedVersions ?? [],
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
     onChanged: () => {
@@ -2723,7 +2788,7 @@ void app.whenReady().then(async () => {
         void runCodexManagedUpgrade({
           ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
           doctorSourceEnv: () => codexDoctorSourceEnv(bootEnv, codexEngineProxyUrl),
-          relayUrl: () => mainRelayUrl,
+          relayUrl: doctorRelayUrl,
           readBinaryPathSetting: async () => settings?.codex?.binaryPath,
           swapBinaryPath: (expected, next) => handleSwapCodexBinaryPath(settingsIpcDeps, expected, next),
           onChanged: () => {

@@ -4928,6 +4928,29 @@ describe("CLI proxy-relay lifecycle (Taskana 4074 cross-review F5)", () => {
     expect(exitCode).toBe(2);
     expect(proxyRelayUrl()).toBeUndefined();
   });
+
+  it("Taskana 4685 rework: the boot scan starts the relay for the FIRST credentialed env value", async () => {
+    // The relay URL handed to children carries the token as userinfo and
+    // never the upstream password; a second boot for a DIFFERENT upstream
+    // would be a second relay (registry semantics — see proxy-relay.test.ts).
+    const exitCode = await runCli({
+      argv: ["-p", "say hi"],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        ANYCODE_MODEL: "test-model",
+        ANYCODE_DB_PATH: ":memory:",
+        ANYCODE_SETTINGS_PATH: isolatedSettingsPath(),
+        HTTPS_PROXY: "http://user:secret@127.0.0.1:9",
+      } as NodeJS.ProcessEnv,
+      input: new PassThrough(),
+      output: new PassThrough(),
+      errorOutput: new PassThrough(),
+      modelPort: new CountingModelPort(),
+      cwd: process.cwd(),
+    });
+    expect(exitCode).toBe(0);
+    expect(proxyRelayUrl()).toBeUndefined(); // closed on exit (F5 above) — the assertion is the lifecycle, not the URL shape
+  });
 });
 
 describe("--tui flag (Taskana 4082)", () => {

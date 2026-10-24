@@ -2214,9 +2214,13 @@ describe("handleConnectionUpdate — resets health on a significant ENDPOINT fie
 });
 
 describe("connection proxyUrl CRUD (TASK.132) — strict at the IPC boundary, only-truthy on disk", () => {
-  const PROXY = "http://user:pass@proxy.example.com:3128";
+  // Taskana 4685 rework: the IPC boundary refuses CREDENTIALED urls outright
+  // (a proxy password's home is a registry profile + vault, never the 0644
+  // settings.json), so the CRUD happy path uses a credential-less url; the
+  // refusal has its own test below.
+  const PROXY = "http://proxy.example.com:3128";
 
-  it("create persists a valid proxyUrl verbatim, userinfo included", async () => {
+  it("create persists a valid credential-less proxyUrl verbatim", async () => {
     const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",
       model: "m",
@@ -2230,6 +2234,28 @@ describe("connection proxyUrl CRUD (TASK.132) — strict at the IPC boundary, on
 
   // Strictness lives HERE, not in the persisted schema (settings/schema.ts is
   // deliberately lenient so one bad value cannot corrupt the document).
+  // Taskana 4685 rework small fix: a credentialed proxyUrl is REFUSED at the
+  // trust boundary on create AND update — the legacy migration
+  // (`proxyRef: "legacy"`/boot scan) is the only path that moves a password
+  // from a url into the vault.
+  it("create and update refuse a CREDENTIALED proxyUrl `invalid` (4685 rework)", async () => {
+    const createRes = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      proxyUrl: "http://user:pass@proxy.example.com:3128",
+    });
+    expect(createRes).toEqual({ ok: false, reason: "invalid" });
+
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    const updateRes = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      proxyUrl: "http://user:pass@proxy.example.com:3128",
+    });
+    expect(updateRes).toEqual({ ok: false, reason: "invalid" });
+
+    const loaded = await loadSettings(settingsPath);
+    expect("proxyUrl" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+
   it("create refuses an invalid proxyUrl `invalid` and persists nothing", async () => {
     const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",

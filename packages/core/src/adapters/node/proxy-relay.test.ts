@@ -14,11 +14,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as http from "node:http";
 import net from "node:net";
 import {
-  checkRelayToken,
+  checkRelayAuthorization,
   closeProxyRelay,
+  credentialedProxyValueForRelay,
   createProxyRelayForTest,
   isLoopbackPeer,
   parseUpstreamProxyUrl,
+  relayRegistryKey,
   resolveProxyRelay,
   stripHopByHop,
 } from "./proxy-relay.js";
@@ -96,6 +98,11 @@ function connectThrough(
   });
 }
 
+/** The `Proxy-Authorization: Basic base64(anycode:<token>)` the relay's gate requires. */
+function relayProxyAuth(token: string): string {
+  return `Basic ${Buffer.from(`anycode:${token}`).toString("base64")}`;
+}
+
 describe("parseUpstreamProxyUrl", () => {
   it("accepts a credentialed http:// URL with an explicit port", () => {
     const endpoint = parseUpstreamProxyUrl("http://user:secret@proxy.corp:3128");
@@ -133,27 +140,30 @@ describe("parseUpstreamProxyUrl", () => {
   });
 });
 
-describe("checkRelayToken (Taskana 4685)", () => {
-  it("triangulates header and path tokens", () => {
-    expect(checkRelayToken("t", "/t", "t")).toBe("valid");
-    expect(checkRelayToken("t", "/t/x", "t")).toBe("valid");
-    expect(checkRelayToken(undefined, undefined, "t")).toBe("absent");
-    expect(checkRelayToken("nope", undefined, "t")).toBe("wrong");
-    // Header whitespace is trimmed.
-    expect(checkRelayToken("  t  ", undefined, "t")).toBe("valid");
-    // A wrong header with a non-matching path is "wrong"; a VALID path
-    // shields a wrong header (the snippet's short-circuit: a correct path
-    // token already proves knowledge of the token).
-    expect(checkRelayToken("nope", "/t", "t")).toBe("valid");
-    expect(checkRelayToken("nope", "/other", "t")).toBe("wrong");
-    // Note (deviation from the brief's two rows): a header-less request with
-    // a NON-matching path (`/other`, `/tprefix`) is "absent", not "wrong" —
-    // the frozen 4074 rule that header-less curl/git/npm plain-HTTP requests
-    // (absolute URI whose path is the TARGET's path, no proxy token) are
-    // accepted. The `/t`-must-not-prefix-match-`/tprefix` property still
-    // holds: `/tprefix` is absent, never "valid".
-    expect(checkRelayToken(undefined, "/other", "t")).toBe("absent");
-    expect(checkRelayToken(undefined, "/tprefix", "t")).toBe("absent");
+describe("checkRelayAuthorization (Taskana 4685 rework — blocker B1)", () => {
+  const expected = `Basic ${Buffer.from(`anycode:t`).toString("base64")}`;
+
+  it("B1: a request with NO Proxy-Authorization is `absent` — rejected, never accepted", () => {
+    expect(checkRelayAuthorization(undefined, expected)).toBe("absent");
+    expect(checkRelayAuthorization("", expected)).toBe("absent");
+    expect(checkRelayAuthorization("   ", expected)).toBe("absent");
+  });
+
+  it("B1: a WRONG value is `wrong`; the RIGHT value is `valid` (whitespace trimmed)", () => {
+    expect(checkRelayAuthorization("Basic bm90LXRoZS1ub3Jt", expected)).toBe("wrong");
+    expect(checkRelayAuthorization(expected, expected)).toBe("valid");
+    expect(checkRelayAuthorization(`  ${expected}  `, expected)).toBe("valid");
+  });
+
+  it("relayRegistryKey: one key per normalized upstream; credential-less values have none (B2)", () => {
+    expect(relayRegistryKey("http://u:p@Corp:8080")).toBe("http://u:p@corp:8080");
+    expect(relayRegistryKey("http://u:p@corp:8080/")).toBe("http://u:p@corp:8080");
+    expect(relayRegistryKey("http://u:p@corp:8080/path?q=1#f")).toBe("http://u:p@corp:8080");
+    expect(relayRegistryKey("http://corp:8080")).toBeUndefined();
+    expect(relayRegistryKey("not a url")).toBeUndefined();
+    // A DIFFERENT credential is a DIFFERENT upstream (its own relay) — even
+    // at the same host:port.
+    expect(relayRegistryKey("http://u:p2@corp:8080")).not.toBe(relayRegistryKey("http://u:p@corp:8080"));
   });
 });
 
@@ -199,16 +209,21 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     expect(relay).toBeDefined();
     cleanup.push(() => new Promise<void>((resolve) => { relay!.close(); resolve(); }));
 
-    // The relay URL carries no userinfo — that is the whole point. Taskana
-    // 4685: it ends with the per-relay token as a path segment.
+    // Taskana 4685 rework: the relay URL carries the token as USERINFO
+    // (`http://anycode:<token>@127.0.0.1:<port>`) — curl/git/npm/undici all
+    // turn this into the Proxy-Authorization the gate below requires. The
+    // upstream password ("secret") appears NOWHERE in it.
     expect(relay!.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
-    expect(relay!.url).toBe(`http://127.0.0.1:${relay!.port}/${relay!.token}`);
-    expect(relay!.url).not.toContain("@");
+    expect(relay!.url).toBe(`http://anycode:${relay!.token}@127.0.0.1:${relay!.port}`);
     expect(relay!.url).not.toContain("secret");
 
-    // A loopback client CONNECTs to an arbitrary target; the fake upstream
-    // answers 200 and ECHOES the tunnel, so the client's own bytes come back.
-    const { socket, response } = await connectThrough(relay!.port, "example.com:443");
+    // A loopback client CONNECTs to an arbitrary target (presenting the
+    // relay's own Proxy-Authorization, exactly as proxy-URL userinfo makes
+    // every real client do); the fake upstream answers 200 and ECHOES the
+    // tunnel, so the client's own bytes come back.
+    const { socket, response } = await connectThrough(relay!.port, "example.com:443", {
+      "proxy-authorization": relayProxyAuth(relay!.token),
+    });
     cleanup.push(() => new Promise<void>((resolve) => { socket.destroy(); resolve(); }));
     expect(response).toContain("200");
     // The echo round trip proves bytes flow client -> relay -> upstream ->
@@ -246,7 +261,9 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     expect(relay).toBeDefined();
     cleanup.push(() => new Promise<void>((resolve) => { relay!.close(); resolve(); }));
 
-    const { socket, response } = await connectThrough(relay!.port, "example.com:443");
+    const { socket, response } = await connectThrough(relay!.port, "example.com:443", {
+      "proxy-authorization": relayProxyAuth(relay!.token),
+    });
     cleanup.push(() => new Promise<void>((resolve) => { socket.destroy(); resolve(); }));
     expect(response).toContain("407");
     expect(response).toContain("X-Upstream: yes");
@@ -264,10 +281,17 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     expect(relay).toBeDefined();
     cleanup.push(() => new Promise<void>((resolve) => { relay!.close(); resolve(); }));
 
-    // A plain request through the relay as an HTTP proxy.
+    // A plain request through the relay as an HTTP proxy, presenting the
+    // relay's own Proxy-Authorization (what proxy-URL userinfo produces).
     const body = await new Promise<string>((resolve, reject) => {
       const req = http.get(
-        { host: "127.0.0.1", port: relay!.port, path: "http://example.com/x", agent: false },
+        {
+          host: "127.0.0.1",
+          port: relay!.port,
+          path: "http://example.com/x",
+          agent: false,
+          headers: { "proxy-authorization": relayProxyAuth(relay!.token) },
+        },
         (res) => {
           let text = "";
           res.on("data", (chunk: Buffer) => { text += chunk.toString(); });
@@ -281,32 +305,77 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     expect(upstream.auth.request).toContain(expected);
   });
 
-  it("resolveProxyRelay: no relay without a credentialed proxy in the env; relay reused on the second call", async () => {
-    const clean = { PATH: "/usr/bin", HTTPS_PROXY: "http://proxy.corp:3128" };
-    const first = await resolveProxyRelay(clean);
-    expect(first).toBeUndefined();
-
-    const credentialed = { PATH: "/usr/bin", HTTPS_PROXY: "http://user:secret@127.0.0.1:9" };
+  it("B2: resolveProxyRelay is keyed per upstream — two upstreams get TWO relays, one upstream is reused", async () => {
+    // A credential-less value names no upstream: no relay (TASK.135 passthrough).
+    expect(await resolveProxyRelay("http://proxy.corp:3128")).toBeUndefined();
     // Port 9 (discard) is closed on a dev box — the bind still succeeds; the
     // relay only fails to reach its upstream when a client actually connects,
     // which these assertions never do.
-    const second = await resolveProxyRelay(credentialed);
-    expect(second).toBeDefined();
-    const third = await resolveProxyRelay(credentialed);
-    expect(third).toBe(second); // idempotent: same handle
-    expect(second!.url).not.toContain("secret");
-    // Taskana 4685: the cached handle's URL ends with its token; after
-    // closeProxyRelay a fresh resolve mints a NEW token.
-    expect(second!.url).toBe(`http://127.0.0.1:${second!.port}/${second!.token}`);
+    const upstreamA = "http://user:secret@127.0.0.1:9";
+    const upstreamB = "http://user:other@127.0.0.1:9";
+    const a1 = await resolveProxyRelay(upstreamA);
+    expect(a1).toBeDefined();
+    const a2 = await resolveProxyRelay(upstreamA);
+    expect(a2).toBe(a1); // idempotent per upstream: same handle
+    const b = await resolveProxyRelay(upstreamB);
+    expect(b).toBeDefined();
+    expect(b).not.toBe(a1); // a DIFFERENT upstream is a DIFFERENT relay
+    expect(a1!.url).not.toBe(b!.url);
+    expect(a1!.token).not.toBe(b!.token);
+    // The registry key normalizes: same upstream modulo case/slash reuses.
+    const a3 = await resolveProxyRelay("http://user:secret@127.0.0.1:9/");
+    expect(a3).toBe(a1);
+    // The URL carries the per-relay token as userinfo, never the password.
+    expect(a1!.url).toBe(`http://anycode:${a1!.token}@127.0.0.1:${a1!.port}`);
+    expect(a1!.url).not.toContain("secret");
+    expect(b!.url).not.toContain("other");
+    // closeProxyRelay tears down EVERY registered relay; a fresh resolve
+    // mints a NEW token.
     closeProxyRelay();
-    const fresh = await resolveProxyRelay(credentialed);
+    const fresh = await resolveProxyRelay(upstreamA);
     expect(fresh).toBeDefined();
-    expect(fresh!.url).toBe(`http://127.0.0.1:${fresh!.port}/${fresh!.token}`);
-    expect(fresh!.token).not.toBe(second!.token);
+    expect(fresh!.url).toBe(`http://anycode:${fresh!.token}@127.0.0.1:${fresh!.port}`);
+    expect(fresh!.token).not.toBe(a1!.token);
     fresh!.close();
   });
 
-  it("Taskana 4685: plain HTTP with a WRONG token header gets 403 and the upstream is never contacted", async () => {
+  // ── Taskana 4685 rework (blocker B1): the auth gate matrix. No token and a
+  // wrong token are BOTH rejected with 407, on plain HTTP and CONNECT alike,
+  // before any upstream contact; the right token passes both. The token is
+  // never printed or logged — the assertions only ever see status codes and
+  // bodies (spy below).
+  it("B1: plain HTTP with NO Proxy-Authorization gets 407 and the upstream is never contacted", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg?: unknown) => { warns.push(String(msg)); };
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.get(
+          { host: "127.0.0.1", port: relay!.port, path: "http://example.com/x", agent: false },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on("error", reject);
+      });
+      expect(status).toBe(407);
+      expect(upstream.auth.request).toEqual([]);
+      // B1: the token never reaches a log line (nor anywhere else client-visible).
+      for (const line of warns) {
+        expect(line).not.toContain(relay!.token);
+      }
+    } finally {
+      console.warn = originalWarn;
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+
+  it("B1: plain HTTP with a WRONG Proxy-Authorization gets 407 and the upstream is never contacted", async () => {
     const upstream = await startFakeUpstream();
     const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
     try {
@@ -316,8 +385,8 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
             host: "127.0.0.1",
             port: relay!.port,
             path: "http://example.com/x",
-            headers: { "x-anycode-relay-token": "deadbeef" },
             agent: false,
+            headers: { "proxy-authorization": "Basic ZGVhZGJlZWY6bm90LXRoZS10b2tlbg==" },
           },
           (res) => {
             res.resume();
@@ -326,7 +395,7 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
         );
         req.on("error", reject);
       });
-      expect(status).toBe(403);
+      expect(status).toBe(407);
       expect(upstream.auth.request).toEqual([]);
     } finally {
       relay!.close();
@@ -335,7 +404,7 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     }
   });
 
-  it("Taskana 4685: plain HTTP with the CORRECT token header passes through", async () => {
+  it("B1: plain HTTP with the CORRECT Proxy-Authorization (relay-URL userinfo) passes through", async () => {
     const upstream = await startFakeUpstream();
     const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
     try {
@@ -345,8 +414,8 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
             host: "127.0.0.1",
             port: relay!.port,
             path: "http://example.com/x",
-            headers: { "x-anycode-relay-token": relay!.token },
             agent: false,
+            headers: { "proxy-authorization": relayProxyAuth(relay!.token) },
           },
           (res) => {
             let text = "";
@@ -366,39 +435,14 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     }
   });
 
-  it("Taskana 4685: plain HTTP with NO token header is accepted (frozen absent-accepted rule)", async () => {
-    const upstream = await startFakeUpstream();
-    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
-    try {
-      const body = await new Promise<string>((resolve, reject) => {
-        const req = http.get(
-          { host: "127.0.0.1", port: relay!.port, path: "http://example.com/x", agent: false },
-          (res) => {
-            let text = "";
-            res.on("data", (chunk: Buffer) => { text += chunk.toString(); });
-            res.on("end", () => resolve(text));
-          },
-        );
-        req.on("error", reject);
-      });
-      expect(body).toBe("UPSTREAM-GET-OK");
-    } finally {
-      relay!.close();
-      upstream.server.closeAllConnections();
-      upstream.server.close();
-    }
-  });
-
-  it("Taskana 4685: CONNECT with a WRONG token header gets 403 and the upstream is never contacted", async () => {
+  it("B1: CONNECT with NO Proxy-Authorization gets 407 and the upstream is never contacted", async () => {
     const upstream = await startFakeUpstream();
     const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
     let socket: net.Socket | undefined;
     try {
-      const { socket: s, response } = await connectThrough(relay!.port, "example.com:443", {
-        "x-anycode-relay-token": "deadbeef",
-      });
+      const { socket: s, response } = await connectThrough(relay!.port, "example.com:443");
       socket = s;
-      expect(response).toContain("403");
+      expect(response).toContain("407");
       expect(upstream.auth.connect).toEqual([]);
     } finally {
       socket?.destroy();
@@ -408,13 +452,32 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     }
   });
 
-  it("Taskana 4685: CONNECT with the CORRECT token header tunnels through", async () => {
+  it("B1: CONNECT with a WRONG Proxy-Authorization gets 407 and the upstream is never contacted", async () => {
     const upstream = await startFakeUpstream();
     const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
     let socket: net.Socket | undefined;
     try {
       const { socket: s, response } = await connectThrough(relay!.port, "example.com:443", {
-        "x-anycode-relay-token": relay!.token,
+        "proxy-authorization": "Basic d3Jvbmc6d3Jvbmc=",
+      });
+      socket = s;
+      expect(response).toContain("407");
+      expect(upstream.auth.connect).toEqual([]);
+    } finally {
+      socket?.destroy();
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+
+  it("B1: CONNECT with the CORRECT Proxy-Authorization tunnels through", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    let socket: net.Socket | undefined;
+    try {
+      const { socket: s, response } = await connectThrough(relay!.port, "example.com:443", {
+        "proxy-authorization": relayProxyAuth(relay!.token),
       });
       socket = s;
       expect(response).toContain("200");
@@ -433,8 +496,44 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     }
   });
 
+  it("B1: a client-sent x-anycode-relay-token header is dropped, never forwarded upstream", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        const req = http.get(
+          {
+            host: "127.0.0.1",
+            port: relay!.port,
+            path: "http://example.com/x",
+            agent: false,
+            headers: {
+              "proxy-authorization": relayProxyAuth(relay!.token),
+              "x-anycode-relay-token": "smuggled-value",
+            },
+          },
+          (res) => {
+            res.resume();
+            res.on("end", () => resolve("done"));
+          },
+        );
+        req.on("error", reject);
+      });
+      expect(body).toBe("done");
+      // The fake upstream records only proxy-authorization; to prove the
+      // anycode header was dropped we assert via stripHopByHop plus the fact
+      // the request SUCCEEDED (a forwarded unknown header would still pass,
+      // so the strip unit test below carries the precise assertion).
+      expect(upstream.auth.request.length).toBe(1);
+    } finally {
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+
   it("refuses an https:// upstream (logs once, falls back to drop)", async () => {
-    const relay = await resolveProxyRelay({ HTTPS_PROXY: "https://user:secret@proxy.corp:3128" });
+    const relay = await resolveProxyRelay("https://user:secret@proxy.corp:3128");
     expect(relay).toBeUndefined();
   });
 
@@ -443,14 +542,14 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
   // HTTP(S)_PROXY names — a credentialed ALL_PROXY was silently dropped with
   // no relay and no warn, reproducing the exact breakage 4074 exists to fix
   // one variable name later. Both must now start a relay.
-  it("F4 repro: a credentialed ALL_PROXY / npm_config_https_proxy also starts the relay", async () => {
+  it("F4 repro: the boot scan finds a credentialed ALL_PROXY / npm_config_https_proxy too", async () => {
     closeProxyRelay();
-    const fromAllProxy = await resolveProxyRelay({ ALL_PROXY: "http://user:secret@127.0.0.1:9" });
+    const fromAllProxy = await resolveProxyRelay(credentialedProxyValueForRelay({ ALL_PROXY: "http://user:secret@127.0.0.1:9" })!);
     expect(fromAllProxy).toBeDefined();
     expect(fromAllProxy!.url).not.toContain("secret");
     closeProxyRelay();
 
-    const fromNpm = await resolveProxyRelay({ npm_config_https_proxy: "http://user:secret@127.0.0.1:9" });
+    const fromNpm = await resolveProxyRelay(credentialedProxyValueForRelay({ npm_config_https_proxy: "http://user:secret@127.0.0.1:9" })!);
     expect(fromNpm).toBeDefined();
     closeProxyRelay();
   });
@@ -467,9 +566,9 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
       warns.push(String(msg));
     };
     try {
-      const env = { HTTPS_PROXY: "https://user:secret@proxy.corp:3128" } as NodeJS.ProcessEnv;
+      const upstream = "https://user:secret@proxy.corp:3128";
       for (let i = 0; i < 5; i += 1) {
-        const relay = await resolveProxyRelay(env);
+        const relay = await resolveProxyRelay(upstream);
         expect(relay).toBeUndefined();
       }
       expect(warns).toHaveLength(1);
@@ -478,11 +577,36 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
       // closeProxyRelay() clears the refused state with the cache — a later
       // resolve re-attempts (and warns again exactly once for the new cycle).
       closeProxyRelay();
-      const again = await resolveProxyRelay(env);
+      const again = await resolveProxyRelay(upstream);
       expect(again).toBeUndefined();
       expect(warns).toHaveLength(2);
     } finally {
       console.warn = originalWarn;
+    }
+  });
+});
+
+// B2 companion: the refuse memory is PER UPSTREAM — a refused https://
+// upstream does not silence the warn for a different, relayable one.
+describe("refuse memory per upstream (Taskana 4685 rework B2)", () => {
+  it("two refused upstreams each warn once; a refused key never blocks a different upstream", async () => {
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg?: unknown) => { warns.push(String(msg)); };
+    try {
+      const refused = "https://user:secret@proxy.corp:3128";
+      expect(await resolveProxyRelay(refused)).toBeUndefined();
+      expect(await resolveProxyRelay(refused)).toBeUndefined();
+      expect(warns).toHaveLength(1); // once for THIS upstream
+      const refused2 = "https://user:secret@other.corp:3128";
+      expect(await resolveProxyRelay(refused2)).toBeUndefined();
+      expect(warns).toHaveLength(2); // a different upstream warns again
+      const ok = await resolveProxyRelay("http://user:secret@127.0.0.1:9");
+      expect(ok).toBeDefined(); // unaffected by the refused keys
+      ok!.close();
+    } finally {
+      console.warn = originalWarn;
+      closeProxyRelay();
     }
   });
 });
@@ -494,6 +618,7 @@ describe("proxy relay hardening (review follow-up)", () => {
       "keep-alive": "timeout=5",
       "proxy-connection": "keep-alive",
       "proxy-authorization": "Basic client-supplied",
+      "x-anycode-relay-token": "client-smuggled", // Taskana 4685 rework: retired header, dropped outright
       upgrade: "websocket",
       te: "trailers",
       trailer: "x-checksum", // cross-review F7 triage: Trailer IS stripped — no dangling trailer promise post-relay
@@ -530,7 +655,9 @@ describe("proxy relay hardening (review follow-up)", () => {
     const upstreamSockets: net.Socket[] = [];
     upstream.server.on("connect", (_req, socket: net.Socket) => upstreamSockets.push(socket));
     const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
-    const { socket } = await connectThrough(relay!.port, "example.com:443");
+    const { socket } = await connectThrough(relay!.port, "example.com:443", {
+      "proxy-authorization": relayProxyAuth(relay!.token),
+    });
     try {
       const clientClosed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
       const upstreamClosed = new Promise<void>((resolve) => upstreamSockets[0]!.once("close", () => resolve()));
@@ -573,7 +700,11 @@ describe("proxy relay hardening (review follow-up)", () => {
       const response = await new Promise<string>((resolve, reject) => {
         const socket = net.connect(relay!.port, "127.0.0.1");
         const chunks: Buffer[] = [];
-        socket.on("connect", () => socket.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"));
+        socket.on("connect", () =>
+          socket.write(
+            `CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: ${relayProxyAuth(relay!.token)}\r\n\r\n`,
+          ),
+        );
         socket.on("data", (chunk: Buffer) => chunks.push(chunk));
         socket.on("close", () => resolve(Buffer.concat(chunks).toString("latin1")));
         socket.on("error", reject);
@@ -603,7 +734,9 @@ describe("proxy relay hardening (review follow-up)", () => {
     const port = (refusing.address() as net.AddressInfo).port;
     const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${port}`);
     try {
-      const { socket, response, rest } = await connectThrough(relay!.port, "example.com:443");
+      const { socket, response, rest } = await connectThrough(relay!.port, "example.com:443", {
+        "proxy-authorization": relayProxyAuth(relay!.token),
+      });
       // The refusal body may arrive with the header chunk (rest) or as the
       // next data event; collect whatever follows the header block.
       const body = await new Promise<string>((resolve) => {
@@ -624,10 +757,13 @@ describe("proxy relay hardening (review follow-up)", () => {
     }
   });
 
-  // F8(e): the smuggling property that matters most — a client-supplied
-  // Proxy-Authorization must never ride along to (or override the relay's
-  // credential at) the upstream. The upstream sees ONLY the relay's value.
-  it("strips a client-supplied Proxy-Authorization end-to-end (the relay's credential is the only one upstream)", async () => {
+  // F8(e): the smuggling property that matters most — the upstream sees ONLY
+  // the relay's credential. Since the 4685 rework gate a client MUST present
+  // the relay's own token to get past the 407, and the relay OVERWRITES
+  // `proxy-authorization` with the upstream credential before forwarding, a
+  // client-crafted value can never ride along (a different value is 407-gated
+  // before any upstream contact — see the B1 matrix above).
+  it("the relay's credential is the only one upstream (client auth never forwards)", async () => {
     const upstream = await startFakeUpstream();
     const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
     try {
@@ -638,7 +774,7 @@ describe("proxy relay hardening (review follow-up)", () => {
             port: relay!.port,
             path: "http://example.com/x",
             agent: false,
-            headers: { "proxy-authorization": "Basic Y2xpZW50LWZvcmdlZA==" }, // client-forged
+            headers: { "proxy-authorization": relayProxyAuth(relay!.token) },
           },
           (res) => {
             res.resume();
@@ -665,7 +801,9 @@ describe("proxy relay hardening (review follow-up)", () => {
     const encoded = new URL(`http://user:päss@127.0.0.1:${upstream.port}`).toString();
     const relay = await createProxyRelayForTest(encoded);
     try {
-      const { socket, response } = await connectThrough(relay!.port, "example.com:443");
+      const { socket, response } = await connectThrough(relay!.port, "example.com:443", {
+        "proxy-authorization": relayProxyAuth(relay!.token),
+      });
       expect(response).toContain("200");
       socket.destroy();
       const expected = `Basic ${Buffer.from("user:päss", "utf8").toString("base64")}`;

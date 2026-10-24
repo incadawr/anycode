@@ -45,7 +45,7 @@ import { NodeArtifactStore } from "../adapters/node/node-artifacts.js";
 // Credential-free loopback proxy relay (TASK.135 follow-up / Taskana 4074):
 // started before the first child spawn when the env holds a credentialed
 // proxy; the exec adapter below re-reads its URL per spawn.
-import { closeProxyRelay, resolveProxyRelay } from "../adapters/node/proxy-relay.js";
+import { closeProxyRelay, credentialedProxyValueForRelay, resolveProxyRelay } from "../adapters/node/proxy-relay.js";
 import { ConversationHistory } from "../context/history.js";
 import { deriveSessionTitle, generateSessionTitle, sanitizeTitleSource } from "../context/session-title.js";
 import { createDefaultTokenizer } from "../context/tokenizer.js";
@@ -620,14 +620,19 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   delete env[ENV_API_KEY];
 
   // TASK.135 follow-up (Taskana 4074): when this CLI holds a credentialed
-  // proxy, start the credential-free loopback relay BEFORE the exec adapter
-  // below can spawn anything, so the first Bash child already sees the relay
-  // URL instead of a dropped proxy var. No-op otherwise; a refused upstream
-  // (https:// scheme &c) logs once and keeps TASK.135's drop behaviour.
-  // (`env` here is the same source the adapter's spawns read — process.env in
-  // production, the injected test env otherwise — so the relay is started for
-  // exactly the env the children will be built from.)
-  await resolveProxyRelay(env);
+  // proxy, start the credential-free loopback relay for it BEFORE the exec
+  // adapter below can spawn anything, so the first Bash child already sees
+  // the relay URL instead of a dropped proxy var. No-op otherwise; a refused
+  // upstream (https:// scheme &c) logs once and keeps TASK.135's drop
+  // behaviour. Taskana 4685 rework: the boot scan finds the first
+  // credentialed proxy value in `env` (process.env in production, the
+  // injected test env otherwise — the same source the adapter's spawns read)
+  // and starts the relay for THAT upstream; the relay registry keeps one
+  // relay per distinct upstream.
+  const bootUpstream = credentialedProxyValueForRelay(env);
+  if (bootUpstream !== undefined) {
+    await resolveProxyRelay(bootUpstream);
+  }
 
   const fs = new NodeFileSystemAdapter();
   const exec = new NodeExecutionAdapter();

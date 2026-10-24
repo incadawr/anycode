@@ -864,27 +864,32 @@ export function engineProxyOutcome(
   const carrier: EngineProxyCarrier = NO_PROXY_KEYS.some((name) => envPresent(bootEnv, name))
     ? { kind: "proxy", url: materialized.url }
     : { kind: "proxy", url: materialized.url, noProxy: composeNoProxy(materialized.noProxy) };
-  // Taskana 4685: a credentialed carrier never crosses the engine-child
-  // boundary — swap for main's relay, fail-closed to `direct` without one.
-  return relayCredentialedCarrier(carrier, deps.relayUrl);
+  // Taskana 4685 rework: a credentialed carrier never crosses the
+  // engine-child boundary — swapped for the relay OF THAT VALUE (the
+  // registry key is the carrier's own upstream), fail-closed to `direct`
+  // without one.
+  return relayCredentialedCarrier(carrier, deps.relayFor);
 }
 
 /**
- * Taskana 4685: de-credentialises an engine carrier before it is ever stamped
- * into a host fork's env. A carrier whose url carries userinfo (`@`) is swapped
- * for main's own credential-free loopback relay URL (the same boundary Bash/
- * terminal children get); the engine's `noProxy` licence survives the swap.
- * Fail-closed without a relay: a credentialed carrier degrades to `direct` —
- * never hand `user:pass@` across the engine-child boundary. Credential-free
- * carriers, `direct` and `absent` pass through untouched.
+ * Taskana 4685 rework: de-credentialises an engine carrier before it is ever
+ * stamped into a host fork's env. A carrier whose url carries userinfo (`@`)
+ * is swapped for the relay URL of THAT SAME upstream (`relayFor` is main's
+ * per-upstream registry lookup — never a relay fronting some other proxy,
+ * which would silently re-route the child through the wrong network path);
+ * the engine's `noProxy` licence survives the swap. Fail-closed without a
+ * relay: a credentialed carrier degrades to `direct` — never hand
+ * `user:pass@` across the engine-child boundary. Credential-free carriers,
+ * `direct` and `absent` pass through untouched.
  */
 export function relayCredentialedCarrier(
   carrier: EngineProxyCarrier,
-  relayUrl: string | undefined,
+  relayFor: ((upstreamUrl: string) => string | undefined) | undefined,
 ): EngineProxyCarrier {
   if (carrier.kind !== "proxy" || !carrier.url.includes("@")) {
     return carrier;
   }
+  const relayUrl = relayFor?.(carrier.url);
   if (relayUrl === undefined) {
     return { kind: "direct" };
   }

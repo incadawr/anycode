@@ -763,16 +763,20 @@ describe("NodeExecutionAdapter", () => {
       vi.unstubAllEnvs();
     });
 
-    /** Spy the relay URL in (the module-level cache `proxyRelayUrl` reads). */
-    async function stubRelayUrl(url: string = RELAY_URL): Promise<() => void> {
+    /**
+     * Spy the relay LOOKUP in (the per-value resolver `buildChildEnv`'s third
+     * argument reads — Taskana 4685 rework: one relay per upstream, so the
+     * stub answers the value being swapped, like the real registry would).
+     */
+    async function stubRelayLookup(url: string = RELAY_URL): Promise<() => void> {
       const relayModule = await import("./proxy-relay.js");
-      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(url);
+      const spy = vi.spyOn(relayModule, "proxyRelayLookup").mockReturnValue(() => url);
       return () => spy.mockRestore();
     }
 
-    it("Taskana 4685: a tokened relay URL (path segment) reaches the child verbatim", async () => {
-      const TOKENED = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
-      const restore = await stubRelayUrl(TOKENED);
+    it("Taskana 4685 rework: a minted relay URL (token as userinfo) reaches the child verbatim", async () => {
+      const TOKENED = "http://anycode:AbCdEf1234567890_-XyZ@127.0.0.1:47557";
+      const restore = await stubRelayLookup(TOKENED);
       tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
       try {
         const result = await adapter.run({
@@ -783,17 +787,18 @@ describe("NodeExecutionAdapter", () => {
         expect(result.status).toBe("completed");
         const childEnv = JSON.parse(result.stdout) as Record<string, string | undefined>;
         expect(childEnv.HTTPS_PROXY).toBe(TOKENED);
-        // Per-var (the inherited dev env can carry unrelated `@`s elsewhere).
-        expect(childEnv.HTTPS_PROXY).not.toContain("@");
-        expect(childEnv.HTTP_PROXY).not.toContain("@");
+        // Per-var: the upstream password never appears anywhere.
         expect(JSON.stringify(childEnv)).not.toContain("s3cret");
+        // The relay URL's own userinfo IS the relay's token (not a credential
+        // leak) — the one `@` the DoD permits, in exactly this shape.
+        expect(childEnv.HTTPS_PROXY).toContain("anycode:");
       } finally {
         restore();
       }
     });
 
     it("a spawned shell child receives the relay URL instead of the credentialed proxy, and no credential anywhere", async () => {
-      const restore = await stubRelayUrl();
+      const restore = await stubRelayLookup();
       tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
       try {
         const result = await adapter.run({
@@ -809,8 +814,6 @@ describe("NodeExecutionAdapter", () => {
         expect(childEnv.NO_PROXY).toBe("localhost");
         expect(JSON.stringify(childEnv)).not.toContain("s3cret");
         expect(JSON.stringify(childEnv)).not.toContain("user:");
-        // The relay URL itself never carries an @ (the whole DoD of the relay).
-        expect(childEnv.HTTPS_PROXY).not.toContain("@");
         // The parent's own env keeps the credentialed value (engines still need it).
         expect(process.env.HTTPS_PROXY).toBe(CREDENTIALED);
       } finally {
@@ -819,7 +822,7 @@ describe("NodeExecutionAdapter", () => {
     });
 
     it("runBinary child receives the same relay URL", async () => {
-      const restore = await stubRelayUrl();
+      const restore = await stubRelayLookup();
       tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
       try {
         const result = await adapter.runBinary({

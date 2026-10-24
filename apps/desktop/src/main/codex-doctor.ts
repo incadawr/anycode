@@ -18,6 +18,7 @@
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { closeSync, openSync, readSync } from "node:fs";
+import { proxyValueCarriesCredential } from "@anycode/core/child-env";
 import { StringDecoder } from "node:string_decoder";
 import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import { ENV_CODEX_PROXY_URL, applyEngineProxyOverride } from "../shared/engines.js";
@@ -158,12 +159,14 @@ export function buildDoctorChildEnv(
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
-  // Taskana 4685: a credentialed proxy never reaches the doctor/login CLI —
-  // swap it for MAIN's credential-free relay (main cannot read the host fork's
-  // one). Fail-closed without a relay. The engine carrier below still wins for
-  // an engine-scoped profile; `direct` still clears everything.
+  // Taskana 4685 rework: a credentialed proxy never reaches the doctor/login
+  // CLI. `relayUrl` is the relay of THIS source env's own credentialed
+  // upstream (main's `doctorRelayUrl` resolves it per value — blocker B2),
+  // so the swap never substitutes a relay fronting a different proxy.
+  // Fail-closed without a relay. The engine carrier below still wins for an
+  // engine-scoped profile; `direct` still clears everything.
   for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
-    if (typeof env[name] === "string" && env[name]!.includes("@")) {
+    if (typeof env[name] === "string" && proxyValueCarriesCredential(env[name]!)) {
       if (relayUrl !== undefined) env[name] = relayUrl;
       else delete env[name];
     }
@@ -171,7 +174,7 @@ export function buildDoctorChildEnv(
   // The relay fronts only the HTTP(S)_PROXY upstream: a credentialed
   // ALL_PROXY/all_proxy is dropped (Taskana 4685 review).
   for (const name of ["ALL_PROXY", "all_proxy"] as const) {
-    if (typeof env[name] === "string" && env[name]!.includes("@")) delete env[name];
+    if (typeof env[name] === "string" && proxyValueCarriesCredential(env[name]!)) delete env[name];
   }
   env.PATH = augmentPathForGui(env.PATH, platform);
   // TASK.139: the engine-level proxy, if main stamped its carrier into `source`.

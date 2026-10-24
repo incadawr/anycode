@@ -795,8 +795,11 @@ describe("buildCodexChildEnv — engine proxy carrier (TASK.139)", () => {
   // proxy never reaches the engine CLI — the host swaps it for its
   // credential-free loopback relay URL (fail-closed without one). The exemption
   // is now relay-only.
-  describe("Taskana 4685: credentialed family swapped for the relay URL", () => {
-    const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+  describe("Taskana 4685 rework: credentialed family swapped for the relay URL", () => {
+    // Taskana 4685 rework: the relay URL carries the token as USERINFO
+    // (`http://anycode:<token>@127.0.0.1:<port>`), and the swap is PER VALUE
+    // (blocker B2 — each credentialed upstream gets ITS OWN relay).
+    const RELAY = "http://anycode:AbCdEf1234567890_-XyZ@127.0.0.1:47557";
     const CREDENTIALED_SOURCE: NodeJS.ProcessEnv = {
       HOME: "/home/test",
       PATH: "/usr/bin",
@@ -805,18 +808,54 @@ describe("buildCodexChildEnv — engine proxy carrier (TASK.139)", () => {
       https_proxy: "http://u:s3cret@p:1",
       http_proxy: "http://u:s3cret@p:1",
     };
+    /** Registry stub answering BOTH the HTTPS- and the HTTP-family upstream. */
+    const relayForBoth = (upstreamUrl: string): string | undefined =>
+      upstreamUrl === "http://u:s3cret@p:1" ? RELAY : undefined;
 
     it("with the relay up, all four family vars become the relay URL and no credential survives", async () => {
       const relayModule = await import("@anycode/core/proxy-relay");
-      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY);
+      const spy = vi.spyOn(relayModule, "proxyRelayLookup").mockReturnValue(relayForBoth);
       try {
         const env = buildCodexChildEnv(CREDENTIALED_SOURCE, "linux");
         expect(env.HTTPS_PROXY).toBe(RELAY);
         expect(env.HTTP_PROXY).toBe(RELAY);
         expect(env.https_proxy).toBe(RELAY);
         expect(env.http_proxy).toBe(RELAY);
-        expect(JSON.stringify(env)).not.toContain("@");
         expect(JSON.stringify(env)).not.toContain("s3cret");
+        // The relay URL's own `anycode:<token>@` userinfo is the one @ permitted.
+        expect(env.HTTPS_PROXY).toContain("anycode:");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("B2: distinct HTTP vs HTTPS upstreams swap to their OWN relays", async () => {
+      const relayModule = await import("@anycode/core/proxy-relay");
+      const RELAY_HTTPS = "http://anycode:tok-https@127.0.0.1:47557";
+      const RELAY_HTTP = "http://anycode:tok-http@127.0.0.1:47558";
+      const spy = vi.spyOn(relayModule, "proxyRelayLookup").mockReturnValue(
+        (upstreamUrl: string) =>
+          upstreamUrl === "http://u:s3cret@https-up:1" ? RELAY_HTTPS
+          : upstreamUrl === "http://u:s3cret@http-up:2" ? RELAY_HTTP
+          : undefined,
+      );
+      try {
+        const env = buildCodexChildEnv(
+          {
+            HOME: "/home/test",
+            PATH: "/usr/bin",
+            HTTPS_PROXY: "http://u:s3cret@https-up:1",
+            HTTP_PROXY: "http://u:s3cret@http-up:2",
+          },
+          "linux",
+        );
+        // Per-name truth (the builder swaps WHAT IS THERE — the 4074 contract):
+        // each protocol's UPPER var carries ITS OWN relay; the absent lowercase
+        // spellings stay absent (the allowlist never copied them in).
+        expect(env.HTTPS_PROXY).toBe(RELAY_HTTPS);
+        expect(env.HTTP_PROXY).toBe(RELAY_HTTP);
+        expect(env.https_proxy).toBeUndefined();
+        expect(env.http_proxy).toBeUndefined();
       } finally {
         spy.mockRestore();
       }
@@ -824,7 +863,7 @@ describe("buildCodexChildEnv — engine proxy carrier (TASK.139)", () => {
 
     it("fail-closed without a relay: the credentialed family is deleted", async () => {
       const relayModule = await import("@anycode/core/proxy-relay");
-      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(undefined);
+      const spy = vi.spyOn(relayModule, "proxyRelayLookup").mockReturnValue(() => undefined);
       try {
         const env = buildCodexChildEnv(CREDENTIALED_SOURCE, "linux");
         expect(env.HTTPS_PROXY).toBeUndefined();

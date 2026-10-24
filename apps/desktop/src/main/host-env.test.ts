@@ -2660,48 +2660,62 @@ describe("buildHostEnv — vision-fallback recognizer (TASK.198 E1)", () => {
   });
 });
 
-// ── Taskana 4685: main de-credentialises engine carriers against its own relay ──
+// ── Taskana 4685 rework: main de-credentialises engine carriers against the
+// per-upstream relay registry (blocker B2: the relay of THAT value, never a
+// relay fronting a different upstream) ──
 
-describe("relayCredentialedCarrier (Taskana 4685)", () => {
-  const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+describe("relayCredentialedCarrier (Taskana 4685 rework)", () => {
+  const RELAY_A = "http://anycode:tok-a@127.0.0.1:47557";
+  const RELAY_B = "http://anycode:tok-b@127.0.0.1:47558";
+  /** The registry lookup shape `ProxyMaterializationDeps.relayFor` takes. */
+  const relayFor = (upstreamUrl: string): string | undefined =>
+    upstreamUrl === "http://u:p@a:1" ? RELAY_A : upstreamUrl === "http://u:p@b:2" ? RELAY_B : undefined;
 
-  it("a credentialed carrier + relayUrl becomes the relay URL, keeping the noProxy licence", () => {
-    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@h:1", noProxy: "x" }, RELAY)).toEqual({
+  it("a credentialed carrier swaps for THAT value's relay, keeping the noProxy licence", () => {
+    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@a:1", noProxy: "x" }, relayFor)).toEqual({
       kind: "proxy",
-      url: RELAY,
+      url: RELAY_A,
       noProxy: "x",
     });
   });
 
-  it("a credentialed carrier without a noProxy licence swaps to the bare relay URL", () => {
-    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@h:1" }, RELAY)).toEqual({
+  it("B2: two different credentialed upstreams each get their OWN relay, never one shared URL", () => {
+    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@a:1" }, relayFor)).toEqual({
       kind: "proxy",
-      url: RELAY,
+      url: RELAY_A,
+    });
+    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@b:2" }, relayFor)).toEqual({
+      kind: "proxy",
+      url: RELAY_B,
     });
   });
 
-  it("fail-closed: a credentialed carrier + relayUrl === undefined becomes direct", () => {
-    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@h:1", noProxy: "x" }, undefined)).toEqual({
+  it("fail-closed: a credentialed carrier whose upstream has no relay becomes direct — never a different upstream's relay", () => {
+    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@nowhere:3", noProxy: "x" }, relayFor)).toEqual({
+      kind: "direct",
+    });
+    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@a:1", noProxy: "x" }, undefined)).toEqual({
       kind: "direct",
     });
   });
 
-  it("a credential-less url is returned as-is, with and without a relayUrl", () => {
+  it("a credential-less url is returned as-is, with and without a relayFor", () => {
     const carrier = { kind: "proxy" as const, url: "http://h:1", noProxy: "x" };
-    expect(relayCredentialedCarrier(carrier, RELAY)).toBe(carrier);
+    expect(relayCredentialedCarrier(carrier, relayFor)).toBe(carrier);
     expect(relayCredentialedCarrier(carrier, undefined)).toBe(carrier);
   });
 
   it("direct and absent pass through untouched", () => {
-    expect(relayCredentialedCarrier({ kind: "direct" }, RELAY)).toEqual({ kind: "direct" });
-    expect(relayCredentialedCarrier({ kind: "absent" }, RELAY)).toEqual({ kind: "absent" });
+    expect(relayCredentialedCarrier({ kind: "direct" }, relayFor)).toEqual({ kind: "direct" });
+    expect(relayCredentialedCarrier({ kind: "absent" }, relayFor)).toEqual({ kind: "absent" });
     expect(relayCredentialedCarrier({ kind: "direct" }, undefined)).toEqual({ kind: "direct" });
     expect(relayCredentialedCarrier({ kind: "absent" }, undefined)).toEqual({ kind: "absent" });
   });
 });
 
-describe("engineProxyOutcome threads relayUrl end-to-end (Taskana 4685)", () => {
-  const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+describe("engineProxyOutcome threads relayFor end-to-end (Taskana 4685 rework)", () => {
+  /** The relay URL the fake registry hands to the profile's materialised upstream. */
+  const RELAY = "http://anycode:tok-a@127.0.0.1:47557";
   /** A manual profile whose password comes from the materialisation cache. */
   const profiledSettings = (): AnycodeSettings =>
     settings({
@@ -2715,29 +2729,45 @@ describe("engineProxyOutcome threads relayUrl end-to-end (Taskana 4685)", () => 
   const withPassword: ProxyMaterializationDeps = {
     proxyPassword: () => "pass",
   };
+  /** `relayFor` answering ONLY the profile's own materialised upstream (B2). */
+  const relayForProfileUpstream = (upstreamUrl: string): string | undefined =>
+    upstreamUrl.includes("proxy.corp:3128") ? RELAY : undefined;
 
-  it("without relayUrl the credentialed carrier degrades fail-closed to direct", () => {
+  it("without relayFor the credentialed carrier degrades fail-closed to direct", () => {
     const outcome = engineProxyOutcome(profiledSettings(), {}, "codex", false, withPassword);
     expect(outcome).toEqual({ kind: "direct" });
   });
 
-  it("with relayUrl the carrier becomes the relay URL and keeps the noProxy licence", () => {
+  it("with relayFor the carrier becomes the relay of THAT upstream and keeps the noProxy licence", () => {
     const outcome = engineProxyOutcome(profiledSettings(), {}, "codex", false, {
       ...withPassword,
-      relayUrl: RELAY,
+      relayFor: relayForProfileUpstream,
     });
     expect(outcome).toEqual({ kind: "proxy", url: RELAY, noProxy: LOOPBACK_NO_PROXY });
   });
 
+  it("B2 fail-closed: a relayFor that has no relay for THIS upstream's value yields direct, never some other value's relay", () => {
+    // The registry serves upstream A only; the profile's upstream is B.
+    // The lookup is BY VALUE, so B gets undefined — and the carrier must take
+    // the fail-closed direct, not A's relay (which fronts a different proxy).
+    const servesOnlyA = (upstreamUrl: string): string | undefined =>
+      upstreamUrl.includes("@a:1") ? "http://anycode:tok-a@127.0.0.1:47557" : undefined;
+    const outcome = engineProxyOutcome(profiledSettings(), {}, "codex", false, {
+      ...withPassword,
+      relayFor: servesOnlyA,
+    });
+    expect(outcome).toEqual({ kind: "direct" });
+  });
+
   it("a credential-less engine setting (legacy proxyUrl, no @) is untouched by the relay", () => {
     const outcome = engineProxyOutcome(settings({ codex: { proxyUrl: "http://codex-proxy:3128" } }), {}, "codex", false, {
-      relayUrl: RELAY,
+      relayFor: relayForProfileUpstream,
     });
     expect(outcome).toEqual({ kind: "proxy", url: "http://codex-proxy:3128", noProxy: LOOPBACK_NO_PROXY });
   });
 
   it("engineProxyCarriers threads the same deps: the encoded carrier carries the relay URL", () => {
-    const carriers = engineProxyCarriers(profiledSettings(), {}, { ...withPassword, relayUrl: RELAY });
+    const carriers = engineProxyCarriers(profiledSettings(), {}, { ...withPassword, relayFor: relayForProfileUpstream });
     expect(decodeEngineProxyCarrier(carriers.ANYCODE_CODEX_PROXY_URL!)).toEqual({
       kind: "proxy",
       url: RELAY,

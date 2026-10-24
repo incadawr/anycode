@@ -9,6 +9,8 @@ import {
   isEngineProxyCarrierName,
   isProxyVarName,
   proxyValueHasUserinfo,
+  isCredentialFreeRelayUrl,
+  proxyValueCarriesCredential,
   sanitizeChildEnv,
 } from "./child-env.js";
 
@@ -271,6 +273,71 @@ describe("relayUrl rewrite (TASK.135 follow-up / Taskana 4074)", () => {
     const out = buildChildEnv({ HTTPS_PROXY: "http://user:s3cret@proxy:3128" }, undefined, RELAY);
     expect(JSON.stringify(out)).not.toContain("s3cret");
     expect(JSON.stringify(out)).not.toContain("user:");
+  });
+});
+
+// ── Taskana 4685 rework: the relay URL's own userinfo and the per-value swap ──
+
+describe("relay-URL userinfo exemption + per-value swap (Taskana 4685 rework)", () => {
+  const RELAY_A = "http://anycode:tok-a@127.0.0.1:47557";
+  const RELAY_B = "http://anycode:tok-b@127.0.0.1:47558";
+
+  it("isCredentialFreeRelayUrl: ONLY our exact loopback relay shape is exempt", () => {
+    expect(isCredentialFreeRelayUrl(RELAY_A)).toBe(true);
+    expect(isCredentialFreeRelayUrl("http://anycode:tok@127.0.0.1:1/path")) .toBe(true);
+    // A different user, host, scheme — or a relay user with an EMPTY password — is NOT a relay URL.
+    expect(isCredentialFreeRelayUrl("http://anycode:@127.0.0.1:1")).toBe(false);
+    expect(isCredentialFreeRelayUrl("http://other:tok@127.0.0.1:1")).toBe(false);
+    expect(isCredentialFreeRelayUrl("http://anycode:tok@10.0.0.5:1")).toBe(false);
+    expect(isCredentialFreeRelayUrl("https://anycode:tok@127.0.0.1:1")).toBe(false);
+    expect(isCredentialFreeRelayUrl("http://u:p@corp:3128")).toBe(false);
+    expect(isCredentialFreeRelayUrl("not a url")).toBe(false);
+  });
+
+  it("proxyValueCarriesCredential: an @ is a credential EXCEPT the relay URL's own token userinfo", () => {
+    expect(proxyValueCarriesCredential("http://u:p@corp:3128")).toBe(true);
+    expect(proxyValueCarriesCredential(RELAY_A)).toBe(false);
+    // The raw @-detector still sees both (back-compat: proxyValueHasUserinfo is the TASK.135 shape).
+    expect(proxyValueHasUserinfo(RELAY_A)).toBe(true);
+  });
+
+  it("B2 (lookup form): each dropped value swaps for the relay of THAT value — distinct HTTP vs HTTPS upstreams keep their own relays", () => {
+    const relayFor = (upstreamUrl: string): string | undefined =>
+      upstreamUrl === "http://u:p@https-up:3128" ? RELAY_A : upstreamUrl === "http://u:p@http-up:8080" ? RELAY_B : undefined;
+    const out = sanitizeChildEnv(
+      {
+        HTTPS_PROXY: "http://u:p@https-up:3128",
+        HTTP_PROXY: "http://u:p@http-up:8080",
+      },
+      relayFor,
+    );
+    expect(out.HTTPS_PROXY).toBe(RELAY_A);
+    expect(out.HTTP_PROXY).toBe(RELAY_B);
+  });
+
+  it("B2 (lookup form): a value with no relay of its own is dropped, never swapped for a foreign relay", () => {
+    const relayFor = (upstreamUrl: string): string | undefined =>
+      upstreamUrl === "http://u:p@known:3128" ? RELAY_A : undefined;
+    const out = sanitizeChildEnv(
+      {
+        HTTPS_PROXY: "http://u:p@known:3128",
+        HTTP_PROXY: "http://u:p@unknown:8080",
+      },
+      relayFor,
+    );
+    expect(out.HTTPS_PROXY).toBe(RELAY_A);
+    expect(out.HTTP_PROXY).toBeUndefined();
+    expect(out.http_proxy).toBeUndefined(); // absent spelling not filled from a foreign relay
+  });
+
+  it("a minted relay URL in the env passes the scrub verbatim (the exemption in action)", () => {
+    const out = sanitizeChildEnv({ HTTPS_PROXY: RELAY_A, NO_PROXY: "127.0.0.1" });
+    expect(out).toEqual({ HTTPS_PROXY: RELAY_A, NO_PROXY: "127.0.0.1" });
+  });
+
+  it("buildChildEnv accepts the lookup as its third argument (string callers unchanged)", () => {
+    const out = buildChildEnv({ HTTPS_PROXY: "http://u:p@h:1" }, undefined, () => RELAY_A);
+    expect(out.HTTPS_PROXY).toBe(RELAY_A);
   });
 });
 
