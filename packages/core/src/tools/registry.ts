@@ -13,6 +13,7 @@ import { webFetchTool } from "./web-fetch.js";
 import { createAgentTool, type CreateAgentToolOptions } from "./agent.js";
 import { skillTool } from "./skill.js";
 import { workflowTool } from "./workflow.js";
+import { archMapTool } from "./arch-map.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, AnyToolDefinition>();
@@ -59,10 +60,11 @@ export interface CreateDefaultToolRegistryOptions {
 }
 
 /**
- * Builds a registry with the twelve built-ins: Read, Write, Edit, Bash, Grep
+ * Builds a registry with the thirteen built-ins: Read, Write, Edit, Bash, Grep
  * (Phase 0) + Glob, TodoRead, TodoWrite, WebFetch (Phase 1, design §2.14) +
  * Agent (Phase 3 slice 3.1, design §3.4) + Skill (Phase 3 slice 3.3, design
- * §2.7) + Workflow (Phase 3 slice 3.4, design §2.7).
+ * §2.7) + Workflow (Phase 3 slice 3.4, design §2.7) + ArchMap (TASK.233
+ * slice S1, read-only TS/JS import-graph scanner).
  */
 export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOptions): ToolRegistry {
   const registry = new ToolRegistry();
@@ -78,5 +80,6 @@ export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOption
   registry.register(createAgentTool(opts?.agent));
   registry.register(skillTool);
   registry.register(workflowTool);
+  registry.register(archMapTool);
   return registry;
 }

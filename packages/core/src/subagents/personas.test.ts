@@ -20,13 +20,17 @@ describe("personas", () => {
     // Agent and Workflow are withheld by the non-recursion lock (SPAWN_TOOLS);
     // Skill is withheld because a child subagent inherits no SkillPort in v1
     // (design §2.7 — persona tool lists are unchanged by slices 3.3/3.4).
+    // ArchMap (TASK.233 S1) is a parent-session tool: personas.ts keeps its
+    // explicit lists and deliberately does not grant it to children.
     const expected = defaults.filter(
-      (name) => name !== "Agent" && name !== "Skill" && name !== "Workflow",
+      (name) =>
+        name !== "Agent" && name !== "Skill" && name !== "Workflow" && name !== "ArchMap",
     );
     expect([...PERSONAS["general-purpose"].tools].sort()).toEqual(expected);
     expect(PERSONAS["general-purpose"].tools).not.toContain("Agent");
     expect(PERSONAS["general-purpose"].tools).not.toContain("Skill");
     expect(PERSONAS["general-purpose"].tools).not.toContain("Workflow");
+    expect(PERSONAS["general-purpose"].tools).not.toContain("ArchMap");
   });
 
   it("explore is a strict read-only subset with no Bash (design R7)", () => {

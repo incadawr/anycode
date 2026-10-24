@@ -6,6 +6,7 @@ import { toToolDeclarations } from "./to-model-tools.js";
 
 const ALL_TOOLS = [
   "Agent",
+  "ArchMap",
   "Bash",
   "Edit",
   "Glob",
@@ -56,7 +57,7 @@ describe("toToolDeclarations", () => {
   // set rawInputJsonSchema, so each declaration's inputJsonSchema must deep-equal
   // the direct z.toJSONSchema(inputSchema) it produced before the slice. Slice
   // 3.3 adds the eleventh native tool (Skill); slice 3.4 adds the twelfth
-  // (Workflow) — both zod-authored.
+  // (Workflow); TASK.233 S1 adds the thirteenth (ArchMap) — all zod-authored.
   it("the native tools have no rawInputJsonSchema and stay byte-identical to z.toJSONSchema", () => {
     const registry = createDefaultToolRegistry();
     const declarations = toToolDeclarations(registry);

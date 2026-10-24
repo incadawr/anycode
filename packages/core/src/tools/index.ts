@@ -41,6 +41,8 @@ export {
 export type { BrowserOpenInput, BrowserReadInput } from "./browser-preview.js";
 export { browserScreenshotInputSchema, browserScreenshotTool } from "./browser-screenshot.js";
 export type { BrowserScreenshotInput } from "./browser-screenshot.js";
+export { archMapTool, archMapInputSchema, scanImportGraph, ARCH_MAP_MAX_FILES_DEFAULT, ARCH_MAP_MAX_FILES_LIMIT, ARCH_MAP_MODEL_EDGE_LIMIT } from "./arch-map.js";
+export type { ArchMapInput, ArchMapModule, ArchMapEdge, ArchMapExternal, ArchMapOutput } from "./arch-map.js";
 export {
   createInspectImageTool,
   MAX_QUESTIONS_PER_IMAGE,

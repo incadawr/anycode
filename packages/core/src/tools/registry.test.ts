@@ -67,10 +67,11 @@ describe("ToolRegistry", () => {
 });
 
 describe("createDefaultToolRegistry", () => {
-  it("registers exactly the twelve built-in tools (five Phase 0 + four Phase 1 + Agent + Skill + Workflow)", () => {
+  it("registers exactly the thirteen built-in tools", () => {
     const registry = createDefaultToolRegistry();
     expect(registry.list().sort()).toEqual([
       "Agent",
+      "ArchMap",
       "Bash",
       "Edit",
       "Glob",
@@ -83,5 +84,6 @@ describe("createDefaultToolRegistry", () => {
       "Workflow",
       "Write",
     ]);
+    expect(registry.get("ArchMap")?.metadata.readOnly).toBe(true);
   });
 });

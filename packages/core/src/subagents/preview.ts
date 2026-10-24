@@ -24,9 +24,10 @@ import { SPAWN_TOOLS } from "./spawn-tools.js";
 /**
  * The default tool registry's tool NAMES, in registration order — a data mirror
  * of `createDefaultToolRegistry().list()` (Read, Write, Edit, Bash, Grep, Glob,
- * TodoRead, TodoWrite, WebFetch, Agent, Skill, Workflow). Kept in sync by the
- * parity test in preview.test.ts. Used to intersect a profile's requested tools
- * down to real, grantable tools (the ∩-semantics buildPersonaRegistry applies).
+ * TodoRead, TodoWrite, WebFetch, Agent, Skill, Workflow, ArchMap). Kept in sync
+ * by the parity test in preview.test.ts. Used to intersect a profile's requested
+ * tools down to real, grantable tools (the ∩-semantics buildPersonaRegistry
+ * applies).
  */
 export const DEFAULT_TOOL_NAMES: readonly string[] = [
   "Read",
@@ -41,6 +42,7 @@ export const DEFAULT_TOOL_NAMES: readonly string[] = [
   "Agent",
   "Skill",
   "Workflow",
+  "ArchMap",
 ];
 
 /**
