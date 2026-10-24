@@ -1,20 +1,19 @@
 # MCP servers
 
-MCP (Model Context Protocol) servers give the model extra tools. An MCP server
-is declared in the shared config — never in `settings.json` — and can run as a
-local process (stdio) or a remote endpoint (HTTP).
-
-Requires AnyCode 0.0.35 or newer.
+MCP (Model Context Protocol) servers give the model extra tools. You declare a
+server in a shared config file, never in `settings.json`. A server runs as a
+local process (stdio) or is a remote endpoint (HTTP).
 
 ## Config files, in precedence order
 
-A server name claimed by a higher-priority source wins; the same name in a
-lower source is ignored.
+A server name claimed by a higher source wins. The same name in a lower source is
+ignored, even if the higher entry is disabled or failed.
 
-1. `<workspace>/.anycode/config.json` — project scope
-2. `~/.anycode/config.json` — user scope
-3. `<workspace>/.mcp.json` — Claude-ecosystem compatibility file (same
-   `mcpServers` shape)
+1. `<workspace>/.anycode/config.json`: project scope.
+2. `~/.anycode/config.json`: user scope.
+3. `<workspace>/.mcp.json`: the Claude-ecosystem compatibility file, with the
+   same `mcpServers` shape. The MCP pane shows these entries read-only, and
+   **Import to project** copies one into the project config.
 
 ## One stdio server
 
@@ -32,14 +31,13 @@ lower source is ignored.
 }
 ```
 
-- `command`/`args` spawn the process; `cwd` is optional.
-- `env` sets variables for the child — `${env:VAR}` substitutes from the
-  environment AnyCode runs in. **A referenced variable that is unset skips the
-  whole server** (fail-closed, with a problem line in the logs).
-- `inheritEnv: true` passes the full parent environment (minus `ANYCODE_*`
-  keys) instead of the minimal `PATH/HOME/LANG` base; explicit `env` entries
-  still apply on top.
-- `"enabled": false` disables the entry without deleting it.
+- `command` and `args` start the process. `cwd` is optional.
+- `env` sets variables for the child. `${env:NAME}` takes its value from the
+  environment AnyCode was started with.
+- `inheritEnv: true` passes the whole parent environment, minus every `ANYCODE_*`
+  variable. By default the child gets only `PATH`, `HOME` and `LANG`. Explicit
+  `env` entries apply on top either way.
+- `"enabled": false` turns the entry off without deleting it.
 
 ## One HTTP server
 
@@ -48,48 +46,60 @@ lower source is ignored.
   "mcpServers": {
     "internal-search": {
       "url": "https://mcp.internal.example.com/sse",
-      "headers": {
-        "Authorization": "Bearer ${env:SEARCH_TOKEN}"
-      }
+      "headers": { "Authorization": "Bearer ${env:SEARCH_TOKEN}" }
     }
   }
 }
 ```
 
-Exactly one of `command` (stdio) or `url` (http) per entry — an entry with
-both, or with neither, is skipped with a problem line.
+An entry needs exactly one of `command` (stdio) or `url` (HTTP). An entry with
+both, or with neither, is skipped and reported.
 
-## The env-var secret pattern
+## The `${env:NAME}` secret pattern
 
-Never paste a literal token into config. Reference it:
+Never paste a literal token into a config file. Reference it instead. The
+substitution works in `env` and `headers` values only. If the variable is unset,
+the whole server is skipped rather than started with an empty credential.
 
-```json
-{ "headers": { "Authorization": "Bearer ${env:SEARCH_TOKEN}" } }
-```
+The variable must exist in the environment AnyCode starts from:
 
-The `${env:NAME}` substitution works in every `env` and `headers` value, and a
-missing variable skips the server rather than sending an empty credential.
-Export the variable in the environment AnyCode starts from (e.g. your shell
-profile), so the substitution finds it after every restart.
+- A terminal-launched AnyCode inherits the variables exported in that terminal.
+- A Dock- or Finder-launched app does not read `~/.zshrc` or any other shell
+  profile. On macOS, set the variable with `launchctl setenv NAME value`, then
+  restart AnyCode.
 
-## Failure behavior
+## Failure behaviour
 
-MCP boot is fail-soft: a config file with invalid JSON, or entries that fail
-validation, is skipped and **the app starts with zero servers from that file**
-— other files still load, and nothing crashes. The skip reasons land in the
-host log as problem lines (`[host] extensions: …`, `Invalid MCP config …`).
+MCP loading is fail-soft, per file:
+
+- A config file with invalid JSON is skipped entirely. Other files still load.
+  The problem reads `Invalid JSON in MCP config <path>: …`.
+- A file that fails the schema is skipped entirely, with `Invalid MCP config <path>: …`.
+- A single entry that fails its checks is skipped alone, with
+  `MCP server '<name>' in <path>: …`. Examples are a missing `command` or `url`,
+  or an unset `${env:NAME}` variable.
+
+These problems appear as strips in **Settings → MCP**.
+
+## Managing servers in the pane
+
+**Settings → MCP** lists the servers for the scope chosen at the top: **Global (user)**
+or **Project** (with a workspace picker). The pane offers:
+
+- **Add server**: name, transport (stdio or HTTP), command, arguments, working
+  directory, URL, and environment variables. Values typed into the environment
+  rows are masked afterwards; for tokens, prefer a `${env:NAME}` reference.
+- **Import**: scans Claude, Codex, zcode and `.mcp.json` for servers and offers to
+  add them. Imported servers start disabled until you enable them.
+- Per-row controls to enable, edit or delete a server.
 
 ## How to verify it applied
 
-1. **Restart the session** — `mcpServers` is read at session boot; a live
-   session never picks up an edit.
-2. Open **Settings → MCP** and find the server row: its status goes
-   `connecting…` → `connected` with a tool count (e.g. `12 tools`), or
-   `failed` with the error text. A server absent from the list entirely means
-   its config was skipped — check the logs (invalid JSON, missing/extra
-   `command`/`url`, or an unset `${env:…}` variable).
-3. Run one of the tools the server exports in the session; a connected server
-   with zero tools usually means the process started but the handshake failed
-   — the row's detail text carries the error.
+1. **Start a new session.** `mcpServers` is read when a session starts. A live
+   session does not pick up an edit.
+2. Open **Settings → MCP** and find the server row. A connected row shows a
+   tool-count badge such as `12 tools`. A row that failed shows its error.
+3. A server missing from the list was skipped at load time. Look for the problem
+   strip in the same pane.
 
-More checklists: [troubleshooting.md](troubleshooting.md).
+For more causes, see [troubleshooting.md](troubleshooting.md).

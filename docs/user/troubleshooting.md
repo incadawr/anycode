@@ -1,88 +1,76 @@
 # Troubleshooting
 
-Step-by-step checklists for the three classic failures, plus where the logs
-live. General rule first: most configuration (MCP, skills, profiles) is read
-at **session boot** — "restart the session" is step one of nearly everything
-here, and "restart the app" fixes the rest.
+Checklists for the three common failures, and where problems are shown. Most
+configuration (MCP servers, skills, profiles) is read when a **session starts**.
+"Start a new session" is the first step almost everywhere.
 
-## Scenario 1 — "I added an MCP server and nothing happened"
+## Scenario 1: "I added an MCP server and nothing happened"
 
-1. Start a **new session**. `mcpServers` is read at boot; a live session
-   never picks up an edit.
-2. Open **Settings → MCP** and look for the server row:
-   - **Row present, `failed`** — the process/endpoint rejected the handshake;
-     the row's detail text carries the error (bad command, bad URL, expired
-     token).
-   - **Row present, `connected · N tools`** — it works; the server just
-     exports tools under names you have not tried yet.
-   - **Row absent entirely** — the entry never made it past loading. Go to 3.
-3. Row absent: the config was skipped **silently** (fail-soft). Check the
-   logs, then the file, for the two usual causes:
-   - **Invalid JSON** in the file — one bad comma drops *every* server in
-     that file (`Invalid MCP config <path>: …` in the logs).
-   - **Both `command` and `url`, or neither** — the entry needs exactly one
+1. Start a **new session**.
+2. Open **Settings → MCP** and find the server row:
+   - **Row present, failed**: the process or endpoint rejected the connection.
+     The row shows the error (a bad command, a bad URL or an expired token).
+   - **Row present, connected with a tool count**: it works. The tools may
+     simply have names you have not tried yet.
+   - **Row absent**: the entry was skipped at load time. Go to step 3.
+3. Read the problem strip in the same pane. The usual causes:
+   - Invalid JSON in the file. One bad comma drops every server in that file
+     (`Invalid JSON in MCP config <path>: …`).
+   - An entry with both `command` and `url`, or with neither
      (`must have exactly one of "command" (stdio) or "url" (http)`).
-   - An unset `${env:MY_TOKEN}` variable also skips the server
-     (`env var 'MY_TOKEN' is not set — server skipped`).
-4. Fix, restart the session, re-check the pane. Full reference:
-   [mcp.md](mcp.md).
+   - An unset `${env:NAME}` variable, which skips the server (`env var 'NAME'
+     is not set — server skipped`). A Dock-launched app does not see your shell
+     profile; see [mcp.md](mcp.md).
+4. Fix the file, start a new session and check the pane again. The full reference
+   is [mcp.md](mcp.md).
 
-## Scenario 2 — "How do I configure orchestrator roles?"
+## Scenario 2: "How do I configure orchestrator roles?"
 
-1. Read the pointer page: [orchestration.md](orchestration.md) — then the
-   deep dive it links, `docs/orchestration.md`, for accounts, connections and
-   the watchdog.
-2. Roles are **markdown profiles**, not config keys: one file per role in
-   `<project>/.anycode/agents/<name>.md`. The format, the three hard
-   frontmatter rules, and one complete example per engine kind:
-   [subagents.md](subagents.md).
-3. Profile problems surface in **Settings → Subagents**: a profile rejected
-   for a frontmatter problem (missing `description`, `tools:` combined with
-   `engine:`, a bad `connection:`/`provider:` combination) is simply **absent**
-   from the list — compare against the files on disk.
-4. Remember the pickup rule: Native tabs pick a new profile up on the next
-   turn; **Codex/Claude tabs need a new session** to see a new or renamed
-   profile (body edits apply from the next spawn).
+1. Read [orchestration.md](orchestration.md) for the pattern.
+2. A role is a **markdown profile**, not a config key: one file per role in
+   `<project>/.anycode/agents/<name>.md`. The format, the hard frontmatter rules,
+   and examples are in [subagents.md](subagents.md).
+3. Open **Settings → Subagents**. A profile that failed to load is missing from
+   the list, and the pane shows a strip ("N profile(s) failed to load"). Expand it
+   for the reason. Common causes: a missing `description`, `tools:` combined with
+   `engine:`, or `connection:` combined with `provider:`.
+4. Start a new session after you add or rename a profile. Native tabs pick up a
+   new profile on the next turn; Codex and Claude tabs need the new session.
 
-## Scenario 3 — "Why is my skill not visible?"
+## Scenario 3: "Why is my skill not visible?"
 
-Work down this list — every item is silent by design:
+Work down this list:
 
-1. **Frontmatter invalid** — `name` missing the pattern
-   `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, or `description` absent. The skill is
-   skipped with a problem line in the logs (`Skill discovery: skipping …`),
-   never a chat error.
-2. **Shadowed** — a same-name skill exists in a higher-precedence root
-   (project > user > plugins > built-ins). Yours may be the one *doing* the
-   shadowing while you stare at the other one's behavior.
-3. **Disabled** — the name is in `skills.disabled` in the shared config.
-   Settings → Skills shows disabled state.
-4. **The 64-skill cap** — discovery stops at 64 skills after dedupe
-   (lowest precedence dropped first); prune unused skills.
-5. **Body over 64 KiB** — the skill *is* visible and listed; its body is
-   **truncated** when loaded, not hidden. Split it.
-6. **No new session yet** — discovery runs at session boot.
-7. "Skill works in a Native tab but an engine tab doesn't see it" — engine
-   tabs snapshot their skill list at session boot: start a **new session** in
-   that tab.
+1. **Invalid file.** The name does not match `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`,
+   the `description` is missing, or the frontmatter is invalid. Open **Settings →
+   Skills** and expand the "N skill(s) failed to load" strip.
+2. **Shadowed.** A same-name skill exists in a higher root (project, then user,
+   then plugins, then built-ins). Your file may be the one doing the shadowing.
+3. **Disabled.** The name is in `skills.disabled` in the shared config, or was
+   switched off in Settings → Skills.
+4. **Too many skills.** At most 64 skills load per session after deduplication,
+   and the prompt's skill list holds about 8,000 characters. Prune unused skills
+   or shorten descriptions.
+5. **Large body.** A body over 64 KiB still appears in the list, but it is cut
+   off when loaded. Split it.
+6. **No new session yet.** Discovery runs when a session starts.
+7. **Engine tab.** Codex and Claude tabs do not receive AnyCode skills. Use a
+   Native tab.
 
 Reference: [skills.md](skills.md).
 
-## Where the logs live
+## Where problems are shown
 
-- **The host log** — the session's host process writes boot and problem lines
-  (`[host] …`) to its console output; on macOS the app's console output lands
-  in Console.app under the AnyCode process. Every "silently skipped" item
-  above writes a line here.
-- **The per-session console** — the Console view in the app's bottom panel
-  shows the live session's own output; discovery problems reported by the
-  extensions bootstrap are visible there too.
-- **Settings → Environment** — telemetry and repo-map status (including their
-  config problems) for the workspace.
+- **In the panes.** Settings → Skills, Settings → Subagents and Settings → MCP
+  show a strip for each file or entry that failed to load. Check these first.
+- **In the app's console output.** Startup messages with the `[host]` prefix go to
+  the console of the app process. Start AnyCode from a terminal to see them.
+  AnyCode does not keep a log file.
+- **In Settings → Environment.** Telemetry and repo-map status for the workspace.
 
 ## Still stuck?
 
-Run the built-in `anycode-setup` skill in a session (mention `$anycode-setup`
-or call the `Skill` tool with it): it reads your settings and config files
-read-only and points at the exact file to fix — it never edits anything
-without your approval and never prints secrets.
+Ask the model to use the built-in `anycode-setup` skill, for example "use the
+anycode-setup skill to check why my MCP server is missing", in a Native tab. It
+reads your settings and config files without changing them, names the file to
+fix, and never prints secrets. Any edit it proposes still needs your approval.

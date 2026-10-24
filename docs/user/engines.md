@@ -1,95 +1,93 @@
 # Engines
 
-An **engine** decides which agent runtime drives a tab: AnyCode's own in-process
-loop, the Codex CLI, or Claude Code. A **provider connection** decides which
-model API the requests hit. The two choices are independent.
+An **engine** decides which agent runtime drives a tab: AnyCode's own loop
+(Native), the Codex CLI, or Claude Code. A **provider connection** decides which
+model API the requests go to. The two choices are independent.
 
-Requires AnyCode 0.0.35 or newer.
+## Engine versus provider
 
-## Engine vs provider
-
-- A **connection** (Settings → Provider) picks the model API — e.g. a Z.AI
-  connection running `glm-5.3`, or a DeepSeek connection.
-- An **engine** picks the runtime that drives the tab — AnyCode's own loop, or
-  a real `codex`/`claude` CLI process with its own account, tools, and
-  approval model.
-- The Native engine uses connections directly. Codex and Claude tabs use their
-  CLI's own account (sign-in in their panes) — the app's connections still
-  matter for AnyCode-side children those tabs delegate to.
+- A **connection** (Settings → Provider) picks the model API, for example a
+  Z.AI connection running `glm-5.3`, or a DeepSeek connection.
+- An **engine** picks the runtime. Native uses AnyCode's own loop and your
+  connections. Codex and Claude run the real `codex` or `claude` CLI with its
+  own account, tools and approval model.
+- Codex and Claude tabs sign in through their CLI, not through a connection.
+  Connections still matter for AnyCode subagents that run on Native children.
 
 ## The three engines
 
 | Engine | Tab type | Runs on | Configured in |
 |---|---|---|---|
-| Native | core tabs | AnyCode's in-process agent loop | Settings → Provider (connections) |
+| Native | core tabs | AnyCode's in-process loop | Settings → Provider |
 | Codex | codex tabs | the `codex` CLI as an agent process | Settings → Codex |
 | Claude Code | claude tabs | the `claude` CLI as an agent process | Settings → Claude |
 
 ### Native
 
-The default. Everything — tools, permissions, skills, subagents, MCP — is
-in-process. A Native tab needs at least one working connection in
-Settings → Provider before its first message.
+The default. Tools, permissions, skills, subagents and MCP servers all run
+in-process. A Native tab needs a ready connection in Settings → Provider before
+its first message.
 
-### Codex CLI
+### Codex
 
-Settings → Codex discovers (or installs) the `codex` binary, then walks you
-through sign-in under the account profile you will use. Multiple account
-profiles are supported; a session is frozen to its profile for its lifetime.
-The pane's status states tell you the two things that must both be true: the
-binary was found (path shown), and an account is signed in.
+Settings → Codex finds the `codex` executable and checks its version. If it is
+not installed, the pane offers an install action. Under **Accounts** you sign in
+(**Sign in with a code** is the device-code flow) and choose the account profile
+that new sessions use. Under **Advanced troubleshooting** you can choose the
+executable by hand.
 
 ### Claude Code
 
-Settings → Claude does the same for the `claude` binary: discovery, version
-check, and sign-in state. As with Codex, check the pane's status line — found
-binary plus signed-in account — before relying on a Claude tab.
+Settings → Claude finds the `claude` executable and checks its version. The
+**Connect Claude Code** section signs you in. The sign-in opens a Terminal
+window and runs under your shell environment. Read the pane's status line before you
+rely on a Claude tab: it shows whether the binary and the signed-in account are
+both ready.
+
+## Trust for the engine binaries
+
+AnyCode runs the `codex` and `claude` binaries you point it at. It trusts a
+binary automatically unless the file sits where someone else could replace it:
+the file is writable by others, or owned by another account. Only that case
+asks for consent. The Codex and Claude panes then show a refusal with
+**Review executable trust…** and **Trust this binary…**.
+
+- A consent is for one path and pins the file's current state (mode, owner,
+  group, size and modification time). If the file changes, the consent no longer
+  matches and the pane asks again.
+- A file owned by another account, and a path that is not a regular executable,
+  cannot be trusted this way.
+- Consents are listed under Settings → Permissions → Trusted binaries.
 
 ## When a tab picks each engine
 
-- **Native** is the default for everyday work in this app: it is the engine
-  with the tightest tool, skill, and permission integration.
-- **Codex / Claude tabs** are for running work *under that engine's* runtime —
-  for example a Codex supervisor session orchestrating AnyCode subagents (see
-  [orchestration.md](orchestration.md)) or porting a workflow that already
-  assumes one CLI's toolset.
-
-## Trust and consent prompts
-
-The first time an engine tab spawns its CLI, AnyCode asks you to trust the
-binary. The prompt names the **path** and the binary's **fingerprint**
-(a hash): the path tells you *what* will run, the fingerprint pins *exactly
-which build*. Consents are stored per path and listed in Settings →
-Permissions → trusted binaries; re-consent is required when the fingerprint
-changes.
-
-## When the CLI updates outside the app
-
-The CLI can update itself (or be updated by you) after you trusted it. A new
-build means a new fingerprint: the next spawn asks for trust again — that is
-the mechanism working, not an error. If the binary moves or is removed, the
-engine pane's status returns to "not found" and the tab refuses to start a
-session until you re-discover or reinstall in the pane.
+- **Native** is the default. It has the tightest integration with tools, skills,
+  permissions and profiles.
+- **Codex and Claude tabs** run work under that engine's own runtime, for example
+  a Codex session that supervises AnyCode subagents. See
+  [orchestration.md](orchestration.md).
 
 ## Proxy per engine
 
-Each engine's pane can route its CLI traffic through a proxy profile from
-Settings → Network (a Codex profile is an auth home, never a network path —
-the proxy is configured separately). See [proxy.md](proxy.md).
+The Codex and Claude panes each have a **Proxy** picker: use the application
+proxy, no proxy, or a named proxy profile. A Codex account profile is an auth
+home, not a network path, so the proxy is set separately. An `HTTP(S)_PROXY`
+already exported in the app's launch environment takes precedence over the pane.
+See [proxy.md](proxy.md).
 
-## Delegation from engine tabs
+## Delegation and skills in engine tabs
 
-Codex and Claude tabs see an `anycode_agent` tool for delegating to AnyCode
-subagent profiles — the profiles live in `.anycode/agents/` and are shared
-with Native tabs. The deep dive on that setup (profiles, session children,
-detached background agents) is [../orchestration.md](../orchestration.md);
-the profile format itself is [subagents.md](subagents.md).
+- A Codex or Claude tab can delegate to your subagent profiles when at least one
+  profile exists. The Codex tool is `anycode_agent`; the Claude tool is
+  `mcp__anycode__agent`. Neither appears in a child session.
+- AnyCode skills (including `anycode-setup`) load only in Native tabs. Codex and
+  Claude tabs do not receive them.
 
 ## How to verify it applied
 
-- Binary found + signed in: open Settings → Codex / Claude — the status line
-  in the pane is the single source of truth.
-- A connection for Native tabs: Settings → Provider, then start a new tab.
-- Engine tab sees your profiles: profiles are declared to an engine session at
-  boot — start a **new session** after adding or renaming a profile
-  (editing an existing profile's body applies from the next spawn).
+- Engine ready: open Settings → Codex or Settings → Claude and read the status
+  line.
+- Native tab: Settings → Provider shows a ready connection, then start a new tab.
+- Profiles in an engine tab: a Codex or Claude tab declares the profile list when
+  its session starts. After you add or rename a profile, start a new session in
+  that tab.

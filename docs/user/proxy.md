@@ -1,23 +1,25 @@
 # Proxy and network
 
-Settings → Network owns all proxy configuration in the app. Proxy state is
-kept in `~/.anycode/settings.json` (`network` key), and proxy **passwords**
-never are — they live in the secrets vault and are referenced by profile.
-
-Requires AnyCode 0.0.35 or newer.
+**Settings → Network** owns the proxy configuration. Proxy profiles live in
+`~/.anycode/settings.json` under `network`. Proxy passwords do not: they go to
+the secrets vault and the profile refers to them.
 
 ## Named proxy profiles
 
-A profile is one reusable proxy definition:
+A profile is one reusable proxy definition. Each has a name and a mode:
 
-- **Manual** — you give the `http(s)://host:port` URL; credentials (login +
-  password) go to the vault, never into the URL string or the settings file.
-- **System** — ask the operating system what it would do (including PAC
-  scripts) and materialize that answer for child processes.
+- **Manual**: a host name and port (the **Host name** and **Port number**
+  fields). Optionally tick the HTTPS option when the proxy itself is reached over
+  TLS. A login and password go in the **Proxy authentication** section; the
+  password is stored in the vault.
+- **System proxy**: ask the operating system what it would use, including PAC
+  scripts, and pass that answer to child processes.
 
-Each profile can carry a **no-proxy list** in honest `NO_PROXY` syntax (host
-suffixes, comma-separated). Loopback is always bypassed; your list adds to
-that, it never replaces it.
+Each profile can carry a **No proxy for** list in `NO_PROXY` syntax: host
+suffixes, comma-separated. Loopback addresses are always bypassed, and your list
+adds to that default.
+
+In `settings.json` a manual profile looks like this:
 
 ```json
 {
@@ -30,37 +32,35 @@ that, it never replaces it.
 }
 ```
 
-## Default proxy
+The profile editor has a **Check** section. Enter a target and test the profile
+before you rely on it.
 
-`network.proxyRef` names the profile the **whole app** uses by default — the
-bottom rung of every proxy ladder. Choosing "No proxy" here clears the key
-(nothing is below the app to inherit). Omit the `network` key entirely and the
-app runs direct.
+## Application default
+
+`network.proxyRef` names the profile the whole app uses by default. It is the
+bottom of every proxy choice. The picker's **No proxy** option removes the key,
+because there is nothing below the application to inherit. Without a `network`
+key the app runs direct.
 
 ## Per-connection proxy
 
-Each provider connection (Settings → Provider) can select its own proxy
-profile, overriding the app default for that connection's traffic only. This
-is the right tool when one provider must go through a corporate proxy and the
-rest must not.
+In the connection drawer (Settings → Provider), the **Proxy** picker offers
+**Use application proxy**, **No proxy**, or one of your profiles. Use it when one
+provider must go through a corporate proxy and the others must not.
 
 ## Per-engine proxy
 
-The Codex and Claude panes each route their CLI's traffic through a chosen
-proxy profile. Note the split: a Codex *account profile* is an auth home, not
-a network path — the proxy is configured separately in Settings → Network.
+The Codex and Claude panes have their own **Proxy** picker with the same
+choices. A Codex account profile is an auth home, not a network path, so the
+proxy is configured here and not on the account.
 
-## Environment overrides
-
-`ANYCODE_CODEX_PROXY_URL` and `ANYCODE_CLAUDE_PROXY_URL` exist as
-environment carriers, and a shell-exported `http(s)_proxy` family still wins
-where present. They are plumbing for automation and unusual setups — the
-Settings panes are the owner surface; prefer them.
+An `HTTP(S)_PROXY` (or `NO_PROXY`) variable already set in the app's launch
+environment takes precedence over these pane settings for the CLI's processes.
 
 ## How to verify it applied
 
-Proxy changes reach **new** sessions and newly spawned engine children. After
-changing a profile: restart the app, open Settings → Network and confirm the
-profile list and the default badge, then start a new session and exercise a
-network-dependent tool (a provider call, a WebFetch). A wrong proxy shows up
-as connection timeouts in that tool's error, not in the Network pane.
+Proxy changes reach new sessions and newly started engine processes. After you
+change a profile, reopen **Settings → Network** and check the profile's **Used
+by** line, then start a new session and run a network-dependent tool, such as a
+provider call or WebFetch. A wrong proxy shows up as a connection error in that
+tool's output.

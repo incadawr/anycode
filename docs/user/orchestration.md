@@ -1,41 +1,55 @@
-# Orchestration (multi-model workflows)
+# Orchestration
 
-Orchestration is the pattern where one session — the **supervisor** —
-dispatches work to AnyCode subagent profiles instead of doing it all itself:
-it plans, delegates to a lead/builder profile, awaits the result, verifies the
-work, and accepts or returns defects.
+Orchestration is a pattern, not a separate mode. One session, the **supervisor**,
+hands work to subagent profiles, checks what comes back, and accepts or returns
+it. AnyCode provides the pieces: profiles (see [subagents.md](subagents.md)),
+the delegation tool in each engine, and the engine tabs (see
+[engines.md](engines.md)). This version has no Orchestration settings pane.
 
-Requires AnyCode 0.0.30 or newer.
+## The roles
 
-## The three roles
+| Role | Typical setup | Does |
+|---|---|---|
+| Supervisor | Any tab: Native, Codex or Claude | Plans, dispatches, checks the results, accepts or sends back. |
+| Lead | A profile with `provider:` or `connection:` | Plans and implements a larger task. |
+| Builder | A profile with a `tools:` list, or an `engine:` profile | Carries out one bounded task. |
 
-| Role | Runs on | Spawned as | Does |
-|---|---|---|---|
-| Supervisor | Codex CLI (GPT), a normal AnyCode session | top-level session you drive | dispatches, awaits, verifies, accepts |
-| Lead | Native engine (e.g. `glm-5.3`) | session-tier child via `anycode_agent` | plans, implements, self-reviews |
-| Builder (optional) | Native engine, cheaper model | inline child spawned by the lead | one bounded, fully-resolved task |
+Delegation tools: a Native supervisor uses the `Agent` tool with `agent_type`.
+A Codex tab uses `anycode_agent`, and a Claude tab uses `mcp__anycode__agent`.
+Both engine tools appear only when at least one profile exists.
 
-## Getting started in four steps
+## A minimal setup
 
-1. Set up the supervisor's account (Settings → Codex) and a model connection
-   for the lead (Settings → Provider) — details in the full doc.
-2. Write the role profiles into `<project>/.anycode/agents/` (copy-paste
-   examples: [subagents.md](subagents.md)).
-3. Start a session on the supervisor's engine and dispatch through
-   `anycode_agent` by `agent_type`.
-4. Watch the child cards in the parent session: transcripts, progress, and
-   the result report all surface there.
+1. Write the profiles in `<project>/.anycode/agents/`. A lead routed to a
+   provider:
 
-## Where to read more
+   ```markdown
+   ---
+   name: lead
+   description: Plans and implements a multi-file change on the DeepSeek provider.
+   provider: deepseek
+   maxTurns: 60
+   ---
+   Plan the change first, then implement it in small steps and review your own diff.
+   ```
 
-- **The full setup** — accounts, connections, per-profile routing, idle
-  watchdog, terminal markers: [../orchestration.md](../orchestration.md).
-- **The profile format** (`engine:`, `connection:`, `model:`, the three hard
-  frontmatter rules), plus complete copy-paste profiles per engine kind:
-  [subagents.md](subagents.md).
-- **Engine tabs and delegation** (what an engine session can see, the
-  new-session rule for profile lists): [engines.md](engines.md).
+2. Add a reviewer that runs on the Codex engine:
 
-> Role presets and fallback chains (Settings → Orchestration) arrive with
-> AnyCode 4704 — until then, roles are plain markdown profiles like the ones
-> above.
+   ```markdown
+   ---
+   name: reviewer
+   description: Reviews a change on the Codex engine and reports defects with file:line.
+   engine: codex
+   effort: high
+   ---
+   Verify each finding against the sources before you report it.
+   ```
+
+3. Start a new session in the supervisor tab. Dispatch to `lead` or `reviewer` by
+   name. Start a new session after you add profiles, so a Codex or Claude
+   supervisor sees them.
+4. Each child run appears as a card in the parent session, with its progress and
+   its result.
+
+For a longer worked example, the source repository has `docs/orchestration.md`.
+It is not shipped inside the app.
