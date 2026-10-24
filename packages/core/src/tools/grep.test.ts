@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,8 +7,9 @@ import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
 import { NodeHttpAdapter } from "../adapters/node/node-http.js";
 import { InMemoryTodoStore } from "./todo-store.js";
 import type { ToolContext } from "../types/tools.js";
-import { grepTool } from "./grep.js";
+import { grepTool, selectGrepBackend } from "./grep.js";
 import { __resetRgPathCacheForTests, resolveRgPath } from "./grep-rg.js";
+import type { BinaryExecRequest, ExecResult } from "../ports/execution.js";
 
 const fs = new NodeFileSystemAdapter();
 const exec = new NodeExecutionAdapter();
@@ -283,5 +284,204 @@ describe.skipIf(!rgAvailable)("grepTool — rg/JS backend parity", () => {
     expect(viaRg.output?.mode).toBe("count");
     expect(viaRg.output?.counts).toEqual(viaJs.output?.counts);
     expect(viaRg.output?.totalMatches).toBe(viaJs.output?.totalMatches);
+  });
+});
+
+// ── tgrep backend selection (Taskana 4160) — hermetic, no real binaries ──
+
+function completedResult(stdout: string, exitCode = 0): ExecResult {
+  return {
+    status: exitCode === 0 ? "completed" : "failed",
+    exitCode,
+    signal: null,
+    stdout,
+    stderr: "",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    durationMs: 5,
+  };
+}
+
+function spawnErrorResult(): ExecResult {
+  return {
+    status: "spawn_error",
+    exitCode: null,
+    signal: null,
+    stdout: "",
+    stderr: "not found",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    durationMs: 1,
+  };
+}
+
+function tgrepNdjson(path: string): string {
+  return JSON.stringify({
+    type: "match",
+    data: {
+      path: { text: `${path}/from-tgrep.ts` },
+      lines: { text: "needle served by tgrep\n" },
+      line_number: 7,
+      absolute_offset: 0,
+      submatches: [{ match: { text: "needle" }, start: 0, end: 6 }],
+    },
+  });
+}
+
+/**
+ * Hermetic exec port for backend-selection tests:
+ * - `--version` on file "tgrep" → exit 0 (resolveTgrepPath succeeds)
+ *   unless tgrepVersionFails is set;
+ * - a search whose argv carries `--no-max-filesize` (the tgrep-only flag)
+ *   → canned NDJSON (or exit-2 when tgrepSearchFails is set);
+ * - every other invocation (i.e. an accidental rg call) → spawn_error, so
+ *   the rg tier fails too and the JS tier serves the request — keeping the
+ *   whole block binary-free while still exercising the full ladder.
+ */
+function tgrepStubCtx(
+  cwd: string,
+  opts: { tgrepVersionFails?: boolean; tgrepSearchFails?: boolean } = {},
+): { ctx: ToolContext; runBinary: ReturnType<typeof vi.fn> } {
+  const runBinary = vi.fn((req: BinaryExecRequest): Promise<ExecResult> => {
+    const args = req.args ?? [];
+    if (args.includes("--version")) {
+      return Promise.resolve(
+        req.file === "tgrep" && !opts.tgrepVersionFails ? completedResult("tgrep 0.1.0") : spawnErrorResult(),
+      );
+    }
+    if (req.file === "tgrep" && args.includes("--no-max-filesize")) {
+      return Promise.resolve(opts.tgrepSearchFails ? completedResult("regex parse error", 2) : completedResult(tgrepNdjson(cwd)));
+    }
+    return Promise.resolve(spawnErrorResult());
+  });
+  const ctx: ToolContext = {
+    toolCallId: "t1",
+    abortSignal: new AbortController().signal,
+    cwd,
+    ports: { fs, exec: { run: vi.fn(), runBinary }, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
+  };
+  return { ctx, runBinary };
+}
+
+function tgrepCalls(runBinary: ReturnType<typeof vi.fn>): BinaryExecRequest[] {
+  return runBinary.mock.calls.map((c) => c[0] as BinaryExecRequest);
+}
+
+describe("selectGrepBackend (pure selector)", () => {
+  it("defaults to rg with neither env nor settings", () => {
+    expect(selectGrepBackend({})).toBe("rg");
+  });
+
+  it("env tgrep selects tgrep; case-insensitive", () => {
+    expect(selectGrepBackend({ ANYCODE_GREP_BACKEND: "tgrep" })).toBe("tgrep");
+    expect(selectGrepBackend({ ANYCODE_GREP_BACKEND: "TGREP" })).toBe("tgrep");
+  });
+
+  it("env wins over settings", () => {
+    expect(selectGrepBackend({ ANYCODE_GREP_BACKEND: "rg" }, "tgrep")).toBe("rg");
+    expect(selectGrepBackend({ ANYCODE_GREP_BACKEND: "tgrep" }, "rg")).toBe("tgrep");
+  });
+
+  it("unknown values mean rg (never route Grep to a missing binary)", () => {
+    expect(selectGrepBackend({ ANYCODE_GREP_BACKEND: "BURP" })).toBe("rg");
+    expect(selectGrepBackend({}, "auto")).toBe("rg");
+    // blank-but-present env is still "env wins" under the ?? ladder — it trims
+    // to "" and safely lands on rg (the host never writes a blank value; its
+    // fillFromSettings uses envPresent).
+    expect(selectGrepBackend({ ANYCODE_GREP_BACKEND: "  " }, "tgrep")).toBe("rg");
+  });
+});
+
+describe("grepTool — tgrep backend selection (Taskana 4160)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    vi.stubEnv("ANYCODE_GREP_BACKEND", "");
+    __resetRgPathCacheForTests();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    __resetRgPathCacheForTests();
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function setupTree(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-grep-tgrep-"));
+    await fs.writeFile(join(dir, "a.ts"), "const needle = 1;\n");
+    return dir;
+  }
+
+  it("unset/rg/BURP selector → no tgrep probe at all; search served without tgrep", async () => {
+    const dirs: string[] = [];
+    for (const value of [undefined, "rg", "BURP"]) {
+      const dir = await setupTree();
+      dirs.push(dir);
+      if (value === undefined) vi.stubEnv("ANYCODE_GREP_BACKEND", "");
+      else vi.stubEnv("ANYCODE_GREP_BACKEND", value);
+      const { ctx, runBinary } = tgrepStubCtx(dir);
+
+      const result = await grepTool.handler(
+        { pattern: "needle", output_mode: "files_with_matches", "-n": true, head_limit: 0, multiline: false },
+        ctx,
+      );
+
+      expect(result.ok).toBe(true);
+      const versionProbes = tgrepCalls(runBinary).filter((r) => r.args.includes("--version"));
+      expect(versionProbes).toEqual([]); // the tgrep tier must not even be probed
+    }
+    await Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true })));
+  });
+
+  it("ANYCODE_GREP_BACKEND=tgrep → served by the tgrep stub with --no-max-filesize in argv", async () => {
+    vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    tmpDir = await setupTree();
+    const { ctx, runBinary } = tgrepStubCtx(tmpDir);
+
+    const result = await grepTool.handler(
+      { pattern: "needle", output_mode: "files_with_matches", "-n": true, head_limit: 0, multiline: false },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.output?.mode).toBe("files_with_matches");
+    expect(result.output?.files).toEqual([`${tmpDir}/from-tgrep.ts`]);
+    expect(result.output?.totalMatches).toBe(1);
+
+    const searchCall = tgrepCalls(runBinary).find((r) => r.args.includes("--no-max-filesize"));
+    expect(searchCall).toBeDefined();
+    expect(searchCall?.file).toBe("tgrep");
+  });
+
+  it("ANYCODE_GREP_BACKEND=tgrep but --version probe fails → silent fallback, result still ok", async () => {
+    vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    tmpDir = await setupTree();
+    const { ctx, runBinary } = tgrepStubCtx(tmpDir, { tgrepVersionFails: true });
+
+    const result = await grepTool.handler(
+      { pattern: "needle", output_mode: "files_with_matches", "-n": true, head_limit: 0, multiline: false },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    const probes = tgrepCalls(runBinary).filter((r) => r.args.includes("--version"));
+    expect(probes.length).toBeGreaterThanOrEqual(1); // probe happened
+    expect(result.output?.files).toEqual([join(tmpDir, "a.ts")]); // JS tier served it (rg tier hit spawn_error)
+  });
+
+  it("ANYCODE_GREP_BACKEND=tgrep and search exit 2 → same silent fallback", async () => {
+    vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    tmpDir = await setupTree();
+    const { ctx, runBinary } = tgrepStubCtx(tmpDir, { tgrepSearchFails: true });
+
+    const result = await grepTool.handler(
+      { pattern: "needle", output_mode: "files_with_matches", "-n": true, head_limit: 0, multiline: false },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    const tgrepSearch = tgrepCalls(runBinary).find((r) => r.args.includes("--no-max-filesize"));
+    expect(tgrepSearch).toBeDefined(); // tgrep was attempted
+    expect(result.output?.files).toEqual([join(tmpDir, "a.ts")]); // fell through to JS
   });
 });

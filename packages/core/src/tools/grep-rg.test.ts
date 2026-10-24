@@ -5,9 +5,11 @@ import type { GrepInput } from "./schemas.js";
 import {
   __resetRgPathCacheForTests,
   buildRgArgs,
+  buildTgrepArgs,
   parseRgJsonEvents,
   resolveRgPath,
   searchWithRipgrep,
+  shapeRgJsonOutput,
 } from "./grep-rg.js";
 
 function matchEvent(path: string, lineNumber: number, line: string): string {
@@ -101,6 +103,64 @@ describe("buildRgArgs", () => {
     const args = buildRgArgs(baseInput({ output_mode: "count", "-C": 3 }), "/repo", true);
     expect(args).not.toContain("-A");
     expect(args).not.toContain("-B");
+  });
+});
+
+describe("buildTgrepArgs (Taskana 4160)", () => {
+  it("equals buildRgArgs with --no-max-filesize inserted right after --no-config (directory target with glob)", () => {
+    const input = baseInput({ glob: "*.md" });
+    const expected = buildRgArgs(input, "/repo/src", true);
+    const idx = expected.indexOf("--no-config");
+    expected.splice(idx + 1, 0, "--no-max-filesize");
+
+    expect(buildTgrepArgs(input, "/repo/src", true)).toEqual(expected);
+  });
+
+  it("equals buildRgArgs plus --no-max-filesize for a single-file target", () => {
+    const input = baseInput();
+    const expected = buildRgArgs(input, "/repo/src/a.ts", false);
+    expected.splice(expected.indexOf("--no-config") + 1, 0, "--no-max-filesize");
+
+    expect(buildTgrepArgs(input, "/repo/src/a.ts", false)).toEqual(expected);
+  });
+
+  it("equals buildRgArgs plus --no-max-filesize for content mode with -C 2", () => {
+    const input = baseInput({ "-C": 2 });
+    const expected = buildRgArgs(input, "/repo", true);
+    expected.splice(expected.indexOf("--no-config") + 1, 0, "--no-max-filesize");
+
+    expect(buildTgrepArgs(input, "/repo", true)).toEqual(expected);
+  });
+});
+
+describe("shapeRgJsonOutput (extraction from searchWithRipgrep, Taskana 4160)", () => {
+  const ndjson = [
+    matchEvent("/repo/a.ts", 1, "const needle = 1;"),
+    contextEvent("/repo/a.ts", 2, "const other = 2;"),
+    matchEvent("/repo/sub/d.ts", 3, "needle again"),
+  ].join("\n");
+
+  it("maps a match+context NDJSON fixture through files_with_matches (contexts ignored, files deduped)", () => {
+    const output = shapeRgJsonOutput(baseInput({ output_mode: "files_with_matches", head_limit: 0 }), ndjson);
+    expect(output.mode).toBe("files_with_matches");
+    expect(output.files).toEqual(["/repo/a.ts", "/repo/sub/d.ts"]);
+    expect(output.totalMatches).toBe(2);
+    expect(output.truncated).toBe(false);
+  });
+
+  it("maps a match+context NDJSON fixture through count (contexts not counted)", () => {
+    const output = shapeRgJsonOutput(baseInput({ output_mode: "count", head_limit: 0 }), ndjson);
+    expect(output.mode).toBe("count");
+    expect(output.counts).toEqual({ "/repo/a.ts": 1, "/repo/sub/d.ts": 1 });
+    expect(output.totalMatches).toBe(2);
+    expect(output.truncated).toBe(false);
+  });
+
+  it("keeps the content-mode contract: context lines included in matches, matches only in totalMatches", () => {
+    const output = shapeRgJsonOutput(baseInput({ "-n": true, head_limit: 0 }), ndjson);
+    expect(output.mode).toBe("content");
+    expect(output.matches).toHaveLength(3); // 2 matches + 1 context line
+    expect(output.totalMatches).toBe(2);
   });
 });
 

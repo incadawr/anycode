@@ -78,6 +78,20 @@ export function buildRgArgs(input: GrepInput, target: string, isDirectory: boole
   return args;
 }
 
+/**
+ * tgrep argv for one Grep call (Taskana 4160). `--no-index` is NOT passed:
+ * the card's contract is "server when available, local on-disk index, else
+ * tgrep scans" — every tier answers the full corpus, so an absent daemon
+ * degrades speed, not results. `--no-max-filesize` lifts tgrep's 64 MiB
+ * default cap (card: a trimmed "no matches" is worse than a slow answer).
+ * `--no-config` keeps tgrep from reading user config, same discipline as rg.
+ */
+export function buildTgrepArgs(input: GrepInput, target: string, isDirectory: boolean): string[] {
+  const args = buildRgArgs(input, target, isDirectory);
+  args.splice(args.indexOf("--no-config") + 1, 0, "--no-max-filesize");
+  return args;
+}
+
 interface RgEvent {
   type: "match" | "context";
   path: string;
@@ -158,6 +172,22 @@ function buildCountOutput(events: RgEvent[], limit: number): GrepOutput {
 }
 
 /**
+ * Shared result-shaping for rg-shaped `--json` NDJSON output (used by both
+ * the rg backend and the tgrep backend, whose `--json` is documented
+ * ripgrep-shaped): parses match/context events and builds the mode-specific
+ * `GrepOutput`. Extracted verbatim from `searchWithRipgrep` (Taskana 4160)
+ * — zero behaviour change for the rg path.
+ */
+export function shapeRgJsonOutput(input: GrepInput, stdout: string): GrepOutput {
+  const events = parseRgJsonEvents(stdout);
+  const limit = input.head_limit;
+
+  if (input.output_mode === "files_with_matches") return buildFilesWithMatchesOutput(events, limit);
+  if (input.output_mode === "count") return buildCountOutput(events, limit);
+  return buildContentOutput(events, input["-n"] ?? true, limit);
+}
+
+/**
  * Runs one Grep search through ripgrep. Throws on spawn failure, timeout,
  * cancellation, or an unexpected non-zero/non-one exit code (exit code 1 is
  * ripgrep's normal "no matches" outcome, not an error) — the caller
@@ -191,10 +221,5 @@ export async function searchWithRipgrep(
     throw new Error(`ripgrep exited with code ${String(result.exitCode)}: ${result.stderr}`);
   }
 
-  const events = parseRgJsonEvents(result.stdout);
-  const limit = input.head_limit;
-
-  if (input.output_mode === "files_with_matches") return buildFilesWithMatchesOutput(events, limit);
-  if (input.output_mode === "count") return buildCountOutput(events, limit);
-  return buildContentOutput(events, input["-n"] ?? true, limit);
+  return shapeRgJsonOutput(input, result.stdout);
 }

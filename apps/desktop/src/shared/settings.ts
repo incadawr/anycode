@@ -355,6 +355,13 @@ export interface AnycodeSettings {
     maxTurns?: number;
     subagentMaxTurns?: number;
     subagentStallTimeoutMs?: number;
+    /**
+     * Grep backend selector (Taskana 4160): "rg" (default) or "tgrep"
+     * (microsoft/tgrep trigram index; user must run `tgrep serve` themselves —
+     * AnyCode never manages the daemon). Mirror of ANYCODE_GREP_BACKEND
+     * (env > settings). Never "auto".
+     */
+    grepBackend?: "rg" | "tgrep";
   };
   /** Persisted always-allow rules seeded into every new host session (§5). */
   permissions: { alwaysAllow: AlwaysAllowRule[] };

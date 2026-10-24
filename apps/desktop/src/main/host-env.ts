@@ -58,6 +58,14 @@ export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
  */
 export const ENV_SUBAGENT_STALL_MS = "ANYCODE_SUBAGENT_STALL_MS";
 /**
+ * Grep backend selector (Taskana 4160): "rg" (default) or "tgrep" — literal
+ * mirror of core's Grep-tier `ANYCODE_GREP_BACKEND` selector, filled from
+ * `settings.tools.grepBackend` (env > settings via fillFromSettings).
+ * Registered in PROVIDER_ENV_KEYS so a stale fork env is visible in
+ * diagnostics like the other tool mirrors.
+ */
+export const ENV_GREP_BACKEND = "ANYCODE_GREP_BACKEND";
+/**
  * Reasoning-effort inheritance rung (F14, slice-P7.15-cut.md §2.4). Literal
  * mirrors core's `provider/env.ts:11` (host already reads this into
  * `envConfig.reasoningEffort` on every fork boot — zero host/core delta here).
@@ -389,6 +397,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_CONTEXT_WINDOW_MODEL,
   ENV_PROVIDER_TRANSPORT,
   ENV_INCLUDE_USAGE,
+  ENV_GREP_BACKEND,
 ];
 
 /** True when an env var is present AND non-blank (mirrors loadEnvConfig's own test). */
@@ -1092,6 +1101,10 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   fillFromSettings(env, ENV_MAX_TURNS, numToStr(settings.tools.maxTurns));
   fillFromSettings(env, ENV_SUBAGENT_MAX_TURNS, numToStr(settings.tools.subagentMaxTurns));
   fillFromSettings(env, ENV_SUBAGENT_STALL_MS, numToStr(settings.tools.subagentStallTimeoutMs));
+  // Grep backend selector (Taskana 4160): string enum, not a number — no
+  // numToStr; fillFromSettings keeps env > settings and only fills a blank
+  // slot, exactly like the numeric tool mirrors above.
+  fillFromSettings(env, ENV_GREP_BACKEND, settings.tools.grepBackend);
   // Reasoning-effort inheritance rung (F14 §2.4): a new host boot inherits the
   // active connection's last chosen effort instead of hardcoded `off`. Env still
   // wins by construction (fillFromSettings).

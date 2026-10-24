@@ -7,6 +7,19 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Optional trigram-index backend for the Grep tool: set
+  `ANYCODE_GREP_BACKEND=tgrep` (or `settings.tools.grepBackend: "tgrep"`; env
+  wins, default `rg`) and AnyCode routes Grep through a `tgrep` binary resolved
+  from PATH (`ANYCODE_TGREP_BIN` overrides the location). tgrep is probed with
+  `--version` on every opt-in call; any failure — missing binary, refused
+  daemon, error exit, timeout — silently falls back to ripgrep and then the JS
+  path, never a trimmed result. `--no-max-filesize` lifts tgrep's 64 MiB
+  default cap so it cannot answer "no matches" where `rg` would match. AnyCode
+  never starts, stops or indexes for tgrep — running `tgrep serve` is up to the
+  user.
+
 ## [0.0.35] — 2026-10-10
 
 ### Added
