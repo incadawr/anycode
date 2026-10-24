@@ -217,7 +217,7 @@ export async function runPrintMode(opts: PrintModeOptions): Promise<number> {
           stdout.write(event.text);
         }
       } else {
-        renderEvent(event, writeErr, theme);
+        renderEvent(event, writeErr, theme, { headless: true });
       }
       if (event.type === "error") {
         sawErrorEvent = true;
