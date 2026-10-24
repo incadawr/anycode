@@ -193,9 +193,10 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
   metadata: {
     name: "Grep",
     description:
-      "Search file contents with a regular expression. Returns matching lines, file paths, or per-file counts. " +
-      "Optional trigram-index backend (tgrep) when ANYCODE_GREP_BACKEND=tgrep is set and tgrep is installed; " +
-      "otherwise ripgrep, with a JS fallback — identical output shape either way.",
+      // Taskana 4160: deliberately unchanged — the backend is an operator
+      // setting, invisible to the model, and the default-off tool schema must
+      // stay byte-identical (prompt cache, provider tool snapshots).
+      "Search file contents with a regular expression. Returns matching lines, file paths, or per-file counts.",
     readOnly: true,
     destructive: false,
     concurrentSafe: true,

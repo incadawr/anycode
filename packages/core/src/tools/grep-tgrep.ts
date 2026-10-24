@@ -32,8 +32,6 @@ import type { ToolContext } from "../types/tools.js";
 import type { GrepInput, GrepOutput } from "./schemas.js";
 import { buildTgrepArgs, shapeRgJsonOutput } from "./grep-rg.js";
 
-export type TgrepImporter = (port: ToolContext["ports"]["exec"]) => Promise<string | undefined>;
-
 /**
  * Resolves a usable tgrep executable, or `undefined` when none exists.
  *
