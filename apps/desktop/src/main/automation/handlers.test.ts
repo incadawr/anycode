@@ -70,6 +70,10 @@ import {
   tryAgainButtonClick,
   workflowStepsState,
   workflowStepClick,
+  workflowMapState,
+  workflowMapToggle,
+  workflowTicksState,
+  agentCardCollapse,
   settingsState,
   settingsOpen,
   settingsClose,
@@ -480,6 +484,38 @@ describe("workflow-steps thin facade commands forward method + args (TASK.191 sl
     const deps = fakeDeps();
     await workflowStepClick(deps, "tab-a", "call-1", "step-2");
     expect(deps.callFacade).toHaveBeenCalledWith("workflowStepClick", ["tab-a", "call-1", "step-2"]);
+  });
+});
+
+describe("workflow map / ticks / collapse thin facade commands forward method + args (Taskana 4161)", () => {
+  it("workflowMapState -> callFacade('workflowMapState', [tabId, toolCallId])", async () => {
+    const deps = fakeDeps();
+    await workflowMapState(deps, "tab-a", "call-1");
+    expect(deps.callFacade).toHaveBeenCalledWith("workflowMapState", ["tab-a", "call-1"]);
+  });
+
+  it("workflowMapToggle -> callFacade('workflowMapToggle', [tabId, toolCallId, open]) threading true", async () => {
+    const deps = fakeDeps();
+    await workflowMapToggle(deps, "tab-a", "call-1", true);
+    expect(deps.callFacade).toHaveBeenCalledWith("workflowMapToggle", ["tab-a", "call-1", true]);
+  });
+
+  it("workflowMapToggle threads false, not just the truthy half", async () => {
+    const deps = fakeDeps();
+    await workflowMapToggle(deps, "tab-a", "call-1", false);
+    expect(deps.callFacade).toHaveBeenCalledWith("workflowMapToggle", ["tab-a", "call-1", false]);
+  });
+
+  it("workflowTicksState -> callFacade('workflowTicksState', [tabId, toolCallId])", async () => {
+    const deps = fakeDeps();
+    await workflowTicksState(deps, "tab-a", "call-1");
+    expect(deps.callFacade).toHaveBeenCalledWith("workflowTicksState", ["tab-a", "call-1"]);
+  });
+
+  it("agentCardCollapse -> callFacade('agentCardCollapse', [tabId, toolCallId])", async () => {
+    const deps = fakeDeps();
+    await agentCardCollapse(deps, "tab-a", "call-1");
+    expect(deps.callFacade).toHaveBeenCalledWith("agentCardCollapse", ["tab-a", "call-1"]);
   });
 });
 

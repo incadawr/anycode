@@ -1001,6 +1001,32 @@ export function workflowStepClick(
   return deps.callFacade("workflowStepClick", [tabId, toolCallId, stepId]);
 }
 
+// --- Workflow map / collapsed-ticks probes + map-toggle & card-collapse
+// drivers (Taskana 4161): same thin-wrapper discipline as the workflow-step
+// pair above — the facade owns every guard, this layer only forwards
+// method + args. ---
+
+export function workflowMapState(deps: HandlerDeps, tabId: string, toolCallId: string): Promise<unknown> {
+  return deps.callFacade("workflowMapState", [tabId, toolCallId]);
+}
+
+export function workflowMapToggle(
+  deps: HandlerDeps,
+  tabId: string,
+  toolCallId: string,
+  open: boolean,
+): Promise<unknown> {
+  return deps.callFacade("workflowMapToggle", [tabId, toolCallId, open]);
+}
+
+export function workflowTicksState(deps: HandlerDeps, tabId: string, toolCallId: string): Promise<unknown> {
+  return deps.callFacade("workflowTicksState", [tabId, toolCallId]);
+}
+
+export function agentCardCollapse(deps: HandlerDeps, tabId: string, toolCallId: string): Promise<unknown> {
+  return deps.callFacade("agentCardCollapse", [tabId, toolCallId]);
+}
+
 // --- Settings probe/driver (slice-P7.16-cut.md §5 W4): thin wrappers over the
 // frozen facade contract, same discipline as the transcript-scroll /
 // todo-panel / start-screen / prompt-queue / model-pill probes above — the

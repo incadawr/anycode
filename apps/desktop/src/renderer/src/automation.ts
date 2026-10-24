@@ -795,6 +795,75 @@ export interface WorkflowStepsDom {
   click(tabId: string, toolCallId: string, stepId: string): boolean;
 }
 
+/** One node of the Workflow run map (Taskana 4161): the `<g class="workflow-map-node substatus-<kind>">`'s own `data-step-id` hook (added by this task beside the class — the only prior id carrier was the CLIPPED `workflowMapLabel` text), the `substatus-*` kind off the same class (same vocabulary the checklist rows use), and whether it currently carries the click-driven selection (`aria-pressed` — the map is a second view of ONE selection, never a second selection of its own). DOM order rides through as-is. */
+export interface WorkflowMapNodeView {
+  stepId: string;
+  kind: string;
+  selected: boolean;
+}
+
+/** One edge of the Workflow run map (Taskana 4161): the `<path class="workflow-map-edge">`'s own `data-from`/`data-to` hooks — the dependency the edge actually paints, never re-derived from `dependsOn`. DOM order. */
+export interface WorkflowMapEdgeView {
+  from: string;
+  to: string;
+}
+
+/** Parsed read of one workflow card's run map (Taskana 4161). `togglePresent` is exactly-one-`.workflow-map-toggle` (absent for a single-step run — one box is not a shape); `open` is its `aria-expanded`. The map only mounts while `mapWorthOffering && mapOpen`, so `open: true` implies the SVG is in the DOM; `open: false` is an honestly-collapsed map, not an absent one. */
+export interface WorkflowMapDomState {
+  togglePresent: boolean;
+  open: boolean;
+  nodes: WorkflowMapNodeView[];
+  edges: WorkflowMapEdgeView[];
+}
+
+/** `workflowMapState`'s success shape (Taskana 4161) — `WorkflowMapDomState` plus the `ok: true` marker, same convention as `WorkflowStepsState`. */
+export interface WorkflowMapState {
+  ok: true;
+  togglePresent: boolean;
+  open: boolean;
+  nodes: WorkflowMapNodeView[];
+  edges: WorkflowMapEdgeView[];
+}
+
+/** Parsed read of one workflow card's collapsed-header tick strip (Taskana 4161): `.workflow-ticks`' own `aria-label` (`workflowTickLabel`'s rendered aggregate) plus one `substatus-<kind>` per `.workflow-tick`, DOM order (= dependency order — the strip is the map's shape flattened into the header). `present` is `false` whenever the strip isn't mounted, which is any time the card is EXPANDED: the ticks are the collapsed card's only shape signal. */
+export interface WorkflowTicksDomState {
+  present: boolean;
+  label: string;
+  kinds: string[];
+}
+
+/** `workflowTicksState`'s success shape (Taskana 4161) — `WorkflowTicksDomState` plus the `ok: true` marker. */
+export interface WorkflowTicksState {
+  ok: true;
+  present: boolean;
+  label: string;
+  kinds: string[];
+}
+
+/**
+ * DOM accessor DI for `workflowMapState`/`workflowMapToggle` (Taskana 4161),
+ * same injectable-for-tests discipline as `WorkflowStepsDom`. `state` returns
+ * `null` when the card isn't in the DOM yet — the facade turns that into the
+ * valid-empty reading (a COLLAPSED card honestly reads this way too: the map
+ * and its toggle live inside the expanded body, `ToolCallCard.tsx`'s
+ * `{expanded && …}` gate), never an error.
+ */
+export interface WorkflowMapDom {
+  state(tabId: string, toolCallId: string): WorkflowMapDomState | null;
+  /** A real `.click()` on the ONE `.workflow-map-toggle` — the exact node `WorkflowStepsBody`'s `onClick={() => setMapOpen((open) => !open)}` fires from. Returns `false` (no-op) if the card isn't rendered, or the toggle is absent or ambiguous (more than one). */
+  clickToggle(tabId: string, toolCallId: string): boolean;
+}
+
+/**
+ * DOM accessor DI for `workflowTicksState` (Taskana 4161). Probe-only by
+ * design: the ticks are store-driven (`WorkflowSubStatus`), not interactive,
+ * so there is no driver twin — same "no mirrored state" posture as the map
+ * hooks. `state` returns `null` when the card isn't in the DOM yet.
+ */
+export interface WorkflowTicksDom {
+  state(tabId: string, toolCallId: string): WorkflowTicksDomState | null;
+}
+
 /**
  * `settingsState()`'s shape (design/slice-P7.16-cut.md §5 W4): a live read
  * that deliberately mixes two sources — `permissions.groups` comes from the
@@ -2489,6 +2558,17 @@ export interface AutomationFacade {
   // call directly the way `tryAgain` calls `dispatchTryAgain`.
   workflowStepsState(tabId: string, toolCallId: string): WorkflowStepsState | FacadeErr;
   workflowStepClick(tabId: string, toolCallId: string, stepId: string): Promise<FacadeResult>;
+  // Taskana 4161: probe/driver pairs for the Workflow run map, the collapsed
+  // tick strip, and the card disclosure's missing half. `workflowMapToggle`
+  // is an idempotent BINARY (target `open`, no click when already there) — a
+  // re-run smoke must not collapse a map it wanted open, the same posture as
+  // ctxPopoverOpen. `agentCardCollapse` is the twin `agentCardExpand` froze
+  // out: expand stays ensure-expanded (contract pinned by README/tests), so
+  // automation could never reach the one state where ticks render.
+  workflowMapState(tabId: string, toolCallId: string): WorkflowMapState | FacadeErr;
+  workflowMapToggle(tabId: string, toolCallId: string, open: boolean): Promise<FacadeResult>;
+  workflowTicksState(tabId: string, toolCallId: string): WorkflowTicksState | FacadeErr;
+  agentCardCollapse(tabId: string, toolCallId: string): Promise<FacadeResult>;
   respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult;
   setMode(tabId: string, mode: string): FacadeResult;
   stop(tabId: string): FacadeResult;
@@ -3509,6 +3589,96 @@ function realWorkflowStepsDom(): WorkflowStepsDom {
       }
       matches[0]!.click();
       return true;
+    },
+  };
+}
+
+/**
+ * The real Workflow-map DOM accessor (Taskana 4161): same laziness/scoping
+ * discipline as `realWorkflowStepsDom` above — the card itself is located by
+ * `.tool-call-card[data-tool-call-id]` inside the active tab's
+ * `.message-list[data-tab-id]`. Nodes are identified by their own
+ * `data-step-id` attribute (added beside `substatus-<kind>` by this task —
+ * the only prior id carrier was the CLIPPED `workflowMapLabel` text), edges
+ * by their own `data-from`/`data-to`; the kind comes off the class via the
+ * same regex shape `realMcpPaneDom`'s `dotMatch` uses. `togglePresent`
+ * demands EXACTLY one `.workflow-map-toggle` — zero is an honest reading
+ * (single-step run, or the card collapsed: the whole body unmounts), two
+ * would mean the probe cannot tell which toggle is real.
+ */
+function realWorkflowMapDom(): WorkflowMapDom {
+  function card(tabId: string, toolCallId: string): HTMLElement | null {
+    const containers = document.querySelectorAll<HTMLDivElement>(
+      `.message-list[data-tab-id="${CSS.escape(tabId)}"]`,
+    );
+    const container = containers.length === 1 ? containers[0] : null;
+    return (
+      container?.querySelector<HTMLElement>(`.tool-call-card[data-tool-call-id="${CSS.escape(toolCallId)}"]`) ?? null
+    );
+  }
+  return {
+    state(tabId, toolCallId) {
+      const el = card(tabId, toolCallId);
+      if (!el) {
+        return null;
+      }
+      const toggles = el.querySelectorAll<HTMLElement>(".workflow-map-toggle");
+      const togglePresent = toggles.length === 1;
+      const open = togglePresent ? toggles[0]!.getAttribute("aria-expanded") === "true" : false;
+      const nodes = Array.from(el.querySelectorAll<SVGGElement>(".workflow-map-node")).map((node) => ({
+        stepId: node.getAttribute("data-step-id") ?? "",
+        kind: /substatus-([a-z_]+)/.exec(node.getAttribute("class") ?? "")?.[1] ?? "",
+        selected: node.getAttribute("aria-pressed") === "true",
+      }));
+      const edges = Array.from(el.querySelectorAll<SVGPathElement>(".workflow-map-edge")).map((edge) => ({
+        from: edge.getAttribute("data-from") ?? "",
+        to: edge.getAttribute("data-to") ?? "",
+      }));
+      return { togglePresent, open, nodes, edges };
+    },
+    clickToggle(tabId, toolCallId) {
+      const toggles = Array.from(card(tabId, toolCallId)?.querySelectorAll<HTMLElement>(".workflow-map-toggle") ?? []);
+      if (toggles.length !== 1) {
+        return false;
+      }
+      toggles[0]!.click();
+      return true;
+    },
+  };
+}
+
+/**
+ * The real Workflow-ticks DOM accessor (Taskana 4161): probe-only (the ticks
+ * are store-driven, not interactive — there is no click to proxy), reading
+ * the collapsed header's `.workflow-ticks` strip straight off the DOM. The
+ * strip mounts only while the card is collapsed AND the run has steps
+ * (`WorkflowCollapsedTicks`'s own gate), so `present: false` on an expanded
+ * card is the honest reading, not a miss.
+ */
+function realWorkflowTicksDom(): WorkflowTicksDom {
+  function card(tabId: string, toolCallId: string): HTMLElement | null {
+    const containers = document.querySelectorAll<HTMLDivElement>(
+      `.message-list[data-tab-id="${CSS.escape(tabId)}"]`,
+    );
+    const container = containers.length === 1 ? containers[0] : null;
+    return (
+      container?.querySelector<HTMLElement>(`.tool-call-card[data-tool-call-id="${CSS.escape(toolCallId)}"]`) ?? null
+    );
+  }
+  return {
+    state(tabId, toolCallId) {
+      const el = card(tabId, toolCallId);
+      if (!el) {
+        return null;
+      }
+      const strip = el.querySelector<HTMLElement>(".workflow-ticks");
+      if (!strip) {
+        return { present: false, label: "", kinds: [] };
+      }
+      const kinds = Array.from(strip.querySelectorAll<HTMLElement>(".workflow-tick")).map(
+        (tick) => /substatus-([a-z_]+)/.exec(tick.getAttribute("class") ?? "")?.[1] ?? "",
+      );
+      return { present: true, label: strip.getAttribute("aria-label")?.trim() ?? "", kinds };
     },
   };
 }
@@ -5649,6 +5819,9 @@ const CODEX_IMPORT_APPLY_DEADLINE_MS = 10_000;
 /** Deadline for `workflowStepClick`'s post-click settle poll (TASK.191 slice S4) — same 500ms budget as `AGENT_CARD_COMMIT_DEADLINE_MS`: a local `useState` toggle (`selectedStepId`) with no async work of its own. */
 const WORKFLOW_STEP_CLICK_COMMIT_DEADLINE_MS = 500;
 
+/** Deadline for `workflowMapToggle`'s post-click settle poll (Taskana 4161) — same 500ms budget as `WORKFLOW_STEP_CLICK_COMMIT_DEADLINE_MS`: a local `useState` toggle (`WorkflowStepsBody`'s own `mapOpen`) with no async work of its own. */
+const WORKFLOW_MAP_TOGGLE_COMMIT_DEADLINE_MS = 500;
+
 /** Reads a button's rendered label + disabled state (shared by the codex pane/import DOM accessors below). */
 function buttonFacts(button: HTMLButtonElement): { label: string; disabled: boolean } {
   return { label: (button.textContent ?? "").trim(), disabled: button.disabled };
@@ -6264,6 +6437,10 @@ export function createAutomationFacade(
   // TASK.188 S9.4: appended at the END for the same reason as every DI param
   // above it — every existing positional call site would shift otherwise.
   childSplitDom: ChildSplitDom = realChildSplitDom(),
+  // Taskana 4161: appended at the END for the same reason as every DI param
+  // above it — every existing positional call site would shift otherwise.
+  workflowMapDom: WorkflowMapDom = realWorkflowMapDom(),
+  workflowTicksDom: WorkflowTicksDom = realWorkflowTicksDom(),
 ): AutomationFacade {
   /**
    * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
@@ -6865,6 +7042,110 @@ export function createAutomationFacade(
         WORKFLOW_STEP_CLICK_COMMIT_DEADLINE_MS,
       );
       return committed ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    workflowMapState(tabId: string, toolCallId: string): WorkflowMapState | FacadeErr {
+      // Same two structural refusals as workflowStepsState above.
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const state = workflowMapDom.state(tabId, toolCallId);
+      if (state === null) {
+        // A valid reading, not an error (workflowStepsState precedent) — and
+        // a COLLAPSED card honestly reads this way too: the map and its
+        // toggle live inside the expanded body (`ToolCallCard.tsx`'s
+        // `{expanded && …}` gate), so "nothing mounted" and "collapsed" are
+        // indistinguishable to any DOM probe, by design.
+        return { ok: true, togglePresent: false, open: false, nodes: [], edges: [] };
+      }
+      return { ok: true, ...state };
+    },
+
+    async workflowMapToggle(tabId: string, toolCallId: string, open: boolean): Promise<FacadeResult> {
+      // Same two structural refusals as workflowMapState above.
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const state = workflowMapDom.state(tabId, toolCallId);
+      if (state === null || !state.togglePresent) {
+        return { ok: false, reason: "not_present" };
+      }
+      // Idempotent binary, not a blind click-through: a re-run smoke must
+      // not collapse a map it wanted open (ctxPopoverOpen's posture).
+      if (state.open === open) {
+        return { ok: true };
+      }
+      // A real click on the toggle's own `.workflow-map-toggle` — the map's
+      // open state is local component useState (`WorkflowStepsBody`'s own
+      // `mapOpen`), not a store action, so there is no facade shortcut.
+      const clicked = workflowMapDom.clickToggle(tabId, toolCallId);
+      if (!clicked) {
+        return { ok: false, reason: "not_present" };
+      }
+      // Same commit-race guard as workflowStepClick: a real click schedules
+      // a React state update that may not have committed by the very next
+      // synchronous line.
+      const committed = await waitUntil(
+        () => workflowMapDom.state(tabId, toolCallId)?.open === open,
+        WORKFLOW_MAP_TOGGLE_COMMIT_DEADLINE_MS,
+      );
+      return committed ? { ok: true } : { ok: false, reason: "did_not_settle" };
+    },
+
+    workflowTicksState(tabId: string, toolCallId: string): WorkflowTicksState | FacadeErr {
+      // Same two structural refusals as workflowMapState above.
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const state = workflowTicksDom.state(tabId, toolCallId);
+      if (state === null) {
+        // A valid reading, not an error (workflowStepsState precedent): the
+        // transcript isn't mounted for this tab yet, or no card with this
+        // exact toolCallId has landed there yet.
+        return { ok: true, present: false, label: "", kinds: [] };
+      }
+      return { ok: true, ...state };
+    },
+
+    async agentCardCollapse(tabId: string, toolCallId: string): Promise<FacadeResult> {
+      // `agentCardExpand` inverted, same two structural refusals (Taskana
+      // 4161): expand stays ensure-expanded (its contract is pinned by
+      // README rows and existing tests), so collapse arrives as a twin
+      // instead of a body-driven toggle on expand.
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const before = agentCardDom.state(tabId, toolCallId);
+      if (before === null) {
+        return { ok: false, reason: "not_present" };
+      }
+      if (!before.expanded) {
+        return { ok: true };
+      }
+      // A real click on the card's own toggle button — same posture as
+      // `agentCardExpand`'s `clickToggle` (disclosure is local component
+      // useState, `ToolCallCard`'s own `userExpanded`).
+      agentCardDom.clickToggle(tabId, toolCallId);
+      // Same commit-race guard as agentCardExpand: a real click schedules a
+      // React state update that may not have committed by the very next
+      // synchronous line.
+      const committed = await waitUntil(
+        () => agentCardDom.state(tabId, toolCallId)?.expanded === false,
+        AGENT_CARD_COMMIT_DEADLINE_MS,
+      );
+      return committed ? { ok: true } : { ok: false, reason: "did_not_collapse" };
     },
 
     respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult {

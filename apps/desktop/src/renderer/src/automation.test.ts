@@ -55,6 +55,9 @@ import {
   type TryAgainButtonDom,
   type WorkflowStepsDom,
   type WorkflowStepsDomState,
+  type WorkflowMapDom,
+  type WorkflowMapDomState,
+  type WorkflowTicksDom,
   type ProviderPaneDom,
   type ProviderConnectionRowView,
   type ProviderDrawerDomState,
@@ -7716,6 +7719,404 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       expect(elapsed).toBeGreaterThanOrEqual(450);
       expect(elapsed).toBeLessThan(2000);
       expect(click).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe("automation facade — workflowMapState/workflowMapToggle/workflowTicksState/agentCardCollapse (Taskana 4161)", () => {
+  /** Builds a facade wired for the workflow map/ticks + agent-card-collapse methods (params 38-39, plus agentCardDom at 11 for the collapse twin) — every other DOM/store slot keeps its own real default (never exercised by these tests). */
+  function buildFacade(
+    registry: TabRegistry,
+    tabsStore: TabsStoreApi,
+    workflowMapDom?: WorkflowMapDom,
+    workflowTicksDom?: WorkflowTicksDom,
+    agentCardDom?: AgentCardDom,
+  ) {
+    return createAutomationFacade(
+      registry,
+      tabsStore,
+      stubBridge(),
+      undefined, // 4  dom
+      undefined, // 5  todoPanelDom
+      undefined, // 6  startScreenDom
+      undefined, // 7  modelPillDom
+      undefined, // 8  settingsStore
+      undefined, // 9  settingsDom
+      undefined, // 10 ctxPopoverDom
+      agentCardDom, // 11 agentCardDom
+      undefined, // 12 mcpPaneDom
+      undefined, // 13 skillsPaneDom
+      undefined, // 14 subagentsPaneDom
+      undefined, // 15 profilePaneDom
+      undefined, // 16 composerSlashDom
+      undefined, // 17 shortcutsPaneDom
+      undefined, // 18 lspPanelDom
+      undefined, // 19 hooksPanelDom
+      undefined, // 20 checkpointPanelDom
+      undefined, // 21 transcriptBlockDom
+      undefined, // 22 tryAgainButtonDom
+      undefined, // 23 providerPaneDom
+      undefined, // 24 codexPaneDom
+      undefined, // 25 codexProfileChipDom
+      undefined, // 26 codexImportDom
+      undefined, // 27 binaryTrustDialogDom
+      undefined, // 28 trustedBinariesSectionDom
+      undefined, // 29 childLayoutStore
+      undefined, // 30 sidebarDom
+      undefined, // 31 settingsLayoutDom
+      undefined, // 32 workflowStepsDom
+      undefined, // 33 visionPaneDom
+      undefined, // 34 replayStore
+      undefined, // 35 replayTimer
+      undefined, // 36 childCloseDom
+      undefined, // 37 childSplitDom
+      workflowMapDom, // 38
+      workflowTicksDom, // 39
+    );
+  }
+
+  describe("workflowMapState", () => {
+    it("refuses a tabId that isn't the active tab (tab_not_active)", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
+      registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
+      tabsStore.getState().setActiveTab("tab-b");
+      const workflowMapDom: WorkflowMapDom = { state: () => null, clickToggle: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      expect(facade.workflowMapState(tabId, "call-1")).toEqual({ ok: false, reason: "tab_not_active" });
+    });
+
+    it("rejects an unknown tabId (unknown_tab)", () => {
+      const tabsStore = createTabsStore();
+      const registry = createTabRegistry(tabsStore);
+      tabsStore.setState({ activeTabId: "ghost" });
+      const workflowMapDom: WorkflowMapDom = { state: () => null, clickToggle: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      expect(facade.workflowMapState("ghost", "call-1")).toEqual({ ok: false, reason: "unknown_tab" });
+    });
+
+    it("reports the empty default shape (not an error) when no card with this toolCallId is rendered yet", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const workflowMapDom: WorkflowMapDom = { state: () => null, clickToggle: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      expect(facade.workflowMapState(tabId, "call-1")).toEqual({ ok: true, togglePresent: false, open: false, nodes: [], edges: [] });
+    });
+
+    it("queries workflowMapDom.state with the EXACT tabId + toolCallId requested", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const seen: Array<[string, string]> = [];
+      const workflowMapDom: WorkflowMapDom = {
+        state: (t, id) => {
+          seen.push([t, id]);
+          return null;
+        },
+        clickToggle: vi.fn(() => false),
+      };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      facade.workflowMapState(tabId, "call-42");
+      expect(seen).toEqual([[tabId, "call-42"]]);
+    });
+
+    it("spreads a populated map state verbatim — nodes, edges, toggle, open flag", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const domState: WorkflowMapDomState = {
+        togglePresent: true,
+        open: true,
+        nodes: [
+          { stepId: "fetch", kind: "running", selected: false },
+          { stepId: "build", kind: "pending", selected: true },
+        ],
+        edges: [{ from: "fetch", to: "build" }],
+      };
+      const workflowMapDom: WorkflowMapDom = { state: () => domState, clickToggle: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      expect(facade.workflowMapState(tabId, "call-42")).toEqual({
+        ok: true,
+        togglePresent: true,
+        open: true,
+        nodes: [
+          { stepId: "fetch", kind: "running", selected: false },
+          { stepId: "build", kind: "pending", selected: true },
+        ],
+        edges: [{ from: "fetch", to: "build" }],
+      });
+    });
+
+    it("spreads the collapsed card's honest reading verbatim (map/toggle unmount with the expanded body)", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const domState: WorkflowMapDomState = { togglePresent: false, open: false, nodes: [], edges: [] };
+      const workflowMapDom: WorkflowMapDom = { state: () => domState, clickToggle: vi.fn(() => false) };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      expect(facade.workflowMapState(tabId, "call-42")).toEqual({
+        ok: true,
+        togglePresent: false,
+        open: false,
+        nodes: [],
+        edges: [],
+      });
+    });
+  });
+
+  describe("workflowMapToggle", () => {
+    it("refuses a tabId that isn't the active tab (tab_not_active), touching no DOM click", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
+      registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
+      tabsStore.getState().setActiveTab("tab-b");
+      const clickToggle = vi.fn(() => true);
+      const workflowMapDom: WorkflowMapDom = { state: () => null, clickToggle };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      await expect(facade.workflowMapToggle(tabId, "call-1", true)).resolves.toEqual({ ok: false, reason: "tab_not_active" });
+      expect(clickToggle).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown tabId (unknown_tab), touching no DOM click", async () => {
+      const tabsStore = createTabsStore();
+      const registry = createTabRegistry(tabsStore);
+      tabsStore.setState({ activeTabId: "ghost" });
+      const clickToggle = vi.fn(() => true);
+      const workflowMapDom: WorkflowMapDom = { state: () => null, clickToggle };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      await expect(facade.workflowMapToggle("ghost", "call-1", true)).resolves.toEqual({ ok: false, reason: "unknown_tab" });
+      expect(clickToggle).not.toHaveBeenCalled();
+    });
+
+    it("returns {ok:false, reason:'not_present'} without clicking when no card is rendered at all", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const clickToggle = vi.fn(() => true);
+      const workflowMapDom: WorkflowMapDom = { state: () => null, clickToggle };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      await expect(facade.workflowMapToggle(tabId, "call-1", true)).resolves.toEqual({ ok: false, reason: "not_present" });
+      expect(clickToggle).not.toHaveBeenCalled();
+    });
+
+    it("returns {ok:false, reason:'not_present'} without clicking when the toggle is absent (single-step run, or card collapsed)", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const clickToggle = vi.fn(() => true);
+      const workflowMapDom: WorkflowMapDom = {
+        state: () => ({ togglePresent: false, open: false, nodes: [], edges: [] }),
+        clickToggle,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      await expect(facade.workflowMapToggle(tabId, "call-1", true)).resolves.toEqual({ ok: false, reason: "not_present" });
+      expect(clickToggle).not.toHaveBeenCalled();
+    });
+
+    it("is idempotent: {ok:true} with NO click when the map already reads open:true and target is true", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const clickToggle = vi.fn(() => true);
+      const workflowMapDom: WorkflowMapDom = {
+        state: () => ({ togglePresent: true, open: true, nodes: [], edges: [] }),
+        clickToggle,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      await expect(facade.workflowMapToggle(tabId, "call-1", true)).resolves.toEqual({ ok: true });
+      expect(clickToggle).not.toHaveBeenCalled();
+    });
+
+    it("clicks the toggle and succeeds once open flips only after a tick (same commit-race guard as workflowStepClick)", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      let open = true;
+      const clickToggle = vi.fn(() => {
+        setTimeout(() => {
+          open = false;
+        }, 0);
+        return true;
+      });
+      const workflowMapDom: WorkflowMapDom = {
+        state: () => ({ togglePresent: true, open, nodes: [], edges: [] }),
+        clickToggle,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      await expect(facade.workflowMapToggle(tabId, "call-1", false)).resolves.toEqual({ ok: true });
+      expect(clickToggle).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes symmetrically: target false from an open map is the same click path", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      let open = false;
+      const clickToggle = vi.fn(() => {
+        setTimeout(() => {
+          open = true;
+        }, 0);
+        return true;
+      });
+      const workflowMapDom: WorkflowMapDom = {
+        state: () => ({ togglePresent: true, open, nodes: [], edges: [] }),
+        clickToggle,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      await expect(facade.workflowMapToggle(tabId, "call-1", true)).resolves.toEqual({ ok: true });
+      expect(clickToggle).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses with did_not_settle when open never flips, bounded by the commit-poll deadline", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const clickToggle = vi.fn(() => true);
+      const workflowMapDom: WorkflowMapDom = {
+        state: () => ({ togglePresent: true, open: true, nodes: [], edges: [] }),
+        clickToggle,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      const start = Date.now();
+      await expect(facade.workflowMapToggle(tabId, "call-1", false)).resolves.toEqual({
+        ok: false,
+        reason: "did_not_settle",
+      });
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(450);
+      expect(elapsed).toBeLessThan(2000);
+      expect(clickToggle).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns {ok:false, reason:'not_present'} when the DOM click itself refuses (absent or ambiguous toggle)", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const clickToggle = vi.fn(() => false);
+      const workflowMapDom: WorkflowMapDom = {
+        state: () => ({ togglePresent: true, open: true, nodes: [], edges: [] }),
+        clickToggle,
+      };
+      const facade = buildFacade(registry, tabsStore, workflowMapDom);
+      await expect(facade.workflowMapToggle(tabId, "call-1", false)).resolves.toEqual({ ok: false, reason: "not_present" });
+      expect(clickToggle).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("workflowTicksState", () => {
+    it("refuses a tabId that isn't the active tab (tab_not_active)", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
+      registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
+      tabsStore.getState().setActiveTab("tab-b");
+      const workflowTicksDom: WorkflowTicksDom = { state: () => null };
+      const facade = buildFacade(registry, tabsStore, undefined, workflowTicksDom);
+      expect(facade.workflowTicksState(tabId, "call-1")).toEqual({ ok: false, reason: "tab_not_active" });
+    });
+
+    it("rejects an unknown tabId (unknown_tab)", () => {
+      const tabsStore = createTabsStore();
+      const registry = createTabRegistry(tabsStore);
+      tabsStore.setState({ activeTabId: "ghost" });
+      const workflowTicksDom: WorkflowTicksDom = { state: () => null };
+      const facade = buildFacade(registry, tabsStore, undefined, workflowTicksDom);
+      expect(facade.workflowTicksState("ghost", "call-1")).toEqual({ ok: false, reason: "unknown_tab" });
+    });
+
+    it("reports the empty default shape (not an error) when no card with this toolCallId is rendered yet", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const workflowTicksDom: WorkflowTicksDom = { state: () => null };
+      const facade = buildFacade(registry, tabsStore, undefined, workflowTicksDom);
+      expect(facade.workflowTicksState(tabId, "call-1")).toEqual({ ok: true, present: false, label: "", kinds: [] });
+    });
+
+    it("spreads a populated ticks state verbatim — label + kinds in DOM (dependency) order", () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const workflowTicksDom: WorkflowTicksDom = {
+        state: () => ({ present: true, label: "release-flow: 1 of 2 steps done", kinds: ["completed", "pending"] }),
+      };
+      const facade = buildFacade(registry, tabsStore, undefined, workflowTicksDom);
+      expect(facade.workflowTicksState(tabId, "call-42")).toEqual({
+        ok: true,
+        present: true,
+        label: "release-flow: 1 of 2 steps done",
+        kinds: ["completed", "pending"],
+      });
+    });
+  });
+
+  describe("agentCardCollapse", () => {
+    it("refuses a tabId that isn't the active tab (tab_not_active), touching no DOM click", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab("tab-a");
+      registry.registerPort("tab-b", "/ws/b", asPort(new FakeMessagePort()));
+      tabsStore.getState().setActiveTab("tab-b");
+      const clickToggle = vi.fn(() => true);
+      const agentCardDom: AgentCardDom = { state: () => null, clickToggle };
+      const facade = buildFacade(registry, tabsStore, undefined, undefined, agentCardDom);
+      await expect(facade.agentCardCollapse(tabId, "call-1")).resolves.toEqual({ ok: false, reason: "tab_not_active" });
+      expect(clickToggle).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown tabId (unknown_tab), touching no DOM click", async () => {
+      const tabsStore = createTabsStore();
+      const registry = createTabRegistry(tabsStore);
+      tabsStore.setState({ activeTabId: "ghost" });
+      const clickToggle = vi.fn(() => true);
+      const agentCardDom: AgentCardDom = { state: () => null, clickToggle };
+      const facade = buildFacade(registry, tabsStore, undefined, undefined, agentCardDom);
+      await expect(facade.agentCardCollapse("ghost", "call-1")).resolves.toEqual({ ok: false, reason: "unknown_tab" });
+      expect(clickToggle).not.toHaveBeenCalled();
+    });
+
+    it("refuses with not_present when no card with this toolCallId is rendered", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const clickToggle = vi.fn(() => false);
+      const agentCardDom: AgentCardDom = { state: () => null, clickToggle };
+      const facade = buildFacade(registry, tabsStore, undefined, undefined, agentCardDom);
+      await expect(facade.agentCardCollapse(tabId, "call-1")).resolves.toEqual({ ok: false, reason: "not_present" });
+      expect(clickToggle).not.toHaveBeenCalled();
+    });
+
+    it("no-ops (ok:true) without clicking when the card already reads expanded:false", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const clickToggle = vi.fn(() => true);
+      const agentCardDom: AgentCardDom = {
+        state: () => ({ expanded: false, promptCollapsed: true, feedRowCount: 0, resultRendered: false }),
+        clickToggle,
+      };
+      const facade = buildFacade(registry, tabsStore, undefined, undefined, agentCardDom);
+      await expect(facade.agentCardCollapse(tabId, "call-1")).resolves.toEqual({ ok: true });
+      expect(clickToggle).not.toHaveBeenCalled();
+    });
+
+    it("clicks the toggle and succeeds once the card reports expanded:false only after a tick (agentCardExpand inverted)", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      let expanded = true;
+      const clickToggle = vi.fn(() => {
+        setTimeout(() => {
+          expanded = false;
+        }, 0);
+        return true;
+      });
+      const agentCardDom: AgentCardDom = {
+        state: () => ({ expanded, promptCollapsed: true, feedRowCount: 0, resultRendered: false }),
+        clickToggle,
+      };
+      const facade = buildFacade(registry, tabsStore, undefined, undefined, agentCardDom);
+      await expect(facade.agentCardCollapse(tabId, "call-1")).resolves.toEqual({ ok: true });
+      expect(clickToggle).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses with did_not_collapse when expanded never flips, bounded by the commit-poll deadline", async () => {
+      const { registry, tabsStore, tabId } = setupReadyTab();
+      tabsStore.getState().setActiveTab(tabId);
+      const clickToggle = vi.fn(() => true);
+      const agentCardDom: AgentCardDom = {
+        state: () => ({ expanded: true, promptCollapsed: true, feedRowCount: 0, resultRendered: false }),
+        clickToggle,
+      };
+      const facade = buildFacade(registry, tabsStore, undefined, undefined, agentCardDom);
+      const start = Date.now();
+      await expect(facade.agentCardCollapse(tabId, "call-1")).resolves.toEqual({
+        ok: false,
+        reason: "did_not_collapse",
+      });
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(450);
+      expect(elapsed).toBeLessThan(2000);
+      expect(clickToggle).toHaveBeenCalledTimes(1);
     });
   });
 });
