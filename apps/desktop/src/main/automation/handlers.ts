@@ -1409,6 +1409,10 @@ export function composerKey(
   return deps.callFacade("composerKey", [tabId, key]);
 }
 
+export function composerQueueState(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("composerQueueState", [tabId]);
+}
+
 // --- Keyboard shortcuts pane probe/driver (design/slice-P7.24-cut.md §4 W4):
 // thin wrappers over the frozen facade contract, same discipline as the
 // Profile pane probe/driver above — the facade owns every guard
