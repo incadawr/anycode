@@ -1,6 +1,6 @@
 /**
  * Host-side RPC client for `SessionSubagentPort` (TASK.102 CUT-S2 §2.6.1):
- * the parent root host's half of the `Agent tier:"session"` wire. Turns one
+ * the parent root host's half of the `Agent tier:"session"`` wire. Turns one
  * `SessionSubagentPort.run()` call into a `ChildSpawnRequest`/`ChildRunCancel`
  * pair sent over `process.parentPort`, correlating main's `ChildRunEvent`
  * replies by `requestId`. `send`/`subscribe` are injected closures over
@@ -8,6 +8,13 @@
  * registry — mirrors `createPreviewRpcClient` (host/boot.ts) and the
  * credential broker (host/index.ts:348-377): this module never touches
  * `process.parentPort` directly, so it is fully testable with fakes.
+ *
+ * Taskana 4153 / TASK.216 wire: the control plane now carries a THIRD op —
+ * `ChildRunSend` (`sendToChild` below) — which delivers a follow-up to one
+ * of the parent's OWN still-running children. It shares the requestId
+ * namespace and waiter map with `run()`, but nothing else: it never spawns,
+ * never cancels, and settles on the additive `{ kind: "sent" }` ack rather
+ * than a run's terminal.
  *
  * Unlike the single-shot preview client, ONE `run()` call receives a WHOLE
  * lifecycle of events — exactly one `accepted` XOR `rejected`, then zero or
@@ -110,6 +117,7 @@ import {
   type SessionSubagentOutcome,
   type SessionSubagentPort,
   type SessionSubagentRequest,
+  type SessionSubagentSendResult,
   type SubagentProgress,
   type SubagentRunOptions,
   type SubagentStallReport,
@@ -121,12 +129,14 @@ import {
   CHILD_PROMPT_MAX_CHARS,
   CHILD_PROVIDER_MAX_CHARS,
   CHILD_RUN_CANCEL_TYPE,
+  CHILD_RUN_SEND_TYPE,
   CHILD_SPAWN_REQUEST_TYPE,
   isValidChildId,
   isChildEffort,
   isValidChildModel,
   type ChildRunCancel,
   type ChildRunEvent,
+  type ChildRunSend,
   type ChildSpawnRequest,
 } from "../shared/child-sessions.js";
 
@@ -172,6 +182,41 @@ const PROVIDER_CONNECTION_CONFLICT_MESSAGE =
 const MALFORMED_EFFORT_MESSAGE = "Agent: the child session failed to start (malformed reasoning effort).";
 const MALFORMED_RESUME_MESSAGE = "Agent: the child session failed to start (malformed child session id to continue).";
 const MALFORMED_MAX_TURNS_MESSAGE = "Agent: the child session failed to start (malformed turn budget).";
+
+/**
+ * Taskana 4153 / TASK.216 wire: the RPC timeout bounding a `sendToChild`
+ * call. Unlike `run()` (no client-side timeout by design — the file header's
+ * sync-join contract), a send is a bounded request/reply pair: exactly one
+ * `sent` XOR `rejected` ack must come back for it, and a main that neither
+ * admits nor refuses it leaves the model's Agent call hanging on the
+ * dispatcher's far longer tool timeout. 30s matches
+ * `communicationRequest`'s own 20s host RPC plus dispatch headroom.
+ */
+const CHILD_SEND_RPC_TIMEOUT_MS = 30_000;
+export { CHILD_SEND_RPC_TIMEOUT_MS };
+/** Taskana 4153: pre-flight refusal text for a malformed send (id or text) — same rationale as MALFORMED_SPAWN_ID_MESSAGE. */
+const MALFORMED_SEND_MESSAGE = "Agent: malformed child session id or text.";
+/** Taskana 4153: the send completed before it started (opts.signal already aborted) — same shape as run()'s F9 early return. */
+const SEND_ABORTED_MESSAGE = "Agent: aborted before send.";
+/** Taskana 4153: main never answered the send — delivery genuinely unknown, never silently "ok". */
+const SEND_TIMEOUT_MESSAGE = "Agent: main did not answer the send; delivery unknown.";
+
+/**
+ * Taskana 4153: maps a `rejected` ack's `spawn_failed` reason + message onto
+ * the coarse `SessionSubagentSendResult` reason union the core handler
+ * presents. Main mints one text per refusal family (not yours / not running
+ * / engine child / unreachable host); keyword matching is deliberately
+ * simple — the reason is presentation-only, the MESSAGE is the load-bearing
+ * refusal text either way.
+ */
+function mapSendRejectReason(message: string): "unavailable" | "not_running" | "not_yours" | "busy" | "host_error" {
+  if (message.includes("not running")) return "not_running";
+  if (message.includes("cannot be addressed")) return "not_yours";
+  if (message.includes("not addressable")) return "not_yours";
+  if (message.includes("could not be reached")) return "host_error";
+  if (message.includes("delivery state")) return "busy";
+  return "host_error";
+}
 
 /**
  * Non-empty, capped free text — the exact shape `parseChildSpawnRequest`'s
@@ -292,8 +337,8 @@ export interface CreateChildSessionPortOptions {
    * here rather than on `SessionSubagentRequest`.
    */
   getPermissionMode: () => PermissionMode;
-  /** Sends a ChildSpawnRequest/ChildRunCancel to main (host/index.ts: process.parentPort.postMessage). */
-  send: (message: ChildSpawnRequest | ChildRunCancel) => void;
+  /** Sends a ChildSpawnRequest/ChildRunCancel/ChildRunSend to main (host/index.ts: process.parentPort.postMessage). */
+  send: (message: ChildSpawnRequest | ChildRunCancel | ChildRunSend) => void;
   /**
    * Registers the ONE listener for ChildRunEvent messages arriving on the
    * control-plane channel (host/index.ts: filtered off process.parentPort's
@@ -359,6 +404,18 @@ export interface CreateChildSessionPortOptions {
 export interface ChildSessionPort extends SessionSubagentPort {
   /** Every currently-live detached child this port has admitted and not yet seen a terminal for. */
   listBackgroundChildren(): BackgroundChildSnapshot[];
+  /**
+   * Taskana 4153 / TASK.216 wire: delivers a follow-up `text` to the
+   * parent's OWN STILL-RUNNING child (`childSessionId`, from that run's
+   * "accepted" event), over the additive `ChildRunSend` parentPort op —
+   * completely independent of any `run()` waiter: the original sync-join
+   * Agent call keeps waiting, and its terminal now includes the turns the
+   * delivered message causes. Never spawns, never resumes; a finished child
+   * stays `continue_session`'s to address. Fail-closed on a malformed id or
+   * an oversized text BEFORE anything is sent (main's parser would silently
+   * drop it otherwise — same rationale as `findSpawnRequestShapeError`).
+   */
+  sendToChild(req: { childSessionId: string; text: string }, opts?: { signal?: AbortSignal }): Promise<SessionSubagentSendResult>;
   /**
    * Sends a `ChildRunCancel` for the ONE detached child matching this
    * `childSessionId`, addressed via the registry's own `requestId` (the
@@ -729,6 +786,16 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               finish(outcome);
               return;
             }
+            case "sent": {
+              // Taskana 4153: ack for a ChildRunSend — a run() waiter shares
+              // the requestId namespace but never sees this kind (sendToChild
+              // deletes its own waiter the moment the ack lands, and main
+              // never relays a send's ack into a run's lifecycle). Reachable
+              // only through a same-requestId collision, which the
+              // createRequestId() uuid makes practically impossible; treated
+              // as a stray no-op, never a run outcome.
+              return;
+            }
             default: {
               // Exhaustiveness guard: a new ChildRunEvent kind fails to compile
               // here (matches the codebase's exhaustive-never discipline, e.g.
@@ -771,6 +838,47 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     });
   }
 
+  /**
+   * Taskana 4153 / TASK.216 wire: `ChildSessionPort.sendToChild` — see the
+   * interface's own doc. Mirrors `run()`'s waiter pattern (one
+   * `Map<requestId, waiter>` entry, resolved by the inbound `sent`/
+   * `rejected` ack with that requestId), but bounded by
+   * `CHILD_SEND_RPC_TIMEOUT_MS` — a bounded request/reply pair, not a
+   * sync-join lifecycle (file header).
+   */
+  function sendToChild(req: { childSessionId: string; text: string }, opts?: { signal?: AbortSignal }): Promise<SessionSubagentSendResult> {
+    // Pre-flight (F8/F9 discipline, same rationale as run()'s own two early
+    // returns): an ALREADY-aborted signal or a malformed id/text must fail
+    // immediately and honestly, never reach options.send.
+    if (opts?.signal?.aborted) {
+      return Promise.resolve({ ok: false, reason: "unavailable", message: SEND_ABORTED_MESSAGE });
+    }
+    if (!isValidChildId(req.childSessionId) || !isValidFreeText(req.text, CHILD_PROMPT_MAX_CHARS)) {
+      return Promise.resolve({ ok: false, reason: "unavailable", message: MALFORMED_SEND_MESSAGE });
+    }
+    return new Promise<SessionSubagentSendResult>((resolve) => {
+      const requestId = createRequestId();
+      // Finish is referenced by the timer before its own declaration, exactly
+      // like run()'s waiter closures — hoisted const, called only after both
+      // bindings exist.
+      const timer = setTimeout(() => finish({ ok: false, reason: "host_error", message: SEND_TIMEOUT_MESSAGE }), CHILD_SEND_RPC_TIMEOUT_MS);
+      const finish = (result: SessionSubagentSendResult): void => {
+        clearTimeout(timer);
+        waiters.delete(requestId);
+        resolve(result);
+      };
+      waiters.set(requestId, {
+        onEvent: (event) => {
+          if (event.kind !== "sent" && event.kind !== "rejected") {
+            return;
+          }
+          finish(event.kind === "sent" ? { ok: true } : { ok: false, reason: mapSendRejectReason(event.message), message: event.message });
+        },
+      });
+      options.send({ type: CHILD_RUN_SEND_TYPE, requestId, childSessionId: req.childSessionId, text: req.text });
+    });
+  }
+
   /** TASK.145 срез 3, `ChildSessionPort.listBackgroundChildren` — see that interface's own doc. */
   function listBackgroundChildren(): BackgroundChildSnapshot[] {
     return [...backgroundChildren.values()].map((entry) => entry.snapshot);
@@ -804,5 +912,5 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     };
   }
 
-  return { run, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
+  return { run, sendToChild, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
 }

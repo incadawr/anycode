@@ -46,6 +46,7 @@ export type {
   SessionSubagentOutcome,
   SessionSubagentPort,
   SessionSubagentRequest,
+  SessionSubagentSendResult,
 } from "./session-subagent.js";
 export type { LoadedSkill, SkillMeta, SkillPort } from "./skills.js";
 export type {

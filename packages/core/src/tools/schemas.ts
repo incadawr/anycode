@@ -353,6 +353,19 @@ export const agentInputSchema = z.object({
         "(stated in that call's result and in the delivered child report) — the same child resumes with its full " +
         "history and receives `prompt` as its next message. Invalid for inline tier; cannot be combined with provider.",
     ),
+  /**
+   * Taskana 4153 / TASK.216 wire: session-tier-only, the RUNNING twin of
+   * `continue_session` (finished-only). Physically absent from the restricted
+   * schema below by construction (a child session's registry never sees this
+   * field), same non-recursion lock discipline as `provider`/`detach`.
+   */
+  send_to: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Session tier only: child session id of a STILL-RUNNING earlier Agent call of this conversation — `prompt` is delivered to that child as its next input (it re-reviews on its own context). The original Agent call keeps waiting. Not for finished children (use continue_session).",
+    ),
 });
 
 export type AgentInput = z.output<typeof agentInputSchema>;

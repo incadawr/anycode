@@ -20,6 +20,7 @@ import {
   CHILD_READY_TYPE,
   CHILD_RUN_CANCEL_TYPE,
   CHILD_RUN_EVENT_TYPE,
+  CHILD_RUN_SEND_TYPE,
   CHILD_RUNS_GLOBAL_MAX,
   CHILD_RUNS_PER_PARENT_MAX,
   CHILD_SPAWN_REQUEST_TYPE,
@@ -34,6 +35,7 @@ import {
   parseChildReady,
   parseChildRunCancel,
   parseChildRunEvent,
+  parseChildRunSend,
   parseChildSpawnRequest,
   parseChildStart,
   parseChildTerminal,
@@ -306,6 +308,49 @@ describe("parseChildRunCancel", () => {
   });
 });
 
+describe("parseChildRunSend (Taskana 4153)", () => {
+  const valid = { type: CHILD_RUN_SEND_TYPE, requestId: "req-1", childSessionId: "sess-1", text: "here are the other reviewers' edits" };
+
+  it("accepts a well-formed send", () => {
+    expect(parseChildRunSend(valid)).toEqual(valid);
+  });
+
+  it("rejects a wrong type", () => {
+    expect(parseChildRunSend({ ...valid, type: CHILD_RUN_CANCEL_TYPE })).toBeNull();
+  });
+
+  it.each(GARBAGE_INPUTS)("rejects garbage input %#", (garbage) => {
+    expect(parseChildRunSend(garbage)).toBeNull();
+  });
+
+  it("rejects a missing key (no text)", () => {
+    expect(parseChildRunSend({ type: CHILD_RUN_SEND_TYPE, requestId: "req-1", childSessionId: "sess-1" })).toBeNull();
+  });
+
+  it("rejects a missing key (no childSessionId)", () => {
+    expect(parseChildRunSend({ type: CHILD_RUN_SEND_TYPE, requestId: "req-1", text: "hello" })).toBeNull();
+  });
+
+  it("rejects an extra unknown key", () => {
+    expect(parseChildRunSend({ ...valid, prompt: "shadow field" })).toBeNull();
+  });
+
+  it("rejects a malformed childSessionId shape (dash-leading, whitespace, oversized, non-string)", () => {
+    expect(parseChildRunSend({ ...valid, childSessionId: "-sess-1" })).toBeNull();
+    expect(parseChildRunSend({ ...valid, childSessionId: "sess 1" })).toBeNull();
+    expect(parseChildRunSend({ ...valid, childSessionId: "a".repeat(CHILD_ID_MAX_CHARS + 1) })).toBeNull();
+    expect(parseChildRunSend({ ...valid, childSessionId: 42 })).toBeNull();
+  });
+
+  it("rejects an empty text", () => {
+    expect(parseChildRunSend({ ...valid, text: "" })).toBeNull();
+  });
+
+  it("rejects a text one over CHILD_PROMPT_MAX_CHARS", () => {
+    expect(parseChildRunSend({ ...valid, text: "a".repeat(CHILD_PROMPT_MAX_CHARS + 1) })).toBeNull();
+  });
+});
+
 describe("parseChildRunEvent", () => {
   it("accepts an accepted event", () => {
     const msg = {
@@ -439,6 +484,16 @@ describe("parseChildRunEvent", () => {
 
   it("rejects an attention event with a non-boolean waiting", () => {
     const msg = { type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "attention", waiting: "true" };
+    expect(parseChildRunEvent(msg)).toBeNull();
+  });
+
+  it("accepts a sent event (Taskana 4153 ack, additive union member)", () => {
+    const msg = { type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" };
+    expect(parseChildRunEvent(msg)).toEqual(msg);
+  });
+
+  it("rejects a sent event carrying an extra key", () => {
+    const msg = { type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent", childSessionId: "sess-1" };
     expect(parseChildRunEvent(msg)).toBeNull();
   });
 

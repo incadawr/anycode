@@ -416,6 +416,7 @@ import {
   type ChildReady,
   type ChildRunCancel,
   type ChildRunEvent,
+  type ChildRunSend,
   type ChildSpawnRequest,
   type ChildTerminal,
 } from "../shared/child-sessions.js";
@@ -486,7 +487,7 @@ function subscribeChildRunEvents(listener: (event: ChildRunEvent) => void): () =
   };
 }
 
-function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel): void {
+function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel | ChildRunSend): void {
   process.parentPort.postMessage(message);
 }
 

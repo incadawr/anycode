@@ -21,6 +21,7 @@ import type {
   SessionSubagentOutcome,
   SessionSubagentPort,
   SessionSubagentRequest,
+  SessionSubagentSendResult,
 } from "../ports/session-subagent.js";
 import type { EngineProfileInfo, SubagentPort, SubagentRunOptions } from "../ports/subagent.js";
 
@@ -436,6 +437,147 @@ describe("agentTool handler — continue_session (TASK.218)", () => {
     const text = full.formatResultForModel?.(result) ?? "";
     expect(text).toContain("[Child session id: child-1");
     expect(text).toContain("continue_session");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// send_to (Taskana 4153 / TASK.216 wire): delivering a follow-up to the
+// parent's OWN STILL-RUNNING child through SessionSubagentPort.send — the
+// running twin of continue_session (finished-only). The original sync-join
+// run() call keeps waiting; this call only DELIVERS and returns immediately.
+
+describe("agentTool handler — send_to (Taskana 4153)", () => {
+  const full = createAgentTool({ sessionTier: true });
+
+  /** A port whose send() resolves with the given result and records the call. */
+  function sendPort(result: SessionSubagentSendResult): {
+    port: SessionSubagentPort;
+    sent: () => { childSessionId: string; text: string } | undefined;
+    runReached: () => boolean;
+  } {
+    let seen: { childSessionId: string; text: string } | undefined;
+    let runReached = false;
+    return {
+      sent: () => seen,
+      runReached: () => runReached,
+      port: {
+        run: async () => {
+          runReached = true;
+          return BASE_SESSION_OUTCOME;
+        },
+        send: async (req) => {
+          seen = req;
+          return result;
+        },
+      },
+    };
+  }
+
+  it("tier session + send_to => port.send receives the id and prompt; result ok with a delivered finalText and zero turns", async () => {
+    const { port, sent, runReached } = sendPort({ ok: true });
+    const result = await full.handler(
+      { description: "d", prompt: "re-review with these edits", tier: "session", send_to: "child-77" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(sent()).toEqual({ childSessionId: "child-77", text: "re-review with these edits" });
+    // A delivery never spawns: run() must not be reached.
+    expect(runReached()).toBe(false);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.output?.status).toBe("completed");
+      expect(result.output?.finalText).toContain("delivered");
+      expect(result.output?.finalText).toContain("child-77");
+      expect(result.output?.turns).toBe(0);
+      expect(result.output?.toolCalls).toBe(0);
+    }
+  });
+
+  it("port.send returning ok:false => the call fails with the port's message", async () => {
+    const { port } = sendPort({
+      ok: false,
+      reason: "not_running",
+      message: "Agent: that child session is not running. Wait for its report and use a follow-up instead.",
+    });
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toBe(
+      "Agent: that child session is not running. Wait for its report and use a follow-up instead.",
+    );
+  });
+
+  it("a port WITHOUT send (older/fake host) => fail-closed, never a silent no-op", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      makeCtx({ sessionSubagents: portReturning(BASE_SESSION_OUTCOME) }), // no send field
+    );
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toBe("Agent: sending to a running child is unavailable in this host.");
+  });
+
+  it("send_to with tier inline (explicit) => invalid_input with the exact message", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "inline", send_to: "child-77" },
+      makeCtx({ sessionSubagents: sendPort({ ok: true }).port }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok === false && result.error).toBe(
+      'Agent: "send_to" is only valid with tier "session", alone (no provider/detach/continue_session).',
+    );
+  });
+
+  it("send_to with default (absent) tier => invalid_input", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", send_to: "child-77" },
+      makeCtx({ sessionSubagents: sendPort({ ok: true }).port }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+  });
+
+  it.each([
+    ["continue_session", { continue_session: "child-9" }],
+    ["provider", { provider: "anthropic-2" }],
+    ["detach", { detach: true }],
+  ])("send_to + %s => invalid_input (send_to must stand alone)", async (_name, extra) => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77", ...extra },
+      makeCtx({ sessionSubagents: sendPort({ ok: true }).port }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok === false && result.error).toBe(
+      'Agent: "send_to" is only valid with tier "session", alone (no provider/detach/continue_session).',
+    );
+  });
+
+  it("engine profile + send_to => invalid_input (running engine children are not addressable yet)", async () => {
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker", tier: "session", send_to: "child-77" },
+      makeCtx({
+        subagents: enginePort("claude-worker", { engine: "claude", systemPrompt: "PERSONA BODY" }),
+        sessionSubagents: sendPort({ ok: true }).port,
+      }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok === false && result.error).toContain("send_to is supported only for AnyCode (core) children");
+  });
+
+  it("RESTRICTED declaration: the serialized JSON schema does NOT expose send_to (non-recursion lock parity)", () => {
+    const restricted = createAgentTool();
+    const jsonSchema = z.toJSONSchema(restricted.inputSchema) as { properties?: Record<string, unknown> };
+    expect(Object.keys(jsonSchema.properties ?? {})).not.toContain("send_to");
+    expect(JSON.stringify(jsonSchema)).not.toContain("send_to");
+  });
+
+  it("FULL declaration exposes send_to in the serialized JSON schema", () => {
+    const jsonSchema = z.toJSONSchema(agentInputSchema) as { properties?: Record<string, unknown> };
+    expect(Object.keys(jsonSchema.properties ?? {})).toContain("send_to");
+  });
+
+  it("full schema rejects an empty-string send_to", () => {
+    const result = agentInputSchema.safeParse({ description: "d", prompt: "p", tier: "session", send_to: "" });
+    expect(result.success).toBe(false);
   });
 });
 

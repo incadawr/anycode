@@ -30,12 +30,14 @@ import {
   CHILD_RUNS_PER_PARENT_MAX,
   CHILD_RUN_CANCEL_TYPE,
   CHILD_RUN_EVENT_TYPE,
+  CHILD_RUN_SEND_TYPE,
   CHILD_SPAWN_QUEUE_MAX,
   CHILD_SPAWN_REQUEST_TYPE,
   CHILD_START_DEADLINE_MS,
   CHILD_START_TYPE,
   CHILD_TERMINAL_TYPE,
   type ChildRunEvent,
+  type ChildRunSend,
   type ChildSpawnRequest,
 } from "../shared/child-sessions.js";
 import {
@@ -192,6 +194,11 @@ function spawnRequest(overrides: Partial<ChildSpawnRequest> = {}): ChildSpawnReq
 
 function runCancel(requestId: string) {
   return { type: CHILD_RUN_CANCEL_TYPE, requestId } as const;
+}
+
+/** A valid ChildRunSend (Taskana 4153); caller supplies the childSessionId. */
+function runSend(requestId: string, childSessionId: string, text = "here are the other reviewers' edits") {
+  return { type: CHILD_RUN_SEND_TYPE, requestId, childSessionId, text } as const;
 }
 
 function childReadyMsg() {
@@ -6035,5 +6042,118 @@ describe("child spawn — profile-declared connection routing (Taskana 4269)", (
     expect(acceptedOn(rootHost).map((e) => e.requestId).sort()).toEqual(["ds", "glm"]);
     expect(envs[1]!.ANYCODE_CONNECTION_ID).toBe("conn-glm");
     expect(envs[2]!.ANYCODE_CONNECTION_ID).toBe("conn-ds");
+  });
+});
+
+// ── Taskana 4153 / TASK.216 wire: ChildRunSend — a parent host's follow-up to
+// its OWN STILL-RUNNING child, delivered through communicationRequest into the
+// existing receiveAgentMessage/agentInbox path. Every test drives main purely
+// via host.emit("message", ...) on fake hosts, like the suites above.
+describe("TabHostManager — send to a running own child (Taskana 4153)", () => {
+  /**
+   * One root tab plus ONE still-running core child: spawnRequest accepted
+   * (hosts[0] -> hosts[1]), child-ready emitted, NO terminal — the child tab
+   * stays state "running" with a live proc, exactly the addressable window
+   * send_to exists for.
+   */
+  function runningChild(sessionId: string) {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { validateChildModel: () => {} });
+    expect(manager.createTab({ workspace: "/ws", sessionId, resume: false }).ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "first" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "first" && e.kind === "accepted");
+    const childSessionId = accepted?.kind === "accepted" ? accepted.childSessionId : "";
+    hosts[1]!.emit("message", childReadyMsg());
+    return { manager, hosts, rootHost, childHost: hosts[1]!, childSessionId };
+  }
+
+  /** The communication_request packet posted to a host (if any) for an operation. */
+  function commPacket(host: FakeHost, operation: string): { requestId: string; payload: Record<string, unknown> } | undefined {
+    return host.postMessage.mock.calls
+      .map((call) => call[0] as { type?: string; operation?: string; requestId?: string; payload?: unknown })
+      .find((m) => m.type === "communication_request" && m.operation === operation) as
+      | { requestId: string; payload: Record<string, unknown> }
+      | undefined;
+  }
+
+  it("happy path: delivers via communication_request to the CHILD host, sender parent-session:<id>, and acks kind sent on a queued delivery", async () => {
+    const { hosts, rootHost, childHost, childSessionId } = runningChild("root-send-happy");
+    rootHost.emit("message", runSend("s1", childSessionId, "re-review with these edits"));
+    await flush();
+    // The packet went to the CHILD host (hosts[1]), not the parent or anyone else.
+    const packet = commPacket(childHost, "send_message");
+    expect(packet).toBeDefined();
+    expect(packet!.payload).toMatchObject({
+      sender: "parent-session:root-send-happy",
+      recipientSessionId: childSessionId,
+      payload: "re-review with these edits",
+      mode: "next_turn",
+      kind: "agent_message",
+    });
+    expect(commPacket(rootHost, "send_message")).toBeUndefined();
+    void hosts;
+    // Child host answers queued -> the parent receives { kind: "sent", requestId }.
+    childHost.emit("message", { type: "communication_response", requestId: packet!.requestId, result: { state: "queued", envelope: { messageId: "m1" } } });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "s1")).toMatchObject({ kind: "sent" });
+  });
+
+  it("a rejected delivery state (e.g. inbox full) reaches the parent as kind rejected", async () => {
+    const { rootHost, childHost, childSessionId } = runningChild("root-send-rejected");
+    rootHost.emit("message", runSend("s2", childSessionId));
+    await flush();
+    const packet = commPacket(childHost, "send_message");
+    expect(packet).toBeDefined();
+    childHost.emit("message", { type: "communication_response", requestId: packet!.requestId, result: { state: "rejected", detail: "Inbox full" } });
+    await flush();
+    const event = childRunEvents(rootHost).find((e) => e.requestId === "s2");
+    expect(event).toMatchObject({ kind: "rejected", reason: "spawn_failed" });
+    expect(event?.kind === "rejected" && event.message).toContain("rejected");
+  });
+
+  it("another parent's child is refused (not yours) and NO communication_request is posted anywhere", async () => {
+    const rig = runningChild("root-send-owner");
+    // A second root tab tries to address the first root's child.
+    expect(rig.manager.createTab({ workspace: "/ws", sessionId: "root-send-other", resume: false }).ok).toBe(true);
+    const otherHost = rig.hosts[2]!;
+    otherHost.emit("message", runSend("s3", rig.childSessionId));
+    const event = childRunEvents(otherHost).find((e) => e.requestId === "s3");
+    expect(event).toMatchObject({ kind: "rejected", reason: "spawn_failed" });
+    expect(event?.kind === "rejected" && event.message).toContain("cannot be addressed");
+    // No delivery was attempted on any host.
+    for (const host of rig.hosts) {
+      expect(commPacket(host, "send_message")).toBeUndefined();
+    }
+  });
+
+  it("a finished child is refused (not running)", async () => {
+    const { hosts, rootHost, childSessionId } = runningChild("root-send-finished");
+    hosts[1]!.emit("message", childTerminalMsg({ finalText: "done early" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rootHost.emit("message", runSend("s4", childSessionId));
+    const event = childRunEvents(rootHost).find((e) => e.requestId === "s4");
+    expect(event).toMatchObject({ kind: "rejected", reason: "spawn_failed" });
+    expect(event?.kind === "rejected" && event.message).toContain("not running");
+  });
+
+  it("a CHILD tab trying to send is refused (recursion lock #3 symmetry)", async () => {
+    const { hosts, childHost, childSessionId } = runningChild("root-send-from-child");
+    // The child host itself emits a ChildRunSend addressed to its own session id
+    // (or any other): a tab with childOf set can never pass the sender check.
+    childHost.emit("message", runSend("s5", childSessionId));
+    const event = childRunEvents(childHost).find((e) => e.requestId === "s5");
+    expect(event).toMatchObject({ kind: "rejected", reason: "spawn_failed" });
+    expect(event?.kind === "rejected" && event.message).toContain("cannot be addressed");
+    void hosts;
+  });
+
+  it("an unknown childSessionId is refused", async () => {
+    const { rootHost } = runningChild("root-send-unknown");
+    rootHost.emit("message", runSend("s6", "no-such-child-session"));
+    const event = childRunEvents(rootHost).find((e) => e.requestId === "s6");
+    expect(event).toMatchObject({ kind: "rejected", reason: "spawn_failed" });
+    expect(event?.kind === "rejected" && event.message).toContain("not running");
   });
 });
