@@ -1966,3 +1966,206 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
     expect(seen2 !== undefined && "routeStamped" in seen2).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4729: a settings-derived role whose PRIMARY is an engine entry must
+// not run on the dead primary's engine/model when its route chain is cooling.
+// The session tier degrades to the parent's model (exhausted chain) or takes
+// the healthy fallback entry (cooling primary), and says so in a notice.
+
+describe("agentTool handler — role-route degrade at the session tier (Taskana 4729)", () => {
+  const full = createAgentTool({ sessionTier: true });
+  const ROLE_BODY = "ROLE BODY";
+
+  function routedCtx(opts: {
+    engine: EngineProfileInfo | null;
+    route: { entries: unknown[]; skipped: unknown[]; turnBudget?: number } | null;
+  }): { ctx: ToolContext; seen: () => SessionSubagentRequest | undefined } {
+    let seen: SessionSubagentRequest | undefined;
+    const sessionSubagents: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, finalText: "child done", spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["executor", "general-purpose"],
+      engineProfile: (t) => (t === "executor" ? opts.engine : null),
+      resolveRoleRoute: (t) => (t === "executor" && opts.route !== null ? (opts.route as never) : null),
+    };
+    return { ctx: makeCtx({ subagents, sessionSubagents }), seen: () => seen };
+  }
+
+  const ENGINE_PRIMARY_PROFILE: EngineProfileInfo = { engine: "claude", systemPrompt: ROLE_BODY, model: "profile-model" };
+
+  it("(a) exhausted chain with an engine primary: no engine/model/effort/provider/connection on the request; body kept; maxTurns from the route; notice lists both reasons", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: {
+        entries: [],
+        skipped: [
+          { entry: { engine: "claude", model: "opus" }, reason: "cooling down (rate limit)" },
+          { entry: { provider: "conn-glm", model: "glm-5.3" }, reason: "needs session tier" },
+        ],
+        turnBudget: 80,
+      },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    const req = seen();
+    expect(req).toBeDefined();
+    expect(req).not.toHaveProperty("engine");
+    expect(req).not.toHaveProperty("model");
+    expect(req).not.toHaveProperty("effort");
+    expect(req).not.toHaveProperty("provider");
+    expect(req).not.toHaveProperty("connectionId");
+    expect(req).not.toHaveProperty("routeStamped");
+    expect(req?.prompt).toBe(`${ROLE_BODY}\n\n---\n\ndo it`);
+    expect(req?.maxTurns).toBe(80);
+    expect(result.ok).toBe(true);
+    expect(result.output?.finalText).toContain(
+      'Agent: role "executor" ran on the parent\'s model (every route entry is unhealthy: cooling down (rate limit); needs session tier)',
+    );
+    expect(result.output?.finalText).toContain("child done");
+  });
+
+  it("(b) cooling engine primary with a healthy bare-model fallback: takes the fallback model, no engine, routeStamped, notice", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: {
+        entries: [{ model: "glm-5.3" }],
+        skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down (rate limit)" }],
+        turnBudget: 80,
+      },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    const req = seen();
+    expect(req?.model).toBe("glm-5.3");
+    expect(req).not.toHaveProperty("engine");
+    expect(req?.routeStamped).toBe(true);
+    expect(req?.maxTurns).toBe(80);
+    expect(result.output?.finalText).toContain(
+      'Agent: role "executor" skipped its primary route entry (cooling down (rate limit)); running on the next healthy entry',
+    );
+  });
+
+  it("(c) cooling engine primary with a healthy engine fallback: request engine is the fallback's, routeStamped, notice", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: {
+        entries: [{ engine: "codex", model: "gpt-5.4", effort: "high" }],
+        skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down (rate limit)" }],
+      },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    const req = seen();
+    expect(req?.engine).toBe("codex");
+    expect(req?.model).toBe("gpt-5.4");
+    expect(req?.effort).toBe("high");
+    expect(req?.routeStamped).toBe(true);
+    expect(req?.prompt).toBe(`${ROLE_BODY}\n\n---\n\ndo it`);
+    expect(result.output?.finalText).toContain("skipped its primary route entry");
+  });
+
+  it("(d) healthy chain: request is byte-identical to today's profile request (engine + profile model, no routeStamped, no notice)", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: { entries: [{ engine: "claude", model: "opus" }], skipped: [] },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    expect(seen()).toEqual({
+      agentType: "executor",
+      description: "d",
+      prompt: `${ROLE_BODY}\n\n---\n\ndo it`,
+      spawnToolCallId: "call-1",
+      model: "profile-model",
+      engine: "claude",
+    });
+    expect(result.output?.finalText).toBe("child done");
+  });
+
+  it("(e) resolveRoleRoute returning null (md-claimed engine profile): unchanged profile request, no notice", async () => {
+    const { ctx, seen } = routedCtx({ engine: ENGINE_PRIMARY_PROFILE, route: null });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    expect(seen()).toEqual({
+      agentType: "executor",
+      description: "d",
+      prompt: `${ROLE_BODY}\n\n---\n\ndo it`,
+      spawnToolCallId: "call-1",
+      model: "profile-model",
+      engine: "claude",
+    });
+    expect(result.output?.finalText).toBe("child done");
+  });
+
+  it("(f) explicit input.model with an exhausted chain: the explicit model is honored and the notice still appears", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: ENGINE_PRIMARY_PROFILE,
+      route: { entries: [], skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down" }] },
+    });
+    const result = await full.handler(
+      { description: "d", prompt: "do it", agent_type: "executor", tier: "session", model: "explicit-m" },
+      ctx,
+    );
+    expect(seen()?.model).toBe("explicit-m");
+    expect(seen()).not.toHaveProperty("engine");
+    expect(result.output?.finalText).toContain('ran on the parent\'s model (every route entry is unhealthy: cooling down)');
+  });
+
+  it("(g) continue_session and send_to with an engine profile are refused before any route logic runs", async () => {
+    let routeAsked = false;
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["executor"],
+      engineProfile: () => ENGINE_PRIMARY_PROFILE,
+      resolveRoleRoute: () => {
+        routeAsked = true;
+        return { entries: [], skipped: [{ entry: { model: "m" }, reason: "x" }] } as never;
+      },
+    };
+    let ran = false;
+    const sessionSubagents: SessionSubagentPort = {
+      run: async (req) => {
+        ran = true;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const resumed = await full.handler(
+      { description: "d", prompt: "p", agent_type: "executor", tier: "session", continue_session: "child-1" },
+      makeCtx({ subagents, sessionSubagents }),
+    );
+    expect(resumed.ok).toBe(false);
+    expect(resumed.error).toContain("continue_session is supported only for AnyCode (core) profiles");
+    const sent = await full.handler(
+      { description: "d", prompt: "p", agent_type: "executor", tier: "session", send_to: "child-1" },
+      makeCtx({ subagents, sessionSubagents }),
+    );
+    expect(sent.ok).toBe(false);
+    expect(sent.error).toContain("send_to is supported only for AnyCode (core) children");
+    expect(routeAsked).toBe(false);
+    expect(ran).toBe(false);
+  });
+
+  it("(h) non-engine primary with an exhausted chain: no routing keys stamped, and the notice now appears", async () => {
+    const { ctx, seen } = routedCtx({
+      engine: null,
+      route: {
+        entries: [],
+        skipped: [{ entry: { provider: "conn-glm", model: "glm-5.3" }, reason: "cooling down" }],
+        turnBudget: 80,
+      },
+    });
+    const result = await full.handler({ description: "d", prompt: "do it", agent_type: "executor", tier: "session" }, ctx);
+    const req = seen();
+    expect(req).not.toHaveProperty("provider");
+    expect(req).not.toHaveProperty("connectionId");
+    expect(req).not.toHaveProperty("model");
+    expect(req).not.toHaveProperty("routeStamped");
+    expect(req?.prompt).toBe("do it");
+    expect(result.output?.finalText).toContain('ran on the parent\'s model (every route entry is unhealthy: cooling down)');
+  });
+});

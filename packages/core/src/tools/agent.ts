@@ -54,7 +54,11 @@
 
 import type { ToolContext, ToolDefinition, ToolMetadata, ToolResult } from "../types/tools.js";
 import type { EngineProfileInfo } from "../ports/subagent.js";
-import type { RoleRouteResolution } from "../subagents/role-route.js";
+import {
+  formatRoleDegradeNotice,
+  formatRoleFallbackNotice,
+  type RoleRouteResolution,
+} from "../subagents/role-route.js";
 import type { SessionSubagentRequest } from "../ports/session-subagent.js";
 import { SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS } from "../types/config.js";
 import { listPersonaNames } from "../subagents/personas.js";
@@ -272,6 +276,24 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
               `as child sessions and are unavailable in this host.`,
           };
         }
+        // Taskana 4729: a settings-derived role whose PRIMARY is an engine entry
+        // carries the engine profile too. When its route chain is cooling the
+        // profile's engine/model must not run the dead primary: an exhausted
+        // chain degrades to the parent's model (no engine/model stamped, the
+        // role body kept, a notice), a cooling primary with a healthy fallback
+        // runs that entry through the route stamping. A healthy primary (no
+        // skips) and a md-claimed profile (null route) keep the profile request.
+        const engineRoute = ctx.subagents?.resolveRoleRoute?.(agentType) ?? null;
+        if (engineRoute !== null && engineRoute.skipped.length > 0) {
+          const degrade = {
+            systemPrompt: engineProfile.systemPrompt,
+            notice:
+              engineRoute.entries.length === 0
+                ? formatRoleDegradeNotice(agentType, engineRoute.skipped)
+                : formatRoleFallbackNotice(agentType, engineRoute.skipped),
+          };
+          return runSessionTier(input, ctx, agentType, undefined, undefined, engineRoute, undefined, degrade);
+        }
         // tier is IGNORED for an engine profile: it always runs as a session,
         // a silent inline->session upgrade rather than a tier:"inline" refusal
         // — the migration this slice performs.
@@ -438,6 +460,7 @@ async function runSessionTier(
   routing?: { provider?: string; connection?: string },
   roleRoute?: RoleRouteResolution,
   defaultDetach?: boolean,
+  degrade?: { systemPrompt: string; notice: string },
 ): Promise<ToolResult<AgentOutput>> {
   if (!ctx.sessionSubagents) {
     return {
@@ -511,7 +534,10 @@ async function runSessionTier(
       : buildSessionSubagentRequest({
           agentType,
           description: input.description,
-          prompt: input.prompt,
+          // Taskana 4729: a degraded engine-role spawn carries no profile
+          // (so no engine/model rides), but keeps the role body in the prompt
+          // with the same composition buildSessionSubagentRequest uses.
+          prompt: degrade !== undefined ? `${degrade.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
           model: input.model,
           spawnToolCallId: ctx.toolCallId,
           profile: engineProfile,
@@ -555,6 +581,15 @@ async function runSessionTier(
     // mistakes a caller's coincidentally-equal explicit model for a chain
     // hop — set exactly when every stamping spread below fired, i.e. the
     // caller passed neither provider nor model.
+    // Taskana 4729: an exhausted chain has no entry to stamp, but the role's
+    // turn budget still rides the spawn (the last resort keeps the role's cap).
+    ...(resumeChildSessionId === undefined &&
+    degrade !== undefined &&
+    roleRoute !== undefined &&
+    roleRoute.entries.length === 0 &&
+    roleRoute.turnBudget !== undefined
+      ? { maxTurns: roleRoute.turnBudget }
+      : {}),
     ...(resumeChildSessionId === undefined && roleRoute !== undefined && roleRoute.entries.length > 0
       ? {
           ...(input.provider === undefined && input.model === undefined && roleRoute.entries[0]!.provider !== undefined
@@ -645,7 +680,18 @@ async function runSessionTier(
   }, target);
   const presentation: { presentation?: ToolResultPresentation } =
     snapshot !== null ? { presentation: { subagent: snapshot } } : {};
-  return outcomeToResult(outcome, presentation);
+  // Taskana 4729: a role-route notice (degraded or fallback spawn) rides the
+  // model-visible text on a FRESH spawn only — a resume keeps its own history.
+  const notice =
+    degrade?.notice ??
+    (resumeChildSessionId === undefined && roleRoute !== undefined && roleRoute.entries.length === 0 && roleRoute.skipped.length > 0
+      ? formatRoleDegradeNotice(agentType, roleRoute.skipped)
+      : undefined);
+  const shown =
+    notice !== undefined
+      ? { ...outcome, finalText: outcome.finalText ? `${notice}\n\n${outcome.finalText}` : notice }
+      : outcome;
+  return outcomeToResult(shown, presentation);
 }
 
 /** Inline-only, byte-compatible with the pre-B1 constant export (CUT-S2 §2.1). */

@@ -63,7 +63,7 @@ import {
   listPersonaNames,
   type PersonaDefinition,
 } from "./personas.js";
-import { isRoleRouteName, type RoleRouteEntry, type RoleRouteResolution } from "./role-route.js";
+import { formatRoleDegradeNotice, isRoleRouteName, type RoleRouteEntry, type RoleRouteResolution } from "./role-route.js";
 import type { CeilingRefusalReason, TokenUsage } from "../types/events.js";
 import { summarizeChildToolCall } from "./summarize-tool.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
@@ -904,9 +904,8 @@ export function createSubagentRunner(
       // documented last resort is the parent's model — degrade to it, with a
       // notice naming every skip reason (same channel as the walk's own notice).
       if (personaCarriesRoute && chainEntries.length === 0 && req.model === undefined) {
-        const reasons = chainSkipped.map((s) => s.reason).join("; ");
         requestedModel = undefined;
-        roleFallbackNotice = `Agent: role "${req.agentType}" ran on the parent's model (every route entry is unhealthy${reasons ? `: ${reasons}` : ""})`;
+        roleFallbackNotice = formatRoleDegradeNotice(req.agentType, chainSkipped);
       }
 
       // Engine persona (md-profile `engine:`): the whole in-process path

@@ -53,3 +53,22 @@ export interface RoleRouteResolution {
   /** Role turn budget (ROLE_TURN_BUDGETS) stamped onto session-tier requests. */
   turnBudget?: number;
 }
+
+/**
+ * Model-visible notice for a role whose ENTIRE route chain is cooling down: the
+ * spawn runs on the parent's model (the documented last resort). Shared by the
+ * inline runner (N3) and the session tier (Taskana 4729) — the text is pinned.
+ */
+export function formatRoleDegradeNotice(agentType: string, skipped: readonly RoleRouteSkip[]): string {
+  const reasons = skipped.map((s) => s.reason).join("; ");
+  return `Agent: role "${agentType}" ran on the parent's model (every route entry is unhealthy${reasons ? `: ${reasons}` : ""})`;
+}
+
+/**
+ * Model-visible notice for a role whose PRIMARY entry was skipped but a later
+ * entry is healthy and runs instead (Taskana 4729).
+ */
+export function formatRoleFallbackNotice(agentType: string, skipped: readonly RoleRouteSkip[]): string {
+  const reasons = skipped.map((s) => s.reason).join("; ");
+  return `Agent: role "${agentType}" skipped its primary route entry${reasons ? ` (${reasons})` : ""}; running on the next healthy entry`;
+}
