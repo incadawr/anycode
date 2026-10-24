@@ -489,6 +489,69 @@ describe("unattended latch (TASK.138)", () => {
 });
 
 /**
+ * Taskana 4078 cross-review finding 1: the latch's owner-recovery contract.
+ * The scenario that made 4078's posture safe was "a build-mode codex child
+ * now asks through the broker, the owner opens the child's tab and answers".
+ * That contract has TWO halves, and only the first was wired:
+ *
+ *  1. before expiry — the owner clicks: `handleResponse` disarms (proven
+ *     above, "a permission answer disarms the latch").
+ *  2. AFTER expiry (the detached-child case): the ask expired unseen in the
+ *     hidden child tab (a detached run has no live card; TASK.145), the latch
+ *     armed, and the owner then opens the tab and answers the EXPIRED ask.
+ *     The click still routes through `handleResponse` — TASK.138's own law is
+ *     "a click is proof of a human — even for an unknown/already-settled
+ *     requestId, since the click happened either way" — so the latch MUST
+ *     disarm there too, and asking must resume.
+ *
+ * It does (handleResponse calls noteHumanPresent before settle, and settle
+ * ignores the unknown id): these tests pin it so the recovery path can never
+ * be "fixed" away. Without it, an unattended detached build child that armed
+ * the latch once would keep fast-denying its whole run even while its owner
+ * is actively reading the tab.
+ */
+describe("unattended latch — owner recovery after expiry (Taskana 4078 finding 1)", () => {
+  it("a click on the EXPIRED ask disarms the latch and asking resumes", async () => {
+    vi.useFakeTimers();
+    const { broker, emitted } = makeBroker(120_000);
+    const first = broker.requestPermission(request);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await expect(first).resolves.toMatchObject({ behavior: "deny" });
+    expect(broker.isUnattended).toBe(true);
+
+    // The owner opened the child's tab late and answered the expired ask.
+    broker.handleResponse(requestId(emitted), "allow");
+    expect(broker.isUnattended).toBe(false);
+
+    // Asking resumes: the next ask is PRESENTED again, not fast-denied.
+    const presentedBefore = emitted.filter((m) => m.type === "permission_request").length;
+    void broker.requestPermission(request);
+    expect(emitted.filter((m) => m.type === "permission_request").length).toBe(presentedBefore + 1);
+
+    broker.denyAll("cleanup", "shutdown");
+  });
+
+  it("the expired-ask click's decision itself is still ignored (first response wins) — only the latch moves", async () => {
+    vi.useFakeTimers();
+    const { broker, emitted } = makeBroker(120_000);
+    const first = broker.requestPermission(request);
+    await vi.advanceTimersByTimeAsync(120_000);
+    const settledBefore = settled(emitted).length;
+    await first;
+
+    broker.handleResponse(requestId(emitted), "allow");
+    // No second permission_settled for the already-expired ask...
+    expect(settled(emitted).length).toBe(settledBefore);
+    // ...and the re-armed asking path still fail-closes on a second expiry.
+    const second = broker.requestPermission(request);
+    const presented = emitted.filter((m) => m.type === "permission_request").length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    await expect(second).resolves.toMatchObject({ behavior: "deny" });
+    expect(emitted.filter((m) => m.type === "permission_request").length).toBe(presented);
+  });
+});
+
+/**
  * TASK.144: the always-allow seam the two ENGINE boots pass and the core boot
  * deliberately does not (see PermissionRuleMatcher's header). These assert both
  * halves: a matching rule is answered without ever reaching the UI, and a
