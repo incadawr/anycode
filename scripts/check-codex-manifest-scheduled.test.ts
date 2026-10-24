@@ -72,7 +72,7 @@ describe("parseArgs", () => {
     // parseArgs itself never rejects a repo — orchestrate enforces the watch
     // list only when it would act on it. Pin both halves:
     expect(parseArgs(["--repo", "x/y"])).toEqual({ ok: true, args: { dryRun: true, repo: "x/y" } });
-    expect(orchestrate({ versions: ["0.164.0"], dryRun: false, repo: "x/y", gh: makeFakeGh() })).toMatchObject({
+    expect(orchestrate({ versions: ["9.0.0"], dryRun: false, repo: "x/y", gh: makeFakeGh() })).toMatchObject({
       exit: 2,
       message: expect.stringContaining("repo is not watched"),
     });
@@ -89,7 +89,7 @@ describe("parseArgs", () => {
 describe("orchestrate — dry run (default)", () => {
   it("stale range → exit 0 and gh is never called", () => {
     const ghFake = makeFakeGh();
-    const result = orchestrate({ versions: ["0.164.0"], dryRun: true, gh: ghFake });
+    const result = orchestrate({ versions: ["9.0.0"], dryRun: true, gh: ghFake });
     expect(result.exit).toBe(0);
     expect(result.runResult.exit).toBe(1);
     expect(ghFake.calls).toHaveLength(0);
@@ -102,7 +102,7 @@ describe("orchestrate — live mode (issue flow)", () => {
       "issue list": "[]",
       "issue create": "https://github.com/incadawr/anycode/issues/42\n",
     });
-    const result = orchestrate({ versions: ["0.164.0"], dryRun: false, gh: ghFake });
+    const result = orchestrate({ versions: ["9.0.0"], dryRun: false, gh: ghFake });
     expect(result.exit).toBe(1);
 
     const create = ghFake.calls.find((c) => c[0] === "issue" && c[1] === "create");
@@ -112,7 +112,7 @@ describe("orchestrate — live mode (issue flow)", () => {
     const title = create[create.indexOf("--title") + 1];
     expect(title).toContain("stale");
     const body = create[create.indexOf("--body") + 1];
-    expect(body).toContain("STALE — 0.164.0 is outside the declared range");
+    expect(body).toContain("STALE — 9.0.0 is outside the declared range");
   });
 
   it("label is created on demand before the issue flow", () => {
@@ -120,7 +120,7 @@ describe("orchestrate — live mode (issue flow)", () => {
       "issue list": "[]",
       "issue create": "https://github.com/incadawr/anycode/issues/42\n",
     });
-    orchestrate({ versions: ["0.164.0"], dryRun: false, gh: ghFake });
+    orchestrate({ versions: ["9.0.0"], dryRun: false, gh: ghFake });
     expect(ghFake.calls[0].slice(0, 2)).toEqual(["label", "create"]);
     expect(ghFake.calls[0]).toContain("codex-manifest-watch");
   });
@@ -129,7 +129,7 @@ describe("orchestrate — live mode (issue flow)", () => {
     const ghFake = makeFakeGh({
       "issue list": JSON.stringify([{ number: 7 }]),
     });
-    const result = orchestrate({ versions: ["0.164.0"], dryRun: false, gh: ghFake });
+    const result = orchestrate({ versions: ["9.0.0"], dryRun: false, gh: ghFake });
     expect(result.exit).toBe(1);
 
     const comment = ghFake.calls.find((c) => c[0] === "issue" && c[1] === "comment");
