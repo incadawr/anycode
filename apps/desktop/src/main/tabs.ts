@@ -208,6 +208,8 @@ const CHILD_SEND_NOT_YOURS_MESSAGE =
   "Agent: that child session cannot be addressed — only a still-running AnyCode (core) child spawned by this session can.";
 const CHILD_SEND_NOT_RUNNING_MESSAGE =
   "Agent: that child session is not running. Wait for its report and use a follow-up instead.";
+const CHILD_SEND_STARTING_MESSAGE =
+  "Agent: that child session is still starting and is not running yet; retry the send in a moment.";
 const CHILD_SEND_HOST_UNREACHABLE_MESSAGE =
   "Agent: the child session host could not be reached for delivery; the message was not delivered.";
 /** Core-only slice (Taskana 4153 out-of-scope #2): engine children are not addressable yet. */
@@ -2071,6 +2073,14 @@ export class TabHostManager {
     const childTab = [...this.tabs.values()].find((t) => t.sessionId === msg.childSessionId && t.childOf !== undefined);
     if (childTab === undefined || childTab.proc === null || childTab.state !== "running") return fail(CHILD_SEND_NOT_RUNNING_MESSAGE);
     if (childTab.childOf!.parentTabId !== parentTab.tabId) return fail(CHILD_SEND_NOT_YOURS_MESSAGE);
+    // The tab is "running" from fork on, but the RUN is only addressable once
+    // child-ready released its initial prompt (ledger "running"): a send
+    // during "starting" would let the follow-up drain as the child's FIRST
+    // turn, ahead of its own task; a "cancelling" run would ack "sent" for a
+    // message its shutdown is about to reject.
+    const run = this.childRuns.get(childTab.childOf!.requestId);
+    if (run?.state === "starting") return fail(CHILD_SEND_STARTING_MESSAGE);
+    if (run?.state !== "running") return fail(CHILD_SEND_NOT_RUNNING_MESSAGE);
     // Out-of-scope #2 (core-only slice): an engine child's host steers its CLI
     // differently; the receiveAgentMessage/agentInbox path is a core contract.
     if (childTab.engine !== "core") return fail(CHILD_SEND_ENGINE_MESSAGE);

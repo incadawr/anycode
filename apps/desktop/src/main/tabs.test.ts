@@ -6149,6 +6149,23 @@ describe("TabHostManager — send to a running own child (Taskana 4153)", () => 
     void hosts;
   });
 
+  it("a child still starting (no child-ready yet) is refused and NO communication_request is posted — the follow-up must never run ahead of the child's own task", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window, { validateChildModel: () => {} });
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-send-starting", resume: false }).ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "first" }));
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "first" && e.kind === "accepted");
+    const childSessionId = accepted?.kind === "accepted" ? accepted.childSessionId : "";
+    rootHost.emit("message", runSend("s7", childSessionId));
+    await flush();
+    const event = childRunEvents(rootHost).find((e) => e.requestId === "s7");
+    expect(event).toMatchObject({ kind: "rejected", reason: "spawn_failed" });
+    expect(event?.kind === "rejected" && event.message).toContain("still starting");
+    expect(commPacket(hosts[1]!, "send_message")).toBeUndefined();
+  });
+
   it("an unknown childSessionId is refused", async () => {
     const { rootHost } = runningChild("root-send-unknown");
     rootHost.emit("message", runSend("s6", "no-such-child-session"));

@@ -1,6 +1,6 @@
 /**
  * Host-side RPC client for `SessionSubagentPort` (TASK.102 CUT-S2 §2.6.1):
- * the parent root host's half of the `Agent tier:"session"`` wire. Turns one
+ * the parent root host's half of the `Agent tier:"session"` wire. Turns one
  * `SessionSubagentPort.run()` call into a `ChildSpawnRequest`/`ChildRunCancel`
  * pair sent over `process.parentPort`, correlating main's `ChildRunEvent`
  * replies by `requestId`. `send`/`subscribe` are injected closures over
@@ -210,6 +210,7 @@ const SEND_TIMEOUT_MESSAGE = "Agent: main did not answer the send; delivery unkn
  * refusal text either way.
  */
 function mapSendRejectReason(message: string): "unavailable" | "not_running" | "not_yours" | "busy" | "host_error" {
+  if (message.includes("still starting")) return "busy";
   if (message.includes("not running")) return "not_running";
   if (message.includes("cannot be addressed")) return "not_yours";
   if (message.includes("not addressable")) return "not_yours";
