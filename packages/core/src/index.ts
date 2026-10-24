@@ -8,6 +8,7 @@ export type { PermissionRule } from "./types/permissions.js";
 export * from "./ports/index.js";
 export {
   JsonlTelemetrySink,
+  NodeArtifactStore,
   NodeExecutionAdapter,
   NodeFileSystemAdapter,
   NodeGitAdapter,

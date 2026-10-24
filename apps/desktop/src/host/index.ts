@@ -181,6 +181,7 @@ import {
   LspManager,
   McpManager,
   ModePermissionEngine,
+  NodeArtifactStore,
   NodeExecutionAdapter,
   NodeFileSystemAdapter,
   NodeGitAdapter,
@@ -332,6 +333,7 @@ import {
   scrubSecretEnv,
   seedAlwaysAllowRules,
 } from "./boot.js";
+import { artifactsRootFor } from "../shared/artifacts-root.js";
 /**
  * Mirrors main/index.ts's own literal (dev-profile settings path override,
  * design/slice-P7.15-cut.md §2.6) — kept in sync by contract, same convention
@@ -2398,6 +2400,13 @@ async function boot(): Promise<void> {
       sessionId: sessionMeta.id,
     });
 
+    // Taskana 4104 (TASK.110): artifact store for oversized tool results, rooted
+    // beside the sqlite DB by the same conditional as checkpointsRoot above —
+    // OUTSIDE the workspace, so a spilled Bash log never shows in git status and
+    // needs no write permission (ports/artifacts.ts TASK.94 verdict). Written by
+    // the dispatcher; swept by main at app start; removed on TASK.114 hard delete.
+    const artifactStore = new NodeArtifactStore(artifactsRootFor(dbPath, homedir()));
+
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
     const bootContextInfo = resolveContextWindowInfo(envConfig.model, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
@@ -3007,6 +3016,10 @@ async function boot(): Promise<void> {
       // above built a service; its absence keeps the turn byte-identical (L2 —
       // runTurn never touches the arc). Mirror of cli/main.ts:1101.
       ...(checkpointService !== null ? { checkpoints: checkpointService } : {}),
+      // Taskana 4104 (TASK.110): spill oversized tool results to the artifact
+      // store (mirror of cli/main.ts:1292) — `sessionMeta.id`, not the later
+      // `sessionId` const. Absent = truncation, the pre-TASK.94 behaviour.
+      artifacts: { store: artifactStore, sessionId: sessionMeta.id },
       // TASK.27: planExitMode ("build") + onModeChange, produced together with
       // the ExitPlanMode registration above. Without this spread the tool's
       // handler fails closed and plan mode has no model-driven exit at all.

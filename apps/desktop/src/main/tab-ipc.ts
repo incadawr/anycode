@@ -127,6 +127,14 @@ export interface TabIpcDeps {
   /** Production gate proves the path is still a registered worktree on the persisted branch. */
   validateWorktreeResume?(meta: SessionMeta): Promise<boolean>;
   /**
+   * Taskana 4104 (TASK.110): best-effort removal of the deleted sessions'
+   * artifact directories (NodeArtifactStore.removeSession per id, called with
+   * the cascade summary's removedIds — roots plus children). Absent (legacy
+   * tests) => deletion proceeds, the age-based sweep remains the backstop.
+   * Never fails the delete: handlers wrap it in try/catch.
+   */
+  removeSessionArtifacts?(sessionIds: readonly string[]): Promise<void>;
+  /**
    * The active provider connection id, pinned onto a NEW core session at creation
    * (TASK.45 W10). Undefined = no default configured (a fresh install, or an
    * env-override boot) — the tab stays unpinned and runs on the current default.
@@ -408,6 +416,16 @@ export async function handleSessionDelete(deps: TabIpcDeps, sessionId: string): 
     return { ok: false, reason: "active" };
   }
   const summary = await deps.persistence.deleteSession(sessionId);
+  // Taskana 4104 (TASK.110): a hard delete is the ONLY session-death point that
+  // removes artifacts (tab close / quit keep them — the session stays
+  // resumable). Best-effort: never fails the delete itself.
+  if (summary.removedIds.length > 0) {
+    try {
+      await deps.removeSessionArtifacts?.(summary.removedIds);
+    } catch (error) {
+      console.warn(`[tab-ipc] artifact cleanup failed for session ${sessionId}:`, error);
+    }
+  }
   return { ok: true, summary: { ...summary, skippedActive: [] } };
 }
 
@@ -440,6 +458,16 @@ export async function handleSessionsDeleteOlder(
     return { ok: true, summary };
   }
   const deleted = await deps.persistence.deleteSessions(deletable);
+  // Taskana 4104 (TASK.110): same best-effort artifact cleanup as the single
+  // delete above, over the merged cascade of the whole batch. (dryRun returns
+  // before this point, so a dry run never removes anything.)
+  if (deleted.removedIds.length > 0) {
+    try {
+      await deps.removeSessionArtifacts?.(deleted.removedIds);
+    } catch (error) {
+      console.warn(`[tab-ipc] artifact cleanup failed for bulk delete:`, error);
+    }
+  }
   return { ok: true, summary: { ...deleted, skippedActive } };
 }
 
