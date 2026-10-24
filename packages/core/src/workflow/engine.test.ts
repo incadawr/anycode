@@ -500,6 +500,29 @@ describe("fail-fast", () => {
     expect(events[cEnd]).toEqual({ kind: "step_end", stepId: "C", status: "skipped", turns: 0, durationMs: 0 });
     expect(runEnd).toBeGreaterThan(cEnd);
   });
+
+  // Taskana 4095: the deep-research preset runs every step as
+  // agentType "general-purpose", and a site without a configured WebSearch
+  // backend threads no webSearchTool into the runner. That must NOT reject
+  // the run: "general-purpose" is a built-in persona regardless of tool
+  // wiring, and the preset's failure mode is a DEGRADED child (a registry
+  // without WebSearch), not a fail-fast refusal.
+  it("general-purpose stays a valid agentType when no webSearch tool is wired (degraded child, not a rejected run)", async () => {
+    const { listPersonaNames } = await import("../subagents/personas.js");
+    expect(listPersonaNames()).toContain("general-purpose");
+
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, `out:${id}`),
+    );
+    const wf = def("no-websearch", [
+      { id: "a", agentType: "general-purpose", promptTemplate: "${input}" },
+    ]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run({ name: "no-websearch", input: "go" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcomeOf(outcome.steps, "a").status).toBe("completed");
+  });
 });
 
 // ===========================================================================

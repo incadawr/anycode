@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyToolDefinition } from "../types/tools.js";
 import { createDefaultToolRegistry, ToolRegistry } from "./registry.js";
+import { createWebSearchTool } from "./web-search.js";
 
 function fakeTool(name: string): AnyToolDefinition {
   return {
@@ -82,6 +83,42 @@ describe("createDefaultToolRegistry", () => {
       "WebFetch",
       "Workflow",
       "Write",
+    ]);
+  });
+
+  it("without options WebSearch is absent (byte-compat pinned: no backend, no tool)", () => {
+    const registry = createDefaultToolRegistry();
+    expect(registry.get("WebSearch")).toBeUndefined();
+    expect(registry.has("WebSearch")).toBe(false);
+  });
+
+  it("with webSearch the tool is registered after WebFetch and the other names are undisturbed", () => {
+    const webSearch = createWebSearchTool({
+      kind: "searxng",
+      endpoint: "http://127.0.0.1:8888",
+      headers: {},
+      maxResults: 5,
+    });
+    const registry = createDefaultToolRegistry({ webSearch });
+
+    expect(registry.get("WebSearch")).toBe(webSearch);
+    expect(registry.has("WebFetch")).toBe(true);
+    // Same order as the no-backend registry, with WebSearch spliced in right
+    // after WebFetch — registration order of the other names is undisturbed.
+    expect(registry.list()).toEqual([
+      "Read",
+      "Write",
+      "Edit",
+      "Bash",
+      "Grep",
+      "Glob",
+      "TodoRead",
+      "TodoWrite",
+      "WebFetch",
+      "WebSearch",
+      "Agent",
+      "Skill",
+      "Workflow",
     ]);
   });
 });

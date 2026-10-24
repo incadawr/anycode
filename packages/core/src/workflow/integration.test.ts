@@ -192,7 +192,10 @@ describe("workflow integration — discovery -> Workflow tool -> engine compose 
       });
 
       expect(ext.problems).toEqual([]);
-      expect(ext.workflows.map((wf) => wf.name)).toEqual(["demo-pipeline"]);
+      // The bundled examples/workflows root (Taskana 4095) contributes the
+      // deep-research preset alongside this workspace's own definitions —
+      // project root first, bundled last (claimed-set insertion order).
+      expect(ext.workflows.map((wf) => wf.name)).toEqual(["demo-pipeline", "deep-research"]);
       expect(ext.workflowsPromptSection.length).toBeGreaterThan(0);
       expect(ext.workflowsPromptSection).toContain("demo-pipeline");
 
@@ -344,7 +347,9 @@ describe("workflow integration — orphan safety on the composed discovery -> Wo
         claimedMcpNames: new Set(),
       });
       expect(ext.problems).toEqual([]);
-      expect(ext.workflows.map((wf) => wf.name)).toEqual(["sleeper-wf"]);
+      // Bundled deep-research preset (Taskana 4095) discovered after the
+      // workspace's own definition — same claimed-set order as above.
+      expect(ext.workflows.map((wf) => wf.name)).toEqual(["sleeper-wf", "deep-research"]);
 
       // The step's real child proposes Bash; the parent proposes Workflow. Routed
       // by system prompt exactly like the happy-path test above.

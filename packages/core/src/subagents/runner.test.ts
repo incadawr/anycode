@@ -283,10 +283,16 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(child.permissionEngine).toBe(parent.permissionEngine);
     expect(child.permissionBroker).toBe(parent.permissionBroker);
 
-    // registry: NEW, the nine defaults minus Agent (lock #1, structural).
+    // registry: NEW, the defaults minus Agent (lock #1, structural).
+    // WebSearch is the one conditional name: the persona LISTS it (Taskana
+    // 4095) but the child registry carries it only when the boot-threaded
+    // tool is passed as extras.webSearchTool — absent here (see the
+    // dedicated test below), so the expected set is the persona list minus
+    // that one name.
     expect(child.registry).not.toBe(parent.registry);
     expect(child.registry.has("Agent")).toBe(false);
-    expect(child.registry.list().sort()).toEqual([...PERSONAS["general-purpose"].tools].sort());
+    const expectedNoWebSearch = PERSONAS["general-purpose"].tools.filter((name) => name !== "WebSearch");
+    expect(child.registry.list().sort()).toEqual([...expectedNoWebSearch].sort());
 
     // subagents: UNSET (lock #2, defense in depth).
     expect(child.subagents).toBeUndefined();
@@ -314,6 +320,35 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(child.history).toBeInstanceOf(ConversationHistory);
     expect(child.history?.items.length).toBe(0);
     expect(child.history).not.toBe(buildChildConfig(parent, getPersona("general-purpose"), REQ).history);
+  });
+
+  it("WebSearch reaches a persona child registry ONLY when the tool is threaded in (Taskana 4095)", async () => {
+    const parent = makeParent();
+    const { createWebSearchTool } = await import("../tools/web-search.js");
+    const webSearch = createWebSearchTool({
+      kind: "searxng",
+      endpoint: "http://127.0.0.1:8888",
+      headers: {},
+      maxResults: 5,
+    });
+
+    // Absent option (no backend configured): the persona LISTS "WebSearch"
+    // but the child registry does not carry it, and nothing throws — the
+    // fail-soft miss path (a listed name with no resolvable tool is a
+    // silent skip, never an error).
+    const without = buildChildConfig(parent, getPersona("general-purpose"), REQ);
+    expect(without.registry.has("WebSearch")).toBe(false);
+    expect(without.registry.get("WebSearch")).toBeUndefined();
+
+    // Threaded option: the SAME instance lands in the child registry.
+    const withTool = buildChildConfig(parent, getPersona("general-purpose"), REQ, { webSearchTool: webSearch });
+    expect(withTool.registry.get("WebSearch")).toBe(webSearch);
+    expect(withTool.registry.has("WebFetch")).toBe(true);
+
+    // explore stays fetch-only regardless: it never lists WebSearch, so even
+    // a threaded tool must NOT appear in its child registry.
+    const exploreChild = buildChildConfig(parent, getPersona("explore"), REQ, { webSearchTool: webSearch });
+    expect(exploreChild.registry.has("WebSearch")).toBe(false);
   });
 
   // Budget resolution: request > parent.subagentMaxTurns > DEFAULT, and ONLY
