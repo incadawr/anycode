@@ -119,6 +119,12 @@ describe("tabs-store", () => {
     expect(store.getState().tabs[0]?.timelinePanelOpen).toBe(false);
   });
 
+  it("tasksPanelOpen defaults to false — the background-tasks drawer is user-opened chrome state (TASK.91)", () => {
+    const store = createTabsStore();
+    store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
+    expect(store.getState().tabs[0]?.tasksPanelOpen).toBe(false);
+  });
+
   it("setTerminalOpen flips only its own tab's flag", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
@@ -206,6 +212,55 @@ describe("tabs-store", () => {
     store.getState().setTimelinePanelOpen("a", true);
     expect(store.getState().tabs[0]?.timelinePanelOpen).toBe(true);
     expect(store.getState().tabs[0]?.hooksPanelOpen).toBe(false);
+  });
+
+  it("setTasksPanelOpen flips only its own tab's flag (TASK.91)", () => {
+    const store = createTabsStore();
+    store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
+    store.getState().addTab({ tabId: "b", workspace: "/ws/b" });
+
+    store.getState().setTasksPanelOpen("b", true);
+
+    const [a, b] = store.getState().tabs;
+    expect(a?.tasksPanelOpen).toBe(false);
+    expect(b?.tasksPanelOpen).toBe(true);
+  });
+
+  it("opening the tasks drawer closes the other three drawers on the same tab (TASK.91)", () => {
+    const store = createTabsStore();
+    store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
+
+    store.getState().setLspPanelOpen("a", true);
+    store.getState().setHooksPanelOpen("a", true);
+    store.getState().setTimelinePanelOpen("a", true);
+    store.getState().setTasksPanelOpen("a", true);
+    const tab = store.getState().tabs[0];
+    expect(tab?.tasksPanelOpen).toBe(true);
+    expect(tab?.lspPanelOpen).toBe(false);
+    expect(tab?.hooksPanelOpen).toBe(false);
+    expect(tab?.timelinePanelOpen).toBe(false);
+  });
+
+  it("opening any of the other drawers closes the tasks drawer (TASK.91)", () => {
+    const store = createTabsStore();
+    store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
+
+    store.getState().setTasksPanelOpen("a", true);
+    expect(store.getState().tabs[0]?.tasksPanelOpen).toBe(true);
+
+    store.getState().setLspPanelOpen("a", true);
+    expect(store.getState().tabs[0]?.lspPanelOpen).toBe(true);
+    expect(store.getState().tabs[0]?.tasksPanelOpen).toBe(false);
+
+    store.getState().setTasksPanelOpen("a", true);
+    store.getState().setHooksPanelOpen("a", true);
+    expect(store.getState().tabs[0]?.hooksPanelOpen).toBe(true);
+    expect(store.getState().tabs[0]?.tasksPanelOpen).toBe(false);
+
+    store.getState().setTasksPanelOpen("a", true);
+    store.getState().setTimelinePanelOpen("a", true);
+    expect(store.getState().tabs[0]?.timelinePanelOpen).toBe(true);
+    expect(store.getState().tabs[0]?.tasksPanelOpen).toBe(false);
   });
 });
 

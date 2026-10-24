@@ -91,6 +91,8 @@ export class InProcessTaskManager implements BackgroundTaskPort {
   private readonly tasks = new Map<string, TaskRecord>();
   private notices: BackgroundTaskNotice[] = [];
   private counter = 0;
+  /** Taskana 4097: settled-listener set (host live-push); see onTaskSettled. */
+  private readonly settledListeners = new Set<(notice: BackgroundTaskNotice) => void>();
 
   constructor(private readonly exec: ExecutionPort) {}
 
@@ -154,6 +156,18 @@ export class InProcessTaskManager implements BackgroundTaskPort {
     return { snapshot: this.toSnapshot(record), newOutput };
   }
 
+  /**
+   * Non-consuming read of the whole (capped, append-only) buffer: the read
+   * cursor `readOutput` advances for the model's BashOutput tool is NOT
+   * touched. The desktop panel (Taskana 4097) reads through this so a user
+   * viewing a task's output never steals the increment the agent is owed.
+   */
+  peekOutput(taskId: string): { snapshot: BackgroundTaskSnapshot; output: string } | undefined {
+    const record = this.tasks.get(taskId);
+    if (!record) return undefined;
+    return { snapshot: this.toSnapshot(record), output: record.buffer };
+  }
+
   kill(taskId: string): boolean {
     const record = this.tasks.get(taskId);
     if (!record || record.status !== "running") return false;
@@ -166,6 +180,20 @@ export class InProcessTaskManager implements BackgroundTaskPort {
 
   list(): BackgroundTaskSnapshot[] {
     return [...this.tasks.values()].map((record) => this.toSnapshot(record));
+  }
+
+  /**
+   * Taskana 4097: live "a task just left running" registration for the host's
+   * idle push (a task finishing BETWEEN turns must reach the desktop panel
+   * immediately, not at the next turn teardown). Mirrors `drainNotices`'s
+   * payload (a BackgroundTaskNotice) but is a side channel, never drained:
+   * the next-turn injection queue is untouched by this call.
+   */
+  onTaskSettled(listener: (notice: BackgroundTaskNotice) => void): () => void {
+    this.settledListeners.add(listener);
+    return () => {
+      this.settledListeners.delete(listener);
+    };
   }
 
   drainNotices(): BackgroundTaskNotice[] {
@@ -211,13 +239,24 @@ export class InProcessTaskManager implements BackgroundTaskPort {
     record.status = status;
     record.exitCode = exitCode;
     record.endedAt = Date.now();
-    this.notices.push({
+    const notice: BackgroundTaskNotice = {
       taskId: record.taskId,
       command: record.command,
       status,
       exitCode,
       durationMs: record.endedAt - record.startedAt,
-    });
+    };
+    this.notices.push(notice);
+    // Taskana 4097: fire the live listeners only for the FIRST terminal (the
+    // same idempotency guard as the notice push above) — a settle is a
+    // one-shot event, never a state-reading API.
+    for (const listener of this.settledListeners) {
+      try {
+        listener(notice);
+      } catch {
+        // a broken listener never breaks the manager's own finalize
+      }
+    }
   }
 
   private toSnapshot(record: TaskRecord): BackgroundTaskSnapshot {

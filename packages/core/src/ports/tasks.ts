@@ -52,6 +52,15 @@ export interface BackgroundTaskPort {
   /** false = unknown id or already terminal. Only registry-owned tasks are reachable. */
   kill(taskId: string): boolean;
   list(): BackgroundTaskSnapshot[];
+  /**
+   * Taskana 4097: registers a listener fired exactly once per task, at the
+   * moment the task LEAVES "running" (finalize — natural exit, timeout, kill,
+   * or spawn error). Returns an unsubscribe fn. Optional so legacy
+   * ports/fakes stay source-compatible (the desktop panel must learn a task
+   * finished BETWEEN turns, not only at turn teardown — this is the host's
+   * "task exited" event). Never fires for a task that never started.
+   */
+  onTaskSettled?(listener: (notice: BackgroundTaskNotice) => void): () => void;
   /** Terminal-notice queue, exactly-once semantics (drain empties it). */
   drainNotices(): BackgroundTaskNotice[];
   /** Aborts every live task and awaits reaping, bounded by BACKGROUND_DISPOSE_DEADLINE_MS. */

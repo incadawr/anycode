@@ -7330,3 +7330,131 @@ body {
   padding: var(--sp-1) var(--sp-3);
   cursor: pointer;
 }
+
+/* Background tasks drawer (BackgroundTasksPanel.tsx) — core-only
+   (supportsTasks). Reuses the shared lsp-panel drawer chrome; only the row
+   grid and status badges below are this panel's own. */
+.background-tasks-panel {
+  z-index: 14;
+}
+
+/* Taskana 4097 accordion: one item = row + ITS OWN output, so an expanded
+   output sits directly under its row, not under the whole list. */
+.background-tasks-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.background-tasks-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+
+.background-tasks-command {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-tasks-status {
+  flex-shrink: 0;
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+}
+
+/* running = green (live); completed/killed = neutral; failure family = red. */
+.background-tasks-status-running {
+  border-color: var(--success);
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.background-tasks-status-failed,
+.background-tasks-status-spawn_error,
+.background-tasks-status-timed_out {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.background-tasks-status-killed {
+  border-color: var(--border);
+  color: var(--text-3);
+  background: var(--bg-elevated);
+}
+
+.background-tasks-elapsed {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
+.background-tasks-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: var(--sp-1);
+}
+
+.background-tasks-action {
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.background-tasks-action:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.background-tasks-action[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.background-tasks-stop {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.background-tasks-stop:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.background-tasks-output {
+  margin: 0;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

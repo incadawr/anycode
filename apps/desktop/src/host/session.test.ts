@@ -128,12 +128,41 @@ import {
  */
 class FakeTaskPort implements BackgroundTaskPort {
   private notices: BackgroundTaskNotice[] = [];
+  /** Taskana 4097: the settle side channel, mirroring InProcessTaskManager.onTaskSettled. */
+  private settledListeners = new Set<(notice: BackgroundTaskNotice) => void>();
   snapshots: BackgroundTaskSnapshot[] = [];
   outputs = new Map<string, string[]>();
   killed: string[] = [];
 
   queueNotice(notice: BackgroundTaskNotice): void {
     this.notices.push(notice);
+  }
+
+  onTaskSettled(listener: (notice: BackgroundTaskNotice) => void): () => void {
+    this.settledListeners.add(listener);
+    return () => {
+      this.settledListeners.delete(listener);
+    };
+  }
+
+  /** Test driver: flips a snapshot to terminal and fires the settle listeners (finalize's contract). */
+  settleTask(taskId: string, status: Exclude<BackgroundTaskSnapshot["status"], "running">): void {
+    const snapshot = this.snapshots.find((task) => task.taskId === taskId);
+    if (!snapshot || snapshot.status !== "running") return;
+    snapshot.status = status;
+    snapshot.exitCode = status === "completed" ? 0 : null;
+    snapshot.endedAt = snapshot.startedAt + 1_000;
+    const notice: BackgroundTaskNotice = {
+      taskId,
+      command: snapshot.command,
+      status,
+      exitCode: snapshot.exitCode,
+      durationMs: 1_000,
+    };
+    this.notices.push(notice);
+    for (const listener of this.settledListeners) {
+      listener(notice);
+    }
   }
 
   start(_req: BackgroundTaskStartRequest): BackgroundTaskStartResult {
@@ -649,6 +678,106 @@ describe("Session — background jobs panel wire", () => {
       const killed = await h.waitFor(isTaskKillResult);
       expect(killed).toMatchObject({ requestId: "kill-1", ok: true });
       expect(tasks.killed).toEqual(["task-1"]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("task_list_request re-serves the manager snapshot even with no turn in flight (TASK.91 panel refresh)", async () => {
+    const tasks = new FakeTaskPort();
+    const running = taskSnapshot({ taskId: "task-1", command: "sleep 60" });
+    const completed = taskSnapshot({
+      taskId: "task-2",
+      command: "echo done",
+      status: "completed",
+      exitCode: 0,
+      endedAt: 2_000,
+    });
+    tasks.snapshots = [running, completed];
+    tasks.outputs.set("task-1", ["tick\n"]);
+    const h = createHarness({ steps: [finishStep()], tasks });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // First push: ui_ready's own snapshot.
+      const first = await h.waitFor(isTaskList);
+      expect(first.tasks).toEqual([running, completed]);
+
+      // Second push: an explicit re-request with no turn in flight re-serves
+      // the SAME manager snapshot — the panel's refresh-on-open contract.
+      h.send({ type: "task_list_request" });
+      await h.waitUntil(() => h.received.filter(isTaskList).length >= 2);
+      const lists = h.received.filter(isTaskList);
+      expect(lists).toHaveLength(2);
+      expect(lists[0]?.tasks).toEqual(lists[1]?.tasks);
+
+      // Output request for the running id yields a task_output carrying that
+      // id's snapshot (the panel's Output toggle contract).
+      h.send({ type: "task_output_request", taskId: "task-1" });
+      const output = await h.waitFor(isTaskOutput);
+      expect(output).toMatchObject({ taskId: "task-1", snapshot: running, newOutput: "tick\n" });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a task settling between turns (session idle) live-pushes a fresh task_list — no turn, no task_list_request (Taskana 4097)", async () => {
+    const tasks = new FakeTaskPort();
+    const running = taskSnapshot({ taskId: "task-1", command: "sleep 60" });
+    tasks.snapshots = [running];
+    const h = createHarness({ steps: [finishStep()], tasks });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const initial = await h.waitFor(isTaskList);
+      expect(initial.tasks).toEqual([running]);
+
+      // No turn is ever started; the drawer stays open on an IDLE session.
+      // The task exits on its own between turns.
+      const before = h.received.filter(isTaskList).length;
+      tasks.settleTask("task-1", "completed");
+
+      await h.waitUntil(() => h.received.filter(isTaskList).length > before);
+      const settled = h.received.filter(isTaskList).at(-1);
+      expect(settled?.tasks).toEqual([running]);
+      expect(settled?.tasks[0]?.status).toBe("completed");
+      expect(settled?.tasks[0]?.exitCode).toBe(0);
+      // The renderer never had to ask — no request was sent beyond ui_ready.
+      expect(h.received.filter(isTaskList)).toHaveLength(before + 1);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("task_output_request reads through a non-consuming peek with its own UI cursor — the model's readOutput cursor is untouched (Taskana 4097)", async () => {
+    const running = taskSnapshot({ taskId: "task-1", command: "sleep 60" });
+    let buffer = "one\n";
+    let consumingReads = 0;
+    const tasks = Object.assign(new FakeTaskPort(), {
+      peekOutput: (taskId: string) => (taskId === "task-1" ? { snapshot: running, output: buffer } : undefined),
+    });
+    tasks.snapshots = [running];
+    tasks.readOutput = () => {
+      consumingReads += 1;
+      return undefined;
+    };
+    const h = createHarness({ steps: [finishStep()], tasks });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "task_output_request", taskId: "task-1" });
+      await h.waitUntil(() => h.received.filter(isTaskOutput).length >= 1);
+      buffer += "two\n";
+      h.send({ type: "task_output_request", taskId: "task-1" });
+      await h.waitUntil(() => h.received.filter(isTaskOutput).length >= 2);
+      // A re-attaching renderer (fresh store) starts from the top again.
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length >= 2);
+      h.send({ type: "task_output_request", taskId: "task-1" });
+      await h.waitUntil(() => h.received.filter(isTaskOutput).length >= 3);
+      expect(h.received.filter(isTaskOutput).map((m) => m.newOutput)).toEqual(["one\n", "two\n", "one\ntwo\n"]);
+      expect(consumingReads).toBe(0);
     } finally {
       h.close();
     }

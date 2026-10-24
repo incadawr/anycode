@@ -660,7 +660,19 @@ export interface SessionOptions {
     drainNotices(): BackgroundTaskNotice[];
     list?(): BackgroundTaskSnapshot[];
     readOutput?(taskId: string): { snapshot: BackgroundTaskSnapshot; newOutput: string } | undefined;
+    /** Non-consuming whole-buffer read (Taskana 4097): preferred over readOutput so the UI never advances the model's BashOutput cursor. */
+    peekOutput?(taskId: string): { snapshot: BackgroundTaskSnapshot; output: string } | undefined;
     kill?(taskId: string): boolean;
+    /**
+     * Taskana 4097: "a background task just left running" registration.
+     * Fires at the settle moment itself (finalize — natural exit, timeout,
+     * kill, spawn error), NOT only at turn teardown, so an IDLE session's
+     * task_list push (see the constructor subscription) reaches an
+     * already-ui_ready renderer immediately. Optional (mirrors
+     * `lsp.onStatusChange`/`backgroundChildren.onChange`): absent seam
+     * (legacy tests/fakes) -> no live push, the turn-teardown push stands.
+     */
+    onTaskSettled?(listener: (notice: BackgroundTaskNotice) => void): () => void;
   };
   /**
    * TASK.145 срез 3 §2/§3: narrow read/cancel seam onto the host's own
@@ -907,6 +919,8 @@ export class Session {
   /** Design TASK.40 §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
   private readonly shell: ShellCapabilitiesProjection | undefined;
   private readonly tasks: SessionOptions["tasks"];
+  /** Taskana 4097: the renderer's own read cursor per background task (see pushTaskOutput). */
+  private readonly uiTaskOutputCursors = new Map<string, number>();
   /** TASK.145 срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
   private readonly backgroundChildren: SessionOptions["backgroundChildren"];
   /** taskana 4181: see SessionOptions.supervisorIdle's own doc. */
@@ -1148,6 +1162,11 @@ export class Session {
   private readonly eventTap: SessionOptions["eventTap"];
   /** TASK.145 срез 3 §2: unsubscribes the background-children live-push listener on shutdown (mirror of lspUnsubscribe). */
   private backgroundChildrenUnsubscribe: (() => void) | undefined;
+  /**
+   * Taskana 4097: unsubscribes the tasks port's settled listener on shutdown
+   * (mirror of lspUnsubscribe) — no push-after-dispose, no leaked listener.
+   */
+  private tasksSettledUnsubscribe: (() => void) | undefined;
 
   // ── child-mode state (TASK.102 CUT-S2 §2.6.3); every field below is inert
   // (never read or mutated) whenever `this.child === undefined`. ──
@@ -1270,6 +1289,17 @@ export class Session {
     // or a legacy test) -> no subscription, ui_ready-only pull.
     this.backgroundChildrenUnsubscribe = this.backgroundChildren?.onChange?.(() => {
       if (this.uiReady) this.pushBackgroundChildren();
+    });
+    // Taskana 4097: a background task that finishes BETWEEN turns (the
+    // session idle, no turn teardown pending) must still refresh the
+    // renderer's panel — the same task_list status push the turn teardown
+    // already makes, moved to the moment the manager actually settles the
+    // task. Gated exactly like the other live-push subscriptions (ui_ready,
+    // sendDirect), so an absent seam (legacy tests/fakes) and a
+    // not-yet-ready renderer see zero new messages; supportsTasks is implicit
+    // — engines without the tasks capability never wire this seam.
+    this.tasksSettledUnsubscribe = this.tasks?.onTaskSettled?.(() => {
+      if (this.uiReady && this.engine.capabilities.supportsTasks) this.pushTaskList();
     });
     // Phase 2 of the settings ack (TASK.39, cut §2(k).3). This fires from inside
     // the engine's turn/start, i.e. always while a turn is running and therefore
@@ -1493,6 +1523,10 @@ export class Session {
     this.lspUnsubscribe = undefined;
     this.backgroundChildrenUnsubscribe?.();
     this.backgroundChildrenUnsubscribe = undefined;
+    // Taskana 4097: release the tasks settled listener with the same
+    // push-after-dispose discipline as the LSP/background-children seams above.
+    this.tasksSettledUnsubscribe?.();
+    this.tasksSettledUnsubscribe = undefined;
     this.engineSettingsUnsubscribe?.();
     this.engineSettingsUnsubscribe = undefined;
     // TASK.145 срез 3 §3: closing this session's tab is a deliberate decision
@@ -1594,6 +1628,8 @@ export class Session {
         // status pushes are safe from here on. Set BEFORE the snapshot cascade
         // below (which already pushes the current lsp_status).
         this.uiReady = true;
+        // Taskana 4097: a (re)attaching renderer starts with empty task output.
+        this.uiTaskOutputCursors.clear();
         // TASK.102 CUT-S2 §2.6.3: child-ready fires on the FIRST ui_ready only —
         // never before (nothing was listening yet) and never again on a later
         // reconnect (Open re-attaching to an already-running child).
@@ -2253,7 +2289,23 @@ export class Session {
   }
 
   private pushTaskOutput(taskId: string): void {
-    const result = this.tasks?.readOutput?.(taskId);
+    // Taskana 4097: the UI keeps its OWN per-task cursor over a non-consuming
+    // peek — `readOutput` would advance the cursor the model's BashOutput tool
+    // reads, so a user clicking "Output" would make the agent miss output.
+    // The buffer is append-only (capped, never a ring), so a length cursor is
+    // valid; ui_ready resets these cursors (a fresh renderer store starts empty).
+    const peek = this.tasks?.peekOutput;
+    let result: { snapshot: BackgroundTaskSnapshot; newOutput: string } | undefined;
+    if (peek !== undefined) {
+      const peeked = peek.call(this.tasks, taskId);
+      if (peeked !== undefined) {
+        const from = this.uiTaskOutputCursors.get(taskId) ?? 0;
+        this.uiTaskOutputCursors.set(taskId, peeked.output.length);
+        result = { snapshot: peeked.snapshot, newOutput: peeked.output.slice(from) };
+      }
+    } else {
+      result = this.tasks?.readOutput?.(taskId);
+    }
     this.outbound.sendDirect({
       type: "task_output",
       taskId,

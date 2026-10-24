@@ -56,6 +56,8 @@ export interface TabInfo {
   hooksPanelOpen: boolean;
   /** Whether this tab's checkpoint-timeline drawer is open (slice P7.26/R2). */
   timelinePanelOpen: boolean;
+  /** Whether this tab's background-tasks drawer is open (TASK.91 / Taskana 4097). */
+  tasksPanelOpen: boolean;
 }
 
 /** Renderer-only New Session draft (slice P7.12): lives beside tabs[], never in it. */
@@ -227,6 +229,8 @@ export interface TabsState {
   setHooksPanelOpen(tabId: string, open: boolean): void;
   /** Opens/closes the tab's checkpoint-timeline drawer. */
   setTimelinePanelOpen(tabId: string, open: boolean): void;
+  /** Opens/closes the tab's background-tasks drawer. */
+  setTasksPanelOpen(tabId: string, open: boolean): void;
 
   /**
 
@@ -345,6 +349,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
               lspPanelOpen: false,
               hooksPanelOpen: false,
               timelinePanelOpen: false,
+              tasksPanelOpen: false,
             },
           ],
           activeTabId: state.activeTabId ?? tabId,
@@ -492,7 +497,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
       set((state) => ({
         tabs: state.tabs.map((t) =>
           t.tabId === tabId
-            ? { ...t, lspPanelOpen: open, ...(open ? { hooksPanelOpen: false, timelinePanelOpen: false } : {}) }
+            ? { ...t, lspPanelOpen: open, ...(open ? { hooksPanelOpen: false, timelinePanelOpen: false, tasksPanelOpen: false } : {}) }
             : t,
         ),
       }));
@@ -502,7 +507,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
       set((state) => ({
         tabs: state.tabs.map((t) =>
           t.tabId === tabId
-            ? { ...t, hooksPanelOpen: open, ...(open ? { lspPanelOpen: false, timelinePanelOpen: false } : {}) }
+            ? { ...t, hooksPanelOpen: open, ...(open ? { lspPanelOpen: false, timelinePanelOpen: false, tasksPanelOpen: false } : {}) }
             : t,
         ),
       }));
@@ -512,7 +517,17 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
       set((state) => ({
         tabs: state.tabs.map((t) =>
           t.tabId === tabId
-            ? { ...t, timelinePanelOpen: open, ...(open ? { lspPanelOpen: false, hooksPanelOpen: false } : {}) }
+            ? { ...t, timelinePanelOpen: open, ...(open ? { lspPanelOpen: false, hooksPanelOpen: false, tasksPanelOpen: false } : {}) }
+            : t,
+        ),
+      }));
+    },
+
+    setTasksPanelOpen(tabId, open): void {
+      set((state) => ({
+        tabs: state.tabs.map((t) =>
+          t.tabId === tabId
+            ? { ...t, tasksPanelOpen: open, ...(open ? { lspPanelOpen: false, hooksPanelOpen: false, timelinePanelOpen: false } : {}) }
             : t,
         ),
       }));
