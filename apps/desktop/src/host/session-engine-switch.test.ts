@@ -34,6 +34,7 @@ const NO_CORE_CAPS: EngineCapabilities = {
   supportsImages: false,
   supportsTasks: false,
   supportsFileSnapshots: false,
+  supportsManualCompact: false,
 };
 
 /** Plain wire helpers (same shape session.test.ts uses). */

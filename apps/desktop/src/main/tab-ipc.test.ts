@@ -1654,7 +1654,7 @@ describe("handleSessionDelete (TASK.114)", () => {
       deleteSession: async (id: string) => ({
         deleted: [id],
         removedIds: [id, "child-1"],
-        counts: { historyItems: 2, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+        counts: { historyItems: 2, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0, providerUsage: 0 },
       }),
     });
     const manager = makeManagerWith({});
