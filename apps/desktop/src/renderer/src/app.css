@@ -7237,6 +7237,14 @@ body {
   z-index: 14;
 }
 
+/* Taskana 4097 accordion: one item = row + ITS OWN output, so an expanded
+   output sits directly under its row, not under the whole list. */
+.background-tasks-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
 .background-tasks-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto auto;

@@ -532,34 +532,6 @@ export function createTabRegistry(
     });
   }
 
-  /**
-   * TASK.91: routes a store-dispatched ui→host message exactly like the
-   * public `sendToTab` (same entry lookup, same drop-with-warning posture) —
-   * declared before the returned object so `registerPort` can hand it to the
-   * store's send seam at entry-creation time.
-   */
-  function sendToTabRouted(tabId: string, message: UiToHostMessage): void {
-    const entry = entries.get(tabId);
-    if (!entry?.connection) {
-      console.warn("[tab-registry] dropping outgoing message, no active connection for tab", tabId, message);
-      return;
-    }
-    entry.connection.send(message);
-  }
-
-  /**
-   * TASK.91: injects `send` into a store built without a seam (default
-   * `createStore`). Stores constructed WITH their own seam (tests injecting
-   * `createDesktopStore(scheduler, send)`) keep theirs — no override. Like
-   * every other DesktopState action, `setSendSeam` is optional to call.
-   */
-  function thisWireStoreSend(entry: TabEntry, send: (message: UiToHostMessage) => void): void {
-    const state = entry.store.getState() as DesktopState & { setSendSeam?: (s: (m: UiToHostMessage) => void) => void };
-    if (typeof state.setSendSeam === "function") {
-      state.setSendSeam(send);
-    }
-  }
-
   return {
     registerPort(tabId, workspace, port, pinnedConnection, child): boolean {
       if (!tabId || closedTabIds.has(tabId)) {
@@ -578,14 +550,6 @@ export function createTabRegistry(
           unsubscribeQueue: null,
           isChild: kind === "child",
         };
-        // TASK.91 / Taskana 4097: wires this store's outgoing-wire seam
-        // (store.ts `requestBackgroundTaskRefresh`) to the registry's own
-        // routing, so a store-dispatched request follows the SAME
-        // live-connection rules as `sendToTab` (drop-with-warning while no
-        // connection is attached). One closure over the entry — after a
-        // respawn's `attach` reassigns `entry.connection`, this seam sees the
-        // NEW connection without any rewiring here.
-        thisWireStoreSend(entry, (message) => sendToTabRouted(tabId, message));
         entries.set(tabId, entry);
         if (kind === "child") {
           // TASK.102 CUT-S2 §2.5/§5.3: a child session gets the SAME

@@ -91,6 +91,8 @@ export class InProcessTaskManager implements BackgroundTaskPort {
   private readonly tasks = new Map<string, TaskRecord>();
   private notices: BackgroundTaskNotice[] = [];
   private counter = 0;
+  /** Taskana 4097: settled-listener set (host live-push); see onTaskSettled. */
+  private readonly settledListeners = new Set<(notice: BackgroundTaskNotice) => void>();
 
   constructor(private readonly exec: ExecutionPort) {}
 
@@ -180,6 +182,20 @@ export class InProcessTaskManager implements BackgroundTaskPort {
     return [...this.tasks.values()].map((record) => this.toSnapshot(record));
   }
 
+  /**
+   * Taskana 4097: live "a task just left running" registration for the host's
+   * idle push (a task finishing BETWEEN turns must reach the desktop panel
+   * immediately, not at the next turn teardown). Mirrors `drainNotices`'s
+   * payload (a BackgroundTaskNotice) but is a side channel, never drained:
+   * the next-turn injection queue is untouched by this call.
+   */
+  onTaskSettled(listener: (notice: BackgroundTaskNotice) => void): () => void {
+    this.settledListeners.add(listener);
+    return () => {
+      this.settledListeners.delete(listener);
+    };
+  }
+
   drainNotices(): BackgroundTaskNotice[] {
     const drained = this.notices;
     this.notices = [];
@@ -223,13 +239,24 @@ export class InProcessTaskManager implements BackgroundTaskPort {
     record.status = status;
     record.exitCode = exitCode;
     record.endedAt = Date.now();
-    this.notices.push({
+    const notice: BackgroundTaskNotice = {
       taskId: record.taskId,
       command: record.command,
       status,
       exitCode,
       durationMs: record.endedAt - record.startedAt,
-    });
+    };
+    this.notices.push(notice);
+    // Taskana 4097: fire the live listeners only for the FIRST terminal (the
+    // same idempotency guard as the notice push above) — a settle is a
+    // one-shot event, never a state-reading API.
+    for (const listener of this.settledListeners) {
+      try {
+        listener(notice);
+      } catch {
+        // a broken listener never breaks the manager's own finalize
+      }
+    }
   }
 
   private toSnapshot(record: TaskRecord): BackgroundTaskSnapshot {

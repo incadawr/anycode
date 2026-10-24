@@ -6,10 +6,14 @@
  * + sender. Mirrors TimelinePanel/HooksPanel chrome exactly (`lsp-panel*`
  * classes, right-drawer placement, its own `session-header`-owned open flag).
  *
- * Refresh cadence (v1): on open (`task_list_request` here) and after every
- * turn teardown (the host's `session.ts` re-push). Elapsed time ticks
- * locally every second; output does NOT stream live mid-turn — the Output
- * toggle fetches the appended-since-last-read increment on demand.
+ * Refresh cadence (v2, Taskana 4097 follow-up): on open
+ * (`task_list_request` here), after every turn teardown, AND on the host's
+ * idle task-settled push (a task that exits BETWEEN turns now updates its
+ * row live — `session.ts`'s `onTaskSettled` subscription). While the drawer
+ * is open, a row is selected AND that task is `running`, the Output view
+ * live-tails it: `task_output_request` (the non-consuming peek, 799fd604)
+ * every 1s. Output renders as an ACCORDION under its own row, not a single
+ * pane under the whole list.
  *
  * NOTE: this is NOT BackgroundAgents.tsx — that strip renders detached
  * child sessions (TASK.145); this drawer renders core's Bash background
@@ -47,6 +51,20 @@ export function isTaskStoppable(task: BackgroundTaskSnapshot): boolean {
 /** Newest-first order — the wire's array order is a registry-read detail, not a UI contract. */
 export function sortTasksNewestFirst(tasks: readonly BackgroundTaskSnapshot[]): BackgroundTaskSnapshot[] {
   return [...tasks].sort((a, b) => b.startedAt - a.startedAt);
+}
+
+/** Live-tail poll cadence (Taskana 4097): 1s, only while open ∧ selected ∧ running. */
+export const TASK_OUTPUT_POLL_MS = 1_000;
+
+/**
+ * The live-tail predicate, pure: the Output view polls `task_output_request`
+ * only while ALL THREE hold — the drawer is open, the row is selected, and
+ * the task is still `running`. Any other combination (closed drawer, another
+ * row selected, a finished task) must not poll: the peek is cheap, but a
+ * finished task's output is already complete in the store.
+ */
+export function shouldLiveTailOutput(open: boolean, selectedTask: BackgroundTaskSnapshot | undefined): boolean {
+  return open && selectedTask !== undefined && selectedTask.status === "running";
 }
 
 /**
@@ -142,6 +160,22 @@ export function BackgroundTasksPanel() {
     return () => clearInterval(timer);
   }, [anyRunning]);
 
+  // Live-tail (Taskana 4097): poll `task_output_request` (the non-consuming
+  // peek, 799fd604) every second ONLY while the drawer is open, the row is
+  // selected and the task is running. Stops on close, on selecting another
+  // row, and — through `selectedTask.status` — the moment the task ends (the
+  // host's idle settled push or a turn teardown refreshes the row).
+  const selectedTask = selectedTaskId === null ? undefined : tasks.find((task) => task.taskId === selectedTaskId);
+  const liveTail = shouldLiveTailOutput(open, selectedTask);
+  useEffect(() => {
+    if (!liveTail || selectedTaskId === null) return undefined;
+    const timer = setInterval(() => send(buildTaskOutputRequest(selectedTaskId)), TASK_OUTPUT_POLL_MS);
+    return () => clearInterval(timer);
+    // `send` is stable per tab (useCallback over tabId); `selectedTaskId`
+    // re-arms the interval on a row switch; `liveTail` re-evaluates every
+    // store-driven render, ending the poll the moment the task settles.
+  }, [liveTail, selectedTaskId, send]);
+
   if (!open) {
     return null;
   }
@@ -183,18 +217,20 @@ export function BackgroundTasksPanel() {
           <div className="lsp-empty">No background tasks yet.</div>
         ) : (
           ordered.map((task) => (
-            <TaskRow
-              key={task.taskId}
-              task={task}
-              now={now}
-              selected={selectedTaskId === task.taskId}
-              onToggleOutput={() => toggleOutput(task.taskId)}
-              onStop={() => stop(task)}
-            />
+            // Accordion item: the row plus ITS OWN output, directly under it.
+            <div className="background-tasks-item" key={task.taskId} data-task-id={task.taskId}>
+              <TaskRow
+                task={task}
+                now={now}
+                selected={selectedTaskId === task.taskId}
+                onToggleOutput={() => toggleOutput(task.taskId)}
+                onStop={() => stop(task)}
+              />
+              {selectedTaskId === task.taskId && (
+                <pre className="background-tasks-output">{output[task.taskId] ?? ""}</pre>
+              )}
+            </div>
           ))
-        )}
-        {selectedTaskId !== null && (
-          <pre className="background-tasks-output">{output[selectedTaskId] ?? ""}</pre>
         )}
       </div>
     </aside>

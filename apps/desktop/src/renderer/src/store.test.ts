@@ -5213,18 +5213,6 @@ describe("desktop store — task_list/task_output (renderer panels sub-slice D)"
     expect(store.getState().backgroundTaskOutput).toEqual({});
   });
 
-  it("requestBackgroundTaskRefresh sends a task_list_request through the store's send seam (TASK.91)", () => {
-    const { scheduler } = createManualScheduler();
-    const sent: unknown[] = [];
-    const store = createDesktopStore(scheduler, (message) => {
-      sent.push(message);
-    });
-
-    store.getState().requestBackgroundTaskRefresh();
-
-    expect(sent).toEqual([{ type: "task_list_request" }]);
-  });
-
   it("a task that finished between turns changes status in the projection (TASK.91 discriminating test)", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

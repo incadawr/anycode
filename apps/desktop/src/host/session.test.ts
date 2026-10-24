@@ -127,12 +127,41 @@ import {
  */
 class FakeTaskPort implements BackgroundTaskPort {
   private notices: BackgroundTaskNotice[] = [];
+  /** Taskana 4097: the settle side channel, mirroring InProcessTaskManager.onTaskSettled. */
+  private settledListeners = new Set<(notice: BackgroundTaskNotice) => void>();
   snapshots: BackgroundTaskSnapshot[] = [];
   outputs = new Map<string, string[]>();
   killed: string[] = [];
 
   queueNotice(notice: BackgroundTaskNotice): void {
     this.notices.push(notice);
+  }
+
+  onTaskSettled(listener: (notice: BackgroundTaskNotice) => void): () => void {
+    this.settledListeners.add(listener);
+    return () => {
+      this.settledListeners.delete(listener);
+    };
+  }
+
+  /** Test driver: flips a snapshot to terminal and fires the settle listeners (finalize's contract). */
+  settleTask(taskId: string, status: Exclude<BackgroundTaskSnapshot["status"], "running">): void {
+    const snapshot = this.snapshots.find((task) => task.taskId === taskId);
+    if (!snapshot || snapshot.status !== "running") return;
+    snapshot.status = status;
+    snapshot.exitCode = status === "completed" ? 0 : null;
+    snapshot.endedAt = snapshot.startedAt + 1_000;
+    const notice: BackgroundTaskNotice = {
+      taskId,
+      command: snapshot.command,
+      status,
+      exitCode: snapshot.exitCode,
+      durationMs: 1_000,
+    };
+    this.notices.push(notice);
+    for (const listener of this.settledListeners) {
+      listener(notice);
+    }
   }
 
   start(_req: BackgroundTaskStartRequest): BackgroundTaskStartResult {
@@ -687,6 +716,34 @@ describe("Session — background jobs panel wire", () => {
       h.send({ type: "task_output_request", taskId: "task-1" });
       const output = await h.waitFor(isTaskOutput);
       expect(output).toMatchObject({ taskId: "task-1", snapshot: running, newOutput: "tick\n" });
+    } finally {
+      h.close();
+    }
+  });
+
+  it("a task settling between turns (session idle) live-pushes a fresh task_list — no turn, no task_list_request (Taskana 4097)", async () => {
+    const tasks = new FakeTaskPort();
+    const running = taskSnapshot({ taskId: "task-1", command: "sleep 60" });
+    tasks.snapshots = [running];
+    const h = createHarness({ steps: [finishStep()], tasks });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const initial = await h.waitFor(isTaskList);
+      expect(initial.tasks).toEqual([running]);
+
+      // No turn is ever started; the drawer stays open on an IDLE session.
+      // The task exits on its own between turns.
+      const before = h.received.filter(isTaskList).length;
+      tasks.settleTask("task-1", "completed");
+
+      await h.waitUntil(() => h.received.filter(isTaskList).length > before);
+      const settled = h.received.filter(isTaskList).at(-1);
+      expect(settled?.tasks).toEqual([running]);
+      expect(settled?.tasks[0]?.status).toBe("completed");
+      expect(settled?.tasks[0]?.exitCode).toBe(0);
+      // The renderer never had to ask — no request was sent beyond ui_ready.
+      expect(h.received.filter(isTaskList)).toHaveLength(before + 1);
     } finally {
       h.close();
     }
