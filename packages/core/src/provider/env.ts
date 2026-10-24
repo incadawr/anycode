@@ -59,7 +59,8 @@ export type ModelBoundCoreEnvConfig = CoreEnvConfig & { contextWindowModel?: str
  * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS / ANYCODE_SUBAGENT_STALL_MS
  * (TASK.148 slice 1 — the subagent silence detector, distinct from the stream
  * watchdog) / ANYCODE_SUPERVISOR_IDLE_MS (taskana 4181 — the supervisor idle
- * watchdog, distinct from both) plus ANYCODE_DB_PATH.
+ * watchdog, distinct from both; must be a POSITIVE integer, a nonpositive
+ * value throws) plus ANYCODE_DB_PATH.
  * ANYCODE_CONTEXT_WINDOW_MODEL (TASK.142) is an optional nonblank model id that
  * binds the ANYCODE_CONTEXT_WINDOW override to one model (the pair is emitted
  * together by the host/CLI); a blank/absent value leaves the override global.
@@ -96,7 +97,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const maxTurns = readOptionalInteger(env, ENV_MAX_TURNS);
   const subagentMaxTurns = readOptionalInteger(env, ENV_SUBAGENT_MAX_TURNS);
   const subagentStallTimeoutMs = readOptionalInteger(env, ENV_SUBAGENT_STALL_MS);
-  const supervisorIdleMs = readOptionalInteger(env, ENV_SUPERVISOR_IDLE_MS);
+  const supervisorIdleMs = readPositiveInteger(env, ENV_SUPERVISOR_IDLE_MS);
   const maxOutputTokens = readOptionalInteger(env, ENV_MAX_OUTPUT_TOKENS);
   const contextWindowTokens = readOptionalInteger(env, ENV_CONTEXT_WINDOW);
   const contextWindowModel = env[ENV_CONTEXT_WINDOW_MODEL]?.trim() || undefined;
@@ -209,6 +210,20 @@ function readOptionalInteger(env: NodeJS.ProcessEnv, name: string): number | und
   const parsed = Number(raw);
   if (!Number.isInteger(parsed)) {
     throw new Error(`Invalid ${name}: "${raw}" is not an integer`);
+  }
+  return parsed;
+}
+
+/**
+ * taskana 4181 (P4): like readOptionalInteger but rejects non-POSITIVE values
+ * too. For a reminder-spammer's delay a negative/zero integer is worse than a
+ * typo: it would clamp to an immediate-fire loop. Only the supervisor idle
+ * knob uses this; see readOptionalInteger for the pre-existing family.
+ */
+function readPositiveInteger(env: NodeJS.ProcessEnv, name: string): number | undefined {
+  const parsed = readOptionalInteger(env, name);
+  if (parsed !== undefined && parsed <= 0) {
+    throw new Error(`Invalid ${name}: "${parsed}" is not a positive integer`);
   }
   return parsed;
 }

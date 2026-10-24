@@ -17,6 +17,7 @@ import {
   ENV_MAX_TURNS,
   ENV_MODEL,
   ENV_STALL_TIMEOUT_MS,
+  ENV_SUPERVISOR_IDLE_MS,
   ENV_TOOL_CONCURRENCY,
   loadEnvConfig,
 } from "./env.js";
@@ -90,6 +91,21 @@ describe("loadEnvConfig", () => {
       envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x", [ENV_MAX_TURNS]: "5" }),
     );
     expect(config.maxTurns).toBe(5);
+  });
+
+  it("ANYCODE_SUPERVISOR_IDLE_MS (taskana 4181): valid integer passes through; non-integer and nonpositive both throw naming the knob", () => {
+    const base = { [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" } as const;
+    expect(loadEnvConfig(envWith({ ...base, [ENV_SUPERVISOR_IDLE_MS]: "600000" })).supervisorIdleMs).toBe(600_000);
+    expect(() => loadEnvConfig(envWith({ ...base, [ENV_SUPERVISOR_IDLE_MS]: "soon" }))).toThrow(
+      /ANYCODE_SUPERVISOR_IDLE_MS/,
+    );
+    // P4: a nonpositive value would clamp to an immediate-fire reminder loop.
+    expect(() => loadEnvConfig(envWith({ ...base, [ENV_SUPERVISOR_IDLE_MS]: "-5" }))).toThrow(
+      /ANYCODE_SUPERVISOR_IDLE_MS/,
+    );
+    expect(() => loadEnvConfig(envWith({ ...base, [ENV_SUPERVISOR_IDLE_MS]: "0" }))).toThrow(
+      /ANYCODE_SUPERVISOR_IDLE_MS/,
+    );
   });
 
   it("parses max output tokens and reasoning effort", () => {

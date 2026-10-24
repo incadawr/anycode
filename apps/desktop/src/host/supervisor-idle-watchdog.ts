@@ -17,7 +17,11 @@
  * The three disarm/re-arm sources, in lifecycle order:
  *  - `noteTurnSettled(lastPublicText)`: the turn's final text. A terminal
  *    marker present anywhere in it means the supervisor CLOSED the task —
- *    disarm permanently until the next settle. Otherwise arm `firstAfterMs`.
+ *    disarm permanently until the next settle. Otherwise arm `firstAfterMs`
+ *    — but ONLY when zero live detached children remain: a settle while a
+ *    child still runs (the detach loop's own shape — "Dispatched, awaiting
+ *    report.") must not start a reminder timer against work in flight; the
+ *    children→empty transition below owns that re-arm.
  *  - `noteTurnStarted()`: any new turn start disarms the pending reminder (a
  *    reminder racing through anyway is held harmlessly by the busy
  *    child_report queue). The counter survives, so a reminder's own turn
@@ -79,8 +83,10 @@ export function resolveSupervisorIdleFirstMs(env: NodeJS.ProcessEnv, defaultMs: 
     return defaultMs;
   }
   const parsed = Number(raw);
-  if (!Number.isInteger(parsed)) {
-    console.warn(`Invalid ANYCODE_SUPERVISOR_IDLE_MS: "${raw}" is not an integer — ignoring`);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    console.warn(
+      `Invalid ANYCODE_SUPERVISOR_IDLE_MS: "${raw}" is not a positive integer — ignoring`,
+    );
     return defaultMs;
   }
   return parsed;
@@ -108,6 +114,14 @@ export class SupervisorIdleWatchdog {
    * turn every 15 minutes. Cleared by a terminal marker (the chain closed).
    */
   private supervising = false;
+  /**
+   * Current live detached children, from the last
+   * noteBackgroundChildrenChanged(n). Settle paths no-op while this is > 0:
+   * arming a reminder against a running child is the D1 bug this field
+   * exists to prevent (the host feed only pushes transitions, so settle
+   * must consult stored state, not wait for the empty event).
+   */
+  private liveChildren = 0;
   /**
    * True after the escalated (owner) reminder fired: the chain stays silent
    * until real progress (a marker, or a child dispatch) — the reminders are
@@ -143,6 +157,12 @@ export class SupervisorIdleWatchdog {
     if (!this.supervising || this.exhausted) {
       return;
     }
+    if (this.liveChildren > 0) {
+      // Work is in flight (D1): never nag while a detached child runs. The
+      // children→empty transition re-arms the fresh window on its own.
+      this.disarm();
+      return;
+    }
     if (this.reminderCount > 0) {
       this.schedule(this.facts.repeatEveryMs);
       return;
@@ -167,6 +187,7 @@ export class SupervisorIdleWatchdog {
     if (this.disposed) {
       return;
     }
+    this.liveChildren = liveChildren;
     if (liveChildren > 0) {
       this.supervising = true;
       this.exhausted = false;

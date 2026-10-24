@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SUPERVISOR_IDLE_TERMINAL_MARKERS,
   SupervisorIdleWatchdog,
+  resolveSupervisorIdleFirstMs,
   type SupervisorIdleFacts,
   type SupervisorIdleReport,
 } from "./supervisor-idle-watchdog.js";
@@ -37,9 +38,14 @@ function recorder(): { reports: SupervisorIdleReport[]; onIdle: (r: SupervisorId
   return { reports, onIdle: (r) => reports.push(r) };
 }
 
-/** Puts the watchdog in supervising mode: a detached child went live (and the timer is disarmed). */
+/**
+ * Puts the watchdog in supervising-but-currently-idle mode: a detached child
+ * went live and has since finished (the real host feed pushes transitions in
+ * pairs — spawn → n>0, terminal → 0 — so a past dispatch is modeled by both).
+ */
 function supervising(watchdog: SupervisorIdleWatchdog): SupervisorIdleWatchdog {
   watchdog.noteBackgroundChildrenChanged(1);
+  watchdog.noteBackgroundChildrenChanged(0);
   return watchdog;
 }
 
@@ -195,6 +201,54 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
     watchdog.dispose();
   });
 
+  it("a turn settling while children are LIVE never arms — zero reminders for a long-running child (4181 D1)", async () => {
+    vi.useFakeTimers();
+    const { reports, onIdle } = recorder();
+    const watchdog = new SupervisorIdleWatchdog(facts(), onIdle);
+    watchdog.noteBackgroundChildrenChanged(1); // child live, no past dispatch
+
+    // The detach loop's own shape: child goes live, supervisor's turn ends
+    // "Dispatched, awaiting report." (no marker — correct, work is running).
+    // Settling here must NOT start a reminder timer: the child is in flight.
+    watchdog.noteTurnSettled("Dispatched GLM, awaiting report.");
+    await vi.advanceTimersByTimeAsync(FIRST_MS + REPEAT_MS * 2);
+    expect(reports).toHaveLength(0);
+
+    // Stays silent however long the child runs (the card's own 24-minute run).
+    watchdog.noteTurnSettled("Still waiting on the child.");
+    await vi.advanceTimersByTimeAsync(FIRST_MS + REPEAT_MS * 2);
+    expect(reports).toHaveLength(0);
+
+    // The children->empty transition arms the fresh window exactly once.
+    watchdog.noteBackgroundChildrenChanged(0);
+    await vi.advanceTimersByTimeAsync(FIRST_MS - 1);
+    expect(reports).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reports.map((r) => r.reminderCount)).toEqual([1]);
+
+    watchdog.dispose();
+  });
+
+  it("the reminder chain pauses on a live child mid-chain and resumes from the settle after it empties", async () => {
+    vi.useFakeTimers();
+    const { reports, onIdle } = recorder();
+    const watchdog = supervising(new SupervisorIdleWatchdog(facts(), onIdle));
+
+    watchdog.noteTurnSettled("no marker");
+    await vi.advanceTimersByTimeAsync(FIRST_MS); // reminder 1 fires
+    expect(reports).toHaveLength(1);
+
+    // Reminder 1's own turn settles while a NEW child is already running:
+    // the repeat arm must be suppressed (live child), not scheduled.
+    watchdog.noteBackgroundChildrenChanged(1);
+    watchdog.noteTurnStarted();
+    watchdog.noteTurnSettled("Child 2 dispatched, awaiting report.");
+    await vi.advanceTimersByTimeAsync(REPEAT_MS * 5);
+    expect(reports).toHaveLength(1);
+
+    watchdog.dispose();
+  });
+
   it("an ordinary chat that never had a live detached child is never reminded", async () => {
     vi.useFakeTimers();
     const { reports, onIdle } = recorder();
@@ -277,5 +331,19 @@ describe("SupervisorIdleWatchdog (taskana 4181)", () => {
     expect(SUPERVISOR_IDLE_REPEAT_MS).toBe(10 * 60_000);
     expect(SUPERVISOR_IDLE_ESCALATE_AFTER).toBe(2);
     expect(SUPERVISOR_IDLE_TERMINAL_MARKERS).toEqual(["READY", "BLOCKED", "DONE", "ACCEPT"]);
+  });
+
+  it("resolveSupervisorIdleFirstMs: default on absent/blank, value on valid, warn+default on non-integer and negative (P4)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(resolveSupervisorIdleFirstMs({}, 900_000)).toBe(900_000);
+    expect(resolveSupervisorIdleFirstMs({ ANYCODE_SUPERVISOR_IDLE_MS: "   " }, 900_000)).toBe(900_000);
+    expect(resolveSupervisorIdleFirstMs({ ANYCODE_SUPERVISOR_IDLE_MS: "45000" }, 900_000)).toBe(45_000);
+
+    expect(resolveSupervisorIdleFirstMs({ ANYCODE_SUPERVISOR_IDLE_MS: "yes" }, 900_000)).toBe(900_000);
+    expect(resolveSupervisorIdleFirstMs({ ANYCODE_SUPERVISOR_IDLE_MS: "-5" }, 900_000)).toBe(900_000);
+    expect(warn).toHaveBeenCalledTimes(2);
+
+    warn.mockRestore();
   });
 });
