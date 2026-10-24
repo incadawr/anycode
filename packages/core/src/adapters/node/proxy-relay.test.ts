@@ -375,4 +375,137 @@ describe("proxy relay hardening (review follow-up)", () => {
       upstream.server.close();
     }
   });
+
+  // F8(a): an upstream whose CONNECT reply never terminates its header block
+  // must not grow relay memory unboundedly — past the 16 KiB cap the client
+  // gets a 502 and both sides are torn down.
+  it("a never-terminated CONNECT reply header is cut off at the 16 KiB cap with a 502", async () => {
+    const rambling = http.createServer();
+    rambling.on("connect", (_req, socket: net.Socket) => {
+      // Header bytes forever, never a \r\n\r\n.
+      const interval = setInterval(() => {
+        try {
+          if (socket.writable) {
+            socket.write("X-More: " + "b".repeat(1024) + "\r\n");
+          } else {
+            clearInterval(interval);
+          }
+        } catch {
+          clearInterval(interval); // EPIPE after the relay tore its side down
+        }
+      }, 5);
+      socket.on("close", () => clearInterval(interval));
+      socket.on("error", () => clearInterval(interval));
+      socket.write("HTTP/1.1 999 Never Finishing\r\nX-Filler: " + "a".repeat(64) + "\r\n");
+    });
+    await new Promise<void>((resolve) => rambling.listen(0, "127.0.0.1", resolve));
+    const ramblingPort = (rambling.address() as net.AddressInfo).port;
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${ramblingPort}`);
+    try {
+      const response = await new Promise<string>((resolve, reject) => {
+        const socket = net.connect(relay!.port, "127.0.0.1");
+        const chunks: Buffer[] = [];
+        socket.on("connect", () => socket.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"));
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("close", () => resolve(Buffer.concat(chunks).toString("latin1")));
+        socket.on("error", reject);
+        // Safety net: never hang the suite on a regression that neither 502s nor closes.
+        setTimeout(() => {
+          socket.destroy();
+          resolve(Buffer.concat(chunks).toString("latin1"));
+        }, 5000);
+      });
+      expect(response).toContain("502");
+      expect(response).not.toContain("999");
+    } finally {
+      relay!.close();
+      rambling.closeAllConnections();
+      rambling.close();
+    }
+  });
+
+  // F8(c): a CONNECT refusal that carries body bytes must pass them through
+  // verbatim alongside the status line and headers.
+  it("a non-200 CONNECT answer with body bytes relays the body too", async () => {
+    const refusing = http.createServer();
+    refusing.on("connect", (_req, socket: net.Socket) => {
+      socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nX-Upstream: yes\r\n\r\ncredentials-rejected");
+    });
+    await new Promise<void>((resolve) => refusing.listen(0, "127.0.0.1", resolve));
+    const port = (refusing.address() as net.AddressInfo).port;
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${port}`);
+    try {
+      const { socket, response, rest } = await connectThrough(relay!.port, "example.com:443");
+      // The refusal body may arrive with the header chunk (rest) or as the
+      // next data event; collect whatever follows the header block.
+      const body = await new Promise<string>((resolve) => {
+        if (rest.length > 0) {
+          resolve(rest.toString());
+          return;
+        }
+        socket.once("data", (chunk: Buffer) => resolve(chunk.toString()));
+        socket.once("close", () => resolve(""));
+      });
+      expect(response).toContain("407");
+      expect(body).toContain("credentials-rejected");
+      socket.destroy();
+    } finally {
+      relay!.close();
+      refusing.closeAllConnections();
+      refusing.close();
+    }
+  });
+
+  // F8(e): the smuggling property that matters most — a client-supplied
+  // Proxy-Authorization must never ride along to (or override the relay's
+  // credential at) the upstream. The upstream sees ONLY the relay's value.
+  it("strips a client-supplied Proxy-Authorization end-to-end (the relay's credential is the only one upstream)", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        const req = http.get(
+          {
+            host: "127.0.0.1",
+            port: relay!.port,
+            path: "http://example.com/x",
+            agent: false,
+            headers: { "proxy-authorization": "Basic Y2xpZW50LWZvcmdlZA==" }, // client-forged
+          },
+          (res) => {
+            res.resume();
+            res.on("end", () => resolve("done"));
+          },
+        );
+        req.on("error", reject);
+      });
+      expect(body).toBe("done");
+      const expected = `Basic ${Buffer.from("user:secret").toString("base64")}`;
+      expect(upstream.auth.request).toEqual([expected]); // exactly one, and it is the relay's
+    } finally {
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+
+  // F1 end-to-end companion: the exact-UTF-8 credential parse fix, exercised
+  // through a LIVE relay — the fake upstream must see the base64 of the
+  // original password, not the double-encoded bytes.
+  it("sends the exact UTF-8 Basic credential upstream through a live relay (F1 e2e)", async () => {
+    const upstream = await startFakeUpstream();
+    const encoded = new URL(`http://user:päss@127.0.0.1:${upstream.port}`).toString();
+    const relay = await createProxyRelayForTest(encoded);
+    try {
+      const { socket, response } = await connectThrough(relay!.port, "example.com:443");
+      expect(response).toContain("200");
+      socket.destroy();
+      const expected = `Basic ${Buffer.from("user:päss", "utf8").toString("base64")}`;
+      expect(upstream.auth.connect).toEqual([expected]);
+    } finally {
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
 });
