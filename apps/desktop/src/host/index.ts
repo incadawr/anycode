@@ -214,10 +214,7 @@ import {
   createSkillPort,
   createWebSearchTool,
   loadArchMapEnabled,
-  buildAgentBridgeToolDecl,
-  decodeAgentBridgeCallInput,
   discoverAgentProfiles,
-  runAgentBridgeCall,
   AskCache,
   browserOpenTool,
   browserReadTool,
@@ -291,7 +288,6 @@ import type {
   SystemPromptEnv,
   TelemetryPort,
   TokenUsage,
-  ToolResultPresentation,
   WorktreeControlPort,
   WorkspaceTransition,
 } from "@anycode/core";
@@ -405,6 +401,7 @@ import { resumeClaudeEngine, startClaudeEngine, type ClaudeInitMcpServerStatus }
 import { prepareEngineMcpForward, missingForwardedMcpServerNames } from "./engines/mcp-forward-boot.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
 import { bridgeCallableCatalog, catalogFromProfiles } from "./engines/claude/bridge-catalog.js";
+import { createBridgePresentationStamp } from "./engines/claude/bridge-presentation-stamp.js";
 import { ClaudeMcpBridge } from "./engines/claude/mcp-bridge.js";
 import { projectClaudeHistory } from "./engines/claude/history-projection.js";
 import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./engines/claude/process-ownership.js";
@@ -1588,7 +1585,11 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // (and for detached children's post-turn progress, by design) pushes are
   // no-ops.
   let pushBridgeEvent: ((event: AgentEvent) => void) | undefined;
-  const bridgePresentations = new Map<string, ToolResultPresentation>();
+  // Taskana 4056 review N2: the door's tools/call handler + presentation map
+  // (bridge-presentation-stamp.ts), built inside the catalog block below and
+  // read by the `options` wiring further down — same late-bound-cell shape as
+  // `pushBridgeEvent` directly above.
+  let stamp: ReturnType<typeof createBridgePresentationStamp> | undefined;
   if (args.child === undefined) {
     const discovered = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []));
     for (const problem of discovered.problems) {
@@ -1634,6 +1635,19 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         onDetachedStall: deliverDetachedChildStall,
       });
       claudeChildPort = childPort;
+      // Taskana 4056 review N2: the door's tools/call handler (and the
+      // presentation map it stamps into) lives in bridge-presentation-stamp.ts
+      // now — lifted so its after-abort discipline (an aborted call's LATE
+      // resolve must not stamp past the turn-end sweep) is pinned by a unit
+      // test; index.ts itself is not importable in a test (process.parentPort
+      // at module scope).
+      const door = createBridgePresentationStamp({
+        catalog,
+        resolveCallCatalog: resolveClaudeCatalog,
+        port: childPort,
+        onEvent: (event) => pushBridgeEvent?.(event),
+      });
+      stamp = door;
       mcpBridge = new ClaudeMcpBridge({
         serverName: "anycode",
         // Decorative only (R4 precedent, `appVersion` doc a few hundred
@@ -1648,66 +1662,9 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
           // the TASK.145 delivery path the codex door uses) and the
           // renderer's child_report prompt-queue delivery is engine-agnostic,
           // so a detached child's report reaches this tab as a new turn.
-          const decl = buildAgentBridgeToolDecl(catalog, { detach: true, continueSession: true });
-          return decl === null ? [] : [decl];
+          return door.listTools();
         },
-        callTool: async (name, callArgs, signal, meta) => {
-          if (name !== "agent") {
-            return { text: `AnyCode's MCP bridge has no tool named "${name}"`, isError: true };
-          }
-          if (meta.toolUseId === undefined) {
-            return { text: "AnyCode could not correlate this call to a tool_use id", isError: true };
-          }
-          const input = decodeAgentBridgeCallInput(callArgs);
-          if (input === null) {
-            return {
-              text: "Malformed agent call: description/prompt/agent_type must be non-empty strings",
-              isError: true,
-            };
-          }
-          // TASK.226 план §2.3/Ruling 1: no `wallMs` override — the sync v1
-          // wall is `runAgentBridgeCall`'s own default (SUBAGENT_TIME_BUDGET_MS,
-          // 6h), the SAME stance every other bridge caller takes.
-          // Taskana 4101: resolve the catalog per call (fresh bodies/models,
-          // boot-declared names only); fail-soft to the boot snapshot on a
-          // disk race, mirroring discoverAgentProfiles's own never-throws
-          // posture — a transient re-read failure must not kill the call.
-          let callCatalog: readonly AgentBridgeCatalogEntry[];
-          try {
-            callCatalog = await resolveClaudeCatalog();
-          } catch {
-            callCatalog = catalog;
-          }
-          const result = await runAgentBridgeCall(input, {
-            catalog: callCatalog,
-            port: childPort,
-            spawnToolCallId: meta.toolUseId,
-            signal,
-            // Taskana 4056: live subagent_* events patch the SAME tool_call
-            // card the turn's translator created (the renderer patches by
-            // toolCallId), surfacing mid-turn through the engine's
-            // bridge-event race. Detached children never reach here after
-            // admit — the port does not bridge their post-admit progress —
-            // and a push with no live turn waits in the engine's queue for
-            // the next turn's send barrier (stall notices ride child_report
-            // instead, via onDetachedStall above).
-            // Codex-door parity (dynamic-tool-bridge.ts): once the call is
-            // aborted (Stop / CLI cancel) its late progress is dropped, not
-            // queued into the next turn's send barrier as a stale card patch.
-            onEvent: (event) => {
-              if (signal?.aborted !== true) pushBridgeEvent?.(event);
-            },
-          });
-          // The MCP `tools/call` response itself has no room for a card
-          // payload (`{text, isError}` only — plan §3.1); the durable
-          // snapshot rides `takePresentation` below instead, consumed
-          // exactly once by the paired top-level `tool_result` for this
-          // SAME tool_use id (event-translator.ts's own doc).
-          if (result.presentation !== undefined) {
-            bridgePresentations.set(meta.toolUseId, result.presentation);
-          }
-          return { text: result.text, isError: result.isError };
-        },
+        callTool: door.callTool,
       });
     }
   } else {
@@ -1762,7 +1719,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     ...(processOwnership !== undefined ? { processOwnership } : {}),
     ...(claudeMcpConfigPath !== null ? { mcpConfigPath: claudeMcpConfigPath } : {}),
     ...(claudeBootNotices.length > 0 ? { bootNotices: claudeBootNotices } : {}),
-    ...(mcpBridge !== undefined
+    ...(mcpBridge !== undefined && stamp !== undefined
       ? {
           mcpBridge,
           // Taskana 4056 cross-review M2: the same switch that announces the
@@ -1770,18 +1727,12 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
           // `mcp__anycode__agent` ONLY in sessions where the tool exists (a
           // bridge-less boot's argv stays byte-identical to pre-4056).
           agentBridgePrompt: CLAUDE_AGENT_BRIDGE_PROMPT,
-          takePresentation: (toolUseId: string) => {
-            const presentation = bridgePresentations.get(toolUseId);
-            bridgePresentations.delete(toolUseId);
-            return presentation;
-          },
+          takePresentation: stamp.takePresentation,
           // Taskana 4056 cross-review P1: the engine's turn-end sweep for
           // presentations whose consuming tool_result never arrived (a
           // cancelled/dying turn) — without this, one map entry per aborted
           // bridge call would live for the process's lifetime.
-          dropPresentations: (toolUseIds: readonly string[]) => {
-            for (const id of toolUseIds) bridgePresentations.delete(id);
-          },
+          dropPresentations: stamp.dropPresentations,
         }
       : {}),
   };
