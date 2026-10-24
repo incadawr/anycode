@@ -237,6 +237,12 @@ sweep with several query variants, `fetch-sources` over the most promising
 URLs, and a `synthesize` step that writes one cited report from what was
 actually fetched.
 
+WebSearch is not part of any persona's default tool set — it reaches a child
+only when that child asks for it explicitly. The `search-wide` step does so
+through its own `tools: ["WebSearch"]` entry, the opt-in mechanism workflow
+steps use for extra tools; a step (or md-profile, via its `tools:` frontmatter)
+that names WebSearch gets the tool when a backend is configured.
+
 WebSearch requires a configured backend in the `webSearch` section of
 `.anycode/config.json` — `brave` (needs `apiKeyEnv`, the name of the
 environment variable holding the API key) or `searxng` (self-hosted, the free
