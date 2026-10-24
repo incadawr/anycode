@@ -48,6 +48,7 @@
   "resultSubtypes": {
     "live": ["success", "error_during_execution"],
     "typedOnly": ["error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"],
+    "hostTolerantRead": "TASK.92 (cross-review F6): compactNow deliberately accepts any success-PREFIXED subtype beyond the pinned 'success' (e.g. a future 'success_clears' variant) and fails closed on a result that carries NO subtype at all (error 'unknown'). This is a compensating control for an expected-but-unpinned variant, not evidence of a new live subtype — the pin's 'live' list above stays the only observed set.",
     "requiredKeyPaths": [
       "subtype:string",
       "is_error:boolean",
