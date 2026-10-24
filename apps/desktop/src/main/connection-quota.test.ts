@@ -226,6 +226,27 @@ describe("recordConnectionQuota — 30-second throttle with trailing flush", () 
     expect((await persistedLine())?.observedAt).toBe(observedAtAfterFlush);
   });
 
+  // Taskana 4090 cross-review A4: throttle state is per connection, so a write
+  // in flight for one connection must neither delay nor suppress a sibling's
+  // observation landing in the same window.
+  it("two connections inside the same window each persist their own observation", async () => {
+    await writeSettingsFixture({
+      connections: [
+        { id: "c1", providerId: "zai" },
+        { id: "c2", providerId: "zai" },
+      ],
+    });
+    const [first, second] = await Promise.all([
+      recordConnectionQuota(deps, "c1", { usedPercent: 10 }, "requests"),
+      recordConnectionQuota(deps, "c2", { usedPercent: 70 }, "requests"),
+    ]);
+    expect(first).toBe(true);
+    expect(second).toBe(true);
+    const connections = await readConnections();
+    expect(connections[0]?.lastQuota).toMatchObject({ usedPercent: 10 });
+    expect(connections[1]?.lastQuota).toMatchObject({ usedPercent: 70 });
+  });
+
   it("read-only settings resolve false and never write", async () => {
     const raw = JSON.parse(await readFile(settingsPath, "utf8"));
     raw.version = 999; // newer-than-CURRENT ⇒ readOnly
