@@ -6276,6 +6276,48 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
       text: "Effective sandbox is weaker than the selected preset.",
     });
   });
+
+  // Taskana 4068 / TASK.98 (review 23.08 narrowing): the in-session engine
+  // swap reducers. engine_switched patches the identity chip in place (the
+  // wire carries only ids; the full projection re-projects on the next
+  // ui_ready); engine_switch_failed is a non-blocking refusal toast.
+  it("engine_switched patches engine.id in place and clears any stale pendingEngineChange", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+    // A pending change for the OLD engine that can never apply post-swap.
+    store.getState().applyHostMessage({ type: "engine_settings_changed", activePresetId: "read-only", state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().pendingEngineChange).toEqual({ activePresetId: "read-only" });
+
+    store.getState().applyHostMessage({ type: "engine_switched", requestId: "sw1", engine: "claude", previousEngine: "codex" });
+
+    expect(store.getState().engine?.id).toBe("claude");
+    // The rest of the projection is untouched here (host_ready re-projects it
+    // on the next handshake — the switch message deliberately carries no
+    // capabilities snapshot).
+    expect(store.getState().engine?.model?.current).toBe("gpt-5.6-terra");
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("engine_switched on a core store (engine null) is a no-op — nothing to patch", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+
+    store.getState().applyHostMessage({ type: "engine_switched", requestId: "sw2", engine: "codex", previousEngine: "core" });
+
+    expect(store.getState().engine).toBeNull();
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
+  it("engine_switch_failed pushes the refusal reason on the one-slot notice channel and changes nothing else", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+
+    store.getState().applyHostMessage({ type: "engine_switch_failed", requestId: "sw3", reason: "codex not signed in" });
+
+    expect(store.getState().notice).toEqual({ kind: "engine_switch_failed", text: "codex not signed in" });
+    expect(store.getState().engine?.id).toBe("codex");
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
 });
 
 describe("desktop store — engine_quota / engine_session_tokens (TASK.51, cut §3.4/§5.3/§6, C-bug-1)", () => {

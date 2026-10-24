@@ -94,6 +94,12 @@ export interface SessionEngine {
   steeringStatus?(): { supported: boolean; ready: boolean; nativeTurnId?: string };
   steer?(input: string): Promise<{ turnId: string }>;
   historyItems(): readonly HistoryItem[];
+  /**
+   * Fresh read of the engine's live transcript (codex: `thread/read`), for
+   * callers that need every turn of this launch rather than the boot snapshot
+   * `historyItems()` returns. Optional; Taskana 4068 engine switch prefers it.
+   */
+  readTranscript?(): Promise<readonly HistoryItem[]>;
   replaceHistory?(items: HistoryItem[]): void;
   contextBreakdown?(): ContextBreakdown;
   /**

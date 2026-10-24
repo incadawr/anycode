@@ -613,7 +613,14 @@ export type NoticeKind =
    * applied and the session keeps running on its current connection, so the
    * refusal has to be visible — silence would read as a switch that happened.
    */
-  | "rebind_failed";
+  | "rebind_failed"
+  /**
+   * Taskana 4068: the host refused an `engine_switch_request` (turn running,
+   * child attached, same engine, switch factory unavailable or failed). The
+   * session keeps running on the current engine — the refusal must be visible,
+   * silence would read as a switch that happened (same family as rebind_failed).
+   */
+  | "engine_switch_failed";
 
 /** Status-bar projection of the `context_usage` event (design §2.5/§2.12) — last-known reading, minimal. */
 export interface ContextUsage {
@@ -4507,6 +4514,29 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // config change, so the composer re-gates attachments without a
             // model switch or a host restart.
             set({ imageFallback: message.imageFallback });
+            return;
+          case "engine_switched":
+            // Taskana 4068: the host swapped the live engine in place between
+            // turns. The wire message carries only the ids (the full
+            // EnginePresentation is host-side state); the honest renderer
+            // update is the identity chip — patch `engine.id` in place, keep
+            // the rest of the projection (capabilities from the OLD engine
+            // stay only until the next ui_ready re-projects host_ready from
+            // the new engine; the host also legally omits the model/permissions
+            // blocks there after a swap, §7 Q2). A stale pendingEngineChange
+            // for the old engine can never apply now — cleared here, same as
+            // a respawn would.
+            set((state) => ({
+              ...(state.engine !== null ? { engine: { ...state.engine, id: message.engine } } : {}),
+              pendingEngineChange: null,
+            }));
+            return;
+          case "engine_switch_failed":
+            // Taskana 4068: non-silent refusal — the user asked for a switch
+            // that did not happen (turn running / child attached / same
+            // engine / factory unavailable or failed). Toast-only, nothing
+            // else changes: the session keeps running exactly where it was.
+            set({ notice: { kind: "engine_switch_failed", text: message.reason } });
             return;
           default: {
             const _exhaustive: never = message;

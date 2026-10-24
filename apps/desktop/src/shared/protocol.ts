@@ -48,6 +48,7 @@ import type {
 } from "@anycode/core";
 import type { LspServerStatus } from "@anycode/core";
 import type { EngineId } from "./engines.js";
+import { ENGINE_IDS } from "./engines.js";
 import type { UsageLimitNotice } from "./usage-limit.js";
 // TASK.145 срез 3 §2(a): the exact childSessionId shape bound every producer
 // on the host<->main child-session wire already validates against — reused
@@ -410,6 +411,14 @@ export type UiToHostMessage =
   // time, never a raw config payload from the renderer.
   | { type: "set_engine_preset"; presetId: string }
   | { type: "set_engine_effort"; effort: string }
+  // Taskana 4068 — swap the active engine between turns; history transplant is
+  // NOT part of this message (the canonical transcript stays; the new engine's
+  // native context starts empty and receives a bundled first prompt).
+  // Untrusted -> validated by `engineSwitchRequestSchema` below (fail-closed);
+  // honored only between turns (busy/child-attached refusals get an
+  // `engine_switch_failed` reply — the switch surface is non-silent, mirror of
+  // rewind_request's discipline).
+  | { type: "engine_switch_request"; requestId: string; engine: EngineId }
   // Slice 5.7 (design slice-5.7-cut.md §2.1): one user-initiated git command.
   // Untrusted -> validated by `gitCommandMessageSchema` below (fail-closed). NO
 
@@ -744,6 +753,17 @@ export type HostToUiMessage =
       state?: "pending" | "applied";
       appliesFrom: "next_turn";
     }
+  // Taskana 4068: host acknowledges a successful in-place engine swap. Trusted
+  // host->renderer, no zod (only the untrusted UiToHostMessage direction is
+  // validated), precedent model_changed above. Emitted only AFTER the new
+  // engine is live and the old one disposed, so receiving it means every later
+  // message flows through the replacement engine.
+  | { type: "engine_switched"; requestId: string; engine: EngineId; previousEngine: EngineId }
+  // Taskana 4068: non-silent refusal for engine_switch_request — mirror of
+  // rewind_result's failure shape (the UI must be able to show WHY the switch
+  // did not happen: turn running, child attached, same engine, factory absent
+  // or the factory's own error e.g. "codex not signed in").
+  | { type: "engine_switch_failed"; requestId: string; reason: string }
   // Phase 4 slice 4.4-T (design feature-session-titles.md §4): emitted once
   // the heuristic derives a title from the first user message, and again if
   // the async tier-2 LLM refinement upgrades it. Like `mode_changed` above,
@@ -977,6 +997,19 @@ export const setEngineEffortSchema = z
   .object({ type: z.literal("set_engine_effort"), effort: z.string().min(1).max(32) })
   .strict();
 
+// Taskana 4068: untrusted engine_switch_request. Mirrors setEnginePresetSchema's
+// bounded-length discipline; `engine` is validated against ENGINE_IDS (the same
+// table isEngineId uses) so a hostile renderer cannot ship an unknown engine id,
+// let alone a raw factory/config object. The host re-checks id validity against
+// the live factory at route() time.
+export const engineSwitchRequestSchema = z
+  .object({
+    type: z.literal("engine_switch_request"),
+    requestId: z.string().min(1).max(128),
+    engine: z.enum(ENGINE_IDS),
+  })
+  .strict();
+
 // ── git (slice 5.7): untrusted UiToHostMessage side; semantics FROZEN incl. caps.
 // DRIFT-LOCK: GIT_DIFF_TARGETS is the single source of truth for the diff.target
 // enum AND is `satisfies readonly GitDiffTarget[]`, so if core renames/removes a
@@ -1146,6 +1179,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   setModelSchema,
   setEnginePresetSchema,
   setEngineEffortSchema,
+  engineSwitchRequestSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   contextBreakdownRequestSchema,
