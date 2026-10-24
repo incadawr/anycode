@@ -2227,6 +2227,53 @@ describe("model-pill routes (design/slice-P7.15-cut.md §2.6 W4)", () => {
     expect(calls[0]).toContain('["tab a"]');
   });
 
+  it("401s GET /tabs/:tabId/composer-queue without a token (Taskana 4087 / TASK.55)", async () => {
+    const h = await boot();
+    const res = await fetch(url(h, "/tabs/tab-a/composer-queue"));
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /tabs/:tabId/composer-queue -> composerQueueState (Taskana 4087 / TASK.55)", async () => {
+    const facadeResult = {
+      ok: true,
+      running: true,
+      connection: "ready",
+      inputEnabled: true,
+      placeholder: "Queue a message… (Esc to stop)",
+      draft: "hello",
+      enqueueWouldFire: true,
+      queueLength: 1,
+      paused: false,
+      draining: false,
+    };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/tabs/tab-a/composer-queue"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"composerQueueState"');
+    expect(calls[0]).toContain('["tab-a"]');
+  });
+
+  it("GET /tabs/:tabId/composer-queue decodes a URL-encoded tabId (Taskana 4087 / TASK.55)", async () => {
+    const { window, calls } = fakeWindowCapture({
+      ok: true,
+      running: false,
+      connection: "ready",
+      inputEnabled: true,
+      placeholder: null,
+      draft: "",
+      enqueueWouldFire: false,
+      queueLength: 0,
+      paused: false,
+      draining: false,
+    });
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, `/tabs/${encodeURIComponent("tab a")}/composer-queue`), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(calls[0]).toContain('["tab a"]');
+  });
+
   it("401s POST /tabs/:tabId/model-pill/pick without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/model-pill/pick"), {

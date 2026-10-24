@@ -2,7 +2,10 @@
  * Message input + turn controls (design §5, restructured in UI-5). Sends
  * `user_message` / `cancel_turn` / `set_mode` through the active tab's
  * connection (Phase-2 §4.3: `useTabSend`, the migrated equivalent of the old
- * singleton `sendToHost`). The composer is blocked whenever a turn is running;
+ * singleton `sendToHost`). While a turn is running the composer STAYS
+ * enabled: a send enqueues into the per-tab prompt queue (F15,
+ * `shouldEnqueue`/`handleSend` below) instead of dispatching directly; only
+ * the connection gate (`ready`) disables the textarea;
  * the mode switcher is blocked only while the connection isn't `ready`
  * (TASK.37: set_mode is valid mid-turn and applies to the next permission
  * decision).

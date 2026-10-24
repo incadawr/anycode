@@ -64,6 +64,8 @@ import {
   type BinaryTrustDialogDom,
   type BinaryTrustDialogState,
   type TrustedBinariesSectionDom,
+  type ComposerSlashDom,
+  type ComposerQueueState,
   type SidebarDom,
   type SidebarGroupDomFacts,
   installReplayHotkeys,
@@ -2362,6 +2364,213 @@ describe("automation facade — prompt queue (design/slice-P7.14-cut.md §5 W3)"
     expect(snap.states[tabId]?.promptQueue).toEqual([{ id: expect.any(String), text: "with image", imageCount: 1 }]);
     expect(snap.states[tabId]?.queuePaused).toBe(false);
     assertNoFunctions(snap.states[tabId]?.promptQueue, "promptQueue");
+  });
+});
+
+describe("automation facade — composerQueueState (Taskana 4087 / TASK.55)", () => {
+  /** The running-mode placeholder Composer actually renders (Composer.tsx's textarea placeholder). */
+  const RUNNING_PLACEHOLDER = "Queue a message… (Esc to stop)";
+
+  /**
+   * Minimal `ComposerSlashDom` fake for the queue probe: a live-updatable
+   * textarea double plus the two queue-affordance accessors. Supplied as
+   * positional DI arg 16 (same slot automation.test.ts:732 pins).
+   */
+  function fakeComposerDom(over: Partial<ComposerSlashDom> = {}): ComposerSlashDom {
+    let value = "";
+    let disabled = false;
+    const placeholder = RUNNING_PLACEHOLDER;
+    const textarea = (): HTMLTextAreaElement => ({ value, disabled, placeholder }) as HTMLTextAreaElement;
+    return {
+      textarea,
+      textareaDisabled: () => disabled,
+      textareaPlaceholder: () => placeholder,
+      menuMounted: () => false,
+      rows: () => [],
+      ...over,
+    };
+  }
+
+  /** `setupReadyTab` + facade over a fake composer DOM; explicit active-tab set for clarity. */
+  function buildQueueFacade(over: Partial<ComposerSlashDom> = {}) {
+    const fixture = setupReadyTab();
+    fixture.tabsStore.getState().setActiveTab(fixture.tabId);
+    const facade = createAutomationFacade(
+      fixture.registry,
+      fixture.tabsStore,
+      stubBridge(),
+      undefined, // 4  dom
+      undefined, // 5  todoPanelDom
+      undefined, // 6  startScreenDom
+      undefined, // 7  modelPillDom
+      undefined, // 8  settingsStore
+      undefined, // 9  settingsDom
+      undefined, // 10 ctxPopoverDom
+      undefined, // 11 agentCardDom
+      undefined, // 12 mcpPaneDom
+      undefined, // 13 skillsPaneDom
+      undefined, // 14 subagentsPaneDom
+      undefined, // 15 profilePaneDom
+      fakeComposerDom(over), // 16 composerSlashDom
+    );
+    return { ...fixture, facade };
+  }
+
+  it("idle+ready tab: queueing is NOT armed, input enabled, all queue facts empty/false", () => {
+    const { facade, tabId } = buildQueueFacade();
+
+    expect(facade.composerQueueState(tabId)).toEqual({
+      ok: true,
+      running: false,
+      connection: "ready",
+      inputEnabled: true,
+      placeholder: RUNNING_PLACEHOLDER,
+      draft: "",
+      enqueueWouldFire: false,
+      queueLength: 0,
+      paused: false,
+      draining: false,
+    });
+  });
+
+  it("TASK.55 DoD pin: a running turn arms the enqueue route while the input STAYS enabled (submit would queue, not be lost)", () => {
+    const { facade, tabId, port } = buildQueueFacade();
+    port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
+
+    const state = facade.composerQueueState(tabId);
+
+    expect(state).toMatchObject({
+      ok: true,
+      running: true,
+      enqueueWouldFire: true,
+      queueLength: 0,
+      paused: false,
+      draining: false,
+      inputEnabled: true,
+    });
+  });
+
+  it("running with two queued prompts: queueLength 2, enqueue still armed (a third would queue), then FIFO drain a→b through the REAL drainer", () => {
+    const { facade, tabId, port } = buildQueueFacade();
+    port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
+    expect(facade.queuePrompt(tabId, "a").ok).toBe(true);
+    expect(facade.queuePrompt(tabId, "b").ok).toBe(true);
+
+    const before = facade.composerQueueState(tabId);
+    expect(before).toMatchObject({ queueLength: 2, enqueueWouldFire: true, running: true, draining: false });
+
+    // turn ends cleanly -> the drainer pops "a" onto the wire (FIFO) into the
+    // in-flight slot; "b" stays queued behind it.
+    port.emit({ type: "agent_event", turnId: "t0", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    const sentTexts = port.sent
+      .filter((m) => (m as { type: string }).type === "user_message")
+      .map((m) => (m as { text: string }).text);
+    expect(sentTexts).toEqual(["a"]);
+    const midDrain = facade.composerQueueState(tabId);
+    expect(midDrain).toMatchObject({ queueLength: 1, draining: true, enqueueWouldFire: true });
+
+    // The drain's own turn: started -> running, then loop_end -> "b" drains.
+    // The drain's requestId is the most recent user_message on the wire ("a"'s
+    // drain) — matching it is what clears queueInFlight on turn_started.
+    const drainRequestId = port.sent
+      .filter((m) => (m as { type: string }).type === "user_message")
+      .map((m) => (m as { requestId: string }).requestId)
+      .at(-1)!;
+    port.emit({ type: "turn_started", requestId: drainRequestId, turnId: "t1" });
+    port.emit({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "completed", turns: 1 } });
+
+    const allSentTexts = port.sent
+      .filter((m) => (m as { type: string }).type === "user_message")
+      .map((m) => (m as { text: string }).text);
+    expect(allSentTexts).toEqual(["a", "b"]); // FIFO preserved end-to-end
+
+    // "b"'s drain sits in the in-flight window until ITS turn_started
+    // arrives; ack it and end the turn so the tab returns fully quiet.
+    const drainRequestIdB = port.sent
+      .filter((m) => (m as { type: string }).type === "user_message")
+      .map((m) => (m as { requestId: string }).requestId)
+      .at(-1)!;
+    port.emit({ type: "turn_started", requestId: drainRequestIdB, turnId: "t2" });
+    port.emit({ type: "agent_event", turnId: "t2", event: { type: "loop_end", reason: "completed", turns: 1 } });
+
+    const drained = facade.composerQueueState(tabId);
+    expect(drained).toMatchObject({ queueLength: 0, draining: false, paused: false, running: false });
+  });
+
+  it("in-flight window pin: turn momentarily idle with a drained item unacknowledged — a submit would still enqueue", () => {
+    const { facade, tabId, registry } = buildQueueFacade();
+    registry.getStore(tabId)!.setState({
+      queueInFlight: { requestId: "in-flight", item: { id: "q1", text: "x", images: [] } },
+    });
+
+    const state = facade.composerQueueState(tabId);
+
+    expect(state).toMatchObject({ running: false, draining: true, enqueueWouldFire: true });
+  });
+
+  it("anomalous loop_end pauses the queue (held item, nothing drains); queueResume clears the pause and the drainer then delivers FIFO", () => {
+    const { facade, tabId, port } = buildQueueFacade();
+    port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
+    facade.queuePrompt(tabId, "held");
+    port.emit({ type: "agent_event", turnId: "t0", event: { type: "loop_end", reason: "error", turns: 1 } });
+
+    const paused = facade.composerQueueState(tabId);
+    // After the errored end the turn is idle with nothing in flight, so a NEW
+    // submit would take the DIRECT path (shouldEnqueue("idle", null) ===
+    // false, the §3.4 pin) — the pause holds the QUEUED item, it does not
+    // re-route fresh sends. The held item stays off the wire.
+    expect(paused).toMatchObject({ paused: true, queueLength: 1, enqueueWouldFire: false, running: false });
+    expect(port.sent.filter((m) => (m as { type: string }).type === "user_message")).toEqual([]);
+
+    // Resume: pause clears and the drainer immediately dispatches the held
+    // item onto the wire ("don't send silently" is over — the user resumed).
+    expect(facade.queueResume(tabId)).toEqual({ ok: true });
+    const resumed = facade.composerQueueState(tabId);
+    expect(resumed).toMatchObject({ paused: false, queueLength: 0, draining: true });
+    const sentTexts = port.sent
+      .filter((m) => (m as { type: string }).type === "user_message")
+      .map((m) => (m as { text: string }).text);
+    expect(sentTexts).toEqual(["held"]);
+  });
+
+  it("refuses tab_not_active for a registered-but-background tab", () => {
+    const { facade, registry, tabsStore, port } = buildQueueFacade();
+    registry.registerPort("tab-b", "/ws/b", asPort(port));
+    tabsStore.getState().setActiveTab("tab-a");
+
+    expect(facade.composerQueueState("tab-b")).toEqual({ ok: false, reason: "tab_not_active" });
+  });
+
+  it("an unknown tabId reports tab_not_active (the active-tab guard runs first, slashMenuState's exact order — unknown_tab is unreachable for this probe)", () => {
+    const { facade } = buildQueueFacade();
+
+    // With the active tab being "tab-a", a never-registered id fails the
+    // active-tab equality check before any registry lookup — the same
+    // structural refusal every composer-scoped probe (slashMenuState,
+    // composerType, composerKey) returns for a foreign id.
+    expect(facade.composerQueueState("ghost")).toEqual({ ok: false, reason: "tab_not_active" });
+  });
+
+  it("unmounted textarea is a valid reading, not an error: inputEnabled/placeholder null, draft empty", () => {
+    const { facade, tabId } = buildQueueFacade({
+      textarea: () => null,
+      textareaDisabled: () => null,
+      textareaPlaceholder: () => null,
+    });
+
+    const state = facade.composerQueueState(tabId);
+
+    expect(state).toMatchObject({ ok: true, inputEnabled: null, placeholder: null, draft: "" });
+  });
+
+  it("TASK.102 §10.15.1 pin: a child surface ALWAYS direct-sends — enqueue is never armed there", () => {
+    const { facade, tabId, port, registry } = buildQueueFacade();
+    port.emit({ type: "turn_started", requestId: "r0", turnId: "t0" });
+    registry.getStore(tabId)!.setState({ childSurface: true });
+
+    const state = facade.composerQueueState(tabId);
+
+    expect(state).toMatchObject({ ok: true, running: true, enqueueWouldFire: false });
   });
 });
 

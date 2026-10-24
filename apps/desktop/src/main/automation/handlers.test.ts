@@ -62,6 +62,7 @@ import {
   queueDelete,
   queueResume,
   queueClear,
+  composerQueueState,
   modelPillState,
   modelPillPick,
   agentCardState,
@@ -947,6 +948,14 @@ describe("prompt-queue thin facade commands forward method + args (design/slice-
     const deps = fakeDeps();
     await queueClear(deps, "tab-a");
     expect(deps.callFacade).toHaveBeenCalledWith("queueClear", ["tab-a"]);
+  });
+});
+
+describe("composerQueueState thin facade command (Taskana 4087)", () => {
+  it("composerQueueState -> callFacade('composerQueueState', [tabId])", async () => {
+    const deps = fakeDeps();
+    await composerQueueState(deps, "tab-a");
+    expect(deps.callFacade).toHaveBeenCalledWith("composerQueueState", ["tab-a"]);
   });
 });
 
