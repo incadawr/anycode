@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BASH_RISK_PLAQUE, bashRiskPlaque, bashWriteCapablePlaque } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CODEX_APPROVAL_ERROR_CODE, CodexApprovalBridge, STDIN_WRITE_REASON, type ActiveCodexTurn } from "./approval-bridge.js";
@@ -314,6 +315,89 @@ describe("CodexApprovalBridge — classifier-derived metadata (TASK.184)", () =>
     await flush();
     expect(ask(emitted).metadata.name).toBe("CodexExec");
     broker.handleResponse(ask(emitted).requestId, "deny");
+    await flush();
+  });
+});
+
+/**
+ * Taskana 4070: a Codex `commandExecution` approval renders the SAME
+ * per-command risk plaque a core Bash ask gets in the modal. The bridge's
+ * decoded ask (toolName CodexExec + input.command) is exactly what the modal's
+ * describePermissionAsk reads, so these pin the render at that boundary — the
+ * plaque each of the three classes of command produces, plus the argv-array
+ * wire shape (joined for classification/display only). Presentation only: the
+ * decision still goes through the broker.
+ */
+describe("CodexApprovalBridge — risk plaque for commandExecution approvals (Taskana 4070)", () => {
+  it("a read-only command renders the readOnly plaque", async () => {
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: "git status" }), responder());
+    await flush();
+    const presented = ask(emitted);
+    expect(bashRiskPlaque("CodexExec", presented.input)).toBe(BASH_RISK_PLAQUE.readOnly);
+    broker.handleResponse(presented.requestId, "deny");
+    await flush();
+  });
+
+  it("sudo, bash -c and /bin/rm render the write-capable plaque naming the binary (never the softer note)", async () => {
+    for (const [cmd, binary] of [
+      ["sudo rm -rf /", "sudo"],
+      ["bash -c 'rm -rf /'", "bash"],
+      ["/bin/rm -rf /", "/bin/rm"],
+    ] as const) {
+      const { bridge, broker, emitted } = rig();
+      bridge.handle(command({ command: cmd }), responder());
+      await flush();
+      const presented = ask(emitted);
+      expect(presented.input).toMatchObject({ command: cmd }); // displayed as sent
+      expect(bashRiskPlaque("CodexExec", presented.input)).toBe(bashWriteCapablePlaque(binary));
+      broker.handleResponse(presented.requestId, "deny");
+      await flush();
+    }
+  });
+
+  it("a shell expression shows no plaque (the raw command is the honest presentation)", async () => {
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: "cat f | tee out" }), responder());
+    await flush();
+    const presented = ask(emitted);
+    expect(bashRiskPlaque("CodexExec", presented.input)).toBeNull();
+    broker.handleResponse(presented.requestId, "deny");
+    await flush();
+  });
+
+  it("an argv-array command is joined for display/classification only — the read-only verdict still applies", async () => {
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: ["git", "status"] }), responder());
+    await flush();
+    const presented = ask(emitted);
+    expect(presented.input).toMatchObject({ command: "git status" }); // joined, shown as one line
+    expect(presented.metadata).toMatchObject({ readOnly: true, riskLevel: "low" }); // TASK.184 applied to the joined form
+    expect(bashRiskPlaque("CodexExec", presented.input)).toBe(BASH_RISK_PLAQUE.readOnly);
+    broker.handleResponse(presented.requestId, "deny");
+    await flush();
+  });
+
+  it("an argv-array write-capable command joins for classification and gets the write-capable plaque", async () => {
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: ["sudo", "rm", "-rf", "/"] }), responder());
+    await flush();
+    const presented = ask(emitted);
+    expect(presented.input).toMatchObject({ command: "sudo rm -rf /" });
+    expect(bashRiskPlaque("CodexExec", presented.input)).toBe(bashWriteCapablePlaque("sudo"));
+    broker.handleResponse(presented.requestId, "deny");
+    await flush();
+  });
+
+  it("a non-string, non-array command degrades to the fail-closed default (no command, no plaque)", async () => {
+    const { bridge, broker, emitted } = rig(undefined, { ...ACTIVE, items: new TurnItemIndex() });
+    bridge.handle(command({ command: 17 }), responder());
+    await flush();
+    const presented = ask(emitted);
+    expect(presented.input).not.toHaveProperty("command");
+    expect(presented.metadata).toMatchObject({ readOnly: false, riskLevel: "high" });
+    expect(bashRiskPlaque("CodexExec", presented.input)).toBeNull();
+    broker.handleResponse(presented.requestId, "deny");
     await flush();
   });
 });

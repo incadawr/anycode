@@ -16,6 +16,7 @@ import {
 } from "@anycode/core/permissions/safe-command";
 import {
   BASH_RISK_PLAQUE,
+  NEUTRAL_RISK_LABEL,
   PLAN_PREVIEW_MAX_CHARS,
   UNKNOWN_SHELL_HINT,
   alwaysAllowCheckboxText,
@@ -27,6 +28,7 @@ import {
   canRememberPermission,
   describePermissionAsk,
   formatPermissionTitle,
+  neutralRiskLabelFor,
   suggestAlwaysAllowPattern,
 } from "./PermissionModal.js";
 
@@ -737,5 +739,88 @@ describe("scoped pattern survives the generic sanitizers untouched (TASK.36)", (
         remember: { pattern: scoped },
       });
     }
+  });
+});
+
+/**
+ * Taskana 4070 follow-up: the plaque now covers a CodexExec ask (the Codex
+ * bridge's name for a `commandExecution` approval), and a core-engine Bash
+ * ask whose command the classifier PROVES read-only gets a NEUTRAL header
+ * instead of the static "High risk"/"Destructive" badge — the plaque and the
+ * header must never contradict each other. Presentation only: the metadata
+ * object, the decision and the wire are untouched.
+ */
+describe("describePermissionAsk — CodexExec plaque (Taskana 4070)", () => {
+  it("a read-only Codex command carries the readOnly plaque", () => {
+    expect(describePermissionAsk("CodexExec", { command: "git status" }).plaque).toBe(BASH_RISK_PLAQUE.readOnly);
+  });
+
+  it("sudo, bash -c and /bin/rm carry the write-capable plaque naming the binary", () => {
+    for (const [command, binary] of [
+      ["sudo rm -rf /", "sudo"],
+      ["bash -c 'rm -rf /'", "bash"],
+      ["/bin/rm -rf /", "/bin/rm"],
+    ] as const) {
+      expect(bashRiskPlaque("CodexExec", { command })).toBe(bashWriteCapablePlaque(binary));
+    }
+  });
+
+  it("a Codex shell expression shows no plaque", () => {
+    expect(describePermissionAsk("CodexExec", { command: "cat f | tee out" }).plaque).toBeNull();
+  });
+
+  it("an argv-array command (already joined by the bridge) classifies like the string form", () => {
+    expect(bashRiskPlaque("CodexExec", { command: "git status" })).toBe(
+      bashRiskPlaque("CodexExec", { command: "git status" }),
+    );
+  });
+});
+
+describe("describePermissionAsk — header neutralisation (Taskana 4070)", () => {
+  const HIGH_DESTRUCTIVE = { riskLevel: "high" as const, destructive: true };
+  const LOW_SAFE = { riskLevel: "low" as const, destructive: false };
+
+  it("a classifier-proven read-only command under high/destructive metadata gets the neutral label, not 'High risk'", () => {
+    const presentation = describePermissionAsk("Bash", { command: "git status" }, HIGH_DESTRUCTIVE);
+    expect(presentation.plaque).toBe(BASH_RISK_PLAQUE.readOnly);
+    expect(presentation.neutralRiskLabel).toBe(NEUTRAL_RISK_LABEL);
+    expect(presentation.neutralRiskLabel).not.toBe("High risk");
+  });
+
+  it("sudo, bash -c and /bin/rm keep the high/destructive header — their plaque says write-capable", () => {
+    for (const command of ["sudo rm -rf /", "bash -c 'rm -rf /'", "/bin/rm -rf /"]) {
+      const presentation = describePermissionAsk("Bash", { command }, HIGH_DESTRUCTIVE);
+      expect(presentation.plaque).toContain("can write or execute");
+      expect(presentation.neutralRiskLabel).toBeNull();
+    }
+  });
+
+  it("a read-only pipeline is neutralised too (every segment passed the classifier)", () => {
+    const presentation = describePermissionAsk("Bash", { command: "ls | wc -l" }, HIGH_DESTRUCTIVE);
+    expect(presentation.plaque).toBe(BASH_RISK_PLAQUE.readOnly);
+    expect(presentation.neutralRiskLabel).toBe(NEUTRAL_RISK_LABEL);
+  });
+
+  it("an unknown or write-capable command keeps the metadata-driven badge", () => {
+    expect(describePermissionAsk("Bash", { command: "mytool build ." }, HIGH_DESTRUCTIVE).neutralRiskLabel).toBeNull();
+    expect(describePermissionAsk("Bash", { command: "pnpm install" }, HIGH_DESTRUCTIVE).neutralRiskLabel).toBeNull();
+  });
+
+  it("a metadata-low ask (e.g. the Codex bridge's de-risked presentation) is NOT neutralised — it already agrees", () => {
+    const presentation = describePermissionAsk("CodexExec", { command: "git status" }, LOW_SAFE);
+    expect(presentation.plaque).toBe(BASH_RISK_PLAQUE.readOnly);
+    expect(presentation.neutralRiskLabel).toBeNull();
+  });
+
+  it("no metadata → no neutralisation (fail-closed to today's badge)", () => {
+    expect(describePermissionAsk("Bash", { command: "git status" }).neutralRiskLabel).toBeNull();
+  });
+
+  it("neutralRiskLabelFor: only the exact contradiction (readOnly plaque + high/destructive metadata) neutralises", () => {
+    expect(neutralRiskLabelFor(HIGH_DESTRUCTIVE, BASH_RISK_PLAQUE.readOnly)).toBe(NEUTRAL_RISK_LABEL);
+    expect(neutralRiskLabelFor(LOW_SAFE, BASH_RISK_PLAQUE.readOnly)).toBeNull();
+    expect(neutralRiskLabelFor(HIGH_DESTRUCTIVE, null)).toBeNull();
+    expect(neutralRiskLabelFor(HIGH_DESTRUCTIVE, BASH_RISK_PLAQUE.unknownBinary)).toBeNull();
+    expect(neutralRiskLabelFor({ riskLevel: "medium", destructive: false }, BASH_RISK_PLAQUE.readOnly)).toBeNull();
   });
 });

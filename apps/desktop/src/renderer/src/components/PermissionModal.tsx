@@ -54,6 +54,18 @@ import { Markdown } from "./Markdown.js";
 import { X } from "./icons.js";
 import { commandBinary, isCommandLineTool, sanitizeBashPattern } from "../permission-pattern.js";
 import { classifyBashCommandLine, formatScopedRunnerPattern, recognizeScopedRunnerCommand } from "@anycode/core/permissions/safe-command";
+// Taskana 4070: the classification-to-plaque mapping moved to core (shared
+// with the CLI terminal broker and the Codex commandExecution approvals);
+// imported here for describePermissionAsk and re-exported below for every
+// existing import from this module.
+import {
+  BASH_RISK_PLAQUE,
+  WRITE_CAPABLE_BINARIES,
+  bashRiskFacts,
+  bashRiskPlaque,
+  bashWriteCapablePlaque,
+} from "@anycode/core";
+import type { BashRiskFacts, BashRiskPlaque } from "@anycode/core";
 import "../settings.css";
 
 export interface PermissionModalProps {
@@ -74,6 +86,16 @@ const RISK_LABELS: Record<RiskLevel, string> = {
   medium: "Medium risk",
   high: "High risk",
 };
+
+/**
+ * Taskana 4070: the NEUTRAL badge text shown when the classifier proves the
+ * command line read-only yet the ask's metadata still says high/destructive —
+ * core's Bash metadata is static (`riskLevel:"high", destructive:true` for
+ * every command), so without this the header would scream "High risk /
+ * Destructive" directly above a plaque saying "provably read-only". Pure
+ * cosmetics: the metadata object, the decision and the wire are untouched.
+ */
+export const NEUTRAL_RISK_LABEL = "Command-specific check";
 
 interface SummarizedInput {
   label: string;
@@ -162,6 +184,11 @@ export interface PermissionAskPresentation {
   /** Taskana 4070: per-command risk note for a Bash ask (read-only pipeline /
    * named write-capable binary / unknown binary); null for everything else. */
   plaque: string | null;
+  /** Taskana 4070: neutral badge text when the classifier proves the command
+   * read-only yet the metadata header would otherwise say "High risk" (+
+   * "Destructive") — core's static Bash metadata grades every command high.
+   * Null keeps the ordinary metadata-driven badge. */
+  neutralRiskLabel: string | null;
   /** Whether an "Always allow" rule may be offered for this ask at all. */
   canRemember: boolean;
 }
@@ -188,87 +215,35 @@ function bashUnknownShellHint(toolName: string, input: unknown): string | null {
   return verdict.class === "unknown" && verdict.shellExpression ? UNKNOWN_SHELL_HINT : null;
 }
 
-/** Taskana 4070 (TASK.105 §2): per-command risk note for a Bash ask, derived
- * from the SAME lexical classifier that powers auto-allow (presentation only;
- * the allow decision never reads this). `writeCapable` is NOT in this object —
- * its text names the concrete binary, so it is built by
- * `bashWriteCapablePlaque(binary)` below. */
-export const BASH_RISK_PLAQUE = {
-  readOnly:
-    "This exact command line is provably read-only — every segment passed the same classifier that auto-allows in Auto mode. It asks only because of the session mode, a hook, or an engine bridge.",
-  unknownBinary:
-    "This command's binary is not on AnyCode's read-only list, so it asks. Not-on-the-list is not a verdict of danger; review the exact command before allowing.",
-} as const;
+/** Taskana 4070: re-exports of the shared plaque API (see the import above) —
+ * the desktop modal is where the plaque was born (7d633a64/4ebfbe12); these
+ * keep every existing import from this module working unchanged. */
+export {
+  BASH_RISK_PLAQUE,
+  WRITE_CAPABLE_BINARIES,
+  bashRiskFacts,
+  bashRiskPlaque,
+  bashWriteCapablePlaque,
+};
+export type { BashRiskFacts, BashRiskPlaque };
 
-export type BashRiskPlaque = (typeof BASH_RISK_PLAQUE)[keyof typeof BASH_RISK_PLAQUE];
-
-/** The write-capable plaque names the binary, so it is a function, not a
- * const slot (Taskana 4070). Exported for the copy-pinning test. */
-export function bashWriteCapablePlaque(binary: string): string {
-  return `This command runs ${binary}, which can write or execute — the classifier cannot prove it read-only. Allow only if you intended this exact command.`;
-}
-
-/** Binaries the modal names in the write-capable plaque (Taskana 4070).
- * Presentation-only superset of core's deny-lists: not consulted by any engine. */
-export const WRITE_CAPABLE_BINARIES: ReadonlySet<string> = new Set([
-  "rm", "rmdir", "mv", "cp", "ln", "mkdir", "touch", "tee", "truncate", "shred",
-  "chmod", "chown", "chgrp", "dd", "install",
-  "sed", "awk", "perl", "python", "python3", "node", "bun", "deno",
-  "git", "pnpm", "npm", "yarn", "curl", "wget", "ssh", "scp", "rsync",
-  "find", "xargs", "sort", "splice",
-  // Wrappers, shells and privilege escalators run ANOTHER command: `sudo rm`,
-  // `bash -c '…'`, `env rm` must never get the softer unknown-binary note.
-  "sudo", "doas", "su", "env", "nohup", "nice", "timeout", "time", "command", "exec", "eval",
-  "bash", "sh", "zsh", "dash", "fish", "ksh", "source", ".",
-  "kill", "pkill", "killall", "npx", "pnpx", "bunx", "pip", "pip3", "cargo", "go", "make",
-  "ruby", "php", "docker", "kubectl", "tar", "unzip", "osascript", "open",
-]);
-
-/** Presentation facts about a Bash ask's command line (Taskana 4070). */
-export interface BashRiskFacts {
-  /** "Bash"-shaped tool with a string command; otherwise false. */
-  applies: boolean;
-  plaque: BashRiskPlaque | string | null;
-  /** Leading binary of the first plain segment, when extractable. */
-  binary: string | null;
-}
-
-/** Taskana 4070 (TASK.105 §2): the per-command risk plaque for a Bash ask.
- * Mirrors `bashUnknownShellHint`'s input discipline exactly: presentation
- * only, derived from the SAME lexical classifier that powers auto-allow, and
- * fail-closed (non-Bash tool, no command string → nothing). The plaque and
- * the TASK.35 shell-expression hint never co-occur: a shell expression that
- * is not provably read-only is `bashUnknownShellHint`'s case alone.
- *
- * - proven read-only line (pipeline or single command) → `readOnly` plaque;
- * - unknown single command whose binary is in WRITE_CAPABLE_BINARIES → the
- *   write-capable plaque naming that binary;
- * - unknown single command with any other binary → `unknownBinary` plaque. */
-export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
-  if (toolName !== "Bash") return { applies: false, plaque: null, binary: null };
-  const command =
-    input !== null && typeof input === "object" ? (input as { command?: unknown }).command : undefined;
-  if (typeof command !== "string") return { applies: false, plaque: null, binary: null };
-  const verdict = classifyBashCommandLine(command);
-  if (verdict.class === "read-only") return { applies: true, plaque: BASH_RISK_PLAQUE.readOnly, binary: null };
-  if (verdict.shellExpression) return { applies: true, plaque: null, binary: null }; // UNKNOWN_SHELL_HINT already covers it
-  // plain single command, unknown class: name the binary if we can
-  const binary = /^[^ \t]+/.exec(command.trim())?.[0] ?? null;
-  // Look up by basename so `/bin/rm` is named like `rm`, never softened.
-  const lookup = binary === null ? null : (binary.split("/").pop() ?? binary);
-  return {
-    applies: true,
-    plaque:
-      lookup !== null && WRITE_CAPABLE_BINARIES.has(lookup) ? bashWriteCapablePlaque(binary!) : BASH_RISK_PLAQUE.unknownBinary,
-    binary,
-  };
-}
-
-/** The plaque string `describePermissionAsk` surfaces (Taskana 4070); null for
- * everything the plaque does not apply to. Thin wrapper so the presentation
- * object never depends on the facts struct. */
-export function bashRiskPlaque(toolName: string, input: unknown): string | null {
-  return bashRiskFacts(toolName, input).plaque;
+/** Taskana 4070: neutralises the header badge IFF the ask's command line is
+ * classifier-PROVEN read-only while the static metadata still grades it
+ * "High risk" (or flags it destructive) — exactly the mixed message core's
+ * static Bash metadata produces for `git status`. The badge then shows the
+ * neutral label INSTEAD of "High risk"+"Destructive", matching the readOnly
+ * plaque under it. Everything else keeps the metadata-driven badge: unknown
+ * and write-capable commands are honestly high-risk, and a metadata
+ * `riskLevel:"low"` ask (e.g. the Codex bridge's de-risked presentation)
+ * already agrees with the plaque. Presentation only.
+ * Exported for the header-neutralisation test. */
+export function neutralRiskLabelFor(
+  metadata: { riskLevel: RiskLevel; destructive: boolean },
+  plaque: string | null,
+): string | null {
+  if (plaque !== BASH_RISK_PLAQUE.readOnly) return null;
+  if (metadata.riskLevel !== "high" && !metadata.destructive) return null;
+  return NEUTRAL_RISK_LABEL;
 }
 
 /**
@@ -288,12 +263,21 @@ export function bashRiskPlaque(toolName: string, input: unknown): string | null 
  * rule would auto-approve every future plan before anyone read it, which is the
  * one thing a plan gate exists to prevent.
  */
-export function describePermissionAsk(toolName: string, input: unknown): PermissionAskPresentation {
+export function describePermissionAsk(
+  toolName: string,
+  input: unknown,
+  /** Taskana 4070: the ask's live metadata, when the caller has it — drives
+   * the header neutralisation (a static-high core Bash ask whose command the
+   * classifier proves read-only). Absent → no neutralisation (fail-closed to
+   * today's metadata-driven badge). */
+  metadata?: { riskLevel: RiskLevel; destructive: boolean },
+): PermissionAskPresentation {
   const raw =
     toolName === "ExitPlanMode"
       ? (input !== null && typeof input === "object" ? (input as { plan?: unknown }).plan : undefined)
       : undefined;
   if (typeof raw !== "string") {
+    const plaque = bashRiskPlaque(toolName, input);
     return {
       kind: "generic",
       plan: null,
@@ -302,7 +286,8 @@ export function describePermissionAsk(toolName: string, input: unknown): Permiss
       allowLabel: "Allow",
       denyLabel: "Deny",
       hint: bashUnknownShellHint(toolName, input),
-      plaque: bashRiskPlaque(toolName, input),
+      plaque,
+      neutralRiskLabel: metadata === undefined ? null : neutralRiskLabelFor(metadata, plaque),
       canRemember: true,
     };
   }
@@ -316,6 +301,7 @@ export function describePermissionAsk(toolName: string, input: unknown): Permiss
     denyLabel: "Keep planning",
     hint: "Approving leaves plan mode and starts implementation — write actions still ask for approval individually.",
     plaque: null,
+    neutralRiskLabel: null,
     canRemember: false,
   };
 }
@@ -510,7 +496,10 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
   // capability and the per-ask verdict into ONE flag used by both the checkbox
   // and fireAllow, so a plan can never carry a `remember` even if the checkbox
   // state somehow survived a request change.
-  const presentation = describePermissionAsk(request.toolName, request.input);
+  const presentation = describePermissionAsk(request.toolName, request.input, {
+    riskLevel: request.metadata.riskLevel,
+    destructive: request.metadata.destructive,
+  });
   const isPlan = presentation.kind === "plan";
   const showRemember = allowRemember && presentation.canRemember;
 
@@ -595,9 +584,19 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
             )}
           </span>
           {!isPlan && (
-            <span className={`permission-risk-badge permission-risk-${request.metadata.riskLevel}`}>
-              {RISK_LABELS[request.metadata.riskLevel]}
-              {request.metadata.destructive && <span className="permission-destructive-tag">Destructive</span>}
+            <span
+              className={`permission-risk-badge ${
+                presentation.neutralRiskLabel !== null
+                  ? "permission-risk-neutral"
+                  : `permission-risk-${request.metadata.riskLevel}`
+              }`}
+            >
+              {presentation.neutralRiskLabel !== null
+                ? presentation.neutralRiskLabel
+                : RISK_LABELS[request.metadata.riskLevel]}
+              {request.metadata.destructive && presentation.neutralRiskLabel === null && (
+                <span className="permission-destructive-tag">Destructive</span>
+              )}
             </span>
           )}
         </div>
@@ -717,7 +716,13 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
               <div className="permission-ask-hint">{presentation.hint}</div>
             )}
             {presentation.plaque !== null && (
-              <div className={`permission-risk-plaque permission-risk-plaque-${request.metadata.riskLevel}`}>
+              <div
+                className={`permission-risk-plaque ${
+                  presentation.neutralRiskLabel !== null
+                    ? "permission-risk-plaque-neutral"
+                    : `permission-risk-plaque-${request.metadata.riskLevel}`
+                }`}
+              >
                 {presentation.plaque}
               </div>
             )}

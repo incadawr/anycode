@@ -5455,6 +5455,15 @@ body {
   color: var(--danger);
 }
 
+/* Taskana 4070: the neutral badge/plaque wash for a classifier-proven
+   read-only command under still-high static metadata (core's Bash tool
+   grades every command high/destructive) — information, not a warning. */
+.permission-risk-neutral,
+.permission-risk-plaque-neutral {
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+
 .permission-destructive-tag {
   font-weight: var(--w-semibold);
   text-transform: uppercase;

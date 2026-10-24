@@ -115,6 +115,25 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * Taskana 4070: Codex MAY send the command as an argv ARRAY (rather than the
+ * string observed live in 0.144–0.161). For DISPLAY the array is joined with
+ * single spaces — the best plain-text rendering of an argv — and that joined
+ * form is also what the shared plaque classifier reads. The join is for
+ * presentation/classification ONLY: no decision, rule or wire field is built
+ * from it, and non-string entries degrade to omission rather than rejection
+ * (an absent `command` keeps today's behavior: no command shown, fail-closed
+ * high-risk metadata, no plaque).
+ */
+function optionalCommand(value: unknown, fallback: string | undefined): string | undefined {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (Array.isArray(value)) {
+    const joined = value.filter((part): part is string => typeof part === "string" && part.length > 0).join(" ");
+    return joined.length > 0 ? joined : undefined;
+  }
+  return fallback;
+}
+
 function stringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const items = value.filter((entry): entry is string => typeof entry === "string");
@@ -144,8 +163,10 @@ function decode(request: JsonRpcServerRequest, items: TurnItemIndex | undefined)
   if (request.method === OBSERVED_COMMAND_APPROVAL_METHOD) {
     const fromItem = commandOf(indexed);
     // Live command approvals carry `command`/`cwd` but NO `reason` (L9); an
-    // absent optional field must never turn into a denial.
-    const command = optionalString(params.command) ?? fromItem.command;
+    // absent optional field must never turn into a denial. Taskana 4070: the
+    // command may arrive as an argv array — joined for display/classification
+    // only (see optionalCommand).
+    const command = optionalCommand(params.command, fromItem.command);
     const cwd = optionalString(params.cwd) ?? fromItem.cwd;
     // 0.161: `kind: "writeStdin"` is input sent to a command that is ALREADY
     // running, not a new command — the same `command` would otherwise read as

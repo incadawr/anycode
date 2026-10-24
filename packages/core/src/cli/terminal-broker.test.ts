@@ -13,6 +13,7 @@ import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { AllowAllPermissionBroker, DenyPermissionBroker, SessionPermissionRules } from "../permissions/index.js";
+import { BASH_RISK_PLAQUE, bashWriteCapablePlaque } from "../permissions/bash-risk-plaque.js";
 import type { PermissionMode, PermissionRequest } from "../types/permissions.js";
 import type { RiskLevel } from "../types/tools.js";
 import { createCliTheme } from "./theme.js";
@@ -582,5 +583,83 @@ describe("TerminalPermissionBroker with a real readline prompter", () => {
     await expect(pending).resolves.toEqual({ behavior: "deny", reason: "turn cancelled" });
     expect(out).toContain("\n");
     rl.close();
+  });
+});
+
+/**
+ * Taskana 4070: the CLI ask block carries the SAME one-line per-command risk
+ * plaque the desktop modal shows. The raw command stays in the header, always
+ * visible; the plaque line sits between header and the y/n/a hint; a shell
+ * expression shows no plaque at all (its honest story is already the
+ * header's). Presentation only — no answer mapping or rule reads the plaque.
+ */
+describe("TerminalPermissionBroker ask presentation — Bash risk plaque (Taskana 4070)", () => {
+  /** Renders one Bash ask through the manual prompter and hands back its question text. */
+  async function renderBashAsk(command: unknown): Promise<string> {
+    const { prompter, asks } = makeManualPrompter();
+    const broker = new TerminalPermissionBroker(new SessionPermissionRules(), theme);
+    broker.attachPrompter(prompter);
+    const pending = broker.requestPermission(
+      makeRequest({
+        toolName: "Bash",
+        riskLevel: "high",
+        destructive: true,
+        input: command === null ? null : { command },
+      }),
+    );
+    expect(asks).toHaveLength(1);
+    asks[0]!.resolve("n");
+    await pending;
+    return asks[0]!.question;
+  }
+
+  it("shows the read-only plaque under the raw command, which stays fully visible in the header", async () => {
+    const question = await renderBashAsk("git status");
+    expect(question).toContain('[permission] Bash (risk: high, destructive) — {"command":"git status"}');
+    expect(question).toContain(BASH_RISK_PLAQUE.readOnly);
+    // The plaque sits BETWEEN the header line and the y/n/a hint line.
+    const lines = question.split("\n");
+    const headerIdx = lines.findIndex((line) => line.includes("[permission] Bash"));
+    const plaqueIdx = lines.findIndex((line) => line.includes(BASH_RISK_PLAQUE.readOnly));
+    const hintIdx = lines.findIndex((line) => line.includes("y = allow once"));
+    expect(plaqueIdx).toBe(headerIdx + 1);
+    expect(hintIdx).toBe(plaqueIdx + 1);
+  });
+
+  it("shows the write-capable plaque naming the binary for sudo, bash -c, env and absolute paths", async () => {
+    for (const [command, binary] of [
+      ["sudo rm -rf /", "sudo"],
+      ["bash -c 'rm -rf /'", "bash"],
+      ["env rm x", "env"],
+      ["/bin/rm -rf /", "/bin/rm"],
+    ] as const) {
+      const question = await renderBashAsk(command);
+      expect(question).toContain(bashWriteCapablePlaque(binary));
+      expect(question).toContain(command); // the raw command stays visible in the header
+      expect(question).not.toContain(BASH_RISK_PLAQUE.unknownBinary);
+    }
+  });
+
+  it("shows the unknown-binary plaque for an off-list binary", async () => {
+    const question = await renderBashAsk("mytool build .");
+    expect(question).toContain(BASH_RISK_PLAQUE.unknownBinary);
+  });
+
+  it("shows NO plaque for a shell expression — the raw command alone is the honest presentation", async () => {
+    const question = await renderBashAsk("cat f | tee out");
+    expect(question).toContain("cat f | tee out"); // raw command visible
+    expect(question).not.toContain("plaque");
+    expect(question).not.toContain(BASH_RISK_PLAQUE.readOnly);
+    expect(question).not.toContain(BASH_RISK_PLAQUE.unknownBinary);
+  });
+
+  it("fail-closed presentation: non-Bash tools and Bash asks without a command string get no plaque line", async () => {
+    const { prompter, asks } = makeManualPrompter();
+    const broker = new TerminalPermissionBroker(new SessionPermissionRules(), theme);
+    broker.attachPrompter(prompter);
+    const pending = broker.requestPermission(makeRequest({ toolName: "Write" }));
+    expect(asks[0]!.question.split("\n")).toHaveLength(3); // header + hint + prompt, no plaque line
+    asks[0]!.resolve("n");
+    await pending;
   });
 });
