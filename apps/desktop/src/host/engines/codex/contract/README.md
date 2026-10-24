@@ -183,9 +183,22 @@ from an UNSANDBOXED terminal, once per codex-cli range bump or after any
 
 Step 0 — prepare (scratch workspace repo + the private dir, 0700):
 
-    WS="$(mktemp -d)/repo"; mkdir -p "$WS"; git -C "$WS" init -q
+    WS="$(mktemp -d "$HOME/.anycode/tmp/probe-ws-XXXXXX")/repo"
+    mkdir -p "$WS"; git -C "$WS" init -q
     PRIV="$HOME/.anycode/tmp/probe-4682"
     rm -rf "$PRIV" && mkdir -p -m 700 "$PRIV"
+
+The workspace lives OUTSIDE every tmp-family root (under `~/.anycode/tmp`,
+but NOT inside `$PRIV` itself, and NOT under `/tmp` or the ambient
+`$TMPDIR`): the probe's own policy sets `exclude_tmpdir_env_var=true` and
+`exclude_slash_tmp=true`, and a bare `mktemp -d` on macOS resolves under
+`/var/folders/.../T` (the ambient TMPDIR) with `/tmp` itself a symlink to
+`/private/tmp` — a workspace parked in any of those puts the WRITES THE
+PROBE EXPECTS TO SUCCEED (checks 2 and 3 write into `$WS`) inside a path
+the exclusions are designed to refuse, so a CORRECT build would fail the
+probe. The explicit template above keeps `$WS` home-relative, leaving the
+private dir as the ONLY tmp-family path inside the sandbox — exactly what
+the probe asserts.
 
 Step 1 — write `probe.sh` next to this README is NOT needed; run the four
 checks in ONE child-equivalent invocation. The `-c` overrides mirror

@@ -1518,7 +1518,8 @@ describe("host Codex boot private temp dir leak guard (cross-review F2, Taskana 
  * `parseCodexProfileArgs` and the REAL SqlitePersistenceAdapter, and reads the
  * row back FROM DISK through a second adapter instance, so the parse→persist
  * →reload chain is exercised for real; only the surrounding boot is mirrored.
- */describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut §3.3)", () => {
+ */
+describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut §3.3)", () => {
   let dbDir: string;
 
   beforeEach(async () => {
