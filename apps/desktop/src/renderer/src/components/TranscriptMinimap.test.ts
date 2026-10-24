@@ -226,13 +226,16 @@ describe("TranscriptMinimap (SSR component render)", () => {
     { id: "u2", index: 3, questionExcerpt: "second question", answerText: "", files: [], toolCallCount: 0 },
   ];
 
-  it("renders one .minimap-mark per mark with data-mark-index, data-block-id and Turn aria-label", () => {
+  it("renders one .minimap-mark per mark with data-mark-index, data-mark-block-id and Turn aria-label", () => {
     const html = renderMinimap({ marks });
     expect((html.match(/class="minimap-mark(?:\s[^"]*)?"/g) ?? []).length).toBe(2);
     expect(html).toContain('data-mark-index="0"');
     expect(html).toContain('data-mark-index="1"');
-    expect(html).toContain('data-block-id="u1"');
-    expect(html).toContain('data-block-id="u2"');
+    expect(html).toContain('data-mark-block-id="u1"');
+    expect(html).toContain('data-mark-block-id="u2"');
+    // A minimap button must never carry `data-block-id`: jumpToBlock and the
+    // automation block-count probe query that attribute across .message-list.
+    expect(html).not.toMatch(/\sdata-block-id=/);
     expect(html).toContain('aria-label="Turn 1: first question"');
     expect(html).toContain('aria-label="Turn 2: second question"');
     expect(html).toContain('role="navigation"');

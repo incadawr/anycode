@@ -508,22 +508,29 @@ export function MessageList({
       followRef.current = next;
       setFollow(next);
     }
-    // Minimap scroll-spy (TASK.48): the active mark is the last whose
-    // `.minimap-mark` node sits above the container's vertical midpoint.
-    // Approximate by design (collapsed ToolCallStacks skew offsets — accepted
-    // in the brief §4.4); index-only state, written just on the edge.
+    // Minimap scroll-spy (TASK.48): the active mark is the last USER BUBBLE
+    // (`.message-user[data-block-id]`, one per non-system user turn, DOM order
+    // == mark order) whose top sits above the container's vertical midpoint.
+    // Binary search over the monotone tops keeps a scroll tick at O(log n)
+    // layout reads on a long transcript. Approximate by design (brief §4.4);
+    // index-only state, written just on the edge.
     if (minimapMarks.length > 0) {
-      const midpoint = el.scrollTop + el.clientHeight / 2;
-      const markNodes = el.querySelectorAll<HTMLElement>(".minimap-mark");
+      const midpoint = el.getBoundingClientRect().top + el.clientHeight / 2;
+      const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id]");
+      let lo = 0;
+      let hi = bubbles.length - 1;
       let candidate: number | null = null;
-      for (let i = 0; i < markNodes.length; i += 1) {
-        const node = markNodes[i]!;
-        if (node.offsetTop + node.offsetHeight > midpoint) {
-          break;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (bubbles[mid]!.getBoundingClientRect().top <= midpoint) {
+          candidate = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
         }
-        candidate = i;
       }
-      const nextActive = activeMarkIndex(minimapMarks, candidate);
+      // Above the first bubble still highlights turn 1 (nothing earlier exists).
+      const nextActive = activeMarkIndex(minimapMarks, candidate ?? (bubbles.length > 0 ? 0 : null));
       setMinimapActive((prev) => (prev === nextActive ? prev : nextActive));
     }
   };
@@ -668,6 +675,17 @@ export function MessageList({
   return (
     <div className="message-list" ref={containerRef} onScroll={handleScroll} tabIndex={-1} data-tab-id={tabId ?? undefined}>
       <TodoPanel transcript={blocks} onJumpToBlock={jumpToBlock} />
+      {/* TASK.48 / Taskana 4086: vertical user-turn scrubber. FIRST-child
+          position (beside TodoPanel) on purpose: a `top`-sticky box only gets
+          pushed DOWN to its inset, so as the last child it sat at the content
+          end — off-screen unless scrolled to the bottom, and it grew the
+          scroll height. height:0 + pointer-events:none keep it out of
+          .message-column's layout. */}
+      {shouldShowMinimap(minimapMarks.length) && (
+        <div className="minimap-slot">
+          <TranscriptMinimap marks={minimapMarks} activeIndex={minimapActive} onJump={jumpToBlock} />
+        </div>
+      )}
       {/* Turn announcements (§4-R3(e)) live OUTSIDE the aria-live column: a
           status region nested inside it would double-announce, and the
           ticking working row (aria-hidden) must never reach SR. role=status
@@ -939,16 +957,6 @@ export function MessageList({
         >
           ↓
         </button>
-      )}
-      {/* TASK.48 / Taskana 4086: vertical user-turn scrubber, LAST child of
-          the scroll container (after the jump chip). The sticky slot keeps it
-          pinned to the right edge, vertically centered; height:0 +
-          pointer-events:none on the slot keep the first render from shifting
-          .message-column's layout at all. */}
-      {shouldShowMinimap(minimapMarks.length) && (
-        <div className="minimap-slot">
-          <TranscriptMinimap marks={minimapMarks} activeIndex={minimapActive} onJump={jumpToBlock} />
-        </div>
       )}
     </div>
   );
