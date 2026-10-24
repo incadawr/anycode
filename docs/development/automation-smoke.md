@@ -72,6 +72,30 @@ node apps/desktop/scripts/start-screen-smoke.mjs --keep
 Do not run the dev automation smoke against a packaged app or enable
 `ANYCODE_AUTOMATION` in the release workflow.
 
+## Running workflow-map smoke
+
+For the Workflow run map + collapsed tick strip (Taskana 4161), run:
+
+```bash
+node apps/desktop/scripts/workflow-map-smoke.mjs
+# or: pnpm --filter @anycode/desktop smoke:workflow-map
+```
+
+This plants a 3-step diamond workflow definition in a disposable temp
+workspace, dispatches it through a real model turn (GLM credentials from
+`.smoke-secrets/glm.env`, same as the subagent-card smoke), then exercises the
+map/ticks probe and driver routes: while the run is live it collapses the card
+and asserts the tick strip paints one tick per step with a MIXED bag of
+settled and unsettled kinds, expands back and asserts every step id has
+exactly one map node and every declared dependency exactly one `from`→`to`
+edge, round-trips the map toggle closed and open, and on settle asserts every
+node reached a terminal state. If the live model never dispatches the Workflow
+tool (one retry allowed), the run reports a documented SKIP and exits 0.
+The assertion logic itself is unit-tested in
+`apps/desktop/src/main/workflow-map-smoke-assertions.test.ts`, so a
+headless environment can still verify the judgements the live run makes.
+PNG evidence lands in `apps/desktop/out/workflow-map-smoke/`.
+
 ## Workflow for a coding agent
 
 Ask the agent to follow this sequence:

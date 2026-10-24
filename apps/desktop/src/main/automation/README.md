@@ -614,6 +614,13 @@ curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/agent-card/$TOOL_CALL_ID/workflow-
 curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/agent-card/$TOOL_CALL_ID/collapse -d '{}'
 ```
 
+See `apps/desktop/scripts/workflow-map-smoke.mjs` for the reference live wiring
+of the whole route family: it plants a 3-step diamond workflow definition in a
+temp workspace, dispatches it through a real model turn, collapses the running
+card to read the tick strip mid-run (mixed kinds), expands back to verify the
+map's nodes/edges, round-trips the toggle, and asserts every node terminal on
+settle — dev-only, never in the release path.
+
 ### Try-again button probe/driver (TASK.33 W8-FIX #2)
 
 `POST /tabs/:tabId/retry` above (the pre-existing route) calls
