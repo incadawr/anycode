@@ -455,4 +455,79 @@ describe("Session — engine switch (Taskana 4068)", () => {
       h.close();
     }
   });
+
+  // Taskana 4068 cross-review (finding 1): two legal switches with no turn in
+  // between. The second switch must carry the PRE-SWITCH transcript forward,
+  // not re-read the first switched-to engine's (empty-by-construction) history.
+  it("double switch with no turn in between keeps the pre-switch transcript for the next engine", async () => {
+    const oldEngine = new SwitchableFakeEngine(seededHistory());
+    const codex = new NextFakeEngine();
+    // Runtime id "claude" — the cast keeps the shared fake's shape without a third class.
+    const claude = Object.assign(new NextFakeEngine(), { id: "claude" }) as unknown as NextFakeEngine;
+    const h = createHarness({
+      steps: [],
+      engine: oldEngine as SessionEngine,
+      switchEngineFactory: async (id) => (id === "codex" ? codex : claude) as SessionEngine,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "engine_switch_request", requestId: "dsw1", engine: "codex" });
+      await h.waitFor(isEngineSwitched);
+      h.send({ type: "engine_switch_request", requestId: "dsw2", engine: "claude" });
+      await h.waitFor((m): m is Of<"engine_switched"> => isEngineSwitched(m) && m.requestId === "dsw2");
+
+      h.send({ type: "user_message", requestId: "r1", text: "go" });
+      await h.waitFor(agentEventOf("loop_end"));
+      const firstInput = claude.inputs[0] ?? "";
+      expect(firstInput).toContain("# user first seeded turn");
+      expect(firstInput).toContain("# assistant seeded answer");
+      expect(firstInput).toContain("Imported the full conversation (2 items).");
+
+      // The reload snapshot still carries the seeded transcript.
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some(isSessionHistory));
+      const handshake = h.received.slice(before).find(isSessionHistory);
+      expect(handshake?.items.map((i) => i.id)).toEqual(["seed-1", "seed-2"]);
+    } finally {
+      h.close();
+    }
+  });
+
+  // Taskana 4068 cross-review (finding 3): a renderer reload after a switch
+  // must not replay the pre-switch turns' stream events on top of the
+  // switch-time transcript snapshot (which already carries them).
+  it("reload after a switch does not replay pre-switch turns on top of the snapshot", async () => {
+    const oldEngine = new SwitchableFakeEngine(seededHistory());
+    const codex = new NextFakeEngine();
+    const h = createHarness({ steps: [], engine: oldEngine as SessionEngine, switchEngineFactory: async () => codex });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r0", text: "before the switch" });
+      await h.waitFor(agentEventOf("loop_end"));
+      const preSwitchTurnIds = new Set(
+        h.received.flatMap((m) => (m.type === "agent_event" && m.turnId !== ENGINE_SWITCH_TURN_ID ? [m.turnId] : [])),
+      );
+      expect(preSwitchTurnIds.size).toBeGreaterThan(0);
+
+      h.send({ type: "engine_switch_request", requestId: "rl1", engine: "codex" });
+      await h.waitFor(isEngineSwitched);
+
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some(isSessionHistory));
+      // The replay rides AFTER session_history; wait for the handshake's last
+      // trailing message so the whole re-post has been delivered.
+      await h.waitUntil(() => h.received.slice(before).some((m) => m.type === "background_children"));
+      const replayed = h.received
+        .slice(before)
+        .filter((m) => m.type === "agent_event" && preSwitchTurnIds.has(m.turnId));
+      expect(replayed).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
 });

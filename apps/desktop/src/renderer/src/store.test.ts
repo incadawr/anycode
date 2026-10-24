@@ -6560,6 +6560,38 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
     expect(store.getState().pendingEngineChange).toBeNull();
   });
 
+  // Taskana 4068 cross-review (finding 2): the switch runs BETWEEN turns, so
+  // the renderer's turn id is null while the host's announcement carries the
+  // ENGINE_SWITCH_TURN_ID sentinel. Without the guard exemption the only
+  // in-transcript signal that the engine changed was silently dropped.
+  it("the engine-switch announcement survives the turn-scoped drop guard between turns", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+    expect(store.getState().turn.turnId).toBeNull();
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "engine-switch",
+      event: { type: "engine_notice", level: "info", message: 'Session switched from the "codex" engine to the "claude" engine.' },
+    });
+
+    expect(store.getState().notice).toEqual({
+      kind: "engine_notice",
+      text: 'Session switched from the "codex" engine to the "claude" engine.',
+    });
+  });
+
+  it("a foreign engine_notice (a real turn's id, not the switch sentinel) is still turn-scoped", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReady());
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "some-other-turn",
+      event: { type: "engine_notice", level: "warning", message: "stale drift warning" },
+    });
+    expect(store.getState().notice).toBeNull();
+  });
+
   it("engine_switch_failed pushes the refusal reason on the one-slot notice channel and changes nothing else", () => {
     const store = createDesktopStore();
     store.getState().applyHostMessage(codexHostReady());

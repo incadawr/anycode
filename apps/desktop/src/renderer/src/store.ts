@@ -144,6 +144,9 @@ import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card
 // connection `lastQuota` so the connect card updates live.
 import { useSettingsStore } from "./settings-store.js";
 
+/** Host's engine-switch announcement sentinel (mirrors host/engine-switch.ts ENGINE_SWITCH_TURN_ID). */
+const ENGINE_SWITCH_NOTICE_TURN_ID = "engine-switch";
+
 /** Lifecycle of the renderer<->host port itself, independent of the agent turn lifecycle. */
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
 
@@ -3075,12 +3078,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // session-scoped bookkeeping (a notice + the turn-status flip below),
       // never transcript content, so admitting a late/foreign one costs at
       // most a stale toast.
+      // Taskana 4068 cross-review: the in-session engine switch announces
+      // itself as an `engine_notice` on ENGINE_SWITCH_TURN_ID (host/engine-switch.ts),
+      // also a between-turns sentinel. Exempted by the sentinel id, NOT by
+      // event type: other engines' drift `engine_notice`s are real turn-scoped
+      // events and must keep being dropped when foreign.
+      const isEngineSwitchNotice = event.type === "engine_notice" && turnId === ENGINE_SWITCH_NOTICE_TURN_ID;
       if (
         get().turn.turnId !== turnId &&
         event.type !== "context_usage" &&
         event.type !== "preview_console" &&
         event.type !== "compaction_start" &&
-        event.type !== "compaction_end"
+        event.type !== "compaction_end" &&
+        !isEngineSwitchNotice
       ) {
         return;
       }

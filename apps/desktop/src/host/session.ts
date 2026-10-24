@@ -1077,6 +1077,13 @@ export class Session {
   private engineSwitchImportPending: { prompt: string } | null = null;
   /** Taskana 4068: set once an engine_switch_request succeeded (freezes the core ui_ready history rebuild). */
   private engineSwitched = false;
+  /**
+   * Taskana 4068 cross-review: the canonical transcript carried across the
+   * LAST successful switch. A switched-to engine's live history holds only its
+   * OWN post-switch items, so the next switch prepends this instead of
+   * re-reading (and losing) everything that came before.
+   */
+  private switchCarriedHistory: readonly HistoryItem[] = [];
   private readonly broker: IpcPermissionBroker;
   private readonly fs: FileSystemPort;
   private readonly workspace: string;
@@ -3087,14 +3094,19 @@ export class Session {
       // `historyItems()` is only its BOOT snapshot (codex) or `[]` (claude);
       // codex can re-read the live thread, so prefer that when available —
       // otherwise the import would silently omit every turn of this launch.
-      let canonical: HistoryItem[] = [...previousEngine.historyItems()];
+      // Taskana 4068 cross-review: after an earlier switch the live engine's
+      // items are only its own post-switch turns, so the carried pre-switch
+      // transcript is the prefix (a double switch with no turn between would
+      // otherwise import 0 items and blank the reload snapshot).
+      let liveItems: HistoryItem[] = [...previousEngine.historyItems()];
       if (previousEngine.readTranscript !== undefined) {
         try {
-          canonical = [...(await previousEngine.readTranscript())];
+          liveItems = [...(await previousEngine.readTranscript())];
         } catch (error) {
           console.error(`[host] engine switch: live transcript read failed, using boot history: ${describeError(error)}`);
         }
       }
+      const canonical: HistoryItem[] = [...this.switchCarriedHistory, ...liveItems];
       let next: SessionEngine;
       try {
         next = await this.switchEngineFactory(message.engine);
@@ -3133,13 +3145,20 @@ export class Session {
       }
       this.engine = next;
       this.engineSwitched = true;
+      this.switchCarriedHistory = canonical;
       this.engineSettings = undefined; // foreign seam re-wired by the composition root later (§7 Q2)
       this.engineSettingsUnsubscribe?.();
       this.engineSettingsUnsubscribe = undefined;
-      // Transcript continuity: canonical history stays rendered from the SAME
-      // items; the replay ring is deliberately NOT cleared (unlike rewind,
-      // nothing was removed) — for a native engine it is the only record of
-      // this launch's turns.
+      // Transcript continuity: the reload snapshot is rebuilt from the
+      // canonical items. Taskana 4068 cross-review: when that snapshot carries
+      // any transcript, the pre-switch turn events in the replay ring must
+      // go too — otherwise a renderer reload renders them twice (snapshot +
+      // replay), exactly the rewind discipline. With an EMPTY canonical (a
+      // native engine with no readable transcript) the ring is still the only
+      // record of this launch's turns, so it is kept.
+      if (canonical.length > 0) {
+        this.outbound.clear();
+      }
       this.sessionHistory = buildSessionHistory(canonical, this.historyMaxItems);
       this.outbound.emit({
         type: "agent_event",
