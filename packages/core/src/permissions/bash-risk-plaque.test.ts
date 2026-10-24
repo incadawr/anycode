@@ -86,6 +86,9 @@ describe("bash-risk-plaque — fail-closed input discipline", () => {
     expect(bashRiskPlaque("Bash", {})).toBeNull();
     expect(bashRiskPlaque("Bash", null)).toBeNull();
     expect(bashRiskPlaque("Bash", { command: 42 })).toBeNull();
+    // BashRiskFacts.applies contract: "Command-line tool with a string command; otherwise false".
+    expect(bashRiskFacts("Bash", { command: 42 })).toEqual({ applies: false, plaque: null, binary: null });
+    expect(bashRiskFacts("Bash", null)).toEqual({ applies: false, plaque: null, binary: null });
   });
 });
 
