@@ -62,14 +62,28 @@ export const TGREP_SEARCH_TIMEOUT_MS = DEFAULT_TOOL_TIMEOUT_MS / 2;
  * call — one extra spawn per Grep, and an aborted call could kill it). A
  * FAILED probe is never cached: tgrep can appear mid-session (user installs
  * it, starts serving), and caching a miss would pin "no tgrep" for the whole
- * process. Cost asymmetry: a stale SUCCESS cache only wastes one spawn that
- * then falls back to rg; a stale MISS cache would disable the tier outright.
+ * process. Cost asymmetry: a stale SUCCESS cache wastes one spawn per call
+ * (bounded: a search that keeps timing out suspends the tier, see
+ * `TGREP_SEARCH_TIMEOUT_SUSPEND_AFTER`); a stale MISS cache would disable the
+ * tier outright.
  */
 const tgrepProbeCache = new Map<string, Promise<string | undefined>>();
+
+/**
+ * Consecutive search TIMEOUTS per resolved binary (Taskana 4160 cross-review
+ * F2). A healthy probe is cached, but a binary whose searches keep hanging
+ * (no daemon and a huge corpus, say) would otherwise cost a full tool-timeout
+ * spawn on EVERY Grep call before the rg fallback answers. After this many
+ * consecutive timeouts the tier is suspended for the process; any completed
+ * search resets the count.
+ */
+const TGREP_SEARCH_TIMEOUT_SUSPEND_AFTER = 2;
+const tgrepSearchTimeouts = new Map<string, number>();
 
 /** Test-only: clears the memoized probe outcomes so a fresh probe run can be exercised. */
 export function __resetTgrepPathCacheForTests(): void {
   tgrepProbeCache.clear();
+  tgrepSearchTimeouts.clear();
 }
 
 /**
@@ -189,6 +203,8 @@ export async function searchWithTgrep(
   const runBinary = ctx.ports.exec.runBinary;
   if (!runBinary) return undefined;
 
+  if ((tgrepSearchTimeouts.get(tgrepPath) ?? 0) >= TGREP_SEARCH_TIMEOUT_SUSPEND_AFTER) return undefined;
+
   const args = buildTgrepArgs(input, root, isDirectory);
   let result;
   try {
@@ -203,9 +219,14 @@ export async function searchWithTgrep(
     return undefined;
   }
 
-  if (result.status === "spawn_error" || result.status === "timed_out" || result.status === "cancelled") {
+  if (result.status === "timed_out") {
+    tgrepSearchTimeouts.set(tgrepPath, (tgrepSearchTimeouts.get(tgrepPath) ?? 0) + 1);
     return undefined;
   }
+  if (result.status === "spawn_error" || result.status === "cancelled") {
+    return undefined;
+  }
+  tgrepSearchTimeouts.delete(tgrepPath);
   if (result.status === "failed" && result.exitCode !== 0 && result.exitCode !== 1) {
     return undefined; // exit 2 = tgrep error (bad regex, daemon refused); anything but 0/1 is not ours to interpret
   }

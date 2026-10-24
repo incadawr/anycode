@@ -332,3 +332,28 @@ describe("searchWithTgrep — capped stdout is never a final answer (Taskana 416
     await expect(searchWithTgrep(baseInput({ output_mode: "count" }), ctx, "tgrep", "/repo", true)).resolves.toBeUndefined();
   });
 });
+
+describe("searchWithTgrep — repeated search timeouts stop the tier (Taskana 4160 cross-review F2)", () => {
+  beforeEach(() => __resetTgrepPathCacheForTests());
+  afterEach(() => __resetTgrepPathCacheForTests());
+
+  it("after two consecutive search timeouts the binary is not spawned again (no 2-minute tax per Grep call)", async () => {
+    const { ctx, runBinary } = ctxWithRunBinary(() => statusResult("timed_out"));
+    await expect(searchWithTgrep(baseInput(), ctx, "/usr/bin/tgrep", "/repo", true)).resolves.toBeUndefined();
+    await expect(searchWithTgrep(baseInput(), ctx, "/usr/bin/tgrep", "/repo", true)).resolves.toBeUndefined();
+    expect(runBinary).toHaveBeenCalledTimes(2);
+
+    await expect(searchWithTgrep(baseInput(), ctx, "/usr/bin/tgrep", "/repo", true)).resolves.toBeUndefined();
+    expect(runBinary).toHaveBeenCalledTimes(2); // suspended: the third call never spawns tgrep
+  });
+
+  it("a completed search between timeouts resets the count (isolated timeouts do not suspend the tier)", async () => {
+    let n = 0;
+    const { ctx, runBinary } = ctxWithRunBinary(() => (n++ % 2 === 0 ? statusResult("timed_out") : completedResult(ndjson)));
+    await searchWithTgrep(baseInput(), ctx, "/usr/bin/tgrep", "/repo", true); // timeout
+    await expect(searchWithTgrep(baseInput(), ctx, "/usr/bin/tgrep", "/repo", true)).resolves.toBeDefined(); // success
+    await searchWithTgrep(baseInput(), ctx, "/usr/bin/tgrep", "/repo", true); // timeout again, count restarted
+    await searchWithTgrep(baseInput(), ctx, "/usr/bin/tgrep", "/repo", true); // success
+    expect(runBinary).toHaveBeenCalledTimes(4); // nothing suspended
+  });
+});
