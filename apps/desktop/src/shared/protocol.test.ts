@@ -8,6 +8,7 @@ import type {
 } from "@anycode/core";
 import {
   compactRequestSchema,
+  engineSwitchRequestSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   taskKillRequestSchema,
@@ -352,6 +353,43 @@ describe("TASK.145 срез 2 protocol additions", () => {
     expect(uiToHostMessageSchema.safeParse({ type: "child_report_ack", id: "call-1", extra: 1 }).success).toBe(
       false,
     );
+  });
+});
+
+// Taskana 4068 / TASK.98 (review 23.08 narrowing): the untrusted
+// engine_switch_request side of the in-session engine swap. The engine id is
+// validated against ENGINE_IDS (the same table isEngineId uses); the trusted
+// engine_switched/engine_switch_failed host->renderer acks are plain
+// structured-clone-safe data (no zod, model_changed precedent).
+describe("engine_switch_request protocol (Taskana 4068)", () => {
+  it("engineSwitchRequestSchema accepts a well-formed switch request", () => {
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude" }).success).toBe(true);
+    // and registers in the untrusted-union discriminator (fail-closed path)
+    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude" }).success).toBe(true);
+  });
+
+  it("rejects an unknown engine id", () => {
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt" }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt" }).success).toBe(false);
+  });
+
+  it("rejects extra keys, a missing/empty requestId and a missing engine", () => {
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "codex", factory: {} }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", engine: "codex" }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "", engine: "codex" }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1" }).success).toBe(false);
+  });
+
+  it("engine_switched / engine_switch_failed are structured-clone-safe trusted host->renderer data", () => {
+    const switched = {
+      type: "engine_switched",
+      requestId: "r1",
+      engine: "codex",
+      previousEngine: "core",
+    } satisfies HostToUiMessage;
+    expect(structuredClone(switched)).toEqual(switched);
+    const failed = { type: "engine_switch_failed", requestId: "r1", reason: "a turn is running" } satisfies HostToUiMessage;
+    expect(structuredClone(failed)).toEqual(failed);
   });
 });
 

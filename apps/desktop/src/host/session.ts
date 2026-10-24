@@ -101,6 +101,8 @@ import { describeError, sanitizeAgentEvent } from "./serialize.js";
 import { recordErrorDiagnostic } from "./error-diagnostics.js";
 import { toWireToolMeta } from "./permission-broker.js";
 import type { SessionEngine } from "./engines/session-engine.js";
+import { ENGINE_SWITCH_TURN_ID, planEngineSwitchImport, renderImportPrompt } from "./engine-switch.js";
+import type { EngineId } from "./engines/session-engine.js";
 
 /** Cap on the replay ring buffer; older messages roll off (design §3). */
 export const REPLAY_BUFFER_CAP = 5_000;
@@ -547,6 +549,15 @@ export interface SessionOptions {
   /** The host-selected agent runtime; Session never imports an external engine. */
   engine: SessionEngine;
   /**
+   * Taskana 4068 / TASK.98 (review 23.08 narrowing): builds the replacement
+   * engine for an `engine_switch_request`. Injected by the composition root;
+   * absent -> the message is refused with reason "engine switch is not
+   * available in this host". The production wiring (real startCodexEngine /
+   * bootClaude / CoreEngine construction inside a live host) is a follow-up —
+   * deliberately NOT wired in this cut (owner review pending, §7 Q1).
+   */
+  switchEngineFactory?: (engine: EngineId) => Promise<SessionEngine>;
+  /**
    * TASK.39: the engine's own model catalog + permission presets. Absent for
    * core (and for any engine without native controls) -> `set_engine_preset` is
    * a no-op, `set_model` keeps its legacy core path, and `host_ready.engine`
@@ -858,11 +869,35 @@ export interface PendingChildReportsOptions {
 
 export class Session {
   private readonly outbound: Outbound;
-  private readonly engine: SessionEngine;
-  /** TASK.39: engine-native model/preset controls; undefined -> the engine has none. */
-  private readonly engineSettings: EngineSettingsSeam | undefined;
+  /**
+   * Taskana 4068: NOT readonly — the engine_swap_request handler re-assigns
+   * this between turns (old engine disposed only after the replacement is
+   * live). Every reader goes through `this.engine` live, so a swap
+   * re-projects host_ready/engine notices correctly by construction.
+   */
+  private engine: SessionEngine;
+  /**
+   * Builds the replacement engine for engine_switch_request (Taskana 4068).
+   * Injected by the composition root; absent -> the message is refused with
+   * reason "engine switch is not available in this host".
+   */
+  private readonly switchEngineFactory: ((engine: EngineId) => Promise<SessionEngine>) | undefined;
+  /**
+   * TASK.39: engine-native model/preset controls; undefined -> the engine has
+   * none. Taskana 4068: NOT readonly — a successful engine swap resets this to
+   * undefined (the new engine's settings seam needs per-engine re-bootstrapping,
+   * §7 Q2 follow-up); host_ready then legally omits the engine.model block.
+   */
+  private engineSettings: EngineSettingsSeam | undefined;
   /** Releases the `onSettingsApplied` subscription at shutdown (no push-after-dispose). */
   private engineSettingsUnsubscribe: (() => void) | undefined;
+  /**
+   * Taskana 4068: one-shot import prompt for the FIRST turn after an engine
+   * switch. runTurn consumes it by REPLACING the user's typed text for exactly
+   * that one engine call (the durable user frame acceptUserMessage appended is
+   * unaffected); the user's next typed message follows as the turn after.
+   */
+  private engineSwitchImportPending: { prompt: string } | null = null;
   private readonly broker: IpcPermissionBroker;
   private readonly fs: FileSystemPort;
   private readonly workspace: string;
@@ -1176,6 +1211,7 @@ export class Session {
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
     this.engine = options.engine;
+    this.switchEngineFactory = options.switchEngineFactory;
     this.engineSettings = options.engineSettings;
     this.broker = options.broker;
     this.reconnectGraceMs = options.reconnectGraceMs ?? UI_RECONNECT_GRACE_MS;
@@ -1919,6 +1955,13 @@ export class Session {
         if (this.busy || this.relocating || this.child !== undefined || this.engine.compactNow === undefined) break;
         void this.onCompact();
         break;
+      case "engine_switch_request":
+        // Taskana 4068: async handler holds `busy` across the factory await —
+        // the exact rewind pattern (route() itself never awaits). The handler
+        // re-checks its own gates (messages route synchronously, but this
+        // mirrors onCompact's defensive-net discipline).
+        void this.onEngineSwitch(message);
+        break;
       case "task_list_request":
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         break;
@@ -2493,6 +2536,84 @@ export class Session {
       if (this.currentTurn === op) this.currentTurn = null;
       this.drainAgentInbox();
       release();
+    }
+  }
+
+  /**
+   * Taskana 4068 / TASK.98 (review 23.08 narrowing): swap the active
+   * SessionEngine BETWEEN turns — in place, no session respawn, no N×N
+   * transcript transportation (frozen by review). Ordering contract
+   * (TASK.98 frame "do not destroy the old session until the new one has
+   * started successfully"): the old engine is disposed ONLY after the factory
+   * resolved, the new engine was assigned, the transcript continuity snapshot
+   * was rebuilt and the engine_notice was emitted — on ANY earlier failure the
+   * old engine stays live and untouched.
+   *
+   * Transcript continuity: `sessionHistory` is rebuilt from the canonical
+   * items captured BEFORE the swap, so the UI transcript stays rendered from
+   * the same items across the boundary; the new engine's NATIVE context
+   * starts empty and its first turn receives the rendered import prompt
+   * (runTurn consumes `engineSwitchImportPending` one-shot).
+   *
+   * Busy-holding mirrors onRewind/onCompact: a self-managed deferred routed
+   * through `currentTurn` (shutdown waits it out), `busy` released in the
+   * finally — never between the factory await and the dispose.
+   */
+  private async onEngineSwitch(message: Extract<UiToHostMessage, { type: "engine_switch_request" }>): Promise<void> {
+    const fail = (reason: string) => {
+      this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason });
+    };
+    if (this.busy || this.relocating) return fail("a turn is running");
+    if (this.child !== undefined) return fail("a child session is attached");
+    if (this.engine.id === message.engine) return fail(`already running the "${message.engine}" engine`);
+    if (this.switchEngineFactory === undefined) return fail("engine switch is not available in this host");
+    this.busy = true;
+    let release!: () => void;
+    const op = new Promise<void>((r) => (release = r));
+    this.currentTurn = op;
+    try {
+      const previousEngine = this.engine;
+      // Canonical transcript captured BEFORE anything else — the swap below
+      // never changes what the UI keeps rendering (continuity by construction).
+      const canonical = [...previousEngine.historyItems()];
+      let next: SessionEngine;
+      try {
+        next = await this.switchEngineFactory(message.engine);
+      } catch (error) {
+        // Old engine untouched — TASK.98 frame: a failed start leaves the
+        // session exactly as it was, next turn still runs on the old engine.
+        fail(error instanceof Error ? error.message : String(error));
+        return;
+      }
+      // The import prompt is rendered from `canonical` alone (the old
+      // engine's items captured above) — nothing else feeds the render.
+      this.engineSwitchImportPending = {
+        prompt: renderImportPrompt(previousEngine.id, next.id, planEngineSwitchImport(canonical), this.workspace),
+      };
+      this.engine = next;
+      this.engineSettings = undefined; // foreign seam re-wired by the composition root later (§7 Q2)
+      this.engineSettingsUnsubscribe?.();
+      this.engineSettingsUnsubscribe = undefined;
+      // Transcript continuity: canonical history stays rendered from the SAME items.
+      this.sessionHistory = buildSessionHistory(canonical, this.historyMaxItems);
+      this.outbound.emit({
+        type: "agent_event",
+        turnId: ENGINE_SWITCH_TURN_ID,
+        event: {
+          type: "engine_notice",
+          level: "info",
+          message: `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives an imported summary of this conversation.`,
+        },
+      });
+      // Dispose ONLY after the new engine is live and the notice emitted.
+      await previousEngine.dispose("session-close").catch((error) =>
+        console.error(`[host] previous engine dispose threw: ${error instanceof Error ? error.message : String(error)}`),
+      );
+      this.outbound.clear();
+      this.outbound.sendDirect({ type: "engine_switched", requestId: message.requestId, engine: next.id, previousEngine: previousEngine.id });
+    } finally {
+      release();
+      this.busy = false;
     }
   }
 
@@ -3213,6 +3334,18 @@ export class Session {
     };
 
     try {
+      // Taskana 4068: consume the one-shot engine-switch import prompt BEFORE
+      // the engine call — the import is delivered as the new engine's FIRST
+      // turn (the user's next typed message follows as the turn after), so
+      // the prompt REPLACES the user's typed text for exactly this one engine
+      // call. Only on the text branch (a continueTurn has no fresh user frame
+      // to replace); the durable user frame acceptUserMessage appended to the
+      // history BEFORE runTurn runs is unaffected — the canonical transcript
+      // keeps the user's own words.
+      if (this.engineSwitchImportPending !== null && text !== undefined) {
+        text = this.engineSwitchImportPending.prompt;
+        this.engineSwitchImportPending = null;
+      }
       const options = {
         signal: controller.signal,
         ...(attachments?.length ? { attachments } : {}),

@@ -85,6 +85,10 @@ const TOAST_TONES: Readonly<Record<ToastKind, ToastTone>> = {
   // the session still runs where it did — a refusal, same tint family as
   // retry_blocked/mode_change_rejected.
   rebind_failed: "danger",
+  // Taskana 4068: the engine switch the user asked for was refused (turn
+  // running / child attached / same engine / factory unavailable) — a
+  // refusal, same tint family as rebind_failed/retry_blocked.
+  engine_switch_failed: "danger",
   shell_error: "danger",
   preview_transferred: "neutral",
 };

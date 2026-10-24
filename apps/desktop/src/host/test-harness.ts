@@ -431,6 +431,14 @@ export interface HarnessOptions {
    * (every pre-existing test unaffected).
    */
   pendingChildReports?: SessionOptions["pendingChildReports"];
+  /**
+   * Taskana 4068: the engine-switch factory seam, threaded VERBATIM into
+   * Session (the `engine` passthrough precedent directly above). Omitted ->
+   * engine_switch_request is refused ("engine switch is not available in
+   * this host"), byte-identical to a host boot without the production
+   * wiring (every pre-existing test unaffected).
+   */
+  switchEngineFactory?: SessionOptions["switchEngineFactory"];
 }
 
 export interface Harness {
@@ -620,6 +628,7 @@ export function createHarness(options: HarnessOptions): Harness {
   const session = new Session({
     outbound,
     engine,
+    ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),
     broker,
     fs: toolFs,
     workspace: "/workspace",
