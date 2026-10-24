@@ -216,6 +216,12 @@ export const WRITE_CAPABLE_BINARIES: ReadonlySet<string> = new Set([
   "sed", "awk", "perl", "python", "python3", "node", "bun", "deno",
   "git", "pnpm", "npm", "yarn", "curl", "wget", "ssh", "scp", "rsync",
   "find", "xargs", "sort", "splice",
+  // Wrappers, shells and privilege escalators run ANOTHER command: `sudo rm`,
+  // `bash -c '…'`, `env rm` must never get the softer unknown-binary note.
+  "sudo", "doas", "su", "env", "nohup", "nice", "timeout", "time", "command", "exec", "eval",
+  "bash", "sh", "zsh", "dash", "fish", "ksh", "source", ".",
+  "kill", "pkill", "killall", "npx", "pnpx", "bunx", "pip", "pip3", "cargo", "go", "make",
+  "ruby", "php", "docker", "kubectl", "tar", "unzip", "osascript", "open",
 ]);
 
 /** Presentation facts about a Bash ask's command line (Taskana 4070). */
@@ -248,10 +254,12 @@ export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
   if (verdict.shellExpression) return { applies: true, plaque: null, binary: null }; // UNKNOWN_SHELL_HINT already covers it
   // plain single command, unknown class: name the binary if we can
   const binary = /^[^ \t]+/.exec(command.trim())?.[0] ?? null;
+  // Look up by basename so `/bin/rm` is named like `rm`, never softened.
+  const lookup = binary === null ? null : (binary.split("/").pop() ?? binary);
   return {
     applies: true,
     plaque:
-      binary !== null && WRITE_CAPABLE_BINARIES.has(binary) ? bashWriteCapablePlaque(binary) : BASH_RISK_PLAQUE.unknownBinary,
+      lookup !== null && WRITE_CAPABLE_BINARIES.has(lookup) ? bashWriteCapablePlaque(binary!) : BASH_RISK_PLAQUE.unknownBinary,
     binary,
   };
 }

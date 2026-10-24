@@ -414,7 +414,7 @@ describe("describePermissionAsk — Bash risk plaque (Taskana 4070)", () => {
   });
 
   it("unknown binary → unknownBinary plaque; no hint", () => {
-    const presentation = describePermissionAsk("Bash", { command: "docker build ." });
+    const presentation = describePermissionAsk("Bash", { command: "mytool build ." });
     expect(presentation.plaque).toBe(BASH_RISK_PLAQUE.unknownBinary);
     expect(presentation.hint).toBeNull();
   });
@@ -441,6 +441,17 @@ describe("describePermissionAsk — Bash risk plaque (Taskana 4070)", () => {
     expect(BASH_RISK_PLAQUE.unknownBinary).toBe(
       "This command's binary is not on AnyCode's read-only list, so it asks. Not-on-the-list is not a verdict of danger; review the exact command before allowing.",
     );
+  });
+
+  it("wrappers, shells and absolute paths get the write-capable plaque, never the softer unknown-binary note", () => {
+    for (const [command, binary] of [
+      ["sudo rm -rf /", "sudo"],
+      ["bash -c 'rm -rf /'", "bash"],
+      ["env rm x", "env"],
+      ["/bin/rm -rf /", "/bin/rm"],
+    ] as const) {
+      expect(bashRiskPlaque("Bash", { command })).toBe(bashWriteCapablePlaque(binary));
+    }
   });
 
   it("plaque carries the binary's name (pure-function fallback for the DOM assertion)", () => {
