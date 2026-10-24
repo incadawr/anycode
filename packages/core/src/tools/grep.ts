@@ -3,6 +3,7 @@ import { DEFAULT_TOOL_TIMEOUT_MS } from "../types/config.js";
 import type { FileSystemPort } from "../ports/index.js";
 import { grepInputSchema, type GrepInput, type GrepMatch, type GrepOutput } from "./schemas.js";
 import { resolveRgPath, searchWithRipgrep } from "./grep-rg.js";
+import { resolveTgrepPath, searchWithTgrep } from "./grep-tgrep.js";
 
 const IGNORED_DIR_NAMES = new Set([".git", "node_modules", "dist"]);
 
@@ -108,6 +109,44 @@ function searchMultiline(content: string, pattern: string, caseInsensitive: bool
 }
 
 /**
+ * Grep backend selector (Taskana 4160): "rg" (default) or "tgrep" (the
+ * microsoft/tgrep trigram index, probed from PATH). The tgrep tier only
+ * engages on this explicit opt-in — never an auto-pick, never "enable if a
+ * daemon is found" (owner decision 09.09).
+ */
+export type GrepBackend = "rg" | "tgrep";
+
+/**
+ * env wins over the explicit argument; anything but "tgrep"
+ * (case-insensitive) means "rg" — an unknown value must never route Grep to
+ * a missing binary.
+ */
+export function selectGrepBackend(env: NodeJS.ProcessEnv, settingsBackend?: string): GrepBackend {
+  const raw = (env.ANYCODE_GREP_BACKEND ?? settingsBackend ?? "rg").trim().toLowerCase();
+  return raw === "tgrep" ? "tgrep" : "rg";
+}
+
+/**
+ * Attempts the tgrep backend (Taskana 4160); same never-throw contract as
+ * `tryRipgrep`: `undefined` => next tier (rg, then JS). Resolution
+ * (`ANYCODE_TGREP_BIN` override, else one absolute candidate per PATH entry)
+ * and every failure mode (spawn error, timeout, cancellation, exit 2 =
+ * tgrep error) map to `undefined`, so a missing or broken tgrep installation
+ * degrades to rg silently — never a trimmed result and never a failed call.
+ */
+async function tryTgrep(
+  input: GrepInput,
+  ctx: ToolContext,
+  root: string,
+  isDirectory: boolean,
+): Promise<GrepOutput | undefined> {
+  if (!ctx.ports.exec.runBinary) return undefined;
+  const tgrepPath = await resolveTgrepPath(ctx.ports.exec, process.env, { abortSignal: ctx.abortSignal });
+  if (!tgrepPath) return undefined;
+  return searchWithTgrep(input, ctx, tgrepPath, root, isDirectory);
+}
+
+/**
  * Attempts the ripgrep backend; returns `undefined` (never throws) whenever
  * it isn't available or fails, signaling the caller to fall back to the JS
  * path — the only outcomes that skip the JS path are a successful ripgrep
@@ -131,21 +170,35 @@ async function tryRipgrep(
 }
 
 /**
- * Prefers a ripgrep backend (tools/grep-rg.ts) when `@vscode/ripgrep`
- * resolves and `ExecutionPort.runBinary` is available; ripgrep additionally
- * respects .gitignore and hidden files (a documented improvement over the
- * JS path, not a regression — the forced node_modules/.git/dist excludes
- * are kept as a floor either way). Any resolution/spawn failure (import
- * fails, non-hermetic CI, exotic platform, unexpected exit code) falls back
- * to the pure-JS path below, which walks FileSystemPort directly
- * (readdir/stat/readFile) with a fixed ignore list: .git, node_modules,
- * dist. `GrepOutput`'s shape (mode/matches/files/counts/totalMatches/
- * truncated) is identical regardless of which backend served the request.
+ * Optional tgrep tier first (Taskana 4160): when
+ * `ANYCODE_GREP_BACKEND=tgrep` / `settings.tools.grepBackend: "tgrep"`
+ * selects the trigram backend (tools/grep-tgrep.ts) AND a usable tgrep
+ * binary resolves from PATH, it serves the request from the warm/on-disk
+ * index; ANY failure (binary missing, daemon refused, exit 2, timeout)
+ * silently falls back to the rg tier below — never a trimmed result. A
+ * ZERO-match tgrep answer is re-checked through rg before being returned
+ * (a stale index must never hide a file the agent just wrote); a non-zero
+ * tgrep answer is final for the tgrep tier.
+ *
+ * Otherwise prefers a ripgrep backend (tools/grep-rg.ts) when
+ * `@vscode/ripgrep` resolves and `ExecutionPort.runBinary` is available;
+ * ripgrep additionally respects .gitignore and hidden files (a documented
+ * improvement over the JS path, not a regression — the forced
+ * node_modules/.git/dist excludes are kept as a floor either way). Any
+ * resolution/spawn failure (import fails, non-hermetic CI, exotic platform,
+ * unexpected exit code) falls back to the pure-JS path below, which walks
+ * FileSystemPort directly (readdir/stat/readFile) with a fixed ignore
+ * list: .git, node_modules, dist. `GrepOutput`'s shape (mode/matches/
+ * files/counts/totalMatches/truncated) is identical regardless of which
+ * backend served the request. Ladder: tgrep (opt-in) → rg → JS.
  */
 export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
   metadata: {
     name: "Grep",
     description:
+      // Taskana 4160: deliberately unchanged — the backend is an operator
+      // setting, invisible to the model, and the default-off tool schema must
+      // stay byte-identical (prompt cache, provider tool snapshots).
       "Search file contents with a regular expression. Returns matching lines, file paths, or per-file counts.",
     readOnly: true,
     destructive: false,
@@ -165,6 +218,20 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
     }
 
     const rootStat = await ctx.ports.fs.stat(root);
+
+    const tgrepOutput =
+      selectGrepBackend(process.env) === "tgrep"
+        ? await tryTgrep(input, ctx, root, rootStat.isDirectory)
+        : undefined;
+    // Zero-match re-check (Taskana 4160 follow-up): a trigram index answers
+    // from what it has indexed — a file the agent just wrote may not be in a
+    // stale index yet, so tgrep's "no matches" can be wrong where a fresh
+    // rg scan matches. Re-run every zero-match tgrep answer through the rg
+    // tier below (always a fresh scan) and prefer rg's result when rg runs;
+    // a non-zero tgrep match count is returned as-is. If rg itself is
+    // unavailable/fails, the JS path below answers (also a fresh scan), so a
+    // zero-match tgrep answer is never returned directly.
+    if (tgrepOutput && tgrepOutput.totalMatches > 0) return { ok: true, output: tgrepOutput };
 
     const rgOutput = await tryRipgrep(input, ctx, root, rootStat.isDirectory);
     if (rgOutput) {

@@ -31,6 +31,20 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   via the `anycode_agent` dynamic tool and Claude tabs via the in-band
   `anycode` MCP server; projecting profiles into the CLI's own registry
   (`--agents <json>`) was rejected because `engine:` has no meaning there.
+- Optional trigram-index backend for the Grep tool: set
+  `ANYCODE_GREP_BACKEND=tgrep` (or `settings.tools.grepBackend: "tgrep"`; env
+  wins, default `rg`) and AnyCode routes Grep through a `tgrep` binary
+  resolved from PATH (`ANYCODE_TGREP_BIN` overrides the location; on Windows
+  only absolute PATH candidates are used). tgrep is probed with `--version`
+  (own 5 s budget, abortable, cached per binary for the process lifetime);
+  any failure — missing binary, refused daemon, error exit, timeout —
+  silently falls back to ripgrep and then the JS path, never a trimmed
+  result. A zero-match tgrep answer is re-checked through a fresh ripgrep
+  scan before being returned, so a stale index can never hide a file the
+  agent just wrote. `--no-max-filesize` lifts tgrep's 64 MiB default cap so
+  it cannot answer "no matches" where `rg` would match. AnyCode never
+  starts, stops or indexes for tgrep — running `tgrep serve` is up to the
+  user.
 
 ## [0.0.35] — 2026-10-10
 

@@ -18,6 +18,7 @@ import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
   ENV_CONTEXT_WINDOW,
   ENV_CONTEXT_WINDOW_MODEL,
+  ENV_GREP_BACKEND,
   ENV_INCLUDE_USAGE,
   ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
@@ -134,6 +135,32 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(env.ANYCODE_TOOL_CONCURRENCY).toBe("4");
     expect(env.ANYCODE_STALL_TIMEOUT_MS).toBe("9000");
     expect(env.ANYCODE_MAX_TURNS).toBe("100");
+  });
+
+  it("projects tools.grepBackend into ANYCODE_GREP_BACKEND (Taskana 4160; env > settings)", async () => {
+    // settings fill when the boot env is blank
+    const fromSettings = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ tools: { grepBackend: "tgrep" } }),
+      getSecret: noSecret,
+    });
+    expect(fromSettings[ENV_GREP_BACKEND]).toBe("tgrep");
+
+    // a stale fork env wins over the settings value (fillFromSettings only fills blanks)
+    const fromEnv = await buildHostEnv({
+      bootEnv: { ANYCODE_GREP_BACKEND: "rg" },
+      settings: settings({ tools: { grepBackend: "tgrep" } }),
+      getSecret: noSecret,
+    });
+    expect(fromEnv[ENV_GREP_BACKEND]).toBe("rg");
+
+    // neither set → the variable stays absent (default rg, no explicit emission)
+    const unset = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ tools: {} }),
+      getSecret: noSecret,
+    });
+    expect(unset[ENV_GREP_BACKEND]).toBeUndefined();
   });
 
   it("carries the rest of the boot env through untouched (PATH etc.)", async () => {

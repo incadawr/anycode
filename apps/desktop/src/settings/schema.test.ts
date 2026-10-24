@@ -1524,3 +1524,34 @@ describe("preview.liveReload (Taskana 4100, additive-optional)", () => {
     }
   });
 });
+
+describe("tools.grepBackend (Taskana 4160, additive-optional)", () => {
+  it("round-trips grepBackend: \"tgrep\" through the enum", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), tools: { grepBackend: "tgrep" } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.tools.grepBackend).toBe("tgrep");
+    }
+  });
+
+  it("round-trips grepBackend: \"rg\"", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), tools: { grepBackend: "rg" } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.tools.grepBackend).toBe("rg");
+    }
+  });
+
+  it("rejects grepBackend: \"auto\" — the selector is an enum, never auto", () => {
+    const bad = { ...cloneDefaults(), tools: { grepBackend: "auto" } };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("still parses with no grepBackend present (tools: {} stays valid)", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), tools: {} });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.tools.grepBackend).toBeUndefined();
+    }
+  });
+});
