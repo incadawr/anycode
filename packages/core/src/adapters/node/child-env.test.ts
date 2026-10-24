@@ -200,6 +200,11 @@ describe("relayUrl rewrite (TASK.135 follow-up / Taskana 4074)", () => {
     );
     expect(out.HTTPS_PROXY).toBe(RELAY);
     expect(out.HTTP_PROXY).toBe("http://local-mitm:8080");
+    // ...and the ABSENT lowercase spelling is NOT relay-filled: curl reads
+    // only `http_proxy`, Python lets lowercase win — a relay there would
+    // re-route HTTP through the credentialed upstream (review of F3 fix).
+    expect(out.http_proxy).toBeUndefined();
+    expect(out.https_proxy).toBe(RELAY);
     expect(JSON.stringify(out)).not.toContain("secret");
 
     // Inverse family: credentialed ALL_PROXY + clean HTTPS_PROXY — the clean
@@ -215,6 +220,9 @@ describe("relayUrl rewrite (TASK.135 follow-up / Taskana 4074)", () => {
     );
     expect(inverse.ALL_PROXY).toBeUndefined();
     expect(inverse.HTTPS_PROXY).toBe("http://clean-https:3129");
+    expect(inverse.https_proxy).toBeUndefined(); // clean sibling: absent spelling not relay-filled
+    expect(inverse.HTTP_PROXY).toBe(RELAY); // untouched pair still gets the remedy
+    expect(inverse.http_proxy).toBe(RELAY);
   });
 
   // F4 companion: when the only credentialed member is OUTSIDE the four-name
