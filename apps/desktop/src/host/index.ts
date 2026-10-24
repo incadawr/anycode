@@ -549,6 +549,9 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     status: outcome.status,
     durationMs: outcome.durationMs,
     ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
+    // TASK.240/4055 cross-review F2: the ceiling summary rides the report's
+    // metadata so the renderer's card shows the budget line on this path too.
+    ...(outcome.ceiling !== undefined ? { ceiling: outcome.ceiling } : {}),
   });
 }
 

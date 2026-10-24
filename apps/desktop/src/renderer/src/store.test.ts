@@ -2531,6 +2531,32 @@ describe("desktop store — subagent_end.responseModel forwarding (TASK.161 slic
     expect(block2.subagent).toBeNull();
   });
 
+  // Taskana 4055 cross-review F2: a detached child's ceiling summary must
+  // reach its card (the budget line), not be dropped with the non-length path.
+  it("child_report with childTerminal.ceiling (no length) patches the Agent block's final.ceiling (Taskana 4055 F2)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    beginAgentToolCall(store, "turn-1", "spawn-ceil");
+
+    store.getState().applyHostMessage({
+      type: "child_report",
+      id: "spawn-ceil",
+      text: "stopped",
+      childTerminal: {
+        status: "max_turns",
+        durationMs: 500,
+        ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+      },
+    });
+
+    const block = findByToolCallId(store, "spawn-ceil");
+    expect(block?.kind === "tool_call" ? block.subagent?.final : undefined).toEqual({
+      status: "max_turns",
+      durationMs: 500,
+      ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+    });
+  });
+
   it("a length child_report CORRECTS an already-settled subagent.final (authoritative) and is idempotent", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

@@ -46,6 +46,24 @@ describe("ChildReportQueue (TASK.145 срез 2 §4 point 1)", () => {
     expect(outbound.sent.at(-1)).toEqual({ type: "child_report", id: "report-plain", text: "plain" });
   });
 
+  // Taskana 4055 cross-review F2: the ceiling summary rides the detached
+  // report's childTerminal too (the only terminal channel a detached child has).
+  it("add() with a ceiling summary in childTerminal sends and resends it verbatim (Taskana 4055 F2)", () => {
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    const meta = {
+      status: "max_turns" as const,
+      durationMs: 7,
+      ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" as const },
+    };
+
+    queue.add("report-ceiling", "stopped", meta);
+    expect(outbound.sent).toEqual([{ type: "child_report", id: "report-ceiling", text: "stopped", childTerminal: meta }]);
+    outbound.sent.length = 0;
+    queue.resendAll();
+    expect(outbound.sent).toEqual([{ type: "child_report", id: "report-ceiling", text: "stopped", childTerminal: meta }]);
+  });
+
   it("ack() removes the report so a later resendAll() never re-sends it", () => {
     const outbound = stubOutbound();
     const queue = new ChildReportQueue(outbound);

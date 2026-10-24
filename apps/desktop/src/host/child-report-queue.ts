@@ -34,6 +34,7 @@
 
 import { formatChildReportCapNotice } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
+import type { ChildCeilingSummary } from "../shared/child-sessions.js";
 
 /** Narrow seam this file actually needs — mirrors the SessionPersistence/tasks/lsp narrow-interface posture elsewhere in host/session.ts. */
 export interface ChildReportOutbound {
@@ -51,6 +52,7 @@ export interface ChildReportTerminalMeta {
   status: "completed" | "max_turns" | "cancelled" | "error";
   durationMs: number;
   finalTurnFinishReason?: "length";
+  ceiling?: ChildCeilingSummary;
 }
 
 /** Serializable state of the queue (Taskana 4123): everything a host restart needs to resume delivery. */

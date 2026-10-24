@@ -4483,11 +4483,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // (no subagent_start was ever emitted for it), so the card is
             // synthesized from the block's own input, mirroring App.tsx's
             // fallbackCardFromInput.
-            if (message.childTerminal?.finalTurnFinishReason === "length") {
-              const term: { status: "completed" | "max_turns" | "cancelled" | "error"; durationMs: number; finalTurnFinishReason: "length" } = {
-                status: message.childTerminal.status,
-                durationMs: message.childTerminal.durationMs,
-                finalTurnFinishReason: "length" as const,
+            // TASK.240/4055 cross-review F2: the ceiling summary is patched by
+            // the same branch (it is the detached child's only terminal channel).
+            const childTerminal = message.childTerminal;
+            if (childTerminal !== undefined && (childTerminal.finalTurnFinishReason === "length" || childTerminal.ceiling !== undefined)) {
+              const term: {
+                status: "completed" | "max_turns" | "cancelled" | "error";
+                durationMs: number;
+                finalTurnFinishReason?: "length";
+                ceiling?: { rounds: number; grantedTurns: number; lastRefusal?: string };
+              } = {
+                status: childTerminal.status,
+                durationMs: childTerminal.durationMs,
+                ...(childTerminal.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" as const } : {}),
+                ...(childTerminal.ceiling !== undefined ? { ceiling: childTerminal.ceiling } : {}),
               };
               set((state) => {
                 let matched = false;
@@ -4510,7 +4519,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                         final: {
                           status: term.status,
                           durationMs: term.durationMs,
-                          finalTurnFinishReason: "length" as const,
+                          ...(term.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: term.finalTurnFinishReason } : {}),
+                          ...(term.ceiling !== undefined ? { ceiling: term.ceiling } : {}),
                         },
                       },
                     };
@@ -4535,7 +4545,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                     final: {
                       status: term.status,
                       durationMs: term.durationMs,
-                      finalTurnFinishReason: "length" as const,
+                      ...(term.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: term.finalTurnFinishReason } : {}),
+                      ...(term.ceiling !== undefined ? { ceiling: term.ceiling } : {}),
                     },
                   };
                   return { ...block, subagent: synthesized };

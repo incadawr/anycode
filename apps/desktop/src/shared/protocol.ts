@@ -55,6 +55,7 @@ import type { UsageLimitNotice } from "./usage-limit.js";
 // here rather than re-derived, so the UI wire's cap can never silently drift
 // from the id shape this system actually mints.
 import { CHILD_ID_MAX_CHARS } from "./child-sessions.js";
+import type { ChildCeilingSummary } from "./child-sessions.js";
 // Slice 5.7 (design slice-5.7-cut.md §2.1): git-domain types for the additive
 // git wire surface. Type-only (verbatimModuleSyntax erases them from the renderer
 // bundle — hard requirement, see this file's header). They ride the ports barrel
@@ -927,6 +928,8 @@ export type HostToUiMessage =
         status: "completed" | "max_turns" | "cancelled" | "error";
         durationMs: number;
         finalTurnFinishReason?: "length";
+        /** TASK.240/4055 cross-review F2: the child's ceiling summary (additive; absent when the ceiling never tripped). */
+        ceiling?: ChildCeilingSummary;
       };
     }
   // TASK.198 срез C (plan §1.3): fires strictly AFTER a live recognizer-config
