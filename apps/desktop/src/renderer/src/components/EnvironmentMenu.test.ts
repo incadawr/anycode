@@ -3,17 +3,17 @@ import { workspaceLabel } from "./EnvironmentMenu.js";
 
 describe("workspaceLabel", () => {
   it("returns the path unchanged when it fits within maxChars", () => {
-    const main = "/Users/incadawr/projects/tools/anycode";
+    const main = "/Users/<user>/projects/tools/anycode";
     expect(main.length).toBeLessThanOrEqual(44);
     expect(workspaceLabel(main)).toBe(main);
   });
 
   it("head-ellipsizes a worktree path, preserving the distinguishing tail", () => {
-    const worktree = "/Users/incadawr/projects/tools/anycode/.anycode/worktrees/orch-4108";
+    const worktree = "/Users/<user>/projects/tools/anycode/.anycode/worktrees/orch-4108";
     const label = workspaceLabel(worktree);
     expect(label.startsWith("…")).toBe(true);
     expect(label.endsWith("worktrees/orch-4108")).toBe(true);
-    expect(label).not.toBe(workspaceLabel("/Users/incadawr/projects/tools/anycode"));
+    expect(label).not.toBe(workspaceLabel("/Users/<user>/projects/tools/anycode"));
   });
 
   it("preserves the tail for Windows-style separators", () => {

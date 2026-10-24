@@ -146,3 +146,11 @@ pass the existing settings as `sourceSettings`, retain the real connection ID,
 and keep the source vault unchanged. Never invent a connection ID and expect
 the owner's vault to authenticate it. Migration scenarios deliberately using
 version 1 are separate tests and should retain their old fixtures.
+
+## Repo hygiene guard
+
+`apps/desktop/src/main/repo-hygiene.test.ts` fails the suite when any tracked file contains the
+literal owner home path (`/Users/<owner>`). When a smoke script needs a per-user default,
+derive it from `os.homedir()` / `os.tmpdir()` at runtime (see `apps/desktop/scripts/profile-ui-smoke.mjs`);
+when a doc or fixture needs an example path, use the placeholder `/Users/<user>`.
+History scrubbing of already-pushed commits is out of scope (see Taskana 4163).

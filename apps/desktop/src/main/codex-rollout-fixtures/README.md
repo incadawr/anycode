@@ -139,6 +139,12 @@ instruction ("synthetic MINIMAL fixture ... if none is found in the existing cor
   — plus the `tool_search_call`/`_output` exotic pair. One `function_call_output` (38 KB, a long
   `rg`/`find`-style command dump) was truncated by `scrub.mjs`'s generic >4000-char leaf cap;
   structure (still one `function_call_output` record) is unchanged.
+- **Taskana 4163 scrub:** the source session discussed private infrastructure of another
+  project, so every free-text payload (the workspace AGENTS.md body, the user prompt, the
+  agent messages, the `exec_command` `cmd` strings and the `function_call_output` bodies) was
+  replaced with synthetic placeholder text, and `session_meta.git.commit_hash` was zeroed.
+  Record types, ordering, ids, `call_id`s, tool names and the developer/base instructions are
+  unchanged, so the importer produces the identical item/part/stats shape.
 
 ### `agent-message-inter-agent.jsonl`
 - **Source:** `~/.codex/sessions/2026/07/14/rollout-2026-07-14T23-17-07-019f6246-aed9-7b51-b49c-77f2c92f7213.jsonl`
