@@ -1616,11 +1616,13 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         // (`codexAgentPermissionMode`, host/index.ts's own codex tail).
         // `claudeAgentPermissionMode` is the exact analogue: `read-only`
         // parent → `plan` (the child's Write/Edit/Bash are DENIED, matching
-        // the preset's own "cannot execute the plan" contract), anything
-        // wider or unrecognized → `build` (ask-first). Late-bound through
-        // `claudeParentEngine` (bound at the `claudeEngine` assignment below)
-        // because the port exists before connect; pre-bind calls read the
-        // fail-narrow default, never wider than `ask`.
+        // the preset's own "cannot execute the plan" contract), the
+        // known-wider presets `ask`/`workspace` → `build` (ask-first), and
+        // anything unrecognized fails NARROW to `plan` (the codex door's own
+        // allowlist shape). Late-bound through `claudeParentEngine` (bound at
+        // the `claudeEngine` assignment below) because the port exists
+        // before connect; pre-bind calls read the fail-narrow default
+        // (`ask` preset → `build`), never wider.
         getPermissionMode: () =>
           claudeAgentPermissionMode(claudeParentEngine?.snapshot().activePresetId ?? "ask"),
         send: sendChildSessionMessage,

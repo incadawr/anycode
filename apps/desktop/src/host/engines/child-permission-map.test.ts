@@ -70,17 +70,19 @@ describe("claudeChildPresetId (CUT-S4 §4.2)", () => {
  * analogue of `codexAgentPermissionMode` for the codex door. The posture
  * contract (never wider than the parent): `read-only` → `plan` (its Write/
  * Edit/Bash are DENIED, matching "Claude plans and reads files, but cannot
- * execute the plan"), every wider/unknown preset → `build` (asks). Codex-door
- * parity: `build`/`edit` both mean "ask first", and no claude preset is ever
- * `yolo`-adjacent, so nothing wider than `build` is ever produced.
+ * execute the plan"), `ask`/`workspace` → `build` (ask-first — `workspace`
+ * is still Claude's own ask-outside-the-cwd tier, never wider). Failure arm
+ * parity with the codex door (dynamic-tool-bridge.ts): an UNRECOGNIZED preset
+ * id fails NARROW to `plan`, not to `build` — a future preset id can never
+ * widen a child.
  */
 describe("claudeAgentPermissionMode (claude door port seam, Taskana 4056 M1)", () => {
   it.each([
     ["read-only", "plan"],
     ["ask", "build"],
     ["workspace", "build"],
-    ["unknown-future-preset", "build"],
-    ["", "build"],
+    ["unknown-future-preset", "plan"],
+    ["", "plan"],
   ] as const)("%s maps to %s (never wider than the parent preset)", (presetId, expected) => {
     expect(claudeAgentPermissionMode(presetId)).toBe(expected);
   });
