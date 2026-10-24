@@ -3901,28 +3901,38 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           set({ quota: providerQuotaToWire(event.quota) });
           const snapshot = useSettingsStore.getState().snapshot;
           const settings = snapshot?.settings;
-          if (settings?.provider?.connections) {
-            const observedAt = new Date().toISOString();
-            const source = event.quota.sources[0] ?? "";
-            const primary = event.quota.primary; // present whenever the update exists
-            const connections = settings.provider.connections.map((connection) =>
-              connection.baseUrl && primary !== undefined && event.baseUrl.startsWith(connection.baseUrl.replace(/\/+$/, ""))
-                ? {
-                    ...connection,
-                    // Sparse merge: a new observation with absent fields NEVER
-                    // wipes known fields (Q3 cadence: only what arrived).
-                    lastQuota: {
-                      ...(connection.lastQuota ?? {}),
-                      ...primary,
-                      observedAt,
-                      source,
-                    },
-                  }
-                : connection,
-            );
-            useSettingsStore.setState({
-              snapshot: { ...snapshot!, settings: { ...settings, provider: { ...settings.provider, connections } } },
-            });
+          const primary = event.quota.primary;
+          if (snapshot !== null && snapshot !== undefined && settings?.provider?.connections && primary !== undefined) {
+            const connections = settings.provider.connections;
+            // Attribute to THIS tab's connection (the quota belongs to its key,
+            // not to every connection on the same host). Unpinned tab: only an
+            // exact, unique baseUrl match — never a guess between siblings.
+            const norm = (url: string): string => url.replace(/\/+$/, "");
+            const pinnedId = get().pinnedConnection?.connectionId;
+            const byUrl = connections.filter((c) => c.baseUrl !== undefined && norm(c.baseUrl) === norm(event.baseUrl));
+            const targetId = pinnedId ?? (byUrl.length === 1 ? byUrl[0]!.id : undefined);
+            if (targetId !== undefined && connections.some((c) => c.id === targetId)) {
+              const observedAt = new Date().toISOString();
+              const source = event.quota.sources[0] ?? "";
+              const next = connections.map((connection) =>
+                connection.id === targetId
+                  ? {
+                      ...connection,
+                      // Sparse merge only within the SAME header family: a new
+                      // family must not inherit another family's reset time.
+                      lastQuota: {
+                        ...(connection.lastQuota?.source === source ? connection.lastQuota : {}),
+                        ...primary,
+                        observedAt,
+                        source,
+                      },
+                    }
+                  : connection,
+              );
+              useSettingsStore.setState({
+                snapshot: { ...snapshot, settings: { ...settings, provider: { ...settings.provider, connections: next } } },
+              });
+            }
           }
           return;
         }

@@ -210,4 +210,34 @@ describe("providerQuotaFromHeaders", () => {
     expect(update?.primary).toEqual({ usedPercent: 50, windowDurationMins: 5 });
     expect(update?.sources).toContain("x-ratelimit-requests-window-minutes");
   });
+
+  // Review follow-up: OpenAI ordering, relative resets, strict counts.
+  it("parses OpenAI-ordered names (x-ratelimit-limit-requests) with a Go-duration reset", () => {
+    const update = providerQuotaFromHeaders(
+      bag(200, {
+        "x-ratelimit-limit-requests": "60",
+        "x-ratelimit-remaining-requests": "15",
+        "x-ratelimit-reset-requests": "6m0s",
+      }),
+      NOW,
+    );
+    expect(update?.primary).toEqual({ usedPercent: 75, resetsAt: NOW / 1000 + 360 });
+  });
+
+  it("reads a small numeric reset as a delta in seconds, not as a 1970 epoch", () => {
+    const update = providerQuotaFromHeaders(
+      bag(200, { "x-ratelimit-requests-limit": "10", "x-ratelimit-requests-remaining": "5", "x-ratelimit-requests-reset": "60" }),
+      NOW,
+    );
+    expect(update?.primary?.resetsAt).toBe(NOW / 1000 + 60);
+  });
+
+  it("drops a family whose counts are not plain integers (`20abc`, `1.5`)", () => {
+    expect(
+      providerQuotaFromHeaders(bag(200, { "x-ratelimit-requests-limit": "100", "x-ratelimit-requests-remaining": "20abc" }), NOW),
+    ).toBeNull();
+    expect(
+      providerQuotaFromHeaders(bag(200, { "x-ratelimit-requests-limit": "1.5", "x-ratelimit-requests-remaining": "1" }), NOW),
+    ).toBeNull();
+  });
 });
