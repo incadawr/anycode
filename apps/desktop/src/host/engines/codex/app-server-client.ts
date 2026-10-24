@@ -275,6 +275,12 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
       else delete env[name];
     }
   }
+  // ALL_PROXY/all_proxy ride the same passthrough list; the relay only fronts
+  // the HTTP(S)_PROXY upstream, so a credentialed one is dropped — the DoD is
+  // "no upstream password in an engine tab's env" (Taskana 4685 review).
+  for (const name of ["ALL_PROXY", "all_proxy"] as const) {
+    if (proxyValueHasUserinfo(env[name] ?? "")) delete env[name];
+  }
   // TASK.139: `settings.codex.proxyUrl`, carried in from main under a private
   // name and turned into the real proxy family here. It OVERWRITES whatever the
   // passthrough list just copied in — that value can only be the connection's

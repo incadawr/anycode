@@ -1805,7 +1805,10 @@ void app.whenReady().then(async () => {
       }
     },
   };
-  const migration = await migrateLegacyProxyUrls(settings!, legacyMigrationDeps).catch(() => undefined);
+  // A newer-than-CURRENT settings.json loads read-only: this binary must never
+  // rewrite it (the IPC writers refuse `read_only` the same way), so the
+  // migration — which saves — is skipped entirely (Taskana 4685 review).
+  const migration = loaded.readOnly ? undefined : await migrateLegacyProxyUrls(settings!, legacyMigrationDeps).catch(() => undefined);
   if (migration?.changed) {
     await withSettingsFileLock(settingsPath, () => saveSettings(settingsPath, settings!));
     await refreshProxyPasswordCache().catch(() => undefined);

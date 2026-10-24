@@ -168,6 +168,11 @@ export function buildDoctorChildEnv(
       else delete env[name];
     }
   }
+  // The relay fronts only the HTTP(S)_PROXY upstream: a credentialed
+  // ALL_PROXY/all_proxy is dropped (Taskana 4685 review).
+  for (const name of ["ALL_PROXY", "all_proxy"] as const) {
+    if (typeof env[name] === "string" && env[name]!.includes("@")) delete env[name];
+  }
   env.PATH = augmentPathForGui(env.PATH, platform);
   // TASK.139: the engine-level proxy, if main stamped its carrier into `source`.
   // `codex login` is the reason this belongs on the DOCTOR builder and not only

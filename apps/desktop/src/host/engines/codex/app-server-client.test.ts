@@ -837,6 +837,14 @@ describe("buildCodexChildEnv — engine proxy carrier (TASK.139)", () => {
       }
     });
 
+    it("a credentialed ALL_PROXY/all_proxy is dropped, a clean one passes (Taskana 4685 review)", () => {
+      const SRC: NodeJS.ProcessEnv = { HOME: "/home/test", PATH: "/usr/bin", ALL_PROXY: "socks5://u:s3cret@p:1080", all_proxy: "socks5://p:1080" };
+      const env = buildCodexChildEnv(SRC, "linux");
+      expect(env.ALL_PROXY).toBeUndefined();
+      expect(env.all_proxy).toBe("socks5://p:1080");
+      expect(JSON.stringify(env)).not.toContain("s3cret");
+    });
+
     it("a credential-less passthrough (no @) is untouched, verbatim", () => {
       const env = buildCodexChildEnv(CONNECTION_SOURCE, "linux");
       expect(env.HTTPS_PROXY).toBe(CONNECTION_PROXY);

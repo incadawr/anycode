@@ -407,10 +407,20 @@ export async function migrateLegacyProxyUrls(
     if (!binding.exists(settings, scope)) {
       continue;
     }
-    const { legacyUrl } = binding.read(settings, scope);
+    const { ref, legacyUrl } = binding.read(settings, scope);
     // Only a CREDENTIALED string is migrated; anything else (absent,
     // credential-less, malformed) is left byte-identical.
     if (legacyUrl === undefined || !legacyUrl.includes("@")) {
+      continue;
+    }
+    if (ref !== undefined) {
+      // The scope already carries a ref, which OUTRANKS the legacy string:
+      // importing the dead string would REPLACE the user's chosen profile
+      // with a different proxy. Only the plaintext credential goes — the
+      // binding's write keeps the same ref and deletes the legacy key, so the
+      // effective proxy is unchanged (Taskana 4685 review).
+      binding.write(settings, scope, ref);
+      imported.push({ scope, profileId: ref });
       continue;
     }
     try {

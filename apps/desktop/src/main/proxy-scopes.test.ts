@@ -406,6 +406,17 @@ describe("migrateLegacyProxyUrls (Taskana 4685)", () => {
     expect(vault.writes.map((w) => w.value).sort()).toEqual(["cp", "lp"]);
   });
 
+  it("a scope that already carries a ref keeps it: the outranked credentialed string is stripped, never imported over the ref (Taskana 4685 review)", async () => {
+    const vault = recordingVault();
+    const doc = withConnections([connectionFixture("conn-1", { proxyRef: "chosen", proxyUrl: "http://old:pw@stale:3128" })]);
+    const result = await migrateLegacyProxyUrls(doc, { ...importDeps(ids("proxy-new")), ...vault.deps });
+    expect(result.changed).toBe(true);
+    expect(doc.provider.connections[0]!.proxyRef).toBe("chosen");
+    expect(doc.provider.connections[0]!.proxyUrl).toBeUndefined();
+    expect(proxyProfiles(doc)).toEqual([]);
+    expect(vault.writes).toEqual([]);
+  });
+
   it("a credential-less legacy string is untouched (changed:false, no profile, no secret)", async () => {
     const vault = recordingVault();
     const doc = withConnections([connectionFixture("conn-1", { proxyUrl: "http://plain:3128" })]);
