@@ -111,6 +111,8 @@ import { createSystemProxyResolver, type SystemProxyCache } from "./system-proxy
 import { sendToMainWindow } from "./main-window-send.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
+// Taskana 4109 (old TASK.122): telemetry-directory retention sweep.
+import { startTelemetryRetention, type TelemetryRetentionHandle } from "./telemetry-retention.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
 import {
@@ -457,6 +459,12 @@ let win: BrowserWindow | null = null;
 let persistence: SqlitePersistenceAdapter | null = null;
 /** Multi-host lifecycle manager (§2.2); null until boot wires it. */
 let manager: TabHostManager | null = null;
+/**
+ * Taskana 4109 (old TASK.122): telemetry-directory retention handle. Boot
+ * wires it right after registerProfileIpc (skipped under self-check); quit
+ * stops both timers via `shutdownEverything`.
+ */
+let telemetryRetention: TelemetryRetentionHandle | null = null;
 /** Live for the whole app lifetime once boot() constructs it (registerPreviewHost never returns null). */
 let previewHost: PreviewHostHandle | null = null;
 /**
@@ -2751,6 +2759,20 @@ void app.whenReady().then(async () => {
     env: process.env,
   });
 
+  // Taskana 4109 (old TASK.122): retention for the telemetry directory —
+  // first sweep 2 min after boot, then daily. It sweeps EXACTLY the directory
+  // Profile reads (resolveProfileDir inside), skips self-check runs (an
+  // isolated automation profile must not delete anything), protects sessions
+  // open in a tab, and never touches anything modified in the last 24 h.
+  if (selfCheckProfile === undefined) {
+    telemetryRetention = startTelemetryRetention({
+      home: () => resolveProfileHome(process.env, app.isPackaged) ?? homedir(),
+      fs: new NodeProfileFs(),
+      env: process.env,
+      protectedSessionIds: () => (manager?.listTabs() ?? []).map((tab) => tab.sessionId),
+    });
+  }
+
   createWindow();
   if (selfCheckProfile !== undefined) {
     win!.webContents.on("did-fail-load", (_event, code) => console.error(`[self-check] renderer load failed (${code})`));
@@ -2866,6 +2888,10 @@ app.on("window-all-closed", () => {
  * write-behind queue.
  */
 async function shutdownEverything(): Promise<void> {
+  // Taskana 4109: stop the retention timers first — synchronous, ahead of the
+  // awaited teardown below, so no sweep can start mid-shutdown.
+  telemetryRetention?.stop();
+  telemetryRetention = null;
   const activeManager = manager;
   const activePersistence = persistence;
   const activeOnboarding = codexOnboarding;
