@@ -545,5 +545,84 @@ describe("LspManager (fixture integration)", () => {
       expect(callsB).toHaveLength(0);
       expect(ready.status()[0]!.state).toBe("ready");
     }, 15_000);
+
+    /** Spawns that record their callbacks so a test can deliver late events from a superseded child. */
+    function recordingExec(): {
+      exec: ExecutionPort;
+      children: Array<{ onStdout: (chunk: Buffer) => void; onExit: (info: { code: number | null; signal: string | null }) => void }>;
+    } {
+      const children: Array<{
+        onStdout: (chunk: Buffer) => void;
+        onExit: (info: { code: number | null; signal: string | null }) => void;
+      }> = [];
+      const exec: ExecutionPort = {
+        run: async () => ({
+          status: "completed",
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          durationMs: 0,
+        }),
+        spawnPersistent: (req: PersistentChildRequest): PersistentChildHandle => {
+          children.push({ onStdout: req.onStdout, onExit: req.onExit });
+          return { pid: 5000 + children.length, exited: false, write: () => {}, kill: async () => {} };
+        },
+      };
+      return { exec, children };
+    }
+
+    it(
+      "a late exit of the superseded child does not crash the respawned server (Taskana 4711 cross-review F2)",
+      async () => {
+        const { exec, children } = recordingExec();
+        const manager = makeRestartManager([tsSpec("ts")], exec);
+        void manager.diagnosticsAfterWrite("/proj/a.ts", "x\n");
+        await flushMicrotasks();
+        expect(children).toHaveLength(1);
+
+        children[0]!.onExit({ code: null, signal: "SIGKILL" });
+        await flushMicrotasks();
+        expect(manager.status()[0]!.state).toBe("crashed");
+
+        manager.restartCrashed();
+        await flushMicrotasks();
+        expect(children).toHaveLength(2);
+        expect(manager.status()[0]!.state).toBe("initializing");
+
+        // The old child's exit event arrives after the respawn.
+        children[0]!.onExit({ code: null, signal: "SIGTERM" });
+        await flushMicrotasks();
+        expect(manager.status()[0]!.state).toBe("initializing");
+      },
+      15_000,
+    );
+
+    it(
+      "a trailing malformed frame from the superseded child does not crash the respawned server (Taskana 4711 cross-review F2)",
+      async () => {
+        const { exec, children } = recordingExec();
+        const manager = makeRestartManager([tsSpec("ts")], exec);
+        void manager.diagnosticsAfterWrite("/proj/a.ts", "x\n");
+        await flushMicrotasks();
+
+        children[0]!.onExit({ code: null, signal: "SIGKILL" });
+        await flushMicrotasks();
+        expect(manager.status()[0]!.state).toBe("crashed");
+
+        manager.restartCrashed();
+        await flushMicrotasks();
+        expect(children).toHaveLength(2);
+
+        // A partial frame from the dead child is flushed after the respawn.
+        children[0]!.onStdout(Buffer.from("Content-Length: nope\r\n\r\n", "ascii"));
+        await flushMicrotasks();
+        expect(manager.status()[0]!.state).toBe("initializing");
+        expect(manager.status()[0]!.stderrTail).toBe("");
+      },
+      15_000,
+    );
   });
 });
