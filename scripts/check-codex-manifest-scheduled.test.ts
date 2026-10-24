@@ -42,6 +42,19 @@ describe("parseArgs", () => {
     });
   });
 
+  it("--open-issue is the only way out of dry-run (what the workflow passes)", () => {
+    expect(parseArgs(["--open-issue", "--repo", "incadawr/anycode"])).toEqual({
+      ok: true,
+      args: { dryRun: false, repo: "incadawr/anycode" },
+    });
+  });
+
+  it("--dry-run together with --open-issue is exit 2", () => {
+    const result = parseArgs(["--dry-run", "--open-issue"]);
+    expect(result.ok).toBe(false);
+    expect(result.exit).toBe(2);
+  });
+
   it("an unknown flag is exit 2 with usage", () => {
     const result = parseArgs(["--verbose"]);
     expect(result.ok).toBe(false);

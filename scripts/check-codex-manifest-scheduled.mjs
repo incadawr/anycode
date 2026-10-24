@@ -19,6 +19,8 @@
  *
  * `--dry-run` (the default) prints the verdict lines and exits 0 without
  * touching GitHub — safe to run by hand anywhere, network included.
+ * `--open-issue` is the ONLY way to leave dry-run; the scheduled workflow
+ * passes it explicitly.
  */
 import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -27,10 +29,12 @@ import { run } from "./check-codex-manifest.mjs";
 import { WATCHED_REPOS } from "./lib/collect-watched-repos.mjs";
 
 const SCRIPT = "check-codex-manifest-scheduled.mjs";
-const USAGE = `usage: node scripts/${SCRIPT} [--dry-run] [--repo <owner/name>]
+const USAGE = `usage: node scripts/${SCRIPT} [--dry-run | --open-issue] [--repo <owner/name>]
 
   --dry-run          print the check's lines and exit 0 (default; never
                      touches GitHub)
+  --open-issue       act on the verdict: a stale range opens/refreshes the
+                     tracking issue (what the scheduled workflow runs)
   --repo <owner/name>  repository to open the tracking issue against
                      (default: ${WATCHED_REPOS[0]}); must be in the watched list
 
@@ -56,10 +60,16 @@ function fail(message) {
  */
 export function parseArgs(argv) {
   const args = { dryRun: true, repo: WATCHED_REPOS[0] };
+  let sawDryRun = false;
+  let sawOpenIssue = false;
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === "--dry-run") {
+      sawDryRun = true;
       args.dryRun = true;
+    } else if (flag === "--open-issue") {
+      sawOpenIssue = true;
+      args.dryRun = false;
     } else if (flag === "--repo") {
       const value = argv[i + 1];
       if (!value || value.startsWith("--")) {
@@ -70,6 +80,9 @@ export function parseArgs(argv) {
     } else {
       return { ok: false, exit: 2, message: `unknown flag: ${flag}` };
     }
+  }
+  if (sawDryRun && sawOpenIssue) {
+    return { ok: false, exit: 2, message: "--dry-run and --open-issue are mutually exclusive" };
   }
   return { ok: true, args };
 }
