@@ -9,7 +9,12 @@
  *    be one of the forbidden print-mode/bypass postures (§4.2's "запрещённые
  *    постуры"), proven by resolving the id through the SAME frozen preset
  *    tables (`presets.ts`, read-only import) the engine boots actually
- *    consult — not by re-asserting the id strings alone.
+ *    consult — not by re-asserting the id strings alone. Since TASK.179
+ *    (Taskana 4078) this proof also covers the child-only `child-ask`
+ *    preset: `untrusted` is not a forbidden approval policy, and the
+ *    resolved preset ids are pinned to `read-only`/`child-ask`/`ask`
+ *    (`child-ask` only for the asking mode `build`; the autonomy modes
+ *    keep the public interactive `ask` posture).
  */
 
 import { PERMISSION_MODES } from "@anycode/core";
@@ -61,11 +66,21 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
   it("is total over every PermissionMode and matches the frozen table exactly", () => {
     expect(PERMISSION_MODES.map((mode) => [mode, codexChildPosture(mode)])).toEqual([
       ["plan", "read-only"],
-      ["build", "ask"],
+      ["build", "child-ask"],
       ["edit", "ask"],
       ["auto", "ask"],
       ["yolo", "ask"],
     ]);
+  });
+
+  it("narrowed to the asking mode: only build boots child-ask; the autonomy modes keep the pre-4078 ask posture", () => {
+    // `build` is the one AnyCode mode the codex `ask`/`approve-for-me` presets
+    // map back to (codexAgentPermissionMode) — the asking kind. The explicit
+    // autonomy choices keep exactly what they had before Taskana 4078.
+    expect(codexChildPosture("build")).toBe("child-ask");
+    expect(codexChildPosture("edit")).toBe("ask");
+    expect(codexChildPosture("auto")).toBe("ask");
+    expect(codexChildPosture("yolo")).toBe("ask");
   });
 
   it("'read-only' resolves through findCodexPreset's legacy fallback (never returned by codexPresetChoices, §4.2)", () => {
@@ -77,6 +92,7 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
     for (const mode of PERMISSION_MODES) {
       const preset = findCodexPreset(codexChildPosture(mode));
       expect(preset).toBeDefined();
+      expect(["read-only", "child-ask", "ask"]).toContain(preset!.id);
       expect(FORBIDDEN_CODEX_APPROVAL_POLICIES).not.toContain(preset!.threadParams.approvalPolicy);
       expect(FORBIDDEN_CODEX_REVIEWERS).not.toContain(preset!.threadParams.approvalsReviewer);
       expect(FORBIDDEN_CODEX_SANDBOX_MODES).not.toContain(preset!.threadParams.sandbox);

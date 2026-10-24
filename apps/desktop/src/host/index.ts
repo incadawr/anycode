@@ -328,6 +328,7 @@ import {
   isChildSessionBoot,
   parseHostArgs,
   resolveChildMaxTurns,
+  resolveEngineDraftPresetId,
   repairDanglingToolCalls,
   resolveBootSession,
   routePreviewMessage,
@@ -1121,7 +1122,9 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         // permission-map derives from its inherited mode — NEVER the (always
         // absent, §3.2 п.4's `enginePreset: null`) draft preset argv. A
         // non-child boot keeps the byte-identical prior draft.preset path.
-        const childPresetId = args.child !== undefined ? codexChildPosture(args.child.initialMode) : draft.preset;
+        // (Taskana 4078 finding 5: the ternary lives in boot.ts's
+        // `resolveEngineDraftPresetId` so the argv→preset seam is tested.)
+        const childPresetId = resolveEngineDraftPresetId(args.child, draft.preset, codexChildPosture);
         const created = await startCodexEngine({
           ...options,
           selection: {
@@ -1624,7 +1627,8 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         // permission-map derives from its inherited mode — NEVER the
         // (always absent, §3.2 п.4's `enginePreset: null`) draft preset
         // argv. A non-child boot keeps the byte-identical prior path.
-        const childPresetId = args.child !== undefined ? claudeChildPresetId(args.child.initialMode) : draft.preset;
+        // (Taskana 4078 finding 5: same extracted seam as the codex boot.)
+        const childPresetId = resolveEngineDraftPresetId(args.child, draft.preset, claudeChildPresetId);
         const created = await startClaudeEngine({
           ...options,
           selection: {

@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  CODEX_CHILD_ASK_PRESET_ID,
   CODEX_PERMISSION_PRESETS,
   DEFAULT_CODEX_PRESET,
   codexPresetChoices,
@@ -72,6 +73,42 @@ describe("codexPresetChoices (TASK.39 wire projection)", () => {
     for (const choice of choices) {
       expect(Object.keys(choice).sort()).toEqual(["description", "id", "label"]);
     }
+  });
+});
+
+describe("child-ask preset (Taskana 4078 / TASK.179)", () => {
+  it("resolves through findCodexPreset and boots untrusted on the same workspace-write sandbox", () => {
+    const preset = findCodexPreset(CODEX_CHILD_ASK_PRESET_ID);
+    expect(preset).toBeDefined();
+    expect(preset!.threadParams).toEqual({ approvalPolicy: "untrusted", approvalsReviewer: "user", sandbox: "workspace-write" });
+  });
+
+  it("turnOverride is a pure function of the workspace — sandbox identical to ask's", () => {
+    expect(findCodexPreset(CODEX_CHILD_ASK_PRESET_ID)!.turnOverride("/repo/a")).toEqual({
+      approvalPolicy: "untrusted",
+      approvalsReviewer: "user",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/repo/a"],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
+    });
+  });
+
+  it("is absent from the public menu — the three Codex-menu ids are unchanged", () => {
+    expect(codexPresetChoices().map((choice) => choice.id)).not.toContain(CODEX_CHILD_ASK_PRESET_ID);
+    expect(CODEX_PERMISSION_PRESETS.map((preset) => preset.id)).toEqual(["ask", "approve-for-me", "full-access"]);
+  });
+
+  it("drift check ignores the untrusted -> on-request resume echo (L8)", () => {
+    expect(
+      isEffectivePostureWeaker(findCodexPreset(CODEX_CHILD_ASK_PRESET_ID)!, {
+        approvalPolicy: "on-request",
+        sandbox: { type: "workspaceWrite" },
+      }),
+    ).toBe(false);
   });
 });
 

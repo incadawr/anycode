@@ -306,6 +306,21 @@ describe("CODEX_DRAFT_PRESETS / DEFAULT_CODEX_DRAFT_PRESET (TASK.39, cut §2(d)/
     expect(CODEX_DRAFT_PRESETS.map((p) => p.id)).toEqual(["ask", "approve-for-me", "full-access"]);
   });
 
+  // Taskana 4078 cross-review finding 3: the duplicate table is deliberate
+  // (no host exists at draft time), but the old test pinned only ids/order —
+  // the honest "ask" description (114 chars, names /tmp and $TMPDIR) could
+  // silently drift between the two copies on any future edit while the
+  // source comment claims "verbatim". This pins label AND description text
+  // against the host's own `codexPresetChoices()` projection, exactly the
+  // cross-import pattern store.test.ts already uses for host-pure modules
+  // (TurnTranslator, CollabAgentCardIndex). presets.ts is pure data — no
+  // node API, no Electron — so importing it from a renderer test is safe.
+  it("carries the host table's labels and descriptions verbatim (parity, not just ids)", async () => {
+    const { codexPresetChoices, DEFAULT_CODEX_PRESET } = await import("../../../host/engines/codex/presets.js");
+    expect(CODEX_DRAFT_PRESETS).toEqual(codexPresetChoices());
+    expect(DEFAULT_CODEX_DRAFT_PRESET).toBe(DEFAULT_CODEX_PRESET);
+  });
+
   it("every preset carries a non-empty label and a plain-language description", () => {
     for (const preset of CODEX_DRAFT_PRESETS) {
       expect(preset.label.length).toBeGreaterThan(0);

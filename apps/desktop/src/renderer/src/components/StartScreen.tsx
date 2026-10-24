@@ -384,7 +384,9 @@ export const CODEX_DRAFT_PRESETS: readonly EnginePermissionPreset[] = [
   {
     id: "ask",
     label: "Ask for approval",
-    description: "Codex works in this workspace and asks before going beyond it.",
+    // Mirrors host/engines/codex/presets.ts verbatim (honest wording,
+    // Taskana 4078): see that table's own comment.
+    description: "Codex runs commands itself in a sandbox: this workspace and temp dirs (/tmp, $TMPDIR) are writable without a prompt; AnyCode asks you only when codex itself requests approval.",
   },
   {
     id: "approve-for-me",
