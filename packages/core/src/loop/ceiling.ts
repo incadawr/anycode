@@ -61,6 +61,10 @@ export interface CeilingConfig {
    * captured at construction time would go stale within minutes.
    */
   supervisedRoot?: () => boolean;
+  /**
+   * TASK.240/4055: progress-scaled adaptive grants. Off => the TASK.124 decreasing ladder, byte-identical.
+   */
+  adaptive?: boolean;
 }
 
 /** The structured verdict, exactly as the model called it. */
@@ -113,6 +117,7 @@ export function buildCeilingDecisionPrompt(
   round: number,
   maxRounds: number,
   previousRemaining?: number,
+  adaptive?: boolean,
 ): string {
   const lines = [
     "You have reached the configured turn limit. Call `ceiling_verdict` exactly once with:",
@@ -122,8 +127,13 @@ export function buildCeilingDecisionPrompt(
     `Round ${round} of ${maxRounds}.`,
   ];
   if (previousRemaining !== undefined) {
+    // TASK.240/4055: adaptive mode measures DEMONSTRATED progress, not
+    // list-shortening — the model is told to report honestly instead of
+    // being coached into mechanically shrinking `remaining`.
     lines.push(
-      `Previous remaining count: ${previousRemaining}. You must shorten remaining to continue.`,
+      adaptive === true
+        ? `Previous remaining count: ${previousRemaining}. Report honestly; continuation is granted on demonstrated progress, not on shortening this list.`
+        : `Previous remaining count: ${previousRemaining}. You must shorten remaining to continue.`,
     );
   }
   return lines.join("\n");
@@ -145,6 +155,61 @@ export function grantForRound(round: number, maxTurns: number): number {
 }
 
 /**
+ * TASK.240/4055: the adaptive grant for one round — +50% of the base budget
+ * on round 1, then +25% for every further round (ceil, floored at 1), REPLACING
+ * the decreasing ladder when CeilingConfig.adaptive is on. The SUM clamps in
+ * ceilingGrant()'s existing maxGrantedTurns/maxTurnsCeiling math still bound
+ * the total, whatever this returns.
+ */
+export function adaptiveGrantForRound(round: number, maxTurns: number): number {
+  const share = round <= 1 ? 0.5 : 0.25;
+  return Math.max(1, Math.ceil(maxTurns * share));
+}
+
+/**
+ * TASK.4055 follow-up: tools whose WORK is dispatching other agents. Both are
+ * declared `readOnly: true` (tools/agent.ts, tools/workflow.ts) and that flag
+ * STAYS as-is — the permission plane treats a dispatch as side-effect-free
+ * for the parent workspace, and `readOnly` is load-bearing there. But a
+ * successful dispatch is the one thing an orchestrator session does all day:
+ * without this allowlist the adaptive budget counted such a session as
+ * permanently stalled from round 2 on (0 productive calls, every round).
+ * Exact names only — the core registry's subagent launchers are precisely
+ * Agent and Workflow; the foreign-engine agent tools (`anycode_agent` on
+ * codex, `Task` on claude) never route through this loop's dispatcher, so
+ * they cannot appear here. A tool that merely SOUNDS like a dispatcher is
+ * not one (unknown names keep failing closed in isProductiveToolCall).
+ */
+export const DISPATCH_TOOL_NAMES: readonly string[] = ["Agent", "Workflow"];
+
+/** TASK.4055 follow-up: true for the explicit dispatch allowlist above (name-exact). */
+export function isDispatchToolCall(toolName: string): boolean {
+  return DISPATCH_TOOL_NAMES.includes(toolName);
+}
+
+/**
+ * TASK.240/4055: does a successful call of `toolName` count as PRODUCTIVE
+ * progress? True for the dispatch allowlist above (a successful Agent or
+ * Workflow call IS the orchestrator's work, readOnly or not); otherwise true
+ * unless the registry declares the tool read-only. An unknown tool (no
+ * registry entry, or no metadata) fails CLOSED — a name the host cannot
+ * vouch for is not evidence of work, same posture as every other gate in
+ * this module.
+ */
+export function isProductiveToolCall(
+  toolName: string,
+  registry: { get(name: string): { metadata: { readOnly: boolean } } | undefined } | undefined,
+): boolean {
+  if (isDispatchToolCall(toolName)) {
+    return true;
+  }
+  const meta = registry?.get(toolName)?.metadata;
+  // Fail CLOSED: a tool the registry cannot vouch for (no entry, no metadata)
+  // is not evidence of work — only a REGISTERED non-read-only tool counts.
+  return meta !== undefined && meta.readOnly !== true;
+}
+
+/**
  * The grant actually issued for a round: the decreasing raw grant, clamped by
  * the session's total-grant budget (default = maxTurns, so the ladder can at
  * most double the configured budget) and, for a child, by the absolute
@@ -156,9 +221,17 @@ export function ceilingGrant(
   maxTurns: number,
   alreadyGranted: number,
   config?: CeilingConfig,
+  /**
+   * TASK.240/4055: compute the round's raw grant from adaptiveGrantForRound
+   * (+50%/+25%) instead of the decreasing ladder. The SUM clamps below apply
+   * identically either way — an adaptive grant is still bounded by
+   * maxGrantedTurns and maxTurnsCeiling.
+   */
+  adaptive?: boolean,
 ): number {
   const totalBudget = config?.maxGrantedTurns ?? maxTurns;
-  let grant = Math.min(grantForRound(round, maxTurns), totalBudget - alreadyGranted);
+  const raw = adaptive === true ? adaptiveGrantForRound(round, maxTurns) : grantForRound(round, maxTurns);
+  let grant = Math.min(raw, totalBudget - alreadyGranted);
   if (config?.maxTurnsCeiling !== undefined) {
     grant = Math.min(grant, config.maxTurnsCeiling - maxTurns - alreadyGranted);
   }
@@ -199,17 +272,37 @@ export function acceptCeilingVerdict(params: {
   previousRemaining?: number;
   /** Successful tool calls made since the previous grant. */
   successfulToolCalls: number;
+  /**
+   * TASK.240/4055: successful NON-read-only tool calls since the previous
+   * grant — the adaptive mode's progress measure. Defaults to
+   * `successfulToolCalls` (callers that have not adopted the productive
+   * counter keep the old arithmetic even with the flag on by accident).
+   */
+  productiveToolCalls?: number;
+  /** TASK.240/4055: adaptive mode gates on productive progress, not shortening. */
+  adaptive?: boolean;
 }): boolean {
-  const { verdict, round, previousRemaining, successfulToolCalls } = params;
+  const { verdict, round, previousRemaining, successfulToolCalls, adaptive } = params;
+  const productiveToolCalls = params.productiveToolCalls ?? successfulToolCalls;
   if (verdict.done || verdict.remaining.length === 0) {
     return false;
   }
   if (round >= 2) {
-    if (successfulToolCalls <= 0) {
-      return false;
-    }
-    if (previousRemaining === undefined || verdict.remaining.length >= previousRemaining) {
-      return false;
+    if (adaptive === true) {
+      // TASK.240: "Не считать любое успешное чтение файла прогрессом и не
+      // требовать механического уменьшения количества пунктов плана" — the
+      // round must contain at least one productive (non-read-only) success,
+      // and an unchanged/grown remaining list is NOT by itself a refusal.
+      if (productiveToolCalls <= 0) {
+        return false;
+      }
+    } else {
+      if (successfulToolCalls <= 0) {
+        return false;
+      }
+      if (previousRemaining === undefined || verdict.remaining.length >= previousRemaining) {
+        return false;
+      }
     }
   }
   if (round >= 3 && (verdict.nextAction === undefined || verdict.nextAction.trim().length === 0)) {
@@ -269,6 +362,8 @@ export interface CeilingDecisionRequest {
   round: number;
   maxRounds: number;
   previousRemaining?: number;
+  /** TASK.240/4055: adaptive mode's prompt variant (progress, not shortening). */
+  adaptive?: boolean;
   /** Hard window for this call; the controller is aborted when it elapses. */
   windowMs: number;
   /** The turn signal: the decision must not outlive a cancelled turn. */
@@ -305,6 +400,7 @@ export async function requestCeilingVerdict(
             request.round,
             request.maxRounds,
             request.previousRemaining,
+            request.adaptive,
           ),
         },
       ],

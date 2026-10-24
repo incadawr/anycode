@@ -136,6 +136,42 @@ export type ChildRunStatus = "completed" | "max_turns" | "cancelled" | "error";
 
 const CHILD_RUN_STATUSES: readonly ChildRunStatus[] = ["completed", "max_turns", "cancelled", "error"];
 
+/**
+ * TASK.240/4055: mirror of core's CeilingRefusalReason for the child-fact
+ * wire. Kept as an explicit literal copy (not imported from @anycode/core)
+ * because this file is the shared/main boundary — it must parse before any
+ * core import exists in the child-host boot path and its tests run without
+ * the package graph. If core's enum changes, this list MUST change with it
+ * (a parse here is a whitelist: an unknown reason fails closed to null).
+ */
+export type ChildCeilingRefusalReason =
+  | "ladder_disabled"
+  | "rounds_exhausted"
+  | "no_successful_tool_calls"
+  | "grant_budget_exhausted"
+  | "window_collapsed"
+  | "unreadable_verdict"
+  | "verdict_rejected"
+  | "stalled";
+
+const CHILD_CEILING_REFUSAL_REASONS: readonly ChildCeilingRefusalReason[] = [
+  "ladder_disabled",
+  "rounds_exhausted",
+  "no_successful_tool_calls",
+  "grant_budget_exhausted",
+  "window_collapsed",
+  "unreadable_verdict",
+  "verdict_rejected",
+  "stalled",
+];
+
+/** TASK.240/4055: the child's ceiling ladder summary on the wire — numbers + closed enum only. */
+export interface ChildCeilingSummary {
+  rounds: number;
+  grantedTurns: number;
+  lastRefusal?: ChildCeilingRefusalReason;
+}
+
 export type ChildRunRejectReason =
   | "limit_parent"
   | "limit_global"
@@ -191,6 +227,8 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       model?: string;
       /** Additive (TASK.219): the child's dedicated-port provider claim at terminal, when attributable. Absent on legacy payloads. */
       responseModel?: string;
+      /** TASK.240/4055 (additive): the child's ceiling ladder summary. Absent on legacy payloads and runs that never tripped the ceiling. */
+      ceiling?: ChildCeilingSummary;
     }
   /**
    * Additive (Taskana 4153): ack for a `ChildRunSend` — the follow-up message
@@ -251,6 +289,8 @@ export interface ChildTerminal {
    * no claim exists.
    */
   responseModel?: string;
+  /** TASK.240/4055 (additive): the child's ceiling ladder summary. Absent on legacy payloads. */
+  ceiling?: ChildCeilingSummary;
 }
 
 // ── admission/timing constants (§2.3) ──
@@ -600,6 +640,8 @@ const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   // TASK.219: additive child-fact model attribution keys.
   "model",
   "responseModel",
+  // TASK.240/4055: additive ceiling-ladder summary key.
+  "ceiling",
 ] as const;
 
 export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
@@ -728,6 +770,12 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       ) {
         return null;
       }
+      // TASK.240/4055: the ceiling summary is validated structurally —
+      // counters + a whitelist refusal reason; anything else fails closed.
+      const ceiling = parseChildCeilingSummary(msg.ceiling);
+      if (msg.ceiling !== undefined && ceiling === null) {
+        return null;
+      }
       return {
         type: CHILD_RUN_EVENT_TYPE,
         requestId,
@@ -744,6 +792,7 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed as number } : {}),
         ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
         ...(msg.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true as const } : {}),
+        ...(ceiling !== null ? { ceiling } : {}),
       };
     }
     default:
@@ -834,6 +883,35 @@ export function parseChildProgress(msg: unknown): ChildProgress | null {
   }
 }
 
+/**
+ * TASK.240/4055: structural validation of a wire `ceiling` summary — an
+ * object of exactly {rounds, grantedTurns, lastRefusal?}, counters required,
+ * `lastRefusal` (when present) must be on the whitelist. Returns the typed
+ * summary, or null for absent/invalid (callers fail closed on invalid).
+ */
+function parseChildCeilingSummary(value: unknown): ChildCeilingSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (!hasOnlyKeys(value, ["rounds", "grantedTurns", "lastRefusal"])) {
+    return null;
+  }
+  if (!isCounter(value.rounds) || !isCounter(value.grantedTurns)) {
+    return null;
+  }
+  if (
+    value.lastRefusal !== undefined &&
+    !CHILD_CEILING_REFUSAL_REASONS.includes(value.lastRefusal as ChildCeilingRefusalReason)
+  ) {
+    return null;
+  }
+  return {
+    rounds: value.rounds,
+    grantedTurns: value.grantedTurns,
+    ...(value.lastRefusal !== undefined ? { lastRefusal: value.lastRefusal as ChildCeilingRefusalReason } : {}),
+  };
+}
+
 export function parseChildTerminal(msg: unknown): ChildTerminal | null {
   if (!isRecord(msg) || msg.type !== CHILD_TERMINAL_TYPE) {
     return null;
@@ -865,6 +943,11 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
   ) {
     return null;
   }
+  // TASK.240/4055: structural validation, fail closed on an invalid summary.
+  const ceiling = parseChildCeilingSummary(msg.ceiling);
+  if (msg.ceiling !== undefined && ceiling === null) {
+    return null;
+  }
   return {
     type: CHILD_TERMINAL_TYPE,
     status: msg.status as ChildRunStatus,
@@ -878,5 +961,6 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
     ...(msg.activitySuppressed !== undefined ? { activitySuppressed: msg.activitySuppressed as number } : {}),
     ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
     ...(msg.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true as const } : {}),
+    ...(ceiling !== null ? { ceiling } : {}),
   };
 }

@@ -43,6 +43,7 @@ import type {
   AgentEvent,
   BackgroundTaskNotice,
   BackgroundTaskSnapshot,
+  CeilingRefusalReason,
   CheckpointMeta,
   CodexRateLimitsWire,
   CommandHookDeclaration,
@@ -92,7 +93,7 @@ import type {
   WirePort,
 } from "../shared/protocol.js";
 import { uiToHostMessageSchema } from "../shared/protocol.js";
-import { CHILD_STEER_QUEUE_MAX, type ChildRunStatus } from "../shared/child-sessions.js";
+import { CHILD_STEER_QUEUE_MAX, type ChildCeilingSummary, type ChildRunStatus } from "../shared/child-sessions.js";
 import type { GitUiBridge } from "./git-bridge.js";
 import type { IpcPermissionBroker } from "./permission-broker.js";
 import { extractSnapshotPath, isSnapshotTool, readSnapshot } from "./snapshot-hook.js";
@@ -418,6 +419,12 @@ export interface ChildTerminalReport {
    * inherited/shared ports, providers that expose no raw claim).
    */
   responseModel?: string;
+  /**
+   * TASK.240/4055: the child session's own ceiling ladder summary, folded
+   * from its ceiling_grant/ceiling_refused events. Optional: absent when the
+   * child never tripped the ceiling.
+   */
+  ceiling?: ChildCeilingSummary;
 }
 
 /**
@@ -1224,6 +1231,10 @@ export class Session {
   private childLoopStatus: ChildRunStatus | undefined;
   /** The last loop_end's `declaredDoneAtCeiling` (TASK 4149). */
   private childDeclaredDoneAtCeiling = false;
+  /** TASK.240/4055: the child's ceiling ladder, folded for the terminal summary. */
+  private childCeilingRounds = 0;
+  private childCeilingGrantedTurns = 0;
+  private childCeilingLastRefusal: CeilingRefusalReason | undefined;
   private childSafeError: string | undefined;
   /** TASK.116: latched when an engine error event carried safe.code "engine_dead" — no live engine remains, so queued steers are rejected, never drained into a turn that can only die again. */
   private childEngineDead = false;
@@ -3288,6 +3299,15 @@ export class Session {
         ...(this.childActivitySuppressed > 0 ? { activitySuppressed: this.childActivitySuppressed } : {}),
         ...(this.childFinalTurnFinishReason !== undefined ? { finalTurnFinishReason: this.childFinalTurnFinishReason } : {}),
         ...(this.childDeclaredDoneAtCeiling && this.childLoopStatus === "max_turns" ? { declaredDoneAtCeiling: true } : {}),
+        ...(this.childCeilingRounds > 0 || this.childCeilingGrantedTurns > 0 || this.childCeilingLastRefusal !== undefined
+          ? {
+              ceiling: {
+                rounds: this.childCeilingRounds,
+                grantedTurns: this.childCeilingGrantedTurns,
+                ...(this.childCeilingLastRefusal !== undefined ? { lastRefusal: this.childCeilingLastRefusal } : {}),
+              },
+            }
+          : {}),
       });
     } catch (error) {
       console.error(`[host] child.onTerminal threw: ${describeError(error)}`);
@@ -3376,6 +3396,16 @@ export class Session {
         this.childLoopStatus = event.reason === "workspace_transition" ? "error" : event.reason;
         this.childTurns += event.turns;
         this.childDeclaredDoneAtCeiling = event.declaredDoneAtCeiling === true;
+        break;
+      // TASK.240/4055: fold the child session's own ceiling ladder into the
+      // terminal summary — same closed shape (numbers + refusal enum) as
+      // runner.ts's in-process fold, no model text crosses the boundary.
+      case "ceiling_grant":
+        this.childCeilingRounds = Math.max(this.childCeilingRounds, event.round);
+        this.childCeilingGrantedTurns += event.granted;
+        break;
+      case "ceiling_refused":
+        this.childCeilingLastRefusal = event.reason;
         break;
       default:
         break;

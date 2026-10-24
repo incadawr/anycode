@@ -888,6 +888,98 @@ describe("output cap + status mapping", () => {
 });
 
 // ---------------------------------------------------------------------------
+// TASK.4055 child budget visibility: the child's own ceiling ladder (its
+// ceiling_grant/ceiling_refused events) folds into SubagentOutcome.ceiling and
+// the kind:end progress — numbers + the closed refusal enum only.
+
+describe("TASK.4055 child budget visibility", () => {
+  /**
+   * A child script that trips the ceiling once: round 1 grants (verdict with
+   * a remaining list), the granted round does read-only work only, and round
+   * 2's readable verdict is refused as "stalled" (adaptive mode: no productive
+   * tool call in the round). The wrap-up rescue still runs (TASK.124) — that
+   * request carries no tools and no verdict.
+   */
+  function adaptiveStallScript(): { model: ScriptedModelPort; verdictCalls: () => number } {
+    let step = 0;
+    let verdictCalls = 0;
+    const model = new ScriptedModelPort((req) => {
+      if (isCeilingRequest(req)) {
+        verdictCalls += 1;
+        return [
+          { type: "start" },
+          {
+            type: "tool_call",
+            toolCall: {
+              id: `v${verdictCalls}`,
+              name: "ceiling_verdict",
+              input: { done: false, remaining: ["finish the thing"] },
+            },
+          },
+          { type: "finish", finishReason: "tool_calls", usage: {} },
+        ];
+      }
+      if (isWrapUpRequest(req)) {
+        return textStep("REPORT: partial findings");
+      }
+      step += 1;
+      // Read-only successes only (TodoRead is readOnly in the real registry):
+      // the round has activity, but nothing PRODUCTIVE — the adaptive stall.
+      return toolStep(`c${step}`, "TodoRead", {}, `turn-${step}`);
+    });
+    return { model, verdictCalls: () => verdictCalls };
+  }
+
+  it("a stalled adaptive child folds its ladder into outcome.ceiling (rounds/grantedTurns/lastRefusal)", async () => {
+    const { model } = adaptiveStallScript();
+    const parent = makeParent({ modelPort: model, mode: "yolo" });
+    const runner = createSubagentRunner(parent);
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+    expect(outcome.status).toBe("max_turns");
+    // maxTurns 2 => round 1 grants ceil(2*0.5) = 1... but wait: adaptive is
+    // NOT enabled for children by default (owner decision, §7.3) — so this
+    // script's refusal is the LADDER's verdict_rejected, proving the outcome
+    // fold itself is mode-independent. With the ladder: round 1 granted 1
+    // (floor(2/2)), round 2 refused (remaining not shortened).
+    expect(outcome.ceiling).toEqual({
+      rounds: 1,
+      grantedTurns: 1,
+      lastRefusal: "verdict_rejected",
+    });
+    // A stall is a refusal, not a done declaration.
+    expect(outcome.declaredDoneAtCeiling).toBeUndefined();
+  });
+
+  it("a completed child that never trips the ceiling has NO ceiling key on the outcome", async () => {
+    const model = new ScriptedModelPort(() => [
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "done quickly" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]);
+    const runner = createSubagentRunner(makeParent({ modelPort: model }));
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+    expect(outcome.status).toBe("completed");
+    expect(outcome.ceiling).toBeUndefined();
+    expect("ceiling" in outcome).toBe(false);
+  });
+
+  it("the kind:end progress carries the same ceiling object as the outcome", async () => {
+    const { model } = adaptiveStallScript();
+    const runner = createSubagentRunner(makeParent({ modelPort: model, mode: "yolo" }));
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, { onProgress: (p) => progress.push(p) });
+
+    const ends = progress.filter((p): p is Extract<SubagentProgress, { kind: "end" }> => p.kind === "end");
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.ceiling).toEqual(outcome.ceiling);
+    expect(ends[0]!.ceiling).toEqual({ rounds: 1, grantedTurns: 1, lastRefusal: "verdict_rejected" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Agent-tool model override (Phase 4 slice 4.6, design §2.5). resolveChildModelPort
 // resolves req.model to a FIXED port for exactly that spawn; without a host
 // resolver the runner returns a honest error-outcome instead of a silent

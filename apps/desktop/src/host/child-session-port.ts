@@ -731,6 +731,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 spawnToolCallId: req.spawnToolCallId,
                 ...(event.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: event.finalTurnFinishReason } : {}),
                 ...(event.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true } : {}),
+                ...(event.ceiling !== undefined ? { ceiling: event.ceiling } : {}),
               };
               // TASK.145 срез 1: this run's `run()` promise already settled
               // at admit (above) — this terminal can no longer resolve it.

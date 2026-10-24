@@ -229,6 +229,17 @@ export interface SubagentSubStatus {
     responseModel?: string;
     /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
     finalTurnFinishReason?: "length";
+    /**
+     * TASK.240/4055: the child's turn-ceiling summary (rounds granted, turns
+     * granted, and the refusal reason that ended the ladder when it ended on
+     * one). Lets the UI tell "budget too small" from a hard stop. Absent on
+     * legacy replays and runs that never tripped the ceiling.
+     */
+    ceiling?: {
+      rounds: number;
+      grantedTurns: number;
+      lastRefusal?: string;
+    };
   } | null;
   /**
    * PRESENCE, not value, is the signal: `true` while a session-tier child
@@ -2360,6 +2371,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       // start values.
       model?: string,
       engine?: "codex" | "claude",
+      // TASK.240/4055: the child's ceiling ladder summary (numbers + closed
+      // refusal reason) — verbatim passthrough onto the settled card.
+      ceiling?: {
+        rounds: number;
+        grantedTurns: number;
+        lastRefusal?: string;
+      },
     ): void {
       flushDeltas();
       set((state) => {
@@ -2380,6 +2398,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               durationMs,
               ...(responseModel !== undefined ? { responseModel } : {}),
               ...(finalTurnFinishReason !== undefined ? { finalTurnFinishReason } : {}),
+              ...(ceiling !== undefined ? { ceiling } : {}),
             },
           };
           // The settle strips any stale permission-wait flag in the SAME
@@ -3552,6 +3571,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             event.finalTurnFinishReason,
             event.model,
             event.engine,
+            event.ceiling,
           );
           return;
         // Per-child-tool activity (slice P7.18/F16b, design §4 W2): additive

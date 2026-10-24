@@ -483,6 +483,9 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         ...(progress.responseModel !== undefined ? { responseModel: progress.responseModel } : {}),
         ...(progress.engine !== undefined ? { engine: progress.engine } : {}),
         ...(progress.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: progress.finalTurnFinishReason } : {}),
+        // TASK.240/4055: verbatim passthrough of the child's ceiling summary
+        // (numbers + closed enum — the privacy theorem holds unchanged).
+        ...(progress.ceiling !== undefined ? { ceiling: progress.ceiling } : {}),
       };
     case "attention":
       return {

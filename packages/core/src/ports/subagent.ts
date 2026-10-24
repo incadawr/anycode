@@ -9,7 +9,7 @@
  * receives no port).
  */
 
-import type { FinishReason, TokenUsage } from "../types/events.js";
+import type { CeilingRefusalReason, FinishReason, TokenUsage } from "../types/events.js";
 import type { ReasoningEffort } from "../types/config.js";
 
 export interface SubagentRequest {
@@ -98,6 +98,22 @@ export interface SubagentOutcome {
    * factually. Session hosts forwarding outcomes must forward this flag too.
    */
   declaredDoneAtCeiling?: boolean;
+  /**
+   * TASK.240/4055: the child's turn-ceiling summary, folded from its own
+   * ceiling_grant/ceiling_refused events — `rounds` = granted rounds,
+   * `grantedTurns` = their turn sum, `lastRefusal` = the reason of the
+   * refusal that ended the ladder (if it ended on one). Numbers and the
+   * closed CeilingRefusalReason enum only — no model text, so telemetry and
+   * the desktop can carry it verbatim (the privacy theorem holds). Absent
+   * when the child never tripped the ceiling at all; `lastRefusal` alone is
+   * absent when it hit the cap without a refusal event (e.g. ladder
+   * disabled).
+   */
+  ceiling?: {
+    rounds: number;
+    grantedTurns: number;
+    lastRefusal?: CeilingRefusalReason;
+  };
 }
 
 /**
@@ -160,6 +176,13 @@ export type SubagentProgress =
       // persona's one-shot run.
       engine?: "codex" | "claude";
       finalTurnFinishReason?: "length";
+      // TASK.240/4055: the child's ceiling summary — same closed shape as
+      // SubagentOutcome.ceiling; carried on `end` so live UI sees it too.
+      ceiling?: {
+        rounds: number;
+        grantedTurns: number;
+        lastRefusal?: CeilingRefusalReason;
+      };
     }
   // Permission-broker gate crossing (TASK.102 CUT-S2 §2.2/§0.8): ONLY the
   // session-tier port (SessionSubagentPort) ever produces this — a child

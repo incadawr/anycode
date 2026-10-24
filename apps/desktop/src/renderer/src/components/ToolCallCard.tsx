@@ -64,6 +64,55 @@ const SUBAGENT_FINAL_LABELS: Record<NonNullable<SubagentSubStatus["final"]>["sta
 };
 
 /**
+ * TASK.240/4055: the adaptive-budget line for a settled child that tripped
+ * the turn ceiling — grants spent, over how many rounds, and the refusal
+ * reason that ended the ladder when it ended on one. Lets the user tell
+ * "budget too small" (e.g. grant_budget_exhausted with work still flowing)
+ * from a hard stop (e.g. stalled — the round made no productive tool calls).
+ *
+ * TASK.4055 follow-up: the refusal renders as SHORT HUMAN TEXT
+ * (ceilingRefusalLabel), never the raw enum — "stopped: stalled" said
+ * nothing to a reader. The raw value survives in the line's title
+ * attribute (tooltip), so diagnosis keeps the exact wire word.
+ */
+function formatSubagentCeiling(
+  ceiling: NonNullable<SubagentSubStatus["final"]>["ceiling"],
+): { text: string; refusalTitle?: string } {
+  if (ceiling === undefined || ceiling === null) {
+    return { text: "" };
+  }
+  const hasRefusal = ceiling.lastRefusal !== undefined && ceiling.lastRefusal !== "";
+  const refusal = hasRefusal ? ` — stopped: ${ceilingRefusalLabel(ceiling.lastRefusal!)}` : "";
+  return {
+    text: `Budget: ${ceiling.grantedTurns} extra turn(s) over ${ceiling.rounds} round(s)${refusal}`,
+    ...(hasRefusal ? { refusalTitle: `Refusal reason: ${ceiling.lastRefusal}` } : {}),
+  };
+}
+
+/**
+ * TASK.4055 follow-up: short human text per refusal reason. The store types
+ * lastRefusal as a plain string (store.ts deliberately keeps the renderer
+ * independent of @anycode/core's enum), so the map is keyed by string and an
+ * unknown/future value fails VISIBLE — the raw enum is shown rather than a
+ * fabricated label, and the title attribute carries the same raw word.
+ */
+const CEILING_REFUSAL_LABELS: Record<string, string> = {
+  ladder_disabled: "turn-limit extensions disabled",
+  rounds_exhausted: "extension rounds exhausted",
+  no_successful_tool_calls: "no successful tool calls",
+  grant_budget_exhausted: "extension budget exhausted",
+  window_collapsed: "no time left for a decision",
+  unreadable_verdict: "no readable decision",
+  verdict_rejected: "continuation request rejected",
+  stalled: "no productive work",
+};
+
+/** The label for a refusal reason: mapped text, or the raw value when unknown (never a blank). */
+export function ceilingRefusalLabel(reason: string): string {
+  return CEILING_REFUSAL_LABELS[reason] ?? reason;
+}
+
+/**
  * TASK.102 CUT-S2 §2.5 (slice S2c C3): the session-tier child badge's label,
  * one per `childBadgeKind` outcome. `waiting_permission` is the badge's whole
  * reason to exist — `block.status` (the outer Agent tool_call's own status,
@@ -193,6 +242,20 @@ export function formatSubagentCounters(subagent: SubagentSubStatus): string {
   }
   const turns = subagent.turns > 0 || subagent.toolCalls > 0 ? ` · ${subagent.turns} turn${subagent.turns === 1 ? "" : "s"}` : "";
   return `${label}${turns}${duration}`;
+}
+
+/**
+ * TASK.240/4055: a settled child's ceiling budget line (empty when the child
+ * never tripped the ceiling or the field predates this feature) — rendered as
+ * its own line under the final-status line so "budget too small" is visually
+ * distinct from the outcome itself. TASK.4055 follow-up: returns the line's
+ * TEXT plus the raw refusal reason for the title attribute.
+ */
+export function formatSubagentBudgetLine(subagent: SubagentSubStatus): {
+  text: string;
+  refusalTitle?: string;
+} {
+  return subagent.final === null ? { text: "" } : formatSubagentCeiling(subagent.final.ceiling);
 }
 
 /** One identity slot (model or engine) resolved for display: the explicit
@@ -1325,6 +1388,19 @@ function SubagentStatus({
         <span className="tool-call-subagent-desc">{subagent.description}</span>
       </div>
       <div className="tool-call-subagent-counters">{formatSubagentCounters(subagent)}</div>
+      {/* TASK.240/4055: the adaptive-budget line — only when the settled card
+          actually carries a ceiling summary (a child that never tripped the
+          turn ceiling renders nothing extra). TASK.4055 follow-up: the title
+          keeps the RAW refusal reason on the tooltip while the visible text
+          carries the human label. */}
+      {(() => {
+        const budget = formatSubagentBudgetLine(subagent);
+        return budget.text !== "" ? (
+          <div className="tool-call-subagent-counters" title={budget.refusalTitle}>
+            {budget.text}
+          </div>
+        ) : null;
+      })()}
       <StallNote subagent={subagent} />
       {child !== undefined && (
         <div className="tool-call-subagent-child-row">

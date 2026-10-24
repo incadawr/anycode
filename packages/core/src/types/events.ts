@@ -131,7 +131,17 @@ export type CeilingRefusalReason =
   | "grant_budget_exhausted"
   | "window_collapsed"
   | "unreadable_verdict"
-  | "verdict_rejected";
+  | "verdict_rejected"
+  /**
+   * TASK.240/4055 (adaptive mode only): the verdict was structurally readable
+   * but the round just spent shows no QUALIFYING progress (zero successful
+   * non-read-only tool calls) — the run is restating its plan without doing
+   * work, so the budget is not "too small", the run has stalled. Distinct from
+   * `no_successful_tool_calls` (the cheap pre-call gate, still emitted there
+   * in ladder mode) and from `verdict_rejected` (a readable verdict rejected
+   * while productive progress DID exist).
+   */
+  | "stalled";
 
 /** Full event stream produced by the agent loop; superset of the model stream vocabulary. */
 export type AgentEvent =
@@ -184,6 +194,20 @@ export type AgentEvent =
       totalGranted: number;
       remaining: string[];
       nextAction?: string;
+      /**
+       * TASK.240/4055: which grant path produced this round — the TASK.124
+       * decreasing ladder (default) or the progress-scaled adaptive mode
+       * (CeilingConfig.adaptive). Additive-optional: absent on replays from
+       * before the field existed, which reads as the legacy ladder path.
+       */
+      mode?: "ladder" | "adaptive";
+      /**
+       * TASK.240/4055: the per-round activity measures the gate ran on —
+       * `successfulToolCalls` counts every successful call, `productiveToolCalls`
+       * only the non-read-only ones (a file read alone is not progress).
+       * Numbers only, no model text. Additive-optional, same replay rule.
+       */
+      progress?: { successfulToolCalls: number; productiveToolCalls: number };
     }
   /**
    * One refused round of the turn-ceiling ladder (TASK.208). Emitted exactly
@@ -305,6 +329,22 @@ export type AgentEvent =
        * turn ended normally; never inferred from other fields.
        */
       finalTurnFinishReason?: "length";
+      /**
+       * TASK.240/4055: the child's turn-ceiling summary, folded from its own
+       * ceiling_grant/ceiling_refused events — `rounds` = granted rounds,
+       * `grantedTurns` = their turn sum, `lastRefusal` = the reason of the
+       * refusal that ended the ladder (if it ended on one). Numbers and the
+       * closed CeilingRefusalReason enum only — no model text, so every
+       * consumer (telemetry included) can carry it verbatim. Absent when the
+       * child never tripped the ceiling at all; `lastRefusal` alone is absent
+       * when the child exhausted its turns without a refusal event (a plain
+       * cap trip on a disabled ladder).
+       */
+      ceiling?: {
+        rounds: number;
+        grantedTurns: number;
+        lastRefusal?: CeilingRefusalReason;
+      };
     }
   /**
    * Permission-broker gate crossing for a session-tier subagent (TASK.102

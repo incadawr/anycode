@@ -29,9 +29,11 @@ import {
   AgentCardBody,
   agentResultText,
   capLines,
+  ceilingRefusalLabel,
   defaultExpanded,
   flattenSummary,
   formatSubagentCounters,
+  formatSubagentBudgetLine,
   formatWorkflowCounters,
   isClickableChildBadge,
   moreLinesLabel,
@@ -197,6 +199,95 @@ describe("formatSubagentCounters — settled (final set)", () => {
     expect(formatSubagentCounters({ ...base, final: { status: "completed", durationMs: 1000 } })).toMatch(
       /^Completed · /,
     );
+  });
+});
+
+// TASK.240/4055 + follow-up: the ceiling budget line — grants/rounds in the
+// text, the refusal as SHORT HUMAN TEXT with the RAW enum kept in the title
+// attribute (the card previously rendered "stopped: stalled" verbatim).
+describe("formatSubagentBudgetLine — ceiling summary (TASK.4055)", () => {
+  const base: Omit<SubagentSubStatus, "final"> = {
+    agentType: "explore",
+    description: "d",
+    turns: 3,
+    toolCalls: 4,
+    lastTool: null,
+    activity: [],
+    model: null,
+    engine: null,
+    activityDropped: 0,
+  };
+
+  it("no ceiling on the final (never tripped / legacy): empty text, no title", () => {
+    const budget = formatSubagentBudgetLine({ ...base, final: { status: "max_turns", durationMs: 1000 } });
+    expect(budget.text).toBe("");
+    expect(budget.refusalTitle).toBeUndefined();
+  });
+
+  it("ceiling without a refusal: grants and rounds only, no stopped suffix, no title", () => {
+    const budget = formatSubagentBudgetLine({
+      ...base,
+      final: { status: "max_turns", durationMs: 1000, ceiling: { rounds: 2, grantedTurns: 6 } },
+    });
+    expect(budget.text).toBe("Budget: 6 extra turn(s) over 2 round(s)");
+    expect(budget.refusalTitle).toBeUndefined();
+  });
+
+  it("a refusal maps to short human text; the raw enum survives in the title (follow-up)", () => {
+    const budget = formatSubagentBudgetLine({
+      ...base,
+      final: {
+        status: "max_turns",
+        durationMs: 1000,
+        ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+      },
+    });
+    // Human text in the line — never the raw "stalled".
+    expect(budget.text).toBe("Budget: 1 extra turn(s) over 1 round(s) — stopped: no productive work");
+    expect(budget.text).not.toContain("stalled");
+    // The raw value rides the tooltip for diagnosis.
+    expect(budget.refusalTitle).toBe("Refusal reason: stalled");
+  });
+
+  it("every known refusal reason maps to a human label — none renders the raw enum", () => {
+    const known = [
+      "ladder_disabled",
+      "rounds_exhausted",
+      "no_successful_tool_calls",
+      "grant_budget_exhausted",
+      "window_collapsed",
+      "unreadable_verdict",
+      "verdict_rejected",
+      "stalled",
+    ] as const;
+    for (const reason of known) {
+      const budget = formatSubagentBudgetLine({
+        ...base,
+        final: {
+          status: "max_turns",
+          durationMs: 1000,
+          ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: reason },
+        },
+      });
+      expect(budget.text).toContain("stopped: ");
+      // The raw enum must appear ONLY in the title, never in the visible text.
+      expect(budget.text).not.toContain(reason);
+      expect(budget.refusalTitle).toBe(`Refusal reason: ${reason}`);
+    }
+  });
+
+  it("an unknown/future refusal value fails visible: the raw value is shown, not a blank or a fabricated label", () => {
+    expect(ceilingRefusalLabel("some_future_reason")).toBe("some_future_reason");
+    const budget = formatSubagentBudgetLine({
+      ...base,
+      final: {
+        status: "max_turns",
+        durationMs: 1000,
+        ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "some_future_reason" },
+      },
+    });
+    expect(budget.text).toContain("stopped: some_future_reason");
+    expect(budget.refusalTitle).toBe("Refusal reason: some_future_reason");
   });
 });
 

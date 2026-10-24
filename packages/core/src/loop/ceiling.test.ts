@@ -12,15 +12,18 @@ import {
   CEILING_VERDICT_DECLARATION,
   CEILING_VERDICT_TOOL_NAME,
   acceptCeilingVerdict,
+  adaptiveGrantForRound,
   buildCeilingDecisionPrompt,
   ceilingGrant,
   ceilingWindowMs,
   grantForRound,
+  isProductiveToolCall,
   parseCeilingVerdict,
   requestCeilingVerdict,
   type CeilingConfig,
   type CeilingVerdict,
 } from "./ceiling.js";
+import { createDefaultToolRegistry } from "../tools/registry.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
 
@@ -481,5 +484,149 @@ describe("buildCeilingDecisionPrompt", () => {
     expect(prompt).toContain("Round 2 of 3");
     expect(prompt).toContain("Previous remaining count: 4");
     expect(prompt).toContain("shorten remaining");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.4055 adaptive budget (TASK.240): progress-scaled grants, a productive
+// (non-read-only) progress measure, and an honest-report prompt variant.
+
+describe("TASK.4055 adaptive budget", () => {
+  it("adaptiveGrantForRound: +50% then +25% of the base budget, ceil, floored at 1", () => {
+    expect(adaptiveGrantForRound(1, 8)).toBe(4); // ceil(8 * 0.5)
+    expect(adaptiveGrantForRound(2, 8)).toBe(2); // ceil(8 * 0.25)
+    expect(adaptiveGrantForRound(1, 3)).toBe(2); // ceil(1.5) — ceil, not floor
+    expect(adaptiveGrantForRound(2, 1)).toBe(1); // floored at 1, never 0
+    expect(adaptiveGrantForRound(3, 8)).toBe(2); // further rounds stay at 25%
+  });
+
+  it("isProductiveToolCall: reads are not progress; unknown tools fail closed", () => {
+    const registry = createDefaultToolRegistry();
+    // Productive: writes/execution all count.
+    expect(isProductiveToolCall("Bash", registry)).toBe(true);
+    expect(isProductiveToolCall("Write", registry)).toBe(true);
+    expect(isProductiveToolCall("Edit", registry)).toBe(true);
+    // TodoWrite is deliberately readOnly (session state, not workspace —
+    // tools/todo-write.ts header); its progress signal is the checkpoint in
+    // agent-loop.ts (a shrinking list), not this predicate.
+    expect(isProductiveToolCall("TodoWrite", registry)).toBe(false);
+    // Read-only: a successful read alone is NOT progress.
+    expect(isProductiveToolCall("Read", registry)).toBe(false);
+    expect(isProductiveToolCall("Glob", registry)).toBe(false);
+    expect(isProductiveToolCall("Grep", registry)).toBe(false);
+    expect(isProductiveToolCall("TodoRead", registry)).toBe(false);
+    // Unknown tool: readOnly is undefined — fails closed, not open.
+    expect(isProductiveToolCall("NotARegisteredTool", registry)).toBe(false);
+  });
+
+  // TASK.4055 follow-up: the dispatch allowlist — a successful Agent or
+  // Workflow call is an orchestrator's WORK even though both tools are
+  // readOnly (the flag is load-bearing for permissions and stays as-is).
+  it("isProductiveToolCall: a successful Agent/Workflow dispatch counts despite readOnly (4055 follow-up)", () => {
+    const registry = createDefaultToolRegistry();
+    // Both are declared readOnly in the real registry — the allowlist is the
+    // only reason they count.
+    expect(registry.get("Agent")?.metadata.readOnly).toBe(true);
+    expect(registry.get("Workflow")?.metadata.readOnly).toBe(true);
+    expect(isProductiveToolCall("Agent", registry)).toBe(true);
+    expect(isProductiveToolCall("Workflow", registry)).toBe(true);
+    // Name-exact only: lookalikes do not hitch a ride on the allowlist.
+    expect(isProductiveToolCall("agent", registry)).toBe(false);
+    expect(isProductiveToolCall("Agent2", registry)).toBe(false);
+    expect(isProductiveToolCall("workflow", registry)).toBe(false);
+    // The allowlist holds even with no registry at all (name-exact), while
+    // every other name still needs a registry vouching for it.
+    expect(isProductiveToolCall("Agent", undefined)).toBe(true);
+    expect(isProductiveToolCall("Workflow", undefined)).toBe(true);
+    expect(isProductiveToolCall("Bash", undefined)).toBe(false);
+  });
+
+  it("adaptive acceptCeilingVerdict: round 2 grants on productive progress WITHOUT shortening", () => {
+    expect(
+      acceptCeilingVerdict({
+        verdict: { done: false, remaining: ["a", "b", "c"] },
+        round: 2,
+        previousRemaining: 3, // same length — old path refuses, adaptive must not
+        successfulToolCalls: 3,
+        productiveToolCalls: 1,
+        adaptive: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("adaptive acceptCeilingVerdict: zero productive calls refuses even with reads and shortening (the stalled case)", () => {
+    expect(
+      acceptCeilingVerdict({
+        verdict: { done: false, remaining: ["a"] },
+        round: 2,
+        previousRemaining: 3,
+        successfulToolCalls: 5, // reads counted — but nothing productive
+        productiveToolCalls: 0,
+        adaptive: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("adaptive round 3 still requires a non-blank nextAction", () => {
+    const base = {
+      round: 3,
+      previousRemaining: 2,
+      successfulToolCalls: 1,
+      productiveToolCalls: 1,
+      adaptive: true,
+    } as const;
+    expect(acceptCeilingVerdict({ ...base, verdict: { done: false, remaining: ["a"] } })).toBe(false);
+    expect(
+      acceptCeilingVerdict({ ...base, verdict: { done: false, remaining: ["a"], nextAction: "   " } }),
+    ).toBe(false);
+    expect(
+      acceptCeilingVerdict({
+        ...base,
+        verdict: { done: false, remaining: ["a"], nextAction: "run the last check" },
+      }),
+    ).toBe(true);
+  });
+
+  it("non-adaptive (flag absent): the same inputs keep the old verdicts byte-identical (regression pin)", () => {
+    // No shortening -> refused (old shortening gate).
+    expect(
+      acceptCeilingVerdict({
+        verdict: { done: false, remaining: ["a", "b", "c"] },
+        round: 2,
+        previousRemaining: 3,
+        successfulToolCalls: 3,
+        productiveToolCalls: 1,
+      }),
+    ).toBe(false);
+    // Zero successful calls -> refused (old tool-call gate).
+    expect(
+      acceptCeilingVerdict({
+        verdict: { done: false, remaining: ["a"] },
+        round: 2,
+        previousRemaining: 3,
+        successfulToolCalls: 0,
+        productiveToolCalls: 0,
+      }),
+    ).toBe(false);
+    // Progress + strictly shorter -> accepted, productiveToolCalls ignored.
+    expect(
+      acceptCeilingVerdict({
+        verdict: { done: false, remaining: ["a", "b"] },
+        round: 2,
+        previousRemaining: 3,
+        successfulToolCalls: 1,
+        productiveToolCalls: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("adaptive prompt asks for honest reporting instead of shortening; the ladder prompt is unchanged", () => {
+    const adaptive = buildCeilingDecisionPrompt(2, 3, 4, true);
+    expect(adaptive).toContain("demonstrated progress");
+    expect(adaptive).not.toContain("must shorten");
+    // Without the flag the old instruction stands verbatim.
+    const ladder = buildCeilingDecisionPrompt(2, 3, 4);
+    expect(ladder).toContain("must shorten");
+    expect(ladder).not.toContain("demonstrated progress");
   });
 });

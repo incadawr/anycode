@@ -62,7 +62,7 @@ import {
   listPersonaNames,
   type PersonaDefinition,
 } from "./personas.js";
-import type { TokenUsage } from "../types/events.js";
+import type { CeilingRefusalReason, TokenUsage } from "../types/events.js";
 import { summarizeChildToolCall } from "./summarize-tool.js";
 import { SPAWN_TOOLS } from "./spawn-tools.js";
 
@@ -1085,6 +1085,11 @@ export function createSubagentRunner(
         let loopReason: SubagentOutcome["status"] | undefined;
         let loopTurns: number | undefined;
         let ceilingDone = false;
+        // TASK.240/4055: the child's own ceiling ladder, folded from its
+        // ceiling_grant/ceiling_refused events into the outcome summary.
+        let ceilingRounds = 0;
+        let ceilingGrantedTurns = 0;
+        let ceilingLastRefusal: CeilingRefusalReason | undefined;
         // TASK.193 slice S5: the redacted reason the child died on, if it died on
         // the provider. Set from the loop's {type:"error"} event (case below) or,
         // failing that, from the bare catch — never from the raw thrown value.
@@ -1209,6 +1214,16 @@ export function createSubagentRunner(
                 loopTurns = event.turns;
                 ceilingDone = event.declaredDoneAtCeiling === true;
                 break;
+              // TASK.240/4055: fold the child's own ceiling ladder into the
+              // summary the outcome carries. Numbers and a closed enum only —
+              // `remaining`/`nextAction` text never crosses this boundary.
+              case "ceiling_grant":
+                ceilingRounds = Math.max(ceilingRounds, event.round);
+                ceilingGrantedTurns += event.granted;
+                break;
+              case "ceiling_refused":
+                ceilingLastRefusal = event.reason;
+                break;
               case "error":
                 // TASK.193 (inline-tier mirror of TASK.190's finding): this event was
                 // never read here, so a child that died on a provider failure reported
@@ -1315,6 +1330,17 @@ export function createSubagentRunner(
         }
 
         const capped = capUtf8Bytes(finalText, SUBAGENT_OUTPUT_MAX_BYTES);
+        // TASK.240/4055: the ceiling summary exists only when the child's
+        // ladder actually produced a grant or ended on a refusal — a run that
+        // never tripped the ceiling stays absent, not zero-filled.
+        const ceiling =
+          ceilingRounds > 0 || ceilingGrantedTurns > 0 || ceilingLastRefusal !== undefined
+            ? {
+                rounds: ceilingRounds,
+                grantedTurns: ceilingGrantedTurns,
+                ...(ceilingLastRefusal !== undefined ? { lastRefusal: ceilingLastRefusal } : {}),
+              }
+            : undefined;
         const outcome: SubagentOutcome = {
           status,
           // Taskana 4131 follow-up: the fallback notice rides the SAME field
@@ -1333,6 +1359,7 @@ export function createSubagentRunner(
           ...(usage !== undefined ? { usage } : {}),
           ...(finalTurnFinishReason !== undefined ? { finalTurnFinishReason } : {}),
           ...(ceilingDone ? { declaredDoneAtCeiling: true } : {}),
+          ...(ceiling !== undefined ? { ceiling } : {}),
         };
 
         onProgress?.({
@@ -1349,6 +1376,7 @@ export function createSubagentRunner(
           ...(requestedModel !== undefined ? { model: requestedModel } : {}),
           ...(responseModel !== undefined ? { responseModel } : {}),
           ...(finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
+          ...(ceiling !== undefined ? { ceiling } : {}),
         });
 
         // Fire SubagentStop observers INSIDE the permit (semaphore still held,
