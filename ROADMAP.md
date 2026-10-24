@@ -60,8 +60,8 @@ separate task or research item._
 
 ### Sessions & workflow
 
-- **Mid-session model and provider switching.** _Available now (model and
-  provider; core and Codex)._ Change the model — or the provider behind it —
+- **Mid-session model and provider switching.** _Available now (model on
+  every engine; provider on the native engine)._ Change the model — or the provider behind it —
   between turns of one session, e.g. continue on another subscription when a
   quota runs out. Capability gaps (vision, context-window size) and the
   cache-reset cost are surfaced explicitly, never silent.
