@@ -547,6 +547,15 @@ describe("host subagent model-override wiring", () => {
     expect(source).toContain("return modelPortFactory(id)");
     expect(source).toContain("switchableModelPort.setPort(modelPortFactory(id))");
   });
+
+  it("Taskana 4131: threads envConfig.exploreModel into withSubagents when set", async () => {
+    const source = await readHostSource();
+    const calls = [...source.matchAll(/withSubagents\(\s*config\s*,\s*\{([\s\S]*?)\}\s*\)/g)]
+      .map((m) => m[1]!)
+      .filter((options) => options.includes("profiles: () => ext.profiles"));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!).toContain("exploreModel: envConfig.exploreModel");
+  });
 });
 
 describe("host shutdown order — background-task reap (design slice-6.DP-2-cut.md §1.2f/§6#6)", () => {

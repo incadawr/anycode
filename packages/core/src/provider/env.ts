@@ -7,6 +7,15 @@ import type { ImageInputOverride } from "./capabilities.js";
 export const ENV_API_KEY = "ANYCODE_API_KEY";
 export const ENV_BASE_URL = "ANYCODE_BASE_URL";
 export const ENV_MODEL = "ANYCODE_MODEL";
+/**
+ * Default model id for the built-in explore persona's inline children
+ * (Taskana 4131): recon sweeps many files and needs little intelligence, so
+ * they can run on a cheaper model. Absent/blank ⇒ explore inherits the
+ * parent's port (byte-identical to pre-4131). NOT validated against any
+ * catalog here — the runner's resolveChildModelPort owns id validation and
+ * turns an unresolvable id into an honest error-outcome.
+ */
+export const ENV_EXPLORE_MODEL = "ANYCODE_EXPLORE_MODEL";
 export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
@@ -57,6 +66,9 @@ export type ModelBoundCoreEnvConfig = CoreEnvConfig & { contextWindowModel?: str
  * ANYCODE_CONTEXT_WINDOW_MODEL (TASK.142) is an optional nonblank model id that
  * binds the ANYCODE_CONTEXT_WINDOW override to one model (the pair is emitted
  * together by the host/CLI); a blank/absent value leaves the override global.
+ * ANYCODE_EXPLORE_MODEL (Taskana 4131) is an optional nonblank default model
+ * id for the built-in explore persona's inline children; blank/absent ⇒
+ * explore inherits the parent's model.
  * ANYCODE_REASONING_EFFORT is an optional off|low|medium|high|max selector
  * (per-model levels are gated downstream by the catalog; unsupported → off).
  * ANYCODE_PROVIDER_TRANSPORT selects the wire protocol (TASK.43 §0.4); an
@@ -93,6 +105,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const maxOutputTokens = readOptionalInteger(env, ENV_MAX_OUTPUT_TOKENS);
   const contextWindowTokens = readOptionalInteger(env, ENV_CONTEXT_WINDOW);
   const contextWindowModel = env[ENV_CONTEXT_WINDOW_MODEL]?.trim() || undefined;
+  const exploreModel = env[ENV_EXPLORE_MODEL]?.trim() || undefined;
   const maxRetries = readOptionalInteger(env, ENV_MAX_RETRIES);
   const toolConcurrency = readOptionalInteger(env, ENV_TOOL_CONCURRENCY);
   const stallTimeoutMs = readOptionalInteger(env, ENV_STALL_TIMEOUT_MS);
@@ -116,6 +129,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     reasoningEffort,
     contextWindowTokens,
     contextWindowModel,
+    exploreModel,
     maxRetries,
     dbPath,
     toolConcurrency,

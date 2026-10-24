@@ -59,4 +59,15 @@ describe("personas", () => {
       }
     }
   });
+
+  it("the built-ins stay model-agnostic data (Taskana 4131 adds no hardcoded id)", () => {
+    // 4131 makes the explore model a HOST-CONFIGURED default (runner option
+    // fed by ANYCODE_EXPLORE_MODEL), never a field on the built-in persona.
+    for (const persona of [PERSONAS.explore, PERSONAS["general-purpose"]]) {
+      expect("model" in persona).toBe(false);
+      expect("turnBudget" in persona).toBe(false);
+      expect("effort" in persona).toBe(false);
+      expect("engine" in persona).toBe(false);
+    }
+  });
 });

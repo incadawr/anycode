@@ -1830,6 +1830,225 @@ describe("profile-declared model", () => {
   });
 });
 
+describe("explore default model (Taskana 4131)", () => {
+  it("runs an explore child on the host-configured cheaper model", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const cheapModel = new ScriptedModelPort(() => textStep("cheap-report"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      exploreModel: "cheap-1",
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        return cheapModel;
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("cheap-report");
+    expect(resolved).toEqual(["cheap-1"]);
+    expect(parentModel.calls).toBe(0);
+  });
+
+  it("names the configured default when the host has no resolver", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("should never run"));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      exploreModel: "cheap-1",
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toBe(
+      'Agent: agent type "explore" declares model "cheap-1", which is not supported in this host.',
+    );
+    expect(parentModel.calls).toBe(0);
+  });
+
+  it("an explicit request model outranks the explore default", async () => {
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent(), {
+      exploreModel: "cheap-1",
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        return new ScriptedModelPort(() => textStep("resolved"));
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore", model: "request-model" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(resolved).toEqual(["request-model"]);
+  });
+
+  it("general-purpose never picks up the explore default", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    let resolverCalls = 0;
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      exploreModel: "cheap-1",
+      resolveChildModelPort: () => {
+        resolverCalls += 1;
+        return new ScriptedModelPort(() => textStep("never"));
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "general-purpose" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("parent-report");
+    expect(resolverCalls).toBe(0);
+  });
+
+  it("without the option an explore child keeps inheriting the parent's port", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    let resolverCalls = 0;
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      resolveChildModelPort: () => {
+        resolverCalls += 1;
+        return new ScriptedModelPort(() => textStep("never"));
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("parent-report");
+    expect(resolverCalls).toBe(0);
+  });
+
+  it("an md-profile's own model outranks the explore option (profiles are not the built-in explore)", async () => {
+    const persona = await makeProfile("reviewer", { body: "REVIEWER", model: "profile-model" });
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent(), {
+      profiles: [persona],
+      exploreModel: "cheap-1",
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        return new ScriptedModelPort(() => textStep("resolved"));
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(resolved).toEqual(["profile-model"]);
+  });
+
+  it("subagent_start progress reports the configured default as the model", async () => {
+    const progress: SubagentProgress[] = [];
+    const runner = createSubagentRunner(makeParent(), {
+      exploreModel: "cheap-1",
+      resolveChildModelPort: () => new ScriptedModelPort(() => textStep("cheap-report")),
+    });
+
+    await runner.run({ ...REQ, agentType: "explore" }, { onProgress: (p) => progress.push(p) });
+
+    const start = progress.find((p) => p.kind === "start");
+    expect(start).toMatchObject({ kind: "start", agentType: "explore", model: "cheap-1" });
+  });
+
+  // Taskana 4131 follow-up: the env default is a host-configured convenience,
+  // never the caller's intent — a rejected id must degrade to the parent's
+  // model (with a notice), not fail every explore call on the connection.
+  it("a disallowed explore default falls back to the parent's model with a notice", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      exploreModel: "glm-cheap",
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        throw new Error("This model is not available on the selected connection.");
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(resolved).toEqual(["glm-cheap"]);
+    // The run happened on the PARENT's port, exactly once.
+    expect(parentModel.calls).toBe(1);
+    // The notice rides the outcome's finalText, above the child's own report.
+    expect(outcome.finalText).toContain(
+      'Agent: explore default model "glm-cheap" is not available on this connection; ran on the parent\'s model.',
+    );
+    expect(outcome.finalText).toContain("parent-report");
+    expect(outcome.finalText.indexOf("ran on the parent's model.")).toBeLessThan(
+      outcome.finalText.indexOf("parent-report"),
+    );
+  });
+
+  it("the fallback start-progress reads as inherited (no model field), unlike a honored default", async () => {
+    const progress: SubagentProgress[] = [];
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      exploreModel: "glm-cheap",
+      resolveChildModelPort: () => {
+        throw new Error("not allowed");
+      },
+    });
+
+    await runner.run({ ...REQ, agentType: "explore" }, { onProgress: (p) => progress.push(p) });
+
+    const start = progress.find((p) => p.kind === "start");
+    // TASK.171 discipline: absent model means "inherited the parent's port" —
+    // which is now literally true after the fallback.
+    expect(start).toMatchObject({ kind: "start", agentType: "explore" });
+    expect(start && "model" in start && start.model !== undefined).toBe(false);
+  });
+
+  it("an allowed explore default is used with no fallback notice", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const cheapModel = new ScriptedModelPort(() => textStep("cheap-report"));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      exploreModel: "glm-cheap",
+      resolveChildModelPort: () => cheapModel,
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("completed");
+    // Exactly the child's report — no notice prefixed.
+    expect(outcome.finalText).toBe("cheap-report");
+    expect(outcome.finalText).not.toContain("explore default model");
+    expect(cheapModel.calls).toBe(1);
+    expect(parentModel.calls).toBe(0);
+  });
+
+  it("an explicit disallowed Agent(model:) still errors, even when it equals the explore default", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("should never run"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      exploreModel: "glm-cheap",
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        throw new Error("This model is not available on the selected connection.");
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore", model: "glm-cheap" }, {});
+
+    // The caller ASKED for this id — the honest error stands, no fallback.
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toContain('model "glm-cheap" could not be resolved');
+    expect(outcome.finalText).not.toContain("ran on the parent's model");
+    expect(resolved).toEqual(["glm-cheap"]);
+    expect(parentModel.calls).toBe(0);
+  });
+
+  it("without the option there is no notice — the parent's model, byte-identical inherit", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {});
+
+    const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("parent-report");
+    expect(outcome.finalText).not.toContain("explore default model");
+    expect(parentModel.calls).toBe(1);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Engine persona (subagent-model contract): a md-profile `engine:` frontmatter
 // makes its children run as a one-shot foreign CLI run (Codex or Claude Code)
