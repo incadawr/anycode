@@ -20,6 +20,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - When a turn stops at its turn limit, the transcript offers a Continue button
   that resumes the same task, and a held prompt queue says why it is held (turn
   limit, cancelled, error, or refused) instead of a generic pause.
+- Models fetched live from a connection (for example OpenRouter) keep the
+  reasoning-effort levels the provider declares, so a reasoning model that is
+  not in AnyCode's built-in catalog now gets an effort picker and the effort is
+  sent with requests.
 
 ### Security
 
