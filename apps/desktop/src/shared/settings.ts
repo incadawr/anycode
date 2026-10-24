@@ -519,10 +519,15 @@ export interface AnycodeSettings {
    * NEW preview opens in. Absent means "panel" (task decision) — main's
    * `displayMode()` dep (96-P1) reads `settings.preview?.displayMode ??
    * "panel"`, same absent-default posture as `autoOpen`.
+   *
+   * `liveReload` (Taskana 4100, stage 4): absent means ON — main's
+   * `liveReloadEnabled()` reads `settings.preview?.liveReload ?? true`; a
+   * file-backed preview reloads when its artifact changes on disk.
    */
   preview?: {
     autoOpen?: boolean;
     displayMode?: "panel" | "window";
+    liveReload?: boolean;
   };
   /**
    * Vision-fallback recognizer selection (TASK.198 E1): which ALREADY-

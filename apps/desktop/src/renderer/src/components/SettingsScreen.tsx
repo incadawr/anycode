@@ -1270,6 +1270,10 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
   // settings.preview.displayMode reads as "panel" (task default), mirroring
   // main's own displayMode() dep fallback (96-P1) exactly.
   const [previewDisplayMode, setPreviewDisplayMode] = useState<"panel" | "window">("panel");
+  // Taskana 4100 stage 4: sibling persisted field — absent
+  // settings.preview.liveReload reads as ON (owner default), mirroring
+  // main's own liveReloadEnabled() fallback exactly.
+  const [liveReload, setLiveReload] = useState(true);
   // R8(d): device-local preference — localStorage, NOT the settings vault
   // (no IPC, no snapshot field). Deliberately ignores readOnly: a locked
   // vault blocks vault WRITES; this key never touches the vault. Initializer
@@ -1366,6 +1370,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
       setTheme(snapshot.settings.ui.theme);
       setAutoOpenPreview(snapshot.settings.preview?.autoOpen ?? true);
       setPreviewDisplayMode(snapshot.settings.preview?.displayMode ?? "panel");
+      setLiveReload(snapshot.settings.preview?.liveReload ?? true);
       setInitialized(true);
     }
   }, [snapshot, initialized]);
@@ -1463,6 +1468,13 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
   function changePreviewDisplayMode(next: "panel" | "window"): void {
     setPreviewDisplayMode(next);
     void store.getState().setPatch({ preview: { displayMode: next } });
+  }
+
+  /** Taskana 4100 stage 4: sibling of the two preview toggles above — same setPatch pattern, deep-merged so the other keys are left untouched. */
+  function toggleLiveReload(): void {
+    const next = !liveReload;
+    setLiveReload(next);
+    void store.getState().setPatch({ preview: { liveReload: next } });
   }
 
   const activePaneRecord = SETTINGS_PANES.find((pane) => pane.id === activePane);
@@ -1809,6 +1821,28 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
                     >
                       In a separate window
                     </button>
+                  </div>
+                </div>
+                {/* Taskana 4100 stage 4: live-reload toggle, same
+                    role="switch" settings-switch idiom as autoOpen above —
+                    file-backed previews follow their artifact on disk. */}
+                <div className="settings-field">
+                  <span className="settings-field-label">Live reload</span>
+                  <div className="settings-field-row">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={liveReload}
+                      aria-labelledby="settings-live-reload-caption"
+                      className={`settings-switch${liveReload ? " settings-switch-on" : ""}`}
+                      disabled={readOnly}
+                      onClick={toggleLiveReload}
+                    >
+                      <span className="settings-switch-thumb" />
+                    </button>
+                    <span id="settings-live-reload-caption" className="settings-switch-caption">
+                      Reload file previews automatically when the agent overwrites the artifact
+                    </span>
                   </div>
                 </div>
               </section>

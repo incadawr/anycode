@@ -22,6 +22,7 @@ import {
 } from "../../shared/preview.js";
 import {
   EXEC_JS_TIMEOUT_MS,
+  LIVE_RELOAD_DEBOUNCE_MS,
   PANEL_SCREENSHOT_RETRY_DELAY_MS,
   READ_RESULT_MAX_CHARS,
   clampPanelBounds,
@@ -57,6 +58,8 @@ function fakeImage(opts?: { empty?: boolean; width?: number; height?: number }):
 class FakeWebContents implements PreviewWebContentsLike {
   destroyed = false;
   loadedUrls: string[] = [];
+  /** Taskana 4100 stage 4: every `reload()` call, in order (live-reload assertions). */
+  reloadCalls = 0;
   executeJavaScriptCalls: string[] = [];
   executeJavaScriptImpl: (script: string) => Promise<unknown> = () => Promise.resolve(undefined);
   backgroundThrottlingCalls: boolean[] = [];
@@ -85,6 +88,11 @@ class FakeWebContents implements PreviewWebContentsLike {
 
   loadURL(url: string): Promise<void> {
     this.loadedUrls.push(url);
+    return Promise.resolve();
+  }
+  /** Taskana 4100 stage 4: plain counter — reload() itself needs no URL argument. */
+  reload(): Promise<void> {
+    this.reloadCalls += 1;
     return Promise.resolve();
   }
   isDestroyed(): boolean {
@@ -313,6 +321,14 @@ interface Rig {
   changed: PreviewChangedPayload[];
   clock: { time: number };
   autoOpen: { enabled: boolean };
+  /** Taskana 4100 stage 4: mutable liveReloadEnabled() knob (mirrors autoOpen). */
+  liveReload: { enabled: boolean };
+  /**
+   * Taskana 4100 stage 4: fake watcher registry keyed by watched path —
+   * `events`/`errors` hold the callbacks the host registered; a test fires
+   * `for (const e of w.events) e("change")` and asserts `w.closed`.
+   */
+  watchers: Map<string, { events: Array<(e: "change" | "rename") => void>; errors: Array<(err: Error) => void>; closed: boolean }>;
   /** Mutable so a test can flip container mode mid-scenario; default "window" keeps the entire stage-1 suite byte-untouched. */
   displayModeValue: { value: "panel" | "window" };
   resolveArtifactImpl: (tabId: string, path: string) => Promise<{ realPath: string } | { failure: string }>;
@@ -356,6 +372,9 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
   const changed: PreviewChangedPayload[] = [];
   const clock = { time: 1_000_000 };
   const autoOpen = { enabled: true };
+  // Taskana 4100 stage 4: default ON, mirroring main's own `?? true` fallback.
+  const liveReload = { enabled: true };
+  const watchers = new Map<string, { events: Array<(e: "change" | "rename") => void>; errors: Array<(err: Error) => void>; closed: boolean }>();
   // Default "window" (cut §3 96-P1): every one of the 18 pre-existing
   // describe blocks never touches this and stays the stage-1 window-mode
   // regression suite, byte-untouched.
@@ -371,6 +390,8 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
     changed,
     clock,
     autoOpen,
+    liveReload,
+    watchers,
     displayModeValue,
     resolveArtifactImpl: defaultResolveArtifact,
     mdSourceFiles,
@@ -421,6 +442,15 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
       return rig.captureMainWindowRectImpl(rect);
     },
     autoOpenEnabled: () => autoOpen.enabled,
+    liveReloadEnabled: () => liveReload.enabled,
+    // Taskana 4100 stage 4: hand-written fake watcher — the host's watchFile
+    // dep driven with zero real fs (mirrors the Electron-free discipline of
+    // every other dep in this rig).
+    watchFile: (path, onEvent, onError) => {
+      const w = { events: [onEvent], errors: [onError], closed: false };
+      watchers.set(path, w);
+      return { close: () => { w.closed = true; } };
+    },
     postToHost: (tabId, message) => {
       posted.push({ tabId, message });
       return true;
@@ -3376,5 +3406,208 @@ describe("PreviewHost — markdown: BrowserScreenshot (TASK.99 M4, CUT.md GAP 2)
     const shot = await rig.host.screenshotFor(TAB, previewId);
 
     expect(shot).toMatchObject({ ok: false, errorKind: "unavailable" });
+  });
+});
+
+/**
+ * Taskana 4100 stage 4 (TASK.96 «Этап 4» live-reload): a file-backed preview
+ * follows its artifact on disk. The rig's `watchers` map is a hand-written
+ * fake of the `watchFile` dep (no real fs, no chokidar — mirrors this file's
+ * Electron-free discipline); `vi.useFakeTimers()` drives the 150ms debounce.
+ * Web records: a debounced `wc.reload()` re-settles via an ordinary
+ * did-finish-load. dom-md records: `docVersion += 1` + pushChanged (the
+ * renderer refetches on its own — md-view-state reconciliation).
+ */
+describe("PreviewHost — live-reload (Taskana 4100, stage 4)", () => {
+  /** Fires one fs-watch event at every listener the host registered for `path`. */
+  function fireWatchEvent(rig: Rig, path: string, event: "change" | "rename"): void {
+    for (const l of rig.watchers.get(path)?.events ?? []) l(event);
+  }
+
+  async function openedWebFileRig(
+    path = `${WORKSPACE_ROOT}/a.html`,
+  ): Promise<{ rig: Rig; previewId: string }> {
+    const rig = makeRig();
+    const openPromise = rig.host.openForTab(TAB, { path });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const opened = await openPromise;
+    expect(opened.ok).toBe(true);
+    return { rig, previewId: opened.ok ? opened.value.previewId : "" };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("web file open arms a watcher on the realpath; a URL open arms none", async () => {
+    const { rig } = await openedWebFileRig();
+    expect(rig.watchers.has(`${WORKSPACE_ROOT}/a.html`)).toBe(true);
+
+    // URL-form open: localhost has no artifact file — nothing to watch.
+    const urlPromise = rig.host.openForTab(TAB, { url: "http://localhost:5173/" });
+    await flush();
+    rig.windows[1]!.webContents.fireDidFinishLoad();
+    const urlOpened = await urlPromise;
+    expect(urlOpened.ok).toBe(true);
+    expect([...rig.watchers.keys()]).toEqual([`${WORKSPACE_ROOT}/a.html`]);
+  });
+
+  it("a change burst reloads the settled preview exactly once, and it settles ready again", async () => {
+    const { rig } = await openedWebFileRig();
+    const wc = rig.windows[0]!.webContents;
+    expect(wc.reloadCalls).toBe(0);
+
+    // One save burst: three raw events, one debounced reload.
+    fireWatchEvent(rig, `${WORKSPACE_ROOT}/a.html`, "change");
+    fireWatchEvent(rig, `${WORKSPACE_ROOT}/a.html`, "change");
+    fireWatchEvent(rig, `${WORKSPACE_ROOT}/a.html`, "rename");
+    await vi.advanceTimersByTimeAsync(LIVE_RELOAD_DEBOUNCE_MS);
+
+    expect(wc.reloadCalls).toBe(1);
+    expect(rig.host.listForTab(TAB)[0]).toMatchObject({ status: "loading" });
+
+    // The reload's did-finish-load settles the record ready again — exactly
+    // like an ordinary load (the settle state machine is untouched).
+    wc.fireDidFinishLoad();
+    expect(rig.host.listForTab(TAB)[0]).toMatchObject({ status: "ready" });
+  });
+
+  it("liveReloadEnabled=false arms nothing; flipping it on re-arms on the next open decision", async () => {
+    const rig = makeRig();
+    rig.liveReload.enabled = false;
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const opened = await openPromise;
+    expect(opened.ok).toBe(true);
+    expect(rig.watchers.size).toBe(0);
+
+    // Flip the setting live, then reuse-navigate the SAME previewId — the
+    // reuse tail re-arms on the (new) realpath, no re-open needed.
+    rig.liveReload.enabled = true;
+    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.html`, previewId: opened.ok ? opened.value.previewId : "" });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const reused = await second;
+    expect(reused.ok).toBe(true);
+    expect(rig.watchers.has(`${WORKSPACE_ROOT}/b.html`)).toBe(true);
+  });
+
+  it("watcher error disarms silently — host stays healthy, later events are inert", async () => {
+    const { rig, previewId } = await openedWebFileRig();
+    for (const err of rig.watchers.get(`${WORKSPACE_ROOT}/a.html`)!.errors) {
+      err(new Error("watcher lost"));
+    }
+    expect(rig.watchers.get(`${WORKSPACE_ROOT}/a.html`)!.closed).toBe(true);
+    expect(rig.host.getConsole(TAB, previewId)).toEqual({ entries: [], dropped: 0 });
+    expect(rig.host.listForTab(TAB)).toHaveLength(1);
+
+    // The fake's listener array still holds the host's callback — firing it
+    // must not reload (record.watch is undefined post-degradation).
+    fireWatchEvent(rig, `${WORKSPACE_ROOT}/a.html`, "change");
+    await vi.advanceTimersByTimeAsync(LIVE_RELOAD_DEBOUNCE_MS);
+    expect(rig.windows[0]!.webContents.reloadCalls).toBe(0);
+  });
+
+  it("closeForTab / closePreview / user close each disarm the watcher", async () => {
+    // closeForTab
+    {
+      const { rig } = await openedWebFileRig();
+      rig.host.closeForTab(TAB);
+      expect(rig.watchers.get(`${WORKSPACE_ROOT}/a.html`)!.closed).toBe(true);
+    }
+    // closePreview (panel header ×)
+    {
+      const { rig, previewId } = await openedWebFileRig();
+      const closed = rig.host.closePreview(TAB, previewId);
+      expect(closed.ok).toBe(true);
+      expect(rig.watchers.get(`${WORKSPACE_ROOT}/a.html`)!.closed).toBe(true);
+    }
+    // user close via native window chrome (onClosed path)
+    {
+      const rig = makeRig();
+      const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+      await flush();
+      rig.windows[0]!.webContents.fireDidFinishLoad();
+      await openPromise;
+      rig.windows[0]!.simulateExternalClose();
+      expect(rig.watchers.get(`${WORKSPACE_ROOT}/a.html`)!.closed).toBe(true);
+    }
+  });
+
+  it("web reuse-navigate to a different path re-arms on the NEW realpath (old watcher closed)", async () => {
+    const { rig, previewId } = await openedWebFileRig(`${WORKSPACE_ROOT}/a.html`);
+    const second = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.html`, previewId });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const reused = await second;
+    expect(reused.ok).toBe(true);
+
+    expect(rig.watchers.get(`${WORKSPACE_ROOT}/a.html`)!.closed).toBe(true);
+    expect(rig.watchers.get(`${WORKSPACE_ROOT}/b.html`)!.closed).toBe(false);
+
+    // And the NEW watcher is live: one burst -> one reload.
+    fireWatchEvent(rig, `${WORKSPACE_ROOT}/b.html`, "change");
+    await vi.advanceTimersByTimeAsync(LIVE_RELOAD_DEBOUNCE_MS);
+    expect(rig.windows[0]!.webContents.reloadCalls).toBe(1);
+  });
+
+  it("dom-md panel: change event bumps docVersion and pushes; no webContents reload anywhere", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    rig.mdSourceFiles.set(`${WORKSPACE_ROOT}/doc.md`, { bytes: Buffer.from("# v1", "utf8") });
+    const opened = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    expect(opened.ok).toBe(true);
+    const previewId = opened.ok ? opened.value.previewId : "";
+    const seed = rig.changed.at(-1)!.previews.find((p) => p.previewId === previewId)!.docVersion ?? 0;
+
+    fireWatchEvent(rig, `${WORKSPACE_ROOT}/doc.md`, "change");
+    await vi.advanceTimersByTimeAsync(LIVE_RELOAD_DEBOUNCE_MS);
+
+    const last = rig.changed.at(-1)!;
+    const entry = last.previews.find((p) => p.previewId === previewId);
+    expect(entry?.docVersion).toBe(seed + 1);
+    // dom-md owns no webContents — no reload was ever issued.
+    expect(rig.windows).toHaveLength(0);
+    expect(rig.panelViews).toHaveLength(0);
+  });
+
+  it("md navigate (commitMdNavigate) re-arms on the new file; reuse-navigate mirrors it", async () => {
+    // Direct commitMdNavigate: realpath changes -> the new file is watched,
+    // the old file's watcher is closed.
+    {
+      const rig = makeRig();
+      rig.displayModeValue.value = "panel";
+      rig.mdSourceFiles.set(`${WORKSPACE_ROOT}/doc.md`, { bytes: Buffer.from("# a", "utf8") });
+      rig.mdSourceFiles.set(`${WORKSPACE_ROOT}/other.md`, { bytes: Buffer.from("# b", "utf8") });
+      const opened = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+      const previewId = opened.ok ? opened.value.previewId : "";
+      expect(rig.watchers.has(`${WORKSPACE_ROOT}/doc.md`)).toBe(true);
+
+      const version = rig.host.commitMdNavigate(TAB, previewId, {
+        sourcePath: `${WORKSPACE_ROOT}/other.md`,
+        realSourcePath: `${WORKSPACE_ROOT}/other.md`,
+        docDir: WORKSPACE_ROOT,
+        title: "other.md",
+      });
+      expect(version).toBe(1);
+      expect(rig.watchers.get(`${WORKSPACE_ROOT}/doc.md`)!.closed).toBe(true);
+      expect(rig.watchers.get(`${WORKSPACE_ROOT}/other.md`)!.closed).toBe(false);
+    }
+    // Reuse-navigate lands in the same armWatcher (openMarkdownTarget's tail).
+    {
+      const rig = makeRig();
+      rig.displayModeValue.value = "panel";
+      const first = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+      const previewId = first.ok ? first.value.previewId : "";
+      const second = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/b.md`, previewId });
+      expect(second.ok).toBe(true);
+      expect(rig.watchers.get(`${WORKSPACE_ROOT}/doc.md`)!.closed).toBe(true);
+      expect(rig.watchers.get(`${WORKSPACE_ROOT}/b.md`)!.closed).toBe(false);
+    }
   });
 });

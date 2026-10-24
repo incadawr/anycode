@@ -25,7 +25,7 @@ import { assertChildModel } from "../shared/child-model.js";
  */
 import { randomUUID } from "node:crypto";
 import { CODEX_LOGIN_PROGRESS_CHANNEL } from "../shared/codex-login.js";
-import { mkdirSync, realpathSync, statSync } from "node:fs";
+import { mkdirSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
 import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -1878,6 +1878,25 @@ void app.whenReady().then(async () => {
       return wrapCapturedImage(await win.webContents.capturePage(rect));
     },
     autoOpenEnabled: () => settings?.preview?.autoOpen ?? true,
+    // Taskana 4100 stage 4: live read, same posture as autoOpenEnabled above.
+    liveReloadEnabled: () => settings?.preview?.liveReload ?? true,
+    // Raw fs.watch: rename/change both schedule a debounced reload; watcher
+    // loss (ENOENT mid-save, unlink) degrades to a disarmed watcher, never
+    // a crash. No chokidar — fs.watch suffices at this scale (≤3 watched
+    // files per tab, owner question Q1, recommendation followed).
+    watchFile: (path, onEvent, onError) => {
+      let watcher: import("node:fs").FSWatcher;
+      try {
+        watcher = fsWatch(path, (event) => {
+          if (event === "change" || event === "rename") onEvent(event);
+        });
+      } catch (error) {
+        onError(error instanceof Error ? error : new Error(String(error)));
+        return { close: () => {} };
+      }
+      watcher.on("error", (error) => onError(error instanceof Error ? error : new Error(String(error))));
+      return { close: () => { watcher.close(); } };
+    },
     postToHost: (tabId, message) => {
       const proc = manager?.getTab(tabId)?.proc;
       if (proc === null || proc === undefined) {

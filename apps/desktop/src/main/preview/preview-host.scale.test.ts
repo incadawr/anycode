@@ -49,6 +49,10 @@ class FakeWebContents implements PreviewWebContentsLike {
   loadURL(): Promise<void> {
     return Promise.resolve();
   }
+  /** Taskana 4100 stage 4: reload() is on the interface; not exercised here. */
+  reload(): Promise<void> {
+    return Promise.resolve();
+  }
   isDestroyed(): boolean {
     return false;
   }
@@ -203,6 +207,10 @@ function makeRig(opts: { displayMode: "panel" | "window" }): Rig {
       return rig.captureMainWindowRectImpl(rect);
     },
     autoOpenEnabled: () => true,
+    // Taskana 4100 stage 4: live-reload is not exercised by these tests —
+    // honest additive defaults so the PreviewHostDeps shape keeps compiling.
+    liveReloadEnabled: () => true,
+    watchFile: () => ({ close: () => {} }),
     postToHost: () => true,
     logger: { log() {}, warn() {}, error() {} },
     now: () => 1_000_000,

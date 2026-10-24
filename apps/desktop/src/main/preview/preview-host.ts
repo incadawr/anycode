@@ -115,6 +115,12 @@ export interface PreviewCapturedImage {
 
 export interface PreviewWebContentsLike {
   loadURL(url: string): Promise<void>;
+  /**
+   * Taskana 4100 stage 4 live-reload: reverts the page to its current URL's
+   * on-disk bytes (`wc.reload()` in the adapter); the subsequent
+   * did-finish-load settles the record "ready" exactly like an ordinary load.
+   */
+  reload(): Promise<void>;
   isDestroyed(): boolean;
   executeJavaScript<T = unknown>(script: string): Promise<T>;
   capturePage(): Promise<PreviewCapturedImage>;
@@ -252,6 +258,26 @@ export interface PreviewHostDeps {
   resolveArtifact: PreviewArtifactResolver;
   /** Live read of the persisted auto-open setting (cut §1(e)/§2.7; default ON). */
   autoOpenEnabled(): boolean;
+  /**
+   * Live read of `settings.preview?.liveReload ?? true` (Taskana 4100, stage
+   * 4): whether a file-backed preview reverts to on-disk bytes automatically
+   * when its artifact file changes on disk. Live read (not boot-time), same
+   * posture as autoOpenEnabled above — a SettingsScreen toggle takes effect
+   * on the next arm/re-arm decision, no re-open needed.
+   */
+  liveReloadEnabled(): boolean;
+  /**
+   * Taskana 4100 stage 4: watch ONE file for the live-reload loop. Bound at
+   * the wiring site (main/index.ts) to `fs.watch` — a raw dep so
+   * preview-host.test.ts drives change/rename/error events from a
+   * hand-written fake, no real fs and no chokidar. REQUIRED for exactly one
+   * fs.watch listener per file-backed preview: transient errors (watcher
+   * lost, file deleted mid-write) must NOT crash the host — the watcher is
+   * closed and the preview keeps its last state (the agent re-writes the
+   * file; a fresh open re-arms the watcher).
+   * Returns an unsubscribe handle.
+   */
+  watchFile(path: string, onEvent: (event: "change" | "rename") => void, onError: (error: Error) => void): { close(): void };
   /**
    * Posts one control-plane message to the tab's CURRENT host proc. Respawn-
    * safe by construction: the wiring at main/index.ts resolves `tab.proc`
@@ -436,6 +462,8 @@ const BASE_WINDOW_X = 96;
 const BASE_WINDOW_Y = 96;
 /** Chromium's `-3` `ERR_ABORTED`: superseded by a subsequent navigation (e.g. our own reuse-navigate) — never a real failure on its own. */
 const ERR_ABORTED = -3;
+/** Taskana 4100: coalesce a burst of save-events into one reload (editors write 1-3 events per save). */
+export const LIVE_RELOAD_DEBOUNCE_MS = 150;
 /** Hard cap on any page-controlled string crossing into main (cut §1.3/F3): bounded BEFORE the structured clone leaves the page (in-script `.slice`), and re-enforced main-side in case a hostile page monkey-patches its own DOM getters to dodge that cap. */
 export const READ_RESULT_MAX_CHARS = 200_000;
 /** A previewed page spinning in a loop must not hang a read/pollSelector op past the outer tool timeout (cut §1.3/F3). */
@@ -495,6 +523,14 @@ interface WebPreviewRecord {
   errorMessage?: string;
   settleWaiters: Array<() => void>;
   destroyed: boolean;
+  /**
+   * Taskana 4100 stage 4: the live-reload watcher for this record's
+   * `realSourcePath` (file-backed records only — `kind:"file"` web records
+   * and every dom-md record). Undefined while disarmed (setting off, error
+   * degradation, or a not-yet-armed fresh record); `armWatcher`/
+   * `disarmWatcher` are the only mutators.
+   */
+  watch?: { path: string; handle: { close(): void }; timer?: ReturnType<typeof setTimeout> };
 }
 
 /**
@@ -530,6 +566,8 @@ interface MdDomPreviewRecord {
   createdAt: number;
   lastOpenedAt: number;
   destroyed: boolean;
+  /** Taskana 4100 stage 4: same live-reload watcher shape as the web record — every dom-md record is file-backed. */
+  watch?: { path: string; handle: { close(): void }; timer?: ReturnType<typeof setTimeout> };
 }
 
 type PreviewRecord = WebPreviewRecord | MdDomPreviewRecord;
@@ -798,6 +836,12 @@ class PreviewHost implements PreviewHostHandle {
           this.deps.logger.warn(`[preview] failed to destroy old md window for ${existing.previewId} during flip`, error);
         }
       }
+      if (existing !== undefined && existing.viewKind === "dom-md") {
+        // Taskana 4100 stage 4: the map entry below REPLACES this record —
+        // disarm its artifact watcher so no FSWatcher outlives its record
+        // (its scheduleLiveReload liveness guard would no-op anyway).
+        this.disarmWatcher(existing);
+      }
       const previewId = existing?.previewId ?? randomUUID();
       // D4: displayMode is consulted ONLY for a genuinely brand-new record —
       // a reuse/flip keeps its existing container regardless of a later
@@ -869,6 +913,10 @@ class PreviewHost implements PreviewHostHandle {
         record.errorMessage ?? "preview failed to load",
       );
     }
+    // Taskana 4100 stage 4: the record is now live AND settled — arm the
+    // artifact watcher (no-op for localhost/remote: no file to watch). Reuse-
+    // navigate is covered here too: armWatcher re-arms on the NEW realpath.
+    this.armWatcher(record);
     return {
       ok: true,
       value: {
@@ -928,6 +976,10 @@ class PreviewHost implements PreviewHostHandle {
             this.deps.logger.warn(`[preview] failed to destroy old container for ${existing.previewId} during md flip`, error);
           }
         }
+        // Taskana 4100 stage 4: same disarm-before-replace rationale as
+        // openWebTarget's own dom-md->web flip — no FSWatcher may outlive
+        // the record whose map entry is about to be replaced.
+        this.disarmWatcher(existing);
       }
       const previewId = existing?.previewId ?? randomUUID();
       const containerKind: "window" | "panel" =
@@ -948,6 +1000,10 @@ class PreviewHost implements PreviewHostHandle {
       this.visiblePanelPreviewId.set(tabId, record.previewId);
       this.applyPanel();
     }
+    // Taskana 4100 stage 4: ONE arm call covers both branches above (reuse-
+    // navigate re-pointed at the new realpath, brand-new record's first
+    // arm) — every dom-md record is file-backed by construction.
+    this.armWatcher(record);
     this.pushChanged(tabId);
 
     return {
@@ -1605,6 +1661,10 @@ class PreviewHost implements PreviewHostHandle {
     if (record.destroyed) {
       return;
     }
+    // Taskana 4100 stage 4: disarm the live-reload watcher FIRST — runs for
+    // web close, md close, tab close, closeAll, setContainer old-container
+    // teardown, and the onClosed path alike (one copy, all teardown routes).
+    this.disarmWatcher(record);
     record.destroyed = true;
     if (record.viewKind === "web") {
       this.flushEventSummary(record);
@@ -1893,6 +1953,10 @@ class PreviewHost implements PreviewHostHandle {
       record.window.show();
     }
 
+    // Taskana 4100 stage 4: a transferred-in preview keeps its artifact file
+    // — re-arm on the record's unchanged realpath (no-op if still armed for
+    // it; the OLD container owns no watcher of its own, so no double-watch).
+    this.armWatcher(record);
     this.pushChanged(tabId);
     return { ok: true, reloaded: true };
   }
@@ -1926,6 +1990,9 @@ class PreviewHost implements PreviewHostHandle {
       }
       this.applyPanel();
       record.mdWindow.show();
+      // Taskana 4100 stage 4: the record keeps its artifact file across the
+      // transfer — re-arm on the unchanged realpath (no-op if still armed).
+      this.armWatcher(record);
       this.pushChanged(tabId);
       return { ok: true, reloaded: true };
     }
@@ -1948,8 +2015,87 @@ class PreviewHost implements PreviewHostHandle {
     // (mirrors the web path's own container === "panel" branch).
     this.visiblePanelPreviewId.set(tabId, record.previewId);
     this.applyPanel();
+    // Taskana 4100 stage 4: same re-arm-on-transfer rationale as the window
+    // branch above — the artifact file never changed.
+    this.armWatcher(record);
     this.pushChanged(tabId);
     return { ok: true, reloaded: true };
+  }
+
+  /**
+   * Taskana 4100 stage 4 live-reload (96-R): arm the artifact watcher for a
+   * record whose bytes live on disk. File-backed records only (`realSourcePath`
+   * defined, `kind:"file"` for web records — localhost/remote URLs have no
+   * artifact file). No-op when liveReloadEnabled() is false or a watcher is
+   * already armed for the SAME path; a DIFFERENT path (reuse-navigate /
+   * commitMdNavigate) disarms the old watcher first — exactly one fs.watch
+   * listener per record, re-pointed at the current realpath.
+   */
+  private armWatcher(record: WebPreviewRecord | MdDomPreviewRecord): void {
+    if (!this.deps.liveReloadEnabled()) return;
+    const path = record.realSourcePath;
+    if (path === undefined) return;
+    if (record.viewKind === "web" && record.kind !== "file") return; // localhost/remote URLs have no artifact file
+    if (record.watch !== undefined && record.watch.path === path) return;
+    this.disarmWatcher(record);
+    const handle = this.deps.watchFile(
+      path,
+      () => this.scheduleLiveReload(record, path),
+      () => this.disarmWatcher(record), // honest degradation, never a crash
+    );
+    record.watch = { path, handle };
+  }
+
+  /**
+   * Debounced: one reload per save-burst (editors fire 1-3 rename/change
+   * events per save; fs.watch semantics differ by platform). The timer
+   * callback re-checks liveness — the record may have been closed, replaced,
+   * or re-armed at a different path mid-debounce.
+   */
+  private scheduleLiveReload(record: WebPreviewRecord | MdDomPreviewRecord, path: string): void {
+    if (record.destroyed) return;
+    const w = record.watch;
+    if (w === undefined || w.path !== path) return;
+    if (w.timer !== undefined) clearTimeout(w.timer);
+    w.timer = setTimeout(() => {
+      w.timer = undefined;
+      if (record.destroyed || this.previews.get(record.previewId) !== record) return;
+      if (record.viewKind === "web") {
+        // The `status === "ready"` guard keeps the settle state machine
+        // intact: a reload fired while "loading" would break waitForSettle
+        // (reload() re-fires did-finish-load -> settle(record,"ready"), the
+        // SAME semantics an ordinary loadURL has).
+        if (!record.window.isDestroyed() && !record.window.webContents.isDestroyed() && record.status === "ready") {
+          record.status = "loading";
+          void record.window.webContents.reload().catch((error) => {
+            this.deps.logger.warn(`[preview] live-reload failed for ${record.previewId}`, error);
+            record.status = "failed";
+            record.errorMessage = `live-reload failed: ${String(error)}`;
+            this.pushChanged(record.tabId);
+          });
+        }
+      } else {
+        // dom-md: docVersion bump + pushChanged — the renderer refetches on
+        // its own (md-view-state reconciliation; the panel's docVersion prop
+        // beats the local doc's -> MarkdownPreviewView refetches).
+        record.docVersion += 1;
+        record.lastOpenedAt = this.now();
+        this.pushChanged(record.tabId);
+      }
+    }, LIVE_RELOAD_DEBOUNCE_MS);
+  }
+
+  /** Closes the watcher (if armed) and clears any pending debounce timer — best-effort, never throws. Runs on EVERY teardown route via destroyRecord. */
+  private disarmWatcher(record: WebPreviewRecord | MdDomPreviewRecord): void {
+    const w = record.watch;
+    record.watch = undefined;
+    if (w === undefined) return;
+    if (w.timer !== undefined) clearTimeout(w.timer);
+    try {
+      w.handle.close();
+    } catch {
+      // best-effort — a watcher that already died on its own error path
+    }
   }
 
   /** Broadcasts the tab's current preview set (main -> renderer push, D7's contract). */
@@ -2044,6 +2190,7 @@ class PreviewHost implements PreviewHostHandle {
       lastOpenedAt: now,
       settleWaiters: [],
       destroyed: false,
+      watch: undefined,
     };
   }
 
@@ -2072,6 +2219,7 @@ class PreviewHost implements PreviewHostHandle {
       createdAt: now,
       lastOpenedAt: now,
       destroyed: false,
+      watch: undefined,
     };
   }
 
@@ -2126,6 +2274,9 @@ class PreviewHost implements PreviewHostHandle {
     record.renderedFrom = fields.sourcePath;
     record.docVersion += 1;
     record.lastOpenedAt = this.now();
+    // Taskana 4100 stage 4: realpath changed -> re-arm on the NEW file; same
+    // path -> no-op (armWatcher's own same-path short-circuit).
+    this.armWatcher(record);
     this.pushChanged(tabId);
     return record.docVersion;
   }

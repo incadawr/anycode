@@ -274,6 +274,7 @@ function makeFakeWc(): FakeWc {
   const finishListeners: Array<() => void> = [];
   return {
     loadURL: async () => {},
+    reload: async () => {},
     isDestroyed: () => false,
     executeJavaScript: <T = unknown>(): Promise<T> => Promise.resolve(undefined as T),
     capturePage: async () => ({
@@ -364,6 +365,11 @@ function makeRealHost(): { host: PreviewHostHandle; panelViews: FakePanel[] } {
     readMdSourceNoFollow: async () => Buffer.alloc(0),
     captureMainWindowRect: async () => null,
     autoOpenEnabled: () => true,
+    // Taskana 4100 stage 4: live-reload is not exercised by this suite —
+    // honest additive defaults satisfying PreviewHostDeps' shape (same
+    // posture as the M3/M4 minimal fakes above).
+    liveReloadEnabled: () => false,
+    watchFile: () => ({ close: () => {} }),
     postToHost: () => true,
     logger: { log: () => {}, warn: () => {}, error: () => {} },
     now: () => Date.now(),

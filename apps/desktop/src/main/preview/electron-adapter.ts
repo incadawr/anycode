@@ -142,6 +142,13 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
 
   return {
     loadURL: (url) => wc.loadURL(url),
+    // Taskana 4100 stage 4 (live-reload): reverts the page to its current
+    // URL's on-disk bytes — the subsequent did-finish-load settles the
+    // record "ready" exactly like an ordinary load (preview-host.ts's
+    // scheduleLiveReload owns the debounce + status guards).
+    reload: async () => {
+      await wc.reload();
+    },
     isDestroyed: () => wc.isDestroyed(),
     executeJavaScript: (script) => wc.executeJavaScript(script),
     capturePage: async () => wrapCapturedImage(await wc.capturePage()),
@@ -214,6 +221,12 @@ export function createElectronPreviewWindow(opts: CreateWindowOpts): PreviewWind
   const win = new BrowserWindow({
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
+    // Taskana 4100 stage 4 (TASK.96 «Этап 4»: always-on-top для
+    // превью-окон): a preview window is a passive artifact viewer the user
+    // wants beside the app — 'floating' keeps it above the main window
+    // without fighting the OS focus (macOS floating level; Windows/Linux
+    // honor the flag best-effort).
+    alwaysOnTop: true,
     ...(opts.x !== undefined && opts.y !== undefined ? { x: opts.x, y: opts.y } : {}),
     webPreferences: {
       sandbox: true,
