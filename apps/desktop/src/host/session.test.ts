@@ -43,9 +43,13 @@ import {
   ModePermissionEngine,
   NodeHttpAdapter,
   RuleAwarePermissionEngine,
+  SETUP_BUILTIN_SKILLS,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SessionPermissionRules,
   SqlitePersistenceAdapter,
+  buildSkillsPromptSection,
+  createSkillPort,
+  discoverSkills,
   type ProviderUsageRecord,
   bashTool,
   createDefaultToolRegistry,
@@ -365,6 +369,50 @@ describe("Session — context breakdown wire (slice P7.17 · F12)", () => {
       // Release the parked ask so the turn drains cleanly.
       h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
       await h.waitFor(agentEventOf("loop_end"));
+    } finally {
+      h.close();
+    }
+  });
+});
+
+describe("Session — builtin anycode-setup skill wire (Taskana 4707)", () => {
+  it("advertises the skill in the system prompt's skills section and serves it through the Skill tool", async () => {
+    // The host's own registration shape (host/index.ts builtinSkills):
+    // discoverSkills over the registered builtin sets, one SkillPort, one
+    // skills prompt section — replayed here over the in-memory harness fs.
+    const fs = new MemFs();
+    const discovered = await discoverSkills(fs, [], { builtins: SETUP_BUILTIN_SKILLS });
+    expect(discovered.problems).toEqual([]);
+    const promptSection = buildSkillsPromptSection(discovered.metas);
+    const skills = createSkillPort(fs, discovered.metas, { builtins: SETUP_BUILTIN_SKILLS });
+
+    expect(promptSection).toContain("anycode-setup (builtin):");
+
+    const h = createHarness({
+      steps: [
+        toolStep("s1", "Skill", { name: "anycode-setup" }),
+        textStep("loaded"),
+        finishStep(),
+      ],
+      skills: { port: skills, promptSection },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "user_message", requestId: "r1", text: "help me configure mcp" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      // The Skill tool call resolved against the REAL dispatch pipeline: the
+      // loaded builtin body (topic table included) landed in model-visible
+      // history as the tool result.
+      const skillResult = h.engine
+        .historyItems()
+        .flatMap((item) => (item.message.role === "tool" ? item.message.content : []))
+        .find((part) => part.text.includes("# AnyCode setup"));
+      expect(skillResult).toBeDefined();
+      expect(skillResult?.text).toContain("docs/user/mcp.md");
+      expect(skillResult?.text).toContain("NEVER print API keys, tokens or secrets");
     } finally {
       h.close();
     }

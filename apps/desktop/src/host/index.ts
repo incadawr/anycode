@@ -195,6 +195,7 @@ import {
   SwitchableModelPort,
   WriteBehindHistorySink,
   PREVIEW_BUILTIN_SKILLS,
+  SETUP_BUILTIN_SKILLS,
   SUBAGENT_BUILTIN_SKILLS,
   WORKTREE_BUILTIN_SKILLS,
   backgroundCapableBashTool,
@@ -2911,6 +2912,9 @@ async function boot(): Promise<void> {
       // (withSubagents always attaches a SubagentPort and Write is always
       // registered — night-track wave-2 cut §1.5).
       ...SUBAGENT_BUILTIN_SKILLS,
+      // Taskana 4707: unconditional, same posture as subagents — the skill
+      // only reads config through normal tools; edits stay under the gate.
+      ...SETUP_BUILTIN_SKILLS,
     ];
     try {
       ext = await discoverExtensions(fsAdapter, {

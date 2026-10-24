@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { createSkillPort, discoverSkills } from "./discovery.js";
 import {
+  ANYCODE_SETUP_SKILL,
   BUILTIN_SKILL_SOURCE,
   CREATING_SUBAGENTS_SKILL,
+  SETUP_BUILTIN_SKILLS,
   SUBAGENT_BUILTIN_SKILLS,
   USING_BROWSER_PREVIEW_SKILL,
   USING_GIT_WORKTREES_SKILL,
@@ -162,5 +164,97 @@ describe("using-browser-preview builtin skill (night-track wave-1 fix cut §1.4,
 
   it("tells the model to write self-contained artifacts (no remote subresources)", () => {
     expect(USING_BROWSER_PREVIEW_SKILL.body).toContain("self-contained");
+  });
+});
+
+describe("anycode-setup builtin skill (Taskana 4707)", () => {
+  it("discovers and lazily loads the always-on setup skill", async () => {
+    const fs = fakeFs();
+    const result = await discoverSkills(fs, [], { builtins: SETUP_BUILTIN_SKILLS });
+
+    expect(result.problems).toEqual([]);
+    expect(result.metas).toEqual([
+      expect.objectContaining({
+        name: "anycode-setup",
+        source: BUILTIN_SKILL_SOURCE,
+        path: builtinSkillPath("anycode-setup"),
+      }),
+    ]);
+
+    const port = createSkillPort(fs, result.metas, { builtins: SETUP_BUILTIN_SKILLS });
+    const loaded = await port.load("anycode-setup");
+    expect(loaded?.body).toContain("# AnyCode setup");
+    expect(loaded?.truncated).toBe(false);
+  });
+
+  it("matches the frozen name and description verbatim (Taskana 4707)", () => {
+    expect(ANYCODE_SETUP_SKILL.name).toBe("anycode-setup");
+    expect(ANYCODE_SETUP_SKILL.description).toBe(
+      "Help configure AnyCode itself: settings, connections, engines, MCP servers, skills, subagent profiles, permissions, and proxy. Read-only diagnosis; edits only through approved Write/Edit. Never prints API keys or secrets.",
+    );
+  });
+
+  it("carries both safety rules verbatim: never print secrets, edits only via approved Write/Edit", () => {
+    expect(ANYCODE_SETUP_SKILL.body).toContain(
+      "NEVER print API keys, tokens or secrets — refer to them by env-var name or vault slot only.",
+    );
+    expect(ANYCODE_SETUP_SKILL.body).toContain(
+      "edit config files only through Write/Edit with the user's approval; never shell out to write configs.",
+    );
+    // Defensive, cheap: no key-shaped literal ever rides in the body.
+    expect(ANYCODE_SETUP_SKILL.body).not.toMatch(/sk-[A-Za-z0-9]{8,}/);
+  });
+
+  it("names exactly the docs/user topic files in its topic table", () => {
+    const topics = [
+      ...ANYCODE_SETUP_SKILL.body.matchAll(/\|\s*docs\/user\/([A-Za-z0-9._-]+\.md)\s*\|/g),
+    ].map((match) => match[1]);
+    expect(topics.sort()).toEqual(
+      [
+        "configuration.md",
+        "engines.md",
+        "mcp.md",
+        "orchestration.md",
+        "permissions.md",
+        "proxy.md",
+        "skills.md",
+        "subagents.md",
+        "troubleshooting.md",
+      ].sort(),
+    );
+  });
+
+  it("lets a filesystem skill shadow the same-name builtin", async () => {
+    const root = "/project/.anycode/skills";
+    const skillPath = `${root}/anycode-setup/SKILL.md`;
+    const fs = fakeFs({
+      [skillPath]:
+        "---\nname: anycode-setup\ndescription: Project policy\n---\nproject body\n",
+    });
+
+    const result = await discoverSkills(
+      fs,
+      [{ dir: root, source: "project" }],
+      { builtins: SETUP_BUILTIN_SKILLS },
+    );
+    expect(result.metas).toEqual([
+      expect.objectContaining({
+        name: "anycode-setup",
+        source: "project",
+        path: skillPath,
+      }),
+    ]);
+
+    const port = createSkillPort(fs, result.metas, { builtins: SETUP_BUILTIN_SKILLS });
+    expect((await port.load("anycode-setup"))?.body).toBe("project body\n");
+  });
+
+  it("honors the shared disabled-skills setting for the builtin", async () => {
+    const result = await discoverSkills(fakeFs(), [], {
+      builtins: SETUP_BUILTIN_SKILLS,
+      disabled: new Set(["anycode-setup"]),
+    });
+    expect(result.metas).toEqual([]);
+    expect(result.problems).toEqual([]);
   });
 });

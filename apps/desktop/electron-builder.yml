@@ -25,6 +25,13 @@ files:
   # packaging must never absorb those incidental artifacts.
   - "!out/**/*smoke*/**"
   - "!**/*.map"
+  # Taskana 4707: the user documentation tree ships with the app bundle. The
+  # host resolves these relative to the module EXACTLY as the source test
+  # packages/core/src/skills/setup-docs.test.ts does (module-relative
+  # ../../docs/user). They sit inside app.asar and are read through Electron's
+  # asar virtual FS (plain readFile), so no asarUnpack entry is needed.
+  - ../../docs/user/**
+  - ../../docs/orchestration.md
 
 # Native binaries that must live on the real filesystem, not inside app.asar
 # (they are exec'd/dlopen'd, which the asar virtual FS cannot serve). The

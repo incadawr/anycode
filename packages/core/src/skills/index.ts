@@ -12,9 +12,11 @@ export type { SkillDiscoveryResult, SkillRoot } from "./discovery.js";
 export { buildSkillsPromptSection } from "./prompt-section.js";
 export { SKILL_NAME_RE } from "./discovery.js";
 export {
+  ANYCODE_SETUP_SKILL,
   BUILTIN_SKILL_SOURCE,
   CREATING_SUBAGENTS_SKILL,
   PREVIEW_BUILTIN_SKILLS,
+  SETUP_BUILTIN_SKILLS,
   SUBAGENT_BUILTIN_SKILLS,
   USING_BROWSER_PREVIEW_SKILL,
   USING_GIT_WORKTREES_SKILL,
