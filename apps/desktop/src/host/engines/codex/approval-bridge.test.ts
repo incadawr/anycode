@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { BASH_RISK_PLAQUE, bashRiskPlaque, bashWriteCapablePlaque } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
-import { CODEX_APPROVAL_ERROR_CODE, CodexApprovalBridge, STDIN_WRITE_REASON, type ActiveCodexTurn } from "./approval-bridge.js";
+import {
+  CODEX_APPROVAL_ERROR_CODE,
+  CodexApprovalBridge,
+  STDIN_WRITE_REASON,
+  quoteArgvElement,
+  type ActiveCodexTurn,
+} from "./approval-bridge.js";
 import type { JsonRpcServerRequest } from "./protocol.js";
 import { TurnItemIndex } from "./turn-item-index.js";
 
@@ -387,6 +393,29 @@ describe("CodexApprovalBridge — risk plaque for commandExecution approvals (Ta
     expect(bashRiskPlaque("CodexExec", presented.input)).toBe(bashWriteCapablePlaque("sudo"));
     broker.handleResponse(presented.requestId, "deny");
     await flush();
+  });
+
+  it("an argv array is POSIX-quoted, so element boundaries cannot be re-read through shell quoting", async () => {
+    // A plain space join would read `git log ' --output=/tmp/x '` — one quoted
+    // literal around the flag git really receives. The quoted join renders the
+    // argv faithfully (and the classifier still refuses to call it read-only).
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: ["git", "log", "'", "--output=/tmp/x", "'"] }), responder());
+    await flush();
+    const presented = ask(emitted);
+    expect(presented.input).toMatchObject({ command: String.raw`git log ''\''' --output=/tmp/x ''\'''` });
+    expect(bashRiskPlaque("CodexExec", presented.input)).not.toBe(BASH_RISK_PLAQUE.readOnly);
+    expect(presented.metadata).not.toMatchObject({ readOnly: true });
+    broker.handleResponse(presented.requestId, "deny");
+    await flush();
+  });
+
+  it("quoteArgvElement leaves inert words bare and single-quotes the rest", () => {
+    expect(quoteArgvElement("/bin/rm")).toBe("/bin/rm");
+    expect(quoteArgvElement("a b")).toBe("'a b'");
+    expect(quoteArgvElement("")).toBe("''");
+    expect(quoteArgvElement("it's")).toBe(String.raw`'it'\''s'`);
+    expect(quoteArgvElement("$(rm -rf /)")).toBe("'$(rm -rf /)'");
   });
 
   it("a non-string, non-array command degrades to the fail-closed default (no command, no plaque)", async () => {

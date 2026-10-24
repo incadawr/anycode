@@ -117,21 +117,29 @@ function optionalString(value: unknown): string | null {
 
 /**
  * Taskana 4070: Codex MAY send the command as an argv ARRAY (rather than the
- * string observed live in 0.144–0.161). For DISPLAY the array is joined with
- * single spaces — the best plain-text rendering of an argv — and that joined
- * form is also what the shared plaque classifier reads. The join is for
- * presentation/classification ONLY: no decision, rule or wire field is built
- * from it, and non-string entries degrade to omission rather than rejection
- * (an absent `command` keeps today's behavior: no command shown, fail-closed
- * high-risk metadata, no plaque).
+ * string observed live in 0.144–0.161). The array is rendered as a POSIX-quoted
+ * command line — every element that is not plainly safe is single-quoted — and
+ * that rendering is what the dialog shows and what the shared classifier reads.
+ * A plain space join would let an argv's element boundaries be re-read through
+ * shell quoting (`["git", "log", "'", "--output=/x", "'"]` joined reads as ONE
+ * quoted literal around a flag git really receives), so the quoted form is the
+ * only faithful one — for the dialog, the classifier and any remembered rule
+ * (defense in depth: today's classifier already refuses that joined form). Anything other than a non-empty all-string
+ * array keeps today's behaviour (fall back to the item's own command, or no
+ * command: fail-closed high-risk metadata, no plaque).
  */
 function optionalCommand(value: unknown, fallback: string | undefined): string | undefined {
   if (typeof value === "string" && value.length > 0) return value;
-  if (Array.isArray(value)) {
-    const joined = value.filter((part): part is string => typeof part === "string" && part.length > 0).join(" ");
-    return joined.length > 0 ? joined : undefined;
+  if (Array.isArray(value) && value.length > 0 && value.every((part) => typeof part === "string")) {
+    return (value as string[]).map(quoteArgvElement).join(" ");
   }
   return fallback;
+}
+
+/** POSIX single-quote an argv element unless it consists only of shell-inert characters. */
+export function quoteArgvElement(part: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(part)) return part;
+  return `'${part.replace(/'/g, `'\\''`)}'`;
 }
 
 function stringList(value: unknown): string[] | undefined {
