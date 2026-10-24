@@ -90,6 +90,13 @@ export function cooldownUntil(failures: number, now: number): number {
  * Infrastructure-failure classification (§2.7): fallback triggers are
  * infrastructure classes ONLY. Ordinary task failure / bad answer NEVER
  * falls back ("task failed", "test assertion failed" → none).
+ *
+ * Cross-review F3: the patterns are ANCHORED to the exact prefixes the
+ * provider/resolver layers emit, and classification runs ONLY on error
+ * terminals (see decideRoutedTerminal): a child session's finalText is FREE
+ * MODEL TEXT that legitimately discusses auth code, imports, certificates or
+ * line 403 — loose substring matches here respawned user-CANCELLED and
+ * max_turns children and re-edited the worktree after the user's Stop.
  */
 export type InfraFailureKind =
   | "unreachable"
@@ -100,31 +107,39 @@ export type InfraFailureKind =
   | "none";
 
 export function classifyInfraFailure(text: string): InfraFailureKind {
-  const t = text.toLowerCase();
-  // Model resolver messages (child model id disallowed/unknown on the
-  // connection).
-  if (t.includes("could not be resolved") || t.includes("not available on this connection") || t.includes("not available on the selected connection")) {
+  // The exact error terminal texts (host/session.ts finalizeChildTerminal
+  // prefixes a redacted safe descriptor: "<message> (HTTP <status>)"):
+  // failure.ts's SAFE_MESSAGES carry "rate limited" (429), "authentication
+  // failed" (401), "forbidden" (403), "quota exhausted", "network error",
+  // "connect timeout", "proxy unavailable...", "TLS certificate is not
+  // trusted..." — never raw provider bodies. Model-resolver refusals come
+  // from child-model.ts / tabs.ts / runner.ts's fixed sentences.
+  if (
+    text.includes("This model is not available on the selected connection") ||
+    text.includes("is not available on this connection") ||
+    text.includes("could not be resolved in this host")
+  ) {
     return "model_not_found";
   }
-  if (/\b401\b/.test(t) || /\b403\b/.test(t) || t.includes("auth") || t.includes("unauthorized") || t.includes("forbidden")) {
-    return "auth";
-  }
-  if (/\b429\b/.test(t) || t.includes("quota") || t.includes("rate limit") || t.includes("rate_limit")) {
+  if (
+    text.includes("rate limited") ||
+    text.includes("quota exhausted") ||
+    text.includes("rate limit reached") ||
+    text.includes("rate_limit")
+  ) {
     return "quota";
   }
+  if (text.includes("authentication failed") || text.includes("forbidden") || text.includes("Proxy authentication failed")) {
+    return "auth";
+  }
   if (
-    t.includes("enotfound") ||
-    t.includes("econnrefused") ||
-    t.includes("econnreset") ||
-    t.includes("etimedout") ||
-    t.includes("tls") ||
-    t.includes("certificate") ||
-    t.includes("unreachable")
+    text.includes("network error") ||
+    text.includes("connect timeout") ||
+    text.includes("Proxy unavailable") ||
+    text.includes("TLS certificate is not trusted") ||
+    text.includes("server error")
   ) {
     return "unreachable";
-  }
-  if (t.includes("before first token") || t.includes("stalled before")) {
-    return "timeout_first_token";
   }
   return "none";
 }
@@ -227,6 +242,12 @@ export function decideRoutedTerminal(
     health.markSuccess(entryKey(facts.role, facts.entry));
     return { action: "deliver" };
   }
+  // Cross-review F3: classify ONLY error terminals. max_turns (the budget
+  // ran out — the orchestrator must see the honest incomplete marker, and a
+  // respawn would re-edit the same worktree after the report) and cancelled
+  // (the user's own Stop) are user-visible outcomes, never infra failures,
+  // no matter what free text accompanies them.
+  if (status !== "error") return { action: "deliver" };
   // Fallback point 2: infrastructure classes ONLY (§2.7).
   const kind = classifyInfraFailure(finalText);
   if (kind === "none") return { action: "deliver" };
