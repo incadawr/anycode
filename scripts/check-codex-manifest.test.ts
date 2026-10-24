@@ -80,7 +80,8 @@ describe("run() exit-code mapping (no network)", () => {
   });
 
   it("a stale newest stable exits 1 and names both copies to update", () => {
-    const result = run({ versions: ["0.164.0"] });
+    // Must sit above the REAL repo-root manifest's ceiling (currently <0.165.0).
+    const result = run({ versions: ["9.0.0"] });
     expect(result.exit).toBe(1);
     const stderr = result.stderr.join("\n");
     expect(stderr).toContain("codex-support.json");

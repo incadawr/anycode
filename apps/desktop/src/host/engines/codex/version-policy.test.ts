@@ -69,8 +69,8 @@ describe("resolveHostCodexVersionPolicy", () => {
     expect(policy.supportedRange).toBe(SUPPORTED_CODEX_VERSION);
     // Byte-for-byte the pre-TASK.206 predicate: a bare ceiling, no floor.
     expect(policy.allows(version("0.154.0"))).toBe(true);
-    expect(policy.allows(version("0.162.0"))).toBe(true);
-    expect(policy.allows(version("0.163.0"))).toBe(false);
+    expect(policy.allows(version("0.164.0"))).toBe(true);
+    expect(policy.allows(version("0.165.0"))).toBe(false);
     expect(policy.allows(version("1.0.0"))).toBe(false);
     expect(policy.allows(version("0.100.0"))).toBe(true);
     // The strict compiled fallback never soft-allows and never warns.

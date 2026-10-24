@@ -36,10 +36,10 @@ protocol AnyCode's Codex adapter is built against (design
 
 ## Supported version ceiling
 
-`<0.163.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`<0.165.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). TASK.173 (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
-closed range, so any codex-cli build below 0.163.0 is accepted by version
+closed range, so any codex-cli build below 0.165.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
 wire shapes fails on its own later, at whichever call first needs a shape it
 lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
@@ -110,6 +110,21 @@ Resume therefore retains shadow item IDs, prefers matching native commands,
 and anchors shadow-only denied commands in the original native-visible
 coordinate space. A live failure exposed this change before the fix; the
 subsequent smoke passed without weakening the transcript-order check.
+
+## 0.163.0 / 0.164.0 verification (2026-10-24)
+
+Layer 2 passes against the real 0.163.0 and 0.164.0 binaries; `methods` and
+`decisionEnums` byte-identical. Against 0.162.0, 0.163.0 only adds the
+optional `TurnToolOutput.retain` (not consumed). 0.164.0 adds `PlanType`
+values (`sci`, `sci_plus`; AnyCode reads planType as a free string), an
+optional `inputImages` on the `imageGeneration` thread item, and moves that
+item's `result` into a flattened `anyOf` (`result` OR `fileId`) — the same
+shape change `UserInput.image.url` took at 0.160. The translator only reads
+`result` for the generic display card and already skips a missing field, so
+the path is in `REVIEWED_REMOVALS`, paired with an assertion that the
+inline-result alternative still exists. 0.164.0 passed the live GUI smoke
+**10/10** and is the recommended installer version; 0.163.x was not
+individually live-smoked.
 
 ## Raising the ceiling / updating the pin
 
