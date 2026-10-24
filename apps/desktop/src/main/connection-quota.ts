@@ -56,6 +56,11 @@ export interface ConnectionQuotaDeps {
    * gets `QUOTA_WRITE_INTERVAL_MS`.
    */
   writeIntervalMs?: number;
+  /**
+   * Injectable quit-flush ceiling (tests shrink the 200 ms to prove the
+   * bound); production omits it and gets `QUOTA_QUIT_FLUSH_BUDGET_MS`.
+   */
+  quitFlushBudgetMs?: number;
 }
 
 /**
@@ -274,4 +279,76 @@ async function writeQuotaUnderLock(
     await saveSettings(deps.settingsPath, updated);
     return true;
   });
+}
+
+/**
+ * Hard ceiling on the quit flush (Taskana 4090 brief: "never block quit for
+ * more than about 200 ms"). A settings write is normally single-digit
+ * milliseconds; the ceiling exists for the pathological case (a stalling
+ * disk, a lock held by a wedged writer) so quit can never appear hung.
+ */
+export const QUOTA_QUIT_FLUSH_BUDGET_MS = 200;
+
+/**
+ * Taskana 4090 follow-up: on app quit, a trailing quota value coalesced by
+ * the 30 s throttle (up to 29 s fresher than what is on disk) would
+ * otherwise be lost — the timer is `unref`'d and dies with the process. This
+ * flushes every connection's pending value ONE last time, bypassing the
+ * throttle window (the process is going away; there is no "next event after
+ * the window" to save the write for).
+ *
+ * Best-effort by design, on every axis (brief Q2):
+ *  - bounded: raced against `QUOTA_QUIT_FLUSH_BUDGET_MS`; on timeout the
+ *    pending values are dropped and whatever is already on disk stands;
+ *  - non-fatal: a read-only file, a deleted connection, a write error —
+ *    all resolve `false`/log, never throw into the quit path;
+ *  - lock-respecting: the write goes through the same
+ *    `writeQuotaUnderLock`/`withSettingsFileLock` critical section every
+ *    other quota write uses.
+ *
+ * Called from main's `shutdownEverything` (the awaited before-quit
+ * teardown, before persistence closes) and idempotent: a second call finds
+ * empty `pending` slots and returns immediately.
+ */
+export async function flushPendingConnectionQuota(deps: ConnectionQuotaDeps): Promise<boolean> {
+  const pendingFlushes: Promise<boolean>[] = [];
+  for (const [connectionId, state] of throttles) {
+    const pending = state.pending;
+    if (pending === undefined) {
+      continue;
+    }
+    // Cancel the trailing timer (the process is exiting; the timer would
+    // never usefully fire) and take the value out of the slot so a second
+    // flush call — or the timer's own callback racing this loop — cannot
+    // double-write it.
+    if (state.timer !== undefined) {
+      clearTimeout(state.timer);
+      state.timer = undefined;
+    }
+    state.pending = undefined;
+    pendingFlushes.push(
+      writeQuotaUnderLock(deps, connectionId, pending.quota, pending.source, deps.now ?? Date.now),
+    );
+  }
+  if (pendingFlushes.length === 0) {
+    return false;
+  }
+  const budgetMs = deps.quitFlushBudgetMs ?? QUOTA_QUIT_FLUSH_BUDGET_MS;
+  try {
+    // `reflect()` never rejects: a rejected write is a dropped observation
+    // (logged by the caller), not a failed quit.
+    const results = await Promise.race([
+      Promise.allSettled(pendingFlushes).then((settled) =>
+        settled.map((outcome) => outcome.status === "fulfilled" && outcome.value === true),
+      ),
+      new Promise<boolean[]>((resolve) => {
+        const timer = setTimeout(() => resolve([]), budgetMs);
+        timer.unref?.();
+      }),
+    ]);
+    return results.some((persisted) => persisted);
+  } catch (error) {
+    deps.logger?.warn?.(`[main] quit flush of pending connection quota failed`, error);
+    return false;
+  }
 }

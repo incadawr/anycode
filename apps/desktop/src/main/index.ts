@@ -161,7 +161,7 @@ import { registerMdDocIpc } from "./preview/md-doc-ipc.js";
 import type { MdDocDeps } from "./preview/md-doc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
 import { registerProviderIpc } from "./provider-ipc.js";
-import { handleProviderQuotaMessage } from "./connection-quota.js";
+import { flushPendingConnectionQuota, handleProviderQuotaMessage } from "./connection-quota.js";
 import {
   applyConnectionHealthEvent,
   handleSet,
@@ -515,6 +515,14 @@ let claudeBinaryPath: string | null = null;
 let lastClaudeSnapshot: ClaudeOnboardingSnapshot | undefined;
 /** Set once quit begins, to gate the before-quit handler's second pass. */
 let quitting = false;
+/**
+ * Taskana 4090: the resolved settings path (null until boot finishes) so the
+ * before-quit teardown can flush the quota persister's pending trailing
+ * values against the SAME file every runtime write used — never a raw
+ * `defaultSettingsPath()` re-derivation, which a dev profile override would
+ * silently diverge from.
+ */
+let settingsPathForQuitFlush: string | null = null;
 /** Auto-updater controller (TASK.47 W15) — held module-level so before-quit can clear its armed schedule timer. Null until boot registers it. */
 let updaterController: UpdaterController | null = null;
 
@@ -1862,6 +1870,7 @@ void app.whenReady().then(async () => {
   // every host fork below (buildHostEnv spreads `bootEnv`) sees the identical
   // path `seedAlwaysAllowRules` should read — never a raw, ungated env value.
   bootEnv[ENV_SETTINGS_PATH] = settingsPath;
+  settingsPathForQuitFlush = settingsPath;
   const loaded = await loadSettings(settingsPath, fileLogger);
   settings = loaded.settings;
   vault = new Vault({ safeStorage: selfCheckProfile === undefined ? safeStorage : selfCheckStorage, secretsPath, logger: fileLogger });
@@ -3126,6 +3135,21 @@ async function shutdownEverything(): Promise<void> {
   // `will-quit` backstop below can repeat it for a quit that never routed
   // through `before-quit`.
   closeProxyRelay();
+  // Taskana 4090 follow-up: flush the quota persister's pending trailing
+  // values (a coalesced observation up to 29 s fresher than what is on disk)
+  // BEFORE the hosts/persistence finish tearing down — after quit there is
+  // no timer left to fire. Bounded to ~200 ms internally
+  // (QUOTA_QUIT_FLUSH_BUDGET_MS) and best-effort: a timeout, a read-only
+  // file, or a write error just drops the observation and lets the teardown
+  // proceed, so quit can never hang on it. Only the flush's own budget
+  // bounds it — settings writes are single-digit ms in practice.
+  if (settingsPathForQuitFlush !== null) {
+    await flushPendingConnectionQuota({ settingsPath: settingsPathForQuitFlush, logger: fileLogger }).catch(
+      (error) => {
+        console.error("[main] quit flush of pending connection quota failed", error);
+      },
+    );
+  }
   await Promise.allSettled([
     activeManager !== null && activeManager.count() > 0 ? activeManager.shutdownAllTabHosts() : Promise.resolve(),
     activeOnboarding?.shutdown() ?? Promise.resolve(),

@@ -8354,36 +8354,39 @@ describe("desktop store — provider_quota (Taskana 4090)", () => {
     expect(useSettingsStore.getState().snapshot?.settings.provider.connections[0]?.lastQuota).toBeUndefined();
   });
 
-  // Taskana 4090 follow-up (Opus review): the renderer's in-memory paint is
-  // one source of truth with the PERSISTED line — main's throttled write
-  // (main/connection-quota.ts) lands on disk and its push reloads the
-  // snapshot. A snapshot refresh (any later settings.get) must therefore
-  // RE-SHOW the line from the persisted document instead of wiping the
-  // in-memory paint. Simulated here: a fresh snapshot carrying the persisted
-  // lastQuota replaces the in-memory one wholesale.
-  it("a snapshot refresh carrying the persisted lastQuota keeps the line (no flicker)", () => {
+  // Taskana 4090 follow-up (brief step 3): the previous version of this test
+  // simulated main's write by hand-writing a refreshed snapshot into the
+  // store (`setState`) — it pinned nothing about the wiring that PRODUCES the
+  // reload. This one drives the real chain end to end: main's post-write ping
+  // arrives on the bridge's `onProviderQuotaChanged` channel,
+  // `subscribeProviderQuota` turns it into a fresh `settings.get()`, and the
+  // snapshot the bridge returns (built by main from the PERSISTED document)
+  // replaces the live in-memory paint wholesale — same line, no flicker.
+  //
+  // The singleton store resolves its bridge lazily through
+  // `globalThis.window` (settings-store.ts's `realBridge()`), so the fake is
+  // seated there for the span of this test and restored in `finally` — the
+  // exact injection point that lazy-resolution discipline exists for.
+  it("main's post-write ping drives the snapshot reload that re-shows the persisted line (no flicker)", async () => {
     const store = createDesktopStore();
     store.getState().setPinnedConnection({ connectionId: "c1", providerId: "zai" });
     store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
-    const snapshot = {
+    const baseUrl = "https://api.z.ai/api/anthropic";
+    const snapshotWithoutLine = () => ({
       settings: {
         version: 2,
-        provider: { connections: [{ id: "c1", providerId: "zai", baseUrl: "https://api.z.ai/api/anthropic" }] },
+        provider: { connections: [{ id: "c1", providerId: "zai", baseUrl }] },
       } as never,
       secrets: [],
       providerReady: true,
       envOverrides: [],
       readOnly: false,
-    };
-    useSettingsStore.setState({ snapshot });
-
-    // Live observation painted in-memory.
-    store.getState().applyHostMessage(quotaEvent("https://api.z.ai/api/anthropic", 80));
-    expect(useSettingsStore.getState().snapshot?.settings.provider.connections[0]?.lastQuota?.usedPercent).toBe(80);
-
-    // Main's write landed; the snapshot reload carries the same line forward
-    // (fresh snapshot built from the persisted document, wholesale replace).
-    const refreshed = {
+    });
+    // What main's `settings.get` returns AFTER its throttled write landed:
+    // the persisted document, quota line included. It carries `resetsAt`,
+    // which the live in-memory paint never had — so asserting it below proves
+    // the reload really came from the persisted snapshot, not from the paint.
+    const snapshotWithPersistedLine = () => ({
       settings: {
         version: 2,
         provider: {
@@ -8391,8 +8394,13 @@ describe("desktop store — provider_quota (Taskana 4090)", () => {
             {
               id: "c1",
               providerId: "zai",
-              baseUrl: "https://api.z.ai/api/anthropic",
-              lastQuota: { usedPercent: 80, observedAt: new Date().toISOString(), source: "x-ratelimit-requests-remaining" },
+              baseUrl,
+              lastQuota: {
+                usedPercent: 80,
+                resetsAt: 1_789_999_999,
+                observedAt: "2026-10-24T00:00:00.000Z",
+                source: "x-ratelimit-requests-remaining",
+              },
             },
           ],
         },
@@ -8401,8 +8409,48 @@ describe("desktop store — provider_quota (Taskana 4090)", () => {
       providerReady: true,
       envOverrides: [],
       readOnly: false,
+    });
+
+    let ping: (() => void) | undefined;
+    const get = vi.fn().mockResolvedValueOnce(snapshotWithoutLine()).mockResolvedValueOnce(snapshotWithPersistedLine());
+    const bridge = {
+      get,
+      onProviderQuotaChanged: vi.fn().mockImplementation((cb: () => void) => {
+        ping = cb;
+        return () => {};
+      }),
     };
-    useSettingsStore.setState({ snapshot: refreshed });
-    expect(useSettingsStore.getState().snapshot?.settings.provider.connections[0]?.lastQuota?.usedPercent).toBe(80);
+    const previousWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = { anycode: { settings: bridge } };
+    try {
+      // Initial load: the persisted document has no line yet.
+      await useSettingsStore.getState().load();
+      expect(get).toHaveBeenCalledTimes(1);
+      const unsubscribe = useSettingsStore.getState().subscribeProviderQuota();
+      expect(ping).toBeDefined();
+
+      // Live observation paints in-memory (the renderer's own projection).
+      store.getState().applyHostMessage(quotaEvent(baseUrl, 80));
+      const painted = useSettingsStore.getState().snapshot?.settings.provider.connections[0]?.lastQuota;
+      expect(painted?.usedPercent).toBe(80);
+      expect(painted?.resetsAt).toBeUndefined(); // the paint only ever had the primary window
+
+      // Main's throttled write lands and it fires the payload-less ping —
+      // the renderer's ONLY signal (quota writes never fire onMutation).
+      ping?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(get).toHaveBeenCalledTimes(2); // the ping drove a fresh settings.get
+      const reloaded = useSettingsStore.getState().snapshot?.settings.provider.connections[0]?.lastQuota;
+      expect(reloaded).toEqual({
+        usedPercent: 80,
+        resetsAt: 1_789_999_999,
+        observedAt: "2026-10-24T00:00:00.000Z",
+        source: "x-ratelimit-requests-remaining",
+      });
+      unsubscribe();
+    } finally {
+      (globalThis as { window?: unknown }).window = previousWindow;
+      useSettingsStore.setState({ snapshot: null });
+    }
   });
 });

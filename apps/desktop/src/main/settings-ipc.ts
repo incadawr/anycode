@@ -1787,6 +1787,16 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         ? { lastHealth: { status: "unchecked" as const, at: (deps.now ?? defaultNowIso)() } }
         : {}),
     };
+    // Taskana 4090 follow-up: a re-point invalidates the provider-reported
+    // quota line the same way it invalidates `lastHealth` above — a quota
+    // observed against the OLD endpoint/key must not linger under the new
+    // one (same `endpointChanged` set, so a label-only edit keeps the line).
+    // DELETED, never zeroed: `lastQuota` is optional on disk, and the
+    // brief's wording ("clear") maps to the same delete discipline the
+    // baseUrl change below applies to a stale `models` list.
+    if (endpointChanged) {
+      delete updatedConnection.lastQuota;
+    }
     // Transport clear (`""`) must remove the key entirely, not merely spread
     // `undefined` over it — `normalizedTransport === undefined` here can mean
     // EITHER "not sent" (leave `existing.transport` alone, already carried by

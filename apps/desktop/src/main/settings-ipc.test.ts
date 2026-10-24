@@ -21,6 +21,9 @@ import {
   PROXY_REF_LEGACY,
 } from "../shared/proxy.js";
 import type { ProxyPasswordProbe } from "./proxy-scopes.js";
+// Taskana 4090 follow-up 2: the production quota persister — used to seed a
+// REAL on-disk `lastQuota` in the re-point tests below.
+import { recordConnectionQuota, resetConnectionQuotaThrottles } from "./connection-quota.js";
 import { buildHostEnv, ENV_CONTEXT_WINDOW, ENV_CONTEXT_WINDOW_MODEL, ENV_PROVIDER_TRANSPORT, isKnownSecretKey } from "./host-env.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
 import { handleCustomProviderCreate, type ProviderIpcDeps } from "./provider-ipc.js";
@@ -2334,6 +2337,80 @@ describe("connection proxyUrl CRUD (TASK.132) — strict at the IPC boundary, on
 
     const loaded = await loadSettings(settingsPath);
     expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("ready");
+  });
+});
+
+// Taskana 4090 follow-up 2: a re-point invalidates the provider-reported
+// quota line exactly the way it invalidates `lastHealth` (the same
+// `endpointChanged` set in handleConnectionUpdate). The fixture seeds a REAL
+// persisted `lastQuota` through the production persister
+// (main/connection-quota.ts's `recordConnectionQuota`, same scratch-path
+// discipline as connection-quota.test.ts) — never a hand-written JSON blob —
+// so what the update handler must preserve/clear is the on-disk truth.
+describe("handleConnectionUpdate — re-point clears lastQuota (Taskana 4090 follow-up)", () => {
+  /** Persists one quota observation for `conn-1` via the production writer (fresh throttle state per call). */
+  async function seedLastQuota(usedPercent: number): Promise<void> {
+    resetConnectionQuotaThrottles();
+    expect(
+      await recordConnectionQuota(
+        { settingsPath, now: () => 1_000_000 },
+        "conn-1",
+        { usedPercent },
+        "x-ratelimit-requests-remaining",
+      ),
+    ).toBe(true);
+    resetConnectionQuotaThrottles();
+  }
+
+  it("changing baseUrl clears lastQuota (a quota observed at the OLD endpoint must not linger)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    await seedLastQuota(80);
+
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      baseUrl: "https://api.kimi.com/v1",
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastQuota).toBeUndefined();
+    expect("lastQuota" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+
+  it("changing model or transport clears lastQuota too (the same endpointChanged set as lastHealth)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    await seedLastQuota(40);
+
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      model: "glm-5.2",
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastQuota).toBeUndefined();
+  });
+
+  it("a label-only edit (or resending the SAME baseUrl) keeps the line", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "m",
+      baseUrl: "https://api.z.ai/api/anthropic",
+    }); // conn-1
+    await seedLastQuota(65);
+
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      label: "Work",
+      baseUrl: "https://api.z.ai/api/anthropic",
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.lastQuota?.usedPercent).toBe(65);
+    // Health joins the same boundary: a label-only edit must not have reset it
+    // either (the pre-existing W11 contract, unchanged by this slice).
+    expect(loaded.settings.provider.connections[0]?.lastHealth).toBeUndefined();
   });
 });
 

@@ -15,10 +15,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSettings } from "../settings/files.js";
+import { loadSettings, withSettingsFileLock } from "../settings/files.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import {
+  QUOTA_QUIT_FLUSH_BUDGET_MS,
   QUOTA_WRITE_INTERVAL_MS,
+  flushPendingConnectionQuota,
   handleProviderQuotaMessage,
   parseProviderQuotaEvent,
   recordConnectionQuota,
@@ -246,6 +248,74 @@ describe("recordConnectionQuota — 30-second throttle with trailing flush", () 
     onPersisted.mockClear();
     await recordConnectionQuota(deps, "c1", { usedPercent: 20 }, "requests", onPersisted);
     expect(onPersisted).not.toHaveBeenCalled();
+  });
+});
+
+describe("flushPendingConnectionQuota — the quit flush (Taskana 4090 follow-up)", () => {
+  beforeEach(async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "zai" }] });
+  });
+
+  it("a pending trailing value is written on quit WITHOUT waiting out the window, latest wins", async () => {
+    // First write lands; the second is coalesced as pending with a trailing
+    // timer that (in production) would only fire after the 30 s window —
+    // the exact value the quit flush exists to rescue.
+    expect(await recordConnectionQuota(deps, "c1", { usedPercent: 80 }, "requests")).toBe(true);
+    expect(await recordConnectionQuota(deps, "c1", { usedPercent: 25 }, "requests")).toBe(false);
+    expect((await persistedLine())?.usedPercent).toBe(80); // still the flushed one
+
+    // "Quit": the budget beats the window by orders of magnitude.
+    const flushed = await flushPendingConnectionQuota(deps);
+    expect(flushed).toBe(true);
+    expect((await persistedLine())?.usedPercent).toBe(25);
+    expect((await persistedLine())?.observedAt).toBe(new Date(nowMs).toISOString());
+
+    // Idempotent: a second flush finds nothing pending and writes nothing.
+    const again = await flushPendingConnectionQuota(deps);
+    expect(again).toBe(false);
+    expect((await persistedLine())?.usedPercent).toBe(25);
+    // And the cancelled trailing timer never fires a late double-write.
+    await new Promise((resolve) => setTimeout(resolve, INTERVAL * 3));
+    expect((await persistedLine())?.usedPercent).toBe(25);
+  });
+
+  it("no pending value means the flush resolves immediately without touching the file", async () => {
+    expect(await recordConnectionQuota(deps, "c1", { usedPercent: 80 }, "requests")).toBe(true);
+    const before = await readFile(settingsPath, "utf8");
+    expect(await flushPendingConnectionQuota(deps)).toBe(false);
+    expect(await readFile(settingsPath, "utf8")).toBe(before);
+  });
+
+  it("the flush is BOUNDED: a write that exceeds the budget is abandoned, never blocks quit", async () => {
+    expect(await recordConnectionQuota(deps, "c1", { usedPercent: 80 }, "requests")).toBe(true);
+    expect(await recordConnectionQuota(deps, "c1", { usedPercent: 25 }, "requests")).toBe(false);
+
+    // The settings-file lock is wedged by an outside writer that never
+    // releases — the flush must give up within the (tiny, injected) budget.
+    let releaseLock: () => void = () => {};
+    const gate = withSettingsFileLock(settingsPath, () => new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    }));
+    try {
+      const bounded = { ...deps, quitFlushBudgetMs: 15 };
+      const startedAt = Date.now();
+      expect(await flushPendingConnectionQuota(bounded)).toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(1_000); // ~budget, not the wedged lock's forever
+      // The abandoned pending value is not flushed WITHIN the budget; disk
+      // keeps the first write at the moment the flush returned.
+      expect((await persistedLine())?.usedPercent).toBe(80);
+    } finally {
+      releaseLock();
+      await gate;
+      // Let the abandoned write (still queued on the now-released lock) drain
+      // BEFORE teardown: it is harmless to correctness (the flush already gave
+      // up on it) but its file IO must not race this test's `rm` cleanup.
+      await until(async () => (await persistedLine())?.usedPercent === 25);
+    }
+  });
+
+  it("exports the production budget as ~200 ms (the brief's ceiling)", () => {
+    expect(QUOTA_QUIT_FLUSH_BUDGET_MS).toBe(200);
   });
 });
 
