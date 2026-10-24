@@ -1,0 +1,67 @@
+# Codex manifest watch (Taskana 4093, TASK.86 remainder).
+#
+# The release-time gate (`pnpm check:codex-manifest`, release.md step 4) only
+# fires on a tag push. Between releases nothing re-checked the declared range
+# against npm, so a new stable Codex silently turned every current user's
+# card red. This workflow closes that gap: it runs the same check daily and,
+# when the range is stale, opens/refreshes exactly ONE issue labeled
+# `codex-manifest-watch`. The issue, not the cron, widens the range —
+# widening still requires the live Codex smoke + owner sign-off
+# (release.md step 4).
+#
+# Exit 2 (check could not run — no network / npm unreachable) is silent-green
+# BY DESIGN: an unknown answer is not a verdict, and the watch must not page
+# on a flaky registry.
+
+name: Codex manifest watch
+
+on:
+  schedule:
+    # 06:00 UTC daily. Scheduled workflows run only on the default branch.
+    # Daily is one line and idempotent thanks to the single-issue dedup; at
+    # the current release cadence the drift window is small.
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  # No `pnpm install` anywhere here: the scheduled script is dependency-free,
+  # Node stdlib only, and reads the manifest straight from the checkout.
+  # NOTE: once ANY key is listed under `permissions:`, the default
+  # GITHUB_TOKEN grants are replaced wholesale — `issues: write` must be
+  # listed explicitly alongside `contents: read`, or `gh issue create`
+  # fails with a 403 on the very run that needed it.
+  contents: read
+  issues: write
+
+concurrency:
+  group: codex-manifest-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The job reads the manifest and talks to the Issues API only; it
+          # never pushes, so the token is not left in .git/config.
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check the newest stable Codex against the declared range
+        env:
+          # The built-in Actions token is short-lived and repo-scoped — the
+          # same trust release.yml grants its draft publishing, no PAT, no
+          # external secret. `--repo` is checked against the watched list in
+          # scripts/lib/collect-watched-repos.mjs.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Passed through env, never interpolated into the shell line.
+          REPO: ${{ github.repository }}
+        # --open-issue: the script's default is dry-run, which would make the
+        # watch silent.
+        run: node scripts/check-codex-manifest-scheduled.mjs --open-issue --repo "$REPO"
