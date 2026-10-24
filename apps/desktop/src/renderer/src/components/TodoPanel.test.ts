@@ -6,7 +6,14 @@
  */
 import { describe, expect, it } from "vitest";
 import type { TranscriptBlock } from "../store.js";
-import { progressLabel, selectCurrentTodos, shouldResetCompletedExpanded } from "./TodoPanel.js";
+import {
+  TODO_STALE_TOOL_CALLS,
+  isPlanPossiblyStale,
+  progressLabel,
+  selectCurrentTodos,
+  shouldResetCompletedExpanded,
+  staleHint,
+} from "./TodoPanel.js";
 import type { TodoItemView } from "./ToolCallCard.js";
 
 /** Minimal tool_call block fixture — only the fields selectCurrentTodos reads vary per test. */
@@ -27,6 +34,22 @@ function todoBlock(id: string, status: string, input: unknown): TranscriptBlock 
 
 function otherBlock(id: string): TranscriptBlock {
   return { kind: "user_text", id, text: "hi" };
+}
+
+/** Minimal non-TodoWrite tool_call fixture (Taskana 4665 staleness counting). */
+function bashBlock(id: string, status: string = "success"): TranscriptBlock {
+  return {
+    kind: "tool_call",
+    id,
+    toolCallId: `${id}-call`,
+    toolName: "Bash",
+    input: { command: "ls" },
+    status,
+    modelText: null,
+    snapshots: { before: null, after: null },
+    subagent: null,
+    workflow: null,
+  } as TranscriptBlock;
 }
 
 const TWO_ITEMS = { todos: [{ content: "a", status: "pending" }, { content: "b", status: "completed" }] };
@@ -96,6 +119,61 @@ describe("selectCurrentTodos", () => {
       workflow: null,
     };
     expect(selectCurrentTodos([other])).toBeNull();
+  });
+
+  it("counts tool_call blocks after the source block (user_text and pre-source blocks excluded)", () => {
+    const transcript = [
+      bashBlock("pre1"),
+      otherBlock("u1"),
+      todoBlock("t1", "success", TWO_ITEMS),
+      otherBlock("u2"),
+      bashBlock("b1"),
+      bashBlock("b2"),
+    ];
+    const result = selectCurrentTodos(transcript);
+    expect(result?.sourceBlockId).toBe("t1");
+    expect(result?.toolCallsSince).toBe(2);
+  });
+
+  it("counts tool_call blocks of any status, including failed ones", () => {
+    const transcript = [
+      todoBlock("t1", "success", TWO_ITEMS),
+      bashBlock("b1"),
+      bashBlock("b2", "error"),
+      bashBlock("b3", "running"),
+    ];
+    expect(selectCurrentTodos(transcript)?.toolCallsSince).toBe(3);
+  });
+});
+
+describe("isPlanPossiblyStale / staleHint (Taskana 4665)", () => {
+  function transcriptWith(callsAfter: number, input = TWO_ITEMS): TranscriptBlock[] {
+    return [todoBlock("t1", "success", input), ...Array.from({ length: callsAfter }, (_, i) => bashBlock(`b${i}`))];
+  }
+
+  it("flags at 10 tool calls with an open item, not at 9", () => {
+    expect(TODO_STALE_TOOL_CALLS).toBe(10);
+    expect(isPlanPossiblyStale(selectCurrentTodos(transcriptWith(9))!)).toBe(false);
+    expect(isPlanPossiblyStale(selectCurrentTodos(transcriptWith(10))!)).toBe(true);
+  });
+
+  it("never flags when every item is completed", () => {
+    expect(isPlanPossiblyStale(selectCurrentTodos(transcriptWith(10, ONE_DONE))!)).toBe(false);
+  });
+
+  it("a newer successful TodoWrite resets the count to 0", () => {
+    const transcript = [...transcriptWith(12), todoBlock("t2", "success", TWO_ITEMS)];
+    const result = selectCurrentTodos(transcript);
+    expect(result?.sourceBlockId).toBe("t2");
+    expect(result?.toolCallsSince).toBe(0);
+    expect(isPlanPossiblyStale(result!)).toBe(false);
+  });
+
+  it("staleHint returns null when fresh and a descriptive string when stale", () => {
+    expect(staleHint(selectCurrentTodos(transcriptWith(3))!)).toBeNull();
+    const hint = staleHint(selectCurrentTodos(transcriptWith(10))!);
+    expect(hint).toContain("10 tool calls");
+    expect(hint).toContain("may be out of date");
   });
 });
 

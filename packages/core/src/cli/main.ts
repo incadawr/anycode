@@ -1246,6 +1246,9 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         subagentMaxTurns: envConfig.subagentMaxTurns,
         // TASK.148 slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS.
         subagentStallTimeoutMs: envConfig.subagentStallTimeoutMs,
+        ...(envConfig.todoReminderEvery !== undefined
+          ? { todoReminder: { everyToolCalls: envConfig.todoReminderEvery } }
+          : {}),
         maxOutputTokens: bootMaxOutputTokens,
         reasoningEffort: bootReasoningEffort,
         // Base prompt (identity/conventions/safety/tool-discipline/env, design

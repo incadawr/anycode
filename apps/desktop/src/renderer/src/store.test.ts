@@ -4689,6 +4689,42 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     ]);
   });
 
+  it("projectHistoryToBlocks strips a system-reminder block from a reloaded tool result (Taskana 4665)", () => {
+    const items: WireHistoryItem[] = [
+      {
+        id: "t1",
+        createdAt: 1,
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_call", toolCallId: "call-r", toolName: "Bash", input: { command: "ls" } }],
+        },
+      },
+      {
+        id: "t2",
+        createdAt: 2,
+        message: {
+          role: "tool",
+          content: [
+            {
+              type: "tool_result",
+              toolCallId: "call-r",
+              toolName: "Bash",
+              text: "ok\n\n<system-reminder>\nx\n</system-reminder>",
+              status: "success",
+            },
+          ],
+        },
+      },
+    ];
+
+    const blocks = projectHistoryToBlocks(items);
+    const toolBlock = blocks.find((b) => b.kind === "tool_call");
+    // stripReminderBlocks consumes exactly ONE leading newline with the block
+    // (its documented contract), so core's "\n\n<system-reminder>" separator
+    // leaves a single trailing newline — the reminder itself is gone.
+    expect(toolBlock).toMatchObject({ toolCallId: "call-r", modelText: "ok\n" });
+  });
+
   /** A valid persisted v1 snapshot (CUT-S1 §2.1) with an overridable `target` — mirrors the S1 W5 describe block's own `presentation()` helper, kept local here since that one is scoped to its own describe. */
   function subagentPresentation(target: { kind: "inline" } | { kind: "session"; childSessionId: string; parentSessionId: string; spawnToolCallId: string }) {
     return {

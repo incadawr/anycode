@@ -16,6 +16,8 @@ export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
  * across a whole subagent run.
  */
 export const ENV_SUBAGENT_STALL_MS = "ANYCODE_SUBAGENT_STALL_MS";
+/** Stale-plan reminder period in tool calls (Taskana 4665); 0 disables. */
+export const ENV_TODO_REMINDER_EVERY = "ANYCODE_TODO_REMINDER_EVERY";
 export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 export const ENV_REASONING_EFFORT = "ANYCODE_REASONING_EFFORT";
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
@@ -50,7 +52,8 @@ export type ModelBoundCoreEnvConfig = CoreEnvConfig & { contextWindowModel?: str
  * ANYCODE_MAX_OUTPUT_TOKENS / ANYCODE_CONTEXT_WINDOW / ANYCODE_MAX_RETRIES /
  * ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS / ANYCODE_SUBAGENT_STALL_MS
  * (TASK.148 slice 1 — the subagent silence detector, distinct from the stream
- * watchdog) plus ANYCODE_DB_PATH.
+ * watchdog) / ANYCODE_TODO_REMINDER_EVERY (Taskana 4665 — the stale-plan
+ * reminder period in tool calls) plus ANYCODE_DB_PATH.
  * ANYCODE_CONTEXT_WINDOW_MODEL (TASK.142) is an optional nonblank model id that
  * binds the ANYCODE_CONTEXT_WINDOW override to one model (the pair is emitted
  * together by the host/CLI); a blank/absent value leaves the override global.
@@ -93,6 +96,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const maxRetries = readOptionalInteger(env, ENV_MAX_RETRIES);
   const toolConcurrency = readOptionalInteger(env, ENV_TOOL_CONCURRENCY);
   const stallTimeoutMs = readOptionalInteger(env, ENV_STALL_TIMEOUT_MS);
+  const todoReminderEvery = readOptionalInteger(env, ENV_TODO_REMINDER_EVERY);
 
   const rawDbPath = env[ENV_DB_PATH];
   const dbPath = rawDbPath && rawDbPath.trim() !== "" ? rawDbPath : undefined;
@@ -116,6 +120,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     dbPath,
     toolConcurrency,
     stallTimeoutMs,
+    todoReminderEvery,
     imageInput,
     providerTransport,
     includeUsage,

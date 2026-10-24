@@ -17,6 +17,7 @@ import {
   ENV_MAX_TURNS,
   ENV_MODEL,
   ENV_STALL_TIMEOUT_MS,
+  ENV_TODO_REMINDER_EVERY,
   ENV_TOOL_CONCURRENCY,
   loadEnvConfig,
 } from "./env.js";
@@ -134,6 +135,24 @@ describe("loadEnvConfig", () => {
     );
     expect(config.toolConcurrency).toBe(1);
     expect(config.stallTimeoutMs).toBe(0);
+  });
+
+  it("parses ANYCODE_TODO_REMINDER_EVERY (Taskana 4665)", () => {
+    const config = loadEnvConfig(
+      envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_TODO_REMINDER_EVERY]: "7" }),
+    );
+    expect(config.todoReminderEvery).toBe(7);
+  });
+
+  it("leaves todoReminderEvery undefined when ANYCODE_TODO_REMINDER_EVERY is unset", () => {
+    const config = loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m" }));
+    expect(config.todoReminderEvery).toBeUndefined();
+  });
+
+  it("throws naming ANYCODE_TODO_REMINDER_EVERY on a non-integer value", () => {
+    expect(() =>
+      loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_TODO_REMINDER_EVERY]: "abc" })),
+    ).toThrow(/ANYCODE_TODO_REMINDER_EVERY/);
   });
 
   it("throws naming ANYCODE_TOOL_CONCURRENCY / ANYCODE_STALL_TIMEOUT_MS on non-integer values", () => {
