@@ -91,7 +91,7 @@ export type CodexPickBinaryResult =
 
 export type CodexUseBinaryResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
-  | { ok: false; reason: "busy" | "invalid" };
+  | { ok: false; reason: "busy" | "invalid" | "unlisted" };
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
@@ -216,11 +216,12 @@ export interface CodexOnboardingController {
   ensureChecked(profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
   /**
-   * Taskana 4092 (TASK.85): adopts one of the snapshot's `alternates` (or any
-   * explicit user-supplied path) as the codex binary — the "Use <path>" button
-   * behind the error card's candidate list. A user gesture per switch, exactly
-   * like `pickBinary`, just without the file dialog; the run is serialized on
-   * the same `runExclusive` seam and persists through the same `picker` source.
+   * Taskana 4092 (TASK.85): adopts a path main itself listed as an alternate
+   * in the latest doctor report for this window — the "Use <path>" button
+   * behind the error card's candidate list (see `useBinary`'s own gate). A
+   * user gesture per switch, exactly like `pickBinary`, just without the file
+   * dialog; the run is serialized on the same `runExclusive` seam and
+   * persists through the same `picker` source.
    */
   useBinary(binaryPath: string): Promise<CodexUseBinaryResult>;
   /** Runs the native login INTO a profile's home (TASK.50 п.2); an authLink profile refuses `unsupported` (amended §A1). */
@@ -451,6 +452,17 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
   /** Aborted once, at quit: every doctor run started by this controller carries this signal. */
   const lifetime = new AbortController();
   let shuttingDown = false;
+  /**
+   * Taskana 4092 follow-up: the alternates list of the LATEST doctor report
+   * main produced (any route — recheck, pick, use, login), keyed by resolved
+   * profile id. This is the single source the `useBinary` gate admits paths
+   * from — a path main itself listed as an alternate in the latest report for
+   * THIS window — and the list a failed Use keeps drawing from (the failed
+   * path drops out; the remaining alternates survive until a fresh report
+   * replaces them). Mirror of the `reports` cache's lifetime: main memory
+   * only, never persisted.
+   */
+  const latestAlternates = new Map<string, { path: string; source: CodexBinarySource }[]>();
   /**
    * Every run currently unwinding. Awaiting these IS awaiting the teardown of
    * the children they own: each runner closes its child in a `finally` before
@@ -687,6 +699,19 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
     // — a resolution refusal returns resolutionErrorSnapshot without caching,
     // keeping a bogus id UNKNOWN (hasVerdictFor stays false).
     reports.set(effectiveReport.profileId ?? SYSTEM_PROFILE_ID, { snapshot, checkedAt: now(), binaryStamp });
+    // Taskana 4092 follow-up: the same landing refreshes the alternates window
+    // `useBinary` admits from. An explicit empty array (`pickBinary`/a Use)
+    // CLEARS the slot — a fresh report replaces the previous list wholesale,
+    // never merges into it; `undefined` (no caller-supplied list — login's
+    // re-diagnosis) leaves the slot untouched, exactly like the snapshot's own
+    // `alternates` key.
+    if (alternates !== undefined) {
+      if (alternates.length > 0) {
+        latestAlternates.set(effectiveReport.profileId ?? SYSTEM_PROFILE_ID, alternates);
+      } else {
+        latestAlternates.delete(effectiveReport.profileId ?? SYSTEM_PROFILE_ID);
+      }
+    }
     await persist(snapshot);
     deps.onSnapshot(snapshot);
     return snapshot;
@@ -845,14 +870,31 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
 
     async useBinary(binaryPath: string): Promise<CodexUseBinaryResult> {
       if (shuttingDown) return { ok: false, reason: "busy" };
-      // Validation identical to pickBinary's post-dialog gate: consents NOT
-      // passed here — the doctor's own gate is the consent authority (D-S4-21).
+      // Taskana 4092 follow-up: the Use gate admits ONLY a path main itself
+      // listed as an alternate in the latest doctor report for this window —
+      // the buttons the card actually rendered. Anything else is rejected
+      // before the filesystem is ever touched: an unlisted path must go
+      // through the picker (the native dialog remains the one route for an
+      // arbitrary file). The admitted list is captured ONCE so the gate and
+      // the survivors below judge the same snapshot of the window.
+      const admitted = latestAlternates.get(cachedActiveProfileId) ?? [];
+      if (!admitted.some((alt) => alt.path === binaryPath)) {
+        return { ok: false, reason: "unlisted" };
+      }
+      // Structural validation identical to pickBinary's post-dialog gate:
+      // consents NOT passed here — the doctor's own gate is the consent
+      // authority (D-S4-21).
       const resolved = resolveCodexBinary(binaryPath, deps.fs, deps.platform ?? process.platform, deps.identity);
       if (resolved.path === null && resolved.trustRefused !== true) return { ok: false, reason: "invalid" };
       const confirmedPath = resolved.path ?? binaryPath.trim();
       const resolution = await resolveProfile(undefined);
       const profile = resolution.ok ? resolution.profile : SYSTEM_CODEX_PROFILE;
-      const snapshot = await runExclusive(`id:${profile.id}`, () => checkPath(confirmedPath, "picker", profile, undefined, []));
+      // The failed-Use recovery this exists for: the snapshot (and the
+      // alternates window, when checkPath lands) keeps the remaining
+      // alternates minus the one attempted, so the card can offer the next
+      // candidate without waiting for a recheck.
+      const survivors = admitted.filter((alt) => alt.path !== binaryPath);
+      const snapshot = await runExclusive(`id:${profile.id}`, () => checkPath(confirmedPath, "picker", profile, undefined, survivors));
       return { ok: true, snapshot };
     },
 
@@ -1003,6 +1045,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       const removed = await registry.remove(id);
       if (removed.ok) {
         reports.delete(id);
+        latestAlternates.delete(id);
         if (cachedActiveProfileId === id) {
           cachedActiveProfileId = SYSTEM_PROFILE_ID;
         }

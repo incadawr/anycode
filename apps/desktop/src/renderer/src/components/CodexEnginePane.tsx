@@ -61,7 +61,7 @@ export type CodexPickBinaryResult =
 
 export type CodexUseBinaryResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
-  | { ok: false; reason: "busy" | "invalid" };
+  | { ok: false; reason: "busy" | "invalid" | "unlisted" };
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
@@ -199,9 +199,26 @@ export function canSignIn(report: CodexDoctorReport | undefined, profile?: Codex
   return report?.status === "signed_out" && profile?.authLink === undefined;
 }
 
-/** True iff this error report is the typed 127/node-shebang diagnosis (Taskana 4092) — structured field only, never string-matching `error`. */
-export function isNodeUnavailableReport(report: CodexDoctorReport | undefined): boolean {
-  return report?.status === "error" && report.nodeUnavailable !== undefined;
+/**
+ * Taskana 4092 follow-up: the notice for a refused "Use <path>" click. Main
+ * admits only a path it itself listed as an alternate in the latest doctor
+ * report — `unlisted` means the offered list moved on (a recheck or another
+ * Use replaced it), so the right next step is a recheck or the picker, not a
+ * retry. `null` would be silent; every refusal surfaces.
+ */
+export function useBinaryFailureMessage(reason: Extract<CodexUseBinaryResult, { ok: false }>["reason"]): string | null {
+  switch (reason) {
+    case "busy":
+      return "A Codex check is already in progress — try again in a moment.";
+    case "invalid":
+      return "That file is not a usable codex executable.";
+    case "unlisted":
+      return "That executable is no longer one of the listed candidates — recheck, or choose it with the file picker.";
+    default: {
+      const exhaustive: never = reason;
+      return exhaustive;
+    }
+  }
 }
 
 /** The alternate-binary list a card may offer: snapshot alternates minus the currently-saved path, max 3, winner-shaped. */
@@ -496,7 +513,7 @@ export interface CodexBridge {
   /** TASK.65: `force` bypasses main's doctor TTL cache (the explicit "Recheck all"); a mount-time refresh omits it so a re-check inside the TTL reuses the cached verdict. */
   recheck(profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
-  /** Taskana 4092 (TASK.85): adopt one of the snapshot's alternates (or any explicit path) — the error card's "Use <path>" buttons. A user gesture per switch; never a silent substitution. */
+  /** Taskana 4092 (TASK.85): adopt a path main itself listed as an alternate in its latest doctor report — the error card's "Use <path>" buttons. A user gesture per switch; never a silent substitution. */
   useBinary(binaryPath: string): Promise<CodexUseBinaryResult>;
   loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
   onLoginProgress?(callback: (progress: CodexDeviceCodeProgress) => void): () => void;
@@ -750,7 +767,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
         setReportsById((prev) => ({ ...prev, [SYSTEM_PROFILE_ID]: result.snapshot.report }));
         await refreshAll();
       } else {
-        setNotice(result.reason === "busy" ? "A check is already running — try again in a moment." : "That file is not a usable codex executable.");
+        setNotice(useBinaryFailureMessage(result.reason));
       }
     } finally {
       setBusy(false);

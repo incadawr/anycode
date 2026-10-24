@@ -217,38 +217,122 @@ describe("createCodexOnboardingController.pickBinary", () => {
   });
 });
 
-describe("createCodexOnboardingController.useBinary (Taskana 4092)", () => {
-  it("adopts an explicit absolute path: doctor run against it, picker-source persistence, one snapshot event", async () => {
+describe("createCodexOnboardingController.useBinary (Taskana 4092 — Use restricted to listed candidates)", () => {
+  /** A deps bag whose discovery seam lists exactly the given alternates. */
+  const depsListing = (alternates: Array<{ path: string; source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none" }>, overrides: Partial<CodexIpcDeps> = {}) =>
+    makeDeps({ discoverAlternates: () => alternates, ...overrides });
+
+  it("adopts a listed path: doctor run against it, picker-source persistence, one snapshot event", async () => {
     const runDoctor = vi.fn(async () => ({ status: "ready" as const, version: "0.144.3" }));
-    const deps = makeDeps({ runDoctor });
+    const deps = depsListing([{ path: "/x/codex", source: "common" }], { runDoctor });
     const controller = createCodexOnboardingController(deps);
+    await controller.recheck(); // the doctor report that lists /x/codex as an alternate
     const result = await controller.useBinary("/x/codex");
     expect(result).toMatchObject({ ok: true });
-    expect(runDoctor).toHaveBeenCalledWith("/x/codex", expect.anything());
+    expect(runDoctor).toHaveBeenLastCalledWith("/x/codex", expect.anything());
     expect(deps.writtenPatches).toEqual([
+      { binaryPath: "/usr/local/bin/codex", lastCheck: { status: "ready", version: "0.144.3", at: expect.any(String) } },
       { binaryPath: "/x/codex", lastCheck: { status: "ready", version: "0.144.3", at: expect.any(String) } },
     ]);
-    expect(deps.snapshots).toHaveLength(1);
+    expect(deps.snapshots).toHaveLength(2);
     expect(result.ok && result.snapshot.source).toBe("picker");
   });
 
-  it("returns invalid for a relative path — zero doctor runs, zero writes", async () => {
-    const runDoctor = vi.fn();
-    const deps = makeDeps({ runDoctor });
+  it("rejects an UNLISTED absolute path — {ok:false, reason:'unlisted'}, zero doctor runs, zero writes, alternates window untouched", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "ready" as const, version: "0.144.3" }));
+    const deps = depsListing([{ path: "/alt/codex", source: "common" }], { runDoctor });
     const controller = createCodexOnboardingController(deps);
-    const result = await controller.useBinary("relative/codex");
-    expect(result).toEqual({ ok: false, reason: "invalid" });
+    await controller.recheck();
+    runDoctor.mockClear();
+    const result = await controller.useBinary("/x/codex"); // absolute + would resolve — but never listed
+    expect(result).toEqual({ ok: false, reason: "unlisted" });
     expect(runDoctor).not.toHaveBeenCalled();
-    expect(deps.writtenPatches).toEqual([]);
+    expect(deps.writtenPatches).toHaveLength(1); // the recheck's persist, nothing from the Use
   });
 
-  it("returns invalid for an empty/whitespace path via the controller", async () => {
-    const runDoctor = vi.fn();
+  it("rejects a relative or empty path — {ok:false, reason:'unlisted'} (the gate fires before structural validation)", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "ready" as const, version: "0.144.3" }));
+    const deps = depsListing([{ path: "/alt/codex", source: "common" }], { runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck();
+    runDoctor.mockClear();
+    await expect(controller.useBinary("relative/codex")).resolves.toEqual({ ok: false, reason: "unlisted" });
+    await expect(controller.useBinary("   ")).resolves.toEqual({ ok: false, reason: "unlisted" });
+    expect(runDoctor).not.toHaveBeenCalled();
+  });
+
+  it("with NO alternates listed at all, every Use is refused — the card rendered no buttons", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "ready" as const, version: "0.144.3" }));
     const deps = makeDeps({ runDoctor });
     const controller = createCodexOnboardingController(deps);
-    const result = await controller.useBinary("   ");
-    expect(result).toEqual({ ok: false, reason: "invalid" });
+    await controller.recheck();
+    runDoctor.mockClear();
+    await expect(controller.useBinary("/usr/local/bin/codex")).resolves.toEqual({ ok: false, reason: "unlisted" });
     expect(runDoctor).not.toHaveBeenCalled();
+  });
+
+  it("keeps the remaining alternates minus the failed one after a Use — the snapshot carries the survivors", async () => {
+    // A failing doctor = the "Use" failed (the candidate is broken): the
+    // card must keep offering the OTHER candidates.
+    const runDoctor = vi.fn(async () => ({ status: "error" as const, error: "Codex version check exited with code 127" }));
+    const deps = depsListing([
+      { path: "/broken/codex", source: "path" },
+      { path: "/good1/codex", source: "common" },
+      { path: "/good2/codex", source: "installed" },
+    ], { runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    const before = await controller.recheck();
+    expect(before.alternates).toHaveLength(3);
+    const result = await controller.useBinary("/broken/codex");
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(result.snapshot.report.status).toBe("error");
+      expect(result.snapshot.alternates).toEqual([
+        { path: "/good1/codex", source: "common" },
+        { path: "/good2/codex", source: "installed" },
+      ]);
+    }
+    // The window itself updated to the survivors — a second Use of the SAME
+    // failed path is now refused (it is no longer listed), the next candidate
+    // is still admissible.
+    await expect(controller.useBinary("/broken/codex")).resolves.toEqual({ ok: false, reason: "unlisted" });
+    await expect(controller.useBinary("/good1/codex")).resolves.toMatchObject({ ok: true });
+  });
+
+  it("a successful Use leaves no further alternates on the snapshot (the list is consumed)", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "ready" as const, version: "0.144.3" }));
+    const deps = depsListing([{ path: "/alt/codex", source: "common" }], { runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck();
+    const result = await controller.useBinary("/alt/codex");
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) {
+      expect(result.snapshot.alternates).toBeUndefined();
+    }
+  });
+
+  it("a recheck REPLACES the window wholesale — an alternate offered by an older report is no longer admissible", async () => {
+    let alternates: Array<{ path: string; source: "common" }> = [{ path: "/stale/codex", source: "common" }];
+    const runDoctor = vi.fn(async () => ({ status: "ready" as const, version: "0.144.3" }));
+    const deps = makeDeps({ discoverAlternates: () => alternates, runDoctor });
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck();
+    alternates = []; // the next doctor report found no alternates
+    await controller.recheck(undefined, { force: true });
+    await expect(controller.useBinary("/stale/codex")).resolves.toEqual({ ok: false, reason: "unlisted" });
+  });
+
+  it("pickBinary clears the window — an explicit pick is a fresh report with no candidate list", async () => {
+    const runDoctor = vi.fn(async () => ({ status: "ready" as const, version: "0.144.3" }));
+    const deps = depsListing([{ path: "/alt/codex", source: "common" }], {
+      runDoctor,
+      dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: ["/custom/codex"] }) },
+    });
+    const controller = createCodexOnboardingController(deps);
+    await controller.recheck();
+    const picked = await controller.pickBinary();
+    expect(picked).toMatchObject({ ok: true });
+    await expect(controller.useBinary("/alt/codex")).resolves.toEqual({ ok: false, reason: "unlisted" });
   });
 
   it("stamps the deps seam's alternates onto a recheck snapshot", async () => {

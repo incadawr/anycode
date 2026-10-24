@@ -232,8 +232,12 @@ describe("isNodeShebangUnavailable (Taskana 4092 — typed 127 verdict)", () => 
   });
 
   it("returns true for a spaced env shebang on 127 (env -S forms stay in scope)", () => {
-    const shim = writeShim("shim-node-spaced", "#!/usr/bin/env node");
-    expect(isNodeShebangUnavailable(shim, 127)).toBe(true);
+    // Both forms a real shim can carry: whitespace after `#!` before the
+    // interpreter, and extra spaces around the `env node` operand.
+    const spacedBang = writeShim("shim-node-spaced-bang", "#! /usr/bin/env node");
+    const spacedOperand = writeShim("shim-node-spaced-operand", "#!/usr/bin/env  node");
+    expect(isNodeShebangUnavailable(spacedBang, 127)).toBe(true);
+    expect(isNodeShebangUnavailable(spacedOperand, 127)).toBe(true);
   });
 
   it("returns false for exit 127 on a non-node shebang (#!/bin/sh)", () => {

@@ -28,12 +28,12 @@ import {
   formatCodexQuotaWindowLine,
   hasMainAuthLinkProfile,
   isCodexVersionWithinSupportedRange,
-  isNodeUnavailableReport,
   loginFailureMessage,
   manifestRefreshNotice,
   pickBinaryFailureMessage,
   resolveAccountRows,
   shouldAutoSignIn,
+  useBinaryFailureMessage,
   type CodexOnboardingSnapshot,
   type CodexSupportStatusResult,
 } from "./CodexEnginePane.js";
@@ -653,15 +653,14 @@ describe("Taskana 4092 — 127 diagnosis + alternate binary choices", () => {
     nodeUnavailable: { binaryPath: "/b", exitCode: 127, hint: "HINT" },
   };
 
-  describe("isNodeUnavailableReport", () => {
-    it("is false for undefined, ready, and a plain error report", () => {
-      expect(isNodeUnavailableReport(undefined)).toBe(false);
-      expect(isNodeUnavailableReport({ status: "ready", version: "0.144.3" })).toBe(false);
-      expect(isNodeUnavailableReport({ status: "error", error: "Codex version check exited with code 127" })).toBe(false);
+  describe("useBinaryFailureMessage (Taskana 4092 follow-up — Use restricted to listed candidates)", () => {
+    it("explains the unlisted refusal: the offered list moved on, recheck or pick instead", () => {
+      expect(useBinaryFailureMessage("unlisted")).toMatch(/no longer one of the listed candidates/);
     });
 
-    it("is true for an error report carrying the structured nodeUnavailable field", () => {
-      expect(isNodeUnavailableReport(nodeUnavailableReport)).toBe(true);
+    it("keeps a message for busy and invalid; every refusal surfaces, none is silent", () => {
+      expect(useBinaryFailureMessage("busy")).toMatch(/already in progress/);
+      expect(useBinaryFailureMessage("invalid")).toMatch(/not a usable codex executable/);
     });
   });
 
