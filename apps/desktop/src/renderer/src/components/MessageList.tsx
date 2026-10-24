@@ -1011,7 +1011,7 @@ export function MessageList({
                     </button>
                   )}
                   {showContinueButton(continueOffer, block.id, connection, promptQueueLength) && (
-                    <button type="button" className="retry-try-again-button" onClick={onContinue}>
+                    <button type="button" className="continue-button" onClick={onContinue}>
                       Continue
                     </button>
                   )}

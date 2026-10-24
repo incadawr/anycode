@@ -2755,8 +2755,11 @@ body {
   color: var(--text-3);
 }
 
-/* One-shot Try-again offer, rendered inline with the loop-end divider. */
-.retry-try-again-button {
+/* One-shot Try-again offer, rendered inline with the loop-end divider. The
+   Continue offer (Taskana 4111) shares the look but NOT the class: the
+   automation Try-again probe counts `.retry-try-again-button` as "exactly one". */
+.retry-try-again-button,
+.continue-button {
   flex: none;
   padding: 0.15rem var(--sp-2);
   border-radius: var(--r-sm);
@@ -2770,7 +2773,8 @@ body {
   cursor: pointer;
 }
 
-.retry-try-again-button:hover {
+.retry-try-again-button:hover,
+.continue-button:hover {
   color: var(--text-1);
   border-color: var(--text-3);
 }

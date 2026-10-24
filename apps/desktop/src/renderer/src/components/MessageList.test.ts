@@ -21,7 +21,33 @@ import {
   STARTER_CHIPS,
   topmostVisibleUserIndex,
 } from "./MessageList.js";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MessageList } from "./MessageList.js";
 import type { ErrorRetryMeta, RetryOffer, ToolCallBlock, TranscriptBlock } from "../store.js";
+
+describe("Continue button DOM class (Taskana 4111 cross-review — must not share the Try-again probe's class)", () => {
+  it("a Continue offer renders a button that is NOT counted by the Try-again probe selector", () => {
+    const blocks = [{ kind: "loop_end", id: "loop_end:t1", reason: "max_turns", turns: 3 }] as unknown as TranscriptBlock[];
+    const html = renderToStaticMarkup(
+      createElement(MessageList, {
+        blocks,
+        turn: { status: "idle" } as never,
+        workspace: null,
+        connection: "ready",
+        retry: null,
+        onTryAgain: () => undefined,
+        continueOffer: { loopEndBlockId: "loop_end:t1" },
+        onContinue: () => undefined,
+        promptQueueLength: 0,
+      }),
+    );
+    expect(html).toContain(">Continue</button>");
+    const continueTag = html.slice(0, html.indexOf(">Continue</button>"));
+    expect(continueTag.slice(continueTag.lastIndexOf("<button"))).toContain('class="continue-button"');
+    expect(html.match(/retry-try-again-button/g)).toBeNull();
+  });
+});
 
 describe("shouldShowTranscriptEmpty (R11)", () => {
   it("shows only for a zero-block idle transcript", () => {
