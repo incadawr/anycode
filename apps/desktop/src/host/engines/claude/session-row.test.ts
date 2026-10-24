@@ -11,17 +11,23 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { ClaudeSessionRowWriter, type ClaudeSessionRowPatch, type ClaudeSessionRowPort } from "./session-row.js";
+import {
+  ClaudeSessionRowWriter,
+  type ClaudePendingChildReportsPort,
+  type ClaudeSessionRowPatch,
+  type ClaudeSessionRowPort,
+} from "./session-row.js";
 
 interface Recorder {
   port: ClaudeSessionRowPort;
+  pendingChildReportsPort: ClaudePendingChildReportsPort;
   creates: { id: string; row: Record<string, unknown> }[];
   touches: { id: string; patch: ClaudeSessionRowPatch }[];
   /** Ordered log of every write, for the serialization assertions. */
   order: string[];
 }
 
-function recorder(options: { failCreate?: boolean } = {}): Recorder {
+function recorder(options: { failCreate?: boolean; failPendingReports?: boolean } = {}): Recorder {
   const creates: { id: string; row: Record<string, unknown> }[] = [];
   const touches: { id: string; patch: ClaudeSessionRowPatch }[] = [];
   const order: string[] = [];
@@ -45,10 +51,24 @@ function recorder(options: { failCreate?: boolean } = {}): Recorder {
         return undefined;
       },
     },
+    pendingChildReportsPort: {
+      savePendingChildReports: async (id, json) => {
+        order.push(`pending_reports:${json === null ? "null" : "json"}`);
+        if (options.failPendingReports === true) {
+          throw new Error("SQLITE_BUSY");
+        }
+        return undefined;
+      },
+    },
   };
 }
 
 const IDENTITY = { workspace: "/work", engineId: "claude", externalSessionRef: "native-ref-1" };
+
+/** One macrotask — enough for the fire-and-forget save chains to settle. */
+async function tick(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
 
 function fresh(rec: Recorder): ClaudeSessionRowWriter {
   return new ClaudeSessionRowWriter({
@@ -154,6 +174,94 @@ describe("ClaudeSessionRowWriter — a fresh session writes nothing until the na
     expect(errors).toEqual(["create"]);
     // The buffered patch still drains rather than being lost with the failure.
     expect(rec.touches).toEqual([{ id: "row-1", patch: { title: "buffered" } }]);
+  });
+
+  // Taskana 4123 cross-review F1: the flush of a report snapshot buffered
+  // behind the CREATE used to fire with `void` and no catch — a rejected
+  // save (SQLITE_BUSY past busy_timeout is the realistic trigger) surfaced
+  // as an unhandled rejection, which kills the host under Node's default
+  // `--unhandled-rejections=throw` exactly at the session's first turn.
+  it("a flush whose save rejects surfaces to onError (pending_reports), never as an unhandled rejection", async () => {
+    const rec = recorder({ failPendingReports: true });
+    const errors: Array<{ stage: string; message: string }> = [];
+    const writer = new ClaudeSessionRowWriter({
+      rowId: "row-1",
+      identity: IDENTITY,
+      rowExists: false,
+      port: rec.port,
+      pendingChildReportsPort: rec.pendingChildReportsPort,
+      onError: (error, stage) => errors.push({ stage, message: String(error) }),
+    });
+
+    // A report snapshot lands while the row still does not exist, then the
+    // first system/init materializes the row and flushes the buffer.
+    await writer.savePendingChildReports('{"reports":[{"id":"call-1"}]}');
+    expect(writer.materialized).toBe(false);
+
+    writer.materialize({ model: "haiku", mode: "ask" });
+    await writer.settled();
+    await tick();
+
+    expect(errors).toEqual([{ stage: "pending_reports", message: "Error: SQLITE_BUSY" }]);
+    expect(rec.order).toEqual(["create", "pending_reports:json"]);
+  });
+
+  // Taskana 4123 cross-review F1 sub-case: `create` itself rejects ->
+  // onError swallows it and `this.chain` stays "resolved" — the flush used
+  // to run anyway, silently UPDATE-ing a row that does not exist (0 rows
+  // matched, no error) while the queue believed the report durable.
+  it("a failed create keeps the buffered report snapshot buffered (no no-op flush against a missing row)", async () => {
+    const rec = recorder({ failCreate: true });
+    const errors: string[] = [];
+    const writer = new ClaudeSessionRowWriter({
+      rowId: "row-1",
+      identity: IDENTITY,
+      rowExists: false,
+      port: rec.port,
+      pendingChildReportsPort: rec.pendingChildReportsPort,
+      onError: (_error, stage) => errors.push(stage),
+    });
+
+    await writer.savePendingChildReports('{"reports":[{"id":"call-1"}]}');
+    writer.materialize({ model: "haiku", mode: "ask" });
+    await writer.settled();
+    await tick();
+
+    expect(errors).toEqual(["create"]);
+    // The flush never fired: nothing was written against the missing row
+    // (the OLD behavior fired a no-op UPDATE here and believed the snapshot
+    // durable) — and the snapshot is NOT resurrected into the buffer either:
+    // nothing would ever re-flush it (a second materialize takes the touch
+    // path), and the queue's own next mutation persists the full current
+    // snapshot through the live path anyway.
+    expect(rec.order).toEqual(["create:failed"]);
+  });
+
+  // The live path (row exists / already materialized) is the save every REAL
+  // detached-child report takes (a child can only exist after a parent turn
+  // ran, i.e. after materialize). Its rejection must REACH THE CALLER — the
+  // durability helper's `saveJson(...).catch(console.error)` — never leak as
+  // an unhandled rejection through some internal fire-and-forget use.
+  it("a live-path save rejection propagates to the caller (the durability helper catches it), never as an unhandled rejection", async () => {
+    const rec = recorder({ failPendingReports: true });
+    const writer = new ClaudeSessionRowWriter({
+      rowId: "row-1",
+      identity: IDENTITY,
+      rowExists: true,
+      port: rec.port,
+      pendingChildReportsPort: rec.pendingChildReportsPort,
+      onError: () => {},
+    });
+
+    // The durability helper's exact posture: void saveJson(...).catch(...)
+    let caught: unknown = undefined;
+    void writer.savePendingChildReports('{"reports":[]}').catch((error: unknown) => {
+      caught = error;
+    });
+    await tick();
+
+    expect(String(caught)).toBe("Error: SQLITE_BUSY");
+    expect(rec.order).toEqual(["pending_reports:json"]);
   });
 });
 

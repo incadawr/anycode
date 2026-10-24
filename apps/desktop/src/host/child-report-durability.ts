@@ -60,6 +60,20 @@ export async function attachChildReportDurability(options: {
  *
  * A CHILD-mode engine boot passes nothing (callers gate on `args.child`) — a
  * child never spawns detached children of its own, so its column stays null.
+ *
+ * Durability boundary (Taskana 4123 cross-review F2, stated honestly): this
+ * attach survives and recovers from every restart where the process exits
+ * AFTER a mutation's save settled (main's graceful shutdown, a later crash).
+ * It does NOT cover a SIGKILL-class kill (OOM, reap deadline, power loss)
+ * landing inside the sub-millisecond window between the queue's in-memory
+ * mutation and the synchronous sqlite write committing — no fsync happens
+ * per write under WAL `synchronous=NORMAL`, so that window cannot be closed
+ * by ordering alone, only narrowed. The claude fresh-boot BUFFER path adds no
+ * further window in practice: a detached child can only exist after a parent
+ * turn ran, and a turn's `system/init` (the row's materialize point) strictly
+ * precedes any tool call that could spawn one — so real reports always take
+ * the live save path, and the buffer is defense-in-depth for synthetic
+ * orderings only.
  */
 export async function attachEngineChildReportDurability(options: {
   queue: ChildReportQueue;

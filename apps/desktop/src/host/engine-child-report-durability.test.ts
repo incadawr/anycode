@@ -206,6 +206,52 @@ for (const engine of ["codex", "claude"] as const) {
   });
 }
 
+describe("attachEngineChildReportDurability — save failures never escape the fire-and-forget onChange (Taskana 4123 cross-review)", () => {
+  it("a rejecting saveJson inside onChange is caught and logged, the attach survives, and a later successful save still persists", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const adapter = await makeAdapter();
+
+    // A save seam that rejects the FIRST save (SQLITE_BUSY at the moment the
+    // report is queued) then behaves. The durability helper's own posture —
+    // `void saveJson(...).catch(console.error)` — is the code under test.
+    let failFirst = true;
+    const outbound = stubOutbound();
+    const queue = new ChildReportQueue(outbound);
+    await attachEngineChildReportDurability({
+      queue,
+      loadJson: () => adapter.loadPendingChildReports("engine-root-1"),
+      saveJson: async (json) => {
+        if (failFirst) {
+          failFirst = false;
+          throw new Error("SQLITE_BUSY");
+        }
+        await adapter.savePendingChildReports("engine-root-1", json);
+      },
+    });
+
+    // The add-time save rejects; the catch must swallow it (no unhandled
+    // rejection under the host's Node defaults) and log it.
+    queue.add("call-busy", "report whose first save hit SQLITE_BUSY");
+    await tick();
+    await tick();
+
+    expect(errSpy).toHaveBeenCalled();
+    expect(String(errSpy.mock.calls[0]![0])).toContain("saving pending child reports");
+    expect(String(errSpy.mock.calls[0]![0])).toContain("SQLITE_BUSY");
+    expect(await adapter.loadPendingChildReports("engine-root-1")).toBeNull();
+
+    // The attach survived: the NEXT mutation's save lands normally.
+    queue.add("call-2", "second report");
+    await tick();
+    const saved = await adapter.loadPendingChildReports("engine-root-1");
+    expect(saved).not.toBeNull();
+    expect(JSON.parse(saved!).reports.map((r: { id: string }) => r.id)).toEqual(["call-busy", "call-2"]);
+
+    errSpy.mockRestore();
+    await adapter.close();
+  });
+});
+
 describe("attachEngineChildReportDurability — claude FRESH boot (row not yet materialized, session-row.ts native-first)", () => {
   it("a report queued before the row exists is buffered, lands after materialize, and a restart then delivers it once", async () => {
     const adapter = await makeAdapter();
