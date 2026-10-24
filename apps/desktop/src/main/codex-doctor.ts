@@ -17,7 +17,7 @@
  * for spawn/RPC/teardown timing is imported from there, never hand-rolled.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import type { BinaryTrustConsent } from "../shared/codex-binary-trust.js";
 import { ENV_CODEX_PROXY_URL, applyEngineProxyOverride } from "../shared/engines.js";
@@ -68,6 +68,18 @@ function parseCodexVersion(output: string): ParsedCodexVersion | null {
   return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
 }
 
+/** Reads at most the first 64 bytes — a native codex binary is tens of MB, and only the shebang line matters. */
+function readHead(path: string): Buffer {
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.alloc(64);
+    const read = readSync(fd, buffer, 0, 64, 0);
+    return buffer.subarray(0, read);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * Taskana 4092 (TASK.85): exit 127 on a node-shebang script means "the shim
  * ran but `env: node` was not found in the child PATH" — the Finder-launchd
@@ -80,7 +92,7 @@ function parseCodexVersion(output: string): ParsedCodexVersion | null {
 export function isNodeShebangUnavailable(
   binaryPath: string,
   exitCode: number | null,
-  fs: { readFileSync(path: string): Buffer } = { readFileSync: (p) => readFileSync(p) },
+  fs: { readFileSync(path: string): Buffer } = { readFileSync: readHead },
 ): boolean {
   if (exitCode !== 127) return false;
   try {
@@ -810,7 +822,7 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
         nodeUnavailable: {
           binaryPath,
           exitCode: 127,
-          hint: "This codex is a node script (#!/usr/bin/env node) and `node` was not found in the environment AnyCode gave it. Pick a native codex binary below, or install node into a well-known location.",
+          hint: "This codex is a node script (#!/usr/bin/env node), and `node` was not found on the PATH AnyCode gave it (your PATH plus /usr/local/bin and /opt/homebrew/bin). Choose another codex executable below, or install node into one of those folders.",
         },
       };
     }

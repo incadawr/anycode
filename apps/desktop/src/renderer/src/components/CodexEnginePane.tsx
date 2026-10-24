@@ -992,9 +992,6 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
           <code>{binarySnapshot.binaryPath}</code> ({formatBinarySourceLabel(binarySnapshot.source)})
         </p>
       )}
-      {isNodeUnavailableReport(binarySnapshot?.report) && binarySnapshot?.report.nodeUnavailable && (
-        <div className="settings-notice" role="alert">{binarySnapshot.report.nodeUnavailable.hint}</div>
-      )}
       {alternateBinaryChoices(binarySnapshot).length > 0 && (binarySnapshot?.report.status === "error" || binarySnapshot?.report.status === "update_required") && (
         <div className="settings-field-row">
           {alternateBinaryChoices(binarySnapshot).map((alt) => (
