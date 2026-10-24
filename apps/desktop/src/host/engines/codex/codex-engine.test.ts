@@ -1700,6 +1700,95 @@ describe("TASK.39 — resume (cut §2(k).2/.4)", () => {
   });
 });
 
+describe("Taskana 4682 — excludeTmpRoots rides selection into every turn/start", () => {
+  it("carries BOTH tmp flags true on every turn/start, and threads nothing at boot", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      presetId: "ask",
+      origin: "draft",
+      excludeTmpRoots: true,
+    });
+
+    // The coarse thread/start string carries no flags — boot stays byte-identical.
+    expect(server.threadStartParams).toEqual({
+      cwd: "/work",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    });
+
+    await runTurn(server, connected.engine);
+    await runTurn(server, connected.engine, "again");
+
+    const expected = {
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/work"],
+        networkAccess: false,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    };
+    const starts = server.turnStartParams();
+    expect(starts).toHaveLength(2);
+    // Self-healing per turn: the second turn re-asserts the identical policy.
+    expect(starts[0]).toMatchObject(expected);
+    expect(starts[1]).toMatchObject(expected);
+  });
+
+  it("without the flag the tmp roots stay writable (explicit false on the wire)", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      presetId: "ask",
+      origin: "draft",
+    });
+
+    await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/work"],
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
+    });
+  });
+
+  it("survives resume: the flag rides the selection into the resumed thread's turns", async () => {
+    const server = new FakeAppServer();
+    const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, {
+      presetId: "ask",
+      origin: "persisted",
+      excludeTmpRoots: true,
+    });
+
+    await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/work"],
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    });
+  });
+
+  it("is moot under full-access: dangerFullAccess is sent verbatim, no smuggled flags", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      presetId: "full-access",
+      origin: "draft",
+      excludeTmpRoots: true,
+    });
+
+    await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({ sandboxPolicy: { type: "dangerFullAccess" } });
+    expect(JSON.stringify(server.turnStartParams()[0])).not.toContain("excludeSlashTmp");
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TASK.42 — resume-history hydration + the command shadow log (cut §2(e)).
 // ─────────────────────────────────────────────────────────────────────────────

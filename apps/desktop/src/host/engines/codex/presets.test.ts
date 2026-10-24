@@ -61,6 +61,60 @@ describe("CODEX_PERMISSION_PRESETS", () => {
   });
 });
 
+describe("Taskana 4682 — tmp-root exclusion", () => {
+  it("default keeps the frozen workspaceWrite policy (no exclusion)", () => {
+    const ask = findCodexPreset("ask")!.turnOverride("/repo/a");
+    expect(ask.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/repo/a"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
+  it("excludeTmpRoots: true flips BOTH tmp flags, nothing else", () => {
+    const ask = findCodexPreset("ask")!.turnOverride("/repo/a", { excludeTmpRoots: true });
+    expect(ask.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/repo/a"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    });
+  });
+
+  it("approve-for-me honors the option too", () => {
+    const approveForMe = findCodexPreset("approve-for-me")!.turnOverride("/repo/b", { excludeTmpRoots: true });
+    expect(approveForMe.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/repo/b"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    });
+  });
+
+  it("full-access ignores the option (no policy object to decorate)", () => {
+    const fullAccess = findCodexPreset("full-access")!.turnOverride("/repo/a", { excludeTmpRoots: true });
+    expect(fullAccess.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+  });
+
+  it("legacy read-only ignores the option (no tmp roots exist)", () => {
+    const readOnly = findCodexPreset("read-only")!.turnOverride("/repo/a", { excludeTmpRoots: true });
+    expect(readOnly.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: false });
+  });
+
+  it("purity: the same preset instance yields independent policies per call", () => {
+    const preset = findCodexPreset("ask")!;
+    const withExclusion = preset.turnOverride("/repo/a", { excludeTmpRoots: true });
+    const withoutExclusion = preset.turnOverride("/repo/a");
+    expect(withExclusion.sandboxPolicy).not.toBe(withoutExclusion.sandboxPolicy);
+    expect(withExclusion.sandboxPolicy).toMatchObject({ excludeTmpdirEnvVar: true, excludeSlashTmp: true });
+    expect(withoutExclusion.sandboxPolicy).toMatchObject({ excludeTmpdirEnvVar: false, excludeSlashTmp: false });
+  });
+});
+
 describe("codexPresetChoices (TASK.39 wire projection)", () => {
   it("exposes id/label/description only — never a policy object the renderer could edit", () => {
     const choices = codexPresetChoices();
