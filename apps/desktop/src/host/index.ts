@@ -1036,6 +1036,9 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
             ...(childPresetId !== undefined ? { presetId: childPresetId } : {}),
+            // : engine children get /tmp and $TMPDIR excluded from the
+            // codex workspaceWrite sandbox; owner tabs keep the frozen defaults.
+            ...(args.child !== undefined ? { excludeTmpRoots: true } : {}),
             ...(draft.effort !== undefined ? { effort: draft.effort } : {}),
             origin: "draft",
           },
