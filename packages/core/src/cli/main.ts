@@ -17,6 +17,7 @@
  */
 
 import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { homedir, release } from "node:os";
@@ -60,12 +61,25 @@ import { AgentLoop, type AgentLoopConfig } from "../loop/index.js";
 import { LspManager, loadLspServerSpecs } from "../lsp/index.js";
 import { McpManager, loadMcpServerSpecs } from "../mcp/index.js";
 import {
+  defaultTrustStorePath,
+  promptWorkspaceTrust,
+  resolveWorkspaceTrust,
+  writeTrustDecision,
+  type WorkspaceTrustResult,
+} from "../trust/index.js";
+import {
   ModePermissionEngine,
   RuleAwarePermissionEngine,
   SafeCommandPermissionEngine,
 } from "../permissions/index.js";
 import type { McpServerSpec } from "../ports/mcp.js";
-import type { ImageAttachment, MediaCapabilityPort, ModelPort, TelemetryPort } from "../ports/index.js";
+import type {
+  FileSystemPort,
+  ImageAttachment,
+  MediaCapabilityPort,
+  ModelPort,
+  TelemetryPort,
+} from "../ports/index.js";
 import type { LspServerSpec } from "../ports/lsp.js";
 import { buildSystemPrompt, type SystemPromptEnv } from "../prompts/identity.js";
 import { buildRepoMapPromptSection, loadRepoMapConfig, type RepoMapConfig } from "../repoMap/index.js";
@@ -316,6 +330,76 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   } finally {
     closeProxyRelay();
   }
+}
+
+/**
+ * Resolves the workspace trust gate for this process (Taskana 4736). Returns
+ * true when project declarations may load. Interactive + unknown/changed: asks
+ * (t persists trust, o is this process only, N persists denial). Non-interactive
+ * or denied: skips with a boot line. `ANYCODE_TRUST_WORKSPACE=1` trusts for this
+ * process only (never persisted). Fail-closed on any error.
+ */
+export async function resolveCliProjectTrust(deps: {
+  fs: FileSystemPort;
+  cwd: string;
+  home: string;
+  env: NodeJS.ProcessEnv;
+  interactive: boolean;
+  io: { input: Readable; output: Writable };
+  warn: (text: string) => void;
+}): Promise<boolean> {
+  const storePath = defaultTrustStorePath(deps.home);
+  try {
+    let trust = await resolveWorkspaceTrust(deps.fs, {
+      workspace: deps.cwd,
+      home: deps.home,
+      storePath,
+    });
+    if (trust.projectTrusted) {
+      return true;
+    }
+    if (deps.env.ANYCODE_TRUST_WORKSPACE === "1") {
+      trust = await resolveWorkspaceTrust(deps.fs, {
+        workspace: deps.cwd,
+        home: deps.home,
+        storePath,
+        onceHash: trust.hash,
+      });
+      return trust.projectTrusted;
+    }
+    if (trust.state === "denied") {
+      return false;
+    }
+    if (deps.interactive) {
+      const answer = await promptWorkspaceTrust(
+        deps.io,
+        trust,
+      );
+      if (answer === "trust") {
+        await writeTrustDecision(deps.fs, storePath, deps.cwd, "trusted", trust.hash);
+        return true;
+      }
+      if (answer === "once") {
+        return true;
+      }
+      await writeTrustDecision(deps.fs, storePath, deps.cwd, "denied", trust.hash);
+      return false;
+    }
+    deps.warn(describeUntrustedSkip(trust));
+    return false;
+  } catch (error) {
+    deps.warn(
+      `[warn] workspace trust check failed; project declarations skipped: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    return false;
+  }
+}
+
+function describeUntrustedSkip(trust: WorkspaceTrustResult): string {
+  return (
+    `[warn] workspace not trusted: ${trust.items.length} project process declaration(s) in ${trust.folder} not started. ` +
+    "Run once interactively to trust or refuse it, or set ANYCODE_TRUST_WORKSPACE=1 for this run only.\n"
+  );
 }
 
 async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
@@ -702,10 +786,23 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // (mcp/extensions blocks above). Construction below never spawns anything
 
   // on the first matching Edit/Write.
+  // Taskana 4736: workspace trust gates the project's own spawn declarations
+  // (project MCP, hooks, LSP, project-tier plugin MCP) before ANY of them load.
+  // Decision is computed once per process; user-level config is never gated.
+  const projectTrusted = await resolveCliProjectTrust({
+    fs,
+    cwd,
+    home,
+    env,
+    interactive,
+    io: { input: input as Readable, output: output as Writable },
+    warn: bootWrite,
+  });
+
   let lspServerSpecs: LspServerSpec[] = [];
   let lspIssues: string[] = [];
   try {
-    const loaded = await loadLspServerSpecs(fs, cwd, home);
+    const loaded = await loadLspServerSpecs(fs, cwd, home, { projectTrusted });
     lspServerSpecs = loaded.specs;
     lspIssues = loaded.issues;
   } catch (error) {
@@ -820,7 +917,10 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // of the list — `/hooks` never over-reports an un-registered hook.
   const capturedHookDeclarations: CommandHookDeclaration[] = [];
   try {
-    const hookDeclarations = await loadHookConfigs(fs, cwd, home);
+    const hookDeclarations = await loadHookConfigs(fs, cwd, home, {
+      projectTrusted,
+      onSkip: (message) => bootWrite(`[warn] ${message}\n`),
+    });
     for (const declaration of hookDeclarations) {
       hooks.register(createCommandHook(exec, declaration, cwd));
       capturedHookDeclarations.push(declaration);
@@ -838,7 +938,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   let mcpSpecs: McpServerSpec[] = [];
   let mcpProblems: string[] = [];
   try {
-    const loaded = await loadMcpServerSpecs(fs, cwd, home);
+    const loaded = await loadMcpServerSpecs(fs, cwd, home, { projectTrusted });
     mcpSpecs = loaded.specs;
     mcpProblems = loaded.problems;
   } catch (error) {
@@ -871,6 +971,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
       home,
       claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
       repoMapConfig,
+      projectTrusted,
     });
   } catch (error) {
     bootWrite(`[warn] extensions discovery failed; continuing with zero skills/agent profiles/plugins: ${error instanceof Error ? error.message : String(error)}\n`);

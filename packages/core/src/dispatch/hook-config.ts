@@ -16,6 +16,7 @@
 import { z } from "zod";
 import type { ExecResult, ExecutionPort, FileSystemPort } from "../ports/index.js";
 import { DEFAULT_HOOK_TIMEOUT_MS } from "../types/config.js";
+import { isProjectGated, type ProjectTrustOptions } from "../mcp/config.js";
 import type {
   HookEvent,
   HookRegistration,
@@ -132,14 +133,26 @@ export async function loadHookConfigs(
   fs: FileSystemPort,
   workspace: string,
   homedir: string,
+  opts?: ProjectTrustOptions & {
+    /** Receives one line per project config skipped by the trust gate (Taskana 4736). */
+    onSkip?: (message: string) => void;
+  },
 ): Promise<CommandHookDeclaration[]> {
   const userPath = configPath(homedir);
   const projectPath = configPath(workspace);
 
   const userDeclarations = await loadOneConfig(fs, userPath);
   // When workspace and homedir resolve to the same config, load it only once.
-  const projectDeclarations =
-    userPath === projectPath ? [] : await loadOneConfig(fs, projectPath);
+  let projectDeclarations: CommandHookDeclaration[] = [];
+  if (userPath !== projectPath) {
+    if (isProjectGated(workspace, homedir, opts)) {
+      if (await fs.exists(projectPath)) {
+        opts?.onSkip?.(`Project hooks in ${projectPath} skipped: folder not trusted`);
+      }
+    } else {
+      projectDeclarations = await loadOneConfig(fs, projectPath);
+    }
+  }
 
   return [...userDeclarations, ...projectDeclarations];
 }

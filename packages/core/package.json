@@ -18,6 +18,7 @@
     "./communication-mcp": "./src/mcp/communication-server.ts",
     "./mcp-admin": "./src/mcp/admin.ts",
     "./skills-admin": "./src/skills/admin.ts",
+    "./workspace-trust": "./src/trust/index.ts",
     "./subagents-admin": "./src/subagents/admin.ts",
     "./telemetry-admin": "./src/telemetry/admin.ts",
     "./network-failure": "./src/provider/network-failure.ts",

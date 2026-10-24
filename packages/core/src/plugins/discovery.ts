@@ -28,13 +28,18 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { ZodError } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { McpServerSpec } from "../ports/mcp.js";
-import { resolveMcpServerEntries, type McpServerEntry } from "../mcp/config.js";
+import {
+  isProjectGated,
+  resolveMcpServerEntries,
+  type McpServerEntry,
+  type ProjectTrustOptions,
+} from "../mcp/config.js";
 import type { SkillRoot } from "../skills/discovery.js";
 import type { AgentProfileRoot } from "../subagents/profiles.js";
 import { MAX_PLUGINS } from "../types/config.js";
 import { pluginManifestSchema, type PluginManifest } from "./manifest.js";
 
-export interface DiscoverPluginsOptions {
+export interface DiscoverPluginsOptions extends ProjectTrustOptions {
   workspace: string;
   home: string;
   /** Server names already claimed by explicit config; plugins never override them. */
@@ -55,6 +60,8 @@ interface AcceptedPlugin {
   manifest: PluginManifest;
   /** Absolute plugin root directory (the directory carrying .anycode-plugin/). */
   root: string;
+  /** "project" when discovered under `<workspace>/.anycode/plugins` (Taskana 4736 trust gate). */
+  tier: "project" | "user";
 }
 
 function describeError(error: unknown): string {
@@ -204,9 +211,9 @@ export async function discoverPlugins(
   const claimedPluginNames = new Set<string>();
   const accepted: AcceptedPlugin[] = [];
 
-  const roots = [
-    { dir: pluginsRootPath(opts.workspace) },
-    { dir: pluginsRootPath(opts.home) },
+  const roots: { dir: string; tier: "project" | "user" }[] = [
+    { dir: pluginsRootPath(opts.workspace), tier: "project" },
+    { dir: pluginsRootPath(opts.home), tier: "user" },
   ];
 
   const seenRootDirs = new Set<string>();
@@ -237,7 +244,7 @@ export async function discoverPlugins(
       }
 
       claimedPluginNames.add(manifest.name);
-      accepted.push({ manifest, root: pluginDir });
+      accepted.push({ manifest, root: pluginDir, tier: root.tier });
     }
   }
 
@@ -248,9 +255,20 @@ export async function discoverPlugins(
   const agentRoots: AgentProfileRoot[] = [];
   const mcpServerSpecs: McpServerSpec[] = [];
 
+  const gated = isProjectGated(opts.workspace, opts.home, opts);
   for (const plugin of accepted) {
     skillRoots.push(...resolveContentRoots(plugin, plugin.manifest.skills, "skills", problems));
     agentRoots.push(...resolveContentRoots(plugin, plugin.manifest.agents, "agents", problems));
+
+    // Project-tier plugin MCP is covered by workspace trust ONLY (Taskana 4736):
+    // untrusted => never spawns; trusted => spawns without a per-plugin consent.
+    // Skills and agents above are never gated — they spawn nothing.
+    if (gated && plugin.tier === "project") {
+      if (plugin.manifest.mcpServers) {
+        problems.push(`Plugin "${plugin.manifest.name}" MCP servers skipped: folder not trusted`);
+      }
+      continue;
+    }
 
     const resolvedServers = resolvePluginMcpServers(plugin, opts.claimedMcpNames);
     mcpServerSpecs.push(...resolvedServers.specs);

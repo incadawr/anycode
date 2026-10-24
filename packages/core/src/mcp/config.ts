@@ -21,6 +21,7 @@
  * empty string in place of a secret).
  */
 
+import { resolve } from "node:path";
 import { z } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { McpHttpServerSpec, McpServerSpec, McpStdioServerSpec } from "../ports/mcp.js";
@@ -90,6 +91,20 @@ function projectOrUserConfigPath(baseDir: string): string {
 /** `<workspace>/.mcp.json` — the Claude-ecosystem compat file (same top-level shape). */
 function compatConfigPath(workspace: string): string {
   return `${workspace.replace(/[/\\]+$/, "")}/.mcp.json`;
+}
+
+/**
+ * Workspace trust option (Taskana 4736). `projectTrusted: false` gates the
+ * PROJECT sources only; absent or true keeps the historical behaviour (library
+ * callers). Hosts compute it once at boot via resolveWorkspaceTrust.
+ */
+export interface ProjectTrustOptions {
+  projectTrusted?: boolean;
+}
+
+/** True when project-level sources must be skipped: untrusted and the workspace is not the home directory itself. */
+export function isProjectGated(workspace: string, home: string, opts?: ProjectTrustOptions): boolean {
+  return opts?.projectTrusted === false && resolve(workspace) !== resolve(home);
 }
 
 // ---------------------------------------------------------------------------
@@ -335,6 +350,7 @@ export async function loadMcpServerSpecs(
   fs: FileSystemPort,
   workspace: string,
   home: string,
+  opts?: ProjectTrustOptions,
 ): Promise<LoadedMcpServerSpecs> {
   const specs: McpServerSpec[] = [];
   const problems: string[] = [];
@@ -343,6 +359,7 @@ export async function loadMcpServerSpecs(
   const projectPath = projectOrUserConfigPath(workspace);
   const userPath = projectOrUserConfigPath(home);
   const compatPath = compatConfigPath(workspace);
+  const gated = isProjectGated(workspace, home, opts);
 
   // Dedup identical paths (e.g. workspace === home) so the same file is never
   // parsed twice — harmless either way (claimed[] would no-op the repeat) but
@@ -353,6 +370,12 @@ export async function loadMcpServerSpecs(
       continue;
     }
     seenPaths.add(path);
+    if (gated && (path === projectPath || path === compatPath)) {
+      if (await fs.exists(path)) {
+        problems.push(`Project MCP servers in ${path} skipped: folder not trusted`);
+      }
+      continue;
+    }
     await loadSource(fs, path, claimed, specs, problems);
   }
 

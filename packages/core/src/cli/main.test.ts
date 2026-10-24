@@ -1085,6 +1085,15 @@ function makeTitleTestEnv(dbPath: string): NodeJS.ProcessEnv {
 }
 
 /**
+ * Explicitly trusted fixture (Taskana 4736): the project's own `lspServers`
+ * only load for a trusted workspace. `ANYCODE_TRUST_WORKSPACE=1` trusts this
+ * process only, so no trust store is written.
+ */
+function trustedWorkspaceEnv(dbPath: string): NodeJS.ProcessEnv {
+  return { ...makeTitleTestEnv(dbPath), ANYCODE_TRUST_WORKSPACE: "1" } as NodeJS.ProcessEnv;
+}
+
+/**
  * Reopens the session persisted at `dbPath` for `workspace` (runCli's own
  * exit path has already flushed + closed the write-behind sink and the db
 
@@ -3602,7 +3611,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagno
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath),
       input,
       output,
       modelPort: port,
@@ -3631,7 +3640,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagno
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath),
       input,
       output,
       modelPort: port,
@@ -3661,7 +3670,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#4): diagno
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath),
       input,
       output,
       modelPort: port,
@@ -3693,7 +3702,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6b): deny 
     // (Edit is "ask" in the default "build" mode) auto-denies, no prompter needed.
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath),
       input,
       output,
       modelPort: port,
@@ -3731,7 +3740,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6c/L8): no
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath),
       input,
       output,
       modelPort: port,
@@ -3763,7 +3772,7 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#5): exit-p
 
     const runPromise = runCli({
       argv: [],
-      env: makeTitleTestEnv(dbPath),
+      env: trustedWorkspaceEnv(dbPath),
       input,
       output,
       modelPort: port,
