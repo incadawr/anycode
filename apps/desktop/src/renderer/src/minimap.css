@@ -1,0 +1,109 @@
+/* Transcript minimap (TASK.48 / Taskana 4086). Separate file (not app.css)
+   deliberately — same precedent as transcript-follow.css / chrome-select.css.
+   Residual: fold into app.css if that lock ever lifts. */
+
+/* Sticky positioning wrapper: pins to the RIGHT edge of the scroll
+   container, vertically centered. height:0 + pointer-events:none keep it
+   fully out of .message-column's layout — the transcript's own geometry
+   never shifts when the minimap appears. */
+.minimap-slot {
+  position: sticky;
+  top: 50%;
+  z-index: 5;
+  height: 0;
+  overflow: visible;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+/* The scrubber pill itself: one dot per user turn. var usage copied verbatim
+   from .todo-panel-card's block. position:relative anchors the hover preview
+   card; the pill scrolls internally past 60dvh so it can never crowd the
+   jump-to-latest chip. */
+.minimap {
+  position: relative;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--sp-2);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-menu);
+  max-height: 60dvh;
+  overflow-y: auto;
+}
+
+/* Invisible 1.25rem hit area around a 6px dot. */
+.minimap-mark {
+  width: 1.25rem;
+  height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.minimap-mark-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--text-dim);
+}
+
+.minimap-mark:hover .minimap-mark-dot,
+.minimap-mark:focus-visible .minimap-mark-dot {
+  background: var(--accent);
+}
+
+/* Focus ring comes free from the global :focus-visible rule (tokens.css). */
+.minimap-mark-active .minimap-mark-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* Hover/focus preview card: absolutely-positioned sibling of the marks
+   column, opening to the LEFT of the pill. No transitions declared, so no
+   prefers-reduced-motion block is needed. */
+.minimap-preview {
+  position: absolute;
+  right: calc(100% + var(--sp-3));
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18rem;
+  max-width: 40vw;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.minimap-preview-question {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
+  color: var(--text-1);
+}
+
+.minimap-preview-answer {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.minimap-preview-files {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.minimap-preview-meta {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}

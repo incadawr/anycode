@@ -14,7 +14,7 @@
  * whole column breathes in as one `fade-in` instead). A `role="status"`
  * region outside the aria-live column announces turn start/end exactly once.
  */
-import { useContext, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import type {
   ConnectionPhase,
@@ -32,6 +32,7 @@ import { COMPOSER_INSERT_EVENT } from "./Composer.js";
 import { Markdown } from "./Markdown.js";
 import { ReasoningBlock } from "./ReasoningBlock.js";
 import { TodoPanel } from "./TodoPanel.js";
+import { TranscriptMinimap, activeMarkIndex, selectUserTurns, shouldShowMinimap } from "./TranscriptMinimap.js";
 import { PreviewConsoleRow } from "./PreviewConsoleRow.js";
 import { ToolCallCard } from "./ToolCallCard.js";
 import { ToolCallStack } from "./ToolCallStack.js";
@@ -452,6 +453,12 @@ export function MessageList({
   const followRef = useRef(true);
   const [follow, setFollow] = useState(true);
 
+  // Minimap (TASK.48 / Taskana 4086): pure projection over `blocks` — no new
+  // store state. The active-mark index is mirrored into state ONLY on edge
+  // changes (scroll-spy below), so a scroll tick never re-renders for nothing.
+  const minimapMarks = useMemo(() => selectUserTurns(blocks), [blocks]);
+  const [minimapActive, setMinimapActive] = useState<number | null>(null);
+
   // Finding 1 (codex P7.3-F): a jump-to-latest smooth scroll must not get
   // stomped by the very next post-commit snap effect — while a smooth scroll
   // animates, the plain-effect/RO snap below is suppressed until the browser
@@ -500,6 +507,24 @@ export function MessageList({
     if (followRef.current !== next) {
       followRef.current = next;
       setFollow(next);
+    }
+    // Minimap scroll-spy (TASK.48): the active mark is the last whose
+    // `.minimap-mark` node sits above the container's vertical midpoint.
+    // Approximate by design (collapsed ToolCallStacks skew offsets — accepted
+    // in the brief §4.4); index-only state, written just on the edge.
+    if (minimapMarks.length > 0) {
+      const midpoint = el.scrollTop + el.clientHeight / 2;
+      const markNodes = el.querySelectorAll<HTMLElement>(".minimap-mark");
+      let candidate: number | null = null;
+      for (let i = 0; i < markNodes.length; i += 1) {
+        const node = markNodes[i]!;
+        if (node.offsetTop + node.offsetHeight > midpoint) {
+          break;
+        }
+        candidate = i;
+      }
+      const nextActive = activeMarkIndex(minimapMarks, candidate);
+      setMinimapActive((prev) => (prev === nextActive ? prev : nextActive));
     }
   };
 
@@ -717,7 +742,11 @@ export function MessageList({
               }
               const userTime = formatBlockTime(block.at, Date.now());
               return (
-                <div key={block.id} className={`message message-user${enterClass(block.id)}`}>
+                <div
+                  key={block.id}
+                  data-block-id={block.id}
+                  className={`message message-user${enterClass(block.id)}`}
+                >
                   <div className="message-label">
                     You
                     {userTime && (
@@ -910,6 +939,16 @@ export function MessageList({
         >
           ↓
         </button>
+      )}
+      {/* TASK.48 / Taskana 4086: vertical user-turn scrubber, LAST child of
+          the scroll container (after the jump chip). The sticky slot keeps it
+          pinned to the right edge, vertically centered; height:0 +
+          pointer-events:none on the slot keep the first render from shifting
+          .message-column's layout at all. */}
+      {shouldShowMinimap(minimapMarks.length) && (
+        <div className="minimap-slot">
+          <TranscriptMinimap marks={minimapMarks} activeIndex={minimapActive} onJump={jumpToBlock} />
+        </div>
       )}
     </div>
   );
