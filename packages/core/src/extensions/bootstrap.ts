@@ -16,6 +16,8 @@
  */
 
 import type { FileSystemPort } from "../ports/file-system.js";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { McpServerSpec } from "../ports/mcp.js";
 import type { SkillMeta, SkillPort } from "../ports/skills.js";
 import type { WorkflowDefinition, WorkflowMeta } from "../ports/workflow.js";
@@ -115,6 +117,24 @@ function describeError(error: unknown): string {
 function subdir(baseDir: string, relative: string): string {
   return `${baseDir.replace(/[/\\]+$/, "")}/${relative}`;
 }
+
+/**
+ * Bundled workflow definitions shipped with the repo (`examples/workflows`),
+ * offered as the LOWEST-precedence discovery root after project and user, so
+ * any project/user definition with the same name shadows them (claimed-set
+ * semantics, discovery.ts). Resolved from THIS module's location:
+ * extensions → src → core → packages → repo root. Vitest runs the TS source,
+ * so the directory exists in every dev/test checkout. In a packaged app the
+ * directory does not exist — and a missing root dir is a SILENT skip in
+ * discoverWorkflows (fs.exists guard), so the bundled presets degrade to
+ * absent with zero noise and no problems[] entry there.
+ */
+export const BUNDLED_WORKFLOWS_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../..",
+  "examples",
+  "workflows",
+);
 
 /**
  * One AGENTS.md candidate location tagged with the provenance label its
@@ -310,6 +330,10 @@ export async function discoverExtensions(
   const workflowRoots: WorkflowRoot[] = [
     { dir: subdir(workspace, ".anycode/workflows"), source: "project" },
     ...(sameWorkspaceHome ? [] : [{ dir: subdir(home, ".anycode/workflows"), source: "user" }]),
+    // Bundled presets (deep-research …) come LAST: project and user
+    // definitions shadow them by name (claimed-set semantics). A missing dir
+    // (packaged app) is a silent skip — see BUNDLED_WORKFLOWS_DIR above.
+    { dir: BUNDLED_WORKFLOWS_DIR, source: "bundled" },
   ];
 
   let workflows: WorkflowDefinition[] = [];

@@ -86,8 +86,11 @@ export interface PersonaDefinition {
 }
 
 /**
- * general-purpose: the nine non-Agent default tools (full access under the
- * parent's inherited permission gate). explore: strictly read-only tools, so a
+ * general-purpose: the ten non-Agent default tools — the nine unconditional
+ * built-ins plus WebSearch, which is conditional on a configured search
+ * backend: the runner registers it into the child registry only when boot
+ * supplied the tool, so an unconfigured site degrades to a child without
+ * WebSearch, not an error. explore: strictly read-only tools, so a
  * child runs zero permission asks in build/plan — friction-free parallel
  * reconnaissance. Bash is deliberately excluded from explore (it is not
 
@@ -102,6 +105,7 @@ const GENERAL_PURPOSE_TOOLS = [
   "TodoRead",
   "TodoWrite",
   "WebFetch",
+  "WebSearch",
 ] as const;
 
 const EXPLORE_TOOLS = ["Read", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch"] as const;

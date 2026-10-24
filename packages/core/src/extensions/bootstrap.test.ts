@@ -619,7 +619,7 @@ describe("discoverExtensions — workflow subsystem", () => {
     ]);
   });
 
-  it("scans project > user workflow roots — no plugin roots (design §8-R8)", async () => {
+  it("scans project > user > bundled workflow roots — no plugin roots (design §8-R8)", async () => {
     let capturedRoots: unknown;
     vi.doMock(WORKFLOW_DISCOVERY_PATH, () => ({
       discoverWorkflows: vi.fn(async (_fs: unknown, roots: unknown) => {
@@ -631,13 +631,17 @@ describe("discoverExtensions — workflow subsystem", () => {
     const { discoverExtensions } = await importBootstrap();
     await discoverExtensions(makeFs(), { workspace: "/proj", home: "/home/u" });
 
+    // Bundled (examples/workflows) lands AFTER user: project and user
+    // definitions shadow bundled presets by name (claimed-set semantics).
+    const { BUNDLED_WORKFLOWS_DIR } = await importBootstrap();
     expect(capturedRoots).toEqual([
       { dir: "/proj/.anycode/workflows", source: "project" },
       { dir: "/home/u/.anycode/workflows", source: "user" },
+      { dir: BUNDLED_WORKFLOWS_DIR, source: "bundled" },
     ]);
   });
 
-  it("workspace === home: loads the workflow root once (no duplicate user root)", async () => {
+  it("workspace === home: loads the workflow root once (no duplicate user root; bundled root still appended)", async () => {
     let capturedRoots: unknown;
     vi.doMock(WORKFLOW_DISCOVERY_PATH, () => ({
       discoverWorkflows: vi.fn(async (_fs: unknown, roots: unknown) => {
@@ -649,7 +653,129 @@ describe("discoverExtensions — workflow subsystem", () => {
     const { discoverExtensions } = await importBootstrap();
     await discoverExtensions(makeFs(), { workspace: "/same", home: "/same" });
 
-    expect(capturedRoots).toEqual([{ dir: "/same/.anycode/workflows", source: "project" }]);
+    const { BUNDLED_WORKFLOWS_DIR } = await importBootstrap();
+    expect(capturedRoots).toEqual([
+      { dir: "/same/.anycode/workflows", source: "project" },
+      { dir: BUNDLED_WORKFLOWS_DIR, source: "bundled" },
+    ]);
+  });
+
+  it("a workspace deep-research.json shadows the bundled preset (claimed-set precedence: project wins)", async () => {
+    // Real discovery (no vi.doMock): the workspace defines its own
+    // .anycode/workflows/deep-research.json while the bundled root ALSO
+    // offers one — the discovered definition must carry source "project".
+    const bundled = (await import("./bootstrap.js")).BUNDLED_WORKFLOWS_DIR;
+    const bundledDef = await (await import("node:fs/promises")).readFile(
+      `${bundled}/deep-research.json`,
+      "utf8",
+    );
+    const files = new Map<string, string>([
+      [
+        "/proj/.anycode/workflows/deep-research.json",
+        JSON.stringify({
+          name: "deep-research",
+          description: "project-local override",
+          steps: [{ id: "only", agentType: "general-purpose", promptTemplate: "do ${input}" }],
+        }),
+      ],
+      [`${bundled}/deep-research.json`, bundledDef],
+    ]);
+    // Directory-inferring fake fs (a dir exists iff some file lives under it).
+    const fs: FileSystemPort = {
+      readFile: async (path) => {
+        const content = files.get(path);
+        if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        return content;
+      },
+      writeFile: async () => {},
+      stat: async (path) =>
+        files.has(path)
+          ? { size: 0, mtimeMs: 0, isFile: true, isDirectory: false }
+          : { size: 0, mtimeMs: 0, isFile: false, isDirectory: true },
+      exists: async (path) => {
+        if (files.has(path)) return true;
+        for (const key of files.keys()) {
+          if (key.startsWith(`${path}/`)) return true;
+        }
+        return false;
+      },
+      mkdir: async () => {},
+      readdir: async (path) => {
+        const names = new Set<string>();
+        for (const key of files.keys()) {
+          if (!key.startsWith(`${path}/`)) continue;
+          const name = key.slice(`${path}/`.length).split("/")[0];
+          if (name) names.add(name);
+        }
+        return [...names];
+      },
+    };
+
+    const { discoverExtensions } = await importBootstrap();
+    const bootstrap = await discoverExtensions(fs, { workspace: "/proj", home: "/home/u" });
+
+    const found = bootstrap.workflows.find((w) => w.name === "deep-research");
+    expect(found?.source).toBe("project");
+    expect(found?.description).toBe("project-local override");
+    expect(bootstrap.problems).toEqual([]);
+  });
+
+  it("a missing bundled dir is a silent skip: no problems, project workflows still discovered", async () => {
+    // Pins the packaged-app degradation: the bundled root dir does not exist
+    // (fs.exists returns false — the guard in discovery.ts), and the skip is
+    // silent (zero problems mentioning the bundled path) while project/user
+    // workflows are discovered normally.
+    const bundled = (await import("./bootstrap.js")).BUNDLED_WORKFLOWS_DIR;
+    const files = new Map<string, string>([
+      [
+        "/proj/.anycode/workflows/notes.json",
+        JSON.stringify({
+          name: "notes",
+          description: "project workflow",
+          steps: [{ id: "one", agentType: "general-purpose", promptTemplate: "hi ${input}" }],
+        }),
+      ],
+    ]);
+    const fs: FileSystemPort = {
+      readFile: async (path) => {
+        const content = files.get(path);
+        if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        return content;
+      },
+      writeFile: async () => {},
+      stat: async (path) =>
+        files.has(path)
+          ? { size: 0, mtimeMs: 0, isFile: true, isDirectory: false }
+          : { size: 0, mtimeMs: 0, isFile: false, isDirectory: true },
+      exists: async (path) => {
+        if (files.has(path)) return true;
+        for (const key of files.keys()) {
+          if (key.startsWith(`${path}/`)) return true;
+        }
+        return false;
+      },
+      mkdir: async () => {},
+      readdir: async (path) => {
+        const names = new Set<string>();
+        for (const key of files.keys()) {
+          if (!key.startsWith(`${path}/`)) continue;
+          const name = key.slice(`${path}/`.length).split("/")[0];
+          if (name) names.add(name);
+        }
+        return [...names];
+      },
+    };
+
+    const { discoverExtensions } = await importBootstrap();
+    const bootstrap = await discoverExtensions(fs, { workspace: "/proj", home: "/home/u" });
+
+    expect(bootstrap.workflows.map((w) => w.name)).toEqual(["notes"]);
+    expect(bootstrap.workflows[0]?.source).toBe("project");
+    // Silent skip: no problems[] entry at all, let alone one naming the path.
+    expect(bootstrap.problems).toEqual([]);
+    for (const problem of bootstrap.problems) {
+      expect(problem.includes(bundled)).toBe(false);
+    }
   });
 });
 
