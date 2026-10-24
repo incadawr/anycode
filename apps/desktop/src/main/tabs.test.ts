@@ -3238,6 +3238,36 @@ describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (TASK.102 
     expect(terminal && "activitySuppressed" in terminal).toBe(false);
   });
 
+  // N1 (Taskana 4704 re-review #3): the R2 safe error descriptor must reach
+  // the parent host. Before this relay it was parsed and then dropped here,
+  // so the infra classifier always fell back to the free-text first line.
+  it("N1: ChildTerminal.errorDescriptor is relayed VERBATIM into the terminal ChildRunEvent; absent => key absent", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-descriptor", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "relay-descriptor" }));
+    hosts[1]!.emit("message", childTerminalMsg({ status: "error", finalText: "rate limited (HTTP 429)\nmore model prose", errorDescriptor: "rate limited (HTTP 429)" }));
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "relay-descriptor" && e.kind === "terminal");
+    expect(terminal).toMatchObject({ status: "error", errorDescriptor: "rate limited (HTTP 429)" });
+  });
+
+  it("N1: a terminal WITHOUT errorDescriptor relays no such key", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-relay-no-descriptor", resume: false });
+    expect(root.ok).toBe(true);
+    const rootHost = hosts[0]!;
+    rootHost.emit("message", spawnRequest({ requestId: "relay-no-descriptor" }));
+    hosts[1]!.emit("message", childTerminalMsg({ status: "error", finalText: "boom" }));
+    const terminal = childRunEvents(rootHost).find((e) => e.requestId === "relay-no-descriptor" && e.kind === "terminal");
+    expect(terminal).toBeDefined();
+    expect(terminal && "errorDescriptor" in terminal).toBe(false);
+  });
+
   it("ChildTerminal.finalTurnFinishReason is copied VERBATIM into the terminal ChildRunEvent; absent => key absent", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();

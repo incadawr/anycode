@@ -5336,4 +5336,37 @@ describe("role route chain walk (Taskana 4704 §3.2)", () => {
     expect(outcome.finalText).toContain("md-model-1");
     expect(outcome.finalText).not.toContain("primary-1");
   });
+
+  // N3 (Taskana 4704 re-review #3): the WHOLE settings chain is cooling down.
+  // The resolver returns no entries and every entry in `skipped`. The
+  // settings-derived persona's dead primary must NOT be re-run through the
+  // explicit-id path — the documented last resort is the parent's model.
+  it("N3: an exhausted (all-unhealthy) role chain degrades to the parent model, never the dead primary", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      profiles: [{ ...PERSONAS["executor"]!, model: "primary-1" }],
+      resolveRoleRoute: () => ({
+        entries: [],
+        skipped: [
+          { entry: { model: "primary-1" }, reason: "quota" },
+          { entry: { model: "fallback-2" }, reason: "quota" },
+        ],
+      }),
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        throw new Error(`${modelId} is dead (cooldown)`);
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "executor" }, {});
+
+    expect(outcome.status).toBe("completed");
+    // Neither entry was attempted — the dead primary was not re-run.
+    expect(resolved).toEqual([]);
+    expect(outcome.finalText).toContain("parent-report");
+    expect(outcome.finalText).toContain("ran on the parent's model");
+    expect(outcome.finalText).toContain("quota");
+    expect(parentModel.calls).toBe(1);
+  });
 });

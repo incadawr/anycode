@@ -10,8 +10,8 @@
  * orchestrator's turn-start primary check.
  */
 
-import type { RoleRouteEntry } from "@anycode/core";
-import type { RoleRouteEntry as SettingsRoleRouteEntry } from "../shared/settings.js";
+import type { RoleRouteEntry, RoleRouteResolution } from "@anycode/core";
+import type { RoleConfig, RoleRouteEntry as SettingsRoleRouteEntry } from "../shared/settings.js";
 
 /**
  * Exponential cooldown: base 5min, doubling per consecutive failure, capped
@@ -20,6 +20,17 @@ import type { RoleRouteEntry as SettingsRoleRouteEntry } from "../shared/setting
  */
 export const ROLE_COOLDOWN_BASE_MS = 5 * 60_000;
 export const ROLE_COOLDOWN_MAX_MS = 60 * 60_000;
+
+/**
+ * R3 (Taskana 4704 re-review #3): the child-report queue id of the honest
+ * follow-up a failed respawn produces. Namespaced off the FAILED child's
+ * spawnToolCallId, which the short "retrying" notice already claimed — the
+ * renderer dedupes child_report by originId, so reusing that id would drop
+ * the refusal/failure report silently.
+ */
+export function respawnReportId(failedSpawnToolCallId: string, kind: "refused" | "failed"): string {
+  return `${failedSpawnToolCallId}:respawn-${kind}`;
+}
 
 /** Stable identity for one (role, entry) pair — the health cache key. */
 export function entryKey(role: string, e: RoleRouteEntry): string {
@@ -196,6 +207,43 @@ export class RoleHealthCache {
   snapshot(): HealthSnapshot {
     return new Map(this.entries);
   }
+}
+
+/**
+ * Taskana 4704 §3.6 / re-review #3 (N2, N3): the host's role-route resolution
+ * as a PURE function of its inputs — the settings role config, the set of
+ * role names a hand-authored md profile claims, the health snapshot and the
+ * clock. Returns null when no settings route applies (no config, or an md
+ * profile claims the role: md-profile > settings-derived > built-in, §2.1).
+ * When the whole chain is cooling down the result carries `entries: []` AND
+ * every skipped entry (with its reason), so the runner's R4 check still
+ * recognises a settings-derived persona whose primary is the dead entry and
+ * degrades it to the parent model instead of re-running the dead primary.
+ */
+export function resolveRoleRouteChain(input: {
+  role: string;
+  config: RoleConfig | undefined;
+  claimedByMdProfile: boolean;
+  health: HealthSnapshot;
+  now: number;
+  turnBudget?: number;
+}): RoleRouteResolution | null {
+  if (input.config === undefined || input.claimedByMdProfile) return null;
+  const chain = [input.config.primary, ...(input.config.fallbacks ?? [])].map(toCoreEntry);
+  const budget = input.turnBudget !== undefined ? { turnBudget: input.turnBudget } : {};
+  const picked = pickEntry(chain, input.health, input.now, input.role);
+  if (picked === null) {
+    const skipped = chain.map((entry) => {
+      const h = input.health.get(entryKey(input.role, entry));
+      return { entry, reason: h?.lastReason ?? "unhealthy" };
+    });
+    return { entries: [], skipped, ...budget };
+  }
+  return {
+    entries: [picked.entry, ...chain.slice(picked.index + 1)],
+    skipped: picked.skipped,
+    ...budget,
+  };
 }
 
 /** Settings-side entry -> core-side entry (same shape; keeps module boundaries). */

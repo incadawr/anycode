@@ -620,8 +620,11 @@ describe("host subagent model-override wiring", () => {
     expect(sessionSource).not.toContain("childSpawnModeOverride");
     expect(sessionSource).not.toContain("childSpawnMode?:");
     // And the port's thunk must derive the answer inline (orchestrate-aware,
-    // plan coerced to build) instead of delegating.
-    expect(source).toContain('return pre === "plan" ? "build" : pre;');
+    // plan coerced to build) instead of delegating. R1 moved that derivation
+    // into the shared spawn-mode cell (host/spawn-mode-cell.ts), which index.ts
+    // builds and the harness reuses — the derivation is pinned there now.
+    const cellSource = await readFile(new URL("./spawn-mode-cell.ts", import.meta.url), "utf8");
+    expect(cellSource).toContain('return pre === "plan" ? "build" : pre;');
   });
 
   it("Taskana 4704 F2: withSubagents threads the host's resolveRoleRouteImpl into the runner", async () => {
@@ -669,8 +672,11 @@ describe("host subagent model-override wiring", () => {
     // queue id — never the failed child's spawnToolCallId, which the
     // "retrying" notice already claimed (renderer dedupes child_report by
     // originId; a same-id follow-up would be silently dropped).
-    expect(source).toContain("`${req.spawnToolCallId}:respawn-refused`");
-    expect(source).toContain("`${req.spawnToolCallId}:respawn-failed`");
+    // R3 (re-review #3): the id itself is pinned behaviourally in
+    // role-route.test.ts (respawnReportId + ChildReportQueue); here only the
+    // wiring must go through the helper.
+    expect(source).toContain('respawnReportId(req.spawnToolCallId, "refused")');
+    expect(source).toContain('respawnReportId(req.spawnToolCallId, "failed")');
     // The respawn request stamps ONLY the next entry's fields (a stale
     // engine/connection of the failed hop never leaks through `...req`).
     expect(source).not.toContain("...req,\n    spawnToolCallId: respawnId");

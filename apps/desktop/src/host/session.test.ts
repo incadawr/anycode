@@ -8314,6 +8314,30 @@ describe("Session — set_orchestrate (Taskana 4704 §3.7 / A1)", () => {
     }
   });
 
+  // R5 (Taskana 4704 re-review #3): an APPROVED ExitPlanMode leaves plan mode
+  // through notifyModeChanged (the loop's onModeChange). That is the same
+  // plan exit as a user set_mode, so orchestrate must turn off too — the
+  // orchestrator may never keep running writable with the flag still on.
+  it("R5: an approved ExitPlanMode (notifyModeChanged to build) turns orchestrate off", async () => {
+    const onOrchestrateChanged = vi.fn();
+    const h = createHarness({ steps: [], mode: "build", engine: orchestrateEngine({ initialMode: "build" }), onOrchestrateChanged });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && m.enabled);
+      // The loop advances config.mode before notifying the host.
+      h.config.mode = "build";
+      h.session.notifyModeChanged("build");
+      const offAck = await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && !m.enabled);
+      expect(offAck.enabled).toBe(false);
+      expect(onOrchestrateChanged).toHaveBeenLastCalledWith(false);
+      await h.waitFor((m): m is Of<"mode_changed"> => m.type === "mode_changed" && m.mode === "build");
+    } finally {
+      h.close();
+    }
+  });
+
   it("R5: a non-orchestrate session's set_mode emits no orchestrate_changed", async () => {
     const h = createHarness({ steps: [], engine: orchestrateEngine({}), onOrchestrateChanged: () => {} });
     try {

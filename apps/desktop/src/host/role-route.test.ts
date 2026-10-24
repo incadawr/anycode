@@ -13,8 +13,11 @@ import {
   decideRoutedTerminal,
   entryKey,
   pickEntry,
+  resolveRoleRouteChain,
+  respawnReportId,
   type RoutedSpawnFacts,
 } from "./role-route.js";
+import { ChildReportQueue } from "./child-report-queue.js";
 
 const T0 = 1_000_000;
 
@@ -296,5 +299,61 @@ describe("decideRoutedTerminal (Taskana 4704 §3.6)", () => {
       T0,
     );
     expect(d2.action).toBe("respawn");
+  });
+});
+
+describe("resolveRoleRouteChain (N2 md > settings, N3 exhausted chain)", () => {
+  const config = {
+    primary: { model: "primary-1" },
+    fallbacks: [{ model: "fallback-2" }],
+  };
+  const emptyHealth = new Map();
+
+  it("no settings config => null (built-in defaults apply)", () => {
+    expect(resolveRoleRouteChain({ role: "executor", config: undefined, claimedByMdProfile: false, health: emptyHealth, now: T0 })).toBeNull();
+  });
+
+  it("N2: a role claimed by an md profile => null, so the profile's own routing wins over the settings route", () => {
+    expect(resolveRoleRouteChain({ role: "executor", config, claimedByMdProfile: true, health: emptyHealth, now: T0 })).toBeNull();
+  });
+
+  it("healthy chain => the primary heads the entries, turn budget rides along", () => {
+    const r = resolveRoleRouteChain({ role: "executor", config, claimedByMdProfile: false, health: emptyHealth, now: T0, turnBudget: 40 });
+    expect(r).toEqual({
+      entries: [{ model: "primary-1" }, { model: "fallback-2" }],
+      skipped: [],
+      turnBudget: 40,
+    });
+  });
+
+  it("N3: an exhausted chain => no entries, but EVERY skipped entry with its reason (the runner's R4 check needs the dead primary)", () => {
+    const health = new Map([
+      ["executor||primary-1", { failures: 1, until: T0 + 60_000, lastReason: "quota" }],
+      ["executor||fallback-2", { failures: 1, until: T0 + 60_000, lastReason: "unreachable" }],
+    ]);
+    const r = resolveRoleRouteChain({ role: "executor", config, claimedByMdProfile: false, health, now: T0 });
+    expect(r).not.toBeNull();
+    expect(r!.entries).toEqual([]);
+    expect(r!.skipped).toEqual([
+      { entry: { model: "primary-1" }, reason: "quota" },
+      { entry: { model: "fallback-2" }, reason: "unreachable" },
+    ]);
+  });
+});
+
+describe("respawnReportId (R3)", () => {
+  it("a failed respawn's report never reuses the retrying notice's id, and refused/failed differ", () => {
+    const failed = "spawn-1";
+    expect(respawnReportId(failed, "refused")).not.toBe(failed);
+    expect(respawnReportId(failed, "failed")).not.toBe(failed);
+    expect(respawnReportId(failed, "refused")).not.toBe(respawnReportId(failed, "failed"));
+  });
+
+  it("the queue keeps BOTH the retrying notice and the honest follow-up (renderer dedupe is by id)", () => {
+    const sent: Array<{ id: string }> = [];
+    const queue = new ChildReportQueue({ sendDirect: (m: { id: string }) => sent.push(m) } as never);
+    queue.add("spawn-1", "retrying notice", { status: "completed", durationMs: 0 });
+    queue.add(respawnReportId("spawn-1", "refused"), "refusal report", { status: "error", durationMs: 0 });
+    expect(sent.map((m) => m.id)).toEqual(["spawn-1", "spawn-1:respawn-refused"]);
   });
 });

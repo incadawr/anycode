@@ -897,6 +897,17 @@ export function createSubagentRunner(
       // and `fallbackReason` (why an earlier entry was skipped). Filled by the
       // chain walk below; undefined for every non-routed spawn.
       let roleRouteStart: { route: string; fallbackReason?: string } | undefined;
+      // N3 (Taskana 4704 re-review #3): a settings-derived role persona whose
+      // ENTIRE route chain is cooling down (the R4 check recognised its dead
+      // primary, so the walk is armed, yet no healthy entry is left) must not
+      // fall through to the explicit-id path and re-run the dead primary. The
+      // documented last resort is the parent's model — degrade to it, with a
+      // notice naming every skip reason (same channel as the walk's own notice).
+      if (personaCarriesRoute && chainEntries.length === 0 && req.model === undefined) {
+        const reasons = chainSkipped.map((s) => s.reason).join("; ");
+        requestedModel = undefined;
+        roleFallbackNotice = `Agent: role "${req.agentType}" ran on the parent's model (every route entry is unhealthy${reasons ? `: ${reasons}` : ""})`;
+      }
 
       // Engine persona (md-profile `engine:`): the whole in-process path
       // (buildChildConfig/AgentLoop/resolveChildModelPort) is bypassed in favor

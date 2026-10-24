@@ -314,7 +314,8 @@ import {
   type SupervisorIdleReport,
 } from "./supervisor-idle-watchdog.js";
 import { attachChildReportDurability, attachEngineChildReportDurability } from "./child-report-durability.js";
-import { RoleHealthCache, decideRoutedTerminal, entryLabel, pickEntry, toCoreEntry } from "./role-route.js";
+import { createSpawnModeCell } from "./spawn-mode-cell.js";
+import { RoleHealthCache, decideRoutedTerminal, entryLabel, pickEntry, resolveRoleRouteChain, respawnReportId, toCoreEntry } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
 import { readFileSync } from "node:fs";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
@@ -544,26 +545,28 @@ refreshRolesSettings();
  * `turnBudget` rides only the three ROLE personas (ROLE_TURN_BUDGETS);
  * explore keeps DEFAULT_SUBAGENT_MAX_TURNS (§2.9).
  */
+/**
+ * N2 (Taskana 4704 re-review #3): the role names a hand-authored md agent
+ * profile (`.anycode/agents/*.md`) currently claims. Refreshed whenever `ext`
+ * is (re)assigned — boot discovery and the live profile rescan. A claimed role
+ * is NOT a settings-routed role: md-profile > settings-derived > built-in
+ * (§2.1), so the resolver answers null and the profile's own routing applies.
+ */
+let mdClaimedProfileNames: ReadonlySet<string> = new Set();
 function resolveRoleRouteImpl(agentType: string): RoleRouteResolution | null {
   if (!isRoleRouteName(agentType)) return null;
-  const config = rolesSettings?.[agentType as "planner" | "executor" | "reviewer" | "explore"];
-  if (config === undefined) return null;
-  const chain = [config.primary, ...(config.fallbacks ?? [])].map(toCoreEntry);
-  const now = Date.now();
-  const picked = pickEntry(chain, roleHealth.snapshot(), now, agentType);
-  if (picked === null) {
-    // Whole chain unhealthy — the parent model is the implicit last resort.
-    return { entries: [], skipped: [] };
-  }
   const budget =
     agentType === "planner" || agentType === "executor" || agentType === "reviewer"
       ? ROLE_TURN_BUDGETS[agentType]
       : undefined;
-  return {
-    entries: [picked.entry, ...chain.slice(picked.index + 1)],
-    skipped: picked.skipped,
+  return resolveRoleRouteChain({
+    role: agentType,
+    config: rolesSettings?.[agentType],
+    claimedByMdProfile: mdClaimedProfileNames.has(agentType),
+    health: roleHealth.snapshot(),
+    now: Date.now(),
     ...(budget !== undefined ? { turnBudget: budget } : {}),
-  };
+  });
 }
 
 // Credential broker (design §3.3, slice 2.5.3): CredentialResponse messages
@@ -725,7 +728,7 @@ function respawnRoutedRoleChild(outcome: SessionSubagentOutcome, req: SessionSub
       if (admit.status === "error") {
         routedSpawns.delete(respawnId);
         childReportQueue.add(
-          `${req.spawnToolCallId}:respawn-refused`,
+          respawnReportId(req.spawnToolCallId, "refused"),
           formatChildTaskNotification({
             taskId: req.spawnToolCallId,
             toolUseId: req.spawnToolCallId,
@@ -742,7 +745,7 @@ function respawnRoutedRoleChild(outcome: SessionSubagentOutcome, req: SessionSub
       routedSpawns.delete(respawnId);
       console.error(`[host] routed role respawn failed: ${describeError(runError)}`);
       childReportQueue.add(
-        `${req.spawnToolCallId}:respawn-failed`,
+        respawnReportId(req.spawnToolCallId, "failed"),
         formatChildTaskNotification({
           taskId: req.spawnToolCallId,
           toolUseId: req.spawnToolCallId,
@@ -3182,6 +3185,7 @@ async function boot(): Promise<void> {
     } catch (error) {
       console.error(`[host] extensions discovery failed; continuing with zero skills/agent profiles/plugins: ${describeError(error)}`);
     }
+    mdClaimedProfileNames = new Set(ext.profiles.map((p) => p.name));
     for (const problem of ext.problems) {
       console.warn(`[host] extensions: ${problem}`);
     }
@@ -3690,34 +3694,12 @@ async function boot(): Promise<void> {
     // further down. `undefined` for a child-session boot or a claude/codex
     // master, exactly mirroring `config.sessionSubagents`'s own absence.
     let childSessionPortHandle: ChildSessionPort | undefined;
-    // A1 (Taskana 4704 review, cross-review F1): the child port (below)
-    // exists BEFORE the Session, so the child spawn mode must be derived
-    // WITHOUT the Session — a late-binding cell that bounced back into the
-    // Session's own `childSpawnMode()` recursed forever (Session.childSpawn-
-    // Mode() called the override, the override called the Session). The
-    // derivation lives HERE, against the same facts the Session reads
-    // (config.mode live, config.orchestrate/preOrchestrateMode cells the
-    // Session's set_orchestrate handler owns — see session.ts onSetOrches-
-    // trate: enable remembers the current mode and sets `plan`, disable
-    // restores it), and the Session's childSpawnMode() (no longer takes an
-    // override) derives the identical answer from its own state.
-    let preOrchestrateMode: PermissionMode | undefined;
-    // R1 (Taskana 4704 cross-review): the single source of truth for the
-    // pre-orchestrate mode is the SESSION — onOrchestrateChanged fires AFTER
-    // onSetMode("plan") already flipped config.mode, so reading config.mode
-    // there captured "plan" and every orchestrate child ran as "build"
-    // (a yolo/accept-edits user lost their mode silently). The cell below
-    // captures the mode BEFORE the switch (same place the Session's own
-    // set_orchestrate handler does), and once the Session exists the port's
-    // getter delegates to session.childSpawnMode() — the Session's own
-    // orchestrate/preOrchestrateMode state — so the two can never drift.
-    let spawnModeCell: () => PermissionMode = () => {
-      if (!config.orchestrate) {
-        return config.mode;
-      }
-      const pre = preOrchestrateMode ?? "build";
-      return pre === "plan" ? "build" : pre;
-    };
+    // A1/R1 (Taskana 4704 review): the child port (below) exists BEFORE the
+    // Session, so the child spawn mode is read through the shared cell
+    // (spawn-mode-cell.ts): config-derived until the Session exists, then the
+    // Session's own childSpawnMode(). The SAME factory is what the test harness
+    // builds, so the behavioural tests pin this wiring.
+    const spawnModeCell = createSpawnModeCell(config, () => session);
     if (!isChildSessionBoot(args, sessionMeta)) {
       childSessionPortHandle = createChildSessionPort({
         parentSessionId: sessionMeta.id,
@@ -3728,7 +3710,7 @@ async function boot(): Promise<void> {
         // sessions return the live mode (byte-identical pre-4704 behavior —
         // the child inherits the parent's mode at the moment Agent was
         // invoked, cut §0.8).
-        getPermissionMode: () => spawnModeCell(),
+        getPermissionMode: () => spawnModeCell.read(),
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
         // TASK.145 срез 1: the detach-delivery seam. Fires strictly AFTER
@@ -3764,25 +3746,16 @@ async function boot(): Promise<void> {
         // stamped — a caller-passed explicit model/provider/connection is the
         // caller's own choice, never a role-chain hop, so a later infra
         // failure must NOT respawn it onto the chain (that would override the
-        // explicit request). R7 (cross-review): the primary discriminator is
-        // core's routeStamped flag (tools/agent.ts sets it exactly when the
-        // route stamped the fields); the field-equality check stays as the
-        // secondary/defense-in-depth layer for direct port callers that do
-        // not set the flag.
+        // explicit request). R7 (re-review #3): core's routeStamped flag is
+        // the ONLY discriminator — it is set exactly when the route (not the
+        // caller) stamped the request (tools/agent.ts), so a caller's explicit
+        // model that merely equals the bare head model is never mistaken for a
+        // chain hop. Field equality is no longer consulted.
         if (req.detach === true && isRoleRouteName(req.agentType) && req.resumeChildSessionId === undefined) {
           const resolution = resolveRoleRouteImpl(req.agentType);
           const head = resolution?.entries[0];
           if (head !== undefined) {
-            const headProvider = head.provider;
-            const headConnection = head.connection;
-            const headEngine = head.engine;
-            const stamped =
-              req.routeStamped === true ||
-              (req.provider === headProvider &&
-                req.connectionId === headConnection &&
-                req.engine === headEngine &&
-                req.model === head.model);
-            if (stamped) {
+            if (req.routeStamped === true) {
               noteRoutedSpawn(req, head, resolution!.entries.slice(1), resolution!.skipped);
             }
           }
@@ -3944,6 +3917,7 @@ async function boot(): Promise<void> {
         return;
       }
       ext = { ...ext, profiles: rescanned.profiles, profilesPromptSection: rescanned.promptSection };
+      mdClaimedProfileNames = new Set(ext.profiles.map((p) => p.name));
       // Components AND prompt, same as the switchModel branch below: the
       // accounting split is derived from these components, so assigning only
       // the prompt would leave contextBreakdown() reporting the pre-rescan
@@ -4304,34 +4278,10 @@ async function boot(): Promise<void> {
       // (config.orchestrate), which the loop threads into the dispatch context
       // and the dispatcher into every ToolContext — the Agent tool reads it for
       // orchestrate default-detach (§3.3).
+      // R1: the spawn-mode cell captures the pre-orchestrate mode (see
+      // spawn-mode-cell.ts) and keeps config.orchestrate in step.
       onOrchestrateChanged: (enabled: boolean) => {
-        if (enabled) {
-          // R1: remember the pre-orchestrate mode BEFORE flipping to plan.
-          // This callback fires AFTER the Session's onSetMode("plan") already
-          // mutated config.mode (Session.onSetOrchestrate switches the mode
-          // BEFORE notifying the host) — but the flip to plan is the very
-          // reason we read the mode HERE, so guard against exactly that: when
-          // the mode is already plan (the common enable-from-build path goes
-          // build -> plan, so "already plan" means either the user WAS in
-          // plan — remembered as plan, childSpawnMode coerces to build — or
-          // we raced the switch), the engine's own live mode is the
-          // pre-flip truth only the Session still holds: prefer the Session
-          // when it exists (it captured preOrchestrateMode BEFORE the flip),
-          // else fall back to config.mode.
-          preOrchestrateMode = config.mode === "plan" && session !== null
-            ? session.childSpawnPreOrchestrateMode() ?? config.mode
-            : config.mode;
-          config.orchestrate = true;
-        } else {
-          preOrchestrateMode = undefined;
-          delete config.orchestrate;
-        }
-        // R1: with the Session alive, the port's getter delegates to it from
-        // here on — one derivation, one owner.
-        if (session !== null) {
-          const live = session;
-          spawnModeCell = () => live.childSpawnMode();
-        }
+        spawnModeCell.onOrchestrateChanged(enabled);
       },
       // Taskana 4704 §3.6: turn-start orchestrator-route check — the host
       // owns the health cache AND switchModelImpl. Applies model+effort ONLY

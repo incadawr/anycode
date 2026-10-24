@@ -4476,21 +4476,11 @@ export class Session {
     }
     // R5 (Taskana 4704 cross-review): orchestrate IS the plan-mode posture —
     // a user set_mode that moves the tab OUT of plan while orchestrate is on
-    // leaves the flag asserting a posture the mode no longer holds (an
-    // orchestrator with WRITABLE tools). The transition is treated as an
-    // implicit orchestrate-off: clear the flag through the SAME transition
-    // path set_orchestrate(false) takes (host loop-config copy +
-    // orchestrate_changed ack), restoring the orchestrate invariants
-    // (default-detach off, plan reminder restored, children inherit the live
-    // mode). An approved ExitPlanMode mid-turn is EXEMPT (TASK.27's loop
-    // advance path calls notifyModeChanged, not here — and orchestrate has
-    // its own §3.7 continuation semantics); orchestrate's OWN internal
-    // switches pass fromOrchestrateTransition and are equally exempt.
-    if (!fromOrchestrateTransition && this.orchestrate && mode !== "plan") {
-      this.orchestrate = false;
-      this.preOrchestrateMode = null;
-      this.onOrchestrateChanged?.(false);
-      this.outbound.emit({ type: "orchestrate_changed", enabled: false });
+    // would leave a writable orchestrator behind, so it is an implicit
+    // orchestrate-off. orchestrate's OWN internal switches pass
+    // fromOrchestrateTransition and are exempt (they manage the flag themselves).
+    if (!fromOrchestrateTransition && mode !== "plan") {
+      this.clearOrchestrateForLeavingPlan();
     }
     this.engine.setMode(mode);
     // Persist the mode so a resume restores it (design §4.2); fire-and-forget.
@@ -4583,8 +4573,30 @@ export class Session {
    * persistence touch that lets a resume restore the mode.
    */
   notifyModeChanged(mode: PermissionMode): void {
+    // R5 (Taskana 4704 re-review #3): an approved ExitPlanMode leaves plan
+    // mode, and orchestrate IS the plan posture — leaving plan turns
+    // orchestrate off exactly like a user set_mode would, so an approved
+    // orchestrator never keeps running writable with the flag still on.
+    if (mode !== "plan") {
+      this.clearOrchestrateForLeavingPlan();
+    }
     this.persistence?.touch({ mode });
     this.outbound.emit({ type: "mode_changed", mode });
+  }
+
+  /**
+   * R5 (Taskana 4704 re-review #3): the single orchestrate-off path for a
+   * transition OUT of plan (user set_mode or approved ExitPlanMode). Clears the
+   * flag through the same route set_orchestrate(false) takes — the host's
+   * loop-config copy plus the orchestrate_changed ack — so default-detach
+   * turns off, the plan reminder is restored and children inherit the live mode.
+   */
+  private clearOrchestrateForLeavingPlan(): void {
+    if (!this.orchestrate) return;
+    this.orchestrate = false;
+    this.preOrchestrateMode = null;
+    this.onOrchestrateChanged?.(false);
+    this.outbound.emit({ type: "orchestrate_changed", enabled: false });
   }
 
   /**

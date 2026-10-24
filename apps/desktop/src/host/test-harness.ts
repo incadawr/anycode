@@ -48,6 +48,7 @@ import { IpcPermissionBroker } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
 import { CoreEngine } from "./engines/core-engine.js";
 import type { SessionEngine } from "./engines/session-engine.js";
+import { createSpawnModeCell } from "./spawn-mode-cell.js";
 import { Outbound, Session, type SessionOptions, type SessionPersistence } from "./session.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
 
@@ -725,35 +726,19 @@ export function createHarness(options: HarnessOptions): Harness {
       touches.push(patch);
     },
   };
-  // R1 (Taskana 4704): mirror host/index.ts's spawn-mode cell EXACTLY — the
-  // config-derived base, re-bound to the Session's own childSpawnMode() at
-  // the first orchestrate transition (the host's onOrchestrateChanged does
-  // the same once `session` is constructed). A test that asserts through
-  // this cell pins the HOST wiring, not just the Session's derivation.
+  // R1 (Taskana 4704 re-review #3): the harness builds the SAME spawn-mode cell
+  // host/index.ts builds (spawn-mode-cell.ts) — no copy — so a test asserting
+  // through it pins the production derivation, not a re-implementation.
   const sessionRef: { current: Session | null } = { current: null };
-  let harnessSpawnModeCell: () => PermissionMode = () => config.mode;
-  const orchestrateCallback = (enabled: boolean): void => {
-    if (enabled) {
-      if (config.mode === "plan") {
-        const pre = sessionRef.current?.childSpawnPreOrchestrateMode();
-        config.orchestrate = true;
-        harnessSpawnModeCell = () => sessionRef.current?.childSpawnMode() ?? config.mode;
-        return;
-      }
-      config.orchestrate = true;
-    } else {
-      delete config.orchestrate;
-    }
-    harnessSpawnModeCell = () => sessionRef.current?.childSpawnMode() ?? config.mode;
-  };
+  const spawnModeCell = createSpawnModeCell(config, () => sessionRef.current);
 
   const session = new Session({
     outbound,
     engine,
     ...(options.onOrchestrateChanged !== undefined
-      ? { onOrchestrateChanged: (enabled: boolean) => { options.onOrchestrateChanged!(enabled); if (options.wireSpawnModeCell) orchestrateCallback(enabled); } }
+      ? { onOrchestrateChanged: (enabled: boolean) => { options.onOrchestrateChanged!(enabled); if (options.wireSpawnModeCell) spawnModeCell.onOrchestrateChanged(enabled); } }
       : options.wireSpawnModeCell
-        ? { onOrchestrateChanged: orchestrateCallback }
+        ? { onOrchestrateChanged: (enabled: boolean) => spawnModeCell.onOrchestrateChanged(enabled) }
         : {}),
     ...(options.orchestratorRouteCheck !== undefined ? { orchestratorRouteCheck: options.orchestratorRouteCheck } : {}),
     ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),
@@ -889,7 +874,7 @@ export function createHarness(options: HarnessOptions): Harness {
       return session.childSpawnMode();
     },
     childSpawnModeCell(): PermissionMode {
-      return harnessSpawnModeCell();
+      return spawnModeCell.read();
     },
     armContinuation(): void {
       const internal = session as unknown as { continuationPending: boolean };

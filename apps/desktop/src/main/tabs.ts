@@ -2568,6 +2568,11 @@ export class TabHostManager {
       ...(msg.responseModel !== undefined ? { responseModel: msg.responseModel } : {}),
       // TASK.240/4055: verbatim passthrough of the child's own ceiling summary.
       ...(msg.ceiling !== undefined ? { ceiling: msg.ceiling } : {}),
+      // N1 (Taskana 4704 re-review #3): the redacted safe error descriptor
+      // rides verbatim to the parent host's infra classifier (R2). A
+      // cancel-race turns the terminal into "cancelled", which has no
+      // descriptor, so it is dropped there.
+      ...(msg.errorDescriptor !== undefined && !cancelling ? { errorDescriptor: msg.errorDescriptor } : {}),
     });
   }
 
