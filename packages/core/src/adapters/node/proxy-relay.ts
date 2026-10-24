@@ -759,32 +759,110 @@ export function closeProxyRelay(): void {
 }
 
 /**
+ * Cross-review F3 (opus2): closes every registered relay whose registry key
+ * is NOT in `referencedKeys` — the incremental half of `closeProxyRelay` for
+ * long-lived hosts (desktop main). `prewarmProxyRelays` recomputes the set of
+ * upstreams the CURRENT settings + boot env can materialise; a relay left
+ * over from a PREVIOUS pass (a rotated profile password/url, a deleted
+ * profile, an edited shell export) no longer has a consumer, but its
+ * listener kept answering on 127.0.0.1 with the OLD credential attached to
+ * every hop. Keys are matched through `relayRegistryKey` (the SAME
+ * normalisation the registry caches under), so a caller that collected raw
+ * upstream strings normalises identically. In-flight resolves (F1) are left
+ * alone — their own generation check (F2) decides their fate.
+ */
+export function closeUnreferencedProxyRelays(referencedKeys: readonly string[]): void {
+  const referenced = new Set(referencedKeys);
+  for (const [key, relay] of relays) {
+    if (!referenced.has(key)) {
+      relay.close();
+      relays.delete(key);
+    }
+  }
+}
+
+/**
  * The one proxy-family value in `env` that carries credentials — searched in
  * HTTPS_PROXY/https_proxy/HTTP_PROXY/http_proxy order FIRST (the names a
  * child's tools apply with the strongest precedence), then across the REST of
  * the family `sanitizeChildEnv` drops (ALL_PROXY, npm_config_proxy, … —
  * cross-review F4). Returns the FIRST credentialed value, or undefined when
  * every present member is credential-free. Detection reuses the exact
- * TASK.135 rule: a literal `@` means userinfo. (Taskana 4685 rework: the
- * relay URL's OWN `anycode:<token>@` userinfo does not reach this detector —
- * the host env carries no relay URLs, only upstream ones.)
+ * TASK.135 rule: a literal `@` means userinfo — EXCEPT the relay URL's own
+ * `anycode:<token>@` shape (cross-review F5a): the host env of a NESTED
+ * anycode process (a CLI/host spawned as a Bash child of this one) inherits
+ * the parent's relay URL as its HTTPS_PROXY, and relaying THAT would chain a
+ * second relay in front of the parent's — the parent relay already owns the
+ * credential, a relay-of-a-relay only adds a hop. Such values are skipped,
+ * not returned.
  */
 function credentialedProxyValue(env: NodeJS.ProcessEnv): string | undefined {
-  for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
-    const value = env[name];
-    if (typeof value === "string" && value.includes("@")) {
-      return value;
+  return credentialedProxyValues(env, 1)[0];
+}
+
+/**
+ * The plural boot scan (cross-review F5b): EVERY distinct credentialed
+ * upstream in `env`, in the same family order the singular scan uses. A
+ * shell with DIFFERENT credentialed HTTP_PROXY and HTTPS_PROXY upstreams
+ * needs a relay for EACH (blocker B2: one relay per upstream), and the
+ * first-only scan left the second upstream's children going direct behind an
+ * authenticating proxy. Deduplicated by exact string (the registry key
+ * normalises case/slash on its own); relay-shaped values are skipped exactly
+ * as in the singular scan.
+ */
+export function credentialedProxyValuesForRelay(env: NodeJS.ProcessEnv): string[] {
+  return credentialedProxyValues(env, Number.POSITIVE_INFINITY);
+}
+
+/** Shared body of the two scans above: up to `limit` distinct credentialed upstreams, relay-shaped values skipped. */
+function credentialedProxyValues(env: NodeJS.ProcessEnv, limit: number): string[] {
+  const seen = new Set<string>();
+  const found: string[] = [];
+  const consider = (value: string | undefined): void => {
+    if (found.length >= limit) {
+      return;
     }
+    if (typeof value !== "string" || !value.includes("@") || isRelayUrlShaped(value)) {
+      return;
+    }
+    if (!seen.has(value)) {
+      seen.add(value);
+      found.push(value);
+    }
+  };
+  for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
+    consider(env[name]);
   }
   for (const [name, value] of Object.entries(env)) {
     if (name === "HTTPS_PROXY" || name === "https_proxy" || name === "HTTP_PROXY" || name === "http_proxy") {
       continue; // already scanned above
     }
-    if (typeof value === "string" && isProxyVarName(name) && value.includes("@")) {
-      return value;
+    if (typeof value === "string" && isProxyVarName(name)) {
+      consider(value);
     }
   }
-  return undefined;
+  return found;
+}
+
+/**
+ * True for a value SHAPED like one of this module's relay URLs
+ * (`http://anycode:<token>@127.0.0.1:<port>`), regardless of whether THIS
+ * process minted it (cross-review F5a). The scan-side skip is deliberately
+ * shape-based, NOT registry-gated like `isCredentialFreeRelayUrl`: a nested
+ * anycode's env holds the PARENT's relay URL — minted by another process, so
+ * a registry check would MISS it — and fronting it with a second relay is
+ * wrong regardless of who minted it. The user `anycode` and the loopback
+ * host are ours alone (no real corporate proxy is `anycode@127.0.0.1`), so
+ * the shape test is exact for this purpose.
+ */
+function isRelayUrlShaped(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === "http:" && url.hostname === "127.0.0.1" && url.username === RELAY_URL_USER && url.password !== "";
 }
 
 /**

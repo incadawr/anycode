@@ -57,7 +57,14 @@ import { NodeGitAdapter } from "@anycode/core/node-git";
 // sanctioned route for these two symbols — see core/src/index.ts).
 import { ARTIFACT_MAX_AGE_MS, NodeArtifactStore } from "@anycode/core";
 import { artifactsRootFor } from "../shared/artifacts-root.js";
-import { proxyRelayUrl, resolveProxyRelay, credentialedProxyValueForRelay } from "@anycode/core/proxy-relay";
+import {
+  closeProxyRelay,
+  closeUnreferencedProxyRelays,
+  credentialedProxyValuesForRelay,
+  proxyRelayUrl,
+  relayRegistryKey,
+  resolveProxyRelay,
+} from "@anycode/core/proxy-relay";
 import {
   catalogProviderIds,
   findCatalogEntry,
@@ -1093,6 +1100,15 @@ function relayUrlForUpstream(upstreamUrl: string): string | undefined {
  * corresponding carriers degrade fail-closed to `direct`. Fire-and-forget on
  * boot; awaited inside `refreshProviderState` so a settings change re-warms
  * before the mutation event reaches the renderer.
+ *
+ * Cross-review F3/F5b (opus2): the shell upstream uses the PLURAL scan (each
+ * distinct credentialed shell upstream gets its relay), and a relay whose
+ * upstream is no longer referenced by the CURRENT settings + boot env is
+ * CLOSED here — a changed profile password/url otherwise left the OLD relay
+ * listening on its loopback port, still fronting the OLD credential, while
+ * the sync sites silently read the new one (or nothing). Every non-refused
+ * upstream in this pass is referenced by definition; everything else in the
+ * registry is stale.
  */
 async function prewarmProxyRelays(current: AnycodeSettings): Promise<void> {
   const upstreams = new Set<string>();
@@ -1101,12 +1117,11 @@ async function prewarmProxyRelays(current: AnycodeSettings): Promise<void> {
       upstreams.add(proxy.url);
     }
   };
-  // The shell's own credentialed proxy (if any) needs its relay too: the
+  // The shell's own credentialed proxies (if any) need their relays too: the
   // doctor/login children main spawns read `bootEnv`'s proxy family through
-  // the passthrough allowlist, and `doctorRelayUrl` below swaps exactly this
-  // value for its relay.
-  const shellUpstream = credentialedProxyValueForRelay(bootEnv);
-  if (shellUpstream !== undefined) {
+  // the passthrough allowlist, and `doctorRelayUrl` below swaps exactly these
+  // values for their relays (F5b: ALL of them, not only the first).
+  for (const shellUpstream of credentialedProxyValuesForRelay(bootEnv)) {
     upstreams.add(shellUpstream);
   }
   // Every scope the ladder can resolve for the CURRENT document: the app
@@ -1123,6 +1138,12 @@ async function prewarmProxyRelays(current: AnycodeSettings): Promise<void> {
   await Promise.all(
     [...upstreams].map((upstream) => resolveProxyRelay(upstream).catch(() => undefined)),
   );
+  // F3: close relays whose upstream fell out of reference (a rotated profile
+  // password/url, a deleted profile, an edited shell). The map from registry
+  // key to handle lives behind `closeUnreferencedProxyRelays` (core); refused
+  // upstreams are NOT closed-around — their warn memory stays so a refused
+  // upstream does not re-warn on every pass.
+  closeUnreferencedProxyRelays([...upstreams].map((upstream) => relayRegistryKey(upstream)).filter((key) => key !== undefined));
 }
 
 /**
@@ -1134,7 +1155,7 @@ async function prewarmProxyRelays(current: AnycodeSettings): Promise<void> {
  * value's relay, never a relay fronting some other upstream.
  */
 function doctorRelayUrl(): string | undefined {
-  const upstream = credentialedProxyValueForRelay(bootEnv);
+  const upstream = credentialedProxyValuesForRelay(bootEnv)[0];
   return upstream === undefined ? undefined : proxyRelayUrl(upstream);
 }
 
@@ -3073,6 +3094,13 @@ async function shutdownEverything(): Promise<void> {
   // Preview windows (cut §2.5): synchronous destroy, no write-behind queue to
   // drain — closed ahead of the awaited teardown below, same as the updater.
   previewHost?.closeAll();
+  // Taskana 4685 cross-review F3: every relay THIS process minted dies with
+  // it. The relays answer on 127.0.0.1 with the upstream credential attached
+  // to every hop — a listener that outlived the app (until the OS reaped the
+  // process) had no owner and no path to teardown. Idempotent, so the
+  // `will-quit` backstop below can repeat it for a quit that never routed
+  // through `before-quit`.
+  closeProxyRelay();
   await Promise.allSettled([
     activeManager !== null && activeManager.count() > 0 ? activeManager.shutdownAllTabHosts() : Promise.resolve(),
     activeOnboarding?.shutdown() ?? Promise.resolve(),
@@ -3102,6 +3130,11 @@ app.on("will-quit", () => {
   // Backstop alongside the codex-children one below (cut §2.5): idempotent,
   // so a completed `before-quit`/window-closed pass finds nothing to do here.
   previewHost?.closeAll();
+  // Taskana 4685 cross-review F3: same idempotence argument for the proxy
+  // relays — the `shutdownEverything` pass already closed them; a quit that
+  // skipped that pass still must not leave a credential-forwarding listener
+  // to the OS's process reaper.
+  closeProxyRelay();
 });
 app.on("will-quit", (event) => {
   if (liveCodexChildCount() === 0) return;

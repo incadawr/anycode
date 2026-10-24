@@ -263,7 +263,7 @@ import {
   withWorkflows,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { closeProxyRelay, credentialedProxyValueForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
+import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
 import type {
   AgentBridgeCatalogEntry,
   AgentEvent,
@@ -2287,10 +2287,10 @@ async function boot(): Promise<void> {
     // NodeExecutionAdapter/terminal spawn sites re-read it per spawn).
     // No-op (settled, no server) when no proxy var carries credentials.
     // Taskana 4685 rework: one relay PER upstream (the registry is keyed by
-    // the normalized credentialed URL); the boot scan starts the relay for
-    // this fork's first credentialed env value, later callers may add more.
-    const bootUpstream = credentialedProxyValueForRelay(process.env);
-    if (bootUpstream !== undefined) {
+    // the normalized credentialed URL). Cross-review F5b: the PLURAL scan —
+    // distinct credentialed HTTP vs HTTPS upstreams each need their own
+    // relay before the first spawn, not only the family's first value.
+    for (const bootUpstream of credentialedProxyValuesForRelay(process.env)) {
       await resolveProxyRelay(bootUpstream);
     }
     // Selection/probe is deliberately before loadEnvConfig: an external engine

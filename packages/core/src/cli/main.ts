@@ -45,7 +45,7 @@ import { NodeArtifactStore } from "../adapters/node/node-artifacts.js";
 // Credential-free loopback proxy relay (TASK.135 follow-up / Taskana 4074):
 // started before the first child spawn when the env holds a credentialed
 // proxy; the exec adapter below re-reads its URL per spawn.
-import { closeProxyRelay, credentialedProxyValueForRelay, resolveProxyRelay } from "../adapters/node/proxy-relay.js";
+import { closeProxyRelay, credentialedProxyValuesForRelay, resolveProxyRelay } from "../adapters/node/proxy-relay.js";
 import { ConversationHistory } from "../context/history.js";
 import { deriveSessionTitle, generateSessionTitle, sanitizeTitleSource } from "../context/session-title.js";
 import { createDefaultTokenizer } from "../context/tokenizer.js";
@@ -628,9 +628,11 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   // credentialed proxy value in `env` (process.env in production, the
   // injected test env otherwise — the same source the adapter's spawns read)
   // and starts the relay for THAT upstream; the relay registry keeps one
-  // relay per distinct upstream.
-  const bootUpstream = credentialedProxyValueForRelay(env);
-  if (bootUpstream !== undefined) {
+  // relay per distinct upstream. Cross-review F5b: the PLURAL scan — a shell
+  // with distinct credentialed HTTP vs HTTPS upstreams needs a relay for
+  // EACH, and the first-only scan left the second upstream's children going
+  // direct behind an authenticating proxy.
+  for (const bootUpstream of credentialedProxyValuesForRelay(env)) {
     await resolveProxyRelay(bootUpstream);
   }
 
