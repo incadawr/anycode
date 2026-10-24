@@ -22,36 +22,32 @@
  * https:// (TLS-to-proxy) upstream is the ONE thing this relay refuses —
  * supporting it needs a TLS client per hop (a connect+handshake state machine
  * node:http cannot express without a tls socket), which is not trivial, so
- * `createProxyRelay` returns `undefined` and the caller keeps TASK.135's plain
+ * `resolveProxyRelay` returns `undefined` and the caller keeps TASK.135's plain
  * drop behaviour (log once, children go direct). Engine tabs (claude/codex)
  * keep receiving the upstream proxy URL themselves and are unaffected — that
  * half is out of scope by decision; a separate card can relay them later.
  *
- ── wire behaviour ──
+ * ── wire behaviour ──
  *  - `CONNECT host:port` (HTTPS tunnelling): open a socket to the upstream
  *    proxy, send `CONNECT` with `Proxy-Authorization`, pipe both ways once
  *    upstream answers 200. A non-200 CONNECT answer is relayed to the client
  *    verbatim (status line + headers + whatever body bytes arrived) and both
  *    sides are then torn down.
  *  - plain HTTP absolute-URI requests: forwarded to the upstream proxy with
- *    `Proxy-Authorization` added; the response is piped back byte-for-byte.
- *    Only bytes that are already buffered when the header completes are
- *    inspected (to learn the intended target for `connectUpstream`); request
- *    BODY bytes after the header are piped through untouched.
+ *    `Proxy-Authorization` added and hop-by-hop headers stripped; framing is
+ *    re-done by node's own client/server (no raw byte splicing). Origin-form
+ *    requests (`GET /x`, what a DNS-rebound browser page would send) are
+ *    refused with 400 — they are not proxy requests and must never reach the
+ *    upstream with the credential attached.
  *
- ── lifecycle ──
-/**
  * ── lifecycle ──
- *  - `createProxyRelay(upstreamUrl)` NEVER throws: an unparseable URL, a
- *    missing port or an https:// upstream yields `undefined` (the drop
- *    fallback). Binding is the one asynchronous corner (node populates the
- *    chosen port after the next macrotask), so the factory STASHES the
- *    pending server on an internal registry keyed by the (later) port and the
- *    await-able surface is `resolveProxyRelay` — callers that can await (the
- *    boot paths) use it, and callers that cannot (a spawn already in flight)
- *    simply miss the relay for that one spawn, exactly like a `system` proxy
- *    profile's honest first-direct window. A bind failure also collapses to
- *    `undefined` — callers have ONE failure mode to handle.
+ *  - `resolveProxyRelay(env)` NEVER throws: an unparseable URL, a missing
+ *    port or an https:// upstream yields `undefined` (the drop fallback), and
+ *    so does a bind failure — callers have ONE failure mode to handle. Binding
+ *    is asynchronous, so callers that can await (the boot paths) use it, and
+ *    sync spawn sites read `proxyRelayUrl()` — a spawn before the bind settles
+ *    simply misses the relay, exactly like a `system` proxy profile's honest
+ *    first-direct window.
  *  - `relay.url` is the credential-free `http://127.0.0.1:port` string to feed
  *    `buildChildEnv`'s `relayUrl`.
  *  - `relay.close()` destroys every tracked socket (client-, upstream- and
@@ -178,30 +174,80 @@ export interface ProxyRelay {
   close(): void;
 }
 
+/** RFC 9110 §7.6.1 hop-by-hop headers (plus the legacy `proxy-connection`); never forwarded. */
+const HOP_BY_HOP = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-connection",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "upgrade",
+]);
+
+/** Pre-200 CONNECT reply cap: an upstream that never ends its header must not grow memory unboundedly. */
+const MAX_CONNECT_REPLY_HEADER_BYTES = 16 * 1024;
+
+/**
+ * Copies `headers` minus the hop-by-hop set and minus every token the
+ * `Connection` header itself names. `transfer-encoding`/`content-length` are
+ * KEPT: node's client/server re-frame the body from them (its strict parser
+ * already refused any CL+TE conflict on the way in).
+ */
+export function stripHopByHop(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+  const named = new Set(
+    String(headers.connection ?? "")
+      .split(",")
+      .map((token) => token.trim().toLowerCase())
+      .filter((token) => token !== ""),
+  );
+  const out: http.OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined || HOP_BY_HOP.has(name) || named.has(name)) {
+      continue;
+    }
+    out[name] = value;
+  }
+  return out;
+}
+
 /** Builds the fully-wired relay server (request + connect + peer-check + socket set) without listening. */
 function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Server; sockets: Set<net.Socket> } {
   /** Every live socket in both directions, so close() can tear the world down. */
   const sockets = new Set<net.Socket>();
+  // A DEDICATED agent, never `http.globalAgent`: under NODE_USE_ENV_PROXY=1
+  // (which the desktop host fork sets) node's global agent itself honours
+  // HTTP_PROXY, so the relay's upstream hop would be proxied a second time.
+  const upstreamAgent = new http.Agent({ keepAlive: false });
 
   const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
-    // Plain-HTTP absolute-URI proxying. The request line itself is forwarded
-    // verbatim (absolute URI included), which is exactly what an HTTP forward
-    // proxy expects to receive.
+    // Plain-HTTP absolute-URI proxying. Anything else (origin-form `GET /x`,
+    // `*`) is not a forward-proxy request — refuse it before the credential
+    // is attached to anything.
+    if (req.url === undefined || !/^http:\/\//i.test(req.url)) {
+      res.writeHead(400, { "content-type": "text/plain", connection: "close" });
+      res.end("anycode proxy relay: absolute http:// request URI required\n");
+      return;
+    }
     const upstreamReq = http.request(
       {
         host: endpoint.host,
         port: endpoint.port,
         method: req.method,
         path: req.url,
-        headers: { ...req.headers, "proxy-authorization": endpoint.proxyAuthorization },
+        agent: upstreamAgent,
+        headers: { ...stripHopByHop(req.headers), "proxy-authorization": endpoint.proxyAuthorization },
       },
       (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+        res.writeHead(upstreamRes.statusCode ?? 502, stripHopByHop(upstreamRes.headers));
         upstreamRes.pipe(res);
       },
     );
     upstreamReq.on("error", () => {
       res.destroy();
+    });
+    req.on("error", () => {
+      upstreamReq.destroy();
     });
     res.on("close", () => {
       upstreamReq.destroy();
@@ -244,6 +290,10 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
       headerBuffer = Buffer.concat([headerBuffer, chunk]);
       const headerEnd = headerBuffer.indexOf("\r\n\r\n");
       if (headerEnd === -1) {
+        if (headerBuffer.length > MAX_CONNECT_REPLY_HEADER_BYTES) {
+          clientSocket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+          upstreamSocket.destroy();
+        }
         return;
       }
       const statusLine = headerBuffer.subarray(0, headerBuffer.indexOf("\r\n")).toString("latin1");
@@ -272,13 +322,29 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
     };
     upstreamSocket.on("data", onUpstreamData);
     upstreamSocket.on("error", () => {
-      if (!connected) {
+      if (!connected && !clientSocket.writableEnded) {
+        // end(), not destroy(): destroy() would discard the 502 unsent.
         clientSocket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+      } else {
+        clientSocket.destroy();
       }
-      clientSocket.destroy();
     });
     clientSocket.on("error", () => {
       upstreamSocket.destroy();
+    });
+    // Either side fully closing tears the other down (graceful FINs still
+    // propagate first through pipe()'s end(); this catches resets, a client
+    // that leaves before the upstream answered, and close()).
+    clientSocket.on("close", () => {
+      upstreamSocket.destroy();
+    });
+    upstreamSocket.on("close", () => {
+      if (connected || clientSocket.writableEnded) {
+        // Flush what is queued (tunnel tail, a relayed refusal, a 502).
+        clientSocket.end();
+      } else {
+        clientSocket.destroy();
+      }
     });
     if (head.length > 0) {
       // Client payload that arrived with the CONNECT request itself.
@@ -318,26 +384,6 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
 
   return { server, sockets };
 }
-// ── pending-bind registry ──
-//
-// `server.listen(0, "127.0.0.1")` only populates `address()` on the NEXT
-// macrotask (measured on node 22.13: `null` synchronously, the AddressInfo on
-// `process.nextTick`). A sync factory therefore cannot return a port it does
-// not have yet. Instead of lying or crashing, the factory parks the
-// half-listening server here; `resolveProxyRelay` (the await-able half)
-// settles it once the port is known (or the bind failed) and hands back the
-// SAME relay handle every later resolve returns. Entries are removed the
-// moment they settle, so the registry never grows with use.
-
-interface PendingRelay {
-  server: http.Server;
-  sockets: Set<net.Socket>;
-  settle: (relay: ProxyRelay | undefined) => void;
-}
-
-/** Factories' pending binds — see the block comment above. */
-const pendingRelays = new Set<PendingRelay>();
-
 /**
  * Starts (or returns the already-started) loopback relay for the FIRST
  * credentialed proxy found in `env` — the await-able half every boot path
@@ -435,8 +481,7 @@ function credentialedProxyValue(env: NodeJS.ProcessEnv): string | undefined {
 type RefuseReason = "no_userinfo" | "unsupported_scheme" | "unparseable_url" | "no_port" | "bind_failed";
 
 /**
- * The await-able core of the factory: same wire behaviour as
- * `createProxyRelay`, but settles only once the OS has actually assigned the
+ * The await-able relay factory: settles only once the OS has actually assigned the
  * port (or the bind failed), which is the honest version of "the relay is up".
  */
 async function createProxyRelayAsync(
@@ -465,29 +510,19 @@ async function createProxyRelayAsync(
 
   const { server, sockets } = buildRelayServer(endpoint);
 
-  const relay = await new Promise<ProxyRelay | undefined>((resolve) => {
-    const pending: PendingRelay = {
-      server,
-      sockets,
-      settle: (result) => {
-        pendingRelays.delete(pending);
-        resolve(result);
-      },
-    };
-    pendingRelays.add(pending);
-
+  const relay = await new Promise<ProxyRelay | undefined>((settle) => {
     server.on("error", () => {
       // A bind/EADDR* failure lands here: degrade to the drop behaviour,
       // never take the host down.
-      pending.settle(undefined);
+      settle(undefined);
     });
     server.listen(0, RELAY_HOST, () => {
       const address = server.address();
       if (address === null || typeof address === "string") {
-        pending.settle(undefined);
+        settle(undefined);
         return;
       }
-      pending.settle({
+      settle({
         url: `${RELAY_SCHEME}://${RELAY_HOST}:${address.port}`,
         port: address.port,
         close(): void {

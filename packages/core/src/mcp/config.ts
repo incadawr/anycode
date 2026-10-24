@@ -24,11 +24,8 @@
 import { z } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { McpHttpServerSpec, McpServerSpec, McpStdioServerSpec } from "../ports/mcp.js";
-// Lazy require-style seam to the adapter layer: mcp/config.ts is a pure loader
-// (no node-adapter imports by design — it runs under injected fs ports in
-// tests), while the scrub + relay URL live in adapters/node. The indirection
-// keeps the import graph acyclic (adapters/node imports mcp spec types, not
-// this loader) and lets tests stub both halves.
+// The stdio env scrub + relay URL live in adapters/node (TASK.135 / Taskana
+// 4074); neither module imports this loader back, so the graph stays acyclic.
 import { sanitizeChildEnv } from "../adapters/node/child-env.js";
 import { proxyRelayUrl } from "../adapters/node/proxy-relay.js";
 

@@ -19,6 +19,7 @@ import {
   isLoopbackPeer,
   parseUpstreamProxyUrl,
   resolveProxyRelay,
+  stripHopByHop,
 } from "./proxy-relay.js";
 
 /** Fixture credential — never asserted to appear anywhere client-side. */
@@ -256,19 +257,59 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
   });
 });
 
-/** A tiny TCP echo target for the CONNECT tunnel tests (kept for future tunnel-through cases). */
-function startEchoTarget(): Promise<{ server: net.Server; port: number }> {
-  const server = net.createServer((socket) => {
-    socket.write("ECHO-HELLO");
-    socket.pipe(socket);
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        throw new Error("echo target failed to listen");
-      }
-      resolve({ server, port: address.port });
+describe("proxy relay hardening (review follow-up)", () => {
+  it("stripHopByHop drops hop-by-hop and Connection-named headers, keeps framing", () => {
+    const out = stripHopByHop({
+      connection: "keep-alive, x-secret-hop",
+      "keep-alive": "timeout=5",
+      "proxy-connection": "keep-alive",
+      "proxy-authorization": "Basic client-supplied",
+      upgrade: "websocket",
+      te: "trailers",
+      "x-secret-hop": "1",
+      "transfer-encoding": "chunked",
+      "content-type": "text/plain",
+      host: "example.com",
     });
+    expect(out).toEqual({ "transfer-encoding": "chunked", "content-type": "text/plain", host: "example.com" });
   });
-}
+
+  it("refuses an origin-form request with 400 and never contacts the upstream", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.get({ host: "127.0.0.1", port: relay!.port, path: "/x", agent: false }, (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        req.on("error", reject);
+      });
+      expect(status).toBe(400);
+      expect(upstream.auth.request).toEqual([]);
+    } finally {
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+
+  it("close() tears down a live CONNECT tunnel on both sides", async () => {
+    const upstream = await startFakeUpstream();
+    const upstreamSockets: net.Socket[] = [];
+    upstream.server.on("connect", (_req, socket: net.Socket) => upstreamSockets.push(socket));
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    const { socket } = await connectThrough(relay!.port, "example.com:443");
+    try {
+      const clientClosed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+      const upstreamClosed = new Promise<void>((resolve) => upstreamSockets[0]!.once("close", () => resolve()));
+      relay!.close();
+      await Promise.all([clientClosed, upstreamClosed]);
+      expect(socket.destroyed).toBe(true);
+    } finally {
+      socket.destroy();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+});
