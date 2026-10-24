@@ -193,12 +193,12 @@ turn/start's sandboxPolicy (workspace-write, the workspace plus the private
 dir as writable roots, both tmp exclusions) and the `env` prefix mirrors the
 app-server spawn env:
 
-    codex sandbox \
+    codex sandbox -C "$WS" \
       -c 'sandbox_mode="workspace-write"' \
-      -c 'sandbox_workspace_write.writable_roots=["'"$WS"','""$PRIV""']' \
+      -c 'sandbox_workspace_write.writable_roots=["'"$WS"'","'"$PRIV"'"]' \
       -c 'sandbox_workspace_write.exclude_tmpdir_env_var=true' \
       -c 'sandbox_workspace_write.exclude_slash_tmp=true' \
-      -- env TMPDIR="$PRIV" TMP="$PRIV" TEMP="$PRIV" TMPPREFIX="$PRIV/zsh" \
+      -- env WS="$WS" TMPDIR="$PRIV" TMP="$PRIV" TEMP="$PRIV" TMPPREFIX="$PRIV/zsh" \
          /bin/zsh -c 'touch /tmp/x'
 
  replacing the final command with each check below (same prefix):
