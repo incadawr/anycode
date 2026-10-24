@@ -35,6 +35,7 @@ import type { ConnectionPhase, TurnState } from "../store.js";
 import { Collapse, Dot, Globe, History, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { usePreviewStore } from "../preview/preview-store.js";
+import { useDockStore } from "../dock/dock-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { PREVIEW_TRANSFERRED_TEXT, type ToastKind } from "../toasts.js";
 import type { PreviewChangedPayload, PreviewContainerKind, PreviewPanelInfo } from "../../../shared/preview-panel.js";
@@ -204,9 +205,14 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
           console.warn("[SessionHeader] setContainer failed", error);
         });
     } else {
+      // Taskana 4703: picking a panel item focuses its DOCK TAB (the
+      // tab strip replaced the picker). The `select` call stays the main
+      // path; the dock focus is what actually mounts the body (D7's
+      // previewMounted follows the ACTIVE tab).
       window.anycode.previewPanel.select(tabId, item.previewId).catch((error: unknown) => {
         console.warn("[SessionHeader] select failed", error);
       });
+      useDockStore.getState().focus(`preview:${item.previewId}`);
     }
     setPreviewMenuOpen(false);
   }

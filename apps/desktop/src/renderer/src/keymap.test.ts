@@ -190,6 +190,7 @@ describe("ACTION_CATALOG (§1.4)", () => {
       "sidebar.search",
       "tab.activate",
       "mode.focus",
+      "dock.toggle",
       "turn.interrupt",
     ]);
     expect(new Set(catalogActions).size).toBe(catalogActions.length); // no dupes
@@ -198,7 +199,15 @@ describe("ACTION_CATALOG (§1.4)", () => {
   it("marks only tab.activate and turn.interrupt non-editable", () => {
     const nonEditable = ACTION_CATALOG.filter((m) => !m.editable).map((m) => m.action);
     expect(nonEditable).toEqual(["tab.activate", "turn.interrupt"]);
-    expect(ACTION_CATALOG.filter((m) => m.editable)).toHaveLength(8);
+    expect(ACTION_CATALOG.filter((m) => m.editable)).toHaveLength(9);
+  });
+
+  it("dock.toggle (Taskana 4703): default ⌘\\ / Ctrl+\\, editable, in the sweep", () => {
+    expect(bindingFor("dock.toggle")).toEqual({ action: "dock.toggle", key: "\\", mod: true, shift: false });
+    expect(matchKeymap(stroke({ key: "\\", metaKey: true }), "darwin")).toEqual({ action: "dock.toggle" });
+    expect(matchKeymap(stroke({ key: "\\", ctrlKey: true }), "win32")).toEqual({ action: "dock.toggle" });
+    expect(formatBinding(bindingFor("dock.toggle")!, "darwin")).toBe("⌘\\");
+    expect(ACTION_CATALOG.find((m) => m.action === "dock.toggle")?.editable).toBe(true);
   });
 
   it("gives every entry a non-empty name and description", () => {

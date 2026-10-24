@@ -46,6 +46,15 @@ export interface AutomationWebContents {
 export interface AutomationWindow {
   isDestroyed(): boolean;
   webContents: AutomationWebContents;
+  /**
+   * Taskana 4703 (`POST /window/size`): the dock-smoke's drawer/column legs
+   * need to drive the REAL window size. OPTIONAL so every existing fixture
+   * (and a window type without it) stays structurally valid — an absent
+   * member makes `windowSetSize` answer `{ok:false, reason:"unsupported"}`
+   * instead of throwing. `main/index.ts` passes the real Electron
+   * `BrowserWindow`, whose `setContentSize(width, height)` is this shape.
+   */
+  setContentSize?(width: number, height: number): void;
 }
 
 /** Structural view of Electron's `app` (only the two members the channel uses). */
@@ -1391,6 +1400,37 @@ export function profileRebuild(deps: HandlerDeps): Promise<unknown> {
 
 export function settingsLayoutState(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("settingsLayoutState", []);
+}
+
+// --- Dock probe/driver (Taskana 4703): thin wrappers over the frozen facade
+// contract, same discipline as the settings-geometry probe above — the
+// facade owns every guard (tab_not_present / tab_disabled), this layer only
+// forwards method + args. `windowSetSize` is main-plane (a page cannot
+// resize its own window), same posture as `screenshot()`. ---
+
+export function dockState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("dockLayoutState", []);
+}
+
+export function dockTabClick(deps: HandlerDeps, id: string): Promise<unknown> {
+  return deps.callFacade("dockTabClick", [id]);
+}
+
+export function dockTabClose(deps: HandlerDeps, id: string): Promise<unknown> {
+  return deps.callFacade("dockTabClose", [id]);
+}
+
+/** `POST /window/size {width,height}` (Taskana 4703): resizes the real window (dock mode legs). */
+export function windowSetSize(deps: HandlerDeps, width: number, height: number): { ok: true } | { ok: false; reason: string } {
+  const win = deps.getWindow();
+  if (win === null || win.isDestroyed()) {
+    return { ok: false, reason: "no_window" };
+  }
+  if (typeof win.setContentSize !== "function") {
+    return { ok: false, reason: "unsupported" };
+  }
+  win.setContentSize(width, height);
+  return { ok: true };
 }
 
 // --- Vision pane probe/driver (TASK.198 срез E2c): thin wrappers over the

@@ -138,6 +138,10 @@ import {
   visionProbe,
   visionTurnOff,
   settingsLayoutState,
+  dockState,
+  dockTabClick,
+  dockTabClose,
+  windowSetSize,
   lspPanelState,
   lspPanelToggle,
   hooksPanelState,
@@ -192,9 +196,14 @@ function fakeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
 }
 
 /** A fake AutomationWindow whose executeJavaScript returns a canned value. */
-function fakeWindow(executeJavaScript: (code: string) => Promise<unknown>, destroyed = false): AutomationWindow {
+function fakeWindow(
+  executeJavaScript: (code: string) => Promise<unknown>,
+  destroyed = false,
+  setContentSize?: (width: number, height: number) => void,
+): AutomationWindow {
   return {
     isDestroyed: () => destroyed,
+    ...(setContentSize !== undefined ? { setContentSize } : {}),
     webContents: {
       executeJavaScript: vi.fn(executeJavaScript),
       capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from("PNGDATA") })),
@@ -822,6 +831,43 @@ describe("Profile pane thin facade commands forward method + args (design/slice-
     const deps = fakeDeps();
     await settingsLayoutState(deps);
     expect(deps.callFacade).toHaveBeenCalledWith("settingsLayoutState", []);
+  });
+});
+
+describe("dock probe/driver + window size (Taskana 4703)", () => {
+  it("dockState -> callFacade('dockLayoutState', [])", async () => {
+    const deps = fakeDeps();
+    await dockState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("dockLayoutState", []);
+  });
+
+  it("dockTabClick -> callFacade('dockTabClick', [id])", async () => {
+    const deps = fakeDeps();
+    await dockTabClick(deps, "preview:abc");
+    expect(deps.callFacade).toHaveBeenCalledWith("dockTabClick", ["preview:abc"]);
+  });
+
+  it("dockTabClose -> callFacade('dockTabClose', [id])", async () => {
+    const deps = fakeDeps();
+    await dockTabClose(deps, "git");
+    expect(deps.callFacade).toHaveBeenCalledWith("dockTabClose", ["git"]);
+  });
+
+  it("windowSetSize resizes through the window's setContentSize", () => {
+    const setContentSize = vi.fn();
+    const deps = fakeDeps({ getWindow: () => fakeWindow(async () => ({}), false, setContentSize) });
+    expect(windowSetSize(deps, 760, 600)).toEqual({ ok: true });
+    expect(setContentSize).toHaveBeenCalledWith(760, 600);
+  });
+
+  it("windowSetSize answers no_window when the window is gone", () => {
+    const deps = fakeDeps({ getWindow: () => null });
+    expect(windowSetSize(deps, 760, 600)).toEqual({ ok: false, reason: "no_window" });
+  });
+
+  it("windowSetSize answers unsupported when the window has no setContentSize member", () => {
+    const deps = fakeDeps({ getWindow: () => fakeWindow(async () => ({})) });
+    expect(windowSetSize(deps, 760, 600)).toEqual({ ok: false, reason: "unsupported" });
   });
 });
 

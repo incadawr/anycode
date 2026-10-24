@@ -83,6 +83,7 @@ import {
   type ReplayTimer,
 } from "./replay.js";
 import { useSettingsStore, type SettingsStoreApi } from "./settings-store.js";
+import { useDockStore as dockStore } from "./dock/dock-store.js";
 import { groupAlwaysAllowRules } from "./permission-rules.js";
 import { ruleDisplayPattern, ruleHasPattern, ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
 import { slashQueryAt } from "./slash-menu.js";
@@ -1522,6 +1523,77 @@ export interface SettingsLayoutState {
   scrollbarGap: number | null;
 }
 
+/**
+ * `dockLayoutState()`'s shape (Taskana 4703): a live DOM-measured reading of
+ * the right-side dock — the squash defect's core numbers (conversation
+ * width, dock width/mode) have no store counterpart, exactly the
+ * settings-geometry probe's rationale (TASK.187 S5). `conversationWidth` is
+ * `.session-conversation`'s rendered width; `tabs[].id/kind/title/active`
+ * mirror the dock store's tab set (read through the store — the strip DOM
+ * and the store are one render apart, and the smoke needs the committed
+ * list, not a mid-render one); width/mode are the store's own
+ * clamped/mode values cross-checked against the panel's rendered
+ * `data-dock-mode`. An unmounted dock (no tabs) reads as `mounted:false`
+ * with empty tabs — a valid reading, not an error.
+ */
+export interface DockLayoutState {
+  mounted: boolean;
+  mode: "column" | "drawer" | null;
+  width: number | null;
+  /** `.session-conversation`'s live width — the number the whole fix exists to protect. */
+  conversationWidth: number | null;
+  tabs: { id: string; kind: string; title: string; active: boolean }[];
+}
+
+/**
+ * DOM accessor DI for the dock probe/driver (Taskana 4703), same
+ * injectable-for-tests discipline as `SettingsLayoutDom`. The click drivers
+ * fire REAL `.click()`s on the tab strip's own `[data-tab-id]` buttons and
+ * their `.dock-tab-close` children — the exact nodes the operator touches.
+ */
+export interface DockDom {
+  panelMode(): string | null;
+  panelWidth(): number | null;
+  conversationWidth(): number | null;
+  tabButton(id: string): { disabled: boolean } | null;
+  clickTab(id: string): boolean;
+  clickTabClose(id: string): boolean;
+}
+
+function realDockDom(): DockDom {
+  return {
+    panelMode: () => document.querySelector<HTMLElement>(".dock-panel")?.getAttribute("data-dock-mode") ?? null,
+    panelWidth: () => {
+      const el = document.querySelector<HTMLElement>(".dock-panel");
+      return el ? Math.round(el.getBoundingClientRect().width) : null;
+    },
+    conversationWidth: () => {
+      const el = document.querySelector<HTMLElement>(".session-conversation");
+      return el ? Math.round(el.getBoundingClientRect().width) : null;
+    },
+    tabButton: (id: string) => {
+      const el = document.querySelector<HTMLButtonElement>(`.dock-tab[data-tab-id="${CSS.escape(id)}"]`);
+      return el ? { disabled: el.disabled } : null;
+    },
+    clickTab: (id: string) => {
+      const el = document.querySelector<HTMLButtonElement>(`.dock-tab[data-tab-id="${CSS.escape(id)}"]`);
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    clickTabClose: (id: string) => {
+      const el = document.querySelector<HTMLButtonElement>(`.dock-tab[data-tab-id="${CSS.escape(id)}"] .dock-tab-close`);
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+  };
+}
+
 /** DOM accessor DI for the settings-geometry probe (TASK.187 S5), same injectable-for-tests discipline as `ProfilePaneDom` — the real one is the only implementation that touches `getBoundingClientRect`. */
 export interface SettingsLayoutDom {
   activePane(): string | null;
@@ -2829,6 +2901,15 @@ export interface AutomationFacade {
   // covers every one of them. No prior probe measured geometry at all, which
   // is exactly why the defect survived to a release. ──
   settingsLayoutState(): SettingsLayoutState;
+  // ── Right-side dock probe/driver (Taskana 4703) — `dockLayoutState` is a
+  // DEDICATED DOM-measured probe (conversation width is a layout fact, no
+  // store carries it — SettingsLayoutState's own rationale); the click
+  // drivers fire REAL clicks on the tab strip's own buttons. Shell-level
+  // probe: no tab_not_active refusals (there is exactly one dock per
+  // window, exactly like the settings geometry probe). ──
+  dockLayoutState(): DockLayoutState;
+  dockTabClick(id: string): FacadeResult;
+  dockTabClose(id: string): FacadeResult;
   // ── Slash-command menu probe/driver (design/slice-P7.23-cut.md §7 W4) — a
   // DEDICATED probe, every prior probe above stays byte-untouched. `draft`
   // doubles as the insert-assert (§7). `composerType`/`composerKey` drive the
@@ -6495,6 +6576,9 @@ export function createAutomationFacade(
   sidebarDom: SidebarDom = realSidebarDom(),
   // TASK.187 S5: appended at the END for the same reason.
   settingsLayoutDom: SettingsLayoutDom = realSettingsLayoutDom(),
+  // Taskana 4703: appended at the END for the same reason (every existing
+  // positional call site would shift otherwise).
+  dockDom: DockDom = realDockDom(),
   // TASK.191 slice S4: appended at the END for the same reason.
   workflowStepsDom: WorkflowStepsDom = realWorkflowStepsDom(),
   // TASK.198 срез E2c: appended at the END for the same reason as every DI
@@ -9142,6 +9226,39 @@ export function createAutomationFacade(
         // and never reach 0 even once the layout is correct.
         scrollbarGap: pane === null || container === null ? null : Math.round((container.right - pane.right) * 100) / 100,
       };
+    },
+
+    dockLayoutState(): DockLayoutState {
+      const mode = dockDom.panelMode();
+      const dockState = dockStore.getState();
+      return {
+        mounted: mode !== null,
+        mode: mode === "column" || mode === "drawer" ? mode : null,
+        width: dockDom.panelWidth(),
+        conversationWidth: dockDom.conversationWidth(),
+        tabs: dockState.tabs.map((tab) => ({
+          id: tab.id,
+          kind: tab.kind,
+          title: tab.title,
+          active: tab.id === dockState.activeTabId,
+        })),
+      };
+    },
+
+    dockTabClick(id: string): FacadeResult {
+      const button = dockDom.tabButton(id);
+      if (button === null) {
+        return { ok: false, reason: "tab_not_present" };
+      }
+      if (button.disabled) {
+        return { ok: false, reason: "tab_disabled" };
+      }
+      return dockDom.clickTab(id) ? { ok: true } : { ok: false, reason: "tab_not_present" };
+    },
+
+    dockTabClose(id: string): FacadeResult {
+      // The close affordance has no disabled state — presence is the only gate.
+      return dockDom.clickTabClose(id) ? { ok: true } : { ok: false, reason: "tab_not_present" };
     },
 
     slashMenuState(tabId: string): SlashMenuState | FacadeErr {

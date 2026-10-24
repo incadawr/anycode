@@ -64,7 +64,7 @@ import { WelcomeScreen } from "./components/WelcomeScreen.js";
 import { StartScreen } from "./components/StartScreen.js";
 import { SettingsDialog } from "./components/SettingsScreen.js";
 import { TerminalPanel } from "./components/TerminalPanel.js";
-import { PreviewPanel } from "./components/PreviewPanel.js";
+import { DockPanel } from "./components/DockPanel.js";
 import { useOverlayFlag } from "./preview/overlay-flag.js";
 import { usePanelMountState } from "./preview/panel-bridge.js";
 import { computePreviewPanelOpen, usePreviewStore } from "./preview/preview-store.js";
@@ -82,52 +82,19 @@ import {
 import { projectChildSplitRows } from "./child-split-projection.js";
 import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
+import { clampDockWidth, computeDockMode, derivePreviewTabs, DOCK_HANDLE_PX, type DockMode } from "./dock/dock-layout.js";
+import { selectDockOpen, useDockStore } from "./dock/dock-store.js";
 import { isSessionBusy, type SubagentSubStatus, type TranscriptBlock } from "./store.js";
 import "./settings.css";
 
 /** localStorage key for the renderer-only sidebar collapse flag (design §2.1). */
 const SIDEBAR_COLLAPSED_KEY = "anycode.sidebar.collapsed";
-const REVIEW_WIDTH_STORAGE_KEY = "anycode.review.width";
-const REVIEW_WIDTH_DEFAULT = 560;
-const REVIEW_WIDTH_MIN = 360;
-const REVIEW_WIDTH_MAX = 960;
 
-function readReviewWidth(): number {
-  const stored = Number(window.localStorage.getItem(REVIEW_WIDTH_STORAGE_KEY));
-  return Number.isFinite(stored) && stored >= REVIEW_WIDTH_MIN && stored <= REVIEW_WIDTH_MAX
-    ? stored
-    : REVIEW_WIDTH_DEFAULT;
-}
-
-// CUT.md §3 96-P2 item 3: the Preview panel's own width — same
-// storage-key/clamp/default shape as REVIEW_WIDTH_* above (D10), a fresh
-// localStorage key so the two panels' widths persist independently.
-const PREVIEW_WIDTH_STORAGE_KEY = "anycode.preview.width";
-const PREVIEW_WIDTH_DEFAULT = 640;
-const PREVIEW_WIDTH_MIN = 360;
-const PREVIEW_WIDTH_MAX = 1280;
-
-function readPreviewWidth(): number {
-  const stored = Number(window.localStorage.getItem(PREVIEW_WIDTH_STORAGE_KEY));
-  return Number.isFinite(stored) && stored >= PREVIEW_WIDTH_MIN && stored <= PREVIEW_WIDTH_MAX
-    ? stored
-    : PREVIEW_WIDTH_DEFAULT;
-}
-
-// CUT-S3 §3.1: the split stack's own width — same storage-key/clamp/default
-// shape as REVIEW_WIDTH_*/PREVIEW_WIDTH_* above, a fresh localStorage key so
-// all three panels' widths persist independently.
-const CHILD_SPLIT_WIDTH_STORAGE_KEY = "anycode.childSplit.width";
-const CHILD_SPLIT_WIDTH_DEFAULT = 480;
-const CHILD_SPLIT_WIDTH_MIN = 360;
-const CHILD_SPLIT_WIDTH_MAX = 960;
-
-function readChildSplitWidth(): number {
-  const stored = Number(window.localStorage.getItem(CHILD_SPLIT_WIDTH_STORAGE_KEY));
-  return Number.isFinite(stored) && stored >= CHILD_SPLIT_WIDTH_MIN && stored <= CHILD_SPLIT_WIDTH_MAX
-    ? stored
-    : CHILD_SPLIT_WIDTH_DEFAULT;
-}
+// Taskana 4703: the retired per-panel width keys (`anycode.review.width`,
+// `anycode.preview.width`, `anycode.childSplit.width`) are superseded by the
+// ONE dock width (dock-layout.ts's DOCK_WIDTH_STORAGE_KEY). The legacy keys
+// stay in users' storage, never read again — except the one-time
+// `anycode.preview.width` seed inside readDockWidth.
 
 // Stable empty-array identity for the "no previews yet" selector default —
 // a fresh `[]` literal on every render would make zustand see a "changed"
@@ -224,31 +191,19 @@ export function computeGitPanelOpen(panelOpen: boolean, shellGitReadOnly: boolea
 }
 
 /**
- * Grid-column composer for `.session-content-split-open` (design D10,
- * widened by CUT-S3 §3.1 with a third pair): the conversation column is
- * always `minmax(0, 1fr)`; an open Review (git) panel, Preview panel, and/or
- * the child split stack each add an `8px` resize-handle column followed by
- * their own width column. The child stack is always the RIGHTMOST column of
- * all three (any subset may be open at once) — exact copy of the git-panel
- * pattern, generalized to a third panel. Exported for the unit gate.
+ * Grid-column composer for `.session-content-split-open` (Taskana 4703,
+ * docs/development/dock.md): the conversation column is ALWAYS
+ * `minmax(min(420px,100%), 1fr)` — a real floor (the old `minmax(0,1fr)`
+ * collapsed to ~0 under stacked fixed columns, the root cause of the
+ * squash) — plus the ONE dock's `8px` handle + width columns when the dock
+ * is open in column mode. Drawer mode passes `dockOpen:false` (the dock is
+ * an absolute overlay; the conversation keeps full width). Exported for the
+ * unit gate.
  */
-export function computeSessionContentColumns(
-  gitOpen: boolean,
-  gitWidth: number,
-  previewOpen: boolean,
-  previewWidth: number,
-  childOpen: boolean,
-  childWidth: number,
-): string {
-  const columns = ["minmax(0, 1fr)"];
-  if (gitOpen) {
-    columns.push("8px", `${gitWidth}px`);
-  }
-  if (previewOpen) {
-    columns.push("8px", `${previewWidth}px`);
-  }
-  if (childOpen) {
-    columns.push("8px", `${childWidth}px`);
+export function computeSessionContentColumns(dockOpen: boolean, dockWidth: number): string {
+  const columns = ["minmax(min(420px,100%), 1fr)"];
+  if (dockOpen) {
+    columns.push("8px", `${dockWidth}px`);
   }
   return columns.join(" ");
 }
@@ -593,15 +548,23 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const transcript = useTabStore((state) => state.transcript);
 
   const reviewRootRef = useRef<HTMLDivElement>(null);
-  const [reviewWidth, setReviewWidth] = useState(readReviewWidth);
-  // CUT.md §3 96-P2 items 2/6: the Preview panel's own width + D12 gating —
-  // mounts iff the active tab has >=1 panel-container preview.
-  const [previewWidth, setPreviewWidth] = useState(readPreviewWidth);
-  // CUT-S3 §3.1: the split stack's own width, same shape as review/preview.
-  const [childSplitWidth, setChildSplitWidth] = useState(readChildSplitWidth);
+  // Taskana 4703: the ONE dock width + window-width tracking. `available` is
+  // the .session-content width (reviewRootRef measure), belt-window-resize.
+  const dockWidth = useDockStore((state) => state.width);
+  const dockTabs = useDockStore((state) => state.tabs);
+  const dockActiveTabId = useDockStore((state) => state.activeTabId);
+  const dockHidden = useDockStore((state) => state.hidden);
+  const dockOpenRaw = selectDockOpen(useDockStore.getState());
+  const dockOpen = dockTabs.length > 0 && !dockHidden && dockOpenRaw;
+  const [availableWidth, setAvailableWidth] = useState(() =>
+    typeof window === "undefined" ? 1280 : (document.querySelector(".session-content") as HTMLElement | null)?.getBoundingClientRect().width || window.innerWidth,
+  );
+  const dockMode: DockMode = computeDockMode(availableWidth);
+  const effectiveDockWidth = clampDockWidth(dockWidth, availableWidth);
+  // The dock participates in the grid only in column mode — drawer mode is
+  // an absolute overlay (conversation full width).
+  const splitOpen = dockOpen && dockMode === "column";
   const previews = usePreviewStore((state) => state.byTab[tabId]?.previews ?? EMPTY_PREVIEWS);
-  const previewPanelOpen = computePreviewPanelOpen(previews);
-  const splitOpen = gitPanelOpen || previewPanelOpen || childSplitOpen;
 
   // R8(c): OS notification on running→idle while hidden/blurred (active tab
   // only — cross-tab completion is R10).
@@ -610,12 +573,15 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   // D7: feeds panel-bridge's {activeTabId, panelMounted} half of the
   // gating triple. `tabId` here IS the renderer's active tab — ActiveTabBody
   // only ever renders for the currently active one (App.tsx's main-pane
-  // branch) — and `previewPanelOpen` mirrors exactly whether `<PreviewPanel>`
-  // is actually rendered below. The hook's own cleanup (on unmount OR any
-  // dependency change) republishes {null, false}, immediately superseded by
-  // the next render's fresh values when this is just a tab switch/toggle
-  // rather than a real unmount (D7's "never floats over a non-tab screen").
-  usePanelMountState(tabId, previewPanelOpen);
+  // branch) — and `previewMounted` mirrors exactly whether a preview body is
+  // actually rendered below (dock open AND a preview tab active). The hook's
+  // own cleanup (on unmount OR any dependency change) republishes
+  // {null, false}, immediately superseded by the next render's fresh values
+  // when this is just a tab switch/toggle rather than a real unmount (D7's
+  // "never floats over a non-tab screen"). Main keeps hiding the
+  // WebContentsView while a non-preview tab is active — D7 semantics preserved.
+  const previewMounted = dockOpen && dockTabs.some((tab) => tab.id === dockActiveTabId && tab.kind === "preview");
+  usePanelMountState(tabId, previewMounted);
 
   // Hydration read (CUT §3 96-P2 item 6): on mount AND every tab switch, pull
   // the current preview list for this tab — `onChanged` (subscribed once at
@@ -638,83 +604,108 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
     };
   }, [tabId]);
 
-  // D11: publish the visible panel width + handle (else 0) so NoticeStack can
-  // offset the toast stack instead of letting it sit under the view.
+  // D11: publish the visible dock width + handle (else 0) so NoticeStack can
+  // offset the toast stack instead of letting it sit under the view — column
+  // mode only; in drawer mode toasts sit under the dock by design (same as
+  // the LSP overlay today).
   useEffect(() => {
-    usePreviewStore.getState().setPanelInsetPx(previewPanelOpen ? previewWidth + 8 : 0);
-  }, [previewPanelOpen, previewWidth]);
+    usePreviewStore.getState().setPanelInsetPx(splitOpen ? effectiveDockWidth + DOCK_HANDLE_PX : 0);
+  }, [splitOpen, effectiveDockWidth]);
 
-  function beginReviewResize(event: ReactPointerEvent<HTMLDivElement>): void {
+  // Taskana 4703: the ONE dock resize path (mirror of the retired
+  // beginPreviewResize, now clamped live against the measured root width —
+  // the boot-time clamp is the `effectiveDockWidth` computation above).
+  function beginDockResize(event: ReactPointerEvent<HTMLDivElement>): void {
     event.preventDefault();
     const startX = event.clientX;
-    const startWidth = reviewWidth;
+    const startWidth = effectiveDockWidth;
     const rootWidth = reviewRootRef.current?.getBoundingClientRect().width ?? window.innerWidth;
-    // Leave the conversation enough room for its readable measure and composer.
-    const maxWidth = Math.max(REVIEW_WIDTH_MIN, Math.min(REVIEW_WIDTH_MAX, rootWidth - 320));
     let nextWidth = startWidth;
 
     function onMove(moveEvent: PointerEvent): void {
-      nextWidth = Math.min(maxWidth, Math.max(REVIEW_WIDTH_MIN, startWidth + startX - moveEvent.clientX));
-      setReviewWidth(nextWidth);
+      nextWidth = clampDockWidth(startWidth + startX - moveEvent.clientX, rootWidth);
+      useDockStore.setState({ width: nextWidth });
     }
 
     function onUp(): void {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      window.localStorage.setItem(REVIEW_WIDTH_STORAGE_KEY, String(nextWidth));
+      useDockStore.getState().setWidth(nextWidth); // persists on resize-end
     }
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
   }
 
-  // D10: exact mirror of beginReviewResize above, over previewWidth/PREVIEW_WIDTH_*.
-  function beginPreviewResize(event: ReactPointerEvent<HTMLDivElement>): void {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = previewWidth;
-    const rootWidth = reviewRootRef.current?.getBoundingClientRect().width ?? window.innerWidth;
-    const maxWidth = Math.max(PREVIEW_WIDTH_MIN, Math.min(PREVIEW_WIDTH_MAX, rootWidth - 320));
-    let nextWidth = startWidth;
-
-    function onMove(moveEvent: PointerEvent): void {
-      nextWidth = Math.min(maxWidth, Math.max(PREVIEW_WIDTH_MIN, startWidth + startX - moveEvent.clientX));
-      setPreviewWidth(nextWidth);
+  // Window-width tracking: remeasure the session-content width on window
+  // resize (the belt; every intra-grid shift is itself driven by these
+  // numbers) so mode flips and re-clamps follow the actual available width.
+  useEffect(() => {
+    function remeasure(): void {
+      const rect = reviewRootRef.current?.getBoundingClientRect();
+      setAvailableWidth(rect && rect.width > 0 ? rect.width : window.innerWidth);
     }
+    remeasure();
+    window.addEventListener("resize", remeasure);
+    return () => window.removeEventListener("resize", remeasure);
+  }, []);
 
-    function onUp(): void {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.localStorage.setItem(PREVIEW_WIDTH_STORAGE_KEY, String(nextWidth));
+  // ── Taskana 4703 tab-derivation effects: mirror each source surface into
+  // the dock's tab set. Each effect is [tabId]-scoped so a background tab's
+  // preview pushes never touch the dock (only the ACTIVE tab's
+  // ActiveTabBody runs them). ──
+
+  // Previews: panel-container previews → preview:<id> tabs. A NEW preview
+  // focuses its tab; an EXISTING preview's payload refresh must NOT steal
+  // focus. Vanished previews (closed or transferred to a window) drop their
+  // tabs; when the dropped one WAS active, focus the neighbor the store
+  // picked and select that preview main-side (so the WebContentsView
+  // follows the tab the user now sees).
+  const previewTabs = derivePreviewTabs(previews);
+  useEffect(() => {
+    const dock = useDockStore.getState();
+    const wanted = new Map(previewTabs.map((tab) => [tab.id, tab]));
+    // Open new tabs (focus only the genuinely-new ones).
+    for (const tab of previewTabs) {
+      if (!dock.tabs.some((candidate) => candidate.id === tab.id)) {
+        useDockStore.getState().open(tab);
+      }
     }
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
-  }
-
-  // CUT-S3 §3.1: exact mirror of beginReviewResize/beginPreviewResize above, over childSplitWidth/CHILD_SPLIT_WIDTH_*.
-  function beginChildSplitResize(event: ReactPointerEvent<HTMLDivElement>): void {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = childSplitWidth;
-    const rootWidth = reviewRootRef.current?.getBoundingClientRect().width ?? window.innerWidth;
-    const maxWidth = Math.max(CHILD_SPLIT_WIDTH_MIN, Math.min(CHILD_SPLIT_WIDTH_MAX, rootWidth - 320));
-    let nextWidth = startWidth;
-
-    function onMove(moveEvent: PointerEvent): void {
-      nextWidth = Math.min(maxWidth, Math.max(CHILD_SPLIT_WIDTH_MIN, startWidth + startX - moveEvent.clientX));
-      setChildSplitWidth(nextWidth);
+    // Drop tabs whose preview vanished.
+    for (const tab of dock.tabs) {
+      if (tab.kind === "preview" && !wanted.has(tab.id)) {
+        const wasActive = useDockStore.getState().activeTabId === tab.id;
+        useDockStore.getState().close(tab.id);
+        if (wasActive) {
+          const neighborTabId = useDockStore.getState().activeTabId;
+          const neighbor = neighborTabId !== null ? useDockStore.getState().tabs.find((candidate) => candidate.id === neighborTabId) : undefined;
+          if (neighbor && neighbor.kind === "preview") {
+            window.anycode.previewPanel.select(tabId, neighbor.id.slice("preview:".length)).catch((error: unknown) => {
+              console.warn("[ActiveTabBody] neighbor select failed", error);
+            });
+          }
+        }
+      }
     }
+  }, [tabId, previewTabs]);
 
-    function onUp(): void {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.localStorage.setItem(CHILD_SPLIT_WIDTH_STORAGE_KEY, String(nextWidth));
+  // Subagents split: entering split opens+focuses the tab; leaving closes it.
+  useEffect(() => {
+    if (childSplitOpen) {
+      useDockStore.getState().open({ id: "subagents", kind: "subagents", title: "Subagents" });
+    } else {
+      useDockStore.getState().close("subagents");
     }
+  }, [tabId, childSplitOpen]);
 
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
-  }
+  // Git panel: opening opens+focuses the tab; closing drops it.
+  useEffect(() => {
+    if (gitPanelOpen) {
+      useDockStore.getState().open({ id: "git", kind: "git", title: "Review" });
+    } else {
+      useDockStore.getState().close("git");
+    }
+  }, [tabId, gitPanelOpen]);
 
   // CUT-S3 §3.3: the split stack's rows, `order`-ordered, each resolved off
   // the master transcript exactly like ChildSessionPane/ChildHistoryPane
@@ -801,65 +792,29 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
         style={
           splitOpen
             ? {
-                gridTemplateColumns: computeSessionContentColumns(
-                  gitPanelOpen,
-                  reviewWidth,
-                  previewPanelOpen,
-                  previewWidth,
-                  childSplitOpen,
-                  childSplitWidth,
-                ),
+                gridTemplateColumns: computeSessionContentColumns(splitOpen, effectiveDockWidth),
               }
             : undefined
         }
       >
         <SessionSurface tabId={tabId} onToast={onToast} />
 
-        {gitPanelOpen && (
-          <div
-            className="review-resize-handle"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize Review panel"
-            onPointerDown={beginReviewResize}
+        {/* Taskana 4703: ONE dock column replaces the git/preview/subagents
+            stack. The mount gate is tabs+visible; drawer mode still mounts
+            (absolute overlay) but leaves the grid untouched above. */}
+        {dockOpen && (
+          <DockPanel
+            mode={dockMode}
+            width={effectiveDockWidth}
+            onResizeStart={beginDockResize}
+            onToast={onToast}
+            subagents={{ rows: childSplitRows, expandedId: childView.kind === "split" ? childView.expandedId : "", surface: childSplitSurface }}
           />
-        )}
-        {gitPanelOpen && <GitPanel />}
-
-        {previewPanelOpen && (
-          <div
-            className="review-resize-handle"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize Preview panel"
-            onPointerDown={beginPreviewResize}
-          />
-        )}
-        {previewPanelOpen && <PreviewPanel onToast={onToast} />}
-
-        {childView.kind === "split" && (
-          <div
-            className="review-resize-handle"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize Subagents panel"
-            onPointerDown={beginChildSplitResize}
-          />
-        )}
-        {childView.kind === "split" && (
-          <ChildSplitPane
-            rows={childSplitRows}
-            expandedId={childView.expandedId}
-            onExpandRow={(id) => childLayoutStore.getState().expandRow(tabId, id)}
-            onExitSplit={() => childLayoutStore.getState().exitSplit(tabId)}
-            onClose={() => childLayoutStore.getState().close(tabId)}
-          >
-            {childSplitSurface}
-          </ChildSplitPane>
         )}
       </div>
 
       {gitPanelOpen && <GitConfirmDialog />}
+
       {supportsCorePanels && <LspPanel />}
       {supportsCorePanels && <HooksPanel />}
       {supportsRewind && <TimelinePanel />}
@@ -1400,6 +1355,10 @@ export function App() {
           break;
         case "mode.focus":
           runFocusModeMenu();
+          break;
+        case "dock.toggle":
+          // Taskana 4703: hide/show the dock (the ⌘\ hint rides ACTION_CATALOG).
+          useDockStore.getState().toggleHidden();
           break;
         case "turn.interrupt":
           // docOnly — matcher never returns it; keeps the switch exhaustive.

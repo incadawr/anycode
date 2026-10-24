@@ -890,11 +890,12 @@ describe("automation facade — childCloseClick (TASK.188 S8.3, CUT-S3 §6.1 'ev
       layout, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      undefined, // 33 visionPaneDom
-      undefined, // 34 replayStore
-      undefined, // 35 replayTimer
-      childCloseDom, // 36
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      undefined, // 34 visionPaneDom
+      undefined, // 35 replayStore
+      undefined, // 36 replayTimer
+      childCloseDom, // 37
     );
     return { facade, tabsStore, registry };
   }
@@ -1000,12 +1001,13 @@ describe("automation facade — childSplitClick (TASK.188 S9.4, the entry-side t
       layout, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      undefined, // 33 visionPaneDom
-      undefined, // 34 replayStore
-      undefined, // 35 replayTimer
-      undefined, // 36 childCloseDom
-      childSplitDom, // 37
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      undefined, // 34 visionPaneDom
+      undefined, // 35 replayStore
+      undefined, // 36 replayTimer
+      undefined, // 37 childCloseDom
+      childSplitDom, // 38
     );
     return { facade, tabsStore, registry };
   }
@@ -6583,8 +6585,9 @@ describe("automation facade — Vision pane probe/driver (TASK.198 срез E2c)
       undefined, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      dom, // 33 visionPaneDom
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      dom, // 34 visionPaneDom
     );
   }
 
@@ -7752,7 +7755,8 @@ describe("automation facade — workflowStepsState/workflowStepClick (TASK.191 s
       undefined, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      workflowStepsDom, // 32
+      undefined, // 32 dockDom
+      workflowStepsDom, // 33
     );
   }
 
@@ -8058,14 +8062,15 @@ describe("automation facade — workflowMapState/workflowMapToggle/workflowTicks
       undefined, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      undefined, // 33 visionPaneDom
-      undefined, // 34 replayStore
-      undefined, // 35 replayTimer
-      undefined, // 36 childCloseDom
-      undefined, // 37 childSplitDom
-      workflowMapDom, // 38
-      workflowTicksDom, // 39
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      undefined, // 34 visionPaneDom
+      undefined, // 35 replayStore
+      undefined, // 36 replayTimer
+      undefined, // 37 childCloseDom
+      undefined, // 38 childSplitDom
+      workflowMapDom, // 39
+      workflowTicksDom, // 40
     );
   }
 
@@ -10364,11 +10369,12 @@ describe("automation facade — replay* (TASK.188 S2)", () => {
       layoutStore, // 29 childLayoutStore
       undefined, // 30 sidebarDom
       undefined, // 31 settingsLayoutDom
-      undefined, // 32 workflowStepsDom
-      undefined, // 33 visionPaneDom
-      replayStore, // 34
-      replayTimer, // 35
-      childCloseDom, // 36
+      undefined, // 32 dockDom
+      undefined, // 33 workflowStepsDom
+      undefined, // 34 visionPaneDom
+      replayStore, // 35
+      replayTimer, // 36
+      childCloseDom, // 37
     );
   }
 
