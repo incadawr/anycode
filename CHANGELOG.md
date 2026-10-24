@@ -24,6 +24,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   reasoning-effort levels the provider declares, so a reasoning model that is
   not in AnyCode's built-in catalog now gets an effort picker and the effort is
   sent with requests.
+- The connection drawer lets you set, per model, whether it accepts images
+  (Auto, On or Off). Live model lists from providers that declare input
+  modalities fill this in automatically.
 
 ### Security
 
