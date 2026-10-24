@@ -7,6 +7,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Workflow steps that use an engine role (claude/codex) now follow the role's
+  fallback chain like Agent calls do: a cooling primary hands the step to the
+  next healthy entry, or to the parent's model, with a visible notice. Engine
+  roles in orchestrate mode also run in the background by default.
+
 ## [0.0.36] — 2026-10-25
 
 ### Added
