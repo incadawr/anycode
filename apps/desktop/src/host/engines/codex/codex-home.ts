@@ -267,16 +267,33 @@ export function resolveChildTempDir(childSessionId: string, homeDir: string = ho
  * heredoc temp files). A pre-existing dir keeps its inode; only a too-loose
  * mode is tightened, mirroring `assertCodexProfileHome`'s managed-home rule
  * (ours ⇒ we fix and continue). Throws (fail-closed) when the path exists
- * but is not a directory we own — a symlink there would redirect the child's
- * TMPDIR writes into a foreign tree, exactly the redirection the profile
- * home guard refuses.
+ * but is not a directory we own — a symlink there (at the leaf OR at the
+ * `~/.anycode/tmp` parent) would redirect the child's TMPDIR writes into a
+ * foreign tree, exactly the redirection the profile home guard refuses.
  */
 export function ensureChildTempDir(dir: string): void {
+  // Cross-review F1 (Taskana 4682): lstat the PARENT (~/.anycode/tmp) too, not
+  // just the leaf. Recursive mkdir happily follows a symlinked parent and
+  // creates <child-id> inside the link's target without any error, so a
+  // leaf-only check can never fire there — the child's TMPDIR writes (and the
+  // sandbox writableRoots entry) would land in a foreign tree, exactly the
+  // redirection the leaf guard exists to prevent. Unlike ~/.anycode/codex (only
+  // ever created by AnyCode), ~/.anycode/tmp is a scratch namespace other tools
+  // routinely touch, so the parent is checked on EVERY call, pre-existing or
+  // not. Fail-closed: a symlinked parent refuses the boot.
+  const parent = join(dir, "..");
+  const parentState = lstatSync(parent, { throwIfNoEntry: false });
+  if (parentState !== undefined && (parentState.isSymbolicLink() || !parentState.isDirectory())) {
+    throw new Error(`child temp dir parent is not a directory we own: ${parent}`);
+  }
   const state = lstatSync(dir, { throwIfNoEntry: false });
   if (state === undefined) {
     // The base (~/.anycode/tmp) comes along for the ride; recursive mkdir
     // applies the mode to every level it creates, the same call shape
-    // assertCodexProfileHome uses for the profile home.
+    // assertCodexProfileHome uses for the profile home. The parent check above
+    // already proved the immediate parent is a real directory (or absent, in
+    // which case mkdir creates it plain), so recursion cannot traverse a
+    // planted symlink at the tmp level.
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     return;
   }
