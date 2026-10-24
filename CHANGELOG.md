@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Claude tabs can delegate to AnyCode agent profiles with live subagent cards, background agents (detach) that report back as a new turn, and follow-ups (continue_session) — parity with the Codex door (Taskana 4056).
+
 ## [0.0.35] — 2026-10-10
 
 ### Added

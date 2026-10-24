@@ -624,6 +624,32 @@ export class ClaudeEngine implements SessionEngine {
    * nothing.
    */
   private contextUsageInFlight: Promise<unknown> | null = null;
+  /**
+   * Taskana 4056: subagent_* events from the MCP agent bridge
+   * (`runAgentBridgeCall`'s `onEvent`), waiting for the live turn's race. The
+   * host's `callTool` pushes them from OUTSIDE the engine's turn generator —
+   * an `AgentEvent` only travels inside a turn — so the queue is the seam the
+   * owner-loop race drains (same discipline `queueNotice` uses for the
+   * between-turns case, but live: events surface DURING the quiet stretches of
+   * a running bridge call, with no stream frame to carry them).
+   *
+   * Delivery follows the `pendingUsage` discipline, NOT a plain waiter list: a
+   * losing race arm is never cancelled, so parked waiters from EARLIER loop
+   * iterations would accumulate and the next push would hand the event to a
+   * dead arm (lost). Instead `nextBridgeEvent()` caches ONE slot
+   * (`bridgePending`) until the winning iteration's loop body consumes it
+   * exactly once — a losing arm re-arms the SAME promise the next iteration,
+   * so an event is never stranded in an orphaned promise and never
+   * double-delivered. The turn's `finally` sweeps the slot (a still-parked
+   * waiter is woken with the harmless spurious `null`; an already-resolved
+   * event nobody consumed is re-queued for the next turn's send barrier), so
+   * nothing leaks across turns.
+   */
+  private bridgeEvents: AgentEvent[] = [];
+  /** Taskana 4056: the cached bridge-event slot (see `bridgeEvents`'s own header). */
+  private bridgePending: { promise: Promise<AgentEvent | null>; settled: boolean; event: AgentEvent | null } | null = null;
+  /** Taskana 4056: the parked slot's waiter — at most one; woken by `pushBridgeEvent`/`dispose`. */
+  private bridgeWaiters: { resolve: (event: AgentEvent | null) => void }[] = [];
 
   constructor(
     private readonly client: ClaudeTransport,
@@ -918,8 +944,17 @@ export class ClaudeEngine implements SessionEngine {
         // time, so the whole barrier re-runs on resume (drain again, dispose
         // and Stop checks again) before any send.
         const notices = this.drainNotices();
+        // Taskana 4056: bridge events queued BEFORE the turn (a bridge call
+        // from a prior CLI turn, or a detach whose report events raced the
+        // next owner turn) flush here — before the owner input is sent, same
+        // re-run discipline notices use.
+        const queued = this.drainBridgeEvents();
         if (notices.length > 0) {
           for (const notice of notices) yield notice;
+          continue barrier;
+        }
+        if (queued.length > 0) {
+          for (const ev of queued) yield ev;
           continue barrier;
         }
         // (b) Wait out a STILL-RUNNING foreign turn. NO TIMER, NO
@@ -1075,8 +1110,24 @@ export class ClaudeEngine implements SessionEngine {
           ...(usageDeliveryActive && !abortObserved && pendingUsage !== null
             ? [pendingUsage.then((completion) => ({ kind: "usage" as const, completion }))]
             : []),
+          // Taskana 4056: a live bridge subagent_* event wakes the race on
+          // its own — same quiet-period discipline as the usage arm. The
+          // promise is cached in the `bridgePending` slot until the loop body
+          // consumes it (a losing arm re-arms the same promise), so an event
+          // that resolved a losing arm is never stranded; a `null` resolution
+          // (dispose, or a swept turn) is harmlessly skipped below.
+          this.nextBridgeEvent().then((event) => ({ kind: "bridge-event" as const, event })),
           ...settleRacers(),
         ]);
+        if (raced.kind === "bridge-event") {
+          // Consume the cached slot EXACTLY once, before touching raced.value
+          // — same discipline as the `usage` arm above. A `null` here is a
+          // wake with nothing to deliver (dispose, or an event consumed by an
+          // earlier arm of this same race): skip and re-arm.
+          this.consumeBridgeSlot();
+          if (raced.event !== null) yield raced.event;
+          continue;
+        }
         if (raced.kind === "usage") {
           // Consume the local slot EXACTLY once, before touching raced.value.
           pendingUsage = null;
@@ -1192,6 +1243,11 @@ export class ClaudeEngine implements SessionEngine {
       this.turnActive = false;
       cancelSettle();
       abort.dispose();
+      // Taskana 4056: settle the bridge-event seam with the turn — wake a
+      // still-parked waiter with the spurious `null` and re-queue any
+      // resolved-but-unconsumed event, so the next turn's send barrier (not a
+      // dead arm of THIS turn) delivers anything that lands after this point.
+      this.sweepBridgeSlot();
       // TASK.157: drop the turn-local mid-turn refresh state. The local
       // completion slot dies with the turn; a still-running PHYSICAL guard
       // (`contextUsageInFlight`) is deliberately NOT cleared — it settles
@@ -1212,6 +1268,15 @@ export class ClaudeEngine implements SessionEngine {
     // settles a waiting owner turn, which terminalizes cancelled.
     this.stopIdleReader();
     this.resolveDisposalWait();
+    // Taskana 4056: wake the parked bridge-event race arm (it resolves `null`
+    // against the now-emptied queue, so its turn loop just continues into the
+    // disposal/terminal path) and drop the queue itself — no parked promise
+    // leaks and a detached child's late progress cannot surface into a future
+    // turn.
+    this.bridgeEvents = [];
+    const bridgeWaiters = this.bridgeWaiters;
+    this.bridgeWaiters = [];
+    for (const w of bridgeWaiters) w.resolve(null);
     void this.sendInterruptOnce();
     return this.client.close();
   }
@@ -1441,6 +1506,109 @@ export class ClaudeEngine implements SessionEngine {
    */
   queueNotice(notice: AgentEvent): void {
     this.settings?.notices.push(notice);
+  }
+
+  /**
+   * Taskana 4056: the host's bridge `callTool` pushes live subagent_* events
+   * here mid-turn (core's `runAgentBridgeCall` stamps every progress event
+   * through `deps.onEvent`). A live turn's race drains them between stream
+   * frames; events pushed with NO live turn (a detached child's post-turn
+   * progress, or between turns) simply wait in `bridgeEvents` — flushed by the
+   * NEXT turn's send barrier. Waking all waiters (not one) is deliberate: each
+   * parked arm re-checks the queue itself, so arms woken after their event was
+   * taken by an earlier arm resolve `null` and are skipped — never a
+   * double-delivery.
+   */
+  pushBridgeEvent(event: AgentEvent): void {
+    // Direct hand to the parked waiter when one exists (the slot's promise
+    // stays cached until the winning loop body consumes it); otherwise buffer
+    // for the next `nextBridgeEvent()` call or the next turn's send-barrier
+    // flush. Queue and parked waiter are mutually exclusive at rest, so the
+    // barrier's splice can never race a handoff.
+    const waiter = this.bridgeWaiters.shift();
+    if (waiter !== undefined) {
+      waiter.resolve(event);
+      return;
+    }
+    this.bridgeEvents.push(event);
+  }
+
+  /**
+   * Taskana 4056: take one buffered bridge event, or `null` when none is
+   * queued. A waiter woken after its event was consumed (drained by the send
+   * barrier) must resolve `null`, never resurrect a drained event.
+   */
+  private takeBridgeEvent(): AgentEvent | null {
+    return this.bridgeEvents.shift() ?? null;
+  }
+
+  /**
+   * Taskana 4056: the owner loop's bridge race arm — resolves one event, or
+   * `null` on a wake with nothing to deliver (dispose, or a swept turn). The
+   * promise is cached in the `bridgePending` slot until the loop body consumes
+   * the slot: a losing arm of one iteration re-arms the SAME promise the next
+   * iteration, so an event resolved into an arm that lost its race is never
+   * stranded, and exactly one loop body ever yields it. Resolving (not
+   * rejecting) is what lets `dispose`/the turn's sweep wake a parked arm
+   * without failing the turn.
+   */
+  private nextBridgeEvent(): Promise<AgentEvent | null> {
+    if (this.bridgePending === null) {
+      const now = this.takeBridgeEvent();
+      if (now !== null) {
+        const promise = Promise.resolve(now);
+        this.bridgePending = { promise, settled: true, event: now };
+      } else {
+        let parkedResolve!: (event: AgentEvent | null) => void;
+        const promise = new Promise<AgentEvent | null>((resolve) => {
+          parkedResolve = resolve;
+        });
+        const slot = { promise, settled: false as boolean, event: null as AgentEvent | null };
+        this.bridgePending = slot;
+        this.bridgeWaiters.push({
+          resolve: (event) => {
+            slot.settled = true;
+            slot.event = event;
+            parkedResolve(event);
+          },
+        });
+      }
+    }
+    return this.bridgePending.promise;
+  }
+
+  /**
+   * Taskana 4056: the loop body's slot consumption — called ONLY after a
+   * `bridge-event` raced result, for `null` and event alike. Clearing on
+   * `null` matters as much as on an event: a resolved-`null` promise left in
+   * the slot would win every later race immediately and spin the loop.
+   */
+  private consumeBridgeSlot(): void {
+    this.bridgePending = null;
+  }
+
+  /**
+   * Taskana 4056: settle the turn's bridge state — called from `runTurn`'s
+   * `finally`. A waiter parked by the final race iteration is woken with the
+   * harmless spurious `null` (its dead arm resolves and is never awaited
+   * again), so an event pushed after the turn ended cannot be captured by a
+   * waiter of a finished turn — it stays queued for the next turn's send
+   * barrier. An event-resolved slot the loop never consumed (the turn
+   * terminalized on another arm in the same race tick) is re-queued AHEAD of
+   * the buffer (it is the oldest), so nothing is lost either way.
+   */
+  private sweepBridgeSlot(): void {
+    const slot = this.bridgePending;
+    this.bridgePending = null;
+    for (const waiter of this.bridgeWaiters.splice(0)) waiter.resolve(null);
+    if (slot !== null && slot.settled && slot.event !== null) {
+      this.bridgeEvents.unshift(slot.event);
+    }
+  }
+
+  /** Taskana 4056: splice ALL queued bridge events (the send-barrier flush). */
+  private drainBridgeEvents(): AgentEvent[] {
+    return this.bridgeEvents.splice(0);
   }
 
   /**

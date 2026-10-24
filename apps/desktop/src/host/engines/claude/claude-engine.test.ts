@@ -223,6 +223,25 @@ class FakeTransport implements ClaudeTransport {
     if (waiter !== undefined) waiter.reject(error);
     else this.armedStreamReject = error;
   }
+
+  /**
+   * Taskana 4056: gate the NEXT frames — the listed frames are withheld from
+   * the stream until `release()` is called, mirroring a quiet stretch of a
+   * live turn (a bridge call the CLI is waiting on, no frames flowing).
+   * Delivered through the normal `push` path, so waiter/buffer plumbing is
+   * the production one. Only meaningful before the frames' turn starts.
+   */
+  holdBack(frames: ClaudeStreamMessage[]): { release: () => void } {
+    this.pending = this.pending.filter((frame) => !frames.includes(frame));
+    let released = false;
+    return {
+      release: () => {
+        if (released) return;
+        released = true;
+        for (const frame of frames) this.push(frame);
+      },
+    };
+  }
 }
 
 /**
@@ -479,6 +498,129 @@ describe("ClaudeEngine — TASK.226 срез S4: takePresentation reaches the tu
     const events = await collect(engineWith(transport).runTurn("delegate", { signal: new AbortController().signal }));
     const toolResult = events.find((event) => event.type === "tool_result") as Extract<AgentEvent, { type: "tool_result" }>;
     expect(toolResult.outcome.result?.presentation).toBeUndefined();
+  });
+});
+
+// ── Taskana 4056: live bridge subagent_* events surface inside the turn ────
+
+/**
+ * The bridge frames of a delegating owner turn: an assistant tool_use for the
+ * MCP agent tool, then the (deferred) tool_result, then the terminal result.
+ * The tool_result is the frame the turn WAITS on while the bridged child
+ * runs — the quiet stretch the bridge-event race must fill.
+ */
+function bridgeToolUseFrame(): ClaudeStreamMessage {
+  return {
+    type: "assistant",
+    message: { id: "m-bridge", model: "x", content: [{ type: "tool_use", id: "toolu_bridge", name: "mcp__anycode__agent", input: {} }] },
+  } as unknown as ClaudeStreamMessage;
+}
+
+describe("ClaudeEngine — Taskana 4056: bridge events surface mid-turn", () => {
+  it("a bridge event pushed while the turn is parked on a quiet stream is yielded between stream events", async () => {
+    const toolResult = userToolResultFrame("toolu_bridge");
+    const result = resultFrame157("completed");
+    const transport = new FakeTransport({
+      frames: [bridgeToolUseFrame(), toolResult, result],
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    const gate = transport.holdBack([toolResult, result]);
+    const engine = engineWith(transport);
+
+    const events: AgentEvent[] = [];
+    const turn = (async () => {
+      for await (const event of engine.runTurn("delegate", { signal: new AbortController().signal })) events.push(event);
+    })();
+    // Let the turn start, pass the send barrier, consume the tool_use frame
+    // and park on the quiet stream (the engine's cached read is unresolved).
+    await new Promise((resolve) => setImmediate(resolve));
+
+    engine.pushBridgeEvent({ type: "subagent_start", toolCallId: "toolu_bridge", agentType: "glm-lead", description: "d" });
+    // Give the parked race's bridge arm a tick to resolve BEFORE the frames
+    // arrive — the event must already be yielded (or winning its race) when
+    // the tool_result lands, never deferred behind it.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    gate.release();
+    await turn;
+
+    const startAt = events.findIndex((event) => event.type === "subagent_start");
+    const resultAt = events.findIndex((event) => event.type === "tool_result");
+    expect(startAt).toBeGreaterThanOrEqual(0);
+    expect(resultAt).toBeGreaterThan(startAt);
+    expect(events.filter((event) => event.type === "subagent_start")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
+  });
+
+  it("bridge events queued BEFORE the turn drain in the send barrier, before the user message is sent", async () => {
+    const transport = new FakeTransport({
+      frames: ownerFrames("plain"),
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    const engine = engineWith(transport);
+    engine.pushBridgeEvent({ type: "subagent_start", toolCallId: "t1", agentType: "explore", description: "first" });
+    engine.pushBridgeEvent({ type: "subagent_progress", toolCallId: "t1", turns: 1, toolCalls: 1, lastTool: "Read" });
+
+    const events = await collect(engine.runTurn("plain", { signal: new AbortController().signal }));
+
+    // Both events yielded FIRST, order preserved — and exactly one send: the
+    // barrier's `continue` re-runs before the send, so the flush cannot
+    // double-send the owner input.
+    expect(events[0]).toEqual({ type: "turn_start", turn: 1 });
+    expect(events[1]).toMatchObject({ type: "subagent_start", toolCallId: "t1" });
+    expect(events[2]).toMatchObject({ type: "subagent_progress", toolCallId: "t1" });
+    expect(transport.sent).toEqual(["plain"]);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
+  });
+
+  it("dispose wakes parked bridge waiters without hanging the turn loop", async () => {
+    const toolResult = userToolResultFrame("toolu_bridge");
+    const result = resultFrame157("completed");
+    const transport = new FakeTransport({
+      frames: [bridgeToolUseFrame(), toolResult, result],
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    // The held-back frames are NEVER released: after dispose the stream is
+    // dead (close() resolves the parked read done), exactly like a killed
+    // CLI process delivering no further frames.
+    transport.holdBack([toolResult, result]);
+    const engine = engineWith(transport);
+
+    const events: AgentEvent[] = [];
+    const turn = (async () => {
+      for await (const event of engine.runTurn("delegate", { signal: new AbortController().signal })) events.push(event);
+    })();
+    await new Promise((resolve) => setImmediate(resolve)); // parked on the quiet stream
+
+    engine.pushBridgeEvent({ type: "subagent_start", toolCallId: "toolu_bridge", agentType: "glm-lead", description: "d" });
+    await new Promise((resolve) => setImmediate(resolve)); // the bridge arm delivers the event
+    await engine.dispose("host-shutdown");
+    await turn; // resolves — no parked-promise hang, no unhandled rejection
+
+    // The delivered event survived; the turn terminalized exactly once over
+    // the dead stream (engine-death error terminal — no Stop was requested).
+    expect(events.filter((event) => event.type === "subagent_start")).toHaveLength(1);
+    const loopEnds = events.filter((event) => event.type === "loop_end");
+    expect(loopEnds).toHaveLength(1);
+    expect(["error", "cancelled"]).toContain(loopEnds[0]!.reason);
+  });
+
+  it("a spurious wake (event already consumed) yields nothing extra and the turn continues", async () => {
+    const transport = new FakeTransport({
+      frames: [bridgeToolUseFrame(), userToolResultFrame("toolu_bridge"), resultFrame157("completed")],
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    const engine = engineWith(transport);
+
+    // ONE event; the race arms `nextBridgeEvent()` every iteration and a
+    // losing arm's resolved promise is re-armed by the next iteration (the
+    // cached-slot discipline) — the event must be yielded EXACTLY once no
+    // matter how the frame/bridge arms interleave.
+    engine.pushBridgeEvent({ type: "subagent_start", toolCallId: "toolu_bridge", agentType: "glm-lead", description: "d" });
+    const events = await collect(engine.runTurn("delegate", { signal: new AbortController().signal }));
+
+    expect(events.filter((event) => event.type === "subagent_start")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
   });
 });
 
