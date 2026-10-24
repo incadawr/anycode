@@ -10,6 +10,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import type { EndpointConfig } from "./endpoint.js";
 import { normalizeExplicitBaseUrl } from "./endpoint.js";
+import { wrapFetchWithQuota } from "./quota-fetch.js";
 
 /**
  * Stable public provider name; `@ai-sdk/openai` reads `providerOptions.openai`
@@ -76,12 +77,26 @@ function hasExplicitAuthorizationHeader(headers: Record<string, string> | undefi
 export function createOpenAIResponsesLanguageModel(config: EndpointConfig): LanguageModel {
   const shouldStripAmbientAuthorization =
     config.apiKey === undefined && !hasExplicitAuthorizationHeader(config.headers);
+  // Taskana 4090: when BOTH wrappers apply, the quota wrapper is the OUTER —
+  // stripping sees the final init (Authorization removed before it reaches
+  // the wire), quota sees the final response. Dormant unless an observer is
+  // set: the conditional spread keeps the options byte-identical when unset.
+  const fetchChain =
+    config.onQuotaHeaders !== undefined
+      ? wrapFetchWithQuota(
+          shouldStripAmbientAuthorization ? stripAuthorizationFetch : globalThis.fetch,
+          config.onQuotaHeaders,
+          config.baseUrl,
+        )
+      : shouldStripAmbientAuthorization
+        ? stripAuthorizationFetch
+        : undefined;
   const provider = createOpenAI({
     name: OPENAI_RESPONSES_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),
     apiKey: config.apiKey ?? "",
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
-    ...(shouldStripAmbientAuthorization ? { fetch: stripAuthorizationFetch } : {}),
+    ...(fetchChain !== undefined ? { fetch: fetchChain } : {}),
   });
   return provider.responses(config.model);
 }

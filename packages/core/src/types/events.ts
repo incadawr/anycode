@@ -7,6 +7,7 @@
 
 import type { ToolCallOutcome } from "./tools.js";
 import type { WorkspaceTransition } from "../ports/worktrees.js";
+import type { ProviderQuotaUpdate } from "../provider/quota.js";
 
 export interface TokenUsage {
   inputTokens?: number;
@@ -107,7 +108,16 @@ export type ModelStreamEvent =
       safe?: { code: string; message: string; statusCode?: number };
     }
   /** Emitted by the provider adapter before each retry of a not-yet-started stream (design §2.9). */
-  | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string };
+  | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
+  /**
+   * Provider-reported quota from response headers (Taskana 4090 / TASK.71).
+   * Emitted after a model attempt completes, at most once per attempt;
+   * null-suppressed (a provider that reports nothing emits nothing). This is
+   * the FIRST core-loop-emitted quota variant — the engine-external
+   * `engine_quota` AgentEvent (below) serves only engine brokers
+   * (Codex/Claude), never the core HTTP model port.
+   */
+  | { type: "provider_quota"; quota: ProviderQuotaUpdate; baseUrl: string };
 
 /**
  * Why a loop stopped. `max_turns` means BUDGET EXHAUSTED — either the turn cap

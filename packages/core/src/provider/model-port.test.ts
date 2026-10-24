@@ -1356,3 +1356,128 @@ describe("AiSdkModelPort — networkRetryBudgetMs (transient network outage)", (
     expect(mockStreamText).toHaveBeenCalledTimes(2);
   });
 });
+
+// Taskana 4090 (TASK.71): the port's quota observation lifecycle. The
+// constructor installs a port-owned shim over `config.onQuotaHeaders` (the
+// shim writes `#lastQuota` then forwards); the factories see that shim via
+// the config. Tests capture the shim from the config the factory received,
+// then drive it like the wrapped fetch would (fetch resolves before the SDK
+// decodes any body part), with a DEFERRED scripted stream so the observation
+// lands between `start` and `finish`.
+function deferredQuotaResult(
+  parts: () => unknown[],
+): { result: ReturnType<typeof fakeResult>; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const result = {
+    fullStream: (async function* () {
+      await gate;
+      for (const p of parts()) {
+        yield p as never;
+      }
+    })(),
+  } as unknown as ReturnType<typeof fakeResult>;
+  return { result, release };
+}
+
+type QuotaCb = (update: import("./quota.js").ProviderQuotaUpdate | null, baseUrl: string) => void;
+
+describe("AiSdkModelPort — provider_quota emission (Taskana 4090)", () => {
+  it("yields exactly one provider_quota immediately after finish, carrying the port's baseUrl", async () => {
+    const onQuotaHeaders = vi.fn();
+    const { result, release } = deferredQuotaResult(() => [startPart, finishPart]);
+    mockStreamText.mockImplementationOnce(() => result);
+
+    // Capture the shim from the config handed to the factory.
+    let shim: QuotaCb | undefined;
+    const realCreate = mockCreateLanguageModel.getMockImplementation();
+    mockCreateLanguageModel.mockImplementationOnce((seen: EndpointConfig) => {
+      shim = seen.onQuotaHeaders;
+      return realCreate ? realCreate(seen) : ({} as never);
+    });
+
+    const port = new AiSdkModelPort({ ...baseConfig(), onQuotaHeaders });
+    const eventsPromise = collect(port.streamText(baseRequest));
+    await vi.waitFor(() => expect(shim).toBeDefined());
+
+    // The wrapped fetch resolves before the SDK decodes the body: the
+    // observation arrives while the stream is gated between parts.
+    shim!({ primary: { usedPercent: 80 }, sources: ["x-ratelimit-requests-remaining"] }, "https://api.example.com");
+    release();
+    const events = await eventsPromise;
+
+    const finishIndex = events.findIndex((e) => e.type === "finish");
+    expect(finishIndex).toBeGreaterThanOrEqual(0);
+    expect(events[finishIndex + 1]).toEqual({
+      type: "provider_quota",
+      quota: { primary: { usedPercent: 80 }, sources: ["x-ratelimit-requests-remaining"] },
+      baseUrl: "https://api.example.com",
+    });
+    expect(events.filter((e) => e.type === "provider_quota")).toHaveLength(1);
+    // The original observer still receives the forwarded update (host-side
+    // forwarder contract) — and the port shim did not loop it back.
+    expect(onQuotaHeaders).toHaveBeenCalledTimes(1);
+    expect(onQuotaHeaders).toHaveBeenCalledWith(
+      { primary: { usedPercent: 80 }, sources: ["x-ratelimit-requests-remaining"] },
+      "https://api.example.com",
+    );
+  });
+
+  it("re-emits with the NEW value on a retried attempt", async () => {
+    const error = retryableError();
+    // Attempt 0: retryable throw before any finish (ungated). Attempt 1:
+    // gated between `start` and `finish` so the fresh observation can land.
+    mockStreamText.mockImplementationOnce(() =>
+      fakeResult([part(startPart), throwsWith(error)]),
+    );
+    const { result: r1, release: rel1 } = deferredQuotaResult(() => [startPart, finishPart]);
+    mockStreamText.mockImplementationOnce(() => r1);
+
+    let shim: QuotaCb | undefined;
+    const realCreate = mockCreateLanguageModel.getMockImplementation();
+    mockCreateLanguageModel.mockImplementation((seen: EndpointConfig) => {
+      shim = seen.onQuotaHeaders;
+      return realCreate ? realCreate(seen) : ({} as never);
+    });
+
+    const port = new AiSdkModelPort({ ...baseConfig({ maxRetries: 1 }), onQuotaHeaders: () => {} });
+
+    const events: unknown[] = [];
+    const iterating = (async () => {
+      for await (const e of port.streamText(baseRequest)) events.push(e);
+    })();
+    await vi.waitFor(() => expect(shim).toBeDefined());
+    await vi.waitFor(() => expect(mockStreamText).toHaveBeenCalledTimes(2));
+    // Attempt 0 threw before finish → no emission even if headers arrived;
+    // attempt 1 reports a FRESH value which IS emitted after its finish.
+    shim!({ primary: { usedPercent: 95 }, sources: ["x-ratelimit-requests-remaining"] }, "https://api.example.com");
+    rel1();
+    await iterating;
+
+    const quotaEvents = events.filter((e) => (e as { type: string }).type === "provider_quota") as Array<{
+      type: "provider_quota";
+      quota: import("./quota.js").ProviderQuotaUpdate;
+    }>;
+    expect(quotaEvents).toHaveLength(1);
+    expect(quotaEvents[0]!.quota.primary?.usedPercent).toBe(95);
+  });
+
+  it("emits no provider_quota when the callback was never called", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+    const port = new AiSdkModelPort({ ...baseConfig(), onQuotaHeaders: () => {} });
+    const events = await collect(port.streamText(baseRequest));
+    expect(events.some((e) => e.type === "provider_quota")).toBe(false);
+  });
+
+  it("forwards the SAME config object identity when no onQuotaHeaders is set (dormancy)", async () => {
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
+    const config = baseConfig();
+    const port = new AiSdkModelPort(config);
+    await collect(port.streamText(baseRequest));
+    const seen = mockCreateLanguageModel.mock.calls[0]![0] as EndpointConfig;
+    expect(seen).toBe(config); // identity passthrough — no rewrap, no spread
+    expect(seen.onQuotaHeaders).toBeUndefined();
+  });
+});

@@ -7,6 +7,7 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import type { LanguageModel } from "ai";
 import type { EndpointConfig } from "./endpoint.js";
+import { wrapFetchWithQuota } from "./quota-fetch.js";
 
 export type { AnthropicEndpointConfig } from "./endpoint.js";
 
@@ -74,6 +75,11 @@ export function createAnthropicLanguageModel(
     baseURL: normalizeAnthropicBaseUrl(config.baseUrl),
     apiKey,
     headers: buildDualAuthHeaders(apiKey, config.headers),
+    // Taskana 4090: dormant unless an observer is set — the conditional
+    // spread keeps the options object byte-identical when unset.
+    ...(config.onQuotaHeaders !== undefined
+      ? { fetch: wrapFetchWithQuota(globalThis.fetch, config.onQuotaHeaders, config.baseUrl) }
+      : {}),
   });
   return provider(config.model);
 }

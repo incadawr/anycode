@@ -6,6 +6,7 @@
  */
 
 import type { ProviderTransport } from "./catalog.js";
+import type { ProviderQuotaUpdate } from "./quota.js";
 import type { RetryPolicy } from "./retry.js";
 
 export interface EndpointConfig {
@@ -58,6 +59,13 @@ export interface EndpointConfig {
    * transport is the outer branch — provider name never selects a wire protocol.
    */
   providerName?: string;
+  /**
+   * Optional response-header quota observer (Taskana 4090): when set, the
+   * transport factories wrap the SDK fetch so every response's headers are
+   * offered to it. The callback must never throw into the transport — a quota
+   * parse failure must not kill a model call.
+   */
+  onQuotaHeaders?: (update: ProviderQuotaUpdate | null, baseUrl: string) => void;
 }
 
 /**

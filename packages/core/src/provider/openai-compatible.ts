@@ -11,6 +11,7 @@ import type { LanguageModel } from "ai";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import { normalizeExplicitBaseUrl } from "./endpoint.js";
+import { wrapFetchWithQuota } from "./quota-fetch.js";
 
 /**
  * Stable public provider name. `@ai-sdk/openai-compatible` reads
@@ -43,6 +44,11 @@ export function createOpenAICompatibleLanguageModel(config: EndpointConfig): Lan
     ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
     ...(config.includeUsage === true ? { includeUsage: true } : {}),
+    // Taskana 4090: dormant unless an observer is set — the conditional
+    // spread keeps the options object byte-identical when unset.
+    ...(config.onQuotaHeaders !== undefined
+      ? { fetch: wrapFetchWithQuota(globalThis.fetch, config.onQuotaHeaders, config.baseUrl) }
+      : {}),
   });
   return provider.chatModel(config.model);
 }

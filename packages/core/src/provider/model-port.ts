@@ -56,6 +56,7 @@ import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import { classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { createLanguageModel } from "./language-model.js";
+import type { ProviderQuotaUpdate } from "./quota.js";
 import { DEFAULT_RETRY_POLICY, isRetryableStreamError, isTransientNetworkError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
 import { describeStreamArtifact, isIgnorableStreamArtifact } from "./stream-artifacts.js";
@@ -493,6 +494,16 @@ export class AiSdkModelPort implements ModelPort {
   #lastResponseModel: string | undefined;
 
   /**
+   * Taskana 4090 (TASK.71): latest quota update observed by this attempt's
+   * wrapped fetch (`config.onQuotaHeaders` writes it via the constructor
+   * passthrough below). Fetch resolves before the SDK decodes the body, so
+   * it is populated by the time the `finish` part translates; consumed and
+   * cleared there — one `provider_quota` emission per attempt, and a
+   * retried attempt re-reports fresh headers.
+   */
+  #lastQuota: ProviderQuotaUpdate | null = null;
+
+  /**
    * TASK.168: permanent, per-PORT-INSTANCE memory that a strict
    * openai-chat-completions endpoint has already been confirmed (by a
    * one-shot probe retry) to reject `stream_options.include_usage`. Once
@@ -511,7 +522,19 @@ export class AiSdkModelPort implements ModelPort {
   constructor(
     private readonly config: EndpointConfig,
     private readonly onDiagnostic: DiagnosticSink = consoleDiagnosticSink,
-  ) {}
+  ) {
+    // Taskana 4090: rebind the config's observer through a port-owned shim so
+    // the latest update lands in `#lastQuota` before being forwarded — the
+    // shim is built HERE (port-owned), while the factories only ever see the
+    // config object this port hands them via buildAttemptModel.
+    if (config.onQuotaHeaders !== undefined) {
+      const forward = config.onQuotaHeaders;
+      this.config = { ...config, onQuotaHeaders: (update, baseUrl) => {
+        this.#lastQuota = update;
+        forward(update, baseUrl);
+      } };
+    }
+  }
 
   /** Identity readback: the id this port was constructed for (never canonicalized). */
   get modelId(): string {
@@ -764,6 +787,16 @@ export class AiSdkModelPort implements ModelPort {
             hadModelOutput = true;
           }
           yield event;
+          // Taskana 4090: emit the attempt's quota observation immediately
+          // after `finish` — the wrapped fetch populated `#lastQuota` before
+          // the SDK decoded any body part, so by the time finish translates
+          // the headers have long since been seen. One emission per attempt;
+          // consumed here so a retried attempt re-reports its own headers.
+          if (event.type === "finish" && this.#lastQuota !== null) {
+            const quota = this.#lastQuota;
+            this.#lastQuota = null;
+            yield { type: "provider_quota", quota, baseUrl: this.config.baseUrl };
+          }
         }
       } catch (rawError) {
         const error = contextualizeNetworkFailure(rawError, this.config.baseUrl);

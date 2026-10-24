@@ -30,6 +30,8 @@ const NOT_MODEL_OUTPUT: ModelStreamEvent[] = [
   { type: "start" },
   { type: "error", error: new Error("boom") },
   { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 1, reason: "reset" },
+  // Taskana 4090: quota telemetry is transport metadata, not model output.
+  { type: "provider_quota", quota: { primary: { usedPercent: 42 }, sources: ["x-ratelimit-requests-remaining"] }, baseUrl: "https://api.example.com" },
 ];
 
 describe("isModelOutputEvent", () => {

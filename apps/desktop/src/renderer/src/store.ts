@@ -139,6 +139,10 @@ import { type UsageLimitNotice } from "./provider-notices.js";
 import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
 import { decodeSubagentCardSnapshot, projectSubagentCard } from "./subagent-card.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
+// Taskana 4090: the global settings-store (NOT part of DesktopState) — the
+// provider_quota case projects the observation onto its snapshot's matching
+// connection `lastQuota` so the connect card updates live.
+import { useSettingsStore } from "./settings-store.js";
 
 /** Lifecycle of the renderer<->host port itself, independent of the agent turn lifecycle. */
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
@@ -713,6 +717,25 @@ export function sessionTokensFromEngineEvent(event: {
     output: event.output,
     total: event.total,
     ...(event.cachedInput !== undefined ? { latestCacheRead: event.cachedInput, latestCacheInput: event.input } : {}),
+  };
+}
+
+/**
+ * Taskana 4090 (TASK.71): projects a core `provider_quota` observation
+ * (provider layer's `ProviderQuotaUpdate`) onto the SAME wire slot the
+ * engine brokers use (`CodexRateLimitsWire`, the Composer popover's sole
+ * reader) — primary/secondary carry through, `observedAt` stamps the
+ * arrival. Credits/planType/limitName stay absent: an HTTP provider's
+ * headers never carry them, and absent-means-unreported (never fabricated).
+ * Exported for unit testing.
+ */
+export function providerQuotaToWire(
+  quota: import("@anycode/core/provider/quota").ProviderQuotaUpdate,
+): CodexRateLimitsWire {
+  return {
+    ...(quota.primary !== undefined ? { primary: { ...quota.primary } } : {}),
+    ...(quota.secondary !== undefined ? { secondary: { ...quota.secondary } } : {}),
+    observedAt: new Date().toISOString(),
   };
 }
 
@@ -3865,6 +3888,44 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         case "engine_quota":
           set({ quota: event.quota });
           return;
+        // Taskana 4090 (TASK.71): core-loop quota from HTTP response headers —
+        // the SAME REPLACE semantics as `engine_quota` above (the slot serves
+        // both engine brokers and core HTTP sessions; the Composer popover
+        // renders whichever one last reported). Also projects the observation
+        // onto the GLOBAL settings-store snapshot's matching connection
+        // `lastQuota` (match by baseUrl prefix — a connection's baseUrl is the
+        // endpoint root the port's baseUrl points at) so the connect card
+        // updates live. An unknown base URL leaves connections untouched
+        // (defensive).
+        case "provider_quota": {
+          set({ quota: providerQuotaToWire(event.quota) });
+          const snapshot = useSettingsStore.getState().snapshot;
+          const settings = snapshot?.settings;
+          if (settings?.provider?.connections) {
+            const observedAt = new Date().toISOString();
+            const source = event.quota.sources[0] ?? "";
+            const primary = event.quota.primary; // present whenever the update exists
+            const connections = settings.provider.connections.map((connection) =>
+              connection.baseUrl && primary !== undefined && event.baseUrl.startsWith(connection.baseUrl.replace(/\/+$/, ""))
+                ? {
+                    ...connection,
+                    // Sparse merge: a new observation with absent fields NEVER
+                    // wipes known fields (Q3 cadence: only what arrived).
+                    lastQuota: {
+                      ...(connection.lastQuota ?? {}),
+                      ...primary,
+                      observedAt,
+                      source,
+                    },
+                  }
+                : connection,
+            );
+            useSettingsStore.setState({
+              snapshot: { ...snapshot!, settings: { ...settings, provider: { ...settings.provider, connections } } },
+            });
+          }
+          return;
+        }
         case "engine_session_tokens":
           set({ sessionTokens: sessionTokensFromEngineEvent(event) });
           return;

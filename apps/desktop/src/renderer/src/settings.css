@@ -888,6 +888,13 @@
   font-size: var(--fs-xs);
 }
 
+/* Provider-reported subscription quota line (Taskana 4090 / TASK.71):
+   rendered only when the provider last reported something. */
+.connection-quota {
+  color: var(--text-muted, inherit);
+  font-size: 12px;
+}
+
 .connection-tile-status-dot {
   width: 0.5rem;
   height: 0.5rem;

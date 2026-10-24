@@ -175,6 +175,74 @@ describe("settingsSchema (v2)", () => {
     expect(settingsSchema.safeParse(bad).success).toBe(false);
   });
 
+  // Taskana 4090 (TASK.71): provider-reported quota cache on the connection.
+  it("accepts a connection's lastQuota and preserves it through a JSON round-trip", () => {
+    const lastQuota = {
+      usedPercent: 80,
+      windowDurationMins: 5,
+      resetsAt: 1_789_999_999,
+      observedAt: "2026-10-24T00:00:00.000Z",
+      source: "x-ratelimit-requests-remaining",
+    };
+    const settings = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [{ id: "c1", providerId: "zai", lastQuota }],
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(settings)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.lastQuota).toEqual(lastQuota);
+    }
+  });
+
+  it("accepts a lastQuota with only the required usedPercent/observedAt/source", () => {
+    const settings = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [
+          { id: "c1", providerId: "zai", lastQuota: { usedPercent: 42, observedAt: "2026-10-24T00:00:00.000Z", source: "retry-after" } },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(settings);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.lastQuota).toEqual({
+        usedPercent: 42,
+        observedAt: "2026-10-24T00:00:00.000Z",
+        source: "retry-after",
+      });
+    }
+  });
+
+  it("rejects a malformed lastQuota (string percent)", () => {
+    const bad = {
+      ...cloneDefaults(),
+      provider: {
+        connections: [
+          { id: "c1", providerId: "zai", lastQuota: { usedPercent: "80%", observedAt: "2026-10-24T00:00:00.000Z", source: "x" } },
+        ],
+      },
+    };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("rejects a lastQuota with usedPercent out of [0,100]", () => {
+    const bad = {
+      ...cloneDefaults(),
+      provider: {
+        connections: [
+          { id: "c1", providerId: "zai", lastQuota: { usedPercent: 140, observedAt: "2026-10-24T00:00:00.000Z", source: "x" } },
+        ],
+      },
+    };
+    expect(settingsSchema.safeParse(bad).success).toBe(false);
+  });
+
   // ── Taskana 4118: modelCapabilities round-trips and reads back absent on corruption ──
 
   it("Taskana 4118: a connection's modelCapabilities round-trips through parse", () => {

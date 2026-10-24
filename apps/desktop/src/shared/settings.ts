@@ -303,6 +303,22 @@ export interface ProviderConnection {
   /** Advisory last-known health (TASK.45 §3); W11 writes it, never a runtime-readiness source. */
   lastHealth?: { status: ProviderHealthStatus; at: string; safeCode?: string };
   /**
+   * Provider-reported subscription quota observed from response headers
+   * (Taskana 4090 / TASK.71): the last update the wrapped transport fetch
+   * offered for THIS connection. Connection-scoped by construction — the
+   * quota belongs to the connect (its key + endpoint), not to the global
+   * provider; a sibling connection on the same provider has its own line.
+   * Absent = the provider never reported anything (rendered as no quota
+   * block, never a fabricated 0%).
+   */
+  lastQuota?: {
+    usedPercent: number;
+    windowDurationMins?: number;
+    resetsAt?: number;
+    observedAt: string;
+    source: string;
+  };
+  /**
    * Connection-scoped model ids this connection offers its pickers (TASK.183):
    * a stable union of the ids the user entered MANUALLY for this connection
    * and the ids a connection-scoped `/v1/models` fetch surfaced (the guarded

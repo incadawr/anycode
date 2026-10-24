@@ -8,13 +8,29 @@
  * loopback server in openai-sse-fixture.integration.test.ts.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { EndpointConfig } from "./endpoint.js";
 import {
   createOpenAICompatibleLanguageModel,
   OPENAI_COMPATIBLE_PROVIDER_NAME,
   resolveIncludeUsage,
 } from "./openai-compatible.js";
+
+// Taskana 4090 (TASK.71): SDK factory options recorded while DELEGATING to
+// the real implementation (no behaviour change for existing tests) — for the
+// dormancy pin (no `fetch` key when no observer; a function when set).
+const mockCreateOpenAICompatible = vi.fn();
+
+vi.mock("@ai-sdk/openai-compatible", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@ai-sdk/openai-compatible")>();
+  return {
+    ...actual,
+    createOpenAICompatible: (...args: Parameters<typeof actual.createOpenAICompatible>) => {
+      mockCreateOpenAICompatible(...args);
+      return actual.createOpenAICompatible(...args);
+    },
+  };
+});
 
 function config(overrides: Partial<EndpointConfig> = {}): EndpointConfig {
   return {
@@ -66,6 +82,22 @@ describe("createOpenAICompatibleLanguageModel", () => {
     expect(() => createOpenAICompatibleLanguageModel(config({ includeUsage: true }))).not.toThrow();
     expect(() => createOpenAICompatibleLanguageModel(config({ includeUsage: false }))).not.toThrow();
     expect(() => createOpenAICompatibleLanguageModel(config())).not.toThrow();
+  });
+});
+
+describe("createOpenAICompatibleLanguageModel quota fetch wiring (Taskana 4090)", () => {
+  it("passes NO fetch key when onQuotaHeaders is unset (dormancy pin)", () => {
+    createOpenAICompatibleLanguageModel(config());
+    const options = mockCreateOpenAICompatible.mock.calls.at(-1)![0];
+    expect("fetch" in options).toBe(false);
+  });
+
+  it("wraps fetch when onQuotaHeaders is set", () => {
+    const onQuotaHeaders = vi.fn();
+    createOpenAICompatibleLanguageModel(config({ onQuotaHeaders }));
+    const options = mockCreateOpenAICompatible.mock.calls.at(-1)![0];
+    expect("fetch" in options).toBe(true);
+    expect(typeof options.fetch).toBe("function");
   });
 });
 

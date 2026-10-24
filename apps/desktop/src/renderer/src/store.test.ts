@@ -27,6 +27,9 @@ import {
   type TranscriptBlock,
   type WorkflowSubStatus,
 } from "./store.js";
+// Taskana 4090: the global settings-store singleton — provider_quota projects
+// the observation onto its snapshot's matching connection lastQuota.
+import { useSettingsStore } from "./settings-store.js";
 import { createAutomationFacade, type AnycodeBridge } from "./automation.js";
 // Pure formatter reused ONLY for assertion (TASK.102 slice S1 W5, CUT-S1 §3
 // W5 test 9): NOT a component render — ToolCallCard.tsx itself is untouched
@@ -8220,5 +8223,82 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
     store.getState().applyHostMessage({ type: "steer_requeued", requestId: "r-s", reason: "core turn ended before injection" });
 
     expect(store.getState().promptQueue.map((q) => q.text)).toEqual(["A-first", "S-later"]);
+  });
+});
+// Taskana 4090 (TASK.71): core-loop provider_quota — the REPLACE-semantics
+// slot shared with engine_quota, plus the live projection onto the global
+// settings-store snapshot's matching connection lastQuota.
+describe("desktop store — provider_quota (Taskana 4090)", () => {
+  function quotaEvent(baseUrl: string, usedPercent: number, sources: string[] = ["x-ratelimit-requests-remaining"]) {
+    return {
+      type: "agent_event" as const,
+      turnId: "t1",
+      event: {
+        type: "provider_quota" as const,
+        quota: { primary: { usedPercent }, sources },
+        baseUrl,
+      },
+    };
+  }
+
+  it("replaces state.quota from the provider_quota agent event", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    store.getState().applyHostMessage(quotaEvent("https://api.z.ai/api/anthropic", 80));
+    const quota = store.getState().quota;
+    expect(quota?.primary).toEqual({ usedPercent: 80 });
+    expect(typeof quota?.observedAt).toBe("string");
+  });
+
+  it("updates the matching connection's lastQuota in the settings snapshot (baseUrl prefix match, sparse merge)", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    // Seed the global settings store's snapshot with a matching connection.
+    useSettingsStore.setState({
+      snapshot: {
+        settings: {
+          version: 2,
+          provider: {
+            connections: [
+              { id: "c1", providerId: "zai", baseUrl: "https://api.z.ai/api/anthropic", lastQuota: { usedPercent: 10, observedAt: "2026-10-20T00:00:00.000Z", source: "old" } },
+              { id: "c2", providerId: "openai", baseUrl: "https://api.openai.com/v1" },
+            ],
+          },
+        } as never,
+        secrets: [],
+        providerReady: true,
+        envOverrides: [],
+        readOnly: false,
+      },
+    });
+
+    store.getState().applyHostMessage(quotaEvent("https://api.z.ai/api/anthropic/v1/messages", 80));
+
+    const connections = useSettingsStore.getState().snapshot?.settings.provider.connections;
+    expect(connections?.[0]?.lastQuota?.usedPercent).toBe(80);
+    expect(connections?.[0]?.lastQuota?.source).toBe("x-ratelimit-requests-remaining");
+    // Sibling untouched.
+    expect(connections?.[1]?.lastQuota).toBeUndefined();
+  });
+
+  it("leaves connections untouched for an unknown provider base URL (defensive) but still sets quota", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    useSettingsStore.setState({
+      snapshot: {
+        settings: {
+          version: 2,
+          provider: { connections: [{ id: "c1", providerId: "zai", baseUrl: "https://api.z.ai/api/anthropic" }] },
+        } as never,
+        secrets: [],
+        providerReady: true,
+        envOverrides: [],
+        readOnly: false,
+      },
+    });
+
+    store.getState().applyHostMessage(quotaEvent("https://api.kimi.com/v1", 95));
+    expect(store.getState().quota?.primary).toEqual({ usedPercent: 95 });
+    expect(useSettingsStore.getState().snapshot?.settings.provider.connections[0]?.lastQuota).toBeUndefined();
   });
 });

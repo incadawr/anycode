@@ -3,9 +3,26 @@
  * and the dual-auth header shim. No network access; pure string/object logic.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildDualAuthHeaders, createAnthropicLanguageModel, normalizeAnthropicBaseUrl } from "./anthropic.js";
 import type { EndpointConfig } from "./endpoint.js";
+
+// Taskana 4090 (TASK.71): the SDK factory's options are recorded while still
+// DELEGATING to the real implementation (no behaviour change for any existing
+// test) so the exact options object can be pinned — without the quota
+// observer NO `fetch` key at all (dormancy), with it `fetch` is a function.
+const mockCreateAnthropic = vi.fn();
+
+vi.mock("@ai-sdk/anthropic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@ai-sdk/anthropic")>();
+  return {
+    ...actual,
+    createAnthropic: (...args: Parameters<typeof actual.createAnthropic>) => {
+      mockCreateAnthropic(...args);
+      return actual.createAnthropic(...args);
+    },
+  };
+});
 
 describe("normalizeAnthropicBaseUrl", () => {
   it("appends /v1 when missing", () => {
@@ -109,5 +126,33 @@ describe("createAnthropicLanguageModel", () => {
       model: "gpt-x",
     } as unknown as EndpointConfig & { transport: "anthropic-messages" };
     expect(() => createAnthropicLanguageModel(config)).toThrow(/openai-chat-completions/);
+  });
+});
+
+describe("createAnthropicLanguageModel quota fetch wiring (Taskana 4090)", () => {
+  function anthropicConfig(
+    overrides: Partial<Omit<EndpointConfig, "transport">> = {},
+  ): EndpointConfig & { transport: "anthropic-messages" } {
+    return {
+      transport: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "sk-test-123",
+      model: "claude-x",
+      ...overrides,
+    };
+  }
+
+  it("passes NO fetch key when onQuotaHeaders is unset (dormancy pin)", () => {
+    createAnthropicLanguageModel(anthropicConfig());
+    const options = mockCreateAnthropic.mock.calls.at(-1)![0];
+    expect("fetch" in options).toBe(false);
+  });
+
+  it("wraps fetch when onQuotaHeaders is set", () => {
+    const onQuotaHeaders = vi.fn();
+    createAnthropicLanguageModel(anthropicConfig({ onQuotaHeaders }));
+    const options = mockCreateAnthropic.mock.calls.at(-1)![0];
+    expect("fetch" in options).toBe(true);
+    expect(typeof options.fetch).toBe("function");
   });
 });

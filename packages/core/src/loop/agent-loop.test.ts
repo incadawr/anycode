@@ -5262,3 +5262,66 @@ describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
     expect(loop.queueInjection("x")).toBe(false);
   });
 });
+// Taskana 4090 (TASK.71): provider_quota is pure transport telemetry — the
+// loop forwards it verbatim, neither accumulating it into the step state nor
+// resetting anything on its account, and a stream_retry around it changes
+// nothing about that.
+describe("AgentLoop.runTurn — provider_quota forwarding (Taskana 4090)", () => {
+  it("forwards a provider_quota event verbatim between finish and turn_end", async () => {
+    const quotaEvent: ModelStreamEvent = {
+      type: "provider_quota",
+      quota: { primary: { usedPercent: 80, resetsAt: 1_789_999_999 }, sources: ["x-ratelimit-requests-remaining"] },
+      baseUrl: "https://api.example.com",
+    };
+    const loop = makeLoop({
+      modelPort: new MockModelPort([
+        [
+          { type: "start" },
+          { type: "text_start", id: "t1" },
+          { type: "text_delta", id: "t1", text: "hi" },
+          { type: "text_end", id: "t1" },
+          { type: "finish", finishReason: "stop", usage: {} },
+          quotaEvent,
+        ],
+      ]),
+    });
+    const events = await collect(loop.runTurn("hello"));
+
+    const forwarded = events.find((e) => e.type === "provider_quota");
+    expect(forwarded).toEqual(quotaEvent);
+    // No accumulation side effects: exactly one instance, and the turn's
+    // terminal shape is the ordinary clean completion (no error, no retry).
+    expect(events.filter((e) => e.type === "provider_quota")).toHaveLength(1);
+    expect(types(events).filter((t) => t === "stream_retry" || t === "error")).toEqual([]);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
+  it("forwards provider_quota after a stream_retry without resetting or duplicating anything", async () => {
+    const secondQuota: ModelStreamEvent = {
+      type: "provider_quota",
+      quota: { primary: { usedPercent: 95 }, sources: ["x-ratelimit-requests-limit", "x-ratelimit-requests-remaining"] },
+      baseUrl: "https://api.example.com",
+    };
+    // MockModelPort serves one streamText call per runTurn step: the retry
+    // cycle rides INSIDE the single scripted array (the port-level replay
+    // collapsed into the stream the loop consumes).
+    const loop = makeLoop({
+      modelPort: new MockModelPort([
+        [
+          { type: "start" },
+          { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 1, reason: "reset" },
+          { type: "finish", finishReason: "stop", usage: {} },
+          secondQuota,
+        ],
+      ]),
+    });
+    const events = await collect(loop.runTurn("hello"));
+
+    // The winning attempt's quota crossed verbatim — forwarded
+    // transparently, retry untouched.
+    const quotaEvents = events.filter((e) => e.type === "provider_quota");
+    expect(quotaEvents).toEqual([secondQuota]);
+    expect(types(events)).toContain("stream_retry");
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+});

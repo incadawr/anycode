@@ -11,6 +11,7 @@ import type { ProviderConnection, ProviderHealthStatus, SecretStatus } from "../
 import {
   connectionDisplayName,
   connectionHealthStatus,
+  connectionQuotaLine,
   connectionSecretKey,
   connectionTileProviderLabel,
   describeConnectionHealth,
@@ -407,5 +408,54 @@ describe("connectionTileProviderLabel (TASK.70: one brand = one card)", () => {
 
   it("a missing catalog entry falls back to Custom (the bare/custom bucket)", () => {
     expect(connectionTileProviderLabel(undefined)).toBe("Custom");
+  });
+});
+// Taskana 4090 (TASK.71): the provider-reported quota line — pure helper, so
+// tests cover the real selection (same discipline as tileStatusPresentation).
+describe("connectionQuotaLine (Taskana 4090: the provider-reported quota line)", () => {
+  const NOW = Date.parse("2026-10-24T12:00:00.000Z");
+
+  it("renders the full window+reset line", () => {
+    expect(
+      connectionQuotaLine(
+        { usedPercent: 80, windowDurationMins: 300, resetsAt: Date.parse("2026-10-24T17:00:00.000Z") / 1000, observedAt: "2026-10-24T12:00:00.000Z", source: "x-ratelimit-requests-remaining" },
+        NOW,
+      ),
+    ).toBe("5h · 20% left · resets in 5h");
+  });
+
+  it("returns null for an absent lastQuota (no block, no fabricated 0%)", () => {
+    expect(connectionQuotaLine(undefined, NOW)).toBeNull();
+  });
+
+  it("falls back to the family name from source when windowDurationMins is missing", () => {
+    expect(
+      connectionQuotaLine(
+        { usedPercent: 42, observedAt: "2026-10-24T12:00:00.000Z", source: "x-ratelimit-requests-remaining" },
+        NOW,
+      ),
+    ).toBe("requests · 58% left");
+  });
+
+  it("falls back to 'Limit' when neither window nor family is parseable", () => {
+    expect(
+      connectionQuotaLine({ usedPercent: 10, observedAt: "2026-10-24T12:00:00.000Z", source: "retry-after" }, NOW),
+    ).toBe("Limit · 90% left");
+  });
+
+  it("still renders a stale-but-present observation (freshness is NOT this card's concern)", () => {
+    expect(
+      connectionQuotaLine(
+        { usedPercent: 50, observedAt: "2026-10-01T00:00:00.000Z", source: "x-ratelimit-tokens-remaining" },
+        NOW,
+      ),
+    ).toBe("tokens · 50% left");
+  });
+
+  it("rounds percent-left the same way the Composer popover does", () => {
+    // usedPercent 33 → percentLeft = round(67) = 67
+    expect(
+      connectionQuotaLine({ usedPercent: 33, observedAt: "2026-10-24T12:00:00.000Z", source: "x-ratelimit-requests-remaining" }, NOW),
+    ).toBe("requests · 67% left");
   });
 });

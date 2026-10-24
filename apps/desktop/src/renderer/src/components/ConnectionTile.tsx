@@ -16,6 +16,8 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { CatalogSummaryEntry, ProviderConnection, ProviderHealthStatus, SecretKey, SecretStatus } from "../../../shared/settings.js";
 import { Check, Ellipsis, Pencil, Trash } from "./icons.js";
+import { formatAge } from "./Sidebar.js";
+import { quotaWindowLabel } from "./Composer.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 
 /** Short, human status text for each `ProviderHealthStatus` (task §3 table) — status is ALWAYS paired with this text, never color alone. */
@@ -278,6 +280,32 @@ export function tileStatusPresentation(
   return { text: described.text, title: observation.title, tone: described.tone };
 }
 
+/**
+ * The tile's quota line (Taskana 4090 / TASK.71): what the PROVIDER last
+ * reported about this connection's subscription window, straight from
+ * response headers. `null` when nothing was ever reported — the caller
+ * renders NO block for null (never a fabricated "0% left"; TASK.71 §5).
+ * The label comes from `windowDurationMins` when present, else the family
+ * name in `source` (e.g. "requests" out of
+ * "x-ratelimit-requests-remaining"), else "Limit" — no heuristics beyond
+ * that (owner Q2). Stale-but-present still renders: freshness is NOT this
+ * card's concern (the age rides the title instead).
+ */
+export function connectionQuotaLine(
+  lastQuota: ProviderConnection["lastQuota"],
+  now: number,
+): string | null {
+  if (lastQuota === undefined) {
+    return null;
+  }
+  const familyName = lastQuota.source.match(/ratelimit-([a-z_]+)-/)?.[1] ?? null;
+  const label = quotaWindowLabel(lastQuota.windowDurationMins, familyName);
+  const percentLeft = Math.min(100, Math.max(0, Math.round(100 - lastQuota.usedPercent)));
+  const resetsPart =
+    lastQuota.resetsAt != null ? ` · resets in ${formatAge(lastQuota.resetsAt * 1000, now)}` : "";
+  return `${label} · ${percentLeft}% left${resetsPart}`;
+}
+
 export function ConnectionTile({
   connection,
   catalogEntry,
@@ -330,6 +358,13 @@ export function ConnectionTile({
   const providerLabel = connectionTileProviderLabel(catalogEntry);
   const authKind = catalogEntry?.authKind ?? "api_key";
   const replaceKeyLabel = authKind === "oauth" ? (credentialStatus?.set ? "Sign out" : "Sign in") : "Replace key";
+  // Taskana 4090: the provider-reported quota line — rendered ONLY when the
+  // provider actually reported something (null ⇒ no block, no "0%" placeholder).
+  const quotaLine = connectionQuotaLine(connection.lastQuota, now);
+  const quotaTitle =
+    quotaLine != null && connection.lastQuota?.observedAt
+      ? `Reported by provider · observed ${formatAge(Date.parse(connection.lastQuota.observedAt), now)}`
+      : "Reported by provider";
 
   useEffect(() => {
     if (!menuOpen) {
@@ -419,6 +454,11 @@ export function ConnectionTile({
           <span className="connection-tile-status-dot" aria-hidden="true" />
           <span>{presentation.text}</span>
         </div>
+        {quotaLine != null && (
+          <div className="connection-quota" title={quotaTitle}>
+            {quotaLine}
+          </div>
+        )}
       </button>
 
       <div className="connection-tile-menu" ref={menuRootRef} onKeyDown={onMenuKeyDown}>
