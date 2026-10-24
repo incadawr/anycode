@@ -697,6 +697,13 @@ export function createSubagentRunner(
         ...(persona.connection !== undefined ? { connection: persona.connection } : {}),
       };
     },
+    // Taskana 4704 §3.6 (cross-review F2): the host-side role-route chain,
+    // exposed on THIS port so tools/agent.ts's `ctx.subagents?.resolveRoleRoute`
+    // reads the real resolver in production (SubagentRunnerOptions.resolveRoleRoute
+    // used to be reachable only through faked tests — session-tier route stamping,
+    // maxTurns from turnBudget and the inline connection refusal were all dead).
+    // Pure delegation: the host owns settings + health; core only walks the chain.
+    resolveRoleRoute: opts?.resolveRoleRoute ?? ((agentType: string) => null),
     async run(req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> {
       const startedAt = Date.now();
       const { signal, onProgress } = runOpts;
@@ -784,24 +791,57 @@ export function createSubagentRunner(
         req.model === undefined && persona.model === undefined && persona.name === "explore"
           ? opts?.exploreModel
           : undefined;
+      // F4 (Taskana 4704 cross-review): a settings-derived role persona
+      // carries its PRIMARY entry verbatim (host/index.ts derives it, model
+      // included), which used to disable the chain walk (`persona.model !==
+      // undefined`) and turn a rejected primary into a hard error with no
+      // fallback. The primary-model-that-is-a-route marker (the persona carries
+      // a route chain but no connection/engine of its own) re-opens the walk:
+      // the primary becomes the chain HEAD and the resolver's remaining
+      // entries follow it, preserving profile-frontmatter semantics (a
+      // hand-authored md-profile with `model:` but no settings route keeps
+      // the honest explicit-id error).
+      let chainHeadModel: string | undefined;
+      let personaCarriesRoute = false;
+      if (req.model === undefined && isRoleRouteName(req.agentType)) {
+        const routeResolution = opts?.resolveRoleRoute?.(req.agentType) ?? null;
+        if (routeResolution !== null && persona.model !== undefined && persona.connection === undefined && persona.engine === undefined) {
+          // The persona IS the primary entry of a settings-derived route.
+          personaCarriesRoute = true;
+          chainHeadModel = persona.model;
+        }
+      }
       // The chain candidates in order: [exploreDefault (explore only, compat)]
       // + resolveRoleRoute entries (when the agent_type is a role persona).
       // Entries carrying connection/engine cannot run INLINE — they are kept
       // out of the walkable list and reported as skipped "needs session tier".
       let chainEntries: RoleRouteEntry[] = [];
       const chainSkipped: { entry: RoleRouteEntry; reason: string }[] = [];
-      if (req.model === undefined && persona.model === undefined && isRoleRouteName(req.agentType)) {
+      if (req.model === undefined && (persona.model === undefined || personaCarriesRoute) && isRoleRouteName(req.agentType)) {
         const resolution = opts?.resolveRoleRoute?.(req.agentType) ?? null;
         const walkable: RoleRouteEntry[] = [];
         if (exploreDefault !== undefined) {
           walkable.push({ model: exploreDefault });
+        }
+        // F4: the settings-derived primary (the persona's own model, set when
+        // personaCarriesRoute) is the chain HEAD — it walks exactly like any
+        // other entry, so a rejected primary degrades to the next entry
+        // instead of erroring out.
+        if (chainHeadModel !== undefined) {
+          walkable.push({ model: chainHeadModel, ...(persona.effort !== undefined ? { effort: persona.effort } : {}) });
         }
         if (resolution !== null) {
           for (const entry of resolution.entries) {
             if (entry.connection !== undefined || entry.engine !== undefined) {
               chainSkipped.push({ entry, reason: "needs session tier" });
             } else if (entry.model !== undefined) {
-              walkable.push(entry);
+              // F4 dedupe: the persona's own model (the chain head pushed
+              // above) IS the resolver's primary entry for a settings-derived
+              // role — push it once, never twice (a rejected primary would
+              // otherwise retry the SAME dead id before falling back).
+              if (entry.model !== chainHeadModel) {
+                walkable.push(entry);
+              }
             } else {
               // An entry without a model names nothing the inline path can
               // resolve — it is a pure provider/connection hop for the
@@ -934,11 +974,10 @@ export function createSubagentRunner(
         // thrown message as its skip reason. If ALL entries (and the compat
         // exploreModel head) fail, degrade to the parent's model with a notice
         // listing every reason. An explicit Agent(model:) or a profile
-        // `model:` keeps the honest error — the chain is only consulted when
-        // neither is set (see `chainEntries` construction above), so an
-        // explicit id that COINCIDENTALLY equals an entry never enters this
-        // branch as a chain walk.
-        const isExplicitId = req.model !== undefined || persona.model !== undefined;
+        // `model:` keeps the honest error — EXCEPT the settings-derived role
+        // primary (F4: personaCarriesRoute re-opened the walk for exactly
+        // that case, so the primary is the chain head, not an explicit id).
+        const isExplicitId = req.model !== undefined || (persona.model !== undefined && !personaCarriesRoute);
         if (!isExplicitId && chainEntries.length > 0 && resolve !== undefined) {
           const failures: string[] = [];
           for (const entry of chainEntries) {

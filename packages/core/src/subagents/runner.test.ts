@@ -5225,4 +5225,55 @@ describe("role route chain walk (Taskana 4704 §3.2)", () => {
     expect(outcome.finalText).toBe("parent-report");
     expect(parentModel.calls).toBe(1);
   });
+
+  // F4 (Taskana 4704 cross-review): a settings-derived role persona carries
+  // its PRIMARY model verbatim (persona.model set, no connection/engine).
+  // That persona-model IS the chain head of a settings route — a rejected
+  // primary must degrade to the next entry, not hard-error with the
+  // explicit-id message. Before F4, `persona.model !== undefined` closed
+  // the chain walk and a rejected primary errored out with no fallback.
+  it("F4: a settings-derived role persona's rejected PRIMARY degrades to the next chain entry", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const fallbackModel = new ScriptedModelPort(() => textStep("fallback-report"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      // Exactly the persona host/index.ts derives from settings
+      // roles.executor.primary = { model: "primary-1" }.
+      profiles: [{ ...PERSONAS["executor"]!, model: "primary-1" }],
+      resolveRoleRoute: () => ({
+        entries: [{ model: "primary-1" }, { model: "fallback-2" }],
+        skipped: [],
+      }),
+        resolveChildModelPort: (modelId) => {
+          resolved.push(modelId);
+          if (modelId === "primary-1") throw new Error("This model is not available on the selected connection.");
+          return fallbackModel;
+        },
+      },
+    );
+
+    const outcome = await runner.run({ ...REQ, agentType: "executor" }, {});
+
+    expect(outcome.status).toBe("completed");
+    // The primary was walked, rejected, and the fallback ran.
+    expect(resolved).toEqual(["primary-1", "fallback-2"]);
+    expect(outcome.finalText).toBe("fallback-report");
+    expect(parentModel.calls).toBe(0);
+    expect(outcome.finalText).not.toContain("explicit");
+  });
+
+  it("F4: a hand-authored md-profile `model:` (no settings route) KEEPS the honest explicit-id error", async () => {
+    const runner = createSubagentRunner(makeParent(), {
+      profiles: [{ ...PERSONAS["executor"]!, model: "md-model-1" }],
+      resolveRoleRoute: () => null, // no settings route for this role
+      resolveChildModelPort: () => {
+        throw new Error("md-model-1 is not available on this connection");
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "executor" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toContain("md-model-1");
+  });
 });

@@ -2019,4 +2019,68 @@ describe("child-session-port — maxDetachedChildren cap (Taskana 4704 §2.8)", 
     const admitted = await p3;
     expect(admitted.status).toBe("completed");
   });
+
+  // Taskana 4704 cross-review F6: N detached run() calls made in the SAME
+  // assistant turn (before any child session accepted) all passed the old
+  // registry-only check — the cap must count ADMITTED children, i.e. the
+  // accepted registry PLUS the admits still between spawn request and
+  // accepted/terminal.
+  it("F6: parallel detached admits BEFORE any accept are capped (admit window counts)", async () => {
+    const { port, sent, emit } = capHarness(() => 2);
+    // Fire three detached spawns back-to-back; NONE accepted yet.
+    const p1 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-f6-1", detach: true }, {});
+    const p2 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-f6-2", detach: true }, {});
+    const p3 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-f6-3", detach: true }, {});
+    // The first two posted spawn requests; the third was refused at admit.
+    expect(spawns(sent)).toHaveLength(2);
+    admit(emit, sent, 0);
+    admit(emit, sent, 1);
+    await p1;
+    await p2;
+    expect((await p3).status).toBe("error");
+
+    // Once BOTH children terminal, the slot count drops and a new detach is
+    // admitted again.
+    for (const i of [0, 1]) {
+      const requestId = spawns(sent)[i]!.requestId;
+      emit(
+        {
+          type: CHILD_RUN_EVENT_TYPE,
+          requestId,
+          kind: "terminal",
+          status: "completed",
+          finalText: "done",
+          turns: 1,
+          durationMs: 5,
+          // MUST match the id admit() registered (child-cap-N) — the
+          // registry row is keyed by the ACCEPTED childSessionId.
+          childSessionId: `child-cap-${i}`,
+        } as ChildRunEvent,
+      );
+    }
+    const p4 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-f6-4", detach: true }, {});
+    // p4's spawn request is the THIRD posted message (the two earlier ones
+    // plus this one; the refused spawn-f6-3 never posted).
+    admit(emit, sent, 2);
+    expect((await p4).status).toBe("completed");
+  });
+
+  it("F6: an admit whose spawn request is never answered (reject) frees its reservation", async () => {
+    const { port, sent, emit } = capHarness(() => 1);
+    const p1 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-f6-r1", detach: true }, {});
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId,
+      kind: "rejected",
+      reason: "spawn_failed",
+      message: "child session failed to boot",
+    } as ChildRunEvent);
+    const rejected = await p1;
+    expect(rejected.status).toBe("error");
+    // The reservation is gone with the reject: a fresh detach fits again.
+    const p2 = port.run({ agentType: "executor", description: "d", prompt: "p", spawnToolCallId: "spawn-f6-r2", detach: true }, {});
+    admit(emit, sent, 1);
+    expect((await p2).status).toBe("completed");
+  });
 });

@@ -508,17 +508,41 @@ describe("host subagent model-override wiring", () => {
   it("passes resolveChildModelPort into withSubagents, or the runner rejects every Agent(model:) call", async () => {
     const source = await readHostSource();
 
-    // Anchored on `profiles: () => ext.profiles` (subagent-model: a thunk, not
-    // a boot-time snapshot, so a live rescan is visible to the runner) so the
-    // doc comment near the top of index.ts — which also spells
-    // `withSubagents(config, {profiles})` — can never satisfy this assertion
-    // in place of the real call.
-    const calls = [...source.matchAll(/withSubagents\(\s*config\s*,\s*\{([\s\S]*?)\}\s*\)/g)]
-      .map((match) => match[1]!)
-      .filter((options) => options.includes("profiles: () => ext.profiles"));
+    // Anchored on the profiles THUNK Taskana 4704 wired (`profiles: () => {`
+    // — the host now derives settings role personas inside the thunk, so a
+    // live rescan AND a settings change are both visible to the runner) so
+    // the doc comment near the top of index.ts — which also spells
+    // `withSubagents(config, {profiles})` — can never satisfy this
+    // assertion in place of the real call. Brace-aware: the options object
+    // contains NESTED braces (the thunk body, spreads), so the region is
+    // taken from the call site to the option list's closing `})` — matched
+    // by scanning braces, not a lazy regex.
+    const callStart = source.indexOf("withSubagents(config, {");
+    expect(callStart).toBeGreaterThan(-1);
+    // Skip every occurrence inside comments/doc-comments.
+    let idx = callStart;
+    while (idx > -1 && source.slice(0, idx).split("\n").at(-1)!.trimStart().startsWith("*")) {
+      idx = source.indexOf("withSubagents(config, {", idx + 1);
+    }
+    expect(idx).toBeGreaterThan(-1);
+    let depth = 0;
+    let regionEnd = -1;
+    for (let i = idx; i < source.length; i++) {
+      const ch = source[i]!;
+      if (ch === "{") depth += 1;
+      if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          regionEnd = i;
+          break;
+        }
+      }
+    }
+    expect(regionEnd).toBeGreaterThan(idx);
+    const options = source.slice(idx, regionEnd);
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!).toContain("resolveChildModelPort");
+    expect(options).toContain("profiles: () => {");
+    expect(options).toContain("resolveChildModelPort");
   });
 
   it("TASK.192: assigns config.sessionSubagents before the actual withWorkflows call", async () => {
@@ -555,11 +579,96 @@ describe("host subagent model-override wiring", () => {
 
   it("Taskana 4131: threads envConfig.exploreModel into withSubagents when set", async () => {
     const source = await readHostSource();
-    const calls = [...source.matchAll(/withSubagents\(\s*config\s*,\s*\{([\s\S]*?)\}\s*\)/g)]
-      .map((m) => m[1]!)
-      .filter((options) => options.includes("profiles: () => ext.profiles"));
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!).toContain("exploreModel: envConfig.exploreModel");
+    const callStart = source.indexOf("withSubagents(config, {");
+    let idx = callStart;
+    while (idx > -1 && source.slice(0, idx).split("\n").at(-1)!.trimStart().startsWith("*")) {
+      idx = source.indexOf("withSubagents(config, {", idx + 1);
+    }
+    expect(idx).toBeGreaterThan(-1);
+    let depth = 0;
+    let regionEnd = -1;
+    for (let i = idx; i < source.length; i++) {
+      const ch = source[i]!;
+      if (ch === "{") depth += 1;
+      if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          regionEnd = i;
+          break;
+        }
+      }
+    }
+    const options = source.slice(idx, regionEnd);
+    expect(options).toContain("exploreModel: envConfig.exploreModel");
+  });
+
+  it("Taskana 4704 F1: the child port's getPermissionMode is self-contained (no Session bounce -> no infinite recursion)", async () => {
+    const source = await readHostSource();
+
+    // The recursive shape this guards against: the port's getPermissionMode
+    // thunk once ended in `?? rootSessionChildSpawnModeCell.get?.()` and a
+    // later binding assigned `rootSessionChildSpawnModeCell.get = () =>
+    // rootSession.childSpawnMode()`, where Session.childSpawnMode() itself
+    // began with `if (this.childSpawnModeOverride !== undefined) return
+    // this.childSpawnModeOverride();` — override == the cell == the Session:
+    // the first session-tier spawn blew the stack. All four spellings must
+    // be gone from the host source.
+    expect(source).not.toContain("rootSessionChildSpawnModeCell");
+    expect(source).not.toContain("childSpawnMode:");
+    // The override field/option is gone from the Session seam too.
+    const sessionSource = await readFile(new URL("./session.ts", import.meta.url), "utf8");
+    expect(sessionSource).not.toContain("childSpawnModeOverride");
+    expect(sessionSource).not.toContain("childSpawnMode?:");
+    // And the port's thunk must derive the answer inline (orchestrate-aware,
+    // plan coerced to build) instead of delegating.
+    expect(source).toContain('return pre === "plan" ? "build" : pre;');
+  });
+
+  it("Taskana 4704 F2: withSubagents threads the host's resolveRoleRouteImpl into the runner", async () => {
+    const source = await readHostSource();
+    const callStart = source.indexOf("withSubagents(config, {");
+    let idx = callStart;
+    while (idx > -1 && source.slice(0, idx).split("\n").at(-1)!.trimStart().startsWith("*")) {
+      idx = source.indexOf("withSubagents(config, {", idx + 1);
+    }
+    let depth = 0;
+    let regionEnd = -1;
+    for (let i = idx; i < source.length; i++) {
+      const ch = source[i]!;
+      if (ch === "{") depth += 1;
+      if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          regionEnd = i;
+          break;
+        }
+      }
+    }
+    const options = source.slice(idx, regionEnd);
+    expect(options).toContain("resolveRoleRoute: resolveRoleRouteImpl");
+    // The runner-side default must be the null fallback, never a live
+    // resolver core could invent on its own.
+    const runnerSource = await readFile(new URL("../../../../packages/core/src/subagents/runner.ts", import.meta.url), "utf8");
+    expect(runnerSource).toContain("resolveRoleRoute: opts?.resolveRoleRoute ?? ((agentType: string) => null)");
+  });
+
+  it("Taskana 4704 F5: the respawn notice rides the FAILED child's id; a refused respawn reports honestly", async () => {
+    const source = await readHostSource();
+    // F5(b): the retrying notice is queued under the FAILED child's
+    // spawnToolCallId (a completed marker for a spawn that DID happen,
+    // consumed once the renderer acks it) — NOT under the respawn's fresh id
+    // (the renderer's originId dedupe would swallow the real report of the
+    // respawned child when it eventually arrives under that same id).
+    expect(source).toContain("childReportQueue.add(req.spawnToolCallId, decision.notice");
+    // F5(c): the respawn run()'s admit outcome is HANDLED — a refused
+    // respawn (cap/shape) delivers an honest error report under the failed
+    // child's id instead of a silent "retrying" with no follow-up.
+    expect(source).toContain("admit.status === \"error\"");
+    expect(source).toContain("was refused");
+    // The respawn request stamps ONLY the next entry's fields (a stale
+    // engine/connection of the failed hop never leaks through `...req`).
+    expect(source).not.toContain("...req,\n    spawnToolCallId: respawnId");
+    expect(source).toContain("...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {})");
   });
 });
 

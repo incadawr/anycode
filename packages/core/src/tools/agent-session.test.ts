@@ -1780,4 +1780,68 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
     expect(result.ok).toBe(true);
     expect(inlineSeen).toBeDefined();
   });
+
+  // F5(a) (Taskana 4704 cross-review): an engine entry (role primary pinned
+  // to claude/codex by settings) stamps `engine` on the creating spawn —
+  // without it the host's respawn bookkeeping would boot core for a role
+  // pinned to codex.
+  it("an engine entry stamps engine on a FRESH spawn (F5a)", async () => {
+    const { ctx, seen } = roleCtx({ entries: [{ engine: "codex", model: "gpt-5.4" }], turnBudget: 40 });
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "executor" },
+      ctx,
+    );
+    expect(seen()).toMatchObject({ engine: "codex", model: "gpt-5.4", maxTurns: 40 });
+  });
+
+  it("an explicit provider or model suppresses the route's engine stamp too (explicit choice is not a chain hop)", async () => {
+    const { ctx, seen } = roleCtx({ entries: [{ engine: "codex", model: "gpt-5.4" }] });
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "executor", model: "explicit-m" },
+      ctx,
+    );
+    expect(seen()?.model).toBe("explicit-m");
+    expect(seen() !== undefined && "engine" in seen()!).toBe(false);
+    expect(seen() !== undefined && "provider" in seen()!).toBe(false);
+  });
+
+  // F9 (cross-review): the route's effort belongs to the route's model — an
+  // explicit model override must not inherit it.
+  it("an explicit model also suppresses the route's effort (F9)", async () => {
+    const { ctx, seen } = roleCtx({ entries: [{ model: "route-model", effort: "high" }] });
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "planner", model: "explicit-model" },
+      ctx,
+    );
+    expect(seen()?.model).toBe("explicit-model");
+    expect(seen() !== undefined && "effort" in seen()!).toBe(false);
+  });
+
+  // F9 (cross-review): only the RESOLVED entry (entries[0]) decides the
+  // inline refusal — a connection-tail behind a bare-model head runs inline.
+  it("a bare-model head with a connection TAIL runs inline (only entries[0] refuses, F9)", async () => {
+    let inlineSeen: unknown;
+    const subagents: SubagentPort = {
+      run: async () => {
+        inlineSeen = true;
+        return {
+          status: "completed",
+          finalText: "inline ok",
+          truncated: false,
+          turns: 1,
+          toolCalls: 0,
+          durationMs: 1,
+        };
+      },
+      listAgentTypes: () => ["general-purpose", "explore", "planner", "executor", "reviewer"],
+      resolveRoleRoute: () =>
+        ({ entries: [{ model: "m-1" }, { connection: "conn-x", model: "m-2" }], skipped: [] }) as never,
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "planner" },
+      makeCtx({ subagents }),
+    );
+    expect(result.ok).toBe(true);
+    expect(inlineSeen).toBe(true);
+  });
 });

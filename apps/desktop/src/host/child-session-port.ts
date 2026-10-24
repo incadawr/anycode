@@ -472,6 +472,18 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
   // `req.detach === true` branches below.
   const backgroundChildren = new Map<string, BackgroundChildEntry>();
   const backgroundChildrenListeners = new Set<() => void>();
+  // Taskana 4704 cross-review F6: detach admits that passed the cap check but
+  // whose "accepted" event has not arrived yet. The registry above is keyed by
+  // childSessionId, which is only known at accept — N parallel detached run()
+  // calls in one assistant turn all passed the old `backgroundChildren.size`
+  // check before ANY of them registered. Each pending admit reserves a slot
+  // here for exactly the window between the spawn request and its accept/
+  // reject/terminal, so the cap counts ADMITTED children, not just
+  // already-accepted ones.
+  const pendingDetachedAdmits = new Set<string>();
+  function liveDetachedCount(): number {
+    return backgroundChildren.size + pendingDetachedAdmits.size;
+  }
   function notifyBackgroundChildrenChanged(): void {
     for (const listener of backgroundChildrenListeners) {
       listener();
@@ -510,12 +522,17 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // state, §9-Q5). Only detach requests consume slots; sync-join spawns
     // are untouched. Read as a live cell (the getter) so a settings change
     // lands on the very next spawn. `undefined` => unlimited (pre-4704).
+    // F6: counts ADMITTED children — the accepted registry PLUS every admit
+    // still between the spawn request and its accepted/terminal event (N
+    // parallel detached calls in one turn all passed a registry-only check
+    // before any of them registered).
+    let reservedAdmitSlot = false;
     if (req.detach === true) {
       const cap = options.maxDetachedChildren?.();
-      if (cap !== undefined && backgroundChildren.size >= cap) {
+      if (cap !== undefined && liveDetachedCount() >= cap) {
         return Promise.resolve({
           status: "error",
-          finalText: `Agent: child limit reached (${backgroundChildren.size} running). Wait for a report or stop a child before delegating more.`,
+          finalText: `Agent: child limit reached (${liveDetachedCount()} running). Wait for a report or stop a child before delegating more.`,
           truncated: false,
           turns: 0,
           toolCalls: 0,
@@ -525,6 +542,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
           spawnToolCallId: req.spawnToolCallId,
         });
       }
+      reservedAdmitSlot = true;
     }
 
     // F9 (review finding, found independently by all three reviewers): a
@@ -594,9 +612,20 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     return new Promise<SessionSubagentOutcome>((resolve) => {
       let cancelSent = false;
 
+      // F6: reserve the cap slot for the whole admit->accept window (a
+      // sync-join run reserved nothing — `reservedAdmitSlot` stays false and
+      // every release below is a no-op for it). Released at the same
+      // boundaries that end the window: reject (never admitted), the
+      // detach accept (handed over to the accepted registry), and —
+      // defensively — any terminal that closes this waiter.
+      if (reservedAdmitSlot) {
+        pendingDetachedAdmits.add(requestId);
+      }
+
       const finish = (outcome: SessionSubagentOutcome): void => {
         stallClock.dispose();
         waiters.delete(requestId);
+        pendingDetachedAdmits.delete(requestId);
         opts.signal?.removeEventListener("abort", onAbort);
         resolve(outcome);
       };
@@ -638,6 +667,11 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // disarmed.
               if (req.detach === true) {
                 opts.signal?.removeEventListener("abort", onAbort);
+                // F6: the admit window is over — the accepted registry below
+                // now owns this child's cap slot, so the pending reservation
+                // must go the same instant the registry row appears (a child
+                // is never double-counted, never briefly uncounted).
+                pendingDetachedAdmits.delete(requestId);
                 // TASK.148 slice 2: the id a later stall notice's
                 // onDetachedStall call carries — set exactly once, the
                 // moment it becomes known, mirroring the registry entry
@@ -789,6 +823,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 // dispose it).
                 stallClock.dispose();
                 waiters.delete(requestId);
+                pendingDetachedAdmits.delete(requestId);
                 opts.signal?.removeEventListener("abort", onAbort);
                 backgroundChildren.delete(event.childSessionId);
                 notifyBackgroundChildrenChanged();

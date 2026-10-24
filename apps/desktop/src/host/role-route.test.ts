@@ -105,39 +105,36 @@ describe("RoleHealthCache", () => {
   });
 });
 
-describe("classifyInfraFailure", () => {
+describe("classifyInfraFailure (F3: anchored to the exact provider/resolver sentences)", () => {
   it("model resolver texts -> model_not_found", () => {
+    expect(classifyInfraFailure("This model is not available on the selected connection. Use its exact model ID and choose a matching provider/connection, or retry without a model override.")).toBe("model_not_found");
+    expect(classifyInfraFailure('Agent: role "executor" ran on the parent\'s model (explore default model "cheap-1" is not available on this connection; ran on the parent\'s model.)')).toBe("model_not_found");
     expect(classifyInfraFailure('Agent: model "glm-4.6" could not be resolved in this host: nope')).toBe("model_not_found");
-    expect(classifyInfraFailure("This model is not available on the selected connection.")).toBe("model_not_found");
   });
 
-  it("401/403/auth -> auth", () => {
-    expect(classifyInfraFailure("provider returned 401 unauthorized")).toBe("auth");
-    expect(classifyInfraFailure("HTTP 403 Forbidden")).toBe("auth");
-    expect(classifyInfraFailure("auth_invalid from broker")).toBe("auth");
+  it("redacted safe messages -> auth/quota/unreachable (failure.ts SAFE_MESSAGES, not raw bodies)", () => {
+    expect(classifyInfraFailure("authentication failed (HTTP 401)")).toBe("auth");
+    expect(classifyInfraFailure("forbidden (HTTP 403)")).toBe("auth");
+    expect(classifyInfraFailure("Proxy authentication failed (407). Check the username and password in the connection proxy settings.")).toBe("auth");
+    expect(classifyInfraFailure("rate limited (HTTP 429)")).toBe("quota");
+    expect(classifyInfraFailure("quota exhausted")).toBe("quota");
+    expect(classifyInfraFailure("rate limit reached after 3 retries")).toBe("quota");
+    expect(classifyInfraFailure("network error")).toBe("unreachable");
+    expect(classifyInfraFailure("connect timeout")).toBe("unreachable");
+    expect(classifyInfraFailure("Proxy unavailable. Check the connection proxy address and that the proxy is running, then try again.")).toBe("unreachable");
+    expect(classifyInfraFailure("TLS certificate is not trusted. For a corporate proxy, configure NODE_EXTRA_CA_CERTS with your trusted CA certificate and restart AnyCode.")).toBe("unreachable");
+    expect(classifyInfraFailure("server error (HTTP 500)")).toBe("unreachable");
   });
 
-  it("429/quota/rate -> quota (the final error text after retries)", () => {
-    expect(classifyInfraFailure("429 Too Many Requests after 3 retries")).toBe("quota");
-    expect(classifyInfraFailure("quota exceeded on this key")).toBe("quota");
-    expect(classifyInfraFailure("rate limit reached")).toBe("quota");
-  });
-
-  it("network/TLS texts -> unreachable", () => {
-    expect(classifyInfraFailure("getaddrinfo ENOTFOUND api.example.com")).toBe("unreachable");
-    expect(classifyInfraFailure("connect ECONNREFUSED 127.0.0.1:443")).toBe("unreachable");
-    expect(classifyInfraFailure("socket hang up ECONNRESET")).toBe("unreachable");
-    expect(classifyInfraFailure("ETIMEDOUT")).toBe("unreachable");
-    expect(classifyInfraFailure("unable to verify the first certificate (TLS)")).toBe("unreachable");
-    expect(classifyInfraFailure("host unreachable")).toBe("unreachable");
-  });
-
-  it("first-token stalls -> timeout_first_token", () => {
-    expect(classifyInfraFailure("aborted before first token")).toBe("timeout_first_token");
-    expect(classifyInfraFailure("stream stalled before any output")).toBe("timeout_first_token");
-  });
-
-  it("ordinary task failures NEVER classify (no fallback)", () => {
+  it("FREE MODEL TEXT never classifies: an executor's own report discussing auth/lines/imports/code is a task report, not infra", () => {
+    // F3's false-positive class: a child that touched auth code, hit a TS
+    // import error in its own work, or reported "line 403"/"unreachable
+    // code"/an author field must NEVER respawn.
+    expect(classifyInfraFailure("I refactored the authorize() function and fixed the OAuth token refresh; the author field was stale.")).toBe("none");
+    expect(classifyInfraFailure("line 403 needs a nil check before the map access")).toBe("none");
+    expect(classifyInfraFailure("Module \"../provider/failure\" could not be resolved by the test bundler; switched to a relative import.")).toBe("none");
+    expect(classifyInfraFailure("The linter flags the unreachable code after the early return.")).toBe("none");
+    expect(classifyInfraFailure("429 tests passed, 2 flaky (line 88 timing)")).toBe("none");
     expect(classifyInfraFailure("task failed: could not find the file")).toBe("none");
     expect(classifyInfraFailure("test assertion failed in runner.test.ts")).toBe("none");
     expect(classifyInfraFailure("the child reported DEFECTS and asked for changes")).toBe("none");
@@ -178,7 +175,7 @@ describe("decideRoutedTerminal (Taskana 4704 §3.6)", () => {
     const d = decideRoutedTerminal(
       facts([{ connection: "conn-main", model: "glm-5.3" }]),
       "error",
-      "429 Too Many Requests after retries",
+      "rate limited (HTTP 429)",
       cache,
       T0,
     );
@@ -194,7 +191,7 @@ describe("decideRoutedTerminal (Taskana 4704 §3.6)", () => {
 
   it("an exhausted chain delivers exhausted (the caller appends the failure line)", () => {
     const cache = new RoleHealthCache();
-    const d = decideRoutedTerminal(facts(), "error", "ETIMEDOUT", cache, T0);
+    const d = decideRoutedTerminal(facts(), "error", "network error", cache, T0);
     expect(d).toMatchObject({ action: "deliver_exhausted", reason: "unreachable" });
   });
 
@@ -209,6 +206,36 @@ describe("decideRoutedTerminal (Taskana 4704 §3.6)", () => {
     );
     expect(d).toEqual({ action: "deliver" });
     // No health mutation for a task failure.
+    expect(cache.snapshot().size).toBe(0);
+  });
+
+  // F3 (cross-review): a cancelled or max_turns terminal NEVER respawns, no
+  // matter what free text it carries — the user's Stop and the turn budget
+  // are user-visible outcomes, and a second executor would re-edit the same
+  // worktree after the user's decision.
+  it("a CANCELLED terminal never respawns — even with an infra-looking error text", () => {
+    const cache = new RoleHealthCache();
+    const d = decideRoutedTerminal(
+      facts([{ connection: "conn-main" }]),
+      "cancelled",
+      "rate limited (HTTP 429)",
+      cache,
+      T0,
+    );
+    expect(d).toEqual({ action: "deliver" });
+    expect(cache.snapshot().size).toBe(0);
+  });
+
+  it("a MAX_TURNS terminal never respawns — even with an infra-looking error text", () => {
+    const cache = new RoleHealthCache();
+    const d = decideRoutedTerminal(
+      facts([{ connection: "conn-main" }]),
+      "max_turns",
+      "authentication failed (HTTP 401)",
+      cache,
+      T0,
+    );
+    expect(d).toEqual({ action: "deliver" });
     expect(cache.snapshot().size).toBe(0);
   });
 });

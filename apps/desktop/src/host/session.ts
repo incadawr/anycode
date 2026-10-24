@@ -822,15 +822,6 @@ export interface SessionOptions {
     noteTurnStarted(): void;
   };
   /**
-   * A1 (Taskana 4704 review): the mode CHILD spawns should run under. While
-   * orchestrate is on, this is the PRE-orchestrate mode with `plan` coerced
-   * to `build` (an executor child must be able to write; yolo only if the
-   * user was already yolo); otherwise the LIVE mode (the pre-4704
-   * inherit-parent contract, cut §0.8). The host's child-session port reads
-   * it per spawn via its getPermissionMode seam. Absent => the live mode.
-   */
-  childSpawnMode?: () => PermissionMode;
-  /**
    * Taskana 4704 §3.6: the orchestrator-route turn-start check. Called at
    * turn accept (before busy=true) ONLY while orchestrate is on and
    * roles.orchestrator.primary targets the tab's ACTIVE connection: the host
@@ -1105,8 +1096,6 @@ export class Session {
   private readonly uiTaskOutputCursors = new Map<string, number>();
   /** TASK.145 срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
   private readonly backgroundChildren: SessionOptions["backgroundChildren"];
-  /** A1 (Taskana 4704 review): optional override of the child spawn permission mode; absent => the live engine mode. */
-  private readonly childSpawnModeOverride: SessionOptions["childSpawnMode"];
   /** Taskana 4704 §3.7: host callback on every orchestrate transition (loop-config copy). */
   private readonly onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
   /** Taskana 4704 §3.6: turn-start orchestrator-route health check (host-owned health cache). */
@@ -1485,7 +1474,6 @@ export class Session {
     this.shell = options.shell;
     this.tasks = options.tasks;
     this.backgroundChildren = options.backgroundChildren;
-    this.childSpawnModeOverride = options.childSpawnMode;
     this.onOrchestrateChanged = options.onOrchestrateChanged;
     this.orchestratorRouteCheck = options.orchestratorRouteCheck;
     this.supervisorIdle = options.supervisorIdle;
@@ -4478,14 +4466,12 @@ export class Session {
    * MUST be able to write) and `yolo` preserved only if the user was already
    * yolo. Otherwise: the LIVE mode — the pre-4704 inherit-parent contract
    * (cut §0.8 "a snapshot of the parent's mode at the moment Agent was
-   * invoked"). The host's child-session port reads this per spawn through its
-   * getPermissionMode seam; the deps' optional childSpawnMode thunk
-   * (host/index.ts) delegates here.
+   * invoked"). The host's child-session port derives the same answer from its
+   * own cells (F1: this method once took an override thunk that the host's
+   * late-binding cell bounced back into — infinite recursion; the override is
+   * gone and this method is the Session's own derivation, mirrored host-side).
    */
   childSpawnMode(): PermissionMode {
-    if (this.childSpawnModeOverride !== undefined) {
-      return this.childSpawnModeOverride();
-    }
     if (!this.orchestrate) {
       return this.engine.mode();
     }

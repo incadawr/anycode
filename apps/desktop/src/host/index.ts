@@ -629,19 +629,24 @@ interface RoutedSpawnRecord {
 const routedSpawns = new Map<string, RoutedSpawnRecord>();
 
 /**
- * Taskana 4704 §3.6: registers a detached spawn's route facts at ADMIT time.
- * Called by the host wrapper around the child port (see the spawnTap seam in
- * createCoreChildSessionPort) — pure bookkeeping, no I/O.
+ * Taskana 4704 §3.6 (cross-review F2): registers a detached spawn's route
+ * facts at ADMIT time. Called by the host wrapper around the child port with
+ * the entry the child ACTUALLY runs on (as stamped on the request) plus the
+ * remaining chain — pure bookkeeping, no I/O.
  */
-function noteRoutedSpawn(req: SessionSubagentRequest, resolution: RoleRouteResolution): void {
-  const first = resolution.entries[0];
-  if (first === undefined || !isRoleRouteName(req.agentType)) return;
+function noteRoutedSpawn(
+  req: SessionSubagentRequest,
+  actualEntry: import("@anycode/core").RoleRouteEntry,
+  rest: import("@anycode/core").RoleRouteEntry[],
+  skipped: readonly { entry: import("@anycode/core").RoleRouteEntry; reason: string }[],
+): void {
+  if (!isRoleRouteName(req.agentType)) return;
   routedSpawns.set(req.spawnToolCallId, {
     role: req.agentType,
-    entry: first,
-    rest: resolution.entries.slice(1),
-    usedFallback: resolution.skipped.length > 0,
-    ...(resolution.skipped.length > 0 ? { skipReason: resolution.skipped[0]!.reason } : {}),
+    entry: actualEntry,
+    rest: [...rest],
+    usedFallback: skipped.length > 0,
+    ...(skipped.length > 0 ? { skipReason: skipped[0]!.reason } : {}),
   });
 }
 
@@ -678,23 +683,71 @@ function respawnRoutedRoleChild(outcome: SessionSubagentOutcome, req: SessionSub
     outcome.finalText = `${outcome.finalText}\n[role ${record!.role}: all route entries failed]`;
     return false;
   }
-  // Respawn the same prompt/description on the next healthy entry: a FRESH
-  // spawnToolCallId, description prefixed "[fallback] ", and the report the
-  // orchestrator sees for THIS terminal is the short retrying notice.
+  // Respawn the same prompt/description on the next healthy entry (F5):
+  // stamp the entry's OWN routing fields and clear whatever the failed
+  // child carried (`...req` alone would keep a stale engine/connection of a
+  // DIFFERENT hop; the entry's engine XOR connection/provider XOR bare-model
+  // shape is authoritative). The respawn notice rides the FAILED child's
+  // spawnToolCallId — the real respawned report arrives under its own fresh
+  // id, so the renderer's originId dedupe (store.ts child_report) can never
+  // swallow it.
   const respawnId = randomUUID();
   const respawnReq: SessionSubagentRequest = {
-    ...req,
-    spawnToolCallId: respawnId,
+    agentType: req.agentType,
     description: `[fallback] ${req.description}`,
-    provider: decision.entry.provider,
-    connectionId: decision.entry.connection,
-    model: decision.entry.model,
-    effort: decision.entry.effort,
+    prompt: req.prompt,
+    spawnToolCallId: respawnId,
+    ...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {}),
+    ...(decision.entry.connection !== undefined ? { connectionId: decision.entry.connection } : {}),
+    ...(decision.entry.provider !== undefined ? { provider: decision.entry.provider } : {}),
+    ...(decision.entry.model !== undefined ? { model: decision.entry.model } : {}),
+    ...(decision.entry.effort !== undefined ? { effort: decision.entry.effort } : {}),
     detach: true,
   };
   routedSpawns.set(respawnId, { ...decision.next, rest: [...decision.next.rest] });
-  childSessionPortForRespawn?.run(respawnReq, {});
-  childReportQueue.add(respawnId, decision.notice, { status: "completed", durationMs: 0 });
+  // F5(c): the run() promise is fully handled here — a detached run settles
+  // at admit; a pre-flight/cap REFUSAL must still reach the orchestrator as
+  // an honest failure report under the FAILED child's id, never as a silent
+  // "retrying" that no report ever follows.
+  void childSessionPortForRespawn
+    ?.run(respawnReq, {})
+    .then((admit) => {
+      if (admit.status === "error") {
+        routedSpawns.delete(respawnId);
+        childReportQueue.add(
+          req.spawnToolCallId,
+          formatChildTaskNotification({
+            taskId: req.spawnToolCallId,
+            toolUseId: req.spawnToolCallId,
+            agentId: "",
+            subagentType: req.agentType,
+            status: "failed",
+            summary: `Role ${record!.role} failed (${decision.reason}) and the fallback respawn on ${entryLabel(decision.entry)} was refused: ${admit.finalText}`,
+          }),
+          { status: "error", durationMs: outcome.durationMs },
+        );
+      }
+    })
+    .catch((runError: unknown) => {
+      routedSpawns.delete(respawnId);
+      console.error(`[host] routed role respawn failed: ${describeError(runError)}`);
+      childReportQueue.add(
+        req.spawnToolCallId,
+        formatChildTaskNotification({
+          taskId: req.spawnToolCallId,
+          toolUseId: req.spawnToolCallId,
+          agentId: "",
+          subagentType: req.agentType,
+          status: "failed",
+          summary: `Role ${record!.role} failed (${decision.reason}) and the fallback respawn on ${entryLabel(decision.entry)} could not start.`,
+        }),
+        { status: "error", durationMs: outcome.durationMs },
+      );
+    });
+  // The failed child's terminal is REPLACED by the short retrying notice —
+  // under the failed child's id (a completed marker for a spawn that did
+  // happen), consumed once the renderer acks it.
+  childReportQueue.add(req.spawnToolCallId, decision.notice, { status: "completed", durationMs: 0 });
   return true;
 }
 
@@ -3626,29 +3679,35 @@ async function boot(): Promise<void> {
     // further down. `undefined` for a child-session boot or a claude/codex
     // master, exactly mirroring `config.sessionSubagents`'s own absence.
     let childSessionPortHandle: ChildSessionPort | undefined;
-    // A1 (Taskana 4704 review): late-binding cell for the child spawn
-    // permission mode. The child port (below) exists BEFORE the Session, so
-    // it reads through this cell; the Session binds its `get` to its own
-    // live `childSpawnMode()` once constructed. Unbound (pre-bind, or a boot
-    // that never reaches the Session) falls back to the live config.mode —
-    // identical to the pre-4704 wiring.
-    const rootSessionChildSpawnModeCell: {
-      value?: undefined;
-      get?: () => PermissionMode;
-    } = {};
+    // A1 (Taskana 4704 review, cross-review F1): the child port (below)
+    // exists BEFORE the Session, so the child spawn mode must be derived
+    // WITHOUT the Session — a late-binding cell that bounced back into the
+    // Session's own `childSpawnMode()` recursed forever (Session.childSpawn-
+    // Mode() called the override, the override called the Session). The
+    // derivation lives HERE, against the same facts the Session reads
+    // (config.mode live, config.orchestrate/preOrchestrateMode cells the
+    // Session's set_orchestrate handler owns — see session.ts onSetOrches-
+    // trate: enable remembers the current mode and sets `plan`, disable
+    // restores it), and the Session's childSpawnMode() (no longer takes an
+    // override) derives the identical answer from its own state.
+    let preOrchestrateMode: PermissionMode | undefined;
     if (!isChildSessionBoot(args, sessionMeta)) {
       childSessionPortHandle = createChildSessionPort({
         parentSessionId: sessionMeta.id,
-        // A1 (Taskana 4704 review): children inherit the mode the ORCHESTRATOR
-        // had BEFORE orchestrate was enabled — never `plan` (an orchestrate
-        // parent sits in plan, but its executor children MUST be able to
-        // write) and never `yolo` unless the user was already in yolo. The
-        // Session exposes this as `childSpawnMode()`; non-orchestrate sessions
-        // return the live mode (byte-identical pre-4704 behavior — the child
-        // inherits the parent's mode at the moment Agent was invoked, cut
-        // §0.8). Late-bound through the cell below because the port exists
-        // before the Session is constructed.
-        getPermissionMode: () => rootSessionChildSpawnModeCell.get?.() ?? config.mode,
+        // A1: children inherit the mode the ORCHESTRATOR had BEFORE
+        // orchestrate was enabled — never `plan` (an orchestrate parent sits
+        // in plan, but its executor children MUST be able to write) and never
+        // `yolo` unless the user was already in yolo. Non-orchestrate
+        // sessions return the live mode (byte-identical pre-4704 behavior —
+        // the child inherits the parent's mode at the moment Agent was
+        // invoked, cut §0.8).
+        getPermissionMode: () => {
+          if (!config.orchestrate) {
+            return config.mode;
+          }
+          const pre = preOrchestrateMode ?? "build";
+          return pre === "plan" ? "build" : pre;
+        },
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
         // TASK.145 срез 1: the detach-delivery seam. Fires strictly AFTER
@@ -3680,10 +3739,32 @@ async function boot(): Promise<void> {
       childSessionPortForRespawn = childSessionPortHandle;
       const innerRun = childSessionPortHandle.run.bind(childSessionPortHandle);
       childSessionPortHandle.run = (req: SessionSubagentRequest, opts: SubagentRunOptions) => {
-        if (req.detach === true && isRoleRouteName(req.agentType)) {
+        // Cross-review F2: record ONLY spawns whose route the HOST actually
+        // stamped — a caller-passed explicit model/provider/connection is the
+        // caller's own choice, never a role-chain hop, so a later infra
+        // failure must NOT respawn it onto the chain (that would override the
+        // explicit request). Discriminator: the request is route-stamped iff
+        // its routing fields equal the resolved chain's HEAD entry exactly
+        // (agent.ts stamps entries[0] verbatim when the caller passed none of
+        // them; any explicit field makes at least one comparison diverge).
+        // The recorded entry is what was stamped — NOT resolution.entries[0]
+        // blindly — and the recorded tail is the chain AFTER the head (health
+        // skipping already reordered the chain the resolver returns now).
+        if (req.detach === true && isRoleRouteName(req.agentType) && req.resumeChildSessionId === undefined) {
           const resolution = resolveRoleRouteImpl(req.agentType);
-          if (resolution !== null) {
-            noteRoutedSpawn(req, resolution);
+          const head = resolution?.entries[0];
+          if (head !== undefined) {
+            const headProvider = head.provider;
+            const headConnection = head.connection;
+            const headEngine = head.engine;
+            const stamped =
+              req.provider === headProvider &&
+              req.connectionId === headConnection &&
+              req.engine === headEngine &&
+              req.model === head.model;
+            if (stamped) {
+              noteRoutedSpawn(req, head, resolution!.entries.slice(1), resolution!.skipped);
+            }
           }
         }
         return innerRun(req, opts);
@@ -4194,21 +4275,24 @@ async function boot(): Promise<void> {
             },
           }
         : {}),
-      // A1 (Taskana 4704 review): the Session exposes the mode CHILD spawns
-      // should run under — the pre-orchestrate mode while orchestrate is on
-      // (plan is coerced to build: an executor child must be able to write;
-      // yolo only if the user was already yolo), else the live mode. The
-      // child port's getPermissionMode reads it through the late-binding
-      // cell declared next to its construction above.
-      childSpawnMode: (): PermissionMode => rootSessionChildSpawnModeCell.get?.() ?? config.mode,
+      // A1 (Taskana 4704 review, cross-review F1): the Session derives the
+      // child spawn mode itself (childSpawnMode(), session.ts) from its own
+      // orchestrate state — the host port's copy (above) mirrors the same
+      // derivation because the port exists before the Session. There is no
+      // override option anymore: the earlier override wiring recursed.
       // Taskana 4704 §3.7: orchestrate transitions land on the AgentLoopConfig
       // (config.orchestrate), which the loop threads into the dispatch context
       // and the dispatcher into every ToolContext — the Agent tool reads it for
       // orchestrate default-detach (§3.3).
       onOrchestrateChanged: (enabled: boolean) => {
         if (enabled) {
+          // A1/F1: remember the pre-orchestrate mode BEFORE flipping to plan
+          // — this cell is what the child port's getPermissionMode (above)
+          // reads for every spawn while orchestrate stays on.
+          preOrchestrateMode = config.mode;
           config.orchestrate = true;
         } else {
+          preOrchestrateMode = undefined;
           delete config.orchestrate;
         }
       },
@@ -4229,15 +4313,26 @@ async function boot(): Promise<void> {
         // Only a fallback carrying a model on THIS connection can switch
         // here (an engine/connection entry is a different connection —
         // manual, surfaced as the reason line only when it has a model).
+        // F9 (cross-review): the switch itself requires a BARE model entry
+        // (no engine, no connection) — an entry like {engine: "codex",
+        // model: "gpt-…"} names a model on ANOTHER connection, and
+        // switchModelImpl on it would flip the active tab to a foreign id
+        // (§9-Q2: connection switching stays manual).
         const reason = picked.skipped[0]?.reason ?? "unhealthy";
-        if (picked.entry.model === undefined) {
+        const switchModel = picked.entry.model;
+        const switchable =
+          switchModel !== undefined &&
+          picked.entry.engine === undefined &&
+          picked.entry.connection === undefined &&
+          picked.entry.provider === undefined;
+        if (!switchable || switchModel === undefined) {
           return `Orchestrator: primary route unhealthy (${reason}); configure a model fallback to switch automatically.`;
         }
         const effort = picked.entry.effort === undefined || picked.entry.effort === "xhigh"
           ? undefined
           : picked.entry.effort;
-        switchModelImpl(picked.entry.model, effort ?? selectedEffort ?? "medium");
-        return `Orchestrator: primary route unhealthy (${reason}), running on ${picked.entry.model}.`;
+        switchModelImpl(switchModel, effort ?? selectedEffort ?? "medium");
+        return `Orchestrator: primary route unhealthy (${reason}), running on ${switchModel}.`;
       },
       // Slice P7.8 (design slice-P7.8-cut.md §3.2, mirror of the `lsp` seam
       // above): telemetry reads live counters on every push; repo-map is
@@ -4319,14 +4414,12 @@ async function boot(): Promise<void> {
           }
         : {}),
     });
-    // A1 (Taskana 4704 review): bind the child-port's late-binding spawn-mode
-    // cell to the Session's own `childSpawnMode()` LIVE getter — while
-    // orchestrate is on, children run under the PRE-orchestrate mode (plan
-    // coerced to build); otherwise the live mode (the pre-4704
-    // inherit-parent contract). Bound as a thunk (not a snapshot) so a
-    // set_mode/set_orchestrate between spawns is picked up on the next call.
-    const rootSession = session;
-    rootSessionChildSpawnModeCell.get = () => rootSession.childSpawnMode();
+    // A1/F1 (Taskana 4704 cross-review): no post-construction binding. The
+    // child port's getPermissionMode closure (declared next to the port,
+    // above) derives the spawn mode from the same host cells this callback
+    // keeps current — the earlier late-binding-cell round-trip
+    // (port -> Session.childSpawnMode() -> cell -> port ...) recursed
+    // forever on the first spawn of a session-tier child.
 
     console.log(
       `[host] initialized. workspace=${workspace} model=${envConfig.model} session=${sessionId}` +

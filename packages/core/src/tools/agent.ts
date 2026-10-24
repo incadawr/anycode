@@ -308,12 +308,15 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       const roleRoute = ctx.subagents?.resolveRoleRoute?.(agentType) ?? null;
       if (roleRoute !== null) {
         // An entry carrying connection/engine selects its own connection —
-        // the inline tier cannot honor it (same 4269 refusal shape).
+        // the inline tier cannot honor it (same 4269 refusal shape). F9
+        // (cross-review): only the RESOLVED entry (entries[0] — the one this
+        // spawn would actually run on) decides; a connection-tail behind a
+        // healthy bare-model head never blocks an inline run.
+        const resolved = roleRoute.entries[0];
         if (
           tier !== "session" &&
-          roleRoute.entries.some(
-            (entry) => entry.connection !== undefined || entry.engine !== undefined,
-          )
+          resolved !== undefined &&
+          (resolved.connection !== undefined || resolved.engine !== undefined)
         ) {
           return {
             ok: false,
@@ -547,10 +550,21 @@ async function runSessionTier(
           ...(input.provider === undefined && roleRoute.entries[0]!.connection !== undefined
             ? { connectionId: roleRoute.entries[0]!.connection }
             : {}),
+          // F5(a) (Taskana 4704 cross-review): an engine entry (a role
+          // primary pinned to claude/codex by settings) stamps `engine` on
+          // the creating spawn — the host's respawn bookkeeping reads the
+          // entry the child ACTUALLY runs on from the request, and without
+          // the engine stamp a role-pinned-to-codex respawn would boot core.
+          ...(input.provider === undefined && input.model === undefined && roleRoute.entries[0]!.engine !== undefined
+            ? { engine: roleRoute.entries[0]!.engine }
+            : {}),
           ...(input.model === undefined && roleRoute.entries[0]!.model !== undefined
             ? { model: roleRoute.entries[0]!.model }
             : {}),
-          ...(roleRoute.entries[0]!.effort !== undefined ? { effort: roleRoute.entries[0]!.effort } : {}),
+          // F9 (cross-review): an EXPLICIT model beats the route's model and
+          // also the route's effort — the caller chose the model, and the
+          // entry's effort tier belongs to a model they did not choose.
+          ...(input.model === undefined && roleRoute.entries[0]!.effort !== undefined ? { effort: roleRoute.entries[0]!.effort } : {}),
           ...(roleRoute.turnBudget !== undefined && engineProfile?.turnBudget === undefined
             ? { maxTurns: roleRoute.turnBudget }
             : {}),

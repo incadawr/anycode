@@ -5,19 +5,23 @@
  * (`AgentBridgeCatalogEntry[]`, срез S1's `buildAgentBridgeToolDecl`/
  * `runAgentBridgeCall`).
  *
- * Deliberately excludes built-in personas (`general-purpose`/`explore`) even
- * if one ever appeared in the input list: `discoverAgentProfiles` itself never
- * returns one (it only scans `.anycode/agents/*.md`, never `PERSONAS`), but
- * `isKnownPersona` is checked here too so the exclusion holds by construction
- * rather than by the caller only ever passing the right array (plan §3.1: "
- * встроенные персоны … НЕ включаются в v1").
+ * Deliberately excludes hard-reserved personas (`general-purpose`/`explore`)
+ * even if one ever appeared in the input list: `discoverAgentProfiles` itself
+ * never returns one (it only scans `.anycode/agents/*.md`, never `PERSONAS`),
+ * but `isReservedPersonaName` is checked here too so the exclusion holds by
+ * construction rather than by the caller only ever passing the right array
+ * (plan §3.1: "встроенные персоны … НЕ включаются в v1"). Taskana 4704 made
+ * planner/executor/reviewer overridable personas (an md-profile or a
+ * settings-derived role persona may legitimately own those names), so the
+ * filter must be the reserved-name check, not `isKnownPersona` — otherwise
+ * user role personas vanish from the Claude bridge catalog.
  */
 
-import { isKnownPersona, type AgentBridgeCatalogEntry, type PersonaDefinition } from "@anycode/core";
+import { isReservedPersonaName, type AgentBridgeCatalogEntry, type PersonaDefinition } from "@anycode/core";
 
 export function catalogFromProfiles(profiles: readonly PersonaDefinition[]): AgentBridgeCatalogEntry[] {
   return profiles
-    .filter((profile) => !isKnownPersona(profile.name))
+    .filter((profile) => !isReservedPersonaName(profile.name))
     .map((profile) => ({
       name: profile.name,
       description: profile.description,

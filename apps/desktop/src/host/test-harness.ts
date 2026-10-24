@@ -434,12 +434,6 @@ export interface HarnessOptions {
   fsHook?: (readFile: (path: string) => Promise<string>, path: string, signal: AbortSignal | undefined) => Promise<string>;
   /** Replaces the built-in CoreEngine for neutral Session seam tests. */
   engine?: SessionEngine;
-  /**
-   * Taskana 4704 (part A): the A1 child-spawn-mode seam, threaded DIRECTLY
-   * to Session. Omitted -> Session falls back to its own orchestrate-aware
-   * derivation (engine mode / pre-orchestrate mode).
-   */
-  childSpawnMode?: SessionOptions["childSpawnMode"];
   /** Taskana 4704 §3.7: host callback on orchestrate transitions; omitted -> absent seam. */
   onOrchestrateChanged?: SessionOptions["onOrchestrateChanged"];
   /** Taskana 4704 §3.6: turn-start orchestrator-route health check; omitted -> absent seam. */
@@ -718,7 +712,6 @@ export function createHarness(options: HarnessOptions): Harness {
   const session = new Session({
     outbound,
     engine,
-    ...(options.childSpawnMode !== undefined ? { childSpawnMode: options.childSpawnMode } : {}),
     ...(options.onOrchestrateChanged !== undefined ? { onOrchestrateChanged: options.onOrchestrateChanged } : {}),
     ...(options.orchestratorRouteCheck !== undefined ? { orchestratorRouteCheck: options.orchestratorRouteCheck } : {}),
     ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),
