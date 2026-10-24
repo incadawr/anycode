@@ -21,6 +21,16 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   falls back to the parent's model with a one-line notice in the child's
   report instead of failing every explore call; an explicit disallowed
   `Agent(model: …)` still errors as before.
+### Changed
+
+- A Claude Code tab's agent bridge re-reads profile files before each
+  `mcp__anycode__agent` call, so an edited profile body or model applies from
+  the next spawn — the same behavior a Codex supervisor already had. Profile
+  names stay fixed for the session on both engines.
+- TASK.97 R2/R3 are closed by the shipped agent bridges: Codex tabs delegate
+  via the `anycode_agent` dynamic tool and Claude tabs via the in-band
+  `anycode` MCP server; projecting profiles into the CLI's own registry
+  (`--agents <json>`) was rejected because `engine:` has no meaning there.
 
 ## [0.0.35] — 2026-10-10
 
