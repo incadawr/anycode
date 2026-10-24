@@ -39,6 +39,7 @@ import type {
   PermissionMode,
   ReasoningEffort,
   RecognizerEndpoint,
+  SkillPort,
   TelemetryStatus,
 } from "@anycode/core";
 import type { HostToUiMessage, UiToHostMessage, WireEnvStatus, WirePort } from "../shared/protocol.js";
@@ -486,6 +487,14 @@ export interface HarnessOptions {
    * wiring (every pre-existing test unaffected).
    */
   switchEngineFactory?: SessionOptions["switchEngineFactory"];
+  /**
+   * : a SkillPort + skills prompt-section text threaded into
+   * AgentLoopConfig EXACTLY as host boot does (`config.skills` from
+   * createSkillPort, `systemPromptComponents` carrying the skills section).
+   * Omitted -> no `skills` key and no components (the Skill tool stays
+   * fail-closed "unavailable"), byte-identical for every existing test.
+   */
+  skills?: { port: SkillPort; promptSection: string };
 }
 
 export interface Harness {
@@ -648,6 +657,21 @@ export function createHarness(options: HarnessOptions): Harness {
     // Mirror host boot: planExitMode + onModeChange, or nothing at
     // all -> ctx.planMode is never built and ExitPlanMode fails closed.
     ...(planExit ?? {}),
+    // Mirror host boot: the skills port + prompt section, or
+    // nothing at all -> the Skill tool stays fail-closed "unavailable".
+    ...(options.skills
+      ? {
+          skills: options.skills.port,
+          systemPromptComponents: [
+            { kind: "memory" as const, text: "" },
+            { kind: "skills" as const, text: options.skills.promptSection },
+            { kind: "workflows" as const, text: "" },
+            { kind: "profiles" as const, text: "" },
+            { kind: "repoMap" as const, text: "" },
+          ],
+          systemPrompt: options.skills.promptSection,
+        }
+      : {}),
   };
   const loop = new AgentLoop(config);
   // : mirror the REAL host boot seam (host/index.ts's

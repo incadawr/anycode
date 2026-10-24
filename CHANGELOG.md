@@ -62,6 +62,18 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ## [0.0.35] — 2026-10-24
 
 ### Added
+- User documentation tree `docs/user/`: configuration files and their
+  precedence, engines, subagent profiles, skills, MCP servers, permissions,
+  proxy, orchestration, and troubleshooting checklists. The tree ships with
+  releases (packed into the app bundle by electron-builder) and is indexed by
+  `docs/user/README.md`, which also maps every Settings pane to its page.
+- Built-in `anycode-setup` skill: helps configure AnyCode itself (settings,
+  connections, engines, MCP servers, skills, subagent profiles, permissions,
+  proxy). It summarizes the docs topics, diagnoses the current configuration
+  read-only (citing file paths), and defers every edit to Write/Edit calls
+  under the approval gate. It never prints API keys or secrets — they are
+  referred to by env-var name or vault slot only. A same-name project/user
+  skill shadows it and it can be disabled like every other skill.
 
 - The built-in `explore` recon subagent can run on a cheaper model: set
   `ANYCODE_EXPLORE_MODEL` (exact model id) and every inline explore child

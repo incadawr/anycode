@@ -118,6 +118,7 @@ procedure, and [CHANGELOG.md](CHANGELOG.md) for user-facing changes.
 - `apps/desktop` — the Electron application.
 - `apps/cli` — the command-line interface.
 - `packages/core` — the agent loop and shared platform logic.
+- `docs/user` — user-facing configuration and setup documentation.
 - `docs/development` — public development, automation, and release guidance.
 
 ## Roadmap and contribution guidance
