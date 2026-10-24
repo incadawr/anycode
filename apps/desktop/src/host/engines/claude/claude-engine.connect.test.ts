@@ -12,7 +12,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import { CLAUDE_NOT_SIGNED_IN, resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
-import type { ClaudeMcpBridge } from "./mcp-bridge.js";
+import { ClaudeMcpBridge } from "./mcp-bridge.js";
 
 interface FakeStream extends EventEmitter {
   write(chunk: unknown): boolean;
@@ -465,6 +465,30 @@ describe("TASK.226 срез S4 — the MCP bridge is wired BEFORE initialize is 
     try {
       expect(capturedSdkMcpServers()).toBeUndefined();
       expect(nestedMcpResponse()).toBeUndefined();
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("Taskana 4238: a REAL bridge's notification ack rides the full wire envelope written by ClaudeClient — response is an object, never absent", async () => {
+    // Unlike fakeBridge() above, this drives the real `ClaudeMcpBridge` +
+    // `ClaudeClient` pair end to end: the fake CLI's nested
+    // `notifications/initialized` (the exact message whose empty-body answer
+    // broke CLI 2.1.288+'s SDK MCP connect) is answered by the real bridge
+    // and the envelope actually WRITTEN to the child's stdin is inspected.
+    const { spawnImpl, nestedMcpResponse, capturedSdkMcpServers } = fakeSpawn();
+    const bridge = new ClaudeMcpBridge({
+      serverName: "anycode",
+      version: "0.0.1",
+      listTools: () => [],
+      callTool: () => Promise.reject(new Error("no tool calls in this test")),
+    });
+    const connected = await startClaudeEngine({ ...baseOptions(spawnImpl), mcpBridge: bridge });
+    try {
+      expect(capturedSdkMcpServers()).toEqual(["anycode"]);
+      const nested = nestedMcpResponse();
+      expect(nested?.subtype).toBe("success");
+      expect(nested?.response).toEqual({ mcp_response: { jsonrpc: "2.0", result: {}, id: 0 } });
     } finally {
       await connected.engine.dispose("session-close");
     }
