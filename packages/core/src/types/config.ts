@@ -41,6 +41,7 @@ export interface CoreEnvConfig {
    * ); 0 disables.
    */
   todoReminderEvery?: number;
+  /**
    * Supervisor idle-watchdog first-reminder threshold override in ms (, ANYCODE_SUPERVISOR_IDLE_MS). NOT the subagent stall detector
    * (`subagentStallTimeoutMs` above, ANYCODE_SUBAGENT_STALL_MS) — this one
    * bounds how long an idle supervisor (turn ended, no live detached children,
