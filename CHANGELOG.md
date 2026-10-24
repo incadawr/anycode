@@ -16,8 +16,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   a small loopback relay is started on `127.0.0.1` and the children receive
   its credential-free URL instead, so npm/git/curl keep working while the
   password stays out of every child's environment, whichever side exported
-  the credential — the Claude/Codex engine tabs and the model connection keep
-  the full URL by design (a known, separate follow-up).
+  the credential. The Claude/Codex engine tabs and their doctors get the same
+  relay URL. A credentialed legacy proxy URL is moved into a proxy profile
+  with the password in the vault.
 
 ## [0.0.35] — 2026-10-24
 
