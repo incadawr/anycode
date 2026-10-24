@@ -80,4 +80,38 @@ describe("dock store", () => {
     const store = createDockStore(memoryStorage({ "anycode.preview.width": "700" }));
     expect(store.getState().width).toBe(700);
   });
+
+  // ── Stage 2 (§3): split/merge/auto-merge ──
+
+  it("splitRight pins an open tab when allowed; mergeSplit unpins", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_MD);
+    store.getState().splitRight(TAB_MD.id, true);
+    expect(store.getState().splitTabId).toBe("preview:md");
+    store.getState().mergeSplit();
+    expect(store.getState().splitTabId).toBe(null);
+  });
+
+  it("splitRight refuses when not allowed (window too narrow) — a no-op, never a broken split", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_MD);
+    store.getState().splitRight(TAB_MD.id, false);
+    expect(store.getState().splitTabId).toBe(null);
+  });
+
+  it("splitRight refuses an unknown tab id", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().splitRight("preview:ghost", true);
+    expect(store.getState().splitTabId).toBe(null);
+  });
+
+  it("closing the pinned tab unpins it (never leaves a dangling splitTabId)", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_MD);
+    store.getState().open(TAB_GIT);
+    store.getState().splitRight(TAB_MD.id, true);
+    store.getState().close(TAB_MD.id);
+    expect(store.getState().splitTabId).toBe(null);
+    expect(store.getState().tabs.map((t) => t.id)).toEqual(["git"]);
+  });
 });

@@ -416,12 +416,13 @@ async function step9SplitLeg(ctx) {
   await waitForDockState(ctx, 9, (s) => s.mode === "column", "column at 1800", 30_000);
   const split = await apiOk(ctx, 9, "POST", `/dock/tabs/${encodeURIComponent(`preview:${ctx.htmlPreviewId}`)}/split`);
   assert(9, split?.ok === true, `split failed: ${JSON.stringify(split)}`);
-  const splitState = await waitForDockState(ctx, 9, (s) => s.split === true, "split:true", 20_000);
-  record("1800px: split right → split:true", splitState.split === true ? "PASS" : "FAIL", JSON.stringify(splitState.split));
+  // `split` is the pinned tab ID (string) or null — never a boolean.
+  const splitState = await waitForDockState(ctx, 9, (s) => typeof s.split === "string", "split:<tabId>", 20_000);
+  record("1800px: split right → split pinned", typeof splitState.split === "string" ? "PASS" : "FAIL", JSON.stringify(splitState.split));
 
   await apiOk(ctx, 9, "POST", "/window/size", { width: 900, height: 700 });
-  const merged = await waitForDockState(ctx, 9, (s) => s.split !== true, "auto-merged", 30_000);
-  record("900px: below canSplit → auto-merged", merged.split !== true ? "PASS" : "FAIL", JSON.stringify(merged.split));
+  const merged = await waitForDockState(ctx, 9, (s) => s.split === null, "auto-merged (split:null)", 30_000);
+  record("900px: below canSplit → auto-merged", merged.split === null ? "PASS" : "FAIL", JSON.stringify(merged.split));
 }
 
 // ── teardown ──

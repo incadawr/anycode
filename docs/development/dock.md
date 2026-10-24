@@ -84,7 +84,11 @@ still measures `.preview-panel-body`; overlay hiding (D6/D7) is unchanged.
 
 ## Stage 2 (split view on wide windows)
 
-When `available >= 420 + 2*320 + 2*8 = 1088px`, a per-tab "Split right"
-action pins a second tab into a secondary pane inside the dock (width
-`DOCK_WIDTH_MIN`, border-left). Shrinking below the threshold auto-merges.
-No drag between panes.
+When `available >= 420 + 2*320 + 2*8 = 1076px` (`canSplit`), a per-tab
+"Split right" (⫿) action pins a second tab into a secondary pane inside the
+dock (absolute right of the primary body, width `DOCK_SPLIT_MIN_PX` =
+`DOCK_WIDTH_MIN` = 320, border-left). The pinned tab stays in the strip with
+an active mark; closing it or the header's merge button unpins. Shrinking
+below the threshold auto-calls `mergeSplit()` — no broken split survives.
+The `splitTabId` is not persisted (a boot never restores a split the window
+may no longer afford). No drag between panes (by scope decision).
