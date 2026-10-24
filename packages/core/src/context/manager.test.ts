@@ -966,3 +966,31 @@ describe("ContextManager.breakerTripped (slice 6.4)", () => {
     expect(manager.breakerTripped()).toBe(false);
   });
 });
+
+describe("runCompaction mid-stream replay (Taskana 4705 review)", () => {
+  it("installs only the replayed summary when a stream_retry discards partial text", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const history = buildHistory(messages);
+    const port = new ScriptedModelPort([
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "STALE PARTIAL " },
+      { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, reason: "connection reset" },
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "CONDENSED" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]);
+    const manager = makeManager(history, port, { keepRecentMessages: 4 });
+
+    const result = await manager.runCompaction({});
+
+    expect(result.ok).toBe(true);
+    const content = (history.items[0]!.message as { content: string }).content;
+    expect(content).toContain("CONDENSED");
+    expect(content).not.toContain("STALE");
+  });
+});

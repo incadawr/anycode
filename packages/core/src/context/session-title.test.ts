@@ -218,3 +218,17 @@ describe("generateSessionTitle", () => {
     expect(sentContent).not.toContain("noise");
   });
 });
+
+describe("generateSessionTitle mid-stream replay (Taskana 4705 review)", () => {
+  it("keeps only the replayed attempt's text when a stream_retry discards a partial reply", async () => {
+    const port = new ScriptedModelPort([
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "Stale partial " },
+      { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, reason: "connection reset" },
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "A Title" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]);
+    expect(await generateSessionTitle({ modelPort: port, text: "x" })).toBe("A Title");
+  });
+});

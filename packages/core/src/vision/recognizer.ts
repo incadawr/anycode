@@ -180,6 +180,9 @@ export async function ask(opts: AskOptions): Promise<AskResult> {
       }
       if (event.type === "text_delta") {
         text += event.text;
+      } else if (event.type === "stream_retry") {
+        // Taskana 4705 review: a mid-stream replay discards the partial attempt.
+        text = "";
       } else if (event.type === "finish") {
         usage = event.usage;
       } else if (event.type === "error") {

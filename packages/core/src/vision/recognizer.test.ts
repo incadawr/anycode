@@ -265,3 +265,18 @@ describe("ask", () => {
     expect(OVERVIEW_QUESTION.length).toBeGreaterThan(0);
   });
 });
+
+describe("ask mid-stream replay (Taskana 4705 review)", () => {
+  it("answers with only the replayed attempt's text when a stream_retry discards a partial reply", async () => {
+    const port = new ScriptedModelPort([
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "Stale partial " },
+      { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, reason: "connection reset" },
+      { type: "start" },
+      { type: "text_delta", id: "t", text: "The image shows a button." },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]);
+    const result = await ask(baseOpts({ portFactory: () => port }));
+    expect(result).toMatchObject({ ok: true, text: "The image shows a button." });
+  });
+});

@@ -230,6 +230,10 @@ export class ContextManager {
         }
         if (event.type === "text_delta") {
           summary += event.text;
+        } else if (event.type === "stream_retry") {
+          // Taskana 4705 review: a mid-stream replay discards the partial
+          // attempt; keeping its text would install a duplicated summary.
+          summary = "";
         } else if (event.type === "error") {
           streamError = errorText(event.error);
           break;
