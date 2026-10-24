@@ -151,14 +151,20 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     setOpen(false);
   }
 
-  function openLspDetails(): void {
-    if (tabId) useTabsStore.getState().setLspPanelOpen(tabId, true);
+  // Taskana 4711 cross-review F4: a missing TabContext must not look like a
+  // working Details click — the menu still closes, so say so in the console.
+  function openPanel(apply: (id: string) => void): void {
+    if (tabId) apply(tabId);
+    else console.warn("EnvironmentMenu: no tab context, panel not opened");
     setOpen(false);
   }
 
+  function openLspDetails(): void {
+    openPanel((id) => useTabsStore.getState().setLspPanelOpen(id, true));
+  }
+
   function openHooksDetails(): void {
-    if (tabId) useTabsStore.getState().setHooksPanelOpen(tabId, true);
-    setOpen(false);
+    openPanel((id) => useTabsStore.getState().setHooksPanelOpen(id, true));
   }
 
   // Menu stays open: the row's status text updates via the next lsp_status.
@@ -279,7 +285,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
           )}
           {engine === null && (
             <>
-              <div className="environment-menu-row" role="menuitem" aria-label="Language servers">
+              <div className="environment-menu-row" role="group" aria-label="Language servers">
                 <ServerStack />
                 <span className="environment-menu-row-main">
                   <span>Language servers</span>
@@ -296,7 +302,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   )}
                 </span>
               </div>
-              <div className="environment-menu-row" role="menuitem" aria-label="Hooks">
+              <div className="environment-menu-row" role="group" aria-label="Hooks">
                 <HookIcon />
                 <span className="environment-menu-row-main">
                   <span>Hooks</span>

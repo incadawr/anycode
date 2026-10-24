@@ -42,6 +42,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Language-server and hooks status moved from the header buttons into the
+  Environment menu. Each row shows its state with a Details action; a crashed
+  language server also gets a Restart action that respawns it.
 - Provider requests are retried harder: up to 8 attempts, network outages are
   ridden out for up to 5 minutes, and a stream cut off mid-answer is replayed
   (at most twice) instead of failing the turn. Stop cancels retries at once;
