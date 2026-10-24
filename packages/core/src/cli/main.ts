@@ -96,6 +96,7 @@ import {
   diagnosticsEditTool,
   diagnosticsWriteTool,
   imageCapableReadTool,
+  loadArchMapEnabled,
 } from "../tools/index.js";
 
 // createDefaultToolRegistry and NOT in the tools barrel, so the desktop prompt
@@ -581,7 +582,19 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   // holds regardless of what a workspace's .anycode/config.json contains.
   const lspEnabled = !parsedArgs.print;
 
-  const registry = createDefaultToolRegistry();
+  // ArchMap opt-in (Taskana 4162): ANYCODE_ARCHMAP=1/true/on wins, else
+  // `tools.archMap: true` in the ~/.anycode/settings.json the permission rules
+  // already share, else OFF — the default registry (and therefore the system
+  // prompt's tool-discipline section) stays byte-identical to the pre-ArchMap
+  // baseline. Fail-soft by construction: loadArchMapEnabled never throws, so a
+  // corrupt settings file only costs the flag, never the boot.
+  const archMapEnabled = await loadArchMapEnabled(
+    fs,
+    options?.settingsFilePath ?? env.ANYCODE_SETTINGS_PATH ?? defaultSettingsFilePath(),
+    env,
+  );
+
+  const registry = createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
 
   // mcpManager.start()/toolNames snapshot below, so the tool name reaches the
 

@@ -13,6 +13,7 @@ import { webFetchTool } from "./web-fetch.js";
 import { createAgentTool, type CreateAgentToolOptions } from "./agent.js";
 import { skillTool } from "./skill.js";
 import { workflowTool } from "./workflow.js";
+import { archMapTool } from "./arch-map.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, AnyToolDefinition>();
@@ -56,13 +57,24 @@ export interface CreateDefaultToolRegistryOptions {
    * byte-compatible with the restricted, inline-only Agent declaration.
    */
   agent?: CreateAgentToolOptions;
+  /**
+   * Register ArchMap (TASK.233 slice S1), the read-only TS/JS import-graph
+   * scanner. OPT-IN (Taskana 4162): absent/false keeps it out of the registry,
+   * so the default tool list and the system prompt's tool-discipline section
+   * stay byte-identical to the pre-ArchMap baseline (e89e3d76) — its schema
+   * would otherwise tax every session's prompt on every turn. Boot wirings
+   * resolve the flag via `loadArchMapEnabled` (ANYCODE_ARCHMAP=1 env var, else
+   * `tools.archMap: true` in ~/.anycode/settings.json; default off).
+   */
+  archMap?: boolean;
 }
 
 /**
  * Builds a registry with the twelve built-ins: Read, Write, Edit, Bash, Grep
  * (Phase 0) + Glob, TodoRead, TodoWrite, WebFetch (Phase 1, design §2.14) +
  * Agent (Phase 3 slice 3.1, design §3.4) + Skill (Phase 3 slice 3.3, design
- * §2.7) + Workflow (Phase 3 slice 3.4, design §2.7).
+ * §2.7) + Workflow (Phase 3 slice 3.4, design §2.7). With opts.archMap the
+ * thirteenth built-in joins (TASK.233 slice S1, opt-in per Taskana 4162).
  */
 export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOptions): ToolRegistry {
   const registry = new ToolRegistry();
@@ -78,5 +90,8 @@ export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOption
   registry.register(createAgentTool(opts?.agent));
   registry.register(skillTool);
   registry.register(workflowTool);
+  if (opts?.archMap === true) {
+    registry.register(archMapTool);
+  }
   return registry;
 }

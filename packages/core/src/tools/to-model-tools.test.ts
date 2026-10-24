@@ -6,6 +6,7 @@ import { toToolDeclarations } from "./to-model-tools.js";
 
 const ALL_TOOLS = [
   "Agent",
+  "ArchMap",
   "Bash",
   "Edit",
   "Glob",
@@ -19,9 +20,14 @@ const ALL_TOOLS = [
   "Write",
 ];
 
+/** ArchMap is opt-in (Taskana 4162) — every assertion in this file runs with the flag ON. */
+function registryWithArchMap() {
+  return createDefaultToolRegistry({ archMap: true });
+}
+
 describe("toToolDeclarations", () => {
   it("produces one declaration per registered tool with name/description/JSON Schema", () => {
-    const registry = createDefaultToolRegistry();
+    const registry = registryWithArchMap();
     const declarations = toToolDeclarations(registry);
 
     expect(declarations.map((d) => d.name).sort()).toEqual(ALL_TOOLS);
@@ -38,7 +44,7 @@ describe("toToolDeclarations", () => {
   });
 
   it("carries the JSON Schema shape derived from the tool's zod schema", () => {
-    const registry = createDefaultToolRegistry();
+    const registry = registryWithArchMap();
     const declarations = toToolDeclarations(registry);
 
     const read = declarations.find((d) => d.name === "Read");
@@ -56,9 +62,9 @@ describe("toToolDeclarations", () => {
   // set rawInputJsonSchema, so each declaration's inputJsonSchema must deep-equal
   // the direct z.toJSONSchema(inputSchema) it produced before the slice. Slice
   // 3.3 adds the eleventh native tool (Skill); slice 3.4 adds the twelfth
-  // (Workflow) — both zod-authored.
+  // (Workflow); TASK.233 S1 adds the thirteenth (ArchMap) — all zod-authored.
   it("the native tools have no rawInputJsonSchema and stay byte-identical to z.toJSONSchema", () => {
-    const registry = createDefaultToolRegistry();
+    const registry = registryWithArchMap();
     const declarations = toToolDeclarations(registry);
 
     expect(declarations).toHaveLength(ALL_TOOLS.length);

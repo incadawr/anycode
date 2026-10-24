@@ -362,6 +362,15 @@ export interface AnycodeSettings {
      * (env > settings). Never "auto".
      */
     grepBackend?: "rg" | "tgrep";
+    /**
+     * ArchMap opt-in (Taskana 4162): `true` registers the read-only TS/JS
+     * import-graph scanner in new sessions' tool registries. Absent/false =
+     * off (the default — the tool's schema would otherwise tax every
+     * session's prompt). The ANYCODE_ARCHMAP env var always wins over this
+     * field at boot. Additive-optional, version NOT bumped — an existing
+     * settings.json with no `archMap` key round-trips byte-identically.
+     */
+    archMap?: boolean;
   };
   /** Persisted always-allow rules seeded into every new host session (§5). */
   permissions: { alwaysAllow: AlwaysAllowRule[] };

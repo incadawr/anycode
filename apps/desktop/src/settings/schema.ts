@@ -450,6 +450,10 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       // Taskana 4160: Grep backend selector, mirror of ANYCODE_GREP_BACKEND
       // (env > settings, default "rg"). Enum, never "auto".
       grepBackend: z.enum(["rg", "tgrep"]).optional(),
+      // Taskana 4162: ArchMap opt-in mirror of ANYCODE_ARCHMAP (env > this
+      // field at boot). `.catch(undefined)` keeps the whole-document fail-soft
+      // contract: a hand-edited truthy string degrades to "not enabled" alone.
+      archMap: z.boolean().optional().catch(undefined),
     }),
     permissions: z.object({
       alwaysAllow: z.array(alwaysAllowRuleSchema),
