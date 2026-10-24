@@ -55,21 +55,21 @@ export interface CodexSupportManifest {
  * subset was regenerated from the real 0.147.0, 0.149.0, 0.150.1, 0.151.0,
  * 0.152.1, 0.153.4 and 0.154.0 binaries and found byte-identical in methods and
  * decision enums (see host/engines/codex/contract/README.md). `recommended`
- * now selects 0.162.0, verified by the live GUI smoke on 2026-10-09: the range says which Codex a user
+ * now selects 0.164.0, verified by the live GUI smoke on 2026-10-24: the range says which Codex a user
  * may bring, `recommended` says which one AnyCode installs on their behalf, and
  * only the second one needs the stronger evidence.
  */
 export const BUNDLED_CODEX_MANIFEST: CodexSupportManifest = {
   "schemaVersion": "anycode.codex-support.v1",
-  "updatedAt": "2026-10-09T02:52:34Z",
+  "updatedAt": "2026-10-24T11:27:26Z",
   "supported": [
     {
-      "range": ">=0.144.0 <0.163.0",
+      "range": ">=0.144.0 <0.165.0",
       "status": "tested-and-contract-verified",
-      "note": "0.144.x: живой смоук 10/10, codex-fixes. 0.145–0.154: contract-verified against the real 0.147.0, 0.149.0, 0.150.1, 0.151.0, 0.152.1, 0.153.4 and 0.154.0 binaries — consumed methods and decision enums byte-identical, no union variant removed; 0.160.0: real contract verified and live GUI smoke 10/10 (Allow/Deny, Stop, restart/resume, zero orphans), 2026-10-03; 0.161.0: real contract verified (additive only, new writeStdin command-approval kind handled) and live GUI smoke 10/10, 2026-10-08; 0.162.0: real contract verified (additive only: MessagePhase partial_answer, rootTurnId/parentTurnId — none consumed) and live GUI smoke 10/10, 2026-10-09"
+      "note": "0.144.x: живой смоук 10/10, codex-fixes. 0.145–0.154: contract-verified against the real 0.147.0, 0.149.0, 0.150.1, 0.151.0, 0.152.1, 0.153.4 and 0.154.0 binaries — consumed methods and decision enums byte-identical, no union variant removed; 0.160.0: real contract verified and live GUI smoke 10/10 (Allow/Deny, Stop, restart/resume, zero orphans), 2026-10-03; 0.161.0: real contract verified (additive only, new writeStdin command-approval kind handled) and live GUI smoke 10/10, 2026-10-08; 0.162.0: real contract verified (additive only: MessagePhase partial_answer, rootTurnId/parentTurnId — none consumed) and live GUI smoke 10/10, 2026-10-09; 0.163.x: covered by contract diff only (real 0.163.0 binary: additive only, TurnToolOutput.retain — not consumed), not individually live-smoked; 0.164.0: real contract verified (imageGeneration result moved into a result-or-fileId alternative — display-only, missing field already tolerated; PlanType gained values — read as a free string) and live GUI smoke 10/10, 2026-10-24"
     }
   ],
-  "recommended": "0.162.0",
+  "recommended": "0.164.0",
   "minimum": "0.144.0"
 };
 

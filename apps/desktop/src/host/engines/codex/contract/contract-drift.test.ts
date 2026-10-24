@@ -78,7 +78,7 @@ describe("contract-drift layer 1 (always-on)", () => {
     // Deliberately a LITERAL, not a re-derivation: raising the ceiling must
     // trip this test, so that admitting a version is always a reviewed edit
     // here rather than a constant quietly drifting upward.
-    expect(SUPPORTED_CODEX_VERSION).toBe("<0.163.0");
+    expect(SUPPORTED_CODEX_VERSION).toBe("<0.165.0");
     expect(pinned.generatedFrom.startsWith("codex-cli 0.144")).toBe(true);
   });
 
@@ -405,6 +405,8 @@ describe("contract-drift hardening — the gate can actually go red (always-on, 
 const REVIEWED_REMOVALS: Readonly<Record<string, string>> = {
   // 0.160: url moved into anyOf (url OR fileId); the existing URL variant is preserved.
   "v2/UserInput/image/url": "0.160: URL is now one of two flattened source alternatives; checked by layer 2 below",
+  // 0.164: result moved into anyOf (result OR fileId); the translator's generic card already skips a missing field.
+  "v2/ThreadItem/imageGeneration/result": "0.164: inline result is now one of two flattened alternatives (result OR fileId); checked by layer 2 below",
   // Bedrock credential plumbing; AnyCode never reads an Account's credential source.
   "v2/AmazonBedrockCredentialSource": "0.147: replaced by usesCodexManagedCredentials",
   "v2/Account/amazonBedrock/credentialSource": "0.147: replaced by usesCodexManagedCredentials",
@@ -537,6 +539,10 @@ describe.skipIf(!process.env.ANYCODE_CODEX_DRIFT_BIN)("contract-drift layer 2 (e
       const userInput = (fresh.definitions.v2 as Record<string, unknown>).UserInput as { oneOf: Array<{ properties: { type: { enum: string[] }; url?: unknown }; anyOf?: Array<{ properties: { url?: { type: string } }; required?: string[] }> }> };
       const image = userInput.oneOf.find((variant) => variant.properties.type.enum.includes("image"))!;
       expect(image.properties.url !== undefined || image.anyOf?.some((source) => source.properties.url?.type === "string" && source.required?.includes("url"))).toBe(true);
+      // The inline image-generation result must still be expressible after its 0.164 flattening (result OR fileId).
+      const threadItem = (fresh.definitions.v2 as Record<string, unknown>).ThreadItem as { oneOf: Array<{ properties: { type: { enum: string[] }; result?: unknown }; anyOf?: Array<{ properties: { result?: { type: string } }; required?: string[] }> }> };
+      const generation = threadItem.oneOf.find((variant) => variant.properties.type.enum.includes("imageGeneration"))!;
+      expect(generation.properties.result !== undefined || generation.anyOf?.some((source) => source.properties.result?.type === "string" && source.required?.includes("result"))).toBe(true);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

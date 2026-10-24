@@ -118,7 +118,7 @@ function skip(message) {
 // src/**/*.ts, same posture as codex-contract-extract.mjs. Raising the
 // ceiling in protocol.ts means raising it here in the same commit.)
 
-const SUPPORTED_CODEX_VERSION = "<0.163.0";
+const SUPPORTED_CODEX_VERSION = "<0.165.0";
 
 function parseCodexVersion(output) {
   const match = /^codex-cli (\d+)\.(\d+)\.(\d+)\s*$/.exec(output);
@@ -485,7 +485,14 @@ async function submitCodexDraftWhenReady(ctx, step) {
     CODEX_READY_POLL_TIMEOUT_MS,
     CODEX_READY_POLL_INTERVAL_MS,
     () => apiOk(ctx, step, "POST", "/start-screen/submit", {}),
-    (r) => r?.message === CODEX_NOT_READY_MESSAGE || r?.message === "Sign in to a Codex account in Settings → Codex before opening a tab.",
+    (r) =>
+      r?.message === CODEX_NOT_READY_MESSAGE ||
+      r?.message === "Sign in to a Codex account in Settings → Codex before opening a tab." ||
+      // Card 4053 (renderer/src/codex-draft-model.ts): the renderer refuses a
+      // codex draft until its model catalog has loaded — the same
+      // codex-doctor race, surfaced one layer earlier. Retryable by its own
+      // wording ("Retry once Codex is ready"); the draft is left untouched.
+      r?.message === "Codex model list is unavailable. Retry once Codex is ready, or start a Core session.",
   );
   assert(
     step,
@@ -856,6 +863,38 @@ async function capturePreStopSnapshot(ctx, step) {
 
 // ── step 7: send a slow prompt, Stop it mid-turn, verify the turn returns to idle promptly ──
 
+/**
+ * Holds the Stop until the slow turn is genuinely MID-turn: a non-blank
+ * assistant_text after the last user_text. `turnStatus: "running"` flips the
+ * moment turn/start is accepted, before codex has even recorded the user
+ * input — a Stop landing in that window (measured: aborted 63ms after
+ * task_started on 0.164.0) leaves the interrupted turn with NO userMessage,
+ * so step 9's fact-13 expectation (an interrupted turn persists its
+ * userMessage) reds on a healthy engine. Streamed output proves the input
+ * was recorded first.
+ */
+async function waitForStreamedReply(ctx, step) {
+  const deadline = Date.now() + TURN_WAIT_TIMEOUT_MS;
+  for (;;) {
+    const state = await getTabState(ctx, step, ctx.codexTabId);
+    const transcript = Array.isArray(state?.transcript) ? state.transcript : [];
+    let lastUser = -1;
+    transcript.forEach((b, i) => {
+      if (b?.kind === "user_text") lastUser = i;
+    });
+    if (lastUser >= 0 && transcript.slice(lastUser + 1).some((b) => b?.kind === "assistant_text" && !isBlankText(b))) {
+      return;
+    }
+    if (state?.turnStatus !== undefined && state.turnStatus !== "running") {
+      fail(step, `slow turn left "running" (now ${state.turnStatus}) before streaming any reply — nothing to Stop`);
+    }
+    if (Date.now() >= deadline) {
+      fail(step, `slow turn streamed no assistant text within ${TURN_WAIT_TIMEOUT_MS}ms — nothing mid-turn to Stop`);
+    }
+    await sleep(250);
+  }
+}
+
 async function step7StopTurn(ctx) {
   const preStopKindOrder = await capturePreStopSnapshot(ctx, 7);
 
@@ -864,6 +903,7 @@ async function step7StopTurn(ctx) {
   await apiAction(ctx, 7, `/tabs/${ctx.codexTabId}/prompt`, { text: slowPrompt });
 
   await waitUntilTab(ctx, 7, ctx.codexTabId, { turnStatus: "running" }, TURN_WAIT_TIMEOUT_MS);
+  await waitForStreamedReply(ctx, 7);
   await apiAction(ctx, 7, `/tabs/${ctx.codexTabId}/stop`, {});
   await waitUntilTab(ctx, 7, ctx.codexTabId, { turnStatus: "idle" }, TURN_WAIT_TIMEOUT_MS);
 
@@ -997,6 +1037,22 @@ function isBlankText(block) {
 }
 
 /**
+ * The resume-side twin of the live `reasoning` filter. A persisted
+ * `reasoning` thread item has no dedicated block kind on the hydration path:
+ * history-projection.ts's `projectReasoning` renders it as an assistant text
+ * prefixed `[Codex reasoning]` (with a placeholder when the model kept no
+ * summary). Live, the same item arrives as a `reasoning` block, which the
+ * filter above already drops — so without this, any turn on which the model
+ * happened to emit a reasoning item (model-dependent, not version-dependent:
+ * the 0.161/0.162 smoke threads had none, 0.162.1 rollouts routinely do)
+ * reds step 9 on a healthy run. Only the exact projection prefix matches;
+ * every real assistant message still counts.
+ */
+function isProjectedReasoning(block) {
+  return block?.kind === "assistant_text" && typeof block?.text === "string" && block.text.startsWith("[Codex reasoning]\n");
+}
+
+/**
  * W18: also strips `loop_end` blocks. A live completed turn appends its own
  * `loop_end` footer block (store.ts:1461-1469), one per turn — this smoke
  * runs several turns (steps 4/5/6/7) before step 9's resume, so the live
@@ -1016,6 +1072,7 @@ function isBlankText(block) {
 function normalizedKindOrder(blocks) {
   return blocks
     .filter((b) => b?.kind !== "reasoning")
+    .filter((b) => !isProjectedReasoning(b))
     .filter((b) => b?.kind !== "loop_end")
     .filter((b) => b?.kind !== "assistant_text" || !isBlankText(b))
     .map((b) => b?.kind ?? "?");

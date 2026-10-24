@@ -4,7 +4,7 @@
  * or event-to-AgentEvent translation is implied by these shapes.
  */
 
-export const SUPPORTED_CODEX_VERSION = "<0.163.0";
+export const SUPPORTED_CODEX_VERSION = "<0.165.0";
 
 export interface CodexVersion {
   major: number;
@@ -41,7 +41,8 @@ export function parseCodexVersion(output: string): CodexVersion | null {
  * schemas compared against the pinned contract (`contract/README.md`), so
  * 0.160.0 also passed the real contract and live GUI smoke on 2026-10-03;
  * 0.161.0 passed the same real-contract check and live GUI smoke on 2026-10-08,
- * 0.162.0 on 2026-10-09; anything at or above 0.163.0 remains unverified. A
+ * 0.162.0 on 2026-10-09, 0.164.0 on 2026-10-24 (0.163.x by contract diff only);
+ * anything at or above 0.165.0 remains unverified. A
  * build old enough to actually lack the consumed wire shapes fails on its own
  * later — an unparseable/missing response at whichever call first needs the
  * missing shape — rather than being preemptively refused here by version
