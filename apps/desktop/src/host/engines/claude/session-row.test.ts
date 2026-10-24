@@ -23,6 +23,8 @@ interface Recorder {
   pendingChildReportsPort: ClaudePendingChildReportsPort;
   creates: { id: string; row: Record<string, unknown> }[];
   touches: { id: string; patch: ClaudeSessionRowPatch }[];
+  /** Every pending-reports write with its payload, for snapshot-staleness assertions. */
+  reportSaves: { id: string; json: string | null }[];
   /** Ordered log of every write, for the serialization assertions. */
   order: string[];
 }
@@ -30,10 +32,12 @@ interface Recorder {
 function recorder(options: { failCreate?: boolean; failPendingReports?: boolean } = {}): Recorder {
   const creates: { id: string; row: Record<string, unknown> }[] = [];
   const touches: { id: string; patch: ClaudeSessionRowPatch }[] = [];
+  const reportSaves: { id: string; json: string | null }[] = [];
   const order: string[] = [];
   return {
     creates,
     touches,
+    reportSaves,
     order,
     port: {
       create: async (id, row) => {
@@ -53,6 +57,7 @@ function recorder(options: { failCreate?: boolean; failPendingReports?: boolean 
     },
     pendingChildReportsPort: {
       savePendingChildReports: async (id, json) => {
+        reportSaves.push({ id, json });
         order.push(`pending_reports:${json === null ? "null" : "json"}`);
         if (options.failPendingReports === true) {
           throw new Error("SQLITE_BUSY");
@@ -235,6 +240,93 @@ describe("ClaudeSessionRowWriter — a fresh session writes nothing until the na
     // path), and the queue's own next mutation persists the full current
     // snapshot through the live path anyway.
     expect(rec.order).toEqual(["create:failed"]);
+  });
+
+  // Taskana 4123 review N1: the buffered flush used to be DEFERRED to
+  // `created.then(...)` — it registered on the serialized chain only when the
+  // create settled, i.e. AFTER any live save issued between materialize() and
+  // that settlement had already registered. The older buffered snapshot then
+  // landed LAST (port order NEW, OLD), clobbering the newer live state. Here
+  // that means the drained-by-null write is followed by a stale json write:
+  // after a restart the queue would resurrect reports the user had already
+  // acknowledged. The buffer must never win against a live save.
+  it("a live save registering between materialize() and the create settling is never overwritten by the older buffered snapshot", async () => {
+    const rec = recorder();
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const writer = new ClaudeSessionRowWriter({
+      rowId: "row-1",
+      identity: IDENTITY,
+      rowExists: false,
+      // The create hangs until the gate opens, so the window between
+      // materialize() and the create settling is fully controllable.
+      port: {
+        ...rec.port,
+        create: async (id, row) => {
+          await createGate;
+          return rec.port.create(id, row);
+        },
+      },
+      pendingChildReportsPort: rec.pendingChildReportsPort,
+      onError: () => {},
+    });
+
+    // A snapshot is buffered while the row does not exist...
+    await writer.savePendingChildReports('{"reports":[{"id":"call-old"}]}');
+    // ...the row starts materializing (create now in flight)...
+    writer.materialize({ model: "haiku", mode: "ask" });
+    // ...and a NEWER live save registers on the chain inside the window — the
+    // queue drained, so the truthful latest state is null.
+    const liveSave = writer.savePendingChildReports(null);
+    releaseCreate();
+    await writer.settled();
+    await liveSave;
+    await tick();
+
+    // The live save is the LAST word: exactly one report write, the null one.
+    // (OLD behavior: two writes — null, then the stale buffered json.)
+    expect(rec.reportSaves.map((save) => save.json)).toEqual([null]);
+    expect(rec.order).toEqual(["create", "pending_reports:null"]);
+  });
+
+  // Taskana 4123 review N1, json variant: same window, but the live save
+  // carries a NEWER json snapshot (a second report). The buffered one-report
+  // snapshot must not land after it and silently drop the second report.
+  it("a live json save inside the window stays newer than the buffered snapshot (no NEW,OLD reorder)", async () => {
+    const rec = recorder();
+    let releaseCreate!: () => void;
+    const createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const writer = new ClaudeSessionRowWriter({
+      rowId: "row-1",
+      identity: IDENTITY,
+      rowExists: false,
+      port: {
+        ...rec.port,
+        create: async (id, row) => {
+          await createGate;
+          return rec.port.create(id, row);
+        },
+      },
+      pendingChildReportsPort: rec.pendingChildReportsPort,
+      onError: () => {},
+    });
+
+    await writer.savePendingChildReports('{"reports":[{"id":"call-1"}]}');
+    writer.materialize({ model: "haiku", mode: "ask" });
+    const liveSave = writer.savePendingChildReports('{"reports":[{"id":"call-1"},{"id":"call-2"}]}');
+    releaseCreate();
+    await writer.settled();
+    await liveSave;
+    await tick();
+
+    expect(rec.reportSaves.map((save) => save.json)).toEqual([
+      '{"reports":[{"id":"call-1"},{"id":"call-2"}]}',
+    ]);
+    expect(rec.order).toEqual(["create", "pending_reports:json"]);
   });
 
   // The live path (row exists / already materialized) is the save every REAL

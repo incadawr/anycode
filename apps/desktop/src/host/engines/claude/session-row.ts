@@ -74,6 +74,15 @@ export class ClaudeSessionRowWriter {
    * CREATE, mirroring `buffered`'s own flush below.
    */
   private bufferedReportJson: string | null | undefined;
+  /**
+   * Taskana 4123 review N1: how many live (non-buffered) report saves have
+   * REGISTERED on the chain since materialize() captured the buffer. The flush
+   * appended by materialize() runs after those registrations, so any count > 0
+   * at flush time means the buffered snapshot is STALE — a live save already
+   * carried newer state past it — and the flush must drop the buffer rather
+   * than let an older snapshot land last (order NEW, OLD) and clobber it.
+   */
+  private liveReportSaves = 0;
 
   constructor(private readonly options: ClaudeSessionRowWriterOptions) {
     this.chain = options.rowExists ? Promise.resolve() : null;
@@ -111,6 +120,7 @@ export class ClaudeSessionRowWriter {
       this.bufferedReportJson = json;
       return Promise.resolve(undefined);
     }
+    this.liveReportSaves += 1;
     return this.chain
       .then(() => port.savePendingChildReports(this.options.rowId, json))
       .then(() => undefined);
@@ -127,11 +137,20 @@ export class ClaudeSessionRowWriter {
    * would already carry newer state), and a stale resurrected snapshot is its
    * own hazard — the queue's NEXT mutation re-persists the full current
    * snapshot through the live path, which is the honest retry mechanism.
+   *
+   * Taskana 4123 review N1: the flush runs as the first link AFTER the create
+   * on the same serialized chain it appended itself to at materialize() time —
+   * so any live save registered in between stays strictly AHEAD of it. If one
+   * did, the buffered snapshot is stale by construction (the live path always
+   * carries the newest full-queue state); the buffer is dropped, never allowed
+   * to land last in NEW, OLD order and clobber it — worst case a stale json
+   * overwriting a live `null` (the drained queue), which would resurrect
+   * already-acknowledged reports after a restart.
    */
   private flushBufferedReportJson(): void {
     const json = this.bufferedReportJson;
     this.bufferedReportJson = undefined;
-    if (json === undefined) {
+    if (json === undefined || this.liveReportSaves > 0) {
       return;
     }
     void this.savePendingChildReports(json).catch((error: unknown) => {
@@ -169,9 +188,23 @@ export class ClaudeSessionRowWriter {
     // the queue believes its snapshot is durable. (The `.catch(() => undefined)`
     // here only silences this gate's own view of the failure; the error itself
     // was already routed to onError through `this.chain` above.)
-    void created
-      .then(() => this.flushBufferedReportJson())
-      .catch(() => undefined);
+    // Taskana 4123 review N1: the flush link is appended to the chain HERE —
+    // synchronously, while materialize() still owns the code between the
+    // create's start and its settlement — not in `created.then(...)`. Deferred
+    // registration let any live save issued in that window register FIRST, so
+    // the older buffered snapshot landed last (NEW, OLD) and clobbered the
+    // newer live state. Registered synchronously, the flush sits ahead of
+    // every such save on the chain; `flushBufferedReportJson` then drops the
+    // buffer if a live save registered anyway (defense against any future
+    // reordering), and the create-success gate is evaluated when the link
+    // RUNS, so `settled()` still covers the whole tail including the flush.
+    this.chain = this.chain
+      .then(() => created)
+      .then(
+        () => this.flushBufferedReportJson(),
+        () => undefined,
+      );
+    void this.chain;
   }
 
   /** Resolves once every write issued so far has settled (tests; never awaited on the boot path). */
