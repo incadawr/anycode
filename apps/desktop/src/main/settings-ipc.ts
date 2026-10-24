@@ -397,6 +397,12 @@ const connectionCreateSchema = z
     // from the renderer; the model binding is derived server-side from the
     // effective model in the handler.
     contextWindowTokens: contextWindowTokensSchema.optional(),
+    // Per-model image-input override (Taskana 4088). Only the enum value is
+    // accepted from the renderer; the model binding (`imageInputModel`) is
+    // derived server-side from the effective model in the handler. Create has
+    // no "" clear sentinel (omission already means "auto") — the union with
+    // z.literal("") lives on UPDATE only.
+    imageInputOverride: z.enum(["on", "off"]).optional(),
     authOptional: z.boolean().optional(),
     setActive: z.boolean().optional(),
   })
@@ -428,6 +434,11 @@ const connectionUpdateSchema = z
     // Per-model context window (TASK.142) with the same `""` clear sentinel as
     // `maxOutputTokens` above; a number sets tokens AND the server-derived binding.
     contextWindowTokens: z.union([contextWindowTokensSchema, z.literal("")]).optional(),
+    // Per-model image-input override (Taskana 4088) with the same TASK.150
+    // `maxOutputTokens` clear-sentinel discipline: `""` clears BOTH keys
+    // (override + binding), "on"/"off" persists the pair with a server-derived
+    // binding, absent leaves them untouched.
+    imageInputOverride: z.union([z.enum(["on", "off"]), z.literal("")]).optional(),
     // `false` clears (removed from disk), `true` sets — see ConnectionUpdateRequest.
     authOptional: z.boolean().optional(),
   })
@@ -1643,6 +1654,16 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
     ) {
       return { ok: false, reason: "invalid" };
     }
+    // Taskana 4088: the TASK.142 context-window rule verbatim — a non-empty
+    // override needs a nonblank effective model to bind to, rejected before
+    // saving rather than silently dropped.
+    const createImageInputModel = req.model?.trim();
+    if (
+      req.imageInputOverride !== undefined &&
+      (createImageInputModel === undefined || createImageInputModel === "")
+    ) {
+      return { ok: false, reason: "invalid" };
+    }
     const connection: ProviderConnection = {
       id,
       providerId: req.providerId,
@@ -1656,6 +1677,11 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.maxOutputTokens !== undefined ? { maxOutputTokens: req.maxOutputTokens } : {}),
       ...(req.contextWindowTokens !== undefined
         ? { contextWindowTokens: req.contextWindowTokens, contextWindowModel: createContextWindowModel }
+        : {}),
+      // Taskana 4088: value+binding travel together (the context-window pair
+      // discipline); the binding is server-derived, never renderer-supplied.
+      ...(req.imageInputOverride !== undefined
+        ? { imageInputOverride: req.imageInputOverride, imageInputModel: req.model?.trim() }
         : {}),
       ...(req.authOptional === true ? { authOptional: true } : {}),
     };
@@ -1813,6 +1839,25 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         }
         updatedConnection.contextWindowTokens = req.contextWindowTokens;
         updatedConnection.contextWindowModel = effectiveModel;
+      }
+    }
+    // Per-model image-input override (Taskana 4088) — the context-window pair
+    // discipline verbatim: `""` deletes BOTH keys, "on"/"off" writes BOTH with
+    // the server-derived binding `imageInputModel = effectiveModel` (a later
+    // model edit re-binds by rewriting the pair under the new effective model),
+    // absent leaves them untouched. A non-empty override with a blank
+    // effective model is rejected — never silently dropped.
+    if (req.imageInputOverride !== undefined) {
+      if (req.imageInputOverride === "") {
+        delete updatedConnection.imageInputOverride;
+        delete updatedConnection.imageInputModel;
+      } else {
+        const effectiveModel = (req.model !== undefined ? req.model : existing.model)?.trim();
+        if (effectiveModel === undefined || effectiveModel === "") {
+          return { ok: false, reason: "invalid" };
+        }
+        updatedConnection.imageInputOverride = req.imageInputOverride;
+        updatedConnection.imageInputModel = effectiveModel;
       }
     }
     // Proxy clear (`""`) must remove the key entirely (TASK.132) — identical

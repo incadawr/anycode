@@ -37,6 +37,10 @@ import {
   contextWindowInitialField,
   contextWindowAfterModelInput,
   contextWindowAfterRawInput,
+  imageInputToPayload,
+  imageInputInitialValue,
+  imageInputEffectiveHint,
+  imageInputEnvHint,
 } from "./ConnectionDrawer.js";
 import { providerModelsFor, modelMenuItems } from "./ModelPill.js";
 import { buildStartModelGroups } from "./start-model-picker.js";
@@ -153,6 +157,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       authOptional: false,
       maxOutputTokens: "",
       contextWindowTokens: "",
+      imageInput: "auto",
     });
     expect(payload).toEqual({
       id: "conn-1",
@@ -164,6 +169,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       authOptional: false,
       maxOutputTokens: "",
       contextWindowTokens: "",
+      imageInputOverride: "",
     });
   });
 
@@ -179,6 +185,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       authOptional: false,
       maxOutputTokens: "",
       contextWindowTokens: "",
+      imageInput: "auto",
     });
     expect(payload.transport).toBe("openai-responses");
   });
@@ -195,6 +202,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       authOptional: false,
       maxOutputTokens: "",
       contextWindowTokens: "",
+      imageInput: "auto",
     });
     expect(shown.baseUrl).toBe("https://x");
     const hidden = buildConnectionUpdatePayload({
@@ -208,6 +216,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       authOptional: false,
       maxOutputTokens: "",
       contextWindowTokens: "",
+      imageInput: "auto",
     });
     expect(hidden.baseUrl).toBe("");
   });
@@ -227,6 +236,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
       proxyRef: "",
       maxOutputTokens: "" as const,
       contextWindowTokens: "" as const,
+      imageInput: "auto" as const,
     };
     expect(buildConnectionUpdatePayload({ ...base, authOptional: true }).authOptional).toBe(true);
     expect(buildConnectionUpdatePayload({ ...base, authOptional: false }).authOptional).toBe(false);
@@ -244,6 +254,7 @@ describe("buildConnectionUpdatePayload — proxyRef (TASK.141, replacing TASK.13
     authOptional: false,
     maxOutputTokens: "" as const,
     contextWindowTokens: "" as const,
+    imageInput: "auto" as const,
   };
 
   it("sends the picked profile id", () => {
@@ -559,6 +570,7 @@ describe("buildConnectionUpdatePayload — maxOutputTokens (TASK.150, same uncon
     proxyRef: "",
     authOptional: false,
     contextWindowTokens: "" as const,
+    imageInput: "auto" as const,
   };
 
   it("a chosen number lands in the payload", () => {
@@ -675,6 +687,7 @@ describe("buildConnectionUpdatePayload — contextWindowTokens (TASK.142, same u
     proxyRef: "",
     authOptional: false,
     maxOutputTokens: "" as const,
+    imageInput: "auto" as const,
   };
 
   it("a chosen number lands in the payload", () => {
@@ -891,6 +904,7 @@ describe("contextWindowInitialField / contextWindowAfterModelInput / contextWind
       authOptional: false,
       maxOutputTokens: "" as const,
       contextWindowTokens: field.ok ? field.value : "",
+      imageInput: "auto",
     });
     // The clear sentinel travels on the wire: main deletes BOTH saved keys.
     expect(payload.contextWindowTokens).toBe("");
@@ -1384,5 +1398,108 @@ describe("pre-create flow composition (TASK.183 items 1–2)", () => {
     // TASK.142 ownership preserved: A's number must not ride onto a manually
     // typed B of the same connection.
     expect(contextWindowAfterModelInput({ raw: "900000", model: "manual-a" }, "manual-b", undefined)).toEqual({ raw: "", model: "manual-b" });
+  });
+});
+
+// ── Taskana 4088 (TASK.69): the per-model image-input select's pure helpers ──
+
+describe("buildConnectionUpdatePayload — imageInputOverride (Taskana 4088: unconditional send, \"\" clears the pair)", () => {
+  const base = {
+    connectionId: "conn-1",
+    label: "",
+    model: "",
+    transport: "" as const,
+    baseUrl: "",
+    showBaseUrl: false,
+    proxyRef: "",
+    authOptional: false,
+    maxOutputTokens: "" as const,
+    contextWindowTokens: "" as const,
+  };
+
+  it('sends imageInputOverride:"on" / "off" / "" unconditionally — never omits the key', () => {
+    expect(buildConnectionUpdatePayload({ ...base, imageInput: "on" }).imageInputOverride).toBe("on");
+    expect(buildConnectionUpdatePayload({ ...base, imageInput: "off" }).imageInputOverride).toBe("off");
+    const payload = buildConnectionUpdatePayload({ ...base, imageInput: "auto" });
+    expect(payload.imageInputOverride).toBe("");
+    expect("imageInputOverride" in payload).toBe(true);
+  });
+
+  it("the renderer never names a model in the payload — the binding is derived server-side (pair discipline)", () => {
+    const payload = buildConnectionUpdatePayload({ ...base, model: "glm-5.3v", imageInput: "on" });
+    expect(payload.imageInputOverride).toBe("on");
+    expect("imageInputModel" in payload).toBe(false);
+  });
+});
+
+describe("imageInputToPayload (Taskana 4088: the auto -> \"\" mapping)", () => {
+  it("maps the three select states onto the wire's two enum arms plus the clear sentinel", () => {
+    expect(imageInputToPayload("auto")).toBe("");
+    expect(imageInputToPayload("on")).toBe("on");
+    expect(imageInputToPayload("off")).toBe("off");
+  });
+});
+
+describe("imageInputInitialValue (Taskana 4088: the contextWindowInitialRaw model-binding rule)", () => {
+  it("prefills the override ONLY when it binds to the shown model", () => {
+    expect(
+      imageInputInitialValue({ imageInputOverride: "on", imageInputModel: "glm-5.3v", model: "glm-5.3v" }),
+    ).toBe("on");
+    expect(
+      imageInputInitialValue({ imageInputOverride: "off", imageInputModel: "glm-5.2", model: "glm-5.2" }),
+    ).toBe("off");
+  });
+
+  it('reads "auto" when the pair binds a DIFFERENT model, is half-absent, or missing entirely', () => {
+    expect(
+      imageInputInitialValue({ imageInputOverride: "on", imageInputModel: "other-model", model: "glm-5.3v" }),
+    ).toBe("auto");
+    expect(imageInputInitialValue({ imageInputOverride: "on", model: "glm-5.3v" })).toBe("auto");
+    expect(imageInputInitialValue({ imageInputModel: "glm-5.3v", model: "glm-5.3v" })).toBe("auto");
+    expect(imageInputInitialValue({ model: "glm-5.3v" })).toBe("auto");
+    expect(imageInputInitialValue({})).toBe("auto");
+  });
+});
+
+describe("imageInputEffectiveHint (Taskana 4088: name what Auto resolves to)", () => {
+  const entry: CatalogSummaryEntry = {
+    id: "z-ai",
+    name: "Z.AI",
+    authKind: "api_key",
+    models: [
+      { id: "glm-5.3v", imageInput: true },
+      { id: "glm-5.2" },
+    ],
+  };
+
+  it("raw auto + catalog imageInput:true -> 'catalog: vision'", () => {
+    expect(imageInputEffectiveHint(entry, "glm-5.3v", undefined, "auto")).toBe("catalog: vision");
+  });
+
+  it("raw auto + the connection's live caps imageInput fact -> 'live /v1/models: vision' (catalog-unmarked model)", () => {
+    expect(imageInputEffectiveHint(entry, "glm-5.2", { modelCapabilities: { "glm-5.2": { imageInput: true } } }, "auto")).toBe(
+      "live /v1/models: vision",
+    );
+    // The live fact is checked only when the catalog does NOT vouch — the
+    // catalog branch wins first, mirroring resolve order at resolve time.
+    expect(imageInputEffectiveHint(entry, "glm-5.3v", { modelCapabilities: {} }, "auto")).toBe("catalog: vision");
+  });
+
+  it("raw on/off suppresses the hint; auto with no fact in either source is null", () => {
+    expect(imageInputEffectiveHint(entry, "glm-5.3v", undefined, "on")).toBeNull();
+    expect(imageInputEffectiveHint(entry, "glm-5.3v", undefined, "off")).toBeNull();
+    expect(imageInputEffectiveHint(entry, "glm-5.2", undefined, "auto")).toBeNull();
+    expect(imageInputEffectiveHint(entry, "glm-5.2", { modelCapabilities: { other: { imageInput: true } } }, "auto")).toBeNull();
+  });
+});
+
+describe("imageInputEnvHint (Taskana 4088: the per-model override rides the env)", () => {
+  it("names the variable while it is live, null otherwise (exact-name match)", () => {
+    // 4088-on-4118: only the override still rides the env; the former
+    // MODELS var is no longer recognized.
+    expect(imageInputEnvHint(["ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE"])).toContain("ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE is set");
+    expect(imageInputEnvHint([])).toBeNull();
+    expect(imageInputEnvHint(["ANYCODE_IMAGE_INPUT_MODELS"])).toBeNull();
+    expect(imageInputEnvHint(["ANYCODE_IMAGE_INPUT_MODELS_X"])).toBeNull();
   });
 });

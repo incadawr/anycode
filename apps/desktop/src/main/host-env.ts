@@ -89,6 +89,13 @@ export const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 export const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
 export const ENV_CONTEXT_WINDOW_MODEL = "ANYCODE_CONTEXT_WINDOW_MODEL";
 /**
+ * 4088-on-4118 integration: the former ENV_IMAGE_INPUT_MODELS declaration is
+ * GONE — the live image-modality facts ride 4118's `modelCapabilities` map
+ * (persisted on the connection, read by the host at boot), not the fork env.
+ */
+/** Taskana 4088: `<on|off>:<modelId>` — mirror of core's ENV_IMAGE_INPUT_MODEL_OVERRIDE. */
+export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
+/**
  * Wire transport override (TASK.43 W5). Literal mirrors core's
  * `provider/env.ts` `ENV_PROVIDER_TRANSPORT` — same local-literal convention
  * as every other var above (host-env stays core-free, never value-imports the
@@ -398,6 +405,11 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_PROVIDER_TRANSPORT,
   ENV_INCLUDE_USAGE,
   ENV_GREP_BACKEND,
+  // 4088-on-4118 integration: ENV_IMAGE_INPUT_MODELS is GONE — the live
+  // image-modality facts ride 4118's modelCapabilities transport instead (the
+  // host reads them from the connection's settings record). Only the per-model
+  // override still travels through the fork env.
+  ENV_IMAGE_INPUT_MODEL_OVERRIDE,
 ];
 
 /** True when an env var is present AND non-blank (mirrors loadEnvConfig's own test). */
@@ -1182,6 +1194,20 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
       env[ENV_CONTEXT_WINDOW] = numToStr(windowTokens);
       env[ENV_CONTEXT_WINDOW_MODEL] = windowBinding;
     }
+  }
+  // 4088-on-4118 integration: the former ANYCODE_IMAGE_INPUT_MODELS emission is
+  // GONE — the live image-modality facts ride 4118's modelCapabilities map,
+  // which the host reads fail-soft from the connection's settings record at
+  // boot (readConnectionModelCapabilities), so nothing is emitted here.
+  // Taskana 4088: the drawer's per-model override (value+binding in ONE var).
+  // The host applies it only while its current model equals the binding, so it
+  // never un-gates a sibling model after a mid-session switch.
+  if (view.imageInputOverride !== undefined && view.imageInputOverrideModel?.trim()) {
+    fillFromSettings(
+      env,
+      ENV_IMAGE_INPUT_MODEL_OVERRIDE,
+      `${view.imageInputOverride}:${view.imageInputOverrideModel.trim()}`,
+    );
   }
   // The host fork's own network path (TASK.132, generalised by TASK.141 §2
   // ladder (a)/(b)): the ACTIVE connection's rung, then the app's. Keyed off

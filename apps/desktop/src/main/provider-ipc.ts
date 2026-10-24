@@ -101,7 +101,7 @@ export type FetchModelsFailureReason =
   | "read_only";
 
 export type FetchModelsOutcome =
-  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[] }[] }
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true }[] }
   | { ok: false; reason: FetchModelsFailureReason };
 
 /** Minimal fetch surface this module needs (injectable; defaults to global fetch — mirrors oauth.ts's `FetchLike`). */
@@ -272,7 +272,9 @@ async function readBodyCapped(response: Response, maxBytes: number): Promise<str
 /**
  * Taskana 4118: per-item meta fields we keep from a models-list entry. A plain
  * `z.object` (NOT `.strict()` — bodies carry many legitimate siblings we do
- * not model) that picks only the two known fields; unknown keys are ignored.
+ * not model) that picks only the known fields; unknown keys are ignored.
+ * 4088-on-4118 integration: `architecture.input_modalities` joins the schema
+ * (parsed per field, same fail-soft posture as the reasoning signals).
  */
 // Each field validates on its own (`.catch(undefined)`), so garbage in one
 // signal (e.g. `reasoning: null`, `supported_efforts: null`) never discards the
@@ -283,6 +285,12 @@ const liveCapsSchema = z.object({
   reasoning: z
     .object({
       supported_efforts: z.array(z.string().max(64)).max(16).optional().catch(undefined),
+    })
+    .optional()
+    .catch(undefined),
+  architecture: z
+    .object({
+      input_modalities: z.array(z.string()).optional().catch(undefined),
     })
     .optional()
     .catch(undefined),
@@ -300,17 +308,27 @@ const liveCapsSchema = z.object({
 const MODEL_CAPABILITY_ID_MAX = 256;
 
 /**
- * `{data:[{id}...]}` -> `{id, reasoning?, effortLevels?}[]`; undefined for any
- * other shape (fail-closed, never throws). Taskana 4118: per-item meta is kept
- * ONLY when the endpoint declares reasoning — `supported_parameters` contains
- * `"reasoning"` OR `reasoning.supported_efforts` is a non-empty array (either
- * signal suffices; OpenRouter sends both) — and then `effortLevels` carries the
- * RAW foreign strings exactly as spelled (mapping into the closed enum is
- * core's job, at resolution). Garbage meta on an item (wrong types, over-long
- * entries) drops ONLY that item's meta via safeParse failure; the id survives.
- * An OpenAI-style `{id, object, created, owned_by}` body parses to plain ids.
+ * `{data:[{id}...]}` -> `{id, reasoning?, effortLevels?, imageInput?}[]`;
+ * undefined for any other shape (fail-closed, never throws). Taskana 4118:
+ * per-item reasoning meta is kept ONLY when the endpoint declares reasoning —
+ * `supported_parameters` contains `"reasoning"` OR `reasoning.supported_efforts`
+ * is a non-empty array (either signal suffices; OpenRouter sends both) — and
+ * then `effortLevels` carries the RAW foreign strings exactly as spelled
+ * (mapping into the closed enum is core's job, at resolution). 4088 adds the
+ * image-modality fact: an item's OpenRouter-shaped
+ * `architecture.input_modalities` array containing `"image"` adds
+ * `imageInput: true` — ADDITIVE ONLY, independent of the reasoning gate
+ * (the caps filter is per field, never reasoning-only). An absent/non-array
+ * modality field (or one not containing "image") contributes NOTHING: not
+ * every `/v1/models` speaks modalities, and a silent absence must never read
+ * as "text-only" (the TASK.197 asymmetry — live facts may promote, never
+ * demote). Garbage meta on an item (wrong types, over-long entries) drops
+ * ONLY that item's meta via safeParse failure; the id survives. An
+ * OpenAI-style `{id, object, created, owned_by}` body parses to plain ids.
  */
-function extractModelIds(value: unknown): { id: string; reasoning?: boolean; effortLevels?: string[] }[] | undefined {
+function extractModelIds(
+  value: unknown,
+): { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true }[] | undefined {
   if (typeof value !== "object" || value === null || !("data" in value)) {
     return undefined;
   }
@@ -318,7 +336,7 @@ function extractModelIds(value: unknown): { id: string; reasoning?: boolean; eff
   if (!Array.isArray(data)) {
     return undefined;
   }
-  const models: { id: string; reasoning?: boolean; effortLevels?: string[] }[] = [];
+  const models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true }[] = [];
   for (const item of data) {
     if (typeof item !== "object" || item === null) {
       continue;
@@ -327,7 +345,7 @@ function extractModelIds(value: unknown): { id: string; reasoning?: boolean; eff
     if (typeof maybe.id !== "string") {
       continue;
     }
-    // D-Trust: read only the two known fields; a safeParse failure (garbage
+    // D-Trust: read only the known fields; a safeParse failure (garbage
     // meta) degrades this item to its bare id — never to a fetch failure.
     const meta = liveCapsSchema.safeParse(item);
     if (!meta.success) {
@@ -340,14 +358,19 @@ function extractModelIds(value: unknown): { id: string; reasoning?: boolean; eff
     // Cross-review F2: ids the settings schema cannot accept as capability
     // keys degrade to the bare id — keeping their meta would poison the whole
     // stored map on the next read (`.catch` is whole-map, not per-key).
-    if (!reasoning || maybe.id.length > MODEL_CAPABILITY_ID_MAX) {
+    // 4088: the image-modality fact is read independently of the reasoning
+    // gate — a plain sighted model with no reasoning declaration still keeps
+    // its imageInput fact.
+    const imageInput = meta.data.architecture?.input_modalities?.includes("image") === true;
+    if ((!reasoning && !imageInput) || maybe.id.length > MODEL_CAPABILITY_ID_MAX) {
       models.push({ id: maybe.id });
       continue;
     }
     models.push({
       id: maybe.id,
-      reasoning: true,
-      ...(declared !== undefined && declared.length > 0 ? { effortLevels: [...declared] } : {}),
+      ...(reasoning ? { reasoning: true } : {}),
+      ...(reasoning && declared !== undefined && declared.length > 0 ? { effortLevels: [...declared] } : {}),
+      ...(imageInput ? { imageInput: true } : {}),
     });
   }
   return models;
@@ -845,10 +868,15 @@ async function handleConnectionFetchModels(
       return;
     }
     const fetchedIds = outcome.models.map((m) => m.id);
-    // Taskana 4118: live per-model capabilities the endpoint declared, keyed by
-    // model id. Fail-closed like `models` above: an outcome with zero capable
-    // models leaves the stored map untouched (never deleted on empty).
-    const caps: Record<string, { reasoning?: boolean; effortLevels?: string[] }> = {};
+    // Taskana 4118 (+4088 integration): live per-model capabilities the
+    // endpoint declared, keyed by model id. Fail-closed like `models` above:
+    // an outcome with zero capable models leaves the stored map untouched
+    // (never deleted on empty). Caps are merged PER FIELD (not a whole-record
+    // spread): a fetch that no longer declares a field keeps the previously
+    // stored one — a stale/shorter live answer must never blind a fact an
+    // earlier fetch recorded (the TASK.197 asymmetry). The 4088 imageInput
+    // fact now lives in this map instead of a separate imageInputModels list.
+    const caps: Record<string, { reasoning?: boolean; effortLevels?: string[]; imageInput?: true }> = {};
     for (const m of outcome.models) {
       // Cross-review F2 (defense-in-depth): `fetchModels` is injectable, so
       // this seam can see meta the extractor never produced — the same
@@ -856,10 +884,15 @@ async function handleConnectionFetchModels(
       if (m.id.length > MODEL_CAPABILITY_ID_MAX) {
         continue;
       }
-      if (m.reasoning === true || m.effortLevels !== undefined) {
+      const prev = target.modelCapabilities?.[m.id];
+      const reasoning = m.reasoning === true ? true : prev?.reasoning;
+      const effortLevels = m.effortLevels !== undefined ? m.effortLevels : prev?.effortLevels;
+      const imageInput = m.imageInput === true ? (true as const) : prev?.imageInput;
+      if (reasoning !== undefined || effortLevels !== undefined || imageInput !== undefined) {
         caps[m.id] = {
-          ...(m.reasoning === true ? { reasoning: true } : {}),
-          ...(m.effortLevels !== undefined ? { effortLevels: m.effortLevels } : {}),
+          ...(reasoning !== undefined ? { reasoning } : {}),
+          ...(effortLevels !== undefined ? { effortLevels } : {}),
+          ...(imageInput !== undefined ? { imageInput } : {}),
         };
       }
     }

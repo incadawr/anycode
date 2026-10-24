@@ -58,8 +58,10 @@ import {
   type LiveModelCapabilities,
   resolveContextWindow,
   resolveEffortLevels,
+  resolveImageInput,
   resolveMaxOutputTokens,
   resolveReasoningEffort,
+  type ImageModalityLookup,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
   SqlitePersistenceAdapter,
   SwitchableModelPort,
@@ -2945,5 +2947,99 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
     expect(resolve("glm-4.6", "high").contextWindowTokens).toBe(200_000);
     // Agent(model: unknown): the assumed fallback.
     expect(resolve("not-in-catalog", "high").contextWindowTokens).toBe(8_192);
+  });
+});
+
+// ── Taskana 4088 (TASK.69): the per-send image-modality closure shape ──
+// 4088-on-4118 integration: the live-modality facts ride 4118's
+// LiveModelCapabilities map (`imageInput?: true` per model) instead of a
+// comma-separated env list; the lookup closure and its additive-only
+// semantics are unchanged.
+
+describe("host imageInputEnabled closure (Taskana 4088: live-modality rung, per-send honesty)", () => {
+  /**
+   * index.ts is not importable from a test (process.parentPort at module
+   * scope — the file-header idiom), so this pins the two load-bearing halves
+   * separately:
+   *  1. SOURCE-ANCHORED: the real media closure passes the boot-built
+   *     `imageModalityLookup` as resolveImageInput's 4th argument and still
+   *     reads `currentModel` live per call (a model switch re-gates; never a
+   *     boot-time constant).
+   *  2. BEHAVIORAL: the closure's own resolution rule — a live imageInput
+   *     fact promotes a catalog-false model, and a model switch to an
+   *     unlisted id re-gates false — over the REAL resolveImageInput.
+   */
+  async function readIndexSource4088(): Promise<string> {
+    return readFile(new URL("./index.ts", import.meta.url), "utf8");
+  }
+
+  it("the real media closure resolves through imageModalityLookup and reads currentModel live", async () => {
+    const source = await readIndexSource4088();
+    // The real call: 4 arguments, last one imageModalityLookup, model read
+    // from currentModel (a `let` the /model switch rewrites).
+    expect(source).toContain(
+      "envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined),\n          imageModalityLookup,",
+    );
+    // 4088-on-4118: the lookup reads the caps map (liveCapsFor), NOT an env
+    // list; the per-model override still travels through the fork env.
+    expect(source).toContain("liveCapsFor(id)?.imageInput === true");
+    expect(source).toContain("parseImageInputModelOverride(process.env[ENV_IMAGE_INPUT_MODEL_OVERRIDE])");
+    // The dropped 4088 transport must be gone from the host entirely.
+    expect(source).not.toContain("ENV_IMAGE_INPUT_MODELS");
+    expect(source).not.toContain("parseImageInputModels(");
+    expect(source).not.toContain("active.imageInputModels");
+  });
+
+  it("the closure returns true when the active model has a live imageInput fact and the catalog says false; a switch re-gates false", () => {
+    // The boot-loaded caps map (the normal desktop path, 4118 transport).
+    const liveCaps: Record<string, LiveModelCapabilities> = {
+      "glm-5.3v": { imageInput: true },
+      "on-prem-8b": { imageInput: true },
+    };
+    const imageModalityLookup: ImageModalityLookup = (id) =>
+      liveCaps[id]?.imageInput === true ? true : undefined;
+    // A catalog entry whose every model is BLIND (the glm-5.2 hazard).
+    const blindEntry: Parameters<typeof resolveImageInput>[1] = {
+      id: "z-ai",
+      name: "Z.AI",
+      baseUrl: "https://api.z.ai/api/anthropic",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
+      auth: { kind: "api_key" },
+      models: [
+        { id: "glm-5.2", contextWindow: 200_000 },
+        { id: "glm-5.3v", contextWindow: 200_000 },
+      ],
+    };
+    // The per-send verdict the media closure computes for the current model.
+    const verdict = (currentModel: string) =>
+      resolveImageInput(currentModel, blindEntry, undefined, imageModalityLookup);
+    // Live fact promotes the unmarked model the catalog cannot vouch for.
+    expect(verdict("glm-5.3v")).toBe(true);
+    expect(verdict("on-prem-8b")).toBe(true);
+    // A mid-session switch to an unlisted (blind) model re-gates false on the
+    // NEXT call — the per-send honesty DoD. (glm-5.2 is exactly the hazard the
+    // global env knob had.)
+    expect(verdict("glm-5.2")).toBe(false);
+    expect(verdict("some-unknown-id")).toBe(false);
+  });
+
+  it("an absent live fact reads as NO fact (undefined), never as 'blind every model'", () => {
+    // No caps map entry: the lookup must be undefined-per-model so
+    // a catalog-TRUE model keeps its verdict (the TASK.197 asymmetry).
+    const liveCaps: Record<string, LiveModelCapabilities> = {};
+    const imageModalityLookup: ImageModalityLookup = (id) =>
+      liveCaps[id]?.imageInput === true ? true : undefined;
+    const sightedEntry: Parameters<typeof resolveImageInput>[1] = {
+      id: "anthropic",
+      name: "Anthropic",
+      baseUrl: "https://api.anthropic.com",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
+      auth: { kind: "api_key" },
+      models: [{ id: "claude-vision", contextWindow: 200_000, imageInput: true }],
+    };
+    expect(imageModalityLookup("claude-vision")).toBeUndefined();
+    expect(resolveImageInput("claude-vision", sightedEntry, undefined, imageModalityLookup)).toBe(true);
   });
 });

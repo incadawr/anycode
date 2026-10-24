@@ -276,7 +276,10 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(result).toEqual({ ok: true, models: [{ id: "m" }] });
   });
 
-  // ── Taskana 4118: the fetch keeps declared per-model reasoning meta ──
+  // ── Taskana 4118 + 4088: the fetch keeps declared per-model meta ──
+  // (reasoning facts per 4118; image-modality facts per 4088, now riding the
+  // same per-model record — extractModelIds is module-private, so these run
+  // the real parse end-to-end over a local server.)
 
   it("Taskana 4118: an OpenRouter-style body keeps reasoning + RAW supported_efforts; bare items stay bare", async () => {
     const { origin } = await listen((req, res) => {
@@ -302,6 +305,58 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
         // core's job at resolution, never the parser's.
         { id: "a", reasoning: true, effortLevels: ["xhigh", "high", "low"] },
         { id: "b" },
+      ],
+    });
+  });
+
+  it("Taskana 4088: an OpenRouter-shaped item with input_modalities [image,text] yields imageInput:true; [text] does not", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: [
+            {
+              id: "qwen3-vl",
+              architecture: { input_modalities: ["image", "text"] },
+            },
+            {
+              id: "qwen3-text",
+              architecture: { input_modalities: ["text"] },
+            },
+          ],
+        }),
+      );
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({
+      ok: true,
+      models: [{ id: "qwen3-vl", imageInput: true }, { id: "qwen3-text" }],
+    });
+  });
+
+  it("4088-on-4118: an item with BOTH reasoning and image facts keeps both; image alone survives without any reasoning declaration", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: [
+            {
+              id: "both",
+              supported_parameters: ["reasoning"],
+              reasoning: { supported_efforts: ["high"] },
+              architecture: { input_modalities: ["image", "text"] },
+            },
+            { id: "sighted-only", architecture: { input_modalities: ["image"] } },
+          ],
+        }),
+      );
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({
+      ok: true,
+      models: [
+        { id: "both", reasoning: true, effortLevels: ["high"], imageInput: true },
+        { id: "sighted-only", imageInput: true },
       ],
     });
   });
@@ -337,6 +392,32 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
       ok: true,
       models: [{ id: "bad-1" }, { id: "bad-2" }, { id: "ok-3", reasoning: true, effortLevels: ["low", "high"] }],
     });
+  });
+
+  it("Taskana 4088: a bare {id} item contributes NOTHING modality-wise (additive rule — no mark, never a false fact)", async () => {
+    const { origin } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: [
+            { id: "bare-model" },
+            // Wrong-shaped modality fields are ignored fail-closed, not treated
+            // as facts in either direction.
+            { id: "weird-modalities", architecture: { input_modalities: "image" } },
+            { id: "null-architecture", architecture: null },
+          ],
+        }),
+      );
+    });
+    const result = await fetchCustomProviderModels({ baseUrl: origin });
+    expect(result).toEqual({
+      ok: true,
+      models: [{ id: "bare-model" }, { id: "weird-modalities" }, { id: "null-architecture" }],
+    });
+    // Every collected item carries no imageInput key at all.
+    if (result.ok) {
+      expect(result.models.every((m) => !("imageInput" in m))).toBe(true);
+    }
   });
 
   it("Taskana 4118 review: a null/garbage reasoning block does not discard a supported_parameters reasoning declaration", async () => {
@@ -1274,9 +1355,11 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(saveSettingsSpy.count).toBe(0);
   });
 
-  // ── Taskana 4118: the connection persists live per-model capabilities ──
+  // ── Taskana 4118 (+4088): the connection persists live per-model capabilities ──
+  // 4088-on-4118: the image-modality facts ride the same caps map
+  // (per-field merge; the old imageInputModels list is gone).
 
-  it("Taskana 4118: a fetch outcome with caps persists modelCapabilities merged over the stored map (fetched wins on collision)", async () => {
+  it("Taskana 4118: a fetch outcome with caps persists modelCapabilities merged over the stored map (fetched wins per field)", async () => {
     await seedConnection({
       id: "conn-caps",
       providerId: "kimi",
@@ -1363,6 +1446,48 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-caps-3" });
     expect(res).toEqual({ ok: false, reason: "http_error" });
     expect(saveSettingsSpy.count).toBe(0);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.modelCapabilities).toBeUndefined();
+  });
+
+  it("Taskana 4088 (on 4118 caps): image facts persist into modelCapabilities and merge PER FIELD with stored facts", async () => {
+    await seedConnection({
+      id: "conn-img-1",
+      providerId: "kimi",
+      models: ["stale-live-model"],
+      modelCapabilities: {
+        "stale-live-model": { imageInput: true },
+        "live-a": { reasoning: true }, // reasoning survives the fetch's image-only delta
+      },
+    });
+    const { deps } = makeCatalogDeps({
+      fetchModels: async () => ({
+        ok: true,
+        models: [
+          { id: "live-a", imageInput: true },
+          { id: "live-b" },
+        ],
+      }),
+    });
+    const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-img-1" });
+    expect(res.ok).toBe(true);
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.modelCapabilities).toEqual({
+      // stale image fact survives (no demotion on a modalities-blind answer).
+      "stale-live-model": { imageInput: true },
+      // per-field merge: fetched imageInput + stored reasoning both live.
+      "live-a": { reasoning: true, imageInput: true },
+    });
+    // the old 4088 list never appears
+    expect(Object.hasOwn(reloaded.settings.provider.connections[0] ?? {}, "imageInputModels")).toBe(false);
+  });
+
+  it("Taskana 4088 (on 4118 caps): a fetch with no image facts on a fresh connection persists NO caps key", async () => {
+    await seedConnection({ id: "conn-img-3", providerId: "kimi" });
+    const { deps } = makeCatalogDeps({
+      fetchModels: async () => ({ ok: true, models: [{ id: "live-a" }] }),
+    });
+    await handleCustomProviderFetchModels(deps, { connectionId: "conn-img-3" });
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.connections[0]?.modelCapabilities).toBeUndefined();
   });

@@ -76,6 +76,55 @@ describe("resolveImageInput (slice 6.2 §2-B4, fail-closed)", () => {
   });
 });
 
+// ── Taskana 4088 (TASK.69): the live-modality rung between override and catalog ──
+
+describe("resolveImageInput — liveModality rung (Taskana 4088: additive-only)", () => {
+  const live = (set: readonly string[]) => (id: string) => set.includes(id);
+
+  it("a live true PROMOTES a catalog-false (unmarked) model", () => {
+    expect(resolveImageInput("claude-textonly", VISION_ENTRY, undefined, live(["claude-textonly"]))).toBe(true);
+  });
+
+  it("a live true PROMOTES a model the entry does not know at all", () => {
+    expect(resolveImageInput("ghost-model", VISION_ENTRY, undefined, live(["ghost-model"]))).toBe(true);
+    expect(resolveImageInput("on-prem-8b", undefined, undefined, live(["on-prem-8b"]))).toBe(true);
+  });
+
+  it("a live FALSE never cancels a catalog-true model (TASK.197 asymmetry: stale/absent live data must not blind)", () => {
+    expect(resolveImageInput("claude-vision", VISION_ENTRY, undefined, live([]))).toBe(true);
+    expect(resolveImageInput("claude-vision", VISION_ENTRY, undefined, (id) => false)).toBe(true);
+  });
+
+  it("a live undefined (no fact for this model) leaves the catalog verdict untouched", () => {
+    expect(resolveImageInput("claude-vision", VISION_ENTRY, undefined, live(["other"]))).toBe(true);
+    expect(resolveImageInput("claude-textonly", VISION_ENTRY, undefined, live(["other"]))).toBe(false);
+  });
+
+  it("the explicit override still beats the live rung in BOTH directions", () => {
+    expect(resolveImageInput("claude-textonly", VISION_ENTRY, "on", live([]))).toBe(true);
+    expect(resolveImageInput("claude-vision", VISION_ENTRY, "off", live(["claude-vision"]))).toBe(false);
+  });
+
+  it("full precedence: override > live > catalog > false", () => {
+    // catalog-true, no override, live true → true (live agrees).
+    expect(resolveImageInput("claude-vision", VISION_ENTRY, undefined, live(["claude-vision"]))).toBe(true);
+    // catalog-false, no override, live true → true (live promotes).
+    expect(resolveImageInput("claude-textonly", VISION_ENTRY, undefined, live(["claude-textonly"]))).toBe(true);
+    // catalog-true, override off, live true → false (override wins).
+    expect(resolveImageInput("claude-vision", VISION_ENTRY, "off", live(["claude-vision"]))).toBe(false);
+    // everything absent/false → false (fail-closed default unchanged).
+    expect(resolveImageInput("claude-textonly", VISION_ENTRY, undefined, live([]))).toBe(false);
+    expect(resolveImageInput("ghost-model", VISION_ENTRY, undefined, undefined)).toBe(false);
+  });
+
+  it("a 3-arg call (no liveModality) is byte-identical to the pre-4088 behavior", () => {
+    expect(resolveImageInput("claude-vision", VISION_ENTRY, undefined)).toBe(true);
+    expect(resolveImageInput("claude-textonly", VISION_ENTRY, undefined)).toBe(false);
+    expect(resolveImageInput("anything", undefined, "on")).toBe(true);
+    expect(resolveImageInput("claude-vision", VISION_ENTRY, "off")).toBe(false);
+  });
+});
+
 describe("output and reasoning capability resolution", () => {
   const entry: CatalogProviderEntry = { id: "z-ai", name: "Z.AI", baseUrl: "https://api.z.ai/api/anthropic", defaultTransport: "anthropic-messages", supportedTransports: ["anthropic-messages"], auth: { kind: "api_key" }, models: [
     { id: "glm-5.2", contextWindow: 200_000, maxOutputTokens: 32_768, reasoning: true, effortLevels: ["off", "high", "max"] },

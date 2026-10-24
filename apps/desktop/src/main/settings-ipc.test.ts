@@ -2770,6 +2770,144 @@ describe("connection contextWindowTokens CRUD (TASK.142) — bounded pair at the
   });
 });
 
+// ── Taskana 4088 (TASK.69): per-model imageInputOverride CRUD at the IPC boundary ──
+
+describe("connection imageInputOverride CRUD (Taskana 4088) — value+binding pair, server-derived, \"\" clears both", () => {
+  it('create with "on" + model persists the pair with the server-derived binding', async () => {
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "glm-5.3v",
+      imageInputOverride: "on",
+    });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("on");
+    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("glm-5.3v");
+  });
+
+  it('create with "off" persists the pair (both enum arms)', async () => {
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "glm-5.2",
+      imageInputOverride: "off",
+    });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("off");
+    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("glm-5.2");
+  });
+
+  it('create with "on" and a BLANK model is rejected invalid and persists nothing (TASK.142 rule verbatim)', async () => {
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "  ",
+      imageInputOverride: "on",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toEqual([]);
+  });
+
+  it('create with "on" and NO model at all is rejected invalid (cannot bind to nothing)', async () => {
+    const res = await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      imageInputOverride: "on",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections).toEqual([]);
+  });
+
+  it("create without the field leaves both keys off disk entirely", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" });
+    const conn = (await loadSettings(settingsPath)).settings.provider.connections[0] ?? {};
+    expect(Object.hasOwn(conn, "imageInputOverride")).toBe(false);
+    expect(Object.hasOwn(conn, "imageInputModel")).toBe(false);
+  });
+
+  it("update sets the pair and derives the binding from the STORED model when the request omits it", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "stored-model" }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      imageInputOverride: "on",
+    });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("on");
+    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("stored-model");
+  });
+
+  it('a model edit rebinding rule: update with "on" alongside a model change re-binds imageInputModel to the NEW effective model', async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "old-model" }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      model: "new-model",
+      imageInputOverride: "on",
+    });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("on");
+    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("new-model");
+  });
+
+  it('update with the "" sentinel deletes BOTH keys from disk', async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "glm-5.3v",
+      imageInputOverride: "on",
+    }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", imageInputOverride: "" });
+    expect(res.ok).toBe(true);
+    const conn = (await loadSettings(settingsPath)).settings.provider.connections[0] ?? {};
+    expect(Object.hasOwn(conn, "imageInputOverride")).toBe(false);
+    expect(Object.hasOwn(conn, "imageInputModel")).toBe(false);
+  });
+
+  it("update without the field leaves a saved pair untouched", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "glm-5.3v",
+      imageInputOverride: "on",
+    }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", label: "Work" });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("on");
+    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("glm-5.3v");
+  });
+
+  it("a model-ONLY update does not re-write a saved pair (stale bindings are handled at consumption, not here)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      providerId: "z-ai",
+      model: "model-a",
+      imageInputOverride: "off",
+    }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", model: "model-b" });
+    expect(res.ok).toBe(true);
+    const conn = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    // The pair stays as saved — the drawer shows "auto" for model-b (the
+    // imageInputInitialValue model-binding rule) until the user re-saves.
+    expect(conn?.imageInputOverride).toBe("off");
+    expect(conn?.imageInputModel).toBe("model-a");
+  });
+
+  it('update rejects a non-empty override when the model is explicitly CLEARED — it must not fall back to the stored model', async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "stored-model" }); // conn-1
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      model: "",
+      imageInputOverride: "on",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it('the IPC boundary rejects a garbage override ("maybe") — strict at the boundary, lenient on disk', async () => {
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      imageInputOverride: "maybe",
+    });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+});
+
 describe("handleConnectionUpdate — a baseUrl change drops the live-fetched model list", () => {
   /** Stamps a live-fetched list onto conn-1 on disk (what provider-ipc's connection-scoped fetch persists). */
   async function stampFetchedModels(): Promise<void> {

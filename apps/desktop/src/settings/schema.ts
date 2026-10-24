@@ -168,6 +168,15 @@ const connectionSchema = z.object({
   // host-env emission requires BOTH a valid value and a matching model).
   contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
   contextWindowModel: z.string().optional(),
+  // Taskana 4088 (TASK.69): per-model image-input override bound to ONE model id
+  // (the TASK.142 contextWindowTokens/contextWindowModel pair discipline). The
+  // binding is derived SERVER-SIDE from the effective model; the renderer never
+  // supplies it. `.catch(undefined)` fail-soft, same reason as maxOutputTokens.
+  imageInputOverride: z.enum(["on", "off"]).optional().catch(undefined),
+  imageInputModel: z.string().optional(),
+  // 4088-on-4118 integration: the former imageInputModels array is GONE —
+  // the live image-modality facts ride modelCapabilities' per-model
+  // `imageInput: true` field below.
   authOptional: z.boolean().optional(),
   // Live-fetched model ids (connection-scoped fetch, main/provider-ipc.ts) —
   // advisory display data, same round-trip discipline as `lastHealth`.
@@ -179,6 +188,10 @@ const connectionSchema = z.object({
   modelCapabilities: z.record(z.string().max(256), z.object({
     reasoning: z.boolean().optional(),
     effortLevels: z.array(z.string().max(64)).max(16).optional(),
+    // 4088-on-4118 integration: the live image-modality fact rides the same
+    // per-model caps map (`architecture.input_modalities` containing "image").
+    // `true` only — absence is "no live fact", never a demotion.
+    imageInput: z.literal(true).optional(),
   })).optional().catch(undefined),
   lastHealth: z
     .object({

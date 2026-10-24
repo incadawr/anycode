@@ -324,6 +324,7 @@ export function buildConnectionUpdatePayload(params: {
   authOptional: boolean;
   maxOutputTokens: number | "";
   contextWindowTokens: number | "";
+  imageInput: ImageInputSelection;
 }): ConnectionUpdateRequest {
   return {
     id: params.connectionId,
@@ -351,6 +352,11 @@ export function buildConnectionUpdatePayload(params: {
     // model binding is derived SERVER-SIDE from the effective model, so the
     // renderer can never attach a window to the wrong model.
     contextWindowTokens: params.contextWindowTokens,
+    // Sent unconditionally (Taskana 4088), same rationale: "auto" must CLEAR
+    // the saved override pair (`""` is main's clear sentinel), while "on"/"off"
+    // persist it. The model binding is derived SERVER-SIDE, exactly like the
+    // context-window pair.
+    imageInputOverride: imageInputToPayload(params.imageInput),
   };
 }
 
@@ -653,6 +659,86 @@ export function contextWindowAfterRawInput(
   return { raw, model: currentModel.trim() };
 }
 
+// ── Taskana 4088 (TASK.69): the per-model image-input select ──
+
+/** The drawer's three-state select value: catalog/live resolve, force on, force off. */
+export type ImageInputSelection = "auto" | "on" | "off";
+
+/**
+ * Taskana 4088: the wire value for a selection. "auto" maps to main's `""`
+ * clear sentinel (deletes the saved override pair), "on"/"off" persist it —
+ * the TASK.150 maxOutputTokens discipline verbatim. Exported for direct
+ * testing (no jsdom).
+ */
+export function imageInputToPayload(selection: ImageInputSelection): "on" | "off" | "" {
+  return selection === "auto" ? "" : selection;
+}
+
+/**
+ * Taskana 4088: the select value the drawer starts with for a saved
+ * connection — the `contextWindowInitialRaw` rule: the saved override is
+ * prefilled ONLY when it binds to the model now shown; a pair saved for
+ * another model (or no pair) reads as "auto". Exported for direct testing.
+ */
+export function imageInputInitialValue(connection: {
+  imageInputOverride?: "on" | "off";
+  imageInputModel?: string;
+  model?: string;
+}): ImageInputSelection {
+  return connection.imageInputOverride !== undefined &&
+    connection.imageInputModel !== undefined &&
+    connection.imageInputModel === (connection.model ?? "")
+    ? connection.imageInputOverride
+    : "auto";
+}
+
+/** Local literal (Taskana 4088), same convention as `ENV_CONTEXT_WINDOW` above — renderer modules don't import main, let alone core. */
+// 4088-on-4118: ANYCODE_IMAGE_INPUT_MODELS is GONE; only the per-model
+// override still rides the fork env.
+const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
+
+/**
+ * Taskana 4088: hint under the "Image input" select when the launching shell
+ * set ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE (in main's PROVIDER_ENV_KEYS): a
+ * shell value wins over the saved one, because buildHostEnv never overwrites
+ * it. `null` when absent. Exported for direct testing (no jsdom).
+ */
+export function imageInputEnvHint(envOverrides: readonly string[]): string | null {
+  const present = [ENV_IMAGE_INPUT_MODEL_OVERRIDE].filter((name) => envOverrides.includes(name));
+  return present.length > 0
+    ? `${present.join(" and ")} ${present.length > 1 ? "are" : "is"} set in the environment AnyCode was launched from — it takes precedence over the value saved here.`
+    : null;
+}
+
+/**
+ * Taskana 4088: one line naming what "Auto" resolves to for the shown model:
+ * the catalog's `imageInput: true` mark, or the connection's live-fetched
+ * modality set (the `/v1/models` fetch's `architecture.input_modalities`).
+ * An explicit on/off override suppresses the hint (the select already shows
+ * what wins). `null` when Auto has no fact to name. Exported for direct
+ * testing (no jsdom).
+ */
+export function imageInputEffectiveHint(
+  entry: CatalogSummaryEntry | undefined,
+  modelId: string,
+  connection: { modelCapabilities?: Record<string, { imageInput?: true }> } | undefined,
+  raw: ImageInputSelection,
+): string | null {
+  if (raw !== "auto") {
+    return null;
+  }
+  const matched = entry?.models.find((candidate) => candidate.id === modelId);
+  if (matched?.imageInput === true) {
+    return "catalog: vision";
+  }
+  // 4088-on-4118: the live image-modality facts ride the connection's
+  // modelCapabilities map (`imageInput?: true` per model).
+  if (connection?.modelCapabilities?.[modelId]?.imageInput === true) {
+    return "live /v1/models: vision";
+  }
+  return null;
+}
+
 /**
  * The Model field's offered list (datalist + click-to-fill chips): a stable
  * UNION (TASK.183) of this session's fetched ids, the ids persisted on the
@@ -867,6 +953,12 @@ export function ConnectionDrawerFields({
   const [contextWindow, setContextWindow] = useState<ContextWindowField>(() =>
     contextWindowInitialField(editConnection),
   );
+  // Taskana 4088: the per-model image-input select ("auto" | "on" | "off").
+  // Prefilled ONLY when the saved override binds to the connection's own model
+  // (the contextWindowInitialRaw rule); "auto" clears the pair on save.
+  const [imageInput, setImageInput] = useState<ImageInputSelection>(() =>
+    editConnection === undefined ? "auto" : imageInputInitialValue(editConnection),
+  );
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
   const [customName, setCustomName] = useState("");
@@ -981,6 +1073,16 @@ export function ConnectionDrawerFields({
     proxySnapshot,
     contextWindow.raw,
   );
+  // Taskana 4088 hints for the Image-input select: what Auto resolves to for
+  // the model this form will save (catalog mark, else the connection's live
+  // image-modality list), and whether the live feed rides the env right now.
+  const imageInputHint = imageInputEffectiveHint(
+    selectedEntry,
+    effectiveFormModel.trim(),
+    targetConnection,
+    imageInput,
+  );
+  const imageInputFeedHint = proxySnapshot === null ? null : imageInputEnvHint(proxySnapshot.envOverrides);
 
   /**
    * TASK.142: the ONE model-changing route. `next` is what goes into the Model
@@ -1129,6 +1231,13 @@ export function ConnectionDrawerFields({
       setError(CONTEXT_WINDOW_ERROR_MODEL);
       return;
     }
+    // Taskana 4088: an explicit on/off override needs the model this create
+    // will actually SEND (main derives the binding and refuses otherwise) —
+    // same specific-message pre-flight as the context window above.
+    if (imageInput !== "auto" && createModel === "") {
+      setError("Enter a model before forcing image input — the override is saved for one model.");
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
@@ -1145,6 +1254,10 @@ export function ConnectionDrawerFields({
           ...(noAuth ? { authOptional: true } : {}),
           ...(mot.value !== "" ? { maxOutputTokens: mot.value } : {}),
           ...(cw.value !== "" ? { contextWindowTokens: cw.value } : {}),
+          // Taskana 4088: create keeps the conditional-spread form (create's
+          // schema has no "" sentinel — omission already means "auto"); only an
+          // explicit choice travels, and the binding is server-derived.
+          ...(imageInput !== "auto" ? { imageInputOverride: imageInput } : {}),
         },
         createModel !== "" ? createModel : null,
       );
@@ -1253,6 +1366,7 @@ export function ConnectionDrawerFields({
           authOptional: noAuth,
           maxOutputTokens: mot.value,
           contextWindowTokens: cw.value,
+          imageInput,
         }),
         selectedModelId,
       );
@@ -1650,6 +1764,39 @@ export function ConnectionDrawerFields({
         {cwEnvHint !== null && (
           <div className="settings-field-hint" role="note">
             {cwEnvHint}
+          </div>
+        )}
+        {/* Taskana 4088 (TASK.69): per-model image input. Three states: Auto
+            (catalog mark, then the connection's live-fetched modality set —
+            whichever vouches first), On/Off (a per-model override pair saved
+            like the context-window pair above, binding derived server-side).
+            Never a connection-wide switch: a blanket "on" would un-gate every
+            blind sibling (the glm-5.2 hazard) the moment the user switches. */}
+        <label className="settings-field">
+          <span className="settings-field-label">Image input</span>
+          <select
+            className="settings-field-input"
+            value={imageInput}
+            disabled={readOnly}
+            onChange={(e) => setImageInput(e.target.value as ImageInputSelection)}
+          >
+            <option value="auto">Auto (catalog / live fetch)</option>
+            <option value="on">On (this model accepts images)</option>
+            <option value="off">Off (this model rejects images)</option>
+          </select>
+        </label>
+        {/* One line naming what Auto resolves to for the shown model: the
+            catalog's vision mark, or the live /v1/models modality fact. */}
+        {imageInputHint !== null && <div className="settings-field-hint">{imageInputHint}</div>}
+        <div className="settings-field-hint" role="note">
+          Saved for the model above only — switching this connection to another model ignores it. Auto uses the catalog's
+          vision mark or the image-capable list fetched from the provider's /v1/models; a running session picks a change
+          up when it next starts.
+        </div>
+        {/* Taskana 4088: shown while the live-modality feed rides the env. */}
+        {imageInputFeedHint !== null && (
+          <div className="settings-field-hint" role="note">
+            {imageInputFeedHint}
           </div>
         )}
         {/* TASK.141: one instance of the same picker the engine panes and the

@@ -13,12 +13,14 @@ import {
   loadEnvConfig,
   resolveContextBudgetConfig,
   resolveContextWindow,
+  resolveImageInput,
 } from "@anycode/core";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import {
   ENV_CONTEXT_WINDOW,
   ENV_CONTEXT_WINDOW_MODEL,
   ENV_GREP_BACKEND,
+  ENV_IMAGE_INPUT_MODEL_OVERRIDE,
   ENV_INCLUDE_USAGE,
   ENV_MAX_OUTPUT_TOKENS,
   ENV_PROVIDER_TRANSPORT,
@@ -507,6 +509,44 @@ describe("buildHostEnv — ANYCODE_CONTEXT_WINDOW + ANYCODE_CONTEXT_WINDOW_MODEL
     const overrides = envOverrides({ [ENV_CONTEXT_WINDOW]: "4096", [ENV_CONTEXT_WINDOW_MODEL]: "m" });
     expect(overrides).toContain(ENV_CONTEXT_WINDOW);
     expect(overrides).toContain(ENV_CONTEXT_WINDOW_MODEL);
+  });
+});
+
+// ── Taskana 4088 (TASK.69): the live image-modality list on the fork env ──
+// 4088-on-4118 integration: ANYCODE_IMAGE_INPUT_MODELS is GONE — the live
+// image-modality facts ride 4118's modelCapabilities map (read by the host
+// from the connection record). Only the per-model override still travels
+// through the fork env.
+
+describe("buildHostEnv — image-input transport (Taskana 4088 on 4118's caps map)", () => {
+  it("NEVER emits ANYCODE_IMAGE_INPUT_MODELS, even for a connection with live image facts", async () => {
+    const conn = {
+      ...connectionFixture({ id: "z-ai", model: "glm-5.3v" }),
+      modelCapabilities: { "glm-5.3v": { imageInput: true as const } },
+    };
+    const env = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...settings(), provider: providerV2Multi(conn.id, [conn]) },
+      getSecret: noSecret,
+    });
+    expect(env["ANYCODE_IMAGE_INPUT_MODELS"]).toBeUndefined();
+  });
+
+  it("emits the per-model override as <value>:<binding>; absent pair emits nothing; shell wins", async () => {
+    const conn = { ...connectionFixture({ id: "z-ai", model: "glm-5.3v" }), imageInputOverride: "on" as const, imageInputModel: "glm-5.3v" };
+    const build = (bootEnv: NodeJS.ProcessEnv, c: typeof conn | ReturnType<typeof connectionFixture>) =>
+      buildHostEnv({ bootEnv, settings: { ...settings(), provider: providerV2Multi(c.id, [c]) }, getSecret: noSecret });
+    expect((await build({}, conn))[ENV_IMAGE_INPUT_MODEL_OVERRIDE]).toBe("on:glm-5.3v");
+    expect((await build({}, connectionFixture({ id: "z-ai", model: "m" })))[ENV_IMAGE_INPUT_MODEL_OVERRIDE]).toBeUndefined();
+    expect((await build({ ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE: "off:x" }, conn))[ENV_IMAGE_INPUT_MODEL_OVERRIDE]).toBe("off:x");
+  });
+
+  it("a caps-map imageInput fact resolves true through the live-modality lookup (no env round-trip)", () => {
+    // The integrated lookup: liveCapsFor(id)?.imageInput === true.
+    const liveCaps: Record<string, { imageInput?: true }> = { "glm-5.3v": { imageInput: true } };
+    const lookup = (id: string) => (liveCaps[id]?.imageInput === true ? true : undefined);
+    expect(resolveImageInput("glm-5.3v", undefined, undefined, lookup)).toBe(true);
+    expect(resolveImageInput("glm-5.2", undefined, undefined, lookup)).toBe(false);
   });
 });
 

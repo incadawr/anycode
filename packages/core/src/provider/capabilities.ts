@@ -1,14 +1,22 @@
 /**
  * Image-input capability resolution (Phase 6 slice 6.2, design §2-B4). Pure and
- * fail-closed: given the current model id, its catalog entry (if any) and an
- * optional explicit override, decide whether image attachments are allowed. The
- * CLI wires this into a MediaCapabilityPort closure so a /model switch is honored
- * on the next call.
+ * fail-closed: given the current model id, its catalog entry (if any), an
+ * optional explicit override and an optional live-modality lookup, decide
+ * whether image attachments are allowed. The CLI wires this into a
+ * MediaCapabilityPort closure so a /model switch is honored on the next call.
  *
- * Taskana 4118 adds the live-capability seam: per-model facts a connection's
- * /v1/models endpoint declared (`LiveModelCapabilities`) supplement the static
- * catalog, consulted ONLY when the catalog has no matching model — the catalog
- * is checked knowledge and is never overridden by live meta.
+ * Taskana 4088 (TASK.69) adds the `liveModality` rung: a connection-scoped set
+ * of model ids a live `/v1/models` fetch declared image-capable
+ * (`architecture.input_modalities` containing "image"). It sits BETWEEN the
+ * override and the catalog and is ADDITIVE ONLY: a live `true` promotes an
+ * unmarked or catalog-false model, but a live false/absent fact NEVER cancels
+ * a catalog-true model — not every `/v1/models` speaks modalities, and stale
+ * live data must not blind a model the static catalog vouches for.
+ *
+ * 4088-on-4118 integration: the live-modality facts ride 4118's
+ * `LiveModelCapabilities` map (`imageInput?: true`, same per-model record as
+ * the reasoning facts) instead of a separate model-id list; the lookup rung
+ * and its additive-only semantics are unchanged.
  */
 
 import type { CatalogProviderEntry } from "./catalog.js";
@@ -18,22 +26,36 @@ import { DEFAULT_MAX_OUTPUT_TOKENS, type ReasoningEffort } from "../types/config
 export type ImageInputOverride = "on" | "off";
 
 /**
+ * Live-modality lookup (Taskana 4088): `true` when the connection-scoped live
+ * `/v1/models` fetch declared THIS model image-capable; `false`/`undefined`
+ * when it did not (or nobody fetched). Consulted BETWEEN the explicit override
+ * and the static catalog; only `true` has any effect (additive rule above).
+ */
+export type ImageModalityLookup = (modelId: string) => boolean | undefined;
+
+/**
  * Fail-closed capability verdict: an explicit override wins (`on` ⇒ true,
- * `off` ⇒ false); otherwise the static catalog hint decides (the matched model's
- * `imageInput === true`); otherwise false. An unknown model id, a missing entry,
- * or an unmarked model all resolve to false — the CLI then returns an explicit,
- * actionable error naming the override instead of silently dropping the image.
+ * `off` ⇒ false); otherwise the live-modality rung may PROMOTE (true ⇒ true,
+ * never demote — Taskana 4088); otherwise the static catalog hint decides (the
+ * matched model's `imageInput === true`); otherwise false. An unknown model
+ * id, a missing entry, or an unmarked model all resolve to false — the CLI
+ * then returns an explicit, actionable error naming the override instead of
+ * silently dropping the image.
  */
 export function resolveImageInput(
   modelId: string,
   entry: CatalogProviderEntry | undefined,
   override: ImageInputOverride | undefined,
+  liveModality?: ImageModalityLookup,
 ): boolean {
   if (override === "on") {
     return true;
   }
   if (override === "off") {
     return false;
+  }
+  if (liveModality?.(modelId) === true) {
+    return true;
   }
   const model = entry?.models.find((candidate) => candidate.id === modelId);
   return model?.imageInput === true;
@@ -193,6 +215,12 @@ export interface LiveModelCapabilities {
   reasoning?: boolean;
   /** Raw foreign effort levels, UNMAPPED — mapped fail-closed at resolution. */
   effortLevels?: string[];
+  /**
+   * 4088-on-4118 integration: the endpoint declared this model
+   * image-capable (`architecture.input_modalities` containing "image").
+   * `true` only — absence means "no live fact", never a demotion.
+   */
+  imageInput?: true;
 }
 
 /**

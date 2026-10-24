@@ -239,9 +239,11 @@ import {
   type LiveModelCapabilities,
   mapChildRunStatusToNotification,
   matchCatalogEntryByBaseUrl,
+  parseImageInputModelOverride,
   resolveContextWindowInfo,
   resolveEffortLevels,
   resolveImageInput,
+  type ImageModalityLookup,
   resolveIncludeUsage,
   resolveMaxOutputTokens,
   clampSubagentMaxOutputTokens,
@@ -372,6 +374,14 @@ const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
  * `"pnpm test,pnpm typecheck"`.
  */
 const ENV_RUN_ALLOW_BASH = "ANYCODE_RUN_ALLOW_BASH";
+/**
+ * 4088-on-4118 integration: the former ANYCODE_IMAGE_INPUT_MODELS local
+ * literal is GONE — the live image-modality facts ride 4118's
+ * modelCapabilities map (`imageInput?: true`), read fail-soft from THIS
+ * fork's connection record at boot (see liveCapsFor).
+ */
+/** Taskana 4088: `<on|off>:<modelId>`, the drawer's per-model override (main/host-env.ts). */
+const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 import { resolveExtensionsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
@@ -2295,6 +2305,18 @@ async function boot(): Promise<void> {
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
 
+    // Taskana 4088 (TASK.69), 4088-on-4118 integration: the per-model override
+    // is parsed ONCE here from the env main stamps for THIS fork's connection
+    // (buildHostEnv runs on the per-tab pinned settings). The live
+    // image-modality set no longer travels through the fork env: it rides
+    // 4118's modelCapabilities map (`imageInput?: true` per model), which this
+    // boot already loaded into `liveCapsFor` (readConnectionModelCapabilities,
+    // fail-soft, fork-connection id first then the session row pin). Both are
+    // consumed per call by `media.imageInputEnabled` (below), which
+    // re-resolves through `currentModel` on every send.
+    const imageModelOverride = parseImageInputModelOverride(process.env[ENV_IMAGE_INPUT_MODEL_OVERRIDE]);
+    const imageModalityLookup: ImageModalityLookup = (id) => (liveCapsFor(id)?.imageInput === true ? true : undefined);
+
     // TASK.138 slice 2: per-run Bash allow-list, a PROCESS INPUT (whoever
     // launched this fork), never a setting — see run-allow-bash.ts's module
     // doc. Parsed once here so the same list feeds both the permission engine
@@ -3064,7 +3086,19 @@ async function boot(): Promise<void> {
     const media: MediaCapabilityPort = {
       // Reads currentModel so a P7.15 model switch re-gates image input on the
       // next send; currentModel === envConfig.model at boot (byte-identical).
-      imageInputEnabled: () => resolveImageInput(currentModel, catalogEntry, envConfig.imageInput),
+      // Taskana 4088: imageModalityLookup adds the live /v1/models modality
+      // rung between the env override and the catalog (additive-only, parsed
+      // once at boot above); the verdict still re-resolves per call through
+      // currentModel, so a switch re-gates honestly.
+      // The global ANYCODE_IMAGE_INPUT (shell) wins; otherwise the per-model
+      // override applies only while currentModel is the model it is bound to.
+      imageInputEnabled: () =>
+        resolveImageInput(
+          currentModel,
+          catalogEntry,
+          envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined),
+          imageModalityLookup,
+        ),
       // TASK.198 срез C: live verdict for the vision fallback — true whenever
       // a recognizer endpoint is CURRENTLY configured, independent of the
       // current model's own sightedness. Consulted by host/session.ts's

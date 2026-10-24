@@ -146,6 +146,8 @@ export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
 export interface ModelCapabilitiesDto {
   reasoning?: boolean;
   effortLevels?: string[];
+  /** 4088-on-4118 integration: live `architecture.input_modalities` image fact; `true` only. */
+  imageInput?: true;
 }
 
 /**
@@ -261,6 +263,26 @@ export interface ProviderConnection {
   /** Model id `contextWindowTokens` is bound to (see above). Main derives it server-side from the effective model; the renderer never supplies it. */
   contextWindowModel?: string;
   /**
+   * Per-model image-input override for this connection (Taskana 4088 /
+   * TASK.69), paired with `imageInputModel` — the model id it binds to (the
+   * TASK.142 pair discipline verbatim). SCOPE is connection+model, NEVER
+   * global: the override governs ONLY the bound model, so enabling image
+   * input for a sighted vLLM model does not un-gate a blind sibling the next
+   * time the user switches — the exact hazard the single global
+   * ANYCODE_IMAGE_INPUT env var had. Main derives `imageInputModel`
+   * server-side from the effective model; the renderer never supplies it.
+   * Absent = "auto" (catalog hint, then the live-modality set below, resolve).
+   */
+  imageInputOverride?: "on" | "off";
+  /** Model id `imageInputOverride` is bound to (see above). */
+  imageInputModel?: string;
+  /**
+   * 4088-on-4118 integration: the former `imageInputModels` list is GONE —
+   * the live image-modality facts now ride `modelCapabilities`' per-model
+   * `imageInput?: true` field (same /v1/models fetch, same additive-only
+   * semantics; the host reads the map from the connection record at boot).
+   */
+  /**
    * User declaration that this endpoint authenticates nothing (dogfood 16.07:
    * local servers — LM Studio/ollama/llama.cpp). UI-level truth for the
    * drawer's "no API key" checkbox and the tile's health derivation (a keyless
@@ -353,6 +375,20 @@ export interface ActiveProviderView {
   /** The active connection's per-model context-window override (TASK.142) and the model it binds to; absent = catalog/assumed fallback. */
   contextWindowTokens?: number;
   contextWindowModel?: string;
+  /**
+   * 4088-on-4118 integration: the former `imageInputModels` projection is
+   * GONE — the live image-modality facts ride `modelCapabilities` (read by
+   * the host from the connection record; no fork-env emission).
+   */
+  /**
+   * Taskana 4088: the active connection's per-model image-input override and
+   * its binding, projected for display/diagnostics (the override itself
+   * reaches the host through the connection's persisted pair on the settings
+   * read, exactly like the context-window pair). Only a COMPLETE pair
+   * projects.
+   */
+  imageInputOverride?: "on" | "off";
+  imageInputOverrideModel?: string;
   /** The active connection's "no API key" declaration (TASK.152); only `true` is projected. */
   authOptional?: boolean;
 }
@@ -991,6 +1027,12 @@ export interface ConnectionCreateRequest {
    * window to the wrong model.
    */
   contextWindowTokens?: number;
+  /**
+   * Per-model image-input override (Taskana 4088; see
+   * `ProviderConnection.imageInputOverride`). Omitted = Auto. The model binding
+   * is NOT carried here — main derives it server-side from the effective model.
+   */
+  imageInputOverride?: "on" | "off";
   /** "No API key" declaration (see `ProviderConnection.authOptional`); only `true` is persisted. */
   authOptional?: boolean;
   /** Make the new connection active (default for new sessions). */
@@ -1049,6 +1091,14 @@ export interface ConnectionUpdateRequest {
    * supplies the binding itself.
    */
   contextWindowTokens?: number | "";
+  /**
+   * Per-model image-input override (Taskana 4088 / TASK.69) with the same `""`
+   * clear sentinel as `contextWindowTokens` above: absent = keep the current
+   * pair, "on"/"off" = set the override AND the binding (main derives the
+   * binding from the effective model, never the renderer), `""` = clear BOTH
+   * keys back to Auto (catalog / live-modality resolve).
+   */
+  imageInputOverride?: "on" | "off" | "";
   /**
    * "No API key" declaration: absent = keep the current value, `true` = set,
    * `false` = clear (the handler removes the key from disk rather than
@@ -1255,6 +1305,10 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     maxOutputTokens: connection.maxOutputTokens,
     contextWindowTokens: connection.contextWindowTokens,
     contextWindowModel: connection.contextWindowModel,
+    // 4088-on-4118: imageInputModels projection removed (caps map instead).
+    ...(connection.imageInputOverride !== undefined && connection.imageInputModel !== undefined
+      ? { imageInputOverride: connection.imageInputOverride, imageInputOverrideModel: connection.imageInputModel }
+      : {}),
     ...(connection.authOptional === true ? { authOptional: true } : {}),
   };
 }

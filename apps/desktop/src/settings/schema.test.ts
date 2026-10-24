@@ -857,6 +857,124 @@ describe("connection.contextWindowTokens / contextWindowModel (TASK.142) — per
   );
 });
 
+// ── Taskana 4088 (TASK.69): per-model image-input override + live modality set ──
+
+describe("connection.imageInputOverride / imageInputModel (Taskana 4088) + caps imageInput (4088-on-4118) — additive-optional, lenient on purpose", () => {
+  it("round-trips a valid override+binding pair and the live-modality list verbatim through a read-modify-write", () => {
+    const before = {
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [
+          {
+            id: "c1",
+            providerId: "z-ai",
+            imageInputOverride: "on" as const,
+            imageInputModel: "glm-5.3v",
+            modelCapabilities: { a: { imageInput: true }, b: { imageInput: true } },
+          },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(before)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.imageInputOverride).toBe("on");
+      expect(parsed.data.provider.connections[0]?.imageInputModel).toBe("glm-5.3v");
+      expect(parsed.data.provider.connections[0]?.modelCapabilities).toEqual({ a: { imageInput: true }, b: { imageInput: true } });
+      // Read-modify-write: the parsed output re-parses identically.
+      const reparsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(parsed.data)));
+      expect(reparsed.success).toBe(true);
+      if (reparsed.success) {
+        expect(reparsed.data.provider.connections[0]?.imageInputOverride).toBe("on");
+        expect(reparsed.data.provider.connections[0]?.modelCapabilities).toEqual({ a: { imageInput: true }, b: { imageInput: true } });
+      }
+    }
+  });
+
+  it('a garbage imageInputOverride ("maybe") reads back as absent while siblings stay intact (fail-soft .catch, never corrupt)', () => {
+    const before = {
+      version: 2,
+      provider: {
+        activeConnectionId: "c1",
+        connections: [
+          { id: "c1", providerId: "z-ai", label: "Work", imageInputOverride: "maybe", imageInputModel: "glm-5.3v" },
+          { id: "c2", providerId: "openai", model: "gpt-5" },
+        ],
+      },
+      tools: {},
+      permissions: { alwaysAllow: [] },
+      ui: { theme: "system" },
+      security: { allowWeakSecretStorage: false },
+    };
+    const parsed = settingsSchema.safeParse(before);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.imageInputOverride).toBeUndefined();
+      expect(JSON.stringify(parsed.data.provider.connections[0])).not.toContain("imageInputOverride");
+      // The binding survives inert (host-env emits the override only as a pair).
+      expect(parsed.data.provider.connections[0]?.imageInputModel).toBe("glm-5.3v");
+      expect(parsed.data.provider.connections[0]?.label).toBe("Work");
+      expect(parsed.data.provider.connections[1]).toEqual({ id: "c2", providerId: "openai", model: "gpt-5" });
+    }
+  });
+
+  it('imageInputOverride "off" round-trips (both enum arms parse)', () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [{ id: "c1", providerId: "z-ai", imageInputOverride: "off", imageInputModel: "glm-5.2" }],
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.provider.connections[0]?.imageInputOverride).toBe("off");
+    }
+  });
+
+  it("caps imageInput:true round-trips; a wrong-typed caps map reads back as absent (fail-soft .catch)", () => {
+    const ok = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [{ id: "c1", providerId: "z-ai", modelCapabilities: { a: { imageInput: true } } }],
+      },
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) {
+      expect(ok.data.provider.connections[0]?.modelCapabilities).toEqual({ a: { imageInput: true } });
+    }
+    // 4088-on-4118: the former imageInputModels field is GONE — a legacy file
+    // carrying it must not fail the parse (zod strips unknown keys) and must
+    // not resurrect the list.
+    const legacy = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      provider: {
+        activeConnectionId: "c1",
+        connections: [{ id: "c1", providerId: "z-ai", imageInputModels: ["a", "b"] }],
+      },
+    });
+    expect(legacy.success).toBe(true);
+    if (legacy.success) {
+      expect(Object.hasOwn(legacy.data.provider.connections[0] ?? {}, "imageInputModels")).toBe(false);
+    }
+  });
+
+  it("a connection with none of the three keys round-trips with them absent (additive-optional, byte-identical pre-4088 files)", () => {
+    const parsed = settingsSchema.safeParse(
+      JSON.parse(JSON.stringify({ ...cloneDefaults(), provider: providerV2({ id: "z-ai" }) })),
+    );
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      const conn = parsed.data.provider.connections[0] ?? {};
+      expect("imageInputOverride" in conn).toBe(false);
+      expect("imageInputModel" in conn).toBe(false);
+      expect("modelCapabilities" in conn).toBe(false);
+    }
+  });
+});
+
 describe("connection.maxOutputTokens (TASK.150) — persisted schema stays LENIENT on purpose", () => {
   it("round-trips a valid maxOutputTokens verbatim", () => {
     const settings = {

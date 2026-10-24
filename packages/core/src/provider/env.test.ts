@@ -22,6 +22,7 @@ import {
   ENV_SUPERVISOR_IDLE_MS,
   ENV_TOOL_CONCURRENCY,
   loadEnvConfig,
+  parseImageInputModelOverride,
 } from "./env.js";
 
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
@@ -294,6 +295,16 @@ describe("loadEnvConfig", () => {
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
+    }
+  });
+
+  // 4088-on-4118: the ANYCODE_IMAGE_INPUT_MODELS parse tests are GONE with the var.
+
+  it("ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE: <on|off>:<model>, model ids may contain ':'; garbage is ignored", () => {
+    expect(parseImageInputModelOverride("on:glm-5.3v")).toEqual({ override: "on", model: "glm-5.3v" });
+    expect(parseImageInputModelOverride("off:qwen:7b")).toEqual({ override: "off", model: "qwen:7b" });
+    for (const raw of [undefined, "", "on", "on:", "maybe:m", ":m"]) {
+      expect(parseImageInputModelOverride(raw)).toBeUndefined();
     }
   });
 

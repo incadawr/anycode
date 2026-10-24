@@ -45,6 +45,19 @@ export const ENV_DB_PATH = "ANYCODE_DB_PATH";
 export const ENV_TOOL_CONCURRENCY = "ANYCODE_TOOL_CONCURRENCY";
 export const ENV_STALL_TIMEOUT_MS = "ANYCODE_STALL_TIMEOUT_MS";
 export const ENV_IMAGE_INPUT = "ANYCODE_IMAGE_INPUT";
+/**
+ * 4088-on-4118 integration: the former ENV_IMAGE_INPUT_MODELS declaration is
+ * GONE — the live image-modality facts ride 4118's modelCapabilities map
+ * (`imageInput?: true` per model) instead of the fork env.
+ */
+/**
+ * Taskana 4088: the active connection's per-model image-input override as ONE
+ * value `<on|off>:<modelId>` (value and binding travel in a single var so they
+ * can never be half-inherited). The host applies it ONLY while the session's
+ * current model equals the bound id, so a mid-session switch to another model
+ * falls back to the live/catalog rungs.
+ */
+export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
 export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
 
@@ -62,6 +75,30 @@ export const DEFAULT_BASE_URL = "https://api.anthropic.com";
  * stays entirely inside `provider/**`.
  */
 export type ModelBoundCoreEnvConfig = CoreEnvConfig & { contextWindowModel?: string };
+
+/**
+ * Parses ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE (Taskana 4088) — the drawer's
+ * per-model override as ONE `<on|off>:<modelId>` value. Non-fatal: a bad
+ * value parses to undefined, never throws.
+ */
+export function parseImageInputModelOverride(
+  raw: string | undefined,
+): { override: "on" | "off"; model: string } | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const colon = raw.indexOf(":");
+  if (colon < 0) {
+    return undefined;
+  }
+  const value = raw.slice(0, colon).trim().toLowerCase();
+  const model = raw.slice(colon + 1).trim();
+  if ((value !== "on" && value !== "off") || model === "") {
+    return undefined;
+  }
+  return { override: value, model };
+}
+
 
 /**
  * Reads ANYCODE_API_KEY, ANYCODE_BASE_URL (default: native Anthropic),
