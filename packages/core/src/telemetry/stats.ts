@@ -219,6 +219,7 @@ const VALID_RECORD_TYPES: ReadonlySet<string> = new Set([
   "error",
   "checkpoint_created",
   "checkpoint_failed",
+  "permission_auto_decided",
   // TelemetryLifecycleRecord
   "session_start",
   "session_end",

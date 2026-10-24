@@ -133,7 +133,7 @@ export interface PersistedRenderContext<Out = unknown> {
  */
 export type ToolEmittedEvent = Extract<
   AgentEvent,
-  { type: `subagent_${string}` | `workflow_${string}` | `checkpoint_${string}` }
+  { type: `subagent_${string}` | `workflow_${string}` | `checkpoint_${string}` | `permission_${string}` }
 >;
 
 export interface ToolContext {
