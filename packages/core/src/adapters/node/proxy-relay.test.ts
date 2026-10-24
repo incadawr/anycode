@@ -111,6 +111,21 @@ describe("parseUpstreamProxyUrl", () => {
     const endpoint = parseUpstreamProxyUrl("http://us%40er:p%40ss@proxy:3128")!;
     expect(endpoint.proxyAuthorization).toBe(`Basic ${Buffer.from("us@er:p@ss").toString("base64")}`);
   });
+
+  // F1 repro: a URL-parser-canonicalised non-ASCII password (what every
+  // `new URL(...)` round trip produces — `päss` becomes the UTF-8 bytes
+  // `p%C3%A4ss`) must decode to the ORIGINAL string, not its bytes misread
+  // as latin1 (the old safePercentDecode double-encoded them, so the relay
+  // sent a wrong Proxy-Authorization and every upstream answered 407).
+  it("F1 repro: UTF-8 (non-ASCII, emoji) userinfo yields the exact Basic credential", () => {
+    const url = new URL("http://user:päss@proxy:3128").toString(); // password percent-encoded as UTF-8
+    const endpoint = parseUpstreamProxyUrl(url)!;
+    expect(endpoint.proxyAuthorization).toBe(`Basic ${Buffer.from("user:päss").toString("base64")}`);
+
+    const emojiUrl = new URL("http://user:🔑@proxy:3128").toString();
+    const emojiEndpoint = parseUpstreamProxyUrl(emojiUrl)!;
+    expect(emojiEndpoint.proxyAuthorization).toBe(`Basic ${Buffer.from("user:🔑").toString("base64")}`);
+  });
 });
 
 describe("isLoopbackPeer", () => {
@@ -254,6 +269,37 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
   it("refuses an https:// upstream (logs once, falls back to drop)", async () => {
     const relay = await resolveProxyRelay({ HTTPS_PROXY: "https://user:secret@proxy.corp:3128" });
     expect(relay).toBeUndefined();
+  });
+
+  // F2 repro: the card's "log once" contract. A refused upstream must warn
+  // exactly once per process no matter how many spawn sites re-ask
+  // (ensureProxyRelay fires on EVERY Bash/PTY spawn); closeProxyRelay() is
+  // the documented re-arm seam. Asserted via console.warn spy — the warn is
+  // the contract's user-visible surface.
+  it("F2 repro: a refused upstream warns once per process across repeated resolves (re-armed by closeProxyRelay)", async () => {
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg?: unknown) => {
+      warns.push(String(msg));
+    };
+    try {
+      const env = { HTTPS_PROXY: "https://user:secret@proxy.corp:3128" } as NodeJS.ProcessEnv;
+      for (let i = 0; i < 5; i += 1) {
+        const relay = await resolveProxyRelay(env);
+        expect(relay).toBeUndefined();
+      }
+      expect(warns).toHaveLength(1);
+      expect(warns[0]).toContain("unsupported_scheme");
+
+      // closeProxyRelay() clears the refused state with the cache — a later
+      // resolve re-attempts (and warns again exactly once for the new cycle).
+      closeProxyRelay();
+      const again = await resolveProxyRelay(env);
+      expect(again).toBeUndefined();
+      expect(warns).toHaveLength(2);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 });
 

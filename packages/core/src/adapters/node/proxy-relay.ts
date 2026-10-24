@@ -99,10 +99,14 @@ export function parseUpstreamProxyUrl(upstreamUrl: string): UpstreamProxyEndpoin
     return undefined;
   }
   // `URL.username`/`password` stay PERCENT-ENCODED (the URL parser does not
-  // decode them), so a legal `%40` inside a username must be decoded here —
-  // `safePercentDecode` decodes ONLY `%XX` sequences and leaves every other
-  // character (including `+`, which decodeURIComponent would turn into a
-  // space) byte-identical. A colon in the decoded password is fine — base64
+  // decode them), so a legal `%40` inside a username must be decoded here.
+  // `safePercentDecode` decodes ONLY `%XX` triplets and leaves every other
+  // character byte-identical (`+` stays `+`, unlike decodeURIComponent) — but
+  // each triplet is decoded as a raw BYTE and the result is read back as
+  // UTF-8, because the parser percent-encodes non-ASCII userinfo as UTF-8
+  // bytes (`päss` → `p%C3%A4ss`): latin1-style code-point decoding would
+  // double-encode at the `Buffer.from(…)` below and send a WRONG credential
+  // (cross-review F1). A colon in the decoded password is fine — base64
   // wraps the whole `user:pass`.
   if (url.username === "" && url.password === "") {
     return undefined;
@@ -119,13 +123,40 @@ export function parseUpstreamProxyUrl(upstreamUrl: string): UpstreamProxyEndpoin
   }
   const user = safePercentDecode(url.username);
   const pass = safePercentDecode(url.password);
-  const proxyAuthorization = `Basic ${Buffer.from(`${user}:${pass}`).toString("base64")}`;
+  const proxyAuthorization = `Basic ${Buffer.from(`${user}:${pass}`, "utf8").toString("base64")}`;
   return { host, port, proxyAuthorization };
 }
 
-/** Decodes only `%XX` sequences; `+`, spaces and everything else stay byte-identical (unlike decodeURIComponent). */
+/**
+ * Decodes only `%XX` sequences; `+` and every other literal character stay
+ * byte-identical (unlike decodeURIComponent). Each triplet is decoded as a
+ * raw BYTE and the collected byte string is read back as UTF-8 — the URL
+ * parser emits non-ASCII userinfo as UTF-8 percent bytes, so this round
+ * trips `päss`/emoji exactly (cross-review F1: a latin1 code-point decode
+ * double-encoded them and silently broke the upstream credential).
+ */
 function safePercentDecode(text: string): string {
-  return text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+  const bytes: number[] = [];
+  let literal = "";
+  const flush = (): void => {
+    if (literal !== "") {
+      bytes.push(...Buffer.from(literal, "utf8"));
+      literal = "";
+    }
+  };
+  for (let i = 0; i < text.length; ) {
+    const hex = /^[0-9A-Fa-f]{2}$/.exec(text.slice(i + 1, i + 3));
+    if (text[i] === "%" && hex !== null) {
+      flush();
+      bytes.push(parseInt(hex[0], 16));
+      i += 3;
+    } else {
+      literal += text[i];
+      i += 1;
+    }
+  }
+  flush();
+  return Buffer.from(bytes).toString("utf8");
 }
 
 // ── loopback peer check (pure; exported for unit tests) ──
@@ -398,11 +429,19 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
  *    card's "log once and fall back" rule).
  *  - Idempotent per process: the first successful call caches its relay, and
  *    `closeProxyRelay()` (test seam / shutdown hook) clears the cache so a
- *    later call can start a fresh one under a changed env.
+ *    later call can start a fresh one under a changed env. A REFUSED resolve
+ *    is also remembered (cross-review F2): without that, every spawn-site
+ *    `ensureProxyRelay()` re-warned the same "cannot be relayed" line and the
+ *    card's "log once" contract was actually log-per-spawn.
  */
 export async function resolveProxyRelay(env: NodeJS.ProcessEnv = process.env): Promise<ProxyRelay | undefined> {
   if (activeRelay !== undefined) {
     return activeRelay;
+  }
+  if (refusedReason !== undefined) {
+    // Already refused in this process: keep TASK.135's drop behaviour
+    // silently — the single warn below already said why, once.
+    return undefined;
   }
   const upstreamUrl = credentialedProxyValue(env);
   if (upstreamUrl === undefined) {
@@ -410,8 +449,11 @@ export async function resolveProxyRelay(env: NodeJS.ProcessEnv = process.env): P
   }
   const relay = await createProxyRelayAsync(upstreamUrl, {
     // Log once per process, and never include the offending URL: it carries
-    // the very credential this whole module exists to contain.
+    // the very credential this whole module exists to contain. The refused
+    // state is recorded so the spawn-side `ensureProxyRelay` re-asks are
+    // silent (cross-review F2).
     onRefuse: (reason) => {
+      refusedReason = reason;
       console.warn(`[proxy-relay] credentialed proxy cannot be relayed (${reason}); children fall back to TASK.135's direct behaviour`);
     },
   });
@@ -423,6 +465,14 @@ export async function resolveProxyRelay(env: NodeJS.ProcessEnv = process.env): P
 
 /** The process-wide relay cache (`undefined` until the first successful resolve). */
 let activeRelay: ProxyRelay | undefined;
+
+/**
+ * The refuse memory behind "log once per PROCESS" (cross-review F2): set on
+ * the first refused resolve, consulted by `resolveProxyRelay` and
+ * `ensureProxyRelay`, cleared by `closeProxyRelay()` together with the
+ * relay cache — so a shutdown/re-resolve cycle genuinely re-attempts.
+ */
+let refusedReason: RefuseReason | undefined;
 
 /**
  * The relay URL for SYNC spawn sites (`buildChildEnv`'s third argument):
@@ -445,7 +495,7 @@ export function proxyRelayUrl(): string | undefined {
  * `system` proxy profile has. Callers that CAN await use `resolveProxyRelay`.
  */
 export function ensureProxyRelay(): void {
-  if (activeRelay !== undefined || credentialedProxyValue(process.env) === undefined) {
+  if (activeRelay !== undefined || refusedReason !== undefined || credentialedProxyValue(process.env) === undefined) {
     return;
   }
   // Float the promise: a bind failure must never surface as a rejection at a
@@ -453,10 +503,11 @@ export function ensureProxyRelay(): void {
   void resolveProxyRelay().catch(() => {});
 }
 
-/** Tears down the cached relay and forgets it (idempotent; test seam + shutdown). */
+/** Tears down the cached relay and forgets it (idempotent; test seam + shutdown). Also clears the refuse memory so a later resolve genuinely re-attempts. */
 export function closeProxyRelay(): void {
   activeRelay?.close();
   activeRelay = undefined;
+  refusedReason = undefined;
 }
 
 /**
