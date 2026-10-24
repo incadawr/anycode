@@ -7,6 +7,7 @@
  */
 
 import { PERMISSION_MODES } from "@anycode/core";
+import type { CeilingRefusalReason } from "@anycode/core";
 import { describe, expect, it } from "vitest";
 import {
   CHILD_AGENT_TYPE_MAX_CHARS,
@@ -973,6 +974,38 @@ describe("protocol constants", () => {
 describe("PERMISSION_MODE_VALUES parity with @anycode/core's PERMISSION_MODES (review finding 4)", () => {
   it("stays byte-for-byte in sync with the real core export", () => {
     expect(PERMISSION_MODE_VALUES).toEqual(PERMISSION_MODES);
+  });
+});
+
+// Taskana 4055 cross-review F3: the desktop wire mirror of core's
+// CeilingRefusalReason is a hand-copied whitelist. A value added to core and
+// missed here would make every terminal carrying it fail closed to null (the
+// child's report is discarded). The exhaustive Record below fails to COMPILE
+// when core's union grows, and the runtime case proves each core value parses.
+const CORE_CEILING_REFUSAL_REASONS: Record<CeilingRefusalReason, true> = {
+  ladder_disabled: true,
+  rounds_exhausted: true,
+  no_successful_tool_calls: true,
+  grant_budget_exhausted: true,
+  window_collapsed: true,
+  unreadable_verdict: true,
+  verdict_rejected: true,
+  stalled: true,
+};
+
+describe("ChildCeilingRefusalReason parity with core's CeilingRefusalReason (Taskana 4055 F3)", () => {
+  it.each(Object.keys(CORE_CEILING_REFUSAL_REASONS) as CeilingRefusalReason[])("parses core reason %s on a terminal", (reason) => {
+    const terminal = {
+      type: CHILD_TERMINAL_TYPE,
+      status: "max_turns" as const,
+      finalText: "report",
+      truncated: false,
+      turns: 2,
+      toolCalls: 3,
+      durationMs: 10,
+      ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: reason },
+    };
+    expect(parseChildTerminal(terminal)).toEqual(terminal);
   });
 });
 
