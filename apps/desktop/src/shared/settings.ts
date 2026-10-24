@@ -453,6 +453,12 @@ export interface AnycodeSettings {
     subagentMaxTurns?: number;
     subagentStallTimeoutMs?: number;
     /**
+     * TASK.4721: adaptive turn budget — progress-scaled ceiling grants and a
+     * base subagent budget learned from accepted-task history. Mirror of
+     * ANYCODE_ADAPTIVE_TURN_BUDGET (env > settings). Absent = OFF.
+     */
+    adaptiveTurnBudget?: boolean;
+    /**
      * Mirror of ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS
      * (env > settings) — Taskana 4705 provider retry knobs: retry count and
      * the transient-network wall-clock budget that extends past it.

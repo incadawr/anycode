@@ -67,6 +67,8 @@ export const ENV_IMAGE_INPUT = "ANYCODE_IMAGE_INPUT";
 export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
 export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
+/** TASK.4721: adaptive turn budget (boolean; mirror of `tools.adaptiveTurnBudget`). */
+export const ENV_ADAPTIVE_TURN_BUDGET = "ANYCODE_ADAPTIVE_TURN_BUDGET";
 
 const PROVIDER_TRANSPORT_VALUES: readonly ProviderTransport[] = [
   "anthropic-messages",
@@ -175,6 +177,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const imageInput = readImageInputOverride(env);
   const reasoningEffort = readReasoningEffort(env);
   const includeUsage = readOptionalBoolean(env, ENV_INCLUDE_USAGE);
+  const adaptiveTurnBudget = readOptionalBoolean(env, ENV_ADAPTIVE_TURN_BUDGET);
 
   return {
     apiKey,
@@ -182,6 +185,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     model,
     maxTurns,
     subagentMaxTurns,
+    adaptiveTurnBudget,
     subagentStallTimeoutMs,
     supervisorIdleMs,
     maxOutputTokens,

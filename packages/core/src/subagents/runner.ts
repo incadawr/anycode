@@ -47,6 +47,8 @@ import {
   type ReasoningEffort,
 } from "../types/config.js";
 import { SubagentStallClock } from "./stall-clock.js";
+import { isAcceptedBudgetSample } from "./budget-learning.js";
+import { buildCeilingConfig } from "../loop/ceiling.js";
 import type { AnyToolDefinition } from "../types/tools.js";
 import type {
   EngineChildSpec,
@@ -333,6 +335,16 @@ export function buildChildConfig(
   // read near the end of run()) is a separate, distinctly-named datum for a
   // different question — what the provider reported, not what we asked for.
   const spawnModel = req.model ?? persona.model;
+  // TASK.4721: adaptive mode (ceiling.adaptive, set by the host/CLI from
+  // `tools.adaptiveTurnBudget`) lets the learned base budget stand in for the
+  // host default. It sits BELOW every explicit bound in the chain below.
+  const adaptive = parent.ceiling?.adaptive === true;
+  // Read only when nothing more specific is set: a request/role/setting budget
+  // never consults the history at all.
+  const learned =
+    adaptive && req.maxTurns === undefined && persona.turnBudget === undefined && parent.subagentMaxTurns === undefined
+      ? parent.subagentBudget?.learned({ role: persona.name, ...(spawnModel !== undefined ? { model: spawnModel } : {}) })
+    : undefined;
   return {
 
     // `model` override (slice 4.6, §2.5) resolves to a fixed child-only port
@@ -359,7 +371,7 @@ export function buildChildConfig(
     // guard, not the working budget: deadlineAt below is what usually ends a
     // long run (TASK.74 §2.4, carried into TASK.124).
     maxTurns: Math.min(
-      req.maxTurns ?? persona.turnBudget ?? parent.subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS,
+      req.maxTurns ?? persona.turnBudget ?? parent.subagentMaxTurns ?? learned ?? DEFAULT_SUBAGENT_MAX_TURNS,
       SUBAGENT_MAX_TURNS_CEILING,
     ),
     ...(extras?.deadlineAt !== undefined ? { deadlineAt: extras.deadlineAt } : {}),
@@ -369,6 +381,7 @@ export function buildChildConfig(
     // eventually cancels) the decision call as the dispatcher's wall approaches.
     // The window/round/grant-sum defaults are the loop's own.
     ceiling: {
+      ...buildCeilingConfig({ adaptive }),
       maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING,
       ...(extras?.outcomeDeadlineAt !== undefined
         ? { outcomeDeadlineAt: extras.outcomeDeadlineAt }
@@ -1578,6 +1591,17 @@ export function createSubagentRunner(
           ...(ceilingDone ? { declaredDoneAtCeiling: true } : {}),
           ...(ceiling !== undefined ? { ceiling } : {}),
         };
+
+        // TASK.4721: learn from ACCEPTED runs only (the training filter lives in
+        // budget-learning.ts). Adaptive off => the store is never touched.
+        if (parent.ceiling?.adaptive === true && parent.subagentBudget !== undefined && isAcceptedBudgetSample(outcome)) {
+          const budgetModel = req.model ?? persona.model;
+          parent.subagentBudget.record({
+            role: persona.name,
+            ...(budgetModel !== undefined ? { model: budgetModel } : {}),
+            turns: outcome.turns,
+          });
+        }
 
         onProgress?.({
           kind: "end",

@@ -60,6 +60,11 @@ export const ENV_NETWORK_RETRY_BUDGET_MS = "ANYCODE_NETWORK_RETRY_BUDGET_MS";
 /** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
+ * TASK.4721: adaptive turn budget (boolean); literal mirror of core's
+ * `provider/env.ts` ENV_ADAPTIVE_TURN_BUDGET. Settings are projected as "1"/"0".
+ */
+export const ENV_ADAPTIVE_TURN_BUDGET = "ANYCODE_ADAPTIVE_TURN_BUDGET";
+/**
  * Subagent stall-detector silence threshold (TASK.148 slice 1); literal
  * mirror of core's `provider/env.ts` ENV_SUBAGENT_STALL_MS. NOT
  * ENV_STALL_TIMEOUT_MS above — that one is the per-attempt stream watchdog.
@@ -407,6 +412,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_MAX_RETRIES,
   ENV_NETWORK_RETRY_BUDGET_MS,
   ENV_SUBAGENT_MAX_TURNS,
+  ENV_ADAPTIVE_TURN_BUDGET,
   ENV_SUBAGENT_STALL_MS,
   ENV_REASONING_EFFORT,
   ENV_MAX_OUTPUT_TOKENS,
@@ -1159,6 +1165,12 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   fillFromSettings(env, ENV_MAX_RETRIES, numToStr(settings.tools.maxRetries));
   fillFromSettings(env, ENV_NETWORK_RETRY_BUDGET_MS, numToStr(settings.tools.networkRetryBudgetMs));
   fillFromSettings(env, ENV_SUBAGENT_MAX_TURNS, numToStr(settings.tools.subagentMaxTurns));
+  // TASK.4721: adaptive turn budget, boolean mirror (absent stays absent => OFF).
+  fillFromSettings(
+    env,
+    ENV_ADAPTIVE_TURN_BUDGET,
+    settings.tools.adaptiveTurnBudget === undefined ? undefined : settings.tools.adaptiveTurnBudget ? "1" : "0",
+  );
   fillFromSettings(env, ENV_SUBAGENT_STALL_MS, numToStr(settings.tools.subagentStallTimeoutMs));
   // Grep backend selector (Taskana 4160): string enum, not a number — no
   // numToStr; fillFromSettings keeps env > settings and only fills a blank

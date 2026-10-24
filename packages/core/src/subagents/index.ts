@@ -27,6 +27,16 @@ export type { PersonaDefinition, PersonaName, RolePersonaName } from "./personas
 export { isRoleRouteName } from "./role-route.js";
 export type { RoleRouteEntry, RoleRouteName, RoleRouteResolution, RoleRouteSkip } from "./role-route.js";
 export { discoverAgentProfiles } from "./profiles.js";
+// TASK.4721: the learned base-budget formula + the accepted-run filter, shared
+// by the desktop host's turn-budget history store.
+export {
+  LEARNED_BUDGET_MAX,
+  LEARNED_BUDGET_MIN,
+  LEARNING_MIN_SAMPLES,
+  isAcceptedBudgetSample,
+  learnBaseBudget,
+} from "./budget-learning.js";
+export type { BudgetOutcomeLike, BudgetSample } from "./budget-learning.js";
 export type { AgentProfileRoot, AgentProfilesResult } from "./profiles.js";
 export {
   createSubagentCardAccumulator,

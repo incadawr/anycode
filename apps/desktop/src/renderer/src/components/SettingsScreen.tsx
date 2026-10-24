@@ -294,6 +294,7 @@ export function buildToolsPatch(
   subagentMaxTurnsText = "",
   maxRetriesText = "",
   networkRetryBudgetText = "",
+  adaptiveTurnBudget?: boolean,
 ): SettingsPatch {
   const tools: {
     concurrency?: number;
@@ -302,6 +303,7 @@ export function buildToolsPatch(
     subagentMaxTurns?: number;
     maxRetries?: number;
     networkRetryBudgetMs?: number;
+    adaptiveTurnBudget?: boolean;
   } = {};
   const concurrency = parseOptionalInt(concurrencyText);
   const stallTimeoutMs = parseOptionalInt(stallTimeoutText);
@@ -321,6 +323,9 @@ export function buildToolsPatch(
   if (subagentMaxTurns !== undefined) tools.subagentMaxTurns = subagentMaxTurns;
   if (maxRetries !== undefined) tools.maxRetries = maxRetries;
   if (networkRetryBudgetMs !== undefined) tools.networkRetryBudgetMs = networkRetryBudgetMs;
+  // TASK.4721: undefined = the user never touched the toggle and the setting is
+  // absent, so nothing is written (absent stays absent).
+  if (adaptiveTurnBudget !== undefined) tools.adaptiveTurnBudget = adaptiveTurnBudget;
   return { tools };
 }
 
@@ -1309,6 +1314,8 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
   const [stallTimeoutMs, setStallTimeoutMs] = useState("");
   const [maxTurns, setMaxTurns] = useState("");
   const [subagentMaxTurns, setSubagentMaxTurns] = useState("");
+  // TASK.4721: undefined = absent in settings (default OFF); a toggle sets it.
+  const [adaptiveTurnBudget, setAdaptiveTurnBudget] = useState<boolean | undefined>(undefined);
   // Taskana 4705: provider retry knobs (ANYCODE_MAX_RETRIES /
   // ANYCODE_NETWORK_RETRY_BUDGET_MS mirrors; blank = default).
   const [maxRetries, setMaxRetries] = useState("");
@@ -1456,6 +1463,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
       setStallTimeoutMs(snapshot.settings.tools.stallTimeoutMs?.toString() ?? "");
       setMaxTurns(snapshot.settings.tools.maxTurns?.toString() ?? "");
       setSubagentMaxTurns(snapshot.settings.tools.subagentMaxTurns?.toString() ?? "");
+      setAdaptiveTurnBudget(snapshot.settings.tools.adaptiveTurnBudget);
       setMaxRetries(snapshot.settings.tools.maxRetries?.toString() ?? "");
       setNetworkRetryBudget(snapshot.settings.tools.networkRetryBudgetMs?.toString() ?? "");
       setSessionMaxTabs(snapshot.settings.sessionLimits?.maxTabs?.toString() ?? "");
@@ -1502,7 +1510,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
       return;
     }
     setSessionLimitsError(null);
-    const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns, maxRetries, networkRetryBudget);
+    const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns, maxRetries, networkRetryBudget, adaptiveTurnBudget);
     const hasLimits = limits.patch.sessionLimits !== undefined
       && Object.keys(limits.patch.sessionLimits).length > 0;
     await store.getState().setPatch(
@@ -1778,6 +1786,14 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
                   <span className="settings-field-label">Maximum turns (subagents)</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={subagentMaxTurns}
                     disabled={readOnly} placeholder="40" onChange={(e) => setSubagentMaxTurns(e.target.value)} />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field-label">Adaptive turn budget</span>
+                  <input type="checkbox" checked={adaptiveTurnBudget === true} disabled={readOnly}
+                    onChange={(e) => setAdaptiveTurnBudget(e.target.checked)} />
+                  <span className="settings-field-hint">
+                    Grants extra turns while work makes real progress and learns the subagent budget from accepted tasks. Explicit limits above still win.
+                  </span>
                 </label>
                 <label className="settings-field">
                   <span className="settings-field-label">Maximum open tabs</span>

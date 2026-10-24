@@ -251,6 +251,18 @@ export interface AgentLoopConfig {
    * place to set it; AgentLoop itself never reads it.
    */
   subagentStallTimeoutMs?: number;
+  /**
+   * TASK.4721: learned base-budget port for inline children (adaptive mode
+   * only). `learned` reads the base budget for a role/model key (undefined
+   * when there is too little history); `record` appends one ACCEPTED child
+   * run (the runner applies the training filter before calling it). Core does
+   * no I/O; the desktop host implements this over its history file. Absent =>
+   * no learning, the default budget chain is unchanged.
+   */
+  subagentBudget?: {
+    learned(key: { role: string; model?: string }): number | undefined;
+    record(entry: { role: string; model?: string; turns: number }): void;
+  };
 
   /**
    * Absolute epoch-ms after which runTurnInner must not start another model

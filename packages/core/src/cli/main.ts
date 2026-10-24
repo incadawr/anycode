@@ -145,6 +145,7 @@ import { createCliPermissionBroker, createReadlinePrompter, type TerminalPrompte
 // Type-only import: the TUI module itself is loaded lazily inside the --tui
 // branch (see startTui below) so ink/react never load on other paths.
 import type { TuiHandle } from "./tui.js";
+import { buildCeilingConfig } from "../loop/ceiling.js";
 import {
   runPrintMode,
   readPromptFromStdin,
@@ -1301,7 +1302,16 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
         // Headless print stays on the ladder by omission, which is the safe
         // default: a missed exemption is recoverable, a wrongly-unbounded
         // headless run is not.
-        ...(interactive ? { ceiling: { supervisedRoot: () => true } } : {}),
+        // TASK.4721: the adaptive flag (`ANYCODE_ADAPTIVE_TURN_BUDGET`) rides the
+        // same ceiling object; absent when both are off => ladder, unchanged.
+        ...(interactive || envConfig.adaptiveTurnBudget === true
+          ? {
+              ceiling: buildCeilingConfig({
+                adaptive: envConfig.adaptiveTurnBudget === true,
+                ...(interactive ? { supervisedRoot: () => true } : {}),
+              }),
+            }
+          : {}),
 
         // — unlike checkpoints/tasks/lsp below, images carry no lifecycle to
 

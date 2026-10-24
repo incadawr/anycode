@@ -15,6 +15,7 @@ import {
   ENV_NETWORK_RETRY_BUDGET_MS,
   ENV_PROVIDER_TRANSPORT,
   ENV_REASONING_EFFORT,
+  ENV_ADAPTIVE_TURN_BUDGET,
   ENV_INCLUDE_USAGE,
   ENV_MAX_TURNS,
   ENV_MODEL,
@@ -318,6 +319,28 @@ describe("loadEnvConfig", () => {
     for (const raw of [undefined, "", "on", "on:", "maybe:m", ":m"]) {
       expect(parseImageInputModelOverride(raw)).toBeUndefined();
     }
+  });
+
+  describe("ANYCODE_ADAPTIVE_TURN_BUDGET (TASK.4721)", () => {
+    it("leaves adaptiveTurnBudget undefined when unset (default OFF)", () => {
+      const config = loadEnvConfig(envWith({ [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" }));
+      expect(config.adaptiveTurnBudget).toBeUndefined();
+    });
+
+    it("parses both vocabularies", () => {
+      for (const value of ["1", "true", "on"]) {
+        expect(
+          loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_ADAPTIVE_TURN_BUDGET]: value }))
+            .adaptiveTurnBudget,
+        ).toBe(true);
+      }
+      for (const value of ["0", "false", "off"]) {
+        expect(
+          loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_ADAPTIVE_TURN_BUDGET]: value }))
+            .adaptiveTurnBudget,
+        ).toBe(false);
+      }
+    });
   });
 
   describe("ANYCODE_INCLUDE_USAGE (TASK.158)", () => {

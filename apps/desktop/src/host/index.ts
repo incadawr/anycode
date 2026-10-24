@@ -266,6 +266,8 @@ import {
   PERSONAS,
   ROLE_TURN_BUDGETS,
   isRoleRouteName,
+  // TASK.4721: the one ceiling-object builder (adaptive key absent when off).
+  buildCeilingConfig,
   type PersonaDefinition,
   type RoleRouteResolution,
 } from "@anycode/core";
@@ -304,6 +306,12 @@ import type {
 } from "@anycode/core";
 import { buildAgentProfileRoots } from "@anycode/core/subagents-admin";
 import { hasDurableTransitionResult } from "./worktree-recovery.js";
+import {
+  createSubagentBudgetPort,
+  defaultTurnBudgetHistoryPath,
+  recordAcceptedChildBudget,
+  stampLearnedMaxTurns,
+} from "./turn-budget-store.js";
 import { anycodeSetupDocsForHost } from "./anycode-setup-docs.js";
 import { buildHostBuiltinSkills } from "./builtin-skills.js";
 import { ChildReportQueue } from "./child-report-queue.js";
@@ -2721,6 +2729,14 @@ async function boot(): Promise<void> {
         ? createDefaultToolRegistry({ agent: { sessionTier: true }, ...(archMapEnabled ? { archMap: true } : {}) })
         : createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
 
+    // TASK.4721: adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
+    // `tools.adaptiveTurnBudget`). OFF => no ceiling key, no subagentBudget,
+    // no history file touched — the pre-4721 boot, byte-identical. ON => the
+    // ladder grants on progress and the learned base budget is fed from and
+    // read back through one shared store (inline + session tiers).
+    const adaptiveTurnBudget = envConfig.adaptiveTurnBudget === true;
+    const subagentBudget = adaptiveTurnBudget ? createSubagentBudgetPort(defaultTurnBudgetHistoryPath()) : undefined;
+
 
     // session from argv — create (`--session`) or load (`--resume`, mirror of
     // cli/main.ts:239-259; the initial history is NOT re-appended to the sink).
@@ -3540,8 +3556,15 @@ async function boot(): Promise<void> {
       // (never snapshotted): a run that starts supervised and goes quiet
       // mid-session falls under the ladder from that point on.
       ...(!isChildSessionBoot(args, sessionMeta)
-        ? { ceiling: { supervisedRoot: () => broker.isUnattended !== true } }
-        : {}),
+        ? {
+            ceiling: buildCeilingConfig({
+              adaptive: adaptiveTurnBudget,
+              supervisedRoot: () => broker.isUnattended !== true,
+            }),
+          }
+        : adaptiveTurnBudget
+          ? { ceiling: buildCeilingConfig({ adaptive: true }) }
+          : {}),
       ports: {
         fs: fsAdapter,
         exec: execAdapter,
@@ -3567,6 +3590,8 @@ async function boot(): Promise<void> {
       cwd: workspace,
       maxTurns: resolveChildMaxTurns(args.child, envConfig.maxTurns),
       subagentMaxTurns: envConfig.subagentMaxTurns,
+      // TASK.4721: learned base-budget port (adaptive only; see above).
+      ...(subagentBudget !== undefined ? { subagentBudget } : {}),
       // TASK.148 slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS
       // / settings tools.subagentStallTimeoutMs (main/host-env.ts fills the env var
       // from the setting; envConfig re-reads it here exactly like subagentMaxTurns).
@@ -3716,7 +3741,13 @@ async function boot(): Promise<void> {
         // TASK.145 срез 1: the detach-delivery seam. Fires strictly AFTER
         // the spawning Agent tool call already returned at admit — see
         // deliverDetachedChildReport's own comment for the full picture.
-        onDetachedTerminal: deliverDetachedChildReport,
+        // TASK.4721: a detached child's TERMINAL is the only place its real
+        // turn count exists (the admit outcome is not evidence), so the
+        // adaptive history is written here, before the report is delivered.
+        onDetachedTerminal: (outcome, req) => {
+          recordAcceptedChildBudget(subagentBudget, outcome, req);
+          deliverDetachedChildReport(outcome, req);
+        },
         // TASK.148 slice 2: the detached-stall delivery seam — fires
         // mid-run, zero or more times, independently of onDetachedTerminal
         // above. See deliverDetachedChildStall's own comment for the full
@@ -3760,7 +3791,23 @@ async function boot(): Promise<void> {
             }
           }
         }
-        return innerRun(req, opts);
+        // TASK.4721: adaptive only — a learned base budget stands in for the
+        // host default (never over an explicit request, the settings budget, or
+        // an engine child). The same object is returned when nothing applies.
+        const budgeted = stampLearnedMaxTurns(req, {
+          adaptive: adaptiveTurnBudget,
+          settingsBudgetSet: envConfig.subagentMaxTurns !== undefined,
+          port: subagentBudget,
+        });
+        if (req.detach === true) {
+          // Detached: the admit outcome is not a finished run; the terminal
+          // records itself through onDetachedTerminal above.
+          return innerRun(budgeted, opts);
+        }
+        return innerRun(budgeted, opts).then((outcome) => {
+          recordAcceptedChildBudget(subagentBudget, outcome, budgeted);
+          return outcome;
+        });
       };
     }
     // taskana 4181: the supervisor idle watchdog for a CORE root boot — the
