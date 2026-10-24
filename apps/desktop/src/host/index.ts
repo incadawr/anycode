@@ -856,6 +856,7 @@ function buildChildSessionOptions(
         ...(report.activitySuppressed !== undefined ? { activitySuppressed: report.activitySuppressed } : {}),
         ...(report.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: report.finalTurnFinishReason } : {}),
         ...(report.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true } : {}),
+        ...(report.ceiling !== undefined ? { ceiling: report.ceiling } : {}),
       } satisfies ChildTerminal);
     },
     onProgress: (report) => {

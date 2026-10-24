@@ -2546,6 +2546,8 @@ export class TabHostManager {
       // : verbatim passthrough of the child's own model facts.
       ...(msg.model !== undefined ? { model: msg.model } : {}),
       ...(msg.responseModel !== undefined ? { responseModel: msg.responseModel } : {}),
+      // /4055: verbatim passthrough of the child's own ceiling summary.
+      ...(msg.ceiling !== undefined ? { ceiling: msg.ceiling } : {}),
     });
   }
 

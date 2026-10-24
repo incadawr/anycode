@@ -1,5 +1,6 @@
 export type {
   AgentEvent,
+  CeilingRefusalReason,
   CodexRateLimitsWire,
   FinishReason,
   LoopEndReason,
