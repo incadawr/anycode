@@ -167,17 +167,43 @@ export function adaptiveGrantForRound(round: number, maxTurns: number): number {
 }
 
 /**
+ * TASK.4055 follow-up: tools whose WORK is dispatching other agents. Both are
+ * declared `readOnly: true` (tools/agent.ts, tools/workflow.ts) and that flag
+ * STAYS as-is — the permission plane treats a dispatch as side-effect-free
+ * for the parent workspace, and `readOnly` is load-bearing there. But a
+ * successful dispatch is the one thing an orchestrator session does all day:
+ * without this allowlist the adaptive budget counted such a session as
+ * permanently stalled from round 2 on (0 productive calls, every round).
+ * Exact names only — the core registry's subagent launchers are precisely
+ * Agent and Workflow; the foreign-engine agent tools (`anycode_agent` on
+ * codex, `Task` on claude) never route through this loop's dispatcher, so
+ * they cannot appear here. A tool that merely SOUNDS like a dispatcher is
+ * not one (unknown names keep failing closed in isProductiveToolCall).
+ */
+export const DISPATCH_TOOL_NAMES: readonly string[] = ["Agent", "Workflow"];
+
+/** TASK.4055 follow-up: true for the explicit dispatch allowlist above (name-exact). */
+export function isDispatchToolCall(toolName: string): boolean {
+  return DISPATCH_TOOL_NAMES.includes(toolName);
+}
+
+/**
  * TASK.240/4055: does a successful call of `toolName` count as PRODUCTIVE
- * progress? True unless the registry declares the tool read-only; an unknown
- * tool (no registry entry, or no metadata) fails CLOSED — a name the host
- * cannot vouch for is not evidence of work, same posture as every other gate
- * in this module.
+ * progress? True for the dispatch allowlist above (a successful Agent or
+ * Workflow call IS the orchestrator's work, readOnly or not); otherwise true
+ * unless the registry declares the tool read-only. An unknown tool (no
+ * registry entry, or no metadata) fails CLOSED — a name the host cannot
+ * vouch for is not evidence of work, same posture as every other gate in
+ * this module.
  */
 export function isProductiveToolCall(
   toolName: string,
-  registry: { get(name: string): { metadata: { readOnly: boolean } } | undefined },
+  registry: { get(name: string): { metadata: { readOnly: boolean } } | undefined } | undefined,
 ): boolean {
-  const meta = registry.get(toolName)?.metadata;
+  if (isDispatchToolCall(toolName)) {
+    return true;
+  }
+  const meta = registry?.get(toolName)?.metadata;
   // Fail CLOSED: a tool the registry cannot vouch for (no entry, no metadata)
   // is not evidence of work — only a REGISTERED non-read-only tool counts.
   return meta !== undefined && meta.readOnly !== true;

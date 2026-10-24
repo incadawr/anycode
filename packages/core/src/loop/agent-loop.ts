@@ -1383,7 +1383,10 @@ export class AgentLoop {
             if (annotated.status === "success") {
               this.ceilingSuccessfulToolCalls += 1;
               // TASK.240/4055: only non-read-only successes count as PRODUCTIVE
-              // progress. Unknown tools fail closed inside the helper.
+              // progress, with one carve-out — a successful Agent/Workflow
+              // DISPATCH counts too (TASK.4055 follow-up: an orchestrator's
+              // whole round can be nothing but dispatches). Unknown tools and
+              // other readOnly tools fail closed inside the helper.
               if (isProductiveToolCall(call.name, this.config.registry)) {
                 this.ceilingProductiveToolCalls += 1;
               }

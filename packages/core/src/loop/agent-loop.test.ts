@@ -2130,6 +2130,131 @@ describe("AgentLoop.runTurn — TASK.4055 adaptive budget", () => {
     expect(refusedEvents(events)).toHaveLength(0);
     expect(modelPort.requests).toHaveLength(4);
   });
+
+  // -------------------------------------------------------------------------
+  // TASK.4055 follow-up: the dispatch allowlist. Agent and Workflow are
+  // readOnly (the flag is load-bearing for permissions and stays as-is), but
+  // a SUCCESSFUL dispatch is an orchestrator's work — without the allowlist a
+  // dispatch-only session counted 0 productive calls every round and was
+  // refused as "stalled" from round 2 on.
+
+  /** Mirrors tools/agent.ts's real declaration: readOnly, concurrentSafe. */
+  const agentDispatchTool = makeTool({
+    metadata: { ...baseMetadata, name: "Agent", readOnly: true, concurrentSafe: true, sideEffectScope: "process" },
+    handler: async () => ({ ok: true, output: { report: "child done" } }),
+  });
+
+  /** A dispatch tool whose child FAILS — ok:false, an error outcome, not success. */
+  const failingAgentDispatchTool = makeTool({
+    metadata: { ...baseMetadata, name: "Agent", readOnly: true, concurrentSafe: true, sideEffectScope: "process" },
+    handler: async () => ({ ok: false, error: "child crashed" }),
+  });
+
+  it("4055: an orchestrator that only dispatches Agents earns round 2 — a successful dispatch is productive progress", async () => {
+    const dispatchRegistry = makeRegistry({ Agent: agentDispatchTool });
+    const modelPort = new MockModelPort([
+      toolTurnStep("d1", "Agent"), // turn 1: dispatch only
+      toolTurnStep("d2", "Agent"), // turn 2: dispatch only
+      verdictStep(["a", "b"]), // round 1: no progress gate yet
+      toolTurnStep("d3", "Agent"), // consumes the grant: STILL dispatch-only
+      verdictStep(["a", "b"]), // round 2: SAME remaining, but productive via the allowlist
+      completionStep(),
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 2,
+      registry: dispatchRegistry,
+      ceiling: { adaptive: true },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    // Round 1: successful 2, productive 2 — the allowlist counts dispatches.
+    expect(grantEvents(events)[0]).toMatchObject({
+      round: 1,
+      mode: "adaptive",
+      progress: { successfulToolCalls: 2, productiveToolCalls: 2 },
+    });
+    // Round 2 granted despite the UNSHORTENED remaining list (adaptive gates
+    // on progress) and despite both tools being readOnly (allowlist) — the
+    // pre-fix behaviour here was a "stalled" refusal.
+    const grants = grantEvents(events);
+    expect(grants.map((g) => g.round)).toEqual([1, 2]);
+    expect(grants[1]).toMatchObject({
+      mode: "adaptive",
+      progress: { successfulToolCalls: 1, productiveToolCalls: 1 },
+    });
+    expect(refusedEvents(events)).toHaveLength(0);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 4 });
+  });
+
+  it("4055: a FAILED Agent dispatch does not count — a failed-dispatch round refuses as stalled", async () => {
+    const dispatchRegistry = makeRegistry({ Agent: failingAgentDispatchTool });
+    const modelPort = new MockModelPort([
+      toolTurnStep("f1", "Agent"), // fails: ok:false -> outcome status "error"
+      toolTurnStep("f2", "Agent"), // fails again (2 turns to reach the cap)
+      verdictStep(["a"]), // round 1 grants (no progress gate; success count is 0)
+      toolTurnStep("f3", "Agent"), // consumes the grant: still failing
+      verdictStep(["a"]), // round 2: zero productive -> stalled
+      // No further step: nothing may run after the stalled refusal.
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 2,
+      registry: dispatchRegistry,
+      ceiling: { adaptive: true },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    // Round 1 granted with HONEST counters: no success, no productivity.
+    expect(grantEvents(events)).toEqual([
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 1, // adaptiveGrantForRound(1, 2) = ceil(2 * 0.5)
+        totalGranted: 1,
+        remaining: ["a"],
+        mode: "adaptive",
+        progress: { successfulToolCalls: 0, productiveToolCalls: 0 },
+      },
+    ]);
+    // Round 2: the cheap any-success gate refuses first — a failed dispatch
+    // established nothing, allowlist or not.
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "no_successful_tool_calls", turn: 3, round: 2 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 3 });
+    // 3 real turns + 1 decision call (round 2 refused cheaply, no verdict).
+    expect(modelPort.requests).toHaveLength(4);
+  });
+
+  it("4055: dispatches do not lift the caps — maxTurnsCeiling and maxGrantedTurns still clamp dispatch-only rounds", async () => {
+    const dispatchRegistry = makeRegistry({ Agent: agentDispatchTool });
+    // maxTurnsCeiling === maxTurns: ZERO headroom, so the very first trip
+    // must refuse BEFORE any verdict call even though every round was full
+    // of successful dispatches.
+    const modelPort = new MockModelPort([
+      toolTurnStep("d1", "Agent"),
+      toolTurnStep("d2", "Agent"),
+      // No 3rd step: the ceiling trip must refuse cheaply.
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 2,
+      registry: dispatchRegistry,
+      ceiling: { adaptive: true, maxTurnsCeiling: 2 },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "grant_budget_exhausted", turn: 2, round: 1 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 2 });
+    expect(modelPort.requests).toHaveLength(2); // the two real turns, no verdict call
+    expect(grantEvents(events)).toHaveLength(0);
+  });
 });
 
 describe("AgentLoop.runTurn — supervised root has no turn ceiling (TASK.124 remainder, owner rule 2026-08-22)", () => {

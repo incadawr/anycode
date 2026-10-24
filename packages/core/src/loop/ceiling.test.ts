@@ -519,6 +519,28 @@ describe("TASK.4055 adaptive budget", () => {
     expect(isProductiveToolCall("NotARegisteredTool", registry)).toBe(false);
   });
 
+  // TASK.4055 follow-up: the dispatch allowlist — a successful Agent or
+  // Workflow call is an orchestrator's WORK even though both tools are
+  // readOnly (the flag is load-bearing for permissions and stays as-is).
+  it("isProductiveToolCall: a successful Agent/Workflow dispatch counts despite readOnly (4055 follow-up)", () => {
+    const registry = createDefaultToolRegistry();
+    // Both are declared readOnly in the real registry — the allowlist is the
+    // only reason they count.
+    expect(registry.get("Agent")?.metadata.readOnly).toBe(true);
+    expect(registry.get("Workflow")?.metadata.readOnly).toBe(true);
+    expect(isProductiveToolCall("Agent", registry)).toBe(true);
+    expect(isProductiveToolCall("Workflow", registry)).toBe(true);
+    // Name-exact only: lookalikes do not hitch a ride on the allowlist.
+    expect(isProductiveToolCall("agent", registry)).toBe(false);
+    expect(isProductiveToolCall("Agent2", registry)).toBe(false);
+    expect(isProductiveToolCall("workflow", registry)).toBe(false);
+    // The allowlist holds even with no registry at all (name-exact), while
+    // every other name still needs a registry vouching for it.
+    expect(isProductiveToolCall("Agent", undefined)).toBe(true);
+    expect(isProductiveToolCall("Workflow", undefined)).toBe(true);
+    expect(isProductiveToolCall("Bash", undefined)).toBe(false);
+  });
+
   it("adaptive acceptCeilingVerdict: round 2 grants on productive progress WITHOUT shortening", () => {
     expect(
       acceptCeilingVerdict({
