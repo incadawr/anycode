@@ -65,8 +65,7 @@ export const CODEX_NOT_SIGNED_IN = "Codex is not signed in — run `codex login`
 
 /**
  * TASK.185 / Taskana 4139 (probe-only): the two Windows-sandbox readiness
- * messages. Kept as named constants so the boot-time THROW and the
- * boot-NOTICE are byte-identical by construction, not by copy-paste.
+ * boot-notice messages (named so tests assert the exact text).
  */
 export const WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE = "Codex Windows sandbox is not configured; commands may run unsandboxed.";
 export const WINDOWS_SANDBOX_UPDATE_REQUIRED_MESSAGE =
@@ -504,23 +503,17 @@ export async function initializeAndVerifyAccount(
   }
   // TASK.185 / Taskana 4139 (probe-only): on Windows, ask the app-server
   // whether its SEPARATE Windows-sandbox protocol family is usable. Never
-  // fatal and never sends setupStart: a probe that errors or times out
-  // (old binary without the method) degrades to `undefined`, and a
-  // notConfigured/updateRequired answer THROWS here only because the boot
-  // must not pretend commands are sandboxed when they are not — the caller
-  // also receives the status so it can surface a notice on the paths that
-  // recover. Other platforms skip the probe entirely (no extra RPC).
+  // fatal and never sends setupStart: a probe that errors or times out (old
+  // binary without the method) degrades to `undefined`, and a
+  // notConfigured/updateRequired answer is RETURNED (not thrown) so the
+  // caller surfaces it as a boot notice. Refusing the boot is an owner
+  // decision that waits for the live Windows measurement (TASK.185 step 2).
+  // Other platforms skip the probe entirely (no extra RPC).
   if (platform !== "win32") return undefined;
   const readiness = await client
     .request(WINDOWS_SANDBOX_READINESS_METHOD, undefined, { timeoutMs })
     .then(decodeWindowsSandboxReadiness)
     .catch(() => undefined);
-  if (readiness === "notConfigured") {
-    throw new Error(WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE);
-  }
-  if (readiness === "updateRequired") {
-    throw new Error(WINDOWS_SANDBOX_UPDATE_REQUIRED_MESSAGE);
-  }
   return readiness;
 }
 

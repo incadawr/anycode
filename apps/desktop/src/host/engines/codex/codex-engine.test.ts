@@ -264,8 +264,7 @@ class FakeAppServer implements CodexClient {
   /**
    * TASK.185 / Taskana 4139: `windowsSandbox/readiness` result. The default
    * mirrors a Windows boot that never had a setup — the probe-only status the
-   * engine turns into a boot notice (or a boot-time throw when it comes from
-   * `initializeAndVerifyAccount` on win32).
+   * engine turns into a boot notice (never a boot failure).
    */
   windowsReadinessResult: unknown = { status: "notConfigured" };
   /** Readiness failure mode: an old binary without the method (request rejects). */
@@ -554,17 +553,15 @@ describe("CodexEngine — Windows sandbox readiness probe (Taskana 4139 / TASK.1
     expect(decodeWindowsSandboxReadiness("string")).toBeUndefined();
   });
 
-  it("initializeAndVerifyAccount probes readiness on win32 and throws the exact boot messages for a non-ready sandbox", async () => {
+  it("initializeAndVerifyAccount probes readiness on win32 and RETURNS a non-ready status (never fails the boot)", async () => {
     const server = new FakeAppServer();
     server.windowsReadinessResult = { status: "notConfigured" };
-    await expect(initializeAndVerifyAccount(server, 1000, false, "win32"))
-      .rejects.toThrow(WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE);
+    await expect(initializeAndVerifyAccount(server, 1000, false, "win32")).resolves.toBe("notConfigured");
     expect(server.calls.map((call) => call.method)).toEqual(["initialize", "account/read", "windowsSandbox/readiness"]);
 
     const update = new FakeAppServer();
     update.windowsReadinessResult = { status: "updateRequired" };
-    await expect(initializeAndVerifyAccount(update, 1000, false, "win32"))
-      .rejects.toThrow(WINDOWS_SANDBOX_UPDATE_REQUIRED_MESSAGE);
+    await expect(initializeAndVerifyAccount(update, 1000, false, "win32")).resolves.toBe("updateRequired");
 
     const ready = new FakeAppServer();
     ready.windowsReadinessResult = { status: "ready" };
@@ -582,6 +579,22 @@ describe("CodexEngine — Windows sandbox readiness probe (Taskana 4139 / TASK.1
     await expect(initializeAndVerifyAccount(darwin, 1000, false, "darwin")).resolves.toBeUndefined();
     expect(darwin.calls.map((call) => call.method)).toEqual(["initialize", "account/read"]);
     expect(darwin.calls.some((call) => call.method === "windowsSandbox/readiness")).toBe(false);
+  });
+
+  it("a win32 boot with a notConfigured sandbox still connects and surfaces the warning on the first turn", async () => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      const server = new FakeAppServer();
+      server.windowsReadinessResult = { status: "notConfigured" };
+      const { engine } = await createNativeCodexSession(server, "/work");
+      expect(server.calls.map((call) => call.method)).toContain("windowsSandbox/readiness");
+      const first = noticeEvents(await runTurn(server, engine));
+      expect(first).toContainEqual({ type: "engine_notice", level: "warning", message: WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE });
+      expect(notices(await runTurn(server, engine, "second"))).not.toContain(WINDOWS_SANDBOX_NOT_CONFIGURED_MESSAGE);
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
   });
 
   it("a default (darwin) boot sends NO readiness RPC — the exact 5-method create sequence is unchanged", async () => {
