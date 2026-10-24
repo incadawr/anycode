@@ -578,3 +578,66 @@ describe("grepTool — tgrep backend selection (Taskana 4160)", () => {
     expect(result.output?.files).toEqual([join(tmpDir, "a.ts")]); // fell through to JS
   });
 });
+
+describe("grepTool — tgrep capped stdout falls through the ladder (Taskana 4160 cross-review F1)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    vi.stubEnv("ANYCODE_TGREP_BIN", "/usr/bin/tgrep");
+    __resetRgPathCacheForTests();
+    __resetTgrepPathCacheForTests();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    __resetRgPathCacheForTests();
+    __resetTgrepPathCacheForTests();
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("tgrep returns a capped (stdoutTruncated) non-zero stream → NOT final; rg answers with the full count", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-grep-cap-"));
+    await fs.writeFile(join(tmpDir, "a.ts"), "needle one\n");
+    await fs.writeFile(join(tmpDir, "b.ts"), "needle two\n");
+    await resolveRgPath(() => Promise.resolve({ rgPath: "/usr/bin/rg-stub" }));
+
+    const rgEvent = (file: string, n: number): string =>
+      JSON.stringify({ type: "match", data: { path: { text: file }, lines: { text: "needle\n" }, line_number: n, absolute_offset: 0, submatches: [] } });
+    const runBinary = vi.fn((req: BinaryExecRequest): Promise<ExecResult> => {
+      const base = { signal: null, stderr: "", stderrTruncated: false, durationMs: 1 };
+      if (req.args.includes("--version")) {
+        return Promise.resolve({ ...base, status: "completed", exitCode: 0, stdout: "tgrep 0.1.0", stdoutTruncated: false });
+      }
+      if (req.args.includes("--no-max-filesize")) {
+        // tgrep: non-zero match count but the stream was capped mid-way
+        return Promise.resolve({ ...base, status: "completed", exitCode: 0, stdout: rgEvent(join(tmpDir, "a.ts"), 1), stdoutTruncated: true });
+      }
+      // rg tier: fresh full scan, answers both files
+      return Promise.resolve({
+        ...base,
+        status: "completed",
+        exitCode: 0,
+        stdout: [rgEvent(join(tmpDir, "a.ts"), 1), rgEvent(join(tmpDir, "b.ts"), 1)].join("\n"),
+        stdoutTruncated: false,
+      });
+    });
+    const ctx: ToolContext = {
+      toolCallId: "t1",
+      abortSignal: new AbortController().signal,
+      cwd: tmpDir,
+      ports: { fs, exec: { run: vi.fn(), runBinary }, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
+    };
+
+    const result = await grepTool.handler(
+      { pattern: "needle", output_mode: "files_with_matches", "-n": true, head_limit: 0, multiline: false },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.output?.totalMatches).toBe(2); // rg's full answer, not tgrep's trimmed single file
+    expect(result.output?.files).toEqual([join(tmpDir, "a.ts"), join(tmpDir, "b.ts")]);
+    const rgCalls = runBinary.mock.calls.filter((c) => (c[0] as BinaryExecRequest).file === "/usr/bin/rg-stub");
+    expect(rgCalls.length).toBe(1);
+  });
+});

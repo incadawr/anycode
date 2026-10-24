@@ -200,6 +200,9 @@ export async function searchWithTgrep(
   if (result.status === "failed" && result.exitCode !== 0 && result.exitCode !== 1) {
     return undefined; // exit 2 = tgrep error (bad regex, daemon refused); anything but 0/1 is not ours to interpret
   }
+  // A capped stream is a TRIMMED answer (Taskana 4160 cross-review F1): never
+  // final; the rg tier (which also refuses capped output) answers instead.
+  if (result.stdoutTruncated) return undefined;
 
   return shapeRgJsonOutput(input, result.stdout);
 }

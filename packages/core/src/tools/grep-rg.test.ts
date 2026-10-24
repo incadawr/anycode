@@ -329,3 +329,11 @@ describe("resolveRgPath", () => {
     expect(await resolveRgPath(importer)).toBe(plain);
   });
 });
+
+describe("searchWithRipgrep — capped stdout is never a final answer (Taskana 4160 cross-review F1)", () => {
+  it("stdoutTruncated → throws so the caller falls back to the JS path (no trimmed rg result)", async () => {
+    const stdout = matchEvent("/repo/a.ts", 1, "needle");
+    const { ctx } = ctxWithRunBinary({ ...completedResult(stdout), stdoutTruncated: true });
+    await expect(searchWithRipgrep(baseInput({ head_limit: 0 }), ctx, "/rg", "/repo", true)).rejects.toThrow(/truncated/);
+  });
+});

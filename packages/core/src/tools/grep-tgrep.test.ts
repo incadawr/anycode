@@ -325,3 +325,10 @@ describe("searchWithTgrep (Taskana 4160)", () => {
     await expect(searchWithTgrep(baseInput(), ctx, "tgrep", "/repo", true)).resolves.toBeUndefined();
   });
 });
+
+describe("searchWithTgrep — capped stdout is never a final answer (Taskana 4160 cross-review F1)", () => {
+  it("exit 0 but stdoutTruncated → undefined, even with non-empty NDJSON (a trimmed answer must not be returned)", async () => {
+    const { ctx } = ctxWithRunBinary(() => ({ ...completedResult(ndjson), stdoutTruncated: true }));
+    await expect(searchWithTgrep(baseInput({ output_mode: "count" }), ctx, "tgrep", "/repo", true)).resolves.toBeUndefined();
+  });
+});

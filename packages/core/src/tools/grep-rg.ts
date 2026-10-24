@@ -220,6 +220,11 @@ export async function searchWithRipgrep(
   if (result.status === "failed" && result.exitCode !== 1) {
     throw new Error(`ripgrep exited with code ${String(result.exitCode)}: ${result.stderr}`);
   }
+  // A capped stream is a TRIMMED answer (Taskana 4160 cross-review F1): throw so
+  // the caller falls back to the JS path, which walks the full tree.
+  if (result.stdoutTruncated) {
+    throw new Error("ripgrep stdout truncated");
+  }
 
   return shapeRgJsonOutput(input, result.stdout);
 }
