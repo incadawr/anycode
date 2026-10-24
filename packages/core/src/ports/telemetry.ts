@@ -68,6 +68,17 @@ export type TelemetryEventRecord =
       model?: string;
       /** Provider's own model CLAIM — TASK.171/TASK.174, distinct from `model`. */
       responseModel?: string;
+      /**
+       * TASK.240/4055: the child's ceiling ladder summary — rounds/granted
+       * turns and, when the ladder ended on a refusal, its closed reason.
+       * Numbers + the CeilingRefusalReason enum only (same footing as
+       * `ceiling_refused` above): no free text crosses this port.
+       */
+      ceiling?: {
+        rounds: number;
+        grantedTurns: number;
+        lastRefusal?: CeilingRefusalReason;
+      };
     }
   | { t: "workflow_end"; status: "completed" | "failed" | "cancelled"; completedSteps: number; totalSteps: number; durationMs: number }
   /**

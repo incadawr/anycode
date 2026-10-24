@@ -76,6 +76,57 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
     );
   });
 
+  // TASK.240/4055: an adaptive grant renders its own line naming the
+  // productive-tool count; the ladder line (mode absent or "ladder") keeps its
+  // exact TASK.124 shape.
+  it("renders an adaptive ceiling grant with the productive-tool count (TASK.4055)", () => {
+    const adaptive = collect([
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 4,
+        totalGranted: 4,
+        remaining: ["a"],
+        mode: "adaptive",
+        progress: { successfulToolCalls: 6, productiveToolCalls: 3 },
+      },
+    ]);
+    expect(adaptive).toContain("adaptive");
+    expect(adaptive).toContain("productive tools: 3");
+    expect(adaptive).toContain("round 1");
+    expect(adaptive).toContain("+4 turn(s)");
+    expect(adaptive).toContain("total 4");
+
+    // Ladder mode: the old line verbatim — no "adaptive", no productive count.
+    const ladder = collect([
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 4,
+        totalGranted: 4,
+        remaining: ["a"],
+        mode: "ladder",
+        progress: { successfulToolCalls: 6, productiveToolCalls: 3 },
+      },
+    ]);
+    expect(ladder).not.toContain("adaptive");
+    expect(ladder).not.toContain("productive tools");
+    expect(ladder).toContain("[ceiling: round 1, +4 turn(s) (total 4) — remaining: a]");
+
+    // Mode absent (a legacy replay): the ladder line, byte-identical.
+    const legacy = collect([
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 4,
+        totalGranted: 4,
+        remaining: ["a"],
+      },
+    ]);
+    expect(legacy).not.toContain("adaptive");
+    expect(legacy).toContain("[ceiling: round 1, +4 turn(s) (total 4) — remaining: a]");
+  });
+
   it("prints a degeneration line naming the channel, period and repeat count (TASK.210)", () => {
     const out = collect([
       { type: "degeneration", channel: "text", period: 296, repeats: 341, turn: 4 },

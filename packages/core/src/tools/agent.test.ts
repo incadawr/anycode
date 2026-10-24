@@ -895,6 +895,56 @@ describe("agentTool — subagent_activity bridge (slice P7.18/F16b)", () => {
     expect(end && "model" in end && end.model).toBe("glm-5.3-flash");
     expect(end && "responseModel" in end).toBe(false);
   });
+
+  // -------------------------------------------------------------------------
+  // TASK.240/4055: mapProgressToEvent's "end" case bridges the child's ceiling
+  // ladder summary (numbers + the closed refusal enum) verbatim.
+
+  it("bridges progress.ceiling onto subagent_end verbatim, and omits the key when the port carries none", async () => {
+    const emitted: ToolEmittedEvent[] = [];
+    const port: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({
+          kind: "end",
+          status: "max_turns",
+          turns: 3,
+          durationMs: 5,
+          ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+        });
+        return { status: "max_turns", finalText: "partial", truncated: false, turns: 3, toolCalls: 2, durationMs: 5 };
+      },
+    };
+
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-ceiling", subagents: port, emit: (e) => emitted.push(e) }),
+    );
+
+    const end = emitted.find((e) => e.type === "subagent_end");
+    expect(end).toEqual({
+      type: "subagent_end",
+      toolCallId: "call-ceiling",
+      status: "max_turns",
+      turns: 3,
+      durationMs: 5,
+      ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+    });
+
+    // And the negative: an end progress WITHOUT a ceiling never invents the key.
+    const emitted2: ToolEmittedEvent[] = [];
+    const port2: SubagentPort = {
+      run: async (_req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome> => {
+        opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 5 });
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 5 };
+      },
+    };
+    await agentTool.handler(
+      { description: "d", prompt: "p", agent_type: "explore" },
+      makeCtx({ toolCallId: "call-no-ceiling", subagents: port2, emit: (e) => emitted2.push(e) }),
+    );
+    const end2 = emitted2.find((e) => e.type === "subagent_end");
+    expect(end2 && "ceiling" in end2).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

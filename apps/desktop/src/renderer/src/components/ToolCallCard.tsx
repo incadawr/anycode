@@ -64,6 +64,22 @@ const SUBAGENT_FINAL_LABELS: Record<NonNullable<SubagentSubStatus["final"]>["sta
 };
 
 /**
+ * TASK.240/4055: the adaptive-budget line for a settled child that tripped
+ * the turn ceiling — grants spent, over how many rounds, and the refusal
+ * reason that ended the ladder when it ended on one. Lets the user tell
+ * "budget too small" (e.g. grant_budget_exhausted with work still flowing)
+ * from a hard stop (e.g. stalled — the round made no productive tool calls).
+ */
+function formatSubagentCeiling(ceiling: NonNullable<SubagentSubStatus["final"]>["ceiling"]): string {
+  if (ceiling === undefined || ceiling === null) {
+    return "";
+  }
+  const refusal =
+    ceiling.lastRefusal !== undefined && ceiling.lastRefusal !== "" ? ` — stopped: ${ceiling.lastRefusal}` : "";
+  return `Budget: ${ceiling.grantedTurns} extra turn(s) over ${ceiling.rounds} round(s)${refusal}`;
+}
+
+/**
  * TASK.102 CUT-S2 §2.5 (slice S2c C3): the session-tier child badge's label,
  * one per `childBadgeKind` outcome. `waiting_permission` is the badge's whole
  * reason to exist — `block.status` (the outer Agent tool_call's own status,
@@ -192,7 +208,19 @@ export function formatSubagentCounters(subagent: SubagentSubStatus): string {
     return `${label}${duration}`;
   }
   const turns = subagent.turns > 0 || subagent.toolCalls > 0 ? ` · ${subagent.turns} turn${subagent.turns === 1 ? "" : "s"}` : "";
+  // TASK.240/4055: the budget line rides along once the card settled with a
+  // ceiling summary (a second line at the JSX render sites below).
   return `${label}${turns}${duration}`;
+}
+
+/**
+ * TASK.240/4055: a settled child's ceiling budget line (empty when the child
+ * never tripped the ceiling or the field predates this feature) — rendered as
+ * its own line under the final-status line so "budget too small" is visually
+ * distinct from the outcome itself.
+ */
+export function formatSubagentBudgetLine(subagent: SubagentSubStatus): string {
+  return subagent.final === null ? "" : formatSubagentCeiling(subagent.final.ceiling);
 }
 
 /** One identity slot (model or engine) resolved for display: the explicit
@@ -1318,6 +1346,12 @@ function SubagentStatus({
         <span className="tool-call-subagent-desc">{subagent.description}</span>
       </div>
       <div className="tool-call-subagent-counters">{formatSubagentCounters(subagent)}</div>
+      {/* TASK.240/4055: the adaptive-budget line — only when the settled card
+          actually carries a ceiling summary (a child that never tripped the
+          turn ceiling renders nothing extra). */}
+      {formatSubagentBudgetLine(subagent) !== "" && (
+        <div className="tool-call-subagent-counters">{formatSubagentBudgetLine(subagent)}</div>
+      )}
       <StallNote subagent={subagent} />
       {child !== undefined && (
         <div className="tool-call-subagent-child-row">

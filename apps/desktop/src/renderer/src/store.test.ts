@@ -2370,6 +2370,97 @@ describe("desktop store — subagent_end.responseModel forwarding (TASK.161 slic
     expect(block).toMatchObject({ subagent: { final: { status: "completed", durationMs: 100, finalTurnFinishReason: "length" } } });
   });
 
+  // TASK.240/4055: the child's ceiling ladder summary settles onto the card
+  // verbatim (final.ceiling), and — like every terminal field — is frozen by
+  // the existing settled-guard: a replayed end can never rewrite it.
+  it("subagent_end with ceiling settles final.ceiling verbatim; a replayed end never overwrites it", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-ceil");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-ceil", agentType: "explore", description: "d" },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_end",
+        toolCallId: "call-ceil",
+        status: "max_turns",
+        turns: 3,
+        durationMs: 100,
+        ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+      },
+    });
+
+    const block = findByToolCallId(store, "call-ceil");
+    expect(block).toMatchObject({
+      subagent: {
+        final: {
+          status: "max_turns",
+          durationMs: 100,
+          ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+        },
+      },
+    });
+
+    // A second (replayed) end with DIFFERENT ceiling facts stays a no-op.
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: {
+        type: "subagent_end",
+        toolCallId: "call-ceil",
+        status: "error",
+        turns: 9,
+        durationMs: 999,
+        ceiling: { rounds: 7, grantedTurns: 7, lastRefusal: "ladder_disabled" },
+      },
+    });
+
+    const settled = findByToolCallId(store, "call-ceil");
+    expect(settled).toMatchObject({
+      subagent: {
+        final: {
+          status: "max_turns",
+          durationMs: 100,
+          ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+        },
+      },
+    });
+  });
+
+  it("subagent_end without ceiling leaves the key absent on final", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-noceil");
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_start", toolCallId: "call-noceil", agentType: "explore", description: "d" },
+    });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "subagent_end", toolCallId: "call-noceil", status: "completed", turns: 1, durationMs: 100 },
+    });
+
+    const block = findByToolCallId(store, "call-noceil");
+    expect(
+      block !== undefined &&
+        block.kind === "tool_call" &&
+        block.subagent !== null &&
+        block.subagent.final !== null &&
+        "ceiling" in block.subagent.final,
+    ).toBe(false);
+  });
+
   it("child_report with childTerminal.finalTurnFinishReason patches the matching Agent block (synthesizing the card when subagent was null, sessionChild set); without childTerminal the block is untouched", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

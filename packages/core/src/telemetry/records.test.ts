@@ -182,6 +182,51 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
+  // TASK.240/4055: the child's ceiling ladder summary (numbers + the closed
+  // refusal enum) is whitelisted onto subagent_end field-by-field — same
+  // projection discipline as model/responseModel above; the ladder's own
+  // free text (remaining/nextAction) never reaches this port.
+  it("subagent_end with ceiling (TASK.4055) — carried field-by-field", () => {
+    const event: AgentEvent = {
+      type: "subagent_end",
+      toolCallId: "call-3",
+      status: "max_turns",
+      turns: 3,
+      durationMs: 500,
+      ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "subagent_end",
+      status: "max_turns",
+      turns: 3,
+      durationMs: 500,
+      ceiling: { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" },
+    });
+  });
+
+  it("subagent_end with a ceiling that ended WITHOUT a refusal — lastRefusal key never fabricated", () => {
+    const event: AgentEvent = {
+      type: "subagent_end",
+      toolCallId: "call-3",
+      status: "completed",
+      turns: 5,
+      durationMs: 500,
+      ceiling: { rounds: 2, grantedTurns: 3 },
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "subagent_end",
+      status: "completed",
+      turns: 5,
+      durationMs: 500,
+      ceiling: { rounds: 2, grantedTurns: 3 },
+    });
+    const rec = telemetryRecordFor(event);
+    if (rec === null || !("ceiling" in rec) || rec.ceiling === undefined) {
+      throw new Error("ceiling record missing");
+    }
+    expect("lastRefusal" in rec.ceiling).toBe(false);
+  });
+
   // TASK.171: closes the gap where a completed child's model attribution
   // never reached telemetry at all — `model` (the REQUESTED id) and
   // `responseModel` (the provider's own claim) are now whitelisted onto

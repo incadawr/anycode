@@ -74,6 +74,10 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
       // kept as separate evidence for TASK.174) are added field-by-field,
       // same whitelist discipline as every other case here — this stays a
       // projection, never a spread of the raw event.
+      //
+      // TASK.240/4055: `ceiling` (the child's ladder summary) is copied the
+      // same field-by-field way — numbers and the closed refusal enum only,
+      // never the ladder's `remaining`/`nextAction` text.
       return {
         t: "subagent_end",
         status: event.status,
@@ -82,6 +86,17 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         ...(event.model !== undefined ? { model: event.model } : {}),
         ...(event.responseModel !== undefined ? { responseModel: event.responseModel } : {}),
         ...(event.engine !== undefined ? { engine: event.engine } : {}),
+        ...(event.ceiling !== undefined
+          ? {
+              ceiling: {
+                rounds: event.ceiling.rounds,
+                grantedTurns: event.ceiling.grantedTurns,
+                ...(event.ceiling.lastRefusal !== undefined
+                  ? { lastRefusal: event.ceiling.lastRefusal }
+                  : {}),
+              },
+            }
+          : {}),
       };
     case "workflow_end":
       return {

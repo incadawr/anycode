@@ -484,11 +484,20 @@ export function renderEvent(
     }
     // One granted extension of the turn ceiling (TASK.124). Every grant is
     // visible: the line names the round, what it bought, the running total and
-    // what the model said still remains.
+    // what the model said still remains. TASK.240/4055: an adaptive-mode grant
+    // renders its own line — the productive-tool count is the progress the
+    // grant was actually priced on, so it belongs next to the total.
     case "ceiling_grant":
-      write(
-        `\n[ceiling: round ${event.round}, +${event.granted} turn(s) (total ${event.totalGranted}) — remaining: ${event.remaining.join("; ")}]\n`,
-      );
+      if (event.mode === "adaptive") {
+        const productive = event.progress?.productiveToolCalls ?? 0;
+        write(
+          `\n[ceiling: round ${event.round}, +${event.granted} turn(s) (total ${event.totalGranted}, adaptive — productive tools: ${productive}) — remaining: ${event.remaining.join("; ")}]\n`,
+        );
+      } else {
+        write(
+          `\n[ceiling: round ${event.round}, +${event.granted} turn(s) (total ${event.totalGranted}) — remaining: ${event.remaining.join("; ")}]\n`,
+        );
+      }
       break;
     // The degenerate-generation guard (TASK.210) cut a turn: the model's own
     // output was found looping. A dedicated line, not folded into the

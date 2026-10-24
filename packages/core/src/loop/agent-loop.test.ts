@@ -1246,7 +1246,15 @@ describe("AgentLoop.runTurn — ceiling decision ladder (TASK.124 cut-1)", () =>
     const events = await collect(loop.runTurn("go"));
 
     expect(grantEvents(events)).toEqual([
-      { type: "ceiling_grant", round: 1, granted: 1, totalGranted: 1, remaining: ["finish the thing"] },
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 1,
+        totalGranted: 1,
+        remaining: ["finish the thing"],
+        mode: "ladder",
+        progress: { successfulToolCalls: 2, productiveToolCalls: 2 },
+      },
     ]);
     expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
     // turn_start fires once per turn (1,2,3) — the grant happens INSIDE turn 3's
@@ -1489,8 +1497,24 @@ describe("AgentLoop.runTurn — ceiling decision ladder (TASK.124 cut-1)", () =>
     const events = await collect(loop.runTurn("go"));
 
     expect(grantEvents(events)).toEqual([
-      { type: "ceiling_grant", round: 1, granted: 4, totalGranted: 4, remaining: ["a", "b", "c"] },
-      { type: "ceiling_grant", round: 2, granted: 2, totalGranted: 6, remaining: ["a", "b"] },
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 4,
+        totalGranted: 4,
+        remaining: ["a", "b", "c"],
+        mode: "ladder",
+        progress: { successfulToolCalls: 8, productiveToolCalls: 8 },
+      },
+      {
+        type: "ceiling_grant",
+        round: 2,
+        granted: 2,
+        totalGranted: 6,
+        remaining: ["a", "b"],
+        mode: "ladder",
+        progress: { successfulToolCalls: 4, productiveToolCalls: 4 },
+      },
     ]);
     expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 14 });
     // 8 + 4 + 2 real turns = 14 tool round-trips, plus the two decision calls
@@ -1653,7 +1677,15 @@ describe("AgentLoop.runTurn — ceiling_refused events (TASK.208)", () => {
     const events = await collect(loop.runTurn("go"));
 
     expect(grantEvents(events)).toEqual([
-      { type: "ceiling_grant", round: 1, granted: 1, totalGranted: 1, remaining: ["a", "b"] },
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 1,
+        totalGranted: 1,
+        remaining: ["a", "b"],
+        mode: "ladder",
+        progress: { successfulToolCalls: 8, productiveToolCalls: 8 },
+      },
     ]);
     expect(refusedEvents(events)).toEqual([
       { type: "ceiling_refused", reason: "grant_budget_exhausted", turn: 9, round: 2 },
@@ -1758,6 +1790,332 @@ describe("AgentLoop.runTurn — ceiling_refused events (TASK.208)", () => {
   });
 });
 
+describe("AgentLoop.runTurn — TASK.4055 adaptive budget", () => {
+  /** One successful tool-call turn with a PARAMETERIZED tool name. */
+  function toolTurnStep(id: string, name = "Mock"): ModelStreamEvent[] {
+    return [
+      { type: "tool_call", toolCall: { id, name, input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  /**
+   * ONE model step (one turn) emitting SEVERAL tool calls in parallel — the
+   * granted round's activity measure is per-ROUND, so a read and a write in
+   * the same turn must land in the same step.
+   */
+  function multiToolTurnStep(calls: Array<[id: string, name: string]>): ModelStreamEvent[] {
+    return [
+      ...calls.map(([id, name]) => ({ type: "tool_call", toolCall: { id, name, input: { value: "x" } } }) as ModelStreamEvent),
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  /** A tool-free completion turn — ends the loop with reason "completed". */
+  function completionStep(): ModelStreamEvent[] {
+    return [
+      { type: "text_delta", id: "t", text: "done" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ];
+  }
+
+  /** One clean `ceiling_verdict` call — the ONLY way a grant can be produced. */
+  function verdictStep(
+    remaining: string[],
+    opts?: { done?: boolean; nextAction?: string },
+  ): ModelStreamEvent[] {
+    const input: Record<string, unknown> = { done: opts?.done ?? false, remaining };
+    if (opts?.nextAction !== undefined) input.next_action = opts.nextAction;
+    return [
+      { type: "tool_call", toolCall: { id: `v${Math.random()}`, name: "ceiling_verdict", input } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+  }
+
+  // Registry: Mock (non-read-only, as today) + Reader (read-only) + Planner
+  // (TodoWrite-LIKE: readOnly per the real TodoWrite, checkpoint-eligible).
+  const readerTool = makeTool({
+    metadata: { ...baseMetadata, name: "Reader", readOnly: true, sideEffectScope: "none" },
+  });
+  const plannerTool = makeTool({
+    metadata: { ...baseMetadata, name: "Planner", readOnly: true, sideEffectScope: "none" },
+  });
+  const registry = makeRegistry({ Mock: makeTool(), Reader: readerTool, Planner: plannerTool });
+
+  const grantEvents = (events: AgentEvent[]) =>
+    events.filter((e): e is Extract<AgentEvent, { type: "ceiling_grant" }> => e.type === "ceiling_grant");
+  const refusedEvents = (events: AgentEvent[]) =>
+    events.filter((e): e is Extract<AgentEvent, { type: "ceiling_refused" }> => e.type === "ceiling_refused");
+
+  it("continuation is the SAME child: one adaptive grant, then the loop completes with a continuous history", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      verdictStep(["a"]), // round 1: no progress gate yet
+      completionStep(),
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry, ceiling: { adaptive: true } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toEqual([
+      {
+        type: "ceiling_grant",
+        round: 1,
+        // adaptiveGrantForRound(1, 2) = ceil(2*0.5) = 1
+        granted: 1,
+        totalGranted: 1,
+        remaining: ["a"],
+        mode: "adaptive",
+        progress: { successfulToolCalls: 2, productiveToolCalls: 2 },
+      },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
+    // One continuous history: 1 user message + 3 (assistant, tool) pairs for
+    // the two tool turns, and the final tool-free turn's assistant message.
+    const messages = loop.history.toMessages();
+    expect(messages).toHaveLength(1 + 2 * 2 + 1);
+    expect(loop.history.unansweredToolCallIds()).toEqual([]);
+    const serialized = JSON.stringify(messages);
+    expect(serialized).not.toContain("ceiling_verdict");
+  });
+
+  it("reads are not progress: a read-only round's readable verdict refuses as stalled", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1", "Reader"),
+      toolTurnStep("c2", "Reader"),
+      verdictStep(["a"]), // round 1 grants (no progress gate) — reads included
+      toolTurnStep("c3", "Reader"), // consumes the grant: successful, not productive
+      verdictStep(["a"]), // round 2: readable verdict, but productiveToolCalls === 0
+      // No further step: nothing may run after the stalled refusal.
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry, ceiling: { adaptive: true } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    // Round 1 granted with honest counters: successes yes, productive none.
+    expect(grantEvents(events)).toEqual([
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 1, // adaptiveGrantForRound(1, 2) = ceil(2 * 0.5)
+        totalGranted: 1,
+        remaining: ["a"],
+        mode: "adaptive",
+        progress: { successfulToolCalls: 2, productiveToolCalls: 0 },
+      },
+    ]);
+    // Round 2: the cheap gate passes (successful calls exist — a done:true
+    // report must stay reachable), the verdict IS readable, and the refusal
+    // names the actual cause: no productive work in the round.
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "stalled", turn: 3, round: 2 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 3 });
+    expect(events.at(-2)).toEqual(refusedEvents(events)[0]);
+    // 3 real turns + 2 decision calls; nothing after the stalled verdict.
+    expect(modelPort.requests).toHaveLength(5);
+  });
+
+  it("a stalled round with a productive MIX still refuses stalled only when nothing productive happened; productive progress without shortening grants", async () => {
+    // Round 2 with productive work and an UNSHORTENED remaining list: the
+    // adaptive gate must grant (the old ladder's strict-shortening would not).
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      verdictStep(["a", "b", "c"]), // round 1 grants
+      // ONE model step = ONE granted turn emitting both calls: a read AND a
+      // productive write (successful 2, productive 1 for the round).
+      multiToolTurnStep([
+        ["c3", "Reader"],
+        ["c4", "Mock"],
+      ]),
+      verdictStep(["a", "b", "c"]), // SAME length as round 1 — adaptive grants
+      completionStep(),
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry, ceiling: { adaptive: true } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    const grants = grantEvents(events);
+    expect(grants.map((g) => g.round)).toEqual([1, 2]);
+    expect(grants[1]).toMatchObject({
+      mode: "adaptive",
+      progress: { successfulToolCalls: 2, productiveToolCalls: 1 },
+    });
+    expect(refusedEvents(events)).toHaveLength(0);
+    // turns: 2 base + 1 granted (both calls in one turn) + 1 completion.
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 4 });
+  });
+
+  it("TodoWrite counts as productive: a shrinking plan list earns round 2", async () => {
+    // Planner mirrors the real TodoWrite (readOnly, output {count}): the
+    // checkpoint signal — a shrinking count — is the productive progress.
+    let todoCount = 3;
+    // Registered under the REAL name: the loop's checkpoint signal is
+    // structural (toolName === "TodoWrite" + numeric ok-result count), so the
+    // fake must look exactly like tools/todo-write.ts on the wire.
+    const shrinkingTodoWrite = makeTool({
+      metadata: { ...baseMetadata, name: "TodoWrite", readOnly: true, sideEffectScope: "none" },
+      handler: async () => {
+        todoCount -= 1;
+        return { ok: true, output: { count: todoCount } };
+      },
+    });
+    const plannerRegistry = makeRegistry({ Mock: makeTool(), TodoWrite: shrinkingTodoWrite });
+    const modelPort = new MockModelPort([
+      toolTurnStep("p1", "TodoWrite"), // count 3 -> 2: baseline set, no increment
+      verdictStep(["a"]), // round 1 grants (adaptiveGrantForRound(1, 1) = 1)
+      toolTurnStep("p2", "TodoWrite"), // count 2 -> 1: SHRANK — checkpoint progress
+      verdictStep(["a"]), // round 2: productive via the checkpoint
+      completionStep(),
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 1,
+      registry: plannerRegistry,
+      ceiling: { adaptive: true, maxGrantedTurns: 2 },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    const grants = grantEvents(events);
+    expect(grants.map((g) => g.round)).toEqual([1, 2]);
+    expect(grants[1]).toMatchObject({
+      mode: "adaptive",
+      progress: { successfulToolCalls: 1, productiveToolCalls: 1 },
+    });
+    // Grant sums stay under the configured total budget (maxGrantedTurns = 2).
+    const total = grants.at(-1)!.totalGranted;
+    expect(total).toBeLessThanOrEqual(2);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
+  });
+
+  it("No-Extension finish: adaptive grants flow until maxGrantedTurns is spent, then exactly one refusal", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("t1"),
+      toolTurnStep("t2"),
+      toolTurnStep("t3"),
+      toolTurnStep("t4"),
+      verdictStep(["a", "b"]), // round 1: ceil(8*0.5)=4, clamped to budget 1
+      toolTurnStep("t5"), // consumes the single granted turn
+      // No further step: round 2 must refuse before ever calling the model.
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 4,
+      registry,
+      ceiling: { adaptive: true, maxGrantedTurns: 1 },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toEqual([
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 1,
+        totalGranted: 1,
+        remaining: ["a", "b"],
+        mode: "adaptive",
+        progress: { successfulToolCalls: 4, productiveToolCalls: 4 },
+      },
+    ]);
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "grant_budget_exhausted", turn: 5, round: 2 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 5 });
+    expect(events.at(-2)).toEqual(refusedEvents(events)[0]);
+    expect(modelPort.requests).toHaveLength(6);
+  });
+
+  it("hard limit: maxTurnsCeiling === maxTurns leaves room 0 — the FIRST trip refuses before any verdict call", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      // No 3rd step: the ceiling trip must refuse cheaply.
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 2,
+      registry,
+      ceiling: { adaptive: true, maxTurnsCeiling: 2 },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "grant_budget_exhausted", turn: 2, round: 1 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 2 });
+    expect(modelPort.requests).toHaveLength(2); // the two real turns, no verdict
+    expect(grantEvents(events)).toHaveLength(0);
+  });
+
+  it("decision error: a garbage verdict step refuses unreadable and fails closed", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"), // wrong tool name inside the decision slot — not a verdict
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry, ceiling: { adaptive: true } });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(refusedEvents(events)).toEqual([
+      { type: "ceiling_refused", reason: "unreadable_verdict", turn: 2, round: 1 },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 2 });
+    expect(grantEvents(events)).toHaveLength(0);
+  });
+
+  it("off by default: the same script without the flag uses the ladder grant and mode ladder", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      verdictStep(["a"]),
+      completionStep(),
+    ]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(grantEvents(events)).toEqual([
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 1, // grantForRound(1, 2) = floor(2/2) = 1 — the ladder's math
+        totalGranted: 1,
+        remaining: ["a"],
+        mode: "ladder",
+        progress: { successfulToolCalls: 2, productiveToolCalls: 2 }, // both Mock
+      },
+    ]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
+  });
+
+  it("supervised root: adaptive mode or not, no ceiling events at all", async () => {
+    const modelPort = new MockModelPort([
+      toolTurnStep("c1"),
+      toolTurnStep("c2"),
+      toolTurnStep("c3"), // past maxTurns(2) — supervised: runs untouched
+      completionStep(),
+    ]);
+    const loop = makeLoop({
+      modelPort,
+      maxTurns: 2,
+      registry,
+      ceiling: { adaptive: true, supervisedRoot: () => true },
+    });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 4 });
+    expect(grantEvents(events)).toHaveLength(0);
+    expect(refusedEvents(events)).toHaveLength(0);
+    expect(modelPort.requests).toHaveLength(4);
+  });
+});
+
 describe("AgentLoop.runTurn — supervised root has no turn ceiling (TASK.124 remainder, owner rule 2026-08-22)", () => {
   /** One successful `Mock` tool-call turn — the loop's normal per-turn step. */
   function toolTurnStep(id: string): ModelStreamEvent[] {
@@ -1842,7 +2200,15 @@ describe("AgentLoop.runTurn — supervised root has no turn ceiling (TASK.124 re
     // its mere presence.
     expect(calls).toBeGreaterThan(0);
     expect(grantEvents(events)).toEqual([
-      { type: "ceiling_grant", round: 1, granted: 1, totalGranted: 1, remaining: ["finish the thing"] },
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 1,
+        totalGranted: 1,
+        remaining: ["finish the thing"],
+        mode: "ladder",
+        progress: { successfulToolCalls: 2, productiveToolCalls: 2 },
+      },
     ]);
     expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
   });
@@ -1891,7 +2257,15 @@ describe("AgentLoop.runTurn — supervised root has no turn ceiling (TASK.124 re
     const events = await collect(loop.runTurn("go"));
 
     expect(grantEvents(events)).toEqual([
-      { type: "ceiling_grant", round: 1, granted: 1, totalGranted: 1, remaining: ["keep going"] },
+      {
+        type: "ceiling_grant",
+        round: 1,
+        granted: 1,
+        totalGranted: 1,
+        remaining: ["keep going"],
+        mode: "ladder",
+        progress: { successfulToolCalls: 3, productiveToolCalls: 3 },
+      },
     ]);
     expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 4 });
     expect(events.filter((e) => e.type === "turn_start")).toHaveLength(4);

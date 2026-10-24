@@ -70,8 +70,10 @@ import {
 import { DegenerationDetector } from "./degeneration-detector.js";
 import {
   acceptCeilingVerdict,
+  adaptiveGrantForRound,
   ceilingGrant,
   ceilingWindowMs,
+  isProductiveToolCall,
   requestCeilingVerdict,
   type CeilingConfig,
 } from "./ceiling.js";
@@ -98,6 +100,21 @@ function appendSystemContext(systemPrompt: string | undefined, systemContext: st
   if (systemContext === undefined || systemContext.length === 0) return systemPrompt;
   if (systemPrompt === undefined || systemPrompt.length === 0) return systemContext;
   return `${systemPrompt}\n\n${systemContext}`;
+}
+
+/**
+ * TASK.240/4055 checkpoint signal: the stored item count a successful
+ * TodoWrite reported (`{ todos, count }` — tools/todo-write.ts), or undefined
+ * for any other outcome/shape. Read structurally (never `as`): only a numeric
+ * `count` on an ok result counts, so a malformed or foreign payload is simply
+ * not a checkpoint.
+ */
+function todoWriteCount(outcome: ToolCallOutcome): number | undefined {
+  if (outcome.toolName !== "TodoWrite" || outcome.result?.ok !== true) {
+    return undefined;
+  }
+  const count = (outcome.result.output as { count?: unknown } | undefined)?.count;
+  return typeof count === "number" && Number.isFinite(count) ? count : undefined;
 }
 
 /**
@@ -557,6 +574,21 @@ export class AgentLoop {
   private ceilingGrantedTurns = 0;
   private ceilingPreviousRemaining: number | undefined;
   private ceilingSuccessfulToolCalls = 0;
+  /**
+   * TASK.240/4055: successful NON-read-only tool calls since the last grant —
+   * the adaptive mode's progress measure (a successful file read alone is not
+   * progress). Same lifecycle as `ceilingSuccessfulToolCalls`: incremented on
+   * the same append pass, reset at the same grant.
+   */
+  private ceilingProductiveToolCalls = 0;
+  /**
+   * TASK.240/4055 checkpoint signal: the item count of the last successful
+   * TodoWrite this session (TodoWrite is deliberately readOnly — session
+   * state, not workspace — so the pure isProductiveToolCall check does not
+   * cover it). A successful TodoWrite whose list SHRANK is progress even with
+   * no writes yet: the run is checking off plan items, not restating them.
+   */
+  private ceilingTodoCount: number | undefined;
 
   /** Vision-fallback overview-caption cache (plan §7); shared when the wiring supplies one, private to this loop otherwise. */
   private readonly askCache: AskCache;
@@ -1350,6 +1382,22 @@ export class AgentLoop {
             this.history.append(buildToolResultMessage(call, annotated), ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []));
             if (annotated.status === "success") {
               this.ceilingSuccessfulToolCalls += 1;
+              // TASK.240/4055: only non-read-only successes count as PRODUCTIVE
+              // progress. Unknown tools fail closed inside the helper.
+              if (isProductiveToolCall(call.name, this.config.registry)) {
+                this.ceilingProductiveToolCalls += 1;
+              }
+              // TASK.240/4055 checkpoint: a successful TodoWrite whose list
+              // shrank counts as productive progress for the ROUND gate below
+              // (TodoWrite is readOnly by design, so the check above does not
+              // cover it). Counting, not gating, happens here.
+              const todoCount = todoWriteCount(annotated);
+              if (todoCount !== undefined) {
+                if (this.ceilingTodoCount !== undefined && todoCount < this.ceilingTodoCount) {
+                  this.ceilingProductiveToolCalls += 1;
+                }
+                this.ceilingTodoCount = todoCount;
+              }
             }
           }
         }
@@ -1407,6 +1455,10 @@ export class AgentLoop {
     turn: number,
   ): AsyncGenerator<AgentEvent, CeilingDecision, unknown> {
     const config = this.config.ceiling;
+    // TASK.240/4055: adaptive mode swaps the progress measure (productive, not
+    // any-success) and the grant math (progress-scaled, not decreasing); every
+    // other gate, clamp and refusal path below is shared with the ladder.
+    const adaptive = config?.adaptive === true;
     const round = this.ceilingRounds + 1;
     if (config?.enabled === false) {
       yield { type: "ceiling_refused", reason: "ladder_disabled", turn, round };
@@ -1420,11 +1472,18 @@ export class AgentLoop {
     // since the previous ceiling" has no previous ceiling to measure from, and
     // requiring it would make the ladder unreachable for a run that spent its
     // whole budget on a single long-running dispatch (§1.5).
+    //
+    // TASK.240/4055: the cheap gate KEEPS the any-success measure in adaptive
+    // mode too — a read-only round is not a priori disqualifying, because the
+    // decision it is about to buy can still honestly report done:true. The
+    // PRODUCTIVE judgment happens at the verdict itself: a readable
+    // continuation request from a round with zero productive calls refuses as
+    // "stalled" (below), which is the distinction TASK.240 asked for.
     if (round >= 2 && this.ceilingSuccessfulToolCalls <= 0) {
       yield { type: "ceiling_refused", reason: "no_successful_tool_calls", turn, round };
       return "refused";
     }
-    const grant = ceilingGrant(round, maxTurns, this.ceilingGrantedTurns, config);
+    const grant = ceilingGrant(round, maxTurns, this.ceilingGrantedTurns, config, adaptive);
     if (grant <= 0) {
       yield { type: "ceiling_refused", reason: "grant_budget_exhausted", turn, round };
       return "refused";
@@ -1446,6 +1505,7 @@ export class AgentLoop {
       round,
       maxRounds: MAX_CEILING_ROUNDS,
       previousRemaining: this.ceilingPreviousRemaining,
+      ...(adaptive ? { adaptive: true } : {}),
       windowMs,
       signal,
     });
@@ -1462,18 +1522,38 @@ export class AgentLoop {
         round,
         previousRemaining: this.ceilingPreviousRemaining,
         successfulToolCalls: this.ceilingSuccessfulToolCalls,
+        ...(adaptive
+          ? { productiveToolCalls: this.ceilingProductiveToolCalls, adaptive: true }
+          : {}),
       })
     ) {
-      yield { type: "ceiling_refused", reason: "verdict_rejected", turn, round };
+      // TASK.240/4055: in adaptive mode a readable verdict rejected SOLELY
+      // because the round produced no productive work is a STALL, not a bad
+      // verdict — the budget was not too small, the run just was not doing
+      // anything with it. Any other rejection (round 3's missing nextAction,
+      // an empty remaining list, ...) stays verdict_rejected.
+      const stalled = adaptive && this.ceilingProductiveToolCalls <= 0;
+      yield {
+        type: "ceiling_refused",
+        reason: stalled ? "stalled" : "verdict_rejected",
+        turn,
+        round,
+      };
       return "refused";
     }
 
     this.ceilingRounds = round;
     this.ceilingGrantedTurns += grant;
     this.ceilingPreviousRemaining = verdict.remaining.length;
+    // The grant event reports the counters of the round JUST SPENT — capture
+    // them before the resets below make the per-round lifecycle visible.
+    const roundSuccessfulToolCalls = this.ceilingSuccessfulToolCalls;
+    const roundProductiveToolCalls = this.ceilingProductiveToolCalls;
     // "Successful tool call" is measured PER ROUND: the counter restarts with
-    // the turns this grant just bought.
+    // the turns this grant just bought. The productive counter restarts with
+    // it (same round, same lifecycle — TASK.240/4055).
     this.ceilingSuccessfulToolCalls = 0;
+    this.ceilingProductiveToolCalls = 0;
     yield {
       type: "ceiling_grant",
       round,
@@ -1481,6 +1561,14 @@ export class AgentLoop {
       totalGranted: this.ceilingGrantedTurns,
       remaining: [...verdict.remaining],
       ...(verdict.nextAction !== undefined ? { nextAction: verdict.nextAction } : {}),
+      // TASK.240/4055: which grant path produced this round, plus the round's
+      // own activity measures (successful vs productive). Additive-optional
+      // fields — the wire envelope and legacy consumers ignore them.
+      ...(adaptive ? { mode: "adaptive" as const } : { mode: "ladder" as const }),
+      progress: {
+        successfulToolCalls: roundSuccessfulToolCalls,
+        productiveToolCalls: roundProductiveToolCalls,
+      },
     };
     return "granted";
   }
