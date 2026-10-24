@@ -88,6 +88,15 @@ vi.mock("react", async (importOriginal) => {
       };
       return [slots[slot], set];
     },
+    // useRef shares useState's slot array/cursor (call order is stable per render).
+    useRef(initial: unknown) {
+      const slots = (harness.state[harness.key] ??= []);
+      const slot = harness.cursor++;
+      if (slots.length <= slot) {
+        slots[slot] = { current: initial };
+      }
+      return slots[slot];
+    },
     useEffect(fn: () => unknown, deps?: readonly unknown[]) {
       const slots = (harness.effects[harness.key] ??= []);
       const slot = harness.effectCursor++;
@@ -430,8 +439,12 @@ describe("BackgroundTasksPanel live-tail (Taskana 4097)", () => {
       backgroundTaskOutput: { "task-1": "done" },
     };
     mountUnit("panel");
+    // Exactly one final peek on the running -> terminal edge (the last <1s of
+    // output), then nothing: running -> terminal ended the poll.
+    expect(outputRequests()).toBe(2);
     vi.advanceTimersByTime(5_000);
-    expect(outputRequests()).toBe(1); // running -> terminal ended the poll
+    mountUnit("panel");
+    expect(outputRequests()).toBe(2);
   });
 
   it("never polls a task that is already terminal when selected", () => {

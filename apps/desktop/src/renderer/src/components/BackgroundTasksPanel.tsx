@@ -19,7 +19,7 @@
  * child sessions (TASK.145); this drawer renders core's Bash background
  * tasks. Different feature, different wire.
  */
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import type { UiToHostMessage } from "../../../shared/protocol.js";
 import type { BackgroundTaskSnapshot, BackgroundTaskStatus } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
@@ -175,6 +175,30 @@ export function BackgroundTasksPanel() {
     // re-arms the interval on a row switch; `liveTail` re-evaluates every
     // store-driven render, ending the poll the moment the task settles.
   }, [liveTail, selectedTaskId, send]);
+
+  // Final fetch: the poll above stops the moment the selected task settles,
+  // so whatever it printed in its last <1s would stay unseen until the row is
+  // reopened. One last peek on the running -> terminal edge of the SAME
+  // selected row closes that gap (a row switch or a close is not that edge).
+  const settleEdgeRef = useRef<{ taskId: string | null; status: BackgroundTaskStatus | undefined }>({
+    taskId: null,
+    status: undefined,
+  });
+  const selectedStatus = selectedTask?.status;
+  useEffect(() => {
+    const prev = settleEdgeRef.current;
+    settleEdgeRef.current = { taskId: selectedTaskId, status: selectedStatus };
+    if (
+      open &&
+      selectedTaskId !== null &&
+      prev.taskId === selectedTaskId &&
+      prev.status === "running" &&
+      selectedStatus !== undefined &&
+      selectedStatus !== "running"
+    ) {
+      send(buildTaskOutputRequest(selectedTaskId));
+    }
+  }, [open, selectedTaskId, selectedStatus, send]);
 
   if (!open) {
     return null;
