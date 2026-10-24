@@ -20,6 +20,7 @@ import {
   createProxyRelayForTest,
   isLoopbackPeer,
   parseUpstreamProxyUrl,
+  proxyRelayUrl,
   relayRegistryKey,
   resolveProxyRelay,
   stripHopByHop,
@@ -815,3 +816,91 @@ describe("proxy relay hardening (review follow-up)", () => {
     }
   });
 });
+
+// ── cross-review F1/F2 (opus2): in-flight resolve dedup + close-during-resolve ──
+//
+// F1: `resolveProxyRelay` checked the cache, then AWAITED a bind — two
+// concurrent resolves for the same registry key (a rapid
+// `refreshProviderState` racing a spawn-site prewarm, or prewarm Set entries
+// that normalise to one key) both bound, the second `relays.set` overwrote
+// the first, and the first listener leaked WITH the credential it fronts.
+// F2: `closeProxyRelay()` during that in-flight window cleared an empty map;
+// the late `relays.set` then repopulated the registry after shutdown and the
+// relay answered on 127.0.0.1 forever.
+describe("resolveProxyRelay lifecycle (cross-review F1/F2)", () => {
+  afterEach(() => {
+    closeProxyRelay();
+  });
+
+  it("F1 repro: two concurrent resolves for the same key return ONE relay (no leaked listener)", async () => {
+    const upstream = "http://user:secret@127.0.0.1:9";
+    const [a, b, c] = await Promise.all([
+      resolveProxyRelay(upstream),
+      resolveProxyRelay("http://user:secret@127.0.0.1:9/"), // trailing slash — SAME key
+      resolveProxyRelay("http://user:secret@127.0.0.1:9"),
+    ]);
+    expect(a).toBeDefined();
+    expect(b).toBe(a); // concurrent, same key: the in-flight promise is shared
+    expect(c).toBe(a);
+    // A later resolve still reuses the SAME handle (cache holds after settle).
+    expect(await resolveProxyRelay(upstream)).toBe(a);
+    // Teardown reachability: closeProxyRelay must actually stop the listener
+    // (the leaked first relay of the pre-fix race stayed bound past this).
+    const port = a!.port;
+    closeProxyRelay();
+    await expect(
+      new Promise<void>((resolve, reject) => {
+        const probe = net.connect(port, "127.0.0.1");
+        probe.on("error", () => resolve());
+        // A listener that survived teardown ACCEPTS the connection — refusal
+        // is the pass condition, a 10s silence the fail one.
+        probe.on("connect", () => {
+          probe.destroy();
+          reject(new Error(`listener on ${port} survived closeProxyRelay`));
+        });
+        setTimeout(() => {
+          probe.destroy();
+          resolve();
+        }, 2000).unref();
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("F2 repro: closeProxyRelay during an in-flight resolve — the late relay closes itself", async () => {
+    // Start the resolve, close BEFORE the bind settles, then let the resolve
+    // finish. The settle path must observe the shutdown (generation) and close
+    // its own relay — the registry stays empty and the listener never answers.
+    const upstream = "http://user:secret@127.0.0.1:9";
+    const pending = resolveProxyRelay(upstream);
+    closeProxyRelay(); // mid-flight shutdown (the registry is empty at this instant)
+    const relay = await pending;
+    // The handle is handed back usable-shaped, but it is already closed and
+    // NOT registered — a sync lookup answers nothing (fail-closed drop).
+    expect(relay).toBeDefined();
+    expect(proxyRelayUrlForTest()).toBeUndefined();
+    // The listener must be gone: a dial to the minted port is refused.
+    await expect(
+      new Promise<void>((resolve, reject) => {
+        const probe = net.connect(relay!.port, "127.0.0.1");
+        probe.on("error", () => resolve());
+        probe.on("connect", () => {
+          probe.destroy();
+          reject(new Error(`listener on ${relay!.port} answered after mid-flight close`));
+        });
+        setTimeout(() => {
+          probe.destroy();
+          resolve();
+        }, 2000).unref();
+      }),
+    ).resolves.toBeUndefined();
+    // And a fresh resolve after the shutdown mints a NEW working relay.
+    const fresh = await resolveProxyRelay(upstream);
+    expect(fresh).toBeDefined();
+    expect(fresh!.port).not.toBe(relay!.port);
+  });
+});
+
+/** Test seam for the F2 assertion: the bare registry view (`proxyRelayUrl()`'s source). */
+function proxyRelayUrlForTest(): string | undefined {
+  return proxyRelayUrl();
+}
