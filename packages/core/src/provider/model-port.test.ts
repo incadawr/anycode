@@ -1488,6 +1488,9 @@ describe("AiSdkModelPort — provider_quota emission (Taskana 4090)", () => {
     const seen = mockCreateLanguageModel.mock.calls[0]![0] as EndpointConfig;
     expect(seen).toBe(config); // identity passthrough — no rewrap, no spread
     expect(seen.onQuotaHeaders).toBeUndefined();
+  });
+});
+
 describe("AiSdkModelPort — mid-stream replay (Taskana 4705)", () => {
   const textDelta = (text: string) => ({ type: "text-delta", id: "t1", text });
   const toolCallPart = { type: "tool-call", toolCallId: "call_1", toolName: "Read", input: { file_path: "/a.txt" } };
