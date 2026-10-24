@@ -1614,6 +1614,7 @@ describe("agentTool handler — orchestrate default-detach (Taskana 4704 §2.3)"
     return {
       seen: () => seen,
       port: {
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
         run: async (req) => {
           seen = req;
           return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
@@ -1710,6 +1711,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
   ): { ctx: ToolContext; port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
@@ -1894,6 +1896,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
   it("R6: role route REPLACES profile routing — one mechanism stamps the request, never both", async () => {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
@@ -1926,6 +1929,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
   it("R7: routeStamped rides a route-stamped fresh spawn and is suppressed by an explicit model", async () => {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
@@ -1948,6 +1952,7 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
     // not a chain hop, never recorded for respawn.
     let seen2: SessionSubagentRequest | undefined;
     const port2: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen2 = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };

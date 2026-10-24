@@ -128,7 +128,7 @@ describe("bridgeCallableCatalog (Taskana 4101)", () => {
   };
 
   function portReturning(outcome: SessionSubagentOutcome): SessionSubagentPort {
-    return { run: async () => outcome };
+    return { run: async () => outcome, send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }) };
   }
 
   const BASE_OUTCOME: SessionSubagentOutcome = {
@@ -177,6 +177,7 @@ describe("bridgeCallableCatalog (Taskana 4101)", () => {
 
     let seen: SessionSubagentRequest | undefined;
     const recordingPort: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen = req;
         return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
