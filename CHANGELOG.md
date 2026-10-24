@@ -34,6 +34,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Provider requests are retried harder: up to 8 attempts, network outages are
+  ridden out for up to 5 minutes, and a stream cut off mid-answer is replayed
+  (at most twice) instead of failing the turn. Stop cancels retries at once;
+  sign-in errors and exhausted quotas are still not retried.
+
 - The optional `tgrep` Grep backend is stricter: a tgrep answer cut off by the
   output cap is re-run through ripgrep instead of being returned trimmed, tgrep
   gets half the tool timeout so the ripgrep re-check fits in the same budget, and
