@@ -34,6 +34,7 @@ export {
   readTrustStore,
   writeTrustDecision,
   emptyTrustStore,
+  type TrustStoreFs,
   type WorkspaceTrustDecision,
   type WorkspaceTrustRecord,
   type WorkspaceTrustStore,

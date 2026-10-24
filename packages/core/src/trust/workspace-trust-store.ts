@@ -11,6 +11,13 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
 
+/**
+ * The only file operations the decision store needs. Narrower than
+ * FileSystemPort so the Electron main process can persist a decision with a
+ * four-method adapter and never pull the full core barrel.
+ */
+export type TrustStoreFs = Pick<FileSystemPort, "exists" | "readFile" | "writeFile" | "rename">;
+
 export type WorkspaceTrustDecision = "trusted" | "denied";
 
 export interface WorkspaceTrustRecord {
@@ -56,7 +63,7 @@ export function emptyTrustStore(): WorkspaceTrustStore {
 }
 
 export async function readTrustStore(
-  fs: FileSystemPort,
+  fs: TrustStoreFs,
   storePath: string,
 ): Promise<WorkspaceTrustStore> {
   try {
@@ -74,7 +81,7 @@ export async function readTrustStore(
  * persisted state.
  */
 export async function writeTrustDecision(
-  fs: FileSystemPort,
+  fs: TrustStoreFs,
   storePath: string,
   workspace: string,
   decision: WorkspaceTrustDecision,
