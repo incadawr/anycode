@@ -6940,6 +6940,70 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     }
   });
 
+  it("stall-retry double finish: the ABANDONED attempt's finish is discarded; the durable row is the WINNER's usage with retries counted", async () => {
+    // The model-port stall watchdog aborts mid-stream AFTER the SDK already
+    // emitted finish for attempt 1; the port re-yields BOTH finishes verbatim
+    // on the replay (finish#1 -> stream_retry -> ... -> finish#2), and the
+    // agent loop bills only the winner (`usage = {}` reset). The audit row
+    // must match: one durable row = finish#2's tokens, transportRetries 1.
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const usageAudit = {
+      sink: {
+        record: (r: Parameters<ProviderUsageAudit["record"]>[0]) => {
+          void adapter.recordProviderUsage({ ...r, sessionId: "test-session", createdAt: Date.now() }).catch(() => {});
+        },
+      } satisfies ProviderUsageAudit,
+      summary: {
+        summary: () => adapter.listProviderUsage("test-session").then(summarizeProviderUsage),
+      } satisfies ProviderUsageSummaryPort,
+    };
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write" }); // auto-allow: no permission ask parks the turn
+    const h = createHarness({
+      steps: [
+        // step 1: finish#1 (ABANDONED attempt — the stall discards it) ->
+        // stream_retry -> replayed attempt's finish#2 (the winner).
+        [
+          { type: "start" },
+          { type: "tool_call", toolCall: { id: "call-d1", name: "Write", input: WRITE_INPUT } },
+          { type: "finish", finishReason: "tool_calls", usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 } },
+          { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 1, reason: "stall after finish" },
+          { type: "start" },
+          { type: "tool_call", toolCall: { id: "call-d2", name: "Write", input: WRITE_INPUT } },
+          { type: "finish", finishReason: "tool_calls", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } },
+        ],
+        usageStep({ inputTokens: 20, outputTokens: 6, totalTokens: 26 }, "done"),
+      ],
+      rules,
+      usageAudit,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const { turnId } = await runOneTurn(h);
+      // Write-behind: poll for BOTH durable rows before asserting.
+      let durable: ProviderUsageRecord[] = [];
+      for (let i = 0; i < 100; i++) {
+        durable = await adapter.listProviderUsage("test-session");
+        if (durable.length >= 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(durable).toHaveLength(2);
+      const step1 = durable.find((r) => r.step === 1)!;
+      // The audit row equals what the agent loop bills: the WINNER's usage.
+      expect(step1.turnId).toBe(turnId);
+      expect(step1.inputTokens).toBe(7);
+      expect(step1.outputTokens).toBe(3);
+      expect(step1.totalTokens).toBe(10);
+      expect(step1.transportRetries).toBe(1);
+      const s = await usageAudit.summary.summary();
+      expect(s.totals).toEqual({ input: 27, output: 9, total: 36, stepsReported: 2, stepsWithCache: 0 });
+    } finally {
+      h.close();
+      await adapter.close();
+    }
+  });
+
   it("no double record on reconnect replay: the SECOND sink call is a no-op in storage (real adapter as the summary)", async () => {
     // Integration, no fake: the real SqlitePersistenceAdapter backs BOTH the
     // sink (idempotent by PK) and the summary, exactly as host/index.ts wires it.
@@ -7186,6 +7250,54 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
       h.send({ type: "usage_audit_request" });
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(h.received.some(isUsageAudit)).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("cross-review finding 5: a core finish with NO preceding turn_start (currentStep undefined) is skipped, never recorded, turn unaffected", async () => {
+    // The `!` in the original capture trusted "every core finish follows a
+    // turn_start"; a future engine variant that breaks that invariant would
+    // write `step: undefined` -> NULL into a NOT NULL PK and throw inside the
+    // sink. The guard skips the audit for such a finish; the turn is green.
+    const { sink, records } = recordingSink();
+    const engine: SessionEngine = {
+      id: "core",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: false,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: false,
+        costAccounting: false,
+        supportsModelSelection: false,
+        supportsReasoningEffort: false,
+        supportsImages: false,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+      },
+      mode: () => "build",
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(): AsyncIterable<AgentEvent> {
+        // NO turn_start: currentStep stays undefined through the finish.
+        yield { type: "finish", finishReason: "stop", usage: { inputTokens: 99, outputTokens: 9, totalTokens: 108 } };
+        yield { type: "turn_end", turn: 1, finishReason: "stop" };
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+      },
+      historyItems: () => [],
+      dispose: async () => {},
+    };
+    const h = createHarness({ steps: [], engine, usageAudit: { sink, summary: fakeSummary({ steps: [], totals: null }) } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "go" });
+      await h.waitFor((m): m is HostToUiMessage => m.type === "agent_event" && m.event.type === "loop_end");
+      await h.flush();
+      expect(records).toHaveLength(0); // skipped: no step identity, nothing durable
     } finally {
       h.close();
     }

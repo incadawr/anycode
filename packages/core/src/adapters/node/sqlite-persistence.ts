@@ -1453,6 +1453,16 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * Appends one completed-step usage row. INSERT OR IGNORE by the
    * (session_id, turn_id, step) PK: idempotent per step, first write wins —
    * a replayed/duplicate finish after a reconnect writes nothing new.
+   *
+   * Append-only BY DESIGN across a conversation-restoring rewind (cross-
+   * review finding 2): a rewind truncates history but NEVER this table —
+   * the provider genuinely billed every audited step, so the audit is a
+   * spend ledger, not a mirror of the live conversation (the live
+   * counterpart, checkpointSessionTokens, IS rewound). Consequence: after a
+   * rewind, `summary()`/`listProviderUsage` still total pre-rewind rows —
+   * honest spend, deliberately not reset. Callers that rewind MAY pass the
+   * returned-history epoch through `turn_id` scoping instead of deleting
+   * rows; deleting here would destroy the only durable record of spend.
    */
   async recordProviderUsage(record: ProviderUsageRecord): Promise<void> {
     const db = this.open();

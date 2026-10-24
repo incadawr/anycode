@@ -671,6 +671,14 @@ let engineBootstrap: EngineBootstrap | null = null;
 let initFailure: string | null = null;
 let historySink: WriteBehindHistorySink | null = null;
 let persistence: SqlitePersistenceAdapter | null = null;
+/**
+ * Taskana 4083 cross-review finding 4: the usage-audit write-behind tail —
+ * every recordProviderUsage call chains off the previous one (serialized,
+ * same discipline as WriteBehindHistorySink's queue), and the sink's flush()
+ * resolves once the tail settles. Lets Session.shutdown() drain audit writes
+ * strictly before the host closes the database.
+ */
+let usageAuditWriteTail: Promise<void> | null = null;
 // null until the MCP boot block below successfully constructs one (or forever
 // null if it fails-soft) — every reader below guards on this (design §6).
 let mcpManager: McpManager | null = null;
@@ -3446,10 +3454,19 @@ async function boot(): Promise<void> {
       // can never block or fail a turn.
       usageAudit: {
         sink: {
-          record: (r) =>
-            void persistence!
-              .recordProviderUsage({ ...r, sessionId, createdAt: Date.now() })
-              .catch((e) => console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`)),
+          record: (r) => {
+            // Serialized (chained off the tail, never parallel) so flush()
+            // below is an honest drain of every queued write IN ORDER.
+            usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())
+              .then(() => persistence!.recordProviderUsage({ ...r, sessionId, createdAt: Date.now() }))
+              .catch((e) => console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`));
+          },
+          // Cross-review finding 4: shutdown drain — a serialized tail exactly
+          // like WriteBehindHistorySink's, so Session.shutdown() can await
+          // every queued audit write before the host closes the database (an
+          // unbounded late write would otherwise re-open the closed file and
+          // leak the handle). Fail-soft per write; flush() itself never rejects.
+          flush: () => usageAuditWriteTail ?? Promise.resolve(),
         },
         summary: {
           summary: () => persistence!.listProviderUsage(sessionId).then(summarizeProviderUsage),
