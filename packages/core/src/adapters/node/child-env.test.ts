@@ -180,6 +180,26 @@ describe("relayUrl rewrite (TASK.135 follow-up / Taskana 4074)", () => {
     expect(out.HTTPS_PROXY).toBe(RELAY);
   });
 
+  it("Taskana 4685: a tokened relay URL (path segment) replaces the family verbatim", () => {
+    const RELAY_TOKENED = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+    const out = sanitizeChildEnv(
+      {
+        HTTPS_PROXY: "http://user:pass@proxy:3128",
+        https_proxy: "http://user:pass@proxy:3128",
+        HTTP_PROXY: "http://user:pass@proxy:3128",
+        http_proxy: "http://user:pass@proxy:3128",
+      },
+      RELAY_TOKENED,
+    );
+    expect(out.HTTPS_PROXY).toBe(RELAY_TOKENED);
+    expect(out.https_proxy).toBe(RELAY_TOKENED);
+    expect(out.HTTP_PROXY).toBe(RELAY_TOKENED);
+    expect(out.http_proxy).toBe(RELAY_TOKENED);
+    // The token rides the URL verbatim (no percent-mangling, no stripping).
+    expect(JSON.stringify(out)).toContain("AbCdEf1234567890_-XyZ");
+    expect(JSON.stringify(out)).not.toContain("@");
+  });
+
   it("a relay with nothing dropped changes nothing (credential-less proxies pass verbatim)", () => {
     expect(sanitizeChildEnv({ HTTPS_PROXY: "http://proxy.corp:3128" }, RELAY)).toEqual({
       HTTPS_PROXY: "http://proxy.corp:3128",

@@ -57,6 +57,7 @@ import { NodeGitAdapter } from "@anycode/core/node-git";
 // sanctioned route for these two symbols — see core/src/index.ts).
 import { ARTIFACT_MAX_AGE_MS, NodeArtifactStore } from "@anycode/core";
 import { artifactsRootFor } from "../shared/artifacts-root.js";
+import { resolveProxyRelay } from "@anycode/core/proxy-relay";
 import {
   catalogProviderIds,
   findCatalogEntry,
@@ -65,7 +66,7 @@ import {
   resolveEndpoint,
 } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
-import { defaultSecretsPath, defaultSettingsPath, loadSettings, readTrustedBinaryConsentsSync } from "../settings/files.js";
+import { defaultSecretsPath, defaultSettingsPath, loadSettings, readTrustedBinaryConsentsSync, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById, resolveProviderConnection } from "../shared/settings.js";
 import {
@@ -113,6 +114,7 @@ import { spawnProxyProbe } from "./proxy-probe.js";
 import { spawnRecognizerProbeChild } from "./recognizer-probe.js";
 import { registerRecognizerProbeIpc } from "./recognizer-probe-ipc.js";
 import { createSystemProxyResolver, type SystemProxyCache } from "./system-proxy.js";
+import { migrateLegacyProxyUrls, type LegacyProxyImportDeps } from "./proxy-scopes.js";
 import { sendToMainWindow } from "./main-window-send.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
@@ -1056,7 +1058,22 @@ const systemProxyDelegate: SystemProxyResolver = {
 const proxyMaterialization: ProxyMaterializationDeps = {
   systemProxy: systemProxyDelegate,
   proxyPassword: (profileId) => proxyPasswords.get(profileId),
+  // Taskana 4685: main's OWN loopback relay URL (started at boot, refreshed on
+  // every provider-state rebuild). Engine carriers materialised through these
+  // deps swap a credentialed url for it — fail-closed to `direct` without one.
+  get relayUrl() {
+    return mainRelayUrl;
+  },
 };
+
+/**
+ * Taskana 4685: main's own credential-free relay URL, or undefined while no
+ * relay is warranted (no credentialed proxy in main's env / cannot serve / bind
+ * failed — `resolveProxyRelay` has exactly one undefined outcome for all).
+ * Lives at module scope because the `proxyMaterialization` deps object is a
+ * boot-time const consumed by sync call sites that cannot await a bind.
+ */
+let mainRelayUrl: string | undefined;
 
 /**
  * Reloads the plaintext proxy-password cache `proxyMaterialization.proxyPassword`
@@ -1380,6 +1397,13 @@ async function refreshProviderState(): Promise<void> {
   // about, or a vault read that fails, must leave the app running on its last
   // good answer rather than leaving `currentHostEnv` stale forever.
   await refreshProxyPasswordCache().catch(() => undefined);
+  // Taskana 4685: main's own relay, (re)resolved before the env below is
+  // composed. Idempotent per process (`resolveProxyRelay` caches); the URL is
+  // only re-read so a later boot phase sees a settled value. Fail-soft: a bind
+  // failure leaves `mainRelayUrl` undefined and the engine carriers go
+  // fail-closed `direct` — never a credentialed URL across the boundary.
+  const mainRelay = await resolveProxyRelay().catch(() => undefined);
+  mainRelayUrl = mainRelay?.url;
   await (systemProxyCache?.refreshAll() ?? Promise.resolve());
   currentHostEnv = await buildHostEnvFor(current);
   const transportInfo = selectedTransportInfo(current);
@@ -1756,6 +1780,36 @@ void app.whenReady().then(async () => {
   // unrecognized keys are untouched), idempotent + fail-soft internally. It
   // touches secrets.json, not settings.json, so no read_only gate is needed.
   await vault.scrubLegacyProviderKeys(catalogProviderIds());
+  // Taskana 4685 boot-time legacy migration: every CREDENTIALED legacy
+  // `proxyUrl` string (connection / codex / claude) becomes a registry profile
+  // with the password in the vault — the string keeps working, but the secret
+  // stops living in a 0644 settings.json. Fail-soft overall (a corrupt proxy
+  // string never breaks boot) and per scope (a vault failure skips that scope;
+  // its legacy string keeps working). `allowWeak: true` is deliberate: a
+  // headless boot cannot prompt for weak-storage consent, and refusing keeps
+  // the password in the 0644 file — strictly worse than an OS-tier-encrypted
+  // (worst case 0600 plaintext) vault entry.
+  const bootVault = vault;
+  const legacyMigrationDeps: LegacyProxyImportDeps & { writeSecret: (key: SecretKey, value: string) => Promise<void> } = {
+    readPassword: async (profileId) => {
+      const probe = await bootVault.probeSecret(proxyProfileSecretKey(profileId));
+      return probe.state === "value" ? { state: "value", value: probe.value } : { state: probe.state };
+    },
+    writeSecret: async (key, value) => {
+      const result = await bootVault.setSecret(key, value, { allowWeak: true });
+      if (!result.ok) {
+        // Surface the refusal so the per-scope fail-soft skips THIS scope —
+        // a silently-unwritten password would leave a profile that
+        // authenticates against nothing.
+        throw new Error(`vault setSecret refused (${result.reason ?? "unknown"})`);
+      }
+    },
+  };
+  const migration = await migrateLegacyProxyUrls(settings!, legacyMigrationDeps).catch(() => undefined);
+  if (migration?.changed) {
+    await withSettingsFileLock(settingsPath, () => saveSettings(settingsPath, settings!));
+    await refreshProxyPasswordCache().catch(() => undefined);
+  }
   // TokenBroker + OAuth engine (slice 2.5 §3.2/§3.3): main-owned custody. The
   // broker refreshes/rotates oauth tokens (single-flight); the engine runs the
   // loopback+PKCE sign-in. Both read weak-storage consent fresh from settings.
@@ -2500,6 +2554,9 @@ void app.whenReady().then(async () => {
     // TASK.139: the doctor and `codex login` are children main spawns itself, so
     // they get the engine proxy through the same carrier the tab children use.
     engineProxyUrl: codexEngineProxyUrl,
+    // Taskana 4685: the same children get a credentialed proxy swapped for
+    // main's own credential-free relay URL (fail-closed drop without one).
+    relayUrl: () => mainRelayUrl,
     ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
     readBinaryPathSetting: async () => settings?.codex?.binaryPath,
     // TASK.103: fresh read of settings.security.trustedBinaries per gate
@@ -2574,6 +2631,9 @@ void app.whenReady().then(async () => {
     // env builder declares itself a mirror of the session child's builder, and
     // that declaration has to stay true.
     engineProxyUrl: claudeEngineProxyUrl,
+    // Taskana 4685: mirror of the codex dep above — the doctor child's env
+    // builder swaps a credentialed proxy for main's relay URL.
+    relayUrl: () => mainRelayUrl,
     readBinaryPathSetting: async () => settings?.claude?.binaryPath,
     // TASK.103: fresh read of settings.security.trustedBinaries per gate
     // check — mirror of readBinaryPathSetting's dep shape.
@@ -2625,6 +2685,7 @@ void app.whenReady().then(async () => {
     // lives, and would ignore `settings.codex.proxyUrl` while the onboarding
     // recheck and `codex login` honour it.
     doctorSourceEnv: () => codexDoctorSourceEnv(bootEnv, codexEngineProxyUrl),
+    relayUrl: () => mainRelayUrl,
     readRiskAcceptedVersions: async () => settings?.codex?.riskAcceptedVersions ?? [],
     writeCodexSettings: (patch) => handleSet(settingsIpcDeps, { codex: patch }),
     onChanged: () => {
@@ -2659,6 +2720,7 @@ void app.whenReady().then(async () => {
         void runCodexManagedUpgrade({
           ...(codexProfilesHome !== undefined ? { home: codexProfilesHome } : {}),
           doctorSourceEnv: () => codexDoctorSourceEnv(bootEnv, codexEngineProxyUrl),
+          relayUrl: () => mainRelayUrl,
           readBinaryPathSetting: async () => settings?.codex?.binaryPath,
           swapBinaryPath: (expected, next) => handleSwapCodexBinaryPath(settingsIpcDeps, expected, next),
           onChanged: () => {

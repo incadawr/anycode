@@ -24,6 +24,10 @@
  * `http://127.0.0.1:<port>`: children regain the network, still see no
  * credential, and the `ANYCODE_*_PROXY_URL` carriers stay removed. Callers
  * that have not resolved a relay pass nothing and keep the plain drop.
+ * Taskana 4685: that relay URL embeds a per-process random token as a PATH
+ * SEGMENT (`http://127.0.0.1:<port>/<token>`); pass it through verbatim —
+ * the token is the relay's cross-user auth boundary and contains no `@`, so
+ * `proxyValueHasUserinfo` never trips on it.
  *
  * Why a literal-`@` rule and not `maskProxyCredentials` (main/proxy-probe.ts):
  * that regex needs `//` and `:` separators, so it misses user-only

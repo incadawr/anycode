@@ -453,6 +453,16 @@ export interface ProxyMaterializationDeps {
    * named in §9 of the task rather than papered over with a default URL.
    */
   targetUrl?: string;
+  /**
+   * Main's own credential-free loopback relay URL (Taskana 4685). When the
+   * materialised proxy carries userinfo, the ENGINE-CARRIER consumers
+   * (`engineProxyOutcome` and its delegators) swap it for this URL — a
+   * credentialed carrier must never reach an engine child when a relay can
+   * carry the credential for it. Absent ⇒ a credentialed carrier degrades to
+   * `direct` (fail-closed: never hand `user:pass@` across the child boundary).
+   * Every other consumer ignores this field.
+   */
+  relayUrl?: string;
 }
 
 /**

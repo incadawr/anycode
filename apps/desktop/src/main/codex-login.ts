@@ -71,6 +71,14 @@ export interface RunCodexLoginOptions {
   profile?: ResolvedCodexProfile;
   /** DI seam for the pre-spawn home guard; production re-asserts the real filesystem (`assertCodexProfileHome`). */
   profileGuard?: (profile: ResolvedCodexProfile) => CodexProfileGuardResult;
+  /**
+   * Taskana 4685: MAIN's own credential-free relay URL — a credentialed proxy
+   * in the source env is swapped for it in the login child's env (fail-closed
+   * drop when absent). The OAuth round trip is a real network flight, so the
+   * relay keeps it working behind an authenticating proxy WITHOUT the
+   * credential ever reaching the codex CLI.
+   */
+  relayUrl?: string;
 }
 
 /**
@@ -102,7 +110,7 @@ export async function runCodexLogin(binaryPath: string, options: RunCodexLoginOp
   }
   const spawnImpl = options.spawnImpl ?? spawn;
   const platform = options.platform ?? process.platform;
-  const env = applyCodexProfileEnv(buildDoctorChildEnv(options.env ?? process.env, platform), profile);
+  const env = applyCodexProfileEnv(buildDoctorChildEnv(options.env ?? process.env, platform, options.relayUrl), profile);
   const timeoutMs = options.timeoutMs ?? CODEX_LOGIN_TIMEOUT_MS;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? CODEX_DOCTOR_RPC_TIMEOUT_MS;
   const client = new CodexRpcClient(spawnImpl);

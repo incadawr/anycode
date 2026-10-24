@@ -124,6 +124,7 @@ export function buildClaudeDoctorChildEnv(
   source: NodeJS.ProcessEnv,
   profileDir: string | undefined,
   platform: NodeJS.Platform = process.platform,
+  relayUrl?: string,
 ): NodeJS.ProcessEnv {
   const posixKeys = [
     "HOME", "PATH", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "SHELL", "TERM",
@@ -137,6 +138,21 @@ export function buildClaudeDoctorChildEnv(
   for (const key of platform === "win32" ? winKeys : posixKeys) {
     const value = source[key];
     if (value !== undefined) env[key] = value;
+  }
+  // Taskana 4685: a credentialed proxy never reaches the doctor CLI — swap it
+  // for MAIN's credential-free relay (main cannot read the host fork's one).
+  // Fail-closed without a relay. Unlike the codex doctor this builder's
+  // allowlist names NO proxy var (the pinned asymmetry), so the swap reads the
+  // SOURCE: only a CREDENTIALED value crosses, and only as the relay URL — a
+  // credential-less shell proxy keeps not reaching this child at all. The
+  // engine carrier below still wins for an engine-scoped profile; `direct`
+  // still clears everything.
+  for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
+    const value = source[name];
+    if (typeof value === "string" && value.includes("@")) {
+      if (relayUrl !== undefined) env[name] = relayUrl;
+      else delete env[name];
+    }
   }
   // Same GUI-launch PATH fix as the Codex doctor: the npm `claude` shim is a
   // node-shebang script too, so a Finder-launched probe hits the identical
@@ -479,6 +495,12 @@ export interface RunClaudeDoctorOptions {
   initTimeoutMs?: number;
   /** Live per-path binary-trust consents (TASK.103), fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
   consents?: readonly BinaryTrustConsent[];
+  /**
+   * Taskana 4685: MAIN's own credential-free relay URL. A credentialed proxy in
+   * the source env is swapped for it in the child env (fail-closed drop when
+   * absent) — the doctor CLI never sees `user:pass@`.
+   */
+  relayUrl?: string;
 }
 
 /**
@@ -497,7 +519,7 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
   const watchdogMs =
     options.timeoutMs ??
     versionTimeoutMs + initTimeoutMs + TEARDOWN_STDIN_EOF_WAIT_MS + TEARDOWN_SIGTERM_WAIT_MS + TEARDOWN_SIGKILL_WAIT_MS + 2_000;
-  const childEnv = buildClaudeDoctorChildEnv(options.env ?? process.env, options.profileDir, platform);
+  const childEnv = buildClaudeDoctorChildEnv(options.env ?? process.env, options.profileDir, platform, options.relayUrl);
   const cancellation = new DoctorCancellation();
   const quitRequested = (): boolean => options.signal?.aborted === true || cancellation.cancelled;
 

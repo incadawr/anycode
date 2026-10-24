@@ -645,6 +645,8 @@ export interface CodexInstallControllerDeps {
    * existing test deps object relies on).
    */
   doctorSourceEnv?: () => NodeJS.ProcessEnv;
+  /** Taskana 4685: MAIN's own relay URL, threaded to the gate doctor (fail-closed drop when absent). */
+  relayUrl?: () => string | undefined;
   /** DI seams; production = the real trust gate + doctor. */
   trust?: (binaryPath: string) => string | null;
   runDoctor?: (binaryPath: string, options?: RunCodexDoctorOptions) => Promise<CodexDoctorReport>;
@@ -701,7 +703,10 @@ export function createCodexInstallController(deps: CodexInstallControllerDeps): 
     // No dep ⇒ no options object at all, so the call is byte-identical to its
     // pre-TASK.139 form.
     const doctorEnv = deps.doctorSourceEnv?.();
-    const report = await runDoctor(installed.binaryPath, doctorEnv !== undefined ? { env: doctorEnv } : undefined);
+    const report = await runDoctor(
+      installed.binaryPath,
+      doctorEnv !== undefined ? { env: doctorEnv, ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}) } : undefined,
+    );
     if (report.status === "error" || report.status === "update_required" || report.status === "not_installed") {
       return refuse(report.error ?? `installed binary failed its doctor pass (${report.status})`);
     }

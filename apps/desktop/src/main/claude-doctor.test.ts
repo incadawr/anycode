@@ -173,6 +173,63 @@ describe("buildClaudeDoctorChildEnv — engine proxy carrier (TASK.139)", () => 
     expect(env.CLAUDE_CONFIG_DIR).toBe("/tmp/some-profile");
     expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
   });
+
+  // ── Taskana 4685: a credentialed proxy never reaches the doctor CLI ──
+  describe("Taskana 4685: credentialed family swapped for main's relay URL", () => {
+    const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+    const CREDENTIALED_SOURCE: NodeJS.ProcessEnv = {
+      HOME: "/home/me",
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://u:s3cret@p:1",
+      HTTP_PROXY: "http://u:s3cret@p:1",
+      https_proxy: "http://u:s3cret@p:1",
+      http_proxy: "http://u:s3cret@p:1",
+    };
+
+    it("with relayUrl the family becomes the relay URL and no credential survives", () => {
+      const env = buildClaudeDoctorChildEnv(CREDENTIALED_SOURCE, undefined, "linux", RELAY);
+      expect(env.HTTPS_PROXY).toBe(RELAY);
+      expect(env.HTTP_PROXY).toBe(RELAY);
+      expect(env.https_proxy).toBe(RELAY);
+      expect(env.http_proxy).toBe(RELAY);
+      expect(JSON.stringify(env)).not.toContain("@");
+      expect(JSON.stringify(env)).not.toContain("s3cret");
+    });
+
+    it("fail-closed without relayUrl: the credentialed family is deleted", () => {
+      const env = buildClaudeDoctorChildEnv(CREDENTIALED_SOURCE, undefined, "linux");
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.HTTP_PROXY).toBeUndefined();
+      expect(env.https_proxy).toBeUndefined();
+      expect(env.http_proxy).toBeUndefined();
+      expect(JSON.stringify(env)).not.toContain("@");
+    });
+
+    it("the carrier override still applies AFTER the swap (carrier wins)", () => {
+      const env = buildClaudeDoctorChildEnv(
+        { ...CREDENTIALED_SOURCE, [ENV_CLAUDE_PROXY_URL]: ENGINE_CARRIER },
+        undefined,
+        "linux",
+        RELAY,
+      );
+      // Swap-then-override: the engine-scoped carrier's own url lands last.
+      expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
+      expect(env.HTTP_PROXY).toBe(ENGINE_PROXY);
+      expect(env.https_proxy).toBe(ENGINE_PROXY);
+      expect(env.http_proxy).toBe(ENGINE_PROXY);
+    });
+
+    it("the pinned asymmetry survives the relay: a credential-less shell proxy still does not reach this child", () => {
+      const env = buildClaudeDoctorChildEnv(
+        { HOME: "/home/me", PATH: "/usr/bin", HTTPS_PROXY: SHELL_PROXY, https_proxy: SHELL_PROXY, NO_PROXY: "corp" },
+        undefined,
+        "linux",
+        RELAY,
+      );
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.NO_PROXY).toBeUndefined();
+    });
+  });
 });
 
 describe("runClaudeDoctor — status discrimination against a fake CLI", () => {

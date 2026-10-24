@@ -837,7 +837,9 @@ export function engineProxyCarrierValue(
  * them has to emit the sentinel, because the connection's proxy is already in
  * the child env via the passthrough list and staying silent would leave the
  * engine on it — routing traffic through someone else's proxy after the user
- * explicitly said "none".
+ * explicitly said "none". Taskana 4685: the result runs through
+ * `relayCredentialedCarrier` — a credentialed carrier becomes `deps.relayUrl`
+ * or degrades fail-closed to `direct`.
  */
 export function engineProxyOutcome(
   settings: AnycodeSettings,
@@ -859,9 +861,36 @@ export function engineProxyOutcome(
   }
   // The exemption pair is the shell's whenever the shell named it; only then is
   // the licence withheld, and the child builder leaves both spellings alone.
-  return NO_PROXY_KEYS.some((name) => envPresent(bootEnv, name))
+  const carrier: EngineProxyCarrier = NO_PROXY_KEYS.some((name) => envPresent(bootEnv, name))
     ? { kind: "proxy", url: materialized.url }
     : { kind: "proxy", url: materialized.url, noProxy: composeNoProxy(materialized.noProxy) };
+  // Taskana 4685: a credentialed carrier never crosses the engine-child
+  // boundary — swap for main's relay, fail-closed to `direct` without one.
+  return relayCredentialedCarrier(carrier, deps.relayUrl);
+}
+
+/**
+ * Taskana 4685: de-credentialises an engine carrier before it is ever stamped
+ * into a host fork's env. A carrier whose url carries userinfo (`@`) is swapped
+ * for main's own credential-free loopback relay URL (the same boundary Bash/
+ * terminal children get); the engine's `noProxy` licence survives the swap.
+ * Fail-closed without a relay: a credentialed carrier degrades to `direct` —
+ * never hand `user:pass@` across the engine-child boundary. Credential-free
+ * carriers, `direct` and `absent` pass through untouched.
+ */
+export function relayCredentialedCarrier(
+  carrier: EngineProxyCarrier,
+  relayUrl: string | undefined,
+): EngineProxyCarrier {
+  if (carrier.kind !== "proxy" || !carrier.url.includes("@")) {
+    return carrier;
+  }
+  if (relayUrl === undefined) {
+    return { kind: "direct" };
+  }
+  return carrier.noProxy === undefined
+    ? { kind: "proxy", url: relayUrl }
+    : { kind: "proxy", url: relayUrl, noProxy: carrier.noProxy };
 }
 
 

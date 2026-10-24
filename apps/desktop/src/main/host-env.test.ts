@@ -34,11 +34,13 @@ import {
   customSupportedTransports,
   engineProxyCarrierValue,
   engineProxyCarriers,
+  engineProxyOutcome,
   envOverrides,
   findCustomProviderRecord,
   isCustomProviderRecordId,
   isKnownSecretKey,
   materializeProxyRung,
+  relayCredentialedCarrier,
   resolveEffectiveTransport,
   resolveProxyFor,
   scrubSecretEnv,
@@ -1564,8 +1566,11 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
   });
 
   it("emits only the codex carrier when only codex is configured", () => {
+    // Taskana 4685: CODEX_PROXY carries `user:pass@` and these deps pass no
+    // `relayUrl`, so the carrier is de-credentialised fail-closed to `direct`
+    // (never hand the credential across the engine-child boundary).
     const result = engineProxyCarriers(settings({ codex: { proxyUrl: CODEX_PROXY } }), {});
-    expect(result).toEqual({ ANYCODE_CODEX_PROXY_URL: carrier(CODEX_PROXY) });
+    expect(result).toEqual({ ANYCODE_CODEX_PROXY_URL: PROXY_CARRIER_DIRECT });
   });
 
   it("emits only the claude carrier when only claude is configured", () => {
@@ -1574,12 +1579,14 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
   });
 
   it("emits both carriers, each with its own engine's value", () => {
+    // Taskana 4685: codex's url is credentialed and there is no `relayUrl` in
+    // these deps → `direct`; claude's is credential-less → verbatim.
     const result = engineProxyCarriers(
       settings({ codex: { proxyUrl: CODEX_PROXY }, claude: { proxyUrl: CLAUDE_PROXY } }),
       {},
     );
     expect(result).toEqual({
-      ANYCODE_CODEX_PROXY_URL: carrier(CODEX_PROXY),
+      ANYCODE_CODEX_PROXY_URL: PROXY_CARRIER_DIRECT,
       ANYCODE_CLAUDE_PROXY_URL: carrier(CLAUDE_PROXY),
     });
   });
@@ -1588,9 +1595,11 @@ describe("engineProxyCarriers — engine-level proxy (TASK.139)", () => {
   // the child builder cannot make that call, since by the time it runs a
   // shell-exported NO_PROXY and a connection-derived one look identical.
   it("B-02: withholds the exemption licence when the shell owns NO_PROXY", () => {
+    // Taskana 4685: credentialed url + no relayUrl in these deps → `direct`
+    // (the licence question is moot once the carrier is de-credentialised).
     const result = engineProxyCarriers(settings({ codex: { proxyUrl: CODEX_PROXY } }), { NO_PROXY: "corp.internal" });
     expect(result).toEqual({
-      ANYCODE_CODEX_PROXY_URL: encodeEngineProxyCarrier({ kind: "proxy", url: CODEX_PROXY }),
+      ANYCODE_CODEX_PROXY_URL: PROXY_CARRIER_DIRECT,
     });
   });
 
@@ -1736,17 +1745,16 @@ describe("ambient engine-proxy carriers never reach a fork (TASK.139 F1)", () =>
   // And with an engine proxy configured, main's value is the one that lands —
   // the ambient one is gone rather than merely losing a spread order fight.
   it("main's configured carrier replaces an ambient one of the same name", async () => {
+    // Taskana 4685: CODEX_PROXY is credentialed and these deps carry no
+    // `relayUrl`, so the carrier is the fail-closed `direct` sentinel — still
+    // main's value, still replacing the ambient one.
     const bootEnv = { PATH: "/usr/bin", ANYCODE_CODEX_PROXY_URL: AMBIENT_PROXY };
     const current = settings({ codex: { proxyUrl: CODEX_PROXY } });
     const env = await buildHostEnv({ bootEnv, settings: current, getSecret: noSecret });
     expect(env.ANYCODE_CODEX_PROXY_URL).toBeUndefined();
     const overlay = { ...env, ...engineProxyCarriers(current, bootEnv) };
     expect(pick(overlay)).toEqual({
-      ANYCODE_CODEX_PROXY_URL: encodeEngineProxyCarrier({
-        kind: "proxy",
-        url: CODEX_PROXY,
-        noProxy: LOOPBACK_NO_PROXY,
-      }),
+      ANYCODE_CODEX_PROXY_URL: PROXY_CARRIER_DIRECT,
     });
   });
 });
@@ -2648,6 +2656,92 @@ describe("buildHostEnv — vision-fallback recognizer (TASK.198 E1)", () => {
       expect(env.ANYCODE_RECOGNIZER_API_KEY).toBeUndefined();
       expect(env.ANYCODE_RECOGNIZER_MODEL).toBeUndefined();
       expect(env.ANYCODE_RECOGNIZER_TRANSPORT).toBeUndefined();
+    });
+  });
+});
+
+// ── Taskana 4685: main de-credentialises engine carriers against its own relay ──
+
+describe("relayCredentialedCarrier (Taskana 4685)", () => {
+  const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+
+  it("a credentialed carrier + relayUrl becomes the relay URL, keeping the noProxy licence", () => {
+    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@h:1", noProxy: "x" }, RELAY)).toEqual({
+      kind: "proxy",
+      url: RELAY,
+      noProxy: "x",
+    });
+  });
+
+  it("a credentialed carrier without a noProxy licence swaps to the bare relay URL", () => {
+    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@h:1" }, RELAY)).toEqual({
+      kind: "proxy",
+      url: RELAY,
+    });
+  });
+
+  it("fail-closed: a credentialed carrier + relayUrl === undefined becomes direct", () => {
+    expect(relayCredentialedCarrier({ kind: "proxy", url: "http://u:p@h:1", noProxy: "x" }, undefined)).toEqual({
+      kind: "direct",
+    });
+  });
+
+  it("a credential-less url is returned as-is, with and without a relayUrl", () => {
+    const carrier = { kind: "proxy" as const, url: "http://h:1", noProxy: "x" };
+    expect(relayCredentialedCarrier(carrier, RELAY)).toBe(carrier);
+    expect(relayCredentialedCarrier(carrier, undefined)).toBe(carrier);
+  });
+
+  it("direct and absent pass through untouched", () => {
+    expect(relayCredentialedCarrier({ kind: "direct" }, RELAY)).toEqual({ kind: "direct" });
+    expect(relayCredentialedCarrier({ kind: "absent" }, RELAY)).toEqual({ kind: "absent" });
+    expect(relayCredentialedCarrier({ kind: "direct" }, undefined)).toEqual({ kind: "direct" });
+    expect(relayCredentialedCarrier({ kind: "absent" }, undefined)).toEqual({ kind: "absent" });
+  });
+});
+
+describe("engineProxyOutcome threads relayUrl end-to-end (Taskana 4685)", () => {
+  const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+  /** A manual profile whose password comes from the materialisation cache. */
+  const profiledSettings = (): AnycodeSettings =>
+    settings({
+      network: {
+        proxyProfiles: [
+          { id: "proxy-1", name: "Corp", mode: "manual", url: "http://proxy.corp:3128", login: "user" },
+        ],
+      },
+      codex: { proxyRef: "proxy-1" },
+    });
+  const withPassword: ProxyMaterializationDeps = {
+    proxyPassword: () => "pass",
+  };
+
+  it("without relayUrl the credentialed carrier degrades fail-closed to direct", () => {
+    const outcome = engineProxyOutcome(profiledSettings(), {}, "codex", false, withPassword);
+    expect(outcome).toEqual({ kind: "direct" });
+  });
+
+  it("with relayUrl the carrier becomes the relay URL and keeps the noProxy licence", () => {
+    const outcome = engineProxyOutcome(profiledSettings(), {}, "codex", false, {
+      ...withPassword,
+      relayUrl: RELAY,
+    });
+    expect(outcome).toEqual({ kind: "proxy", url: RELAY, noProxy: LOOPBACK_NO_PROXY });
+  });
+
+  it("a credential-less engine setting (legacy proxyUrl, no @) is untouched by the relay", () => {
+    const outcome = engineProxyOutcome(settings({ codex: { proxyUrl: "http://codex-proxy:3128" } }), {}, "codex", false, {
+      relayUrl: RELAY,
+    });
+    expect(outcome).toEqual({ kind: "proxy", url: "http://codex-proxy:3128", noProxy: LOOPBACK_NO_PROXY });
+  });
+
+  it("engineProxyCarriers threads the same deps: the encoded carrier carries the relay URL", () => {
+    const carriers = engineProxyCarriers(profiledSettings(), {}, { ...withPassword, relayUrl: RELAY });
+    expect(decodeEngineProxyCarrier(carriers.ANYCODE_CODEX_PROXY_URL!)).toEqual({
+      kind: "proxy",
+      url: RELAY,
+      noProxy: LOOPBACK_NO_PROXY,
     });
   });
 });

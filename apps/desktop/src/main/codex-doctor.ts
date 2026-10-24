@@ -135,7 +135,11 @@ export function augmentPathForGui(pathValue: string | undefined, platform: NodeJ
  * `process.env` wholesale: no ambient ANYCODE_* secret can leak into the
  * spawned Codex child this way.
  */
-export function buildDoctorChildEnv(source: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+export function buildDoctorChildEnv(
+  source: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+  relayUrl?: string,
+): NodeJS.ProcessEnv {
   const posixKeys = [
     "HOME", "PATH", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "SHELL", "TERM",
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
@@ -153,6 +157,16 @@ export function buildDoctorChildEnv(source: NodeJS.ProcessEnv, platform: NodeJS.
   for (const key of [...(platform === "win32" ? winKeys : posixKeys), ...passThrough]) {
     const value = source[key];
     if (value !== undefined) env[key] = value;
+  }
+  // Taskana 4685: a credentialed proxy never reaches the doctor/login CLI —
+  // swap it for MAIN's credential-free relay (main cannot read the host fork's
+  // one). Fail-closed without a relay. The engine carrier below still wins for
+  // an engine-scoped profile; `direct` still clears everything.
+  for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
+    if (typeof env[name] === "string" && env[name]!.includes("@")) {
+      if (relayUrl !== undefined) env[name] = relayUrl;
+      else delete env[name];
+    }
   }
   env.PATH = augmentPathForGui(env.PATH, platform);
   // TASK.139: the engine-level proxy, if main stamped its carrier into `source`.
@@ -747,6 +761,12 @@ export interface RunCodexDoctorOptions {
   versionPolicy?: CodexVersionPolicy;
   /** Live per-path binary-trust consents (TASK.103), fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
   consents?: readonly BinaryTrustConsent[];
+  /**
+   * Taskana 4685: MAIN's own credential-free relay URL. A credentialed proxy in
+   * the source env is swapped for it in the child env (fail-closed drop when
+   * absent) — the doctor/login CLI never sees `user:pass@`.
+   */
+  relayUrl?: string;
 }
 
 /**
@@ -764,7 +784,10 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
   // never merely joins — whatever CODEX_HOME the ambient env passed through
   // (cut §2.6.2). System/no-profile leaves the allowlisted env untouched.
   const profile = options.profile;
-  const childEnv = applyCodexProfileEnv(buildDoctorChildEnv(options.env ?? process.env, platform), profile);
+  const childEnv = applyCodexProfileEnv(
+    buildDoctorChildEnv(options.env ?? process.env, platform, options.relayUrl),
+    profile,
+  );
   const profileGuard = options.profileGuard ?? ((target: ResolvedCodexProfile) => assertCodexProfileHome(target, { platform }));
   const profileId = profile !== undefined && profile.codexHome !== undefined ? profile.id : undefined;
   const watchdogMs = options.timeoutMs ?? CODEX_DOCTOR_WATCHDOG_MS;

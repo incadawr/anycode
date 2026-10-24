@@ -147,6 +147,8 @@ export interface CodexManagedUpgradeDeps {
    * probe reads through, so the gate honours `settings.codex.proxyUrl`.
    */
   doctorSourceEnv?: () => NodeJS.ProcessEnv;
+  /** Taskana 4685: MAIN's own relay URL, threaded to the post-upgrade doctor (fail-closed drop when absent). */
+  relayUrl?: () => string | undefined;
   /** Fired after a successful upgrade so main pushes ENGINES_CHANGED and rechecks. */
   onChanged?: () => void;
   /** DI seams; production = the real trust gate + doctor. */
@@ -233,7 +235,10 @@ async function upgradeOnce(deps: CodexManagedUpgradeDeps): Promise<CodexManagedU
   if (untrusted !== null) return refuse(untrusted);
   const runDoctor = deps.runDoctor ?? runCodexDoctor;
   const doctorEnv = deps.doctorSourceEnv?.();
-  const report = await runDoctor(installed.binaryPath, doctorEnv !== undefined ? { env: doctorEnv } : undefined);
+  const report = await runDoctor(
+    installed.binaryPath,
+    doctorEnv !== undefined ? { env: doctorEnv, ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}) } : undefined,
+  );
   if (report.status === "error" || report.status === "update_required" || report.status === "not_installed") {
     return refuse(`upgraded binary failed its doctor pass (${report.status}: ${report.error ?? "no detail"})`);
   }

@@ -12,6 +12,7 @@ import type { LegacyProxyImportDeps, ProxyPasswordProbe } from "./proxy-scopes.j
 import {
   allProxyScopes,
   importLegacyProxy,
+  migrateLegacyProxyUrls,
   proxyProfileConsumers,
   PROXY_SCOPE_BINDINGS,
   uniqueProxyProfileName,
@@ -326,5 +327,147 @@ describe("uniqueProxyProfileName", () => {
     });
     expect(uniqueProxyProfileName(current, "Other")).toBe("Other");
     expect(uniqueProxyProfileName(current, "Corp")).toBe("Corp (3)");
+  });
+});
+
+// ── Taskana 4685: boot-time migration of credentialed legacy proxyUrl strings ──
+
+describe("migrateLegacyProxyUrls (Taskana 4685)", () => {
+  /**
+   * A recording fake for the vault write the migration performs — one that
+   * MODELS the vault (a written password reads back), because the B-08 dedup
+   * compares the DECRYPTED password: a write-only fake would make every second
+   * scope mint a twin profile, which is precisely the defect the dedup exists
+   * to prevent.
+   */
+  function recordingVault(): {
+    deps: {
+      writeSecret: (key: string, value: string) => Promise<void>;
+      readPassword: (profileId: string) => Promise<ProxyPasswordProbe>;
+    };
+    writes: { key: string; value: string }[];
+  } {
+    const writes: { key: string; value: string }[] = [];
+    const store = new Map<string, string>();
+    return {
+      writes,
+      deps: {
+        writeSecret: async (key, value) => {
+          writes.push({ key, value });
+          store.set(key, value);
+        },
+        readPassword: async (profileId) => {
+          const value = store.get(`proxy.profile.${profileId}.password`);
+          return value === undefined ? { state: "unset" } : { state: "value", value };
+        },
+      },
+    };
+  }
+
+  function connectionFixture(id: string, over: Partial<ProviderConnection> = {}): ProviderConnection {
+    return {
+      id,
+      label: id,
+      providerId: "z-ai",
+      models: [],
+      ...over,
+    } as ProviderConnection;
+  }
+
+  it("connection legacy string with userinfo -> profile + ref + vault write, legacy key gone", async () => {
+    const vault = recordingVault();
+    const doc = withConnections(
+      [connectionFixture("conn-1", { proxyUrl: "http://user:pass@p:3128" })],
+    );
+    const result = await migrateLegacyProxyUrls(doc, { ...importDeps(ids("proxy-1")), ...vault.deps });
+    expect(result.changed).toBe(true);
+    expect(result.imported).toEqual([{ scope: { kind: "connection", connectionId: "conn-1" }, profileId: "proxy-1" }]);
+    const profiles = proxyProfiles(doc);
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0]).toMatchObject({ id: "proxy-1", mode: "manual", url: "http://p:3128/", login: "user" });
+    expect(doc.provider.connections[0]!.proxyRef).toBe("proxy-1");
+    expect(doc.provider.connections[0]!.proxyUrl).toBeUndefined();
+    expect(vault.writes).toEqual([{ key: "proxy.profile.proxy-1.password", value: "pass" }]);
+  });
+
+  it("codex and claude engine legacy strings migrate identically", async () => {
+    const vault = recordingVault();
+    const doc = settings({
+      codex: { proxyUrl: "http://cu:cp@cp:1" },
+      claude: { proxyUrl: "http://lu:lp@lp:2" },
+    });
+    const result = await migrateLegacyProxyUrls(doc, { ...importDeps(ids("proxy-c", "proxy-l")), ...vault.deps });
+    expect(result.changed).toBe(true);
+    expect(result.imported.map((entry) => entry.profileId).sort()).toEqual(["proxy-c", "proxy-l"]);
+    expect(doc.codex?.proxyUrl).toBeUndefined();
+    expect(doc.codex?.proxyRef).toBe("proxy-c");
+    expect(doc.claude?.proxyUrl).toBeUndefined();
+    expect(doc.claude?.proxyRef).toBe("proxy-l");
+    expect(vault.writes.map((w) => w.value).sort()).toEqual(["cp", "lp"]);
+  });
+
+  it("a credential-less legacy string is untouched (changed:false, no profile, no secret)", async () => {
+    const vault = recordingVault();
+    const doc = withConnections([connectionFixture("conn-1", { proxyUrl: "http://plain:3128" })]);
+    const result = await migrateLegacyProxyUrls(doc, { ...importDeps(ids("proxy-1")), ...vault.deps });
+    expect(result.changed).toBe(false);
+    expect(result.imported).toEqual([]);
+    expect(proxyProfiles(doc)).toEqual([]);
+    expect(doc.provider.connections[0]!.proxyUrl).toBe("http://plain:3128");
+    expect(vault.writes).toEqual([]);
+  });
+
+  it("is idempotent on its own output", async () => {
+    const vault = recordingVault();
+    const doc = withConnections(
+      [connectionFixture("conn-1", { proxyUrl: "http://user:pass@p:3128" })],
+    );
+    const first = await migrateLegacyProxyUrls(doc, { ...importDeps(ids("proxy-1")), ...vault.deps });
+    expect(first.changed).toBe(true);
+    const second = await migrateLegacyProxyUrls(doc, { ...importDeps(ids("proxy-2")), ...vault.deps });
+    expect(second.changed).toBe(false);
+    expect(second.imported).toEqual([]);
+    expect(proxyProfiles(doc)).toHaveLength(1);
+  });
+
+  it("a writeSecret failure skips THAT scope only; the other still migrates; no throw", async () => {
+    const doc = settings({
+      codex: { proxyUrl: "http://cu:cp@cp:1" },
+      claude: { proxyUrl: "http://lu:lp@lp:2" },
+    });
+    let calls = 0;
+    const result = await migrateLegacyProxyUrls(doc, {
+      ...importDeps(ids("proxy-c", "proxy-l")),
+      writeSecret: async (key, value) => {
+        calls += 1;
+        if (key.endsWith("proxy-c.password")) {
+          throw new Error("vault down");
+        }
+        void value;
+      },
+    });
+    expect(result.changed).toBe(true);
+    expect(result.imported).toEqual([{ scope: { kind: "engine", engine: "claude" }, profileId: "proxy-l" }]);
+    // The failed scope keeps its legacy string working.
+    expect(doc.codex?.proxyUrl).toBe("http://cu:cp@cp:1");
+    expect(doc.codex?.proxyRef).toBeUndefined();
+    expect(doc.claude?.proxyRef).toBe("proxy-l");
+    expect(calls).toBeGreaterThanOrEqual(1);
+  });
+
+  it("dedup: two connections sharing one legacy string -> one profile, two refs", async () => {
+    const vault = recordingVault();
+    const doc = withConnections([
+      connectionFixture("conn-1", { proxyUrl: "http://user:pass@p:3128" }),
+      connectionFixture("conn-2", { proxyUrl: "http://user:pass@p:3128" }),
+    ]);
+    // readPassword from the MODELLED vault (a written password reads back), so
+    // the second scope's import dedups against the first's real credential.
+    const result = await migrateLegacyProxyUrls(doc, { genId: ids("proxy-1"), ...vault.deps });
+    expect(result.changed).toBe(true);
+    expect(proxyProfiles(doc)).toHaveLength(1);
+    expect(doc.provider.connections.map((c) => c.proxyRef)).toEqual(["proxy-1", "proxy-1"]);
+    // The dedup path carries no password by construction (B-08): one write.
+    expect(vault.writes).toHaveLength(1);
   });
 });

@@ -187,6 +187,56 @@ describe("buildDoctorChildEnv — engine proxy carrier (TASK.139)", () => {
     );
     expect(env.HTTPS_PROXY).toBeUndefined();
   });
+
+  // ── Taskana 4685: a credentialed proxy never reaches the doctor/login CLI ──
+  describe("Taskana 4685: credentialed family swapped for main's relay URL", () => {
+    const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+    const CREDENTIALED_SOURCE: NodeJS.ProcessEnv = {
+      HOME: "/home/dev",
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://u:s3cret@p:1",
+      HTTP_PROXY: "http://u:s3cret@p:1",
+      https_proxy: "http://u:s3cret@p:1",
+      http_proxy: "http://u:s3cret@p:1",
+    };
+
+    it("with relayUrl the family becomes the relay URL and no credential survives", () => {
+      const env = buildDoctorChildEnv(CREDENTIALED_SOURCE, "linux", RELAY);
+      expect(env.HTTPS_PROXY).toBe(RELAY);
+      expect(env.HTTP_PROXY).toBe(RELAY);
+      expect(env.https_proxy).toBe(RELAY);
+      expect(env.http_proxy).toBe(RELAY);
+      expect(JSON.stringify(env)).not.toContain("@");
+      expect(JSON.stringify(env)).not.toContain("s3cret");
+    });
+
+    it("fail-closed without relayUrl: the credentialed family is deleted", () => {
+      const env = buildDoctorChildEnv(CREDENTIALED_SOURCE, "linux");
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.HTTP_PROXY).toBeUndefined();
+      expect(env.https_proxy).toBeUndefined();
+      expect(env.http_proxy).toBeUndefined();
+      expect(JSON.stringify(env)).not.toContain("@");
+    });
+
+    it("the carrier override still applies AFTER the swap (carrier wins)", () => {
+      const env = buildDoctorChildEnv(
+        { ...CREDENTIALED_SOURCE, [ENV_CODEX_PROXY_URL]: ENGINE_CARRIER },
+        "linux",
+        RELAY,
+      );
+      // Swap-then-override: the engine-scoped carrier's own url lands last.
+      expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
+      expect(env.HTTP_PROXY).toBe(ENGINE_PROXY);
+      expect(env.https_proxy).toBe(ENGINE_PROXY);
+      expect(env.http_proxy).toBe(ENGINE_PROXY);
+    });
+
+    it("a credential-less passthrough is untouched, verbatim", () => {
+      const env = buildDoctorChildEnv({ HOME: "/home/dev", PATH: "/usr/bin", HTTPS_PROXY: SHELL_PROXY }, "linux", RELAY);
+      expect(env.HTTPS_PROXY).toBe(SHELL_PROXY);
+    });
+  });
 });
 
 describe("augmentPathForGui", () => {

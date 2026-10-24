@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as http from "node:http";
 import net from "node:net";
 import {
+  checkRelayToken,
   closeProxyRelay,
   createProxyRelayForTest,
   isLoopbackPeer,
@@ -63,13 +64,17 @@ function startFakeUpstream(): Promise<{ server: http.Server; port: number; auth:
 function connectThrough(
   port: number,
   target: string,
+  headers: Record<string, string> = {},
 ): Promise<{ socket: net.Socket; response: string; rest: Buffer }> {
   return new Promise((resolve, reject) => {
     const socket = net.connect(port, "127.0.0.1");
     const chunks: Buffer[] = [];
     let settled = false;
     socket.on("connect", () => {
-      socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
+      const extra = Object.entries(headers)
+        .map(([name, value]) => `${name}: ${value}\r\n`)
+        .join("");
+      socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${extra}\r\n`);
     });
     socket.on("data", (chunk: Buffer) => {
       if (settled) {
@@ -128,6 +133,30 @@ describe("parseUpstreamProxyUrl", () => {
   });
 });
 
+describe("checkRelayToken (Taskana 4685)", () => {
+  it("triangulates header and path tokens", () => {
+    expect(checkRelayToken("t", "/t", "t")).toBe("valid");
+    expect(checkRelayToken("t", "/t/x", "t")).toBe("valid");
+    expect(checkRelayToken(undefined, undefined, "t")).toBe("absent");
+    expect(checkRelayToken("nope", undefined, "t")).toBe("wrong");
+    // Header whitespace is trimmed.
+    expect(checkRelayToken("  t  ", undefined, "t")).toBe("valid");
+    // A wrong header with a non-matching path is "wrong"; a VALID path
+    // shields a wrong header (the snippet's short-circuit: a correct path
+    // token already proves knowledge of the token).
+    expect(checkRelayToken("nope", "/t", "t")).toBe("valid");
+    expect(checkRelayToken("nope", "/other", "t")).toBe("wrong");
+    // Note (deviation from the brief's two rows): a header-less request with
+    // a NON-matching path (`/other`, `/tprefix`) is "absent", not "wrong" —
+    // the frozen 4074 rule that header-less curl/git/npm plain-HTTP requests
+    // (absolute URI whose path is the TARGET's path, no proxy token) are
+    // accepted. The `/t`-must-not-prefix-match-`/tprefix` property still
+    // holds: `/tprefix` is absent, never "valid".
+    expect(checkRelayToken(undefined, "/other", "t")).toBe("absent");
+    expect(checkRelayToken(undefined, "/tprefix", "t")).toBe("absent");
+  });
+});
+
 describe("isLoopbackPeer", () => {
   it("accepts loopback v4, v6 and v4-mapped forms only", () => {
     expect(isLoopbackPeer("127.0.0.1")).toBe(true);
@@ -170,8 +199,10 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     expect(relay).toBeDefined();
     cleanup.push(() => new Promise<void>((resolve) => { relay!.close(); resolve(); }));
 
-    // The relay URL carries no userinfo — that is the whole point.
-    expect(relay!.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    // The relay URL carries no userinfo — that is the whole point. Taskana
+    // 4685: it ends with the per-relay token as a path segment.
+    expect(relay!.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(relay!.url).toBe(`http://127.0.0.1:${relay!.port}/${relay!.token}`);
     expect(relay!.url).not.toContain("@");
     expect(relay!.url).not.toContain("secret");
 
@@ -264,6 +295,142 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     const third = await resolveProxyRelay(credentialed);
     expect(third).toBe(second); // idempotent: same handle
     expect(second!.url).not.toContain("secret");
+    // Taskana 4685: the cached handle's URL ends with its token; after
+    // closeProxyRelay a fresh resolve mints a NEW token.
+    expect(second!.url).toBe(`http://127.0.0.1:${second!.port}/${second!.token}`);
+    closeProxyRelay();
+    const fresh = await resolveProxyRelay(credentialed);
+    expect(fresh).toBeDefined();
+    expect(fresh!.url).toBe(`http://127.0.0.1:${fresh!.port}/${fresh!.token}`);
+    expect(fresh!.token).not.toBe(second!.token);
+    fresh!.close();
+  });
+
+  it("Taskana 4685: plain HTTP with a WRONG token header gets 403 and the upstream is never contacted", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = http.get(
+          {
+            host: "127.0.0.1",
+            port: relay!.port,
+            path: "http://example.com/x",
+            headers: { "x-anycode-relay-token": "deadbeef" },
+            agent: false,
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on("error", reject);
+      });
+      expect(status).toBe(403);
+      expect(upstream.auth.request).toEqual([]);
+    } finally {
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+
+  it("Taskana 4685: plain HTTP with the CORRECT token header passes through", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        const req = http.get(
+          {
+            host: "127.0.0.1",
+            port: relay!.port,
+            path: "http://example.com/x",
+            headers: { "x-anycode-relay-token": relay!.token },
+            agent: false,
+          },
+          (res) => {
+            let text = "";
+            res.on("data", (chunk: Buffer) => { text += chunk.toString(); });
+            res.on("end", () => resolve(text));
+          },
+        );
+        req.on("error", reject);
+      });
+      expect(body).toBe("UPSTREAM-GET-OK");
+      const expected = `Basic ${Buffer.from("user:secret").toString("base64")}`;
+      expect(upstream.auth.request).toContain(expected);
+    } finally {
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+
+  it("Taskana 4685: plain HTTP with NO token header is accepted (frozen absent-accepted rule)", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        const req = http.get(
+          { host: "127.0.0.1", port: relay!.port, path: "http://example.com/x", agent: false },
+          (res) => {
+            let text = "";
+            res.on("data", (chunk: Buffer) => { text += chunk.toString(); });
+            res.on("end", () => resolve(text));
+          },
+        );
+        req.on("error", reject);
+      });
+      expect(body).toBe("UPSTREAM-GET-OK");
+    } finally {
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+
+  it("Taskana 4685: CONNECT with a WRONG token header gets 403 and the upstream is never contacted", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    let socket: net.Socket | undefined;
+    try {
+      const { socket: s, response } = await connectThrough(relay!.port, "example.com:443", {
+        "x-anycode-relay-token": "deadbeef",
+      });
+      socket = s;
+      expect(response).toContain("403");
+      expect(upstream.auth.connect).toEqual([]);
+    } finally {
+      socket?.destroy();
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
+  });
+
+  it("Taskana 4685: CONNECT with the CORRECT token header tunnels through", async () => {
+    const upstream = await startFakeUpstream();
+    const relay = await createProxyRelayForTest(`http://user:secret@127.0.0.1:${upstream.port}`);
+    let socket: net.Socket | undefined;
+    try {
+      const { socket: s, response } = await connectThrough(relay!.port, "example.com:443", {
+        "x-anycode-relay-token": relay!.token,
+      });
+      socket = s;
+      expect(response).toContain("200");
+      const reply = await new Promise<string>((resolve) => {
+        socket!.once("data", (chunk: Buffer) => resolve(chunk.toString()));
+        socket!.write("ping-tokened-tunnel");
+      });
+      expect(reply).toContain("ping-tokened-tunnel");
+      const expected = `Basic ${Buffer.from("user:secret").toString("base64")}`;
+      expect(upstream.auth.connect).toContain(expected);
+    } finally {
+      socket?.destroy();
+      relay!.close();
+      upstream.server.closeAllConnections();
+      upstream.server.close();
+    }
   });
 
   it("refuses an https:// upstream (logs once, falls back to drop)", async () => {

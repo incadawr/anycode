@@ -764,11 +764,33 @@ describe("NodeExecutionAdapter", () => {
     });
 
     /** Spy the relay URL in (the module-level cache `proxyRelayUrl` reads). */
-    async function stubRelayUrl(): Promise<() => void> {
+    async function stubRelayUrl(url: string = RELAY_URL): Promise<() => void> {
       const relayModule = await import("./proxy-relay.js");
-      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY_URL);
+      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(url);
       return () => spy.mockRestore();
     }
+
+    it("Taskana 4685: a tokened relay URL (path segment) reaches the child verbatim", async () => {
+      const TOKENED = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+      const restore = await stubRelayUrl(TOKENED);
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+      try {
+        const result = await adapter.run({
+          command: `"${process.execPath}" -e "process.stdout.write(JSON.stringify(process.env))"`,
+          cwd: tmpDir,
+          timeoutMs: 10_000,
+        });
+        expect(result.status).toBe("completed");
+        const childEnv = JSON.parse(result.stdout) as Record<string, string | undefined>;
+        expect(childEnv.HTTPS_PROXY).toBe(TOKENED);
+        // Per-var (the inherited dev env can carry unrelated `@`s elsewhere).
+        expect(childEnv.HTTPS_PROXY).not.toContain("@");
+        expect(childEnv.HTTP_PROXY).not.toContain("@");
+        expect(JSON.stringify(childEnv)).not.toContain("s3cret");
+      } finally {
+        restore();
+      }
+    });
 
     it("a spawned shell child receives the relay URL instead of the credentialed proxy, and no credential anywhere", async () => {
       const restore = await stubRelayUrl();

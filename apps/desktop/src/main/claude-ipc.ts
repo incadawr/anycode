@@ -96,6 +96,12 @@ export interface ClaudeIpcDeps {
    * env builder, and that declaration must not quietly become false.
    */
   engineProxyUrl?: () => string | undefined;
+  /**
+   * Taskana 4685: MAIN's own credential-free relay URL, read fresh per call.
+   * The doctor child-env builder swaps a credentialed proxy family for it
+   * (fail-closed drop when absent/undefined).
+   */
+  relayUrl?: () => string | undefined;
   /** Reads the currently-persisted `settings.claude.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
   readBinaryPathSetting: () => Promise<string | undefined>;
   /** TASK.103: reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
@@ -318,6 +324,7 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
             // doctor diagnoses the SAME `~/.claude` the user's own terminal is
             // signed into.
             consents,
+            ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}),
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
     const snapshot: ClaudeOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };

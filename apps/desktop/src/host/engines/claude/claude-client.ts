@@ -17,6 +17,8 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { realpathSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { proxyRelayUrl } from "@anycode/core/proxy-relay";
+import { proxyValueHasUserinfo } from "@anycode/core/child-env";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
 import { ENGINE_PROCESS_REGISTRATION_TYPE, ENV_CLAUDE_PROXY_URL, applyEngineProxyOverride } from "../../../shared/engines.js";
@@ -252,6 +254,17 @@ export function buildClaudeChildEnv(source: NodeJS.ProcessEnv, profileDir: strin
   for (const key of [...(platform === "win32" ? win : posix), ...passThrough]) {
     const value = source[key];
     if (value !== undefined) env[key] = value;
+  }
+  // Taskana 4685: a credentialed proxy never reaches the engine CLI — swap it
+  // for the host's credential-free loopback relay (the same URL Bash/terminal
+  // children get). Fail-closed without a relay. The engine carrier below still
+  // wins for an engine-scoped profile; `direct` still clears everything.
+  const relay = proxyRelayUrl();
+  for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
+    if (proxyValueHasUserinfo(env[name] ?? "")) {
+      if (relay !== undefined) env[name] = relay;
+      else delete env[name];
+    }
   }
   // TASK.139: `settings.claude.proxyUrl`, carried in from main under a private
   // name and turned into the real proxy family here. It OVERWRITES whatever the

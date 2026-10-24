@@ -24,8 +24,24 @@
  * node:http cannot express without a tls socket), which is not trivial, so
  * `resolveProxyRelay` returns `undefined` and the caller keeps TASK.135's plain
  * drop behaviour (log once, children go direct). Engine tabs (claude/codex)
- * keep receiving the upstream proxy URL themselves and are unaffected — that
- * half is out of scope by decision; a separate card can relay them later.
+ * received the upstream proxy URL themselves until Taskana 4685: their host
+ * builders now swap a credentialed family for the relay URL and main
+ * de-credentialises engine carriers against main's own relay (this module).
+ *
+ * ── auth token (Taskana 4685) ──
+ * The 127.0.0.1 bind + peer check keeps the LAN out, but loopback is shared
+ * by EVERY local user of the machine, so before 4685 any process of any local
+ * user could dial the port and get an authenticating proxy. The cross-user
+ * boundary is now a per-relay random token minted at bind time and embedded
+ * as a PATH SEGMENT of the relay URL (`http://127.0.0.1:port/<token>` —
+ * never `@`-userinfo, so `proxyValueHasUserinfo`-based detectors never trip
+ * and children can carry it in env vars). A WRONG token is rejected with 403
+ * BEFORE any upstream contact on both plain-HTTP and CONNECT. An ABSENT token
+ * is accepted: no env-var proxy configuration can attach a header or a path
+ * to a CONNECT (npm/git/curl compatibility — the 4074 DoD), so rejecting
+ * absent tokens would break exactly the children this relay exists to serve;
+ * tightening that is the named follow-up (children need a proxy helper script
+ * or `~/.curlrc` generation first).
  *
  * ── wire behaviour ──
  *  - `CONNECT host:port` (HTTPS tunnelling): open a socket to the upstream
@@ -48,12 +64,13 @@
  *    sync spawn sites read `proxyRelayUrl()` — a spawn before the bind settles
  *    simply misses the relay, exactly like a `system` proxy profile's honest
  *    first-direct window.
- *  - `relay.url` is the credential-free `http://127.0.0.1:port` string to feed
- *    `buildChildEnv`'s `relayUrl`.
+ *  - `relay.url` is the credential-free `http://127.0.0.1:port/<token>` string
+ *    to feed `buildChildEnv`'s `relayUrl`; `relay.token` is the auth token.
  *  - `relay.close()` destroys every tracked socket (client-, upstream- and
  *    tunnel-pairs) and closes the listener; safe to call more than once.
  */
 
+import { randomBytes } from "node:crypto";
 import * as http from "node:http";
 import net from "node:net";
 
@@ -199,12 +216,31 @@ function isLoopbackV4(text: string): boolean {
 
 /** Handle for a running relay; `url` is what children receive as HTTP(S)_PROXY. */
 export interface ProxyRelay {
-  /** Credential-free `http://127.0.0.1:<port>` — feed this to `buildChildEnv`'s `relayUrl`. */
+  /** Credential-free `http://127.0.0.1:<port>/<token>` — feed this to `buildChildEnv`'s `relayUrl`. */
   readonly url: string;
   /** The loopback port the relay listens on. */
   readonly port: number;
+  /** Per-relay random auth token (Taskana 4685); also the path segment of `url`. */
+  readonly token: string;
   /** Destroys every socket (client, upstream and tunnels) and closes the listener. Idempotent. */
   close(): void;
+}
+
+// ── token triage (pure; exported for unit tests) ──
+
+/** Taskana 4685: triage of a presented relay token. `absent` is ACCEPTED (children cannot be configured to send one — see the module header); `wrong` is REJECTED before the upstream is ever dialled. */
+export type RelayTokenCheck = "absent" | "valid" | "wrong";
+
+export function checkRelayToken(presented: string | undefined, path: string | undefined, token: string): RelayTokenCheck {
+  const header = presented?.trim();
+  const pathToken = path !== undefined && (path === `/${token}` || path.startsWith(`/${token}/`)) ? token : undefined;
+  if (header === undefined && pathToken === undefined) {
+    return "absent";
+  }
+  if (header === token || pathToken !== undefined) {
+    return "valid";
+  }
+  return "wrong";
 }
 
 /** RFC 9110 §7.6.1 hop-by-hop headers (plus the legacy `proxy-connection`); never forwarded. */
@@ -244,8 +280,14 @@ export function stripHopByHop(headers: http.IncomingHttpHeaders): http.OutgoingH
   return out;
 }
 
-/** Builds the fully-wired relay server (request + connect + peer-check + socket set) without listening. */
-function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Server; sockets: Set<net.Socket> } {
+/**
+ * Builds the fully-wired relay server (request + connect + peer-check + socket
+ * set) without listening. Mints the per-relay auth token (Taskana 4685): 24
+ * random bytes, base64url — 32 unambiguous URL-path characters that survive
+ * every child's env handling untouched.
+ */
+function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Server; sockets: Set<net.Socket>; token: string } {
+  const token = randomBytes(24).toString("base64url");
   /** Every live socket in both directions, so close() can tear the world down. */
   const sockets = new Set<net.Socket>();
   // A DEDICATED agent, never `http.globalAgent`: under NODE_USE_ENV_PROXY=1
@@ -260,6 +302,25 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
     if (req.url === undefined || !/^http:\/\//i.test(req.url)) {
       res.writeHead(400, { "content-type": "text/plain", connection: "close" });
       res.end("anycode proxy relay: absolute http:// request URI required\n");
+      return;
+    }
+    // Taskana 4685: token gate BEFORE any upstream contact. A WRONG token is
+    // rejected here; an ABSENT one is accepted (children cannot send one via
+    // env alone — the frozen 4074 compatibility ruling; see module header).
+    // The ORIGINAL absolute URI is forwarded upstream unchanged below — the
+    // token lives in the proxy URL's path, which node/undici-based children
+    // preserve in the absolute request URI.
+    let requestUrl: URL;
+    try {
+      requestUrl = new URL(req.url);
+    } catch {
+      res.writeHead(400, { "content-type": "text/plain", connection: "close" });
+      res.end("anycode proxy relay: absolute http:// request URI required\n");
+      return;
+    }
+    if (checkRelayToken(req.headers["x-anycode-relay-token"] as string | undefined, requestUrl.pathname, token) === "wrong") {
+      res.writeHead(403, { "content-type": "text/plain", connection: "close" });
+      res.end("anycode proxy relay: invalid relay token\n");
       return;
     }
     const upstreamReq = http.request(
@@ -296,6 +357,13 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
   };
 
   const connectHandler = (req: http.IncomingMessage, clientSocket: net.Socket, head: Buffer): void => {
+    // Taskana 4685: token gate BEFORE the upstream dial (CONNECT carries no
+    // path, so the check is header-only; absent stays accepted — module
+    // header). A wrong token must never learn whether the upstream is up.
+    if (checkRelayToken(req.headers["x-anycode-relay-token"] as string | undefined, undefined, token) === "wrong") {
+      clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      return;
+    }
     const target = req.url; // `host:port` per the CONNECT contract
     const upstreamSocket = connectUpstream();
     if (upstreamSocket === undefined) {
@@ -415,7 +483,7 @@ function buildRelayServer(endpoint: UpstreamProxyEndpoint): { server: http.Serve
     });
   });
 
-  return { server, sockets };
+  return { server, sockets, token };
 }
 /**
  * Starts (or returns the already-started) loopback relay for the FIRST
@@ -572,7 +640,7 @@ async function createProxyRelayAsync(
     return undefined;
   }
 
-  const { server, sockets } = buildRelayServer(endpoint);
+  const { server, sockets, token } = buildRelayServer(endpoint);
 
   const relay = await new Promise<ProxyRelay | undefined>((settle) => {
     server.on("error", () => {
@@ -587,7 +655,8 @@ async function createProxyRelayAsync(
         return;
       }
       settle({
-        url: `${RELAY_SCHEME}://${RELAY_HOST}:${address.port}`,
+        url: `${RELAY_SCHEME}://${RELAY_HOST}:${address.port}/${token}`,
+        token,
         port: address.port,
         close(): void {
           for (const socket of sockets) {

@@ -790,30 +790,92 @@ describe("buildCodexChildEnv — engine proxy carrier (TASK.139)", () => {
     expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
   });
 
-  // TASK.135 / Taskana 4074: engines are the DELIBERATE exception to the
-  // child-env proxy scrub — the credentialed proxy must reach the CLI.
-  it("keeps the full credentialed proxy family from the source env (TASK.135 exemption)", () => {
-    const env = buildCodexChildEnv(
-      {
-        HOME: "/home/test",
-        PATH: "/usr/bin",
-        HTTPS_PROXY: "http://u:s3cret@p:1",
-        https_proxy: "http://u:s3cret@p:1",
-      },
-      "linux",
-    );
-    expect(env.HTTPS_PROXY).toBe("http://u:s3cret@p:1");
-    expect(env.https_proxy).toBe("http://u:s3cret@p:1");
+  // TASK.135 / Taskana 4074: engines WERE the deliberate exception to the
+  // child-env proxy scrub. Taskana 4685 reverses that exemption: a credentialed
+  // proxy never reaches the engine CLI — the host swaps it for its
+  // credential-free loopback relay URL (fail-closed without one). The exemption
+  // is now relay-only.
+  describe("Taskana 4685: credentialed family swapped for the relay URL", () => {
+    const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
+    const CREDENTIALED_SOURCE: NodeJS.ProcessEnv = {
+      HOME: "/home/test",
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://u:s3cret@p:1",
+      HTTP_PROXY: "http://u:s3cret@p:1",
+      https_proxy: "http://u:s3cret@p:1",
+      http_proxy: "http://u:s3cret@p:1",
+    };
+
+    it("with the relay up, all four family vars become the relay URL and no credential survives", async () => {
+      const relayModule = await import("@anycode/core/proxy-relay");
+      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY);
+      try {
+        const env = buildCodexChildEnv(CREDENTIALED_SOURCE, "linux");
+        expect(env.HTTPS_PROXY).toBe(RELAY);
+        expect(env.HTTP_PROXY).toBe(RELAY);
+        expect(env.https_proxy).toBe(RELAY);
+        expect(env.http_proxy).toBe(RELAY);
+        expect(JSON.stringify(env)).not.toContain("@");
+        expect(JSON.stringify(env)).not.toContain("s3cret");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("fail-closed without a relay: the credentialed family is deleted", async () => {
+      const relayModule = await import("@anycode/core/proxy-relay");
+      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(undefined);
+      try {
+        const env = buildCodexChildEnv(CREDENTIALED_SOURCE, "linux");
+        expect(env.HTTPS_PROXY).toBeUndefined();
+        expect(env.HTTP_PROXY).toBeUndefined();
+        expect(env.https_proxy).toBeUndefined();
+        expect(env.http_proxy).toBeUndefined();
+        expect(JSON.stringify(env)).not.toContain("@");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("a credential-less passthrough (no @) is untouched, verbatim", () => {
+      const env = buildCodexChildEnv(CONNECTION_SOURCE, "linux");
+      expect(env.HTTPS_PROXY).toBe(CONNECTION_PROXY);
+      expect(env.HTTP_PROXY).toBe(CONNECTION_PROXY);
+      expect(env.https_proxy).toBe(CONNECTION_PROXY);
+      expect(env.http_proxy).toBe(CONNECTION_PROXY);
+    });
+
+    it("the engine carrier still wins over the swapped relay URL (order: swap-then-override)", async () => {
+      const relayModule = await import("@anycode/core/proxy-relay");
+      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY);
+      try {
+        // Source carries a credentialed passthrough AND the carrier carries a
+        // (differently) credentialed engine-scoped proxy: the swap runs first,
+        // then the carrier override stamps its own url on top. Main's
+        // `relayCredentialedCarrier` (Taskana 4685 §2.4) de-credentialises the
+        // CARRIER before it ever reaches the host fork.
+        const env = buildCodexChildEnv(
+          { ...CREDENTIALED_SOURCE, [ENV_CODEX_PROXY_URL]: encodeEngineProxyCarrier({ kind: "proxy", url: "http://u:engpass@h:2" }) as string },
+          "linux",
+        );
+        expect(env.HTTPS_PROXY).toBe("http://u:engpass@h:2");
+        expect(env.HTTP_PROXY).toBe("http://u:engpass@h:2");
+        expect(env.https_proxy).toBe("http://u:engpass@h:2");
+        expect(env.http_proxy).toBe("http://u:engpass@h:2");
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 
-  it("a carrier's credentialed url still lands in all four family vars (TASK.135 exemption)", () => {
-    const carrier = encodeEngineProxyCarrier({ kind: "proxy", url: "http://u:s3cret@p:2" }) as string;
+  it("a carrier's credentialed url still lands in all four family vars (host builder does not rewrite carriers)", () => {
+    const carrier = encodeEngineProxyCarrier({ kind: "proxy", url: "http://u:engpass@p:2" }) as string;
     const env = buildCodexChildEnv(
       { HOME: "/home/test", PATH: "/usr/bin", [ENV_CODEX_PROXY_URL]: carrier },
       "linux",
     );
     for (const name of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const) {
-      expect(env[name]).toBe("http://u:s3cret@p:2");
+      expect(env[name]).toBe("http://u:engpass@p:2");
     }
   });
 });

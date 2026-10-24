@@ -16,10 +16,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { AnycodeSettings, ProviderConnection } from "../shared/settings.js";
+import type { AnycodeSettings, ProviderConnection, SecretKey } from "../shared/settings.js";
 import { isProxyUrl } from "../shared/settings.js";
 import type { ProxyProfile, ProxyScopeId } from "../shared/proxy.js";
-import { isProxyProfileUrl, proxyProfiles, readProxyScope } from "../shared/proxy.js";
+import { isProxyProfileUrl, proxyProfileSecretKey, proxyProfiles, readProxyScope } from "../shared/proxy.js";
 
 /**
  * Everything main needs to know about ONE scope kind. `read` answers the ladder
@@ -366,4 +366,70 @@ async function sameCredential(
     return false;
   }
   return password === undefined ? probe.state === "unset" : probe.state === "value" && probe.value === password;
+}
+
+// ── boot-time legacy migration (Taskana 4685) ──
+
+/** Outcome of a boot-time legacy-`proxyUrl` sweep. */
+export interface LegacyProxyMigration {
+  changed: boolean;
+  imported: { scope: ProxyScopeId; profileId: string }[];
+}
+
+/**
+ * Taskana 4685: moves every CREDENTIALED legacy `proxyUrl` string into the
+ * TASK.141 registry at boot — the string keeps working, but the password stops
+ * living in a 0644 settings.json and moves into the vault.
+ *
+ * Per scope: read through the SAME `readProxyScope` the ladder reads; when the
+ * legacy string carries userinfo (`@`), `importLegacyProxy` converts it into a
+ * (deduped) registry profile, the password goes to the vault through the
+ * caller's `writeSecret` (which must allow weak storage — a headless boot
+ * cannot prompt, and refusing keeps the password in the 0644 file, strictly
+ * worse), and the scope's binding rewrites the ref in place (every `write` arm
+ * deletes the legacy key). Credential-less strings are left untouched: they
+ * never carried the secret this migration exists to move.
+ *
+ * Fail-soft PER SCOPE: a vault failure skips that scope (its legacy string
+ * keeps working exactly as before) and never aborts boot; idempotent by
+ * construction — after a write the scope carries `proxyRef`, not a legacy
+ * string, so a second run is a no-op.
+ */
+export async function migrateLegacyProxyUrls(
+  settings: AnycodeSettings,
+  deps: LegacyProxyImportDeps & {
+    writeSecret: (key: SecretKey, value: string) => Promise<void>;
+  },
+): Promise<LegacyProxyMigration> {
+  const imported: { scope: ProxyScopeId; profileId: string }[] = [];
+  for (const scope of allProxyScopes(settings)) {
+    const binding = PROXY_SCOPE_BINDINGS[scope.kind];
+    if (!binding.exists(settings, scope)) {
+      continue;
+    }
+    const { legacyUrl } = binding.read(settings, scope);
+    // Only a CREDENTIALED string is migrated; anything else (absent,
+    // credential-less, malformed) is left byte-identical.
+    if (legacyUrl === undefined || !legacyUrl.includes("@")) {
+      continue;
+    }
+    try {
+      const result = await importLegacyProxy(settings, legacyUrl, deps);
+      if (result === undefined) {
+        // Refused conversion (e.g. a path-carrying url): keep the legacy
+        // string working rather than dropping the user's proxy.
+        continue;
+      }
+      if (result.password !== undefined) {
+        await deps.writeSecret(proxyProfileSecretKey(result.profileId), result.password);
+      }
+      binding.write(settings, scope, result.profileId);
+      imported.push({ scope, profileId: result.profileId });
+    } catch {
+      // Per-scope fail-soft: this scope's legacy string keeps working; boot
+      // continues and any other scope still migrates.
+      continue;
+    }
+  }
+  return { changed: imported.length > 0, imported };
 }
