@@ -50,32 +50,37 @@ separate task or research item._
   contributes skills, agent profiles, and MCP servers) into a public
   ecosystem: a documented manifest spec, installation from a git URL or
   archive, a management UI (list / enable / disable / diagnose), and more
-  contribution types such as slash commands and hooks.
-- **MCP, first-class.** A management surface for MCP servers instead of raw
-  JSON: per-server connection status and tool lists, enable/disable toggles,
-  remote (streamable HTTP) servers with OAuth, and on-demand tool loading so
+  contribution types such as slash commands and hooks. Importing skills and
+  MCP servers from Claude Code, Codex and zcode configurations is available
+  now; the public plugin spec, installer and management UI are still ahead.
+- **MCP, first-class.** _Mostly available now:_ per-server connection status
+  and tool counts, enable/disable toggles, and remote (streamable HTTP)
+  servers. Still ahead: remote-server OAuth and on-demand tool loading so
   large catalogs don't flood the context window.
 
 ### Sessions & workflow
 
-- **Mid-session model and provider switching.** Change the model — or the
-  provider behind it — between turns of one session, e.g. continue on another
-  subscription when a quota runs out. Capability gaps (vision, context-window
-  size) and the cache-reset cost are surfaced explicitly, never silent.
+- **Mid-session model and provider switching.** _Available now (model on
+  every engine; provider on the native engine)._ Change the model — or the provider behind it —
+  between turns of one session, e.g. continue on another subscription when a
+  quota runs out. Capability gaps (vision, context-window size) and the
+  cache-reset cost are surfaced explicitly, never silent.
 - **Harness switching (session transplant).** Move a live session between
   engines at a turn boundary, with the AnyCode transcript as the interchange
   format: lossless import/export where an engine's session format allows it,
   an explicit handoff summary where it doesn't.
-- **Multi-agent orchestration.** A supervisor session that plans work, spawns
-  role-scoped agent sessions, and reviews their results — the substrate for
-  everything below.
+- **Multi-agent orchestration.** _Available now._ A supervisor session that
+  plans work, spawns role-scoped agent sessions, and reviews their results —
+  including declarative workflows (see `docs/orchestration.md`) — the
+  substrate for everything below.
 - **Deep research mode.** Multi-step research sessions (web search and fetch,
   source tracking, a final report with citations) built as an orchestration
   preset rather than a separate agent.
-- **Checkpoints & rewind.** Per-turn snapshots of workspace changes with
-  one-click rollback; capability-gated per engine.
-- **Plan mode.** A read-only planning phase that produces an approvable plan
-  before any file is touched.
+- **Checkpoints & rewind.** _Available now (core engine)._ Per-turn snapshots
+  of workspace changes with one-click rollback from the transcript timeline;
+  capability-gated per engine.
+- **Plan mode.** _Available now._ A read-only planning phase that produces a
+  plan you approve before any file is touched.
 
 ### Preview & media
 

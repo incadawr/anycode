@@ -1,0 +1,28 @@
+{
+  "name": "deep-research",
+  "description": "Multi-step research on a question: parallel web sweeps, source fetches, then one cited report.",
+  "steps": [
+    {
+      "id": "search-wide",
+      "agentType": "general-purpose",
+      "maxTurns": 6,
+      "tools": ["WebSearch"],
+      "promptTemplate": "Research question: ${input}. Run WebSearch with 3-5 distinct query variants (different phrasings, English and the question's original language). From all results, pick the 10 most promising distinct URLs and return a numbered list: URL — one line on why it matters. If WebSearch is unavailable, say so explicitly and list URLs you already know, marking them as unverified."
+    },
+    {
+      "id": "fetch-sources",
+      "agentType": "general-purpose",
+      "maxTurns": 12,
+      "dependsOn": ["search-wide"],
+      "promptTemplate": "For each promising URL in: ${steps.search-wide} — fetch it with WebFetch (question: what does this source say about ${input}?). Extract the concrete claims relevant to the question with a one-line note per claim. Skip dead or paywalled links honestly (say which and why). Return per-URL findings."
+    },
+    {
+      "id": "synthesize",
+      "agentType": "general-purpose",
+      "maxTurns": 4,
+      "dependsOn": ["fetch-sources"],
+      "promptTemplate": "Write the final research report for the question: ${input}. Structure: (1) the answer in 2-4 sentences; (2) findings, each with its source URL in parentheses; (3) open questions the sources did not settle. Use only what is in: ${steps.fetch-sources}. No invented citations."
+    }
+  ],
+  "outputTemplate": "${steps.synthesize}"
+}
