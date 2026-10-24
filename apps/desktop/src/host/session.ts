@@ -273,6 +273,7 @@ function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam
       supportsImages: capabilities.supportsImages,
       supportsTasks: capabilities.supportsTasks,
       supportsFileSnapshots: capabilities.supportsFileSnapshots,
+      supportsManualCompact: capabilities.supportsManualCompact,
     },
     ...(snapshot !== undefined && models.length > 0 ? { model: { current: snapshot.model, available: models, ...(snapshot.effort !== undefined ? { effort: snapshot.effort } : {}) } } : {}),
     ...(snapshot !== undefined && presets.length > 0
@@ -1940,10 +1941,10 @@ export class Session {
         // chain (TASK.102/145) — it is either busy (the whole chain is) or
         // terminal (read-only), so an accepted request here is impossible by
         // construction. `engine.compactNow === undefined` IS the engine gate:
-        // only CoreEngine implements it (session-engine.ts), so a claude/codex
-        // boot drops this unconditionally — no `if (engine === "claude")`
-        // needed. void: onCompact holds `busy` across an await; route() itself
-        // never awaits.
+        // CoreEngine and ClaudeEngine (TASK.92, allowlisted /compact
+        // passthrough) implement it, a codex boot drops this unconditionally
+        // — no `if (engine === "claude")` needed. void: onCompact holds
+        // `busy` across an await; route() itself never awaits.
         if (this.busy || this.relocating || this.child !== undefined || this.engine.compactNow === undefined) break;
         void this.onCompact();
         break;

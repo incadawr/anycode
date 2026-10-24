@@ -233,7 +233,7 @@ class FakeTransport implements ClaudeTransport {
  */
 function engineWith(
   transport: ClaudeTransport,
-  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts> } = {},
+  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts>; slashPassthrough?: boolean } = {},
 ): ClaudeEngine {
   const catalog = overrides.catalog ?? liveCatalog();
   return new ClaudeEngine(transport, "session-ref-1", undefined, {
@@ -242,6 +242,7 @@ function engineWith(
     preset: findClaudePreset(overrides.presetId ?? "ask")!,
     effortsByModel: new Map(),
     notices: [],
+    slashPassthrough: overrides.slashPassthrough ?? true,
   }, overrides.timeouts);
 }
 
@@ -1893,5 +1894,489 @@ describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
       budgetTokens: 30,
       source: "provider",
     });
+  });
+});
+
+// ── TASK.92: manual compaction via the allowlisted slash passthrough ────────
+
+describe("ClaudeEngine.compactNow — TASK.92 allowlisted /compact passthrough", () => {
+  it("sends the allowlisted /compact frame and maps result success to compaction events", async () => {
+    const transport = new FakeTransport({
+      frames: [resultFrame157("completed")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    // Allowlist proof: the ONLY user frame ever sent is the /compact one —
+    // nothing else, no catalog command, no free-form string.
+    expect(transport.sent).toEqual(["/compact"]);
+    expect(types(events)[0]).toBe("compaction_start");
+    const start = events[0] as { type: "compaction_start"; trigger: string };
+    expect(start.trigger).toBe("manual");
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean; preTokens: number; durationMs: number }
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.ok).toBe(true);
+    expect(end!.preTokens).toBe(1000);
+    expect(end!.durationMs).toBeGreaterThanOrEqual(0);
+    // Post-swap meter refresh rides after compaction_end.
+    const order = types(events);
+    expect(order.lastIndexOf("context_usage")).toBeGreaterThan(order.lastIndexOf("compaction_end"));
+  });
+
+  it("compaction failure surfaces compaction_end ok:false with the result subtype", async () => {
+    const transport = new FakeTransport({
+      frames: [
+        {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          num_turns: 1,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          total_cost_usd: 0,
+        } as unknown as ClaudeStreamMessage,
+      ],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean; error?: string; durationMs: number }
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.ok).toBe(false);
+    expect(end!.error).toContain("error_during_execution");
+    expect(end!.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("abort interrupts: interrupt() called, settle timeout closes with ok:false", async () => {
+    // No result frame ever arrives — the settle deadline must terminalize.
+    const transport = new FakeTransport({
+      frames: [assistantFrame("m-compact-stuck")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport, { timeouts: { postInterruptSettleMs: 50 } });
+    const controller = new AbortController();
+
+    const events: AgentEvent[] = [];
+    const run = (async () => {
+      for await (const event of engine.compactNow({ signal: controller.signal })) {
+        events.push(event);
+        if (event.type === "compaction_start") controller.abort();
+      }
+    })();
+    await run;
+
+    expect(transport.interrupts).toBe(1);
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean; error?: string }
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.ok).toBe(false);
+    expect(end!.error).toContain("interrupt settle timeout");
+    // A wedged compaction is NOT proof the session died — transport stays open.
+    expect(transport.closed).toBe(0);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
+
+  it("stream ownership is returned: an engine-level turn AFTER compactNow still sees frames", async () => {
+    const transport = new FakeTransport({
+      frames: [resultFrame157("completed")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+    await collect(engine.compactNow({ signal: new AbortController().signal }));
+    expect(transport.sent).toEqual(["/compact"]);
+
+    // The next owner turn owns the stream again and completes normally.
+    const turnTransport = transport;
+    turnTransport.enqueue(foreignAssistantFrame("m-after", "post-compaction"));
+    turnTransport.enqueue(resultFrame157("completed"));
+    const events = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+    expect(events[0]).toEqual({ type: "turn_start", turn: 1 });
+    expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
+    expect(transport.sent).toEqual(["/compact", "hi"]);
+  });
+
+  it("an engine spawned WITH --disable-slash-commands (child session) refuses compaction and hides the row", async () => {
+    const transport = new FakeTransport({
+      frames: [resultFrame157("completed")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport, { slashPassthrough: false });
+
+    expect(engine.capabilities.supportsManualCompact).toBe(false);
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    // Nothing is sent: a /compact frame to a flagged CLI would reach the model as text.
+    expect(transport.sent).toEqual([]);
+    expect(events).toEqual([
+      { type: "compaction_end", ok: false, preTokens: 0, durationMs: 0, error: "manual compaction unavailable in this session" },
+    ]);
+    expect(engineWith(new FakeTransport({ frames: [] })).capabilities.supportsManualCompact).toBe(true);
+  });
+
+  it("the leak discriminator: initialize.commands/ambient slash_commands never surface", async () => {
+    const transport = new FakeTransport({
+      frames: [
+        {
+          // A system/init whose ambient catalog names an owner-side command.
+          type: "system",
+          subtype: "init",
+          session_id: "s-1",
+          model: "default",
+          permissionMode: "default",
+          cwd: "/tmp",
+          tools: [],
+          mcp_servers: [],
+          slash_commands: ["deep-research", "update-config"],
+          skills: ["ambient-skill"],
+          capabilities: [],
+          claude_code_version: "2.1.220",
+        } as unknown as ClaudeStreamMessage,
+        foreignAssistantFrame("m-turn", "normal turn output"),
+        resultFrame157("completed"),
+      ],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.runTurn("plain turn", { signal: new AbortController().signal }));
+
+    // The ambient catalog NEVER reaches the projected event stream...
+    expect(JSON.stringify(events)).not.toContain("deep-research");
+    expect(JSON.stringify(events)).not.toContain("update-config");
+    // ...and the only user frame sent is the ordinary turn input (no /command
+    // is ever built or forwarded by host code — the allowlist's whole point).
+    expect(transport.sent).toEqual(["plain turn"]);
+    expect(transport.sent.filter((frame) => typeof frame === "string" && frame.startsWith("/"))).toEqual([]);
+  });
+
+  // ── cross-review F3/F4/F5/F7: contract, barrier, and subtype tolerance ────
+
+  it("F3: a client that throws on the /compact send surfaces compaction_end ok:false (never throws out of the generator, no stuck compacting)", async () => {
+    // The client can fail (terminal latch) in the window between the engine's
+    // idle checks and the send — compactNow's own contract (and
+    // AgentLoop.compactNow's precedent) is "never throws". Pre-fix, the send
+    // sat OUTSIDE the try, so this exact window threw out of the generator
+    // after compaction_start had already been yielded, wedging the renderer's
+    // `compacting` status with no compaction_end ever coming.
+    const transport = new FakeTransport({
+      frames: [resultFrame157("completed")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+    // Simulate the client-side death racing ahead of the engine's latch: every
+    // sendUserMessage from here on throws (a closed stdin / latched
+    // terminalError, claude-client.ts's write guard).
+    const death = new Error("claude stdin is unavailable");
+    transport.sendUserMessage = () => {
+      throw death;
+    };
+
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean; error?: string }
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.ok).toBe(false);
+    expect(end!.error).toContain("claude stdin is unavailable");
+    // compaction_start was already yielded — the end MUST follow it on the
+    // same stream so the renderer's compacting status is always released.
+    expect(types(events)[0]).toBe("compaction_start");
+    expect(types(events).lastIndexOf("compaction_end")).toBeGreaterThan(types(events).lastIndexOf("compaction_start"));
+  });
+
+  it("F4: a CLI self-started (foreign) turn finishes BEFORE the /compact frame is sent — its result is never mistaken for the compaction's verdict", async () => {
+    // The exact interleave TASK.189 built the send barrier for: the idle
+    // reader has already classified a foreign assistant frame (foreignTurn
+    // open) when the user hits Compact. Pre-fix, compactNow sent /compact
+    // immediately and treated the FIRST result it saw as terminal — the
+    // FOREIGN turn's. The foreign result here deliberately carries an ERROR
+    // subtype while the compaction's own result is a success: pre-fix this
+    // produced a wrong ok:false (and the mirrored shape — foreign success,
+    // compaction error — a wrong ok:true while the /compact turn was still
+    // queued).
+    const foreignResult: ClaudeStreamMessage = {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      num_turns: 1,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      total_cost_usd: 0,
+    };
+    const compactionResult: ClaudeStreamMessage = {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      num_turns: 1,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      total_cost_usd: 0,
+      terminal_reason: "completed",
+    };
+    const transport = new FakeTransport({
+      frames: [foreignAssistantFrame("m-turn1", "first owner turn"), foreignResultFrame("first result")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+    // A first owner turn flushes the constructor frames and hands the stream
+    // back to the idle reader (TASK.189's between-turns window).
+    await collect(engine.runTurn("first", { signal: new AbortController().signal }));
+    expect(transport.sent).toEqual(["first"]);
+
+    // The foreign turn STARTS between turns: the idle reader classifies the
+    // assistant frame and opens foreignTurn before compactNow takes over.
+    transport.push(foreignAssistantFrame("m-foreign-open", "a cross-session notice is being handled"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    // Start the compaction; while it waits the foreign turn out (parked in
+    // the barrier's frame race), the foreign turn SETTLES — its result must
+    // be absorbed as the foreign turn's, never read as the compaction's.
+    // The compaction's own result rides the /compact send itself (enqueue).
+    const collecting = collect(engine.compactNow({ signal: new AbortController().signal }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    transport.push(foreignResult);
+    transport.enqueue(compactionResult);
+    const events = await collecting;
+
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean; error?: string }
+      | undefined;
+    expect(end).toBeDefined();
+    // The verdict comes from the COMPACTION's own result (success), never the
+    // foreign turn's error subtype.
+    expect(end!.ok).toBe(true);
+    expect(transport.sent).toEqual(["first", "/compact"]);
+    expect(transport.interrupts).toBe(0); // a normal foreign turn is never interrupted
+    // The foreign turn's frames were absorbed (its assistant text and result
+    // never reach the compaction's event stream)...
+    expect(events.some((event) => event.type === "text_start")).toBe(false);
+    // ...but its existence was noticed on the stream itself: the barrier
+    // yields the same engine_notice runTurn's foreign-wait does.
+    const notice = events.find((event) => event.type === "engine_notice") as
+      | { type: "engine_notice"; message: string }
+      | undefined;
+    expect(notice).toBeDefined();
+    expect(notice!.message).toContain("finishing a turn it started on its own");
+  });
+
+  it("F5: a success-prefixed subtype variant (unpinned success_clears) is a PASS", async () => {
+    const transport = new FakeTransport({
+      frames: [
+        {
+          type: "result",
+          subtype: "success_clears",
+          is_error: false,
+          num_turns: 1,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          total_cost_usd: 0,
+        } as unknown as ClaudeStreamMessage,
+      ],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean }
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.ok).toBe(true);
+  });
+
+  it("F5: a result frame with NO subtype at all fails closed as \"unknown\" (the tolerant read pins its default)", async () => {
+    // The pinned contract lists subtype:string as required on a result, but
+    // compactNow deliberately defends against its absence — this pins the
+    // fail-closed default so the drift-buffer cannot silently rot.
+    const transport = new FakeTransport({
+      frames: [
+        {
+          type: "result",
+          is_error: false,
+          num_turns: 1,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          total_cost_usd: 0,
+        } as unknown as ClaudeStreamMessage,
+      ],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean; error?: string }
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.ok).toBe(false);
+    expect(end!.error).toBe("unknown");
+  });
+
+  it("F7: a compaction result carrying cost/usage still feeds session-cumulative accounting", async () => {
+    // A manual compaction runs a REAL summarization model call — its cost is
+    // session state exactly like any foreign turn's (absorbIdleFrame routes
+    // foreign results through onResult). The engine_session_tokens event is
+    // deliberately NOT emitted (REPLACE-semantics consumer, doc'd in
+    // compactNow); the cumulative counters are still kept honest.
+    const transport = new FakeTransport({
+      frames: [foreignResultFrame("compacted", { cost: 0.25, usage: { input_tokens: 700, output_tokens: 300 } })],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    expect(events.some((event) => event.type === "engine_session_tokens")).toBe(false);
+    // The post-compaction owner turn reports the CUMULATIVE counters — the
+    // compaction's tokens are inside them (200 in, 100 out from the usage
+    // fixture below + the compaction's 700/300), never dropped.
+    transport.enqueue(foreignAssistantFrame("m-after", "after"));
+    transport.enqueue(foreignResultFrame("after result", { usage: { input_tokens: 200, output_tokens: 100 } }));
+    const turnEvents = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+    const tokens = turnEvents.find((event) => event.type === "engine_session_tokens") as
+      | { type: "engine_session_tokens"; input: number; output: number; total: number }
+      | undefined;
+    expect(tokens).toBeDefined();
+    expect(tokens!.input).toBe(900);
+    expect(tokens!.output).toBe(400);
+    expect(tokens!.total).toBe(1300);
+  });
+
+  it("F2: a system-origin turn whose model-authored text starts with '/' is neutralized — never interpreted as a slash command", async () => {
+    // The injection boundary TASK.92's spawn change actually created: the
+    // ROOT engine session interprets a leading /command in a stream-json user
+    // frame (w0-17 evidence), and host paths DO convert model output into
+    // user frames — a detached child's final text (child_report ->
+    // enqueuePrompt -> user_message origin:"system") or an agent-to-agent
+    // message (drainAgentInbox -> acceptUserMessage(..., "system")). A child
+    // model that ends its report with "\n/doctor" (or /update-config, /run)
+    // must not get it executed in the parent root session.
+    const transport = new FakeTransport({
+      frames: [foreignAssistantFrame("m-sys-1", "handled"), foreignResultFrame("sys result")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    // POSITION 0: the frame's first non-whitespace character is the slash.
+    const events = await collect(
+      engine.runTurn("/doctor", { signal: new AbortController().signal, origin: "system" }),
+    );
+
+    expect(events.some((event) => event.type === "loop_end")).toBe(true);
+    // The wire frame is NOT a slash command: the guard rewrites position 0.
+    expect(transport.sent[0]).not.toBe("/doctor");
+    expect(String(transport.sent[0])).not.toMatch(/^\/doctor/);
+    // And it still carries the payload verbatim after the guard line.
+    expect(String(transport.sent[0])).toContain("/doctor");
+    // A HUMAN turn with the same text is untouched — the user typing /doctor
+    // verbatim as ordinary text stays reachable by design (claude-engine.ts's
+    // own allowlist comment).
+    transport.enqueue(foreignAssistantFrame("m-human", "handled"));
+    transport.enqueue(foreignResultFrame("human result"));
+    await collect(engine.runTurn("/doctor", { signal: new AbortController().signal }));
+    expect(transport.sent[1]).toBe("/doctor");
+  });
+
+  it("F2: a system-origin turn whose leading '/' sits on a LATER line (after the notification header) is neutralized too", async () => {
+    // The realistic child-report shape: host notification header first, then
+    // the model-authored body. The live CLI's interpretation of a line-start
+    // /cmd at position >0 was the deferred probe (review §10.2) — the host
+    // guard must not bet on the answer: every line-start '/' of a
+    // system-origin frame is de-fanged.
+    const transport = new FakeTransport({
+      frames: [foreignAssistantFrame("m-sys-2", "handled"), foreignResultFrame("sys result 2")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const text = "[SYSTEM NOTIFICATION - NOT USER INPUT]\nchild finished\n/doctor";
+    await collect(engine.runTurn(text, { signal: new AbortController().signal, origin: "system" }));
+
+    expect(String(transport.sent[0])).not.toMatch(/\n\/doctor/);
+    expect(String(transport.sent[0])).toContain("[SYSTEM NOTIFICATION - NOT USER INPUT]");
+  });
+
+  it("F2: ordinary system-origin text (no slash) and HUMAN-origin text are byte-identical to before", async () => {
+    const transport = new FakeTransport({
+      frames: [foreignAssistantFrame("m-plain", "handled"), foreignResultFrame("plain result")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const sysText = "[SYSTEM NOTIFICATION - NOT USER INPUT]\nall clean here";
+    await collect(engine.runTurn(sysText, { signal: new AbortController().signal, origin: "system" }));
+    expect(transport.sent[0]).toBe(sysText);
+
+    transport.enqueue(foreignAssistantFrame("m-human2", "handled"));
+    transport.enqueue(foreignResultFrame("human result 2"));
+    await collect(engine.runTurn("/anything /at /all", { signal: new AbortController().signal }));
+    expect(transport.sent[1]).toBe("/anything /at /all");
+  });
+});
+
+// ── Taskana 4098 review: compactNow through the REAL composition ───────────
+// host/index.ts hands Session a ClaudeShadowTranscriptEngine wrapping a real
+// ClaudeEngine; Session's compact_request rail gates on method presence. This
+// pins the shipped composition (real engine, real wrapper), not a fake.
+describe("ClaudeEngine under ClaudeShadowTranscriptEngine — Taskana 4098 review (F1 end-to-end)", () => {
+  it("the wrapper over a real root ClaudeEngine exposes compactNow, sends the allowlisted frame, and hands the stream back", async () => {
+    const { ClaudeShadowTranscriptEngine } = await import("./shadow-transcript.js");
+    const transport = new FakeTransport({
+      frames: [resultFrame157("completed")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+    const recorded: unknown[] = [];
+    const wrapped = new ClaudeShadowTranscriptEngine(engine, { record: (_ref, items) => recorded.push(...items), list: async () => [] }, "session-ref-1", []);
+
+    expect(wrapped.capabilities.supportsManualCompact).toBe(true);
+    expect(wrapped.compactNow).toBeDefined();
+    const events = await collect(wrapped.compactNow!({ signal: new AbortController().signal }));
+    expect(transport.sent).toEqual(["/compact"]);
+    expect(events.find((event) => event.type === "compaction_end")).toMatchObject({ type: "compaction_end", ok: true });
+    expect(recorded).toEqual([]);
+  });
+});
+
+describe("ClaudeEngine.compactNow — Taskana 4098 review (Stop during the foreign-turn barrier)", () => {
+  it("a Stop while waiting out a foreign turn never sends /compact, never interrupts the CLI's own turn, and ends ok:false cancelled", async () => {
+    const transport = new FakeTransport({
+      frames: [foreignAssistantFrame("m-turn1", "first owner turn"), foreignResultFrame("first result")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("first", { signal: new AbortController().signal }));
+    transport.push(foreignAssistantFrame("m-foreign-open", "a cross-session notice is being handled"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    const controller = new AbortController();
+    const collecting = collect(engine.compactNow({ signal: controller.signal }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    const events = await collecting;
+
+    expect(transport.sent).toEqual(["first"]);
+    expect(transport.interrupts).toBe(0);
+    expect(events.find((event) => event.type === "compaction_end")).toMatchObject({ type: "compaction_end", ok: false, error: "cancelled" });
+
+    // The foreign turn still settles through the restarted idle reader, and a
+    // later owner turn is not wedged behind it.
+    transport.push(foreignResultFrame("foreign result"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    transport.enqueue(resultFrame157("completed"));
+    await collect(engine.runTurn("after", { signal: new AbortController().signal }));
+    expect(transport.sent).toEqual(["first", "after"]);
   });
 });

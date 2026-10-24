@@ -99,7 +99,24 @@ export const CLAUDE_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsImages: true,
   supportsTasks: false,
   supportsFileSnapshots: false,
+  // TASK.92: manual compaction via the allowlisted /compact slash frame
+  // (`compactNow` below) — this is what opens the Compact slash-menu row for
+  // Claude, NOT `supportsCorePermissions` (that flag gates the ModeMenu).
+  supportsManualCompact: true,
 };
+
+/**
+ * TASK.92: the ONLY slash commands AnyCode ever sends to the CLI. A closed
+ * list by construction — anything not here is never built into a user frame
+ * by host code. Ambient catalog commands (`initialize.commands[]` /
+ * `system/init.slash_commands[]`) are neither surfaced in the UI nor
+ * forwarded; for a HUMAN-typed frame they stay reachable only if the user
+ * types them verbatim as ordinary text, same as any text they could type
+ * anyway. System-origin frames (child reports, agent messages) carry
+ * model-authored text and are additionally de-fanged at the send site — see
+ * `neutralizeSystemOriginSlashes` (cross-review F2).
+ */
+const CLAUDE_SLASH_ALLOWLIST = ["/compact"] as const;
 
 const CLAUDE_BRIDGED_CAPABILITIES: EngineCapabilities = {
   ...CLAUDE_ENGINE_CAPABILITIES,
@@ -166,6 +183,13 @@ interface ClaudeEngineSettings {
   effortsByModel: Map<string, string>;
   /** Boot-time warnings (unusable draft model, quota pressure) flushed into the first turn's stream. */
   notices: AgentEvent[];
+  /**
+   * TASK.92: true only when this engine's CLI was spawned WITHOUT
+   * `--disable-slash-commands` (`ClaudeEngineCreateOptions.enableSlashPassthrough`).
+   * Absent/false: `compactNow` refuses and the Compact capability is off — a
+   * `/compact` frame to a flagged CLI would reach the model as plain text.
+   */
+  slashPassthrough?: boolean;
 }
 
 function warning(message: string): AgentEvent {
@@ -332,6 +356,35 @@ function userMessageContent(text: string, attachments?: ImageAttachment[]): stri
     })),
     { type: "text", text },
   ];
+}
+
+/**
+ * TASK.92 cross-review F2: the slash-injection guard for NON-HUMAN user
+ * frames. Root engine sessions interpret slash commands in stream-json user
+ * frames (w0-17 evidence, the same mechanism `compactNow` rides), and host
+ * paths DO convert model output into user frames with `origin:"system"` — a
+ * detached child's final report (`formatChildTaskNotification` ->
+ * `child_report` -> renderer prompt queue -> `user_message`) or an
+ * agent-to-agent message (`drainAgentInbox` -> `acceptUserMessage(...,
+ * "system")`). A child model that ends its report with a `\n/doctor` line
+ * (or `/update-config`, `/run`, …) must not get it executed in the parent
+ * root session where slash interpretation is now ON.
+ *
+ * Defense: for `origin === "system"` turns ONLY, every LINE-START `/` of the
+ * payload is de-fanged by prefixing one space. Position 0 interpretation is
+ * proven by fixture; a line-start `/` at position >0 is unproven either way —
+ * the guard deliberately does not bet on that answer. The slash character and
+ * everything after it stay intact (the model still reads its own command
+ * text); only its command position is broken. Human-typed text is NEVER
+ * touched: the user typing `/doctor` verbatim as ordinary text stays exactly
+ * as reachable as the allowlist's own comment promises, and a human frame
+ * with no slash is byte-identical to before.
+ */
+function neutralizeSystemOriginSlashes(text: string): string {
+  // Multiline-safe: a `/` at the very start or right after any newline. The
+  // single leading space breaks both the position-0 and the line-start
+  // interpretation while changing nothing else about the text.
+  return text.replace(/(^|\n)(\/)/g, "$1 $2");
 }
 
 /**
@@ -509,6 +562,13 @@ async function connectClaudeEngine(
     ...spawn,
     bootstrap: options.bootstrap,
     onControlRequest: approvals.handle,
+    // TASK.92: only a ROOT engine session drops the flag, so the CLI
+    // interprets host-built allowlisted /compact user frames. Fail-closed:
+    // the host opts in explicitly (host/index.ts, root sessions only). Doctor,
+    // login, engine-children.ts AND session-tier claude children (whose
+    // prompt is model-authored — a leading "/" there would be slash
+    // injection) keep the flag.
+    enableSlashPassthrough: options.enableSlashPassthrough === true,
   });
   try {
     await client.start();
@@ -554,7 +614,15 @@ async function connectClaudeEngine(
     const effort = catalog.resolveEffort(model, requestedEffort);
     const effortsByModel = new Map<string, string>();
     if (effort !== undefined) effortsByModel.set(model, effort);
-    const settings: ClaudeEngineSettings = { catalog, model, preset, effortsByModel, notices, ...(effort !== undefined ? { effort } : {}) };
+    const settings: ClaudeEngineSettings = {
+      catalog,
+      model,
+      preset,
+      effortsByModel,
+      notices,
+      ...(effort !== undefined ? { effort } : {}),
+      slashPassthrough: options.enableSlashPassthrough === true,
+    };
     engine = new ClaudeEngine(client, sessionRef, approvals, settings, options.timeouts, options.takePresentation);
     // $0 quota snapshot, seeded before the first turn so a user already at
     // their limit learns it from the first reply rather than a failed turn.
@@ -708,7 +776,9 @@ export class ClaudeEngine implements SessionEngine {
     // Interactive approval is advertised only once the real bridge is installed
     // (the codex CODEX_BRIDGED_CAPABILITIES precedent); a bare test engine keeps
     // the fail-closed capability.
-    this.capabilities = approvals === undefined ? CLAUDE_ENGINE_CAPABILITIES : CLAUDE_BRIDGED_CAPABILITIES;
+    const base = approvals === undefined ? CLAUDE_ENGINE_CAPABILITIES : CLAUDE_BRIDGED_CAPABILITIES;
+    // TASK.92: no slash passthrough (child session, flagged spawn) => no Compact row.
+    this.capabilities = settings?.slashPassthrough === true ? base : { ...base, supportsManualCompact: false };
     this.bounds = { ...DEFAULT_CLAUDE_ENGINE_TIMEOUTS, ...overrides };
     // TASK.189: the idle reader owns the notification stream from boot, so an
     // unsolicited CLI turn BEFORE the first owner turn is absorbed too. If the
@@ -1124,7 +1194,16 @@ export class ClaudeEngine implements SessionEngine {
         }
         // A turn IS a user message on the shared stdin — one process, one
         // session, many turns (probe #1). There is no per-turn request/response.
-        this.client.sendUserMessage(userMessageContent(input, options.attachments));
+        // F2: a system-origin frame is HOST/MODEL-authored text, never human
+        // input — its line-start slashes are de-fanged so the root session's
+        // slash interpretation (w0-17) cannot execute a model-authored
+        // command. Human input goes out byte-identical.
+        this.client.sendUserMessage(
+          userMessageContent(
+            options.origin === "system" ? neutralizeSystemOriginSlashes(input) : input,
+            options.attachments,
+          ),
+        );
         break barrier;
       }
       if (sendCancelled) {
@@ -1280,6 +1359,209 @@ export class ClaudeEngine implements SessionEngine {
       // stream and the done path parks the reader.
       if (!this.disposed && this.terminalError === null) this.runIdleReader();
     }
+  }
+
+  /**
+   * TASK.92: manual compaction over the allowlisted slash passthrough. The
+   * engine spawn omits `--disable-slash-commands` (see `connectClaudeEngine`),
+   * and the CLI interprets a leading `/command` in a stream-json user frame
+   * (w0-17 evidence, committed fixture) — so the whole native compaction
+   * cycle is driven by ONE host-built frame: `CLAUDE_SLASH_ALLOWLIST[0]`,
+   * never a free-form string. The ambient catalog that the missing flag also
+   * exposes is NEVER surfaced or proxied: AnyCode shows its own SLASH_COMMANDS
+   * registry, and this method is the only slash frame host code ever builds.
+   *
+   * Mirrors `runTurn`'s proven skeleton: single-owner stream takeover
+   * (TASK.189), one abort race per await, a settle-deadline backstop after an
+   * interrupt, idle-reader restore in `finally`. Like `AgentLoop.compactNow`
+   * it never throws — every failure surfaces as `compaction_end { ok:false }`.
+   */
+  async *compactNow(options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {
+    if (this.terminalError !== null || this.disposed) {
+      yield { type: "compaction_end", ok: false, preTokens: 0, durationMs: 0, error: "engine closed" };
+      return;
+    }
+    if (this.settings?.slashPassthrough !== true) {
+      // The CLI was spawned with --disable-slash-commands: /compact would
+      // reach the model as ordinary text, not run a compaction.
+      yield { type: "compaction_end", ok: false, preTokens: 0, durationMs: 0, error: "manual compaction unavailable in this session" };
+      return;
+    }
+    this.stopIdleReader();
+    this.turnActive = true;
+    yield { type: "compaction_start", trigger: "manual" };
+    const startedAt = Date.now();
+    const abort = watchAbort(options.signal);
+    this.interruptSent = false;
+    let ok = false;
+    let error: string | undefined;
+    let preTokens = 0;
+    let terminal = false;
+    let abortObserved = false;
+    let cancelledBeforeSend = false;
+    let settle: SettleDeadline | null = null;
+    const cancelSettle = (): void => settle?.cancel();
+
+    // The pre-compaction meter reading, taken BEFORE the frame is sent (the
+    // swap invalidates any later reading as a "pre" number). Fail-soft: an
+    // unusable reading yields preTokens 0, never blocks the compaction.
+    try {
+      await this.awaitContextUsageInFlight();
+      const reading = await this.client.getContextUsage();
+      const event = this.mapContextUsageReading(reading, false);
+      if (event !== null && event.type === "context_usage") preTokens = event.estimatedTokens;
+    } catch {
+      // preTokens stays 0 — same fail-soft posture as mapContextUsageReading.
+    }
+
+    try {
+      // ── cross-review F4: the SEND BARRIER, `runTurn`'s own discipline. The
+      // /compact frame is sent only once no CLI-self-started (foreign) turn
+      // is still running: without the wait, the compaction's loop treats the
+      // FIRST `result` it sees as its terminal verdict — the FOREIGN turn's,
+      // whose subtype says nothing about compaction (a wrong ok either way,
+      // while two turns' frames interleave on one stream). While waiting,
+      // THIS loop is the single reader and every arriving frame is classified
+      // by absorbIdleFrame (a foreign `result` closes foreignTurn and ends
+      // the wait). NO TIMER, NO AUTO-INTERRUPT — an unsolicited turn may run
+      // arbitrarily long; the user's abort below and the settle deadline
+      // remain the only bounds.
+      while (this.foreignTurn !== null) {
+        yield { type: "engine_notice", level: "info",
+          message: "Claude is finishing a turn it started on its own; the compaction will run when it finishes." };
+        const foreignDone = this.foreignTurn.done.promise;
+        const raced = await Promise.race([
+          abort.promise.then(() => ({ kind: "abort" as const })),
+          foreignDone.then(() => ({ kind: "foreign-done" as const })),
+          this.takeFrame().then(
+            (value) => ({ kind: "notification" as const, value }),
+            (error_: unknown) => ({ kind: "rejected" as const, error: error_ }),
+          ),
+        ]);
+        if (raced.kind === "abort") {
+          // The user's Stop outranks the wait — and, exactly like runTurn's
+          // barrier, it means NEVER send: the compaction never started, so
+          // nothing is interrupted (the foreign turn is the CLI's own and
+          // keeps running; the idle reader restarted below absorbs it). A
+          // /compact sent after Stop would queue behind the foreign turn and
+          // run a compaction the user cancelled, unobserved (Taskana 4098
+          // review).
+          cancelledBeforeSend = true;
+          break;
+        }
+        if (raced.kind === "foreign-done") continue; // re-check: an adjacent foreign turn may have opened
+        if (raced.kind === "rejected") throw raced.error;
+        this.frameConsumed();
+        if (raced.value.done) throw this.terminalError ?? new Error("Claude exited during compaction");
+        this.absorbIdleFrame(raced.value.value); // a result here resolves foreignTurn
+      }
+
+      // A compaction turn reuses the ordinary frame vocabulary: `--replay-user-messages`
+      // echoes the /compact frame (discarded like any user echo), `system` init /
+      // `status:"compacting"` pings are ignored, and the terminal `result` decides.
+      // (F3: INSIDE the try — the client's write guard can throw when stdin is
+      // already gone or the client latched a terminal error in the window
+      // between the engine's idle checks and this send; the catch below turns
+      // that into an honest compaction_end{ok:false} instead of a throw out
+      // of the generator after compaction_start was already yielded.)
+      if (cancelledBeforeSend) {
+        terminal = true; // ok stays false
+        error = "cancelled";
+      } else {
+        this.client.sendUserMessage(CLAUDE_SLASH_ALLOWLIST[0]);
+      }
+
+      while (!terminal) {
+        const raced = await Promise.race([
+          this.takeFrame().then(
+            (value) => ({ kind: "notification" as const, value }),
+            (error_: unknown) => ({ kind: "rejected" as const, error: error_ }),
+          ),
+          ...(abortObserved ? [] : [abort.promise.then(() => ({ kind: "abort" as const }))]),
+          ...(settle === null ? [] : [settle.promise]),
+        ]);
+        if (raced.kind === "abort") {
+          abortObserved = true;
+          // NOT sendInterruptOnce — that helper is turn-latched via
+          // interruptSent/turnActive and was reset above; call the client
+          // directly so exactly one interrupt goes out for this cycle.
+          try {
+            await this.client.interrupt();
+          } catch {
+            // Best-effort: the settle deadline below is the backstop.
+          }
+          settle = deadline(this.bounds.postInterruptSettleMs);
+          continue;
+        }
+        if (raced.kind === "settle-timeout") {
+          // The interrupted compaction never settled — close with an honest
+          // failure. The transport stays open (unlike runTurn's settle path):
+          // a wedged compaction is not proof the SESSION is dead.
+          terminal = true;
+          ok = false;
+          error = "interrupt settle timeout";
+          break;
+        }
+        if (raced.kind === "rejected") {
+          throw raced.error;
+        }
+        if (raced.value.done) {
+          throw this.terminalError ?? new Error("Claude exited during compaction");
+        }
+        this.frameConsumed();
+        const frame = raced.value.value;
+        if (frame.type === "system") {
+          continue; // init re-emit or status ping — state, not compaction outcome
+        }
+        if (frame.type === "result") {
+          terminal = true;
+          // cross-review F7: cost IS session state — a manual compaction runs
+          // a REAL summarization model call, and its `total_cost_usd`/`usage`
+          // feed the session-cumulative counters exactly like any foreign
+          // turn's result (absorbIdleFrame's own result branch routes through
+          // onResult too). NO engine_session_tokens is emitted for a
+          // compaction (deliberate: REPLACE-semantics consumer — see the
+          // comment at the compaction_end yield); the counters are simply
+          // kept honest so the next owner turn's cumulative report includes
+          // the summarization call's tokens.
+          this.onResult(frame as unknown as ClaudeResultMessage);
+          this.consumeCompactionTokenUsage();
+          // Tolerant subtype read: the pinned union names "success" today, but
+          // a compaction result may carry a success variant we have not pinned
+          // (e.g. "success_clears") — anything success-prefixed is a pass,
+          // never an invented subtype on the wire out.
+          const subtype = (frame as ClaudeResultMessage).subtype;
+          const subtypeText = typeof subtype === "string" ? subtype : "unknown";
+          ok = subtypeText === "success" || subtypeText.startsWith("success_");
+          if (!ok) error = subtypeText;
+          continue;
+        }
+        // Everything else (the replayed /compact user echo, assistant frames
+        // of the summarization turn, stream_events) is discarded silently.
+      }
+    } catch (error_) {
+      // A rejected takeFrame is terminal engine state — copy runTurn's catch.
+      const terminalError = this.terminalError ?? (error_ instanceof Error ? error_ : new Error(String(error_)));
+      this.terminalError = terminalError;
+      this.approvals?.denyAll("Claude transport failed", "turn_cancelled");
+      void this.client.close().catch(() => {});
+      ok = false;
+      error = terminalError.message;
+    } finally {
+      this.turnActive = false;
+      this.interruptSent = false;
+      cancelSettle();
+      abort.dispose();
+    }
+
+    yield { type: "compaction_end", ok, preTokens, durationMs: Date.now() - startedAt, ...(error !== undefined ? { error } : {}) };
+    // Post-swap meter refresh, mirroring the turn-end read: the compacted
+    // window's own accounting is only readable AFTER the CLI swapped it in.
+    if (!this.disposed && this.terminalError === null) {
+      const usage = await this.readContextUsage();
+      if (usage !== null) yield usage;
+    }
+    if (!this.disposed && this.terminalError === null) this.runIdleReader();
   }
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
@@ -1497,6 +1779,25 @@ export class ClaudeEngine implements SessionEngine {
     const value = this.lastTurnTokenUsage;
     this.lastTurnTokenUsage = null;
     return value;
+  }
+
+  /**
+   * cross-review F7: a manual compaction's own `result.usage` (set by the
+   * `onResult` call on the compaction's result branch) folds into the
+   * SESSION-CUMULATIVE counters immediately — the summarization call's tokens
+   * must not silently vanish from the session's accounting — but emits NO
+   * `engine_session_tokens` event: that event's consumer (the renderer's
+   * sessionTokens chip, store.ts) REPLACES its snapshot, and a compaction is
+   * not a turn — the next owner turn's cumulative report carries the sum.
+   * Same method-split discipline as consumeLastTurnTokenUsage above.
+   */
+  private consumeCompactionTokenUsage(): void {
+    const value = this.lastTurnTokenUsage;
+    this.lastTurnTokenUsage = null;
+    if (value !== null) {
+      this.cumulativeInputTokens += value.input;
+      this.cumulativeOutputTokens += value.output;
+    }
   }
 
   private onResult(result: ClaudeResultMessage): void {

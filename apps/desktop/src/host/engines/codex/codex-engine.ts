@@ -95,6 +95,10 @@ export const CODEX_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsImages: true,
   supportsTasks: false,
   supportsFileSnapshots: false,
+  // TASK.92: no user-triggerable compaction method is pinned on the codex
+  // contract (compact exists only as an auto NonSteerableTurnKind), so the
+  // Compact row stays hidden and Session drops any compact_request.
+  supportsManualCompact: false,
 };
 
 const CODEX_BRIDGED_CAPABILITIES: EngineCapabilities = {

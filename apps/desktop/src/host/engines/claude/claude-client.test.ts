@@ -545,6 +545,44 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append (TASK.90)", 
   });
 });
 
+describe("buildClaudeSpawnArgs — slash passthrough (TASK.92)", () => {
+  it("DEFAULT (no option) keeps --disable-slash-commands — doctor/login/subagent children stay isolated, argv byte-identical", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
+    expect(args).toContain("--disable-slash-commands");
+  });
+
+  it("enableSlashPassthrough: true OMITS the flag, keeping every other always-on flag", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1", enableSlashPassthrough: true });
+    expect(args).not.toContain("--disable-slash-commands");
+    for (const flag of [
+      "-p",
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "--verbose",
+      "--include-partial-messages",
+      "--replay-user-messages",
+      "--permission-prompt-tool",
+      "stdio",
+      "--setting-sources",
+      "project,local",
+      "--strict-mcp-config",
+      "--append-system-prompt",
+    ]) {
+      expect(args).toContain(flag);
+    }
+  });
+
+  it("the passthrough variant's full argv is the default argv minus exactly the one flag (TASK.92 enumeration)", () => {
+    const withFlag = buildClaudeSpawnArgs({ sessionId: "s-1" });
+    const withoutFlag = buildClaudeSpawnArgs({ sessionId: "s-1", enableSlashPassthrough: true });
+    expect(withoutFlag.length).toBe(withFlag.length - 1);
+    const flagIndex = withFlag.indexOf("--disable-slash-commands");
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(withoutFlag).toEqual([...withFlag.slice(0, flagIndex), ...withFlag.slice(flagIndex + 1)]);
+  });
+});
+
 describe("buildClaudeChildEnv", () => {
   it("never forwards ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / CLAUDECODE, and sets CLAUDE_CONFIG_DIR to an explicit override", () => {
     const env = buildClaudeChildEnv(

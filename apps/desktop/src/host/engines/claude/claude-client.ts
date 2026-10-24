@@ -112,6 +112,12 @@ export interface ClaudeSpawnArgsOptions {
    * when undefined — the argv is byte-identical to the pre-TASK.182 spawn.
    */
   mcpConfigPath?: string;
+  /**
+   * TASK.92: when true the engine spawn omits `--disable-slash-commands` so
+   * host-built `/compact` user frames are interpreted. NEVER set for subagent
+   * children (engine-children.ts builds its own argv).
+   */
+  enableSlashPassthrough?: boolean;
 }
 
 /**
@@ -133,7 +139,11 @@ export const CLAUDE_GUI_SURFACE_PROMPT =
  * `-p` silently auto-denies every tool permission — probe #2) and
  * `--disable-slash-commands` (without it the CLI's own built-in slash-command
  * and skill catalog leaks into `system/init`/`initialize.commands[]` — probe
- * #6). TASK.182: when the host materialized a private forward document, an
+ * #6; TASK.92: the flag is now CONDITIONAL — engine session spawns pass
+ * `enableSlashPassthrough` so host-built allowlisted `/compact` user frames
+ * are interpreted, with the UI-side closed allowlist as the compensating
+ * control, while doctor/login/subagent-children keep it for isolation).
+ * TASK.182: when the host materialized a private forward document, an
  * optional `--mcp-config <path>` pair rides IMMEDIATELY BEFORE
  * `--strict-mcp-config`, so only our configured servers (plus the in-band
  * anycode bridge, announced via `sdkMcpServers`) apply; absent, the argv is
@@ -157,7 +167,7 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     "--replay-user-messages",
     "--permission-prompt-tool",
     "stdio",
-    "--disable-slash-commands",
+    ...(options.enableSlashPassthrough === true ? [] : ["--disable-slash-commands"]),
     "--setting-sources",
     "project,local",
     ...(options.mcpConfigPath !== undefined ? ["--mcp-config", options.mcpConfigPath] : []),
@@ -371,6 +381,8 @@ export interface ClaudeClientOptions {
   resume?: string;
   /** See `ClaudeSpawnArgsOptions.mcpConfigPath` — the CLIENT owns this file's lifetime until close. */
   mcpConfigPath?: string;
+  /** See `ClaudeSpawnArgsOptions.enableSlashPassthrough` (TASK.92) — engine sessions only, never subagent children. */
+  enableSlashPassthrough?: boolean;
   binaryArgs?: readonly string[];
   bootstrap?: EngineBootstrap;
   /**
@@ -556,6 +568,7 @@ export class ClaudeClient {
         sessionId: this.options.sessionId,
         resume: this.options.resume,
         ...(this.options.mcpConfigPath !== undefined ? { mcpConfigPath: this.options.mcpConfigPath } : {}),
+        enableSlashPassthrough: this.options.enableSlashPassthrough === true,
       });
       const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], this.spawnOptions(true));
       this.child = child;

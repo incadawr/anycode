@@ -48,6 +48,8 @@ function ctx(overrides: Partial<SlashMenuCtx> = {}): SlashMenuCtx {
     // seeing the full registry.
     supportsCorePermissions: true,
     supportsModelSelection: true,
+    // TASK.92: default mirrors core — the Compact row is visible by default.
+    supportsManualCompact: true,
     shellGitReadOnly: true,
     shellTerminal: true,
     ...overrides,
@@ -392,13 +394,32 @@ describe("SLASH_COMMANDS registry invariants", () => {
     // commands break by this array's order"), so the index is the pin.
     expect(SLASH_COMMANDS[3]!.id).toBe("compact");
     expect(SLASH_COMMANDS[3]!.name).toBe("Compact");
-    expect(SLASH_COMMANDS[3]!.source).toBe("core");
+    // TASK.92: routed through the engine's own native compactNow (Claude has
+    // one now — the allowlisted /compact passthrough), not a core-only control.
+    expect(SLASH_COMMANDS[3]!.source).toBe("engine");
     expect(SLASH_COMMANDS[3]!.run).toEqual({ kind: "compact_now" });
     expect(SLASH_COMMANDS[3]!.icon).toBe("compact");
     expect(SLASH_COMMANDS[3]!.description(ctx())).toBe("Summarize the conversation to free context");
     // Its neighbours are what make it "last in the core cluster".
     expect(SLASH_COMMANDS[2]!.id).toBe("model");
     expect(SLASH_COMMANDS[4]!.id).toBe("new-task");
+  });
+
+  it("TASK.92: the Compact row is visible iff supportsManualCompact (Claude yes, codex no), enabled still keyed to modelDisabled", () => {
+    const compact = SLASH_COMMANDS.find((command) => command.id === "compact")!;
+    // Visible for core-shaped ctx (default) and Claude (capability true)...
+    expect(compact.visible(ctx())).toBe(true);
+    expect(compact.visible(ctx({ supportsManualCompact: true }))).toBe(true);
+    // ...hidden for a codex-shaped ctx (no user-triggerable compaction pinned).
+    expect(compact.visible(ctx({ supportsManualCompact: false }))).toBe(false);
+    // The enabled predicate is untouched by TASK.92.
+    expect(compact.enabled(ctx({ modelDisabled: true }))).toBe(false);
+    expect(compact.enabled(ctx({ modelDisabled: false }))).toBe(true);
+    // And the full filter path hides the row entirely when the capability is off.
+    const hidden = filterSlashItems(SLASH_COMMANDS, [], "com", ctx({ supportsManualCompact: false }));
+    expect(hidden.find((item) => item.name === "Compact")).toBeUndefined();
+    const shown = filterSlashItems(SLASH_COMMANDS, [], "com", ctx({ supportsManualCompact: true }));
+    expect(shown.find((item) => item.name === "Compact")).toBeDefined();
   });
 
   it("TASK.146: the Compact row is gray for exactly the Model row's not-truly-idle window", () => {
@@ -477,6 +498,7 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
   const codexShapedCtx = ctx({
     supportsCorePermissions: false,
     supportsModelSelection: false,
+    supportsManualCompact: false,
     shellGitReadOnly: false,
     shellTerminal: false,
   });
@@ -499,19 +521,21 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
     expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Settings"]);
   });
 
-  it("TASK.146: hides Compact on an engine profile — the list an engine boot sees stays byte-identical to the pre-146 one", () => {
+  it("TASK.146/TASK.92: hides Compact on a codex-shaped profile (no compactNow) — the list a codex boot sees stays byte-identical", () => {
     const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
     expect(names).not.toContain("Compact");
     expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Settings"]);
-    // Not even by query: an engine boot cannot reach the row at all.
+    // Not even by query: a codex boot cannot reach the row at all.
     expect(filterSlashItems(SLASH_COMMANDS, [], "co", codexShapedCtx)).toEqual([]);
   });
 
-  it("TASK.146: supportsCorePermissions is the ONLY gate on Compact — supportsModelSelection off still shows it", () => {
+  it("TASK.92: supportsManualCompact is the gate on Compact — supportsCorePermissions off (a Claude boot) still SHOWS it", () => {
+    // A Claude session: no core permissions, but a real native compactNow —
+    // the row must be there (that is the whole TASK.92 change).
     const corePermissionsOff = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ supportsCorePermissions: false })).map(
       (item) => item.name,
     );
-    expect(corePermissionsOff).not.toContain("Compact");
+    expect(corePermissionsOff).toContain("Compact");
     expect(corePermissionsOff).toContain("Model");
 
     const modelSelectionOff = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ supportsModelSelection: false })).map(
@@ -519,6 +543,12 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
     );
     expect(modelSelectionOff).toContain("Compact");
     expect(modelSelectionOff).not.toContain("Model");
+
+    // Only the manual-compact capability itself hides it.
+    const manualCompactOff = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ supportsManualCompact: false })).map(
+      (item) => item.name,
+    );
+    expect(manualCompactOff).not.toContain("Compact");
   });
 
   it("shows the full registry once every named capability is available (core-shaped ctx, the pre-TASK.40 default)", () => {

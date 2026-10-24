@@ -1050,6 +1050,7 @@ export function Composer() {
     modelDisabled: modelPickDisabled(turn.status, queueInFlight, ready),
     supportsCorePermissions,
     supportsModelSelection,
+    supportsManualCompact: engine?.capabilities.supportsManualCompact ?? true,
     shellGitReadOnly,
     shellTerminal,
   };

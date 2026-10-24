@@ -22,6 +22,20 @@ import type { AgentEvent, HistoryItem, PermissionMode, ReasoningEffort } from "@
 import type { ClaudeTranscriptItem, SqlitePersistenceAdapter } from "@anycode/core";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../session-engine.js";
 
+/**
+ * TASK.92 cross-review F1: the structural shape `ClaudeShadowTranscriptEngine`
+ * needs BEYOND `SessionEngine` to forward manual compaction. `ClaudeEngine`
+ * satisfies it (`compactNow` exists whenever `slashPassthrough` armed the
+ * capability), while a child-shaped engine (flagged spawn,
+ * `supportsManualCompact: false`) does not — so the wrapper's own
+ * `compactNow` is derived by METHOD PRESENCE on the wrapped engine, never by
+ * an `instanceof` check: this file decorates anything engine-shaped (its
+ * tests use a plain fake), and `ClaudeEngine` is not imported here at all.
+ */
+export interface ClaudeShadowTranscriptHost extends SessionEngine {
+  compactNow?(options: { signal: AbortSignal }): AsyncIterable<AgentEvent>;
+}
+
 export interface ClaudeShadowTranscriptPort {
   /** Fire-and-forget: called synchronously after a turn finishes, never awaited by the caller. */
   record(sessionRef: string, items: readonly ClaudeTranscriptItem[]): void;
@@ -147,8 +161,34 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
   readonly id = "claude" as const;
   private nextTurnOrdinal: number;
 
+  /**
+   * TASK.92 cross-review F1: own-property delegation, installed in the
+   * constructor IFF the wrapped engine has the method. Without this, manual
+   * compaction is unreachable in the real product path: Session receives THIS
+   * wrapper (not the bare `ClaudeEngine`) for every root Claude session
+   * (host/index.ts composition), and its `compact_request` rail gates on
+   * `engine.compactNow === undefined` (session.ts route()/onCompact) — a
+   * wrapper that forwards `capabilities` (advertising
+   * `supportsManualCompact: true`, so the renderer shows an enabled Compact
+   * row) but not the method would make every compaction request a silent
+   * drop. Installing it as a constructor-assigned own property (not a
+   * prototype method) mirrors the engine gate 1:1: absent on the wrapped
+   * engine (child-shaped, flagged spawn) → absent on the wrapper, so Session
+   * keeps failing closed exactly as before.
+   *
+   * Delegation is pass-through verbatim: events stream unchanged, and an
+   * inner throw surfaces as a throw (Session.onCompact's own catch is the
+   * documented defensive net) — the wrapper never swallows. A compaction is
+   * NOT a turn and records NOTHING in the mirror: it has no user input to
+   * project and `compaction_*` events have no HistoryItem form; the CLI's own
+   * post-compaction transcript swap is picked up natively by the NEXT resumed
+   * session's boot-time mirror read (CC-D) — `nextTurnOrdinal` advances only
+   * in runTurn, keeping turn ids stable against the on-disk mirror.
+   */
+  compactNow?: (options: { signal: AbortSignal }) => AsyncIterable<AgentEvent>;
+
   constructor(
-    private readonly engine: SessionEngine,
+    private readonly engine: ClaudeShadowTranscriptHost,
     private readonly sink: ClaudeShadowTranscriptPort,
     private readonly sessionRef: string,
     private readonly bootHistory: readonly HistoryItem[],
@@ -156,6 +196,10 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     private readonly now: () => number = Date.now,
   ) {
     this.nextTurnOrdinal = startingTurnOrdinal;
+    const innerCompact = this.engine.compactNow;
+    if (innerCompact !== undefined) {
+      this.compactNow = (options) => innerCompact.call(this.engine, options);
+    }
   }
 
   get capabilities(): EngineCapabilities {

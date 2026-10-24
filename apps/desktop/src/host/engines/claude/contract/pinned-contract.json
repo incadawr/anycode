@@ -48,6 +48,7 @@
   "resultSubtypes": {
     "live": ["success", "error_during_execution"],
     "typedOnly": ["error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"],
+    "hostTolerantRead": "TASK.92 (cross-review F6): compactNow deliberately accepts any success-PREFIXED subtype beyond the pinned 'success' (e.g. a future 'success_clears' variant) and fails closed on a result that carries NO subtype at all (error 'unknown'). This is a compensating control for an expected-but-unpinned variant, not evidence of a new live subtype — the pin's 'live' list above stays the only observed set.",
     "requiredKeyPaths": [
       "subtype:string",
       "is_error:boolean",
@@ -144,7 +145,8 @@
     "redactedAtParseLayer": ["memoryFiles[].path (both /Users/<user> literal AND -Users-<user> dash-slug encodings)"]
   },
   "spawnArgv": {
-    "alwaysOn": ["-p", "--input-format stream-json", "--output-format stream-json", "--verbose", "--include-partial-messages", "--replay-user-messages", "--permission-prompt-tool stdio", "--disable-slash-commands", "--setting-sources project,local", "--strict-mcp-config", "--append-system-prompt <CLAUDE_GUI_SURFACE_PROMPT>"],
-    "note": "TASK.90: --append-system-prompt rides EVERY spawn incl. --resume (no native truth to clobber; static, cacheable). Codex parity checked 01.08 on codex-cli 0.145.0: its base instructions carry the same terminal claim, but the only seams are full-replacement (prohibited class) or custody-violating AGENTS.md-in-home — recorded, codex untouched."
+    "alwaysOn": ["-p", "--input-format stream-json", "--output-format stream-json", "--verbose", "--include-partial-messages", "--replay-user-messages", "--permission-prompt-tool stdio", "--setting-sources project,local", "--strict-mcp-config", "--append-system-prompt <CLAUDE_GUI_SURFACE_PROMPT>"],
+    "conditional": [{ "flag": "--disable-slash-commands", "when": "ROOT engine session spawn (TASK.92) omits it; doctor/login/engine-children and session-tier claude children keep it" }],
+    "note": "TASK.90: --append-system-prompt rides EVERY spawn incl. --resume (no native truth to clobber; static, cacheable). Codex parity checked 01.08 on codex-cli 0.145.0: its base instructions carry the same terminal claim, but the only seams are full-replacement (prohibited class) or custody-violating AGENTS.md-in-home — recorded, codex untouched. TASK.92: --disable-slash-commands moved alwaysOn -> conditional — the engine spawn omits it so host-built allowlisted /compact user frames are interpreted (w0-17 evidence), with the UI-side closed allowlist as the compensating control; doctor/login/subagent-children keep it for isolation."
   }
 }

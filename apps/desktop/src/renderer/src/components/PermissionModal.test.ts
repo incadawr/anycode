@@ -43,6 +43,7 @@ function caps(overrides: Partial<EnginePresentation["capabilities"]>): EnginePre
       supportsImages: false,
       supportsTasks: false,
       supportsFileSnapshots: false,
+      supportsManualCompact: false,
       ...overrides,
     },
   };

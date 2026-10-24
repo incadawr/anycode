@@ -41,6 +41,7 @@ const CLAUDE_CAPABILITIES: EngineCapabilities = {
   supportsImages: false,
   supportsTasks: false,
   supportsFileSnapshots: false,
+  supportsManualCompact: false,
 };
 
 /**
