@@ -186,6 +186,37 @@ describe("relayUrl rewrite (TASK.135 follow-up / Taskana 4074)", () => {
     });
   });
 
+  // F3 repro: a CLEAN member of the proxy family the user deliberately
+  // configured must survive the relay rewrite VERBATIM — the old family-
+  // atomic write clobbered it with the relay of a DIFFERENT upstream,
+  // silently re-routing that traffic through the credentialed proxy.
+  it("F3 repro: a clean sibling proxy survives the relay rewrite verbatim (never re-routed through the relay)", () => {
+    const out = sanitizeChildEnv(
+      {
+        HTTPS_PROXY: "http://user:secret@corp:3128",
+        HTTP_PROXY: "http://local-mitm:8080", // clean and deliberately DIFFERENT
+      },
+      RELAY,
+    );
+    expect(out.HTTPS_PROXY).toBe(RELAY);
+    expect(out.HTTP_PROXY).toBe("http://local-mitm:8080");
+    expect(JSON.stringify(out)).not.toContain("secret");
+
+    // Inverse family: credentialed ALL_PROXY + clean HTTPS_PROXY — the clean
+    // HTTPS proxy survives too (the dropped ALL_PROXY is not one of the four
+    // HTTP(S)_PROXY names, so nothing is written there; see F4 for the relay
+    // side of that gap).
+    const inverse = sanitizeChildEnv(
+      {
+        ALL_PROXY: "http://user:secret@corp:3128",
+        HTTPS_PROXY: "http://clean-https:3129",
+      },
+      RELAY,
+    );
+    expect(inverse.ALL_PROXY).toBeUndefined();
+    expect(inverse.HTTPS_PROXY).toBe("http://clean-https:3129");
+  });
+
   it("buildChildEnv threads relayUrl through the merge; a credential-less overlay still wins over the relay", () => {
     const out = buildChildEnv({ HTTPS_PROXY: "http://u:p@h:1" }, { EXTRA: "1" }, RELAY);
     expect(out.HTTPS_PROXY).toBe(RELAY);

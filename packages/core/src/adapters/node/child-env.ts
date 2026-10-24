@@ -63,30 +63,42 @@ export function proxyValueHasUserinfo(value: string): boolean {
  * `relayUrl` (TASK.135 follow-up): when the host runs a credential-free
  * loopback relay, the dropped credentialed variables are REPLACED by it
  * instead of vanishing — npm/git/curl keep working behind the authenticating
- * proxy while the child still sees no credential. The four-case family is set
- * (both spellings, HTTP and HTTPS), `NO_PROXY` keeps whatever the merged env
- * already carried (a relay URL is loopback; if the host exempted loopback
- * that stays correct, and if it did not the child must reach the relay
- * THROUGH the env proxy var itself, so no rewriting either way), and the
+ * proxy while the child still sees no credential. The relay URL is written
+ * into a four-case HTTP(S)_PROXY name ONLY where the scrub actually removed
+ * (or never had) a value: a CLEAN member the user deliberately configured is
+ * a routing instruction that must survive VERBATIM, not be re-pointed at the
+ * relay of a different upstream (cross-review F3 — the old family-atomic
+ * write silently re-routed the user's clean HTTP proxy through the
+ * credentialed corporate one). The four-case write is still per-name: both
+ * spellings of a dropped name are set so consumers that disagree on case
+ * still agree on the relay. `NO_PROXY` keeps whatever the merged env already
+ * carried (a relay URL is loopback; if the host exempted loopback that stays
+ * correct, and if it did not the child must reach the relay THROUGH the env
+ * proxy var itself, so no rewriting either way), and the
  * `ANYCODE_*_PROXY_URL` carriers are STILL removed — the relay replaces the
  * value, never the carrier machinery.
  */
 export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
-  let droppedCredentialed = false;
+  /** The four-case HTTP(S)_PROXY names the scrub actually removed (cross-review F3). */
+  const droppedNames = new Set<string>();
   for (const [name, value] of Object.entries(env)) {
     if (isEngineProxyCarrierName(name)) {
       continue;
     }
     if (typeof value === "string" && isProxyVarName(name) && proxyValueHasUserinfo(value)) {
-      droppedCredentialed = true;
+      if (name === "HTTPS_PROXY" || name === "https_proxy" || name === "HTTP_PROXY" || name === "http_proxy") {
+        droppedNames.add(name);
+      }
       continue;
     }
     out[name] = value;
   }
-  if (relayUrl !== undefined && droppedCredentialed) {
+  if (relayUrl !== undefined && droppedNames.size > 0) {
     for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
-      out[name] = relayUrl;
+      if (droppedNames.has(name) || !(name in out)) {
+        out[name] = relayUrl;
+      }
     }
   }
   return out;
