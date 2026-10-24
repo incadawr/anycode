@@ -3832,6 +3832,49 @@ describe("responseModel after the wrap-up rescue (codex blocking 4)", () => {
   });
 });
 
+describe("responseModel — live on progress from the first response frame (TASK.4057)", () => {
+  it("progress after the first model call carries the claim; the end-of-run value is unchanged", async () => {
+    // Call 1 (a tool turn) reports no claim; call 2 (the text turn) reports
+    // "glm-5.3". The tool_result progress rides call 1 (still unclaimed), the
+    // turn_end progress rides call 2 (claim known) — so the first emission
+    // carries no key and the later one carries the live claim.
+    let childCalls = 0;
+    const childPort = makeChildPort({
+      modelId: "glm-5.3-flash",
+      claimFor: () => (childCalls <= 1 ? undefined : "glm-5.3"),
+      script: () => {
+        childCalls += 1;
+        return childCalls <= 1 ? toolStep("k", "TodoRead", {}) : textStep("done");
+      },
+    });
+    const runner = createSubagentRunner(makeParent({ mode: "yolo" }), {
+      resolveChildModelPort: () => childPort,
+    });
+    const progress: SubagentProgress[] = [];
+
+    const outcome = await runner.run({ ...REQ, model: "glm-5.3-flash" }, { onProgress: (p) => progress.push(p) });
+
+    expect(outcome.status).toBe("completed");
+    const live = progress.filter((p): p is Extract<SubagentProgress, { kind: "progress" }> => p.kind === "progress");
+    expect(live.length).toBeGreaterThanOrEqual(2);
+    expect("responseModel" in live[0]!).toBe(false);
+    expect(live.at(-1)!.responseModel).toBe("glm-5.3");
+    expect(endOf(progress).responseModel).toBe("glm-5.3");
+  });
+
+  it("a child on the inherited parent port never emits a live claim", async () => {
+    const parentPort = new ScriptedModelPort((req) => (isChildRequest(req) ? textStep("child") : textStep("n/a")));
+    const runner = createSubagentRunner(makeParent({ modelPort: parentPort }));
+    const progress: SubagentProgress[] = [];
+
+    await runner.run(REQ, { onProgress: (p) => progress.push(p) });
+
+    for (const p of progress) {
+      expect("responseModel" in p).toBe(false);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Stall clock wiring — inline tier (TASK.148 slice 1). A stall detector that
 // REPORTS, never kills: silence past SUBAGENT_STALL_TIMEOUT_MS must produce

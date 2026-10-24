@@ -436,6 +436,26 @@ describe("runAgentBridgeCall (§3.4)", () => {
     }
   });
 
+  it("forwards a live progress responseModel onto subagent_progress, and omits the key when absent (TASK.4057)", async () => {
+    const events: SubagentCardEvent[] = [];
+    const port: SessionSubagentPort = {
+      run: async (req, opts: SubagentRunOptions) => {
+        opts.onProgress?.({ kind: "progress", turns: 1, toolCalls: 0 });
+        opts.onProgress?.({ kind: "progress", turns: 2, toolCalls: 1, responseModel: "glm-5.3" });
+        return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+    };
+    await runAgentBridgeCall(
+      { agent_type: "reviewer", description: "d", prompt: "p" },
+      { catalog: [CORE_ENTRY], port, spawnToolCallId: "toolu_live_rm", onEvent: (ev) => events.push(ev) },
+    );
+    const progress = events.filter((ev) => ev.type === "subagent_progress");
+    expect(progress).toHaveLength(2);
+    expect("responseModel" in progress[0]!).toBe(false);
+    expect(progress[1]).toMatchObject({ type: "subagent_progress", responseModel: "glm-5.3" });
+  });
+
   it("caller-supplied signal.abort() propagates into the port's own signal, and a resulting `cancelled` outcome reads as cancelled (not the wall message)", async () => {
     const controller = new AbortController();
     let observedAbort = false;

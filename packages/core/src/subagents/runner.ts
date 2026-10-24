@@ -1001,6 +1001,14 @@ export function createSubagentRunner(
 
       let childModelPort: ModelPort | undefined;
       let childSettings: ResolvedChildModelSettings | undefined;
+      // TASK.4057: the provider's claim as observed NOW on the child's own port
+      // (undefined until its first response frame; always undefined when the
+      // child inherited the parent's port). Read-only: the end-of-run read below
+      // is unchanged and stays the authoritative final value.
+      const liveResponseModelSpread = (): { responseModel?: string } => {
+        const rm = childModelPort?.lastResponseModel;
+        return typeof rm === "string" && rm.length > 0 ? { responseModel: rm } : {};
+      };
       if (requestedModel !== undefined || chainEntries.length > 0) {
         const resolve = opts?.resolveChildModelPort;
         if (resolve === undefined && requestedModel !== undefined) {
@@ -1380,6 +1388,7 @@ export function createSubagentRunner(
                   toolCalls,
                   lastTool,
                   ...(usage !== undefined ? { usage } : {}),
+                  ...liveResponseModelSpread(),
                 });
                 // Activity emission rides the SAME stable boundary as the toolCalls
                 // counter directly above (design §4 W1-FIX, was the "tool_call"
@@ -1430,6 +1439,7 @@ export function createSubagentRunner(
                   toolCalls,
                   lastTool,
                   ...(usage !== undefined ? { usage } : {}),
+                  ...liveResponseModelSpread(),
                 });
                 break;
               case "loop_end":

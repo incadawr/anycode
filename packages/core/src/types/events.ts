@@ -313,6 +313,12 @@ export type AgentEvent =
       turns: number;
       toolCalls: number;
       lastTool?: string;
+      /**
+       * TASK.4057: the provider's own model claim, live (first response frame
+       * onward). Same semantics as `subagent_end.responseModel` — a claim, never
+       * proof of serving, never merged into `model`. Absent until observed.
+       */
+      responseModel?: string;
     }
   | {
       type: "subagent_end";
