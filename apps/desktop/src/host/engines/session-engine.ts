@@ -34,6 +34,13 @@ export interface EngineCapabilities {
   readonly supportsImages: boolean;
   readonly supportsTasks: boolean;
   readonly supportsFileSnapshots: boolean;
+  /**
+   * TASK.92: the engine can run a MANUAL compaction on demand (`compactNow`
+   * exists on it — Session's `compact_request` rail reaches a real method).
+   * Core and Claude: true; codex: false (nothing user-triggerable is pinned
+   * upstream — compact there is only an auto `NonSteerableTurnKind`).
+   */
+  readonly supportsManualCompact: boolean;
 }
 
 export interface ModelSwitchResult {
@@ -113,4 +120,5 @@ export const CORE_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsImages: true,
   supportsTasks: true,
   supportsFileSnapshots: true,
+  supportsManualCompact: true,
 };

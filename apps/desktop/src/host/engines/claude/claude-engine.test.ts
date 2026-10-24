@@ -1814,3 +1814,147 @@ describe("ClaudeEngine — mid-turn context refreshes (TASK.157)", () => {
     });
   });
 });
+
+// ── TASK.92: manual compaction via the allowlisted slash passthrough ────────
+
+describe("ClaudeEngine.compactNow — TASK.92 allowlisted /compact passthrough", () => {
+  it("sends the allowlisted /compact frame and maps result success to compaction events", async () => {
+    const transport = new FakeTransport({
+      frames: [resultFrame157("completed")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    // Allowlist proof: the ONLY user frame ever sent is the /compact one —
+    // nothing else, no catalog command, no free-form string.
+    expect(transport.sent).toEqual(["/compact"]);
+    expect(types(events)[0]).toBe("compaction_start");
+    const start = events[0] as { type: "compaction_start"; trigger: string };
+    expect(start.trigger).toBe("manual");
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean; preTokens: number; durationMs: number }
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.ok).toBe(true);
+    expect(end!.preTokens).toBe(1000);
+    expect(end!.durationMs).toBeGreaterThanOrEqual(0);
+    // Post-swap meter refresh rides after compaction_end.
+    const order = types(events);
+    expect(order.lastIndexOf("context_usage")).toBeGreaterThan(order.lastIndexOf("compaction_end"));
+  });
+
+  it("compaction failure surfaces compaction_end ok:false with the result subtype", async () => {
+    const transport = new FakeTransport({
+      frames: [
+        {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          num_turns: 1,
+          duration_ms: 1,
+          duration_api_ms: 1,
+          total_cost_usd: 0,
+        } as unknown as ClaudeStreamMessage,
+      ],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean; error?: string; durationMs: number }
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.ok).toBe(false);
+    expect(end!.error).toContain("error_during_execution");
+    expect(end!.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("abort interrupts: interrupt() called, settle timeout closes with ok:false", async () => {
+    // No result frame ever arrives — the settle deadline must terminalize.
+    const transport = new FakeTransport({
+      frames: [assistantFrame("m-compact-stuck")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport, { timeouts: { postInterruptSettleMs: 50 } });
+    const controller = new AbortController();
+
+    const events: AgentEvent[] = [];
+    const run = (async () => {
+      for await (const event of engine.compactNow({ signal: controller.signal })) {
+        events.push(event);
+        if (event.type === "compaction_start") controller.abort();
+      }
+    })();
+    await run;
+
+    expect(transport.interrupts).toBe(1);
+    const end = events.find((event) => event.type === "compaction_end") as
+      | { type: "compaction_end"; ok: boolean; error?: string }
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.ok).toBe(false);
+    expect(end!.error).toContain("interrupt settle timeout");
+    // A wedged compaction is NOT proof the session died — transport stays open.
+    expect(transport.closed).toBe(0);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
+
+  it("stream ownership is returned: an engine-level turn AFTER compactNow still sees frames", async () => {
+    const transport = new FakeTransport({
+      frames: [resultFrame157("completed")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+    await collect(engine.compactNow({ signal: new AbortController().signal }));
+    expect(transport.sent).toEqual(["/compact"]);
+
+    // The next owner turn owns the stream again and completes normally.
+    const turnTransport = transport;
+    turnTransport.enqueue(foreignAssistantFrame("m-after", "post-compaction"));
+    turnTransport.enqueue(resultFrame157("completed"));
+    const events = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+    expect(events[0]).toEqual({ type: "turn_start", turn: 1 });
+    expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
+    expect(transport.sent).toEqual(["/compact", "hi"]);
+  });
+
+  it("the leak discriminator: initialize.commands/ambient slash_commands never surface", async () => {
+    const transport = new FakeTransport({
+      frames: [
+        {
+          // A system/init whose ambient catalog names an owner-side command.
+          type: "system",
+          subtype: "init",
+          session_id: "s-1",
+          model: "default",
+          permissionMode: "default",
+          cwd: "/tmp",
+          tools: [],
+          mcp_servers: [],
+          slash_commands: ["deep-research", "update-config"],
+          skills: ["ambient-skill"],
+          capabilities: [],
+          claude_code_version: "2.1.220",
+        } as unknown as ClaudeStreamMessage,
+        foreignAssistantFrame("m-turn", "normal turn output"),
+        resultFrame157("completed"),
+      ],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const events = await collect(engine.runTurn("plain turn", { signal: new AbortController().signal }));
+
+    // The ambient catalog NEVER reaches the projected event stream...
+    expect(JSON.stringify(events)).not.toContain("deep-research");
+    expect(JSON.stringify(events)).not.toContain("update-config");
+    // ...and the only user frame sent is the ordinary turn input (no /command
+    // is ever built or forwarded by host code — the allowlist's whole point).
+    expect(transport.sent).toEqual(["plain turn"]);
+    expect(transport.sent.filter((frame) => typeof frame === "string" && frame.startsWith("/"))).toEqual([]);
+  });
+});

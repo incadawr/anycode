@@ -99,7 +99,21 @@ export const CLAUDE_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsImages: true,
   supportsTasks: false,
   supportsFileSnapshots: false,
+  // TASK.92: manual compaction via the allowlisted /compact slash frame
+  // (`compactNow` below) — this is what opens the Compact slash-menu row for
+  // Claude, NOT `supportsCorePermissions` (that flag gates the ModeMenu).
+  supportsManualCompact: true,
 };
+
+/**
+ * TASK.92: the ONLY slash commands AnyCode ever sends to the CLI. A closed
+ * list by construction — anything not here is never built into a user frame
+ * by host code. Ambient catalog commands (`initialize.commands[]` /
+ * `system/init.slash_commands[]`) are neither surfaced in the UI nor
+ * forwarded; they stay reachable only if the user types them verbatim as
+ * ordinary text, same as any text they could type anyway.
+ */
+const CLAUDE_SLASH_ALLOWLIST = ["/compact"] as const;
 
 const CLAUDE_BRIDGED_CAPABILITIES: EngineCapabilities = {
   ...CLAUDE_ENGINE_CAPABILITIES,
@@ -454,6 +468,11 @@ async function connectClaudeEngine(
     ...spawn,
     bootstrap: options.bootstrap,
     onControlRequest: approvals.handle,
+    // TASK.92: the ENGINE connection is the only flagged-off spawn — the CLI
+    // must interpret host-built allowlisted /compact user frames. Doctor,
+    // login and subagent children (engine-children.ts) keep the flag
+    // (isolation); the engine trusts the UI-side closed allowlist.
+    enableSlashPassthrough: true,
   });
   try {
     await client.start();
@@ -1203,6 +1222,140 @@ export class ClaudeEngine implements SessionEngine {
       // stream and the done path parks the reader.
       if (!this.disposed && this.terminalError === null) this.runIdleReader();
     }
+  }
+
+  /**
+   * TASK.92: manual compaction over the allowlisted slash passthrough. The
+   * engine spawn omits `--disable-slash-commands` (see `connectClaudeEngine`),
+   * and the CLI interprets a leading `/command` in a stream-json user frame
+   * (w0-17 evidence, committed fixture) — so the whole native compaction
+   * cycle is driven by ONE host-built frame: `CLAUDE_SLASH_ALLOWLIST[0]`,
+   * never a free-form string. The ambient catalog that the missing flag also
+   * exposes is NEVER surfaced or proxied: AnyCode shows its own SLASH_COMMANDS
+   * registry, and this method is the only slash frame host code ever builds.
+   *
+   * Mirrors `runTurn`'s proven skeleton: single-owner stream takeover
+   * (TASK.189), one abort race per await, a settle-deadline backstop after an
+   * interrupt, idle-reader restore in `finally`. Like `AgentLoop.compactNow`
+   * it never throws — every failure surfaces as `compaction_end { ok:false }`.
+   */
+  async *compactNow(options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {
+    if (this.terminalError !== null || this.disposed) {
+      yield { type: "compaction_end", ok: false, preTokens: 0, durationMs: 0, error: "engine closed" };
+      return;
+    }
+    this.stopIdleReader();
+    this.turnActive = true;
+    yield { type: "compaction_start", trigger: "manual" };
+    const startedAt = Date.now();
+    const abort = watchAbort(options.signal);
+    this.interruptSent = false;
+    let ok = false;
+    let error: string | undefined;
+    let preTokens = 0;
+    let terminal = false;
+    let abortObserved = false;
+    let settle: SettleDeadline | null = null;
+    const cancelSettle = (): void => settle?.cancel();
+
+    // The pre-compaction meter reading, taken BEFORE the frame is sent (the
+    // swap invalidates any later reading as a "pre" number). Fail-soft: an
+    // unusable reading yields preTokens 0, never blocks the compaction.
+    try {
+      await this.awaitContextUsageInFlight();
+      const reading = await this.client.getContextUsage();
+      const event = this.mapContextUsageReading(reading, false);
+      if (event !== null && event.type === "context_usage") preTokens = event.estimatedTokens;
+    } catch {
+      // preTokens stays 0 — same fail-soft posture as mapContextUsageReading.
+    }
+
+    // A compaction turn reuses the ordinary frame vocabulary: `--replay-user-messages`
+    // echoes the /compact frame (discarded like any user echo), `system` init /
+    // `status:"compacting"` pings are ignored, and the terminal `result` decides.
+    this.client.sendUserMessage(CLAUDE_SLASH_ALLOWLIST[0]);
+
+    try {
+      while (!terminal) {
+        const raced = await Promise.race([
+          this.takeFrame().then(
+            (value) => ({ kind: "notification" as const, value }),
+            (error_: unknown) => ({ kind: "rejected" as const, error: error_ }),
+          ),
+          ...(abortObserved ? [] : [abort.promise.then(() => ({ kind: "abort" as const }))]),
+          ...(settle === null ? [] : [settle.promise]),
+        ]);
+        if (raced.kind === "abort") {
+          abortObserved = true;
+          // NOT sendInterruptOnce — that helper is turn-latched via
+          // interruptSent/turnActive and was reset above; call the client
+          // directly so exactly one interrupt goes out for this cycle.
+          try {
+            await this.client.interrupt();
+          } catch {
+            // Best-effort: the settle deadline below is the backstop.
+          }
+          settle = deadline(this.bounds.postInterruptSettleMs);
+          continue;
+        }
+        if (raced.kind === "settle-timeout") {
+          // The interrupted compaction never settled — close with an honest
+          // failure. The transport stays open (unlike runTurn's settle path):
+          // a wedged compaction is not proof the SESSION is dead.
+          terminal = true;
+          ok = false;
+          error = "interrupt settle timeout";
+          break;
+        }
+        if (raced.kind === "rejected") {
+          throw raced.error;
+        }
+        if (raced.value.done) {
+          throw this.terminalError ?? new Error("Claude exited during compaction");
+        }
+        this.frameConsumed();
+        const frame = raced.value.value;
+        if (frame.type === "system") {
+          continue; // init re-emit or status ping — state, not compaction outcome
+        }
+        if (frame.type === "result") {
+          terminal = true;
+          // Tolerant subtype read: the pinned union names "success" today, but
+          // a compaction result may carry a success variant we have not pinned
+          // (e.g. "success_clears") — anything success-prefixed is a pass,
+          // never an invented subtype on the wire out.
+          const subtype = (frame as ClaudeResultMessage).subtype;
+          const subtypeText = typeof subtype === "string" ? subtype : "unknown";
+          ok = subtypeText === "success" || subtypeText.startsWith("success_");
+          if (!ok) error = subtypeText;
+          continue;
+        }
+        // Everything else (the replayed /compact user echo, assistant frames
+        // of the summarization turn, stream_events) is discarded silently.
+      }
+    } catch (error_) {
+      // A rejected takeFrame is terminal engine state — copy runTurn's catch.
+      const terminalError = this.terminalError ?? (error_ instanceof Error ? error_ : new Error(String(error_)));
+      this.terminalError = terminalError;
+      this.approvals?.denyAll("Claude transport failed", "turn_cancelled");
+      void this.client.close().catch(() => {});
+      ok = false;
+      error = terminalError.message;
+    } finally {
+      this.turnActive = false;
+      this.interruptSent = false;
+      cancelSettle();
+      abort.dispose();
+    }
+
+    yield { type: "compaction_end", ok, preTokens, durationMs: Date.now() - startedAt, ...(error !== undefined ? { error } : {}) };
+    // Post-swap meter refresh, mirroring the turn-end read: the compacted
+    // window's own accounting is only readable AFTER the CLI swapped it in.
+    if (!this.disposed && this.terminalError === null) {
+      const usage = await this.readContextUsage();
+      if (usage !== null) yield usage;
+    }
+    if (!this.disposed && this.terminalError === null) this.runIdleReader();
   }
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {

@@ -777,6 +777,7 @@ describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,
@@ -1266,6 +1267,7 @@ describe("Session — engine shutdown seam", () => {
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "build",
       setMode,
@@ -1333,6 +1335,7 @@ describe("Session — engine shutdown seam", () => {
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,
@@ -1397,6 +1400,7 @@ describe("Session — engine shutdown seam", () => {
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,
@@ -1501,6 +1505,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,
@@ -2201,6 +2206,7 @@ describe("Session — session_checkpoint (TASK.117 control/accounting checkpoint
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,
@@ -4455,6 +4461,7 @@ describe("Session — shutdown() admission funnel: exit_worktree / rewind_reques
         supportsImages: true,
         supportsTasks: true,
         supportsFileSnapshots: true,
+        supportsManualCompact: true,
       },
       mode: () => "build",
       reasoningEffort: () => undefined,
@@ -6106,6 +6113,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "build",
       setMode: () => {},
@@ -6127,6 +6135,65 @@ describe("Session — manual compaction wire (TASK.146)", () => {
       await h.flush();
 
       expect(h.received.some(agentEventOf("compaction_start"))).toBe(false);
+      expect(h.received.some((m) => m.type === "fatal")).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("TASK.92: compact_request reaches a Claude-like engine's compactNow over the same rail (gate is engine-agnostic, method presence decides)", async () => {
+    // A Claude-shaped stub: foreign engine, no core permissions, but WITH a
+    // compactNow — exactly what ClaudeEngine now exposes. The rail in route()/
+    // onCompact is engine-agnostic, so a stub is sufficient: no real
+    // ClaudeClient is needed to prove the request reaches the method.
+    const compactCalls: number[] = [];
+    const engine: SessionEngine = {
+      id: "claude",
+      capabilities: {
+        supportsCorePermissions: false,
+        supportsRewind: false,
+        supportsWorkflow: false,
+        supportsGitMutations: false,
+        supportsContextUsage: true,
+        supportsContextBreakdown: false,
+        supportsInteractiveApprovals: false,
+        costAccounting: true,
+        supportsModelSelection: true,
+        supportsReasoningEffort: true,
+        supportsImages: true,
+        supportsTasks: false,
+        supportsFileSnapshots: false,
+        supportsManualCompact: true,
+      },
+      mode: () => "build",
+      setMode: () => {},
+      reasoningEffort: () => undefined,
+      setReasoningEffort: () => {},
+      async *runTurn(): AsyncIterable<AgentEvent> {},
+      historyItems: () => [],
+      dispose: async () => {},
+      async *compactNow(options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {
+        compactCalls.push(1);
+        expect(options.signal.aborted).toBe(false);
+        yield { type: "compaction_start", trigger: "manual" };
+        yield { type: "compaction_end", ok: true, preTokens: 1000, durationMs: 5 };
+      },
+    };
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "compact_request" });
+      const end = await h.waitFor(agentEventOf("compaction_end"));
+
+      expect(compactCalls).toEqual([1]);
+      expect(end.turnId).toBe(MANUAL_COMPACTION_TURN_ID);
+      expect(end.event).toMatchObject({ type: "compaction_end", ok: true });
+      const start = h.received.find(agentEventOf("compaction_start"));
+      expect(start).toBeDefined();
+      expect(start!.event).toMatchObject({ type: "compaction_start", trigger: "manual" });
+      expect(h.received.indexOf(start!)).toBeLessThan(h.received.indexOf(end));
       expect(h.received.some((m) => m.type === "fatal")).toBe(false);
     } finally {
       h.close();
@@ -6647,6 +6714,7 @@ function createGatedStubEngine(outcome: AgentEvent[], gate: Promise<void>) {
       supportsImages: false,
       supportsTasks: false,
       supportsFileSnapshots: false,
+      supportsManualCompact: false,
     },
     mode: () => "build",
     setMode: () => {},

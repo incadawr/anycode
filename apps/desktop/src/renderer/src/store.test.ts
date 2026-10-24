@@ -171,6 +171,7 @@ describe("desktop store — connection lifecycle", () => {
           supportsImages: false,
           supportsTasks: false,
           supportsFileSnapshots: false,
+          supportsManualCompact: false,
         },
       },
     });
@@ -206,6 +207,7 @@ describe("desktop store — connection lifecycle", () => {
           supportsImages: false,
           supportsTasks: false,
           supportsFileSnapshots: false,
+          supportsManualCompact: false,
         },
       },
       shell: { gitReadOnly: true, gitUserMutations: true, terminal: true },
@@ -243,6 +245,7 @@ describe("desktop store — connection lifecycle", () => {
           supportsImages: false,
           supportsTasks: false,
           supportsFileSnapshots: false,
+          supportsManualCompact: false,
         },
       },
     });
@@ -5934,6 +5937,7 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
           supportsImages: false,
           supportsTasks: false,
           supportsFileSnapshots: false,
+          supportsManualCompact: false,
         },
         model: { current: overrides?.model ?? "gpt-5.6-terra", available: [{ id: "gpt-5.6-terra" }, { id: "gpt-5.6-mini" }] },
         permissions: {
@@ -6199,6 +6203,7 @@ describe("desktop store — engine_quota / engine_session_tokens (TASK.51, cut �
     supportsImages: false,
     supportsTasks: false,
     supportsFileSnapshots: false,
+    supportsManualCompact: false,
   } as const;
 
   function codexHostReadyWithQuota(quota: CodexRateLimitsWire | undefined): HostToUiMessage {
@@ -6499,6 +6504,7 @@ describe("desktop store — hydration re-derives the fold's engine identity from
     supportsImages: false,
     supportsTasks: false,
     supportsFileSnapshots: false,
+    supportsManualCompact: false,
   } as const;
   const HOST_READY_NATIVE = {
     type: "host_ready",

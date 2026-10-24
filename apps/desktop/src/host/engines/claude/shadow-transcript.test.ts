@@ -149,6 +149,7 @@ function fakeEngine(turnEvents: AgentEvent[][], resolved: { model: string | null
       supportsImages: false,
       supportsTasks: false,
       supportsFileSnapshots: false,
+      supportsManualCompact: false,
     },
     mode: () => "build" as const,
     reasoningEffort: () => undefined,

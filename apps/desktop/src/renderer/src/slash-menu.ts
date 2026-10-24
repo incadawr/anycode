@@ -65,6 +65,12 @@ export interface SlashCapabilityCtx {
   supportsCorePermissions: boolean;
   /** Mirrors `engine.capabilities.supportsModelSelection` — gates `/model` (ModelPill isn't rendered without it). */
   supportsModelSelection: boolean;
+  /**
+   * Mirrors `engine.capabilities.supportsManualCompact` — gates the Compact
+   * row (TASK.92 opens it to Claude). Defaults TRUE (mirrors core): a null
+   * engine is core, which always has `compactNow`.
+   */
+  supportsManualCompact: boolean;
   /** Mirrors `shell.gitReadOnly ?? true` — gates `/git-changes` (the Review panel stays closed without it, App.tsx). */
   shellGitReadOnly: boolean;
   /** Mirrors `shell.terminal ?? true` — gates `/terminal`. */
@@ -287,15 +293,14 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     // compaction already in flight ("compacting"), a drained-but-unacked
     // prompt, or a not-yet-ready connection.
     enabled: (ctx) => !ctx.modelDisabled,
-    source: "core",
-    // Handled host-side ONLY by CoreEngine.compactNow (Session drops the
-    // request for any engine that lacks the method). supportsCorePermissions
-    // is the flag the host itself uses to tell a core boot from an engine boot
-    // (index.ts, permission-broker.ts) and is documented to stay false for
-    // Claude/Codex (their presets.ts) — unlike supportsContextBreakdown, which
-    // claude-engine.ts plans to flip, and gating on that would surface a dead
-    // row there (that trade-off is TASK.92, not this task).
-    visible: (ctx) => ctx.supportsCorePermissions,
+    source: "engine",
+    // Handled host-side by a real `compactNow` on the engine: CoreEngine's
+    // (AgentLoop compaction) AND ClaudeEngine's allowlisted /compact slash
+    // frame (TASK.92). Session drops `compact_request` for any engine lacking
+    // the method — codex has none (compact is only an auto
+    // NonSteerableTurnKind there), so `supportsManualCompact: false` keeps the
+    // row hidden instead of dead.
+    visible: (ctx) => ctx.supportsManualCompact,
   },
   {
     id: "new-task",

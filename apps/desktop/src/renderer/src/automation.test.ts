@@ -244,6 +244,7 @@ describe("automation facade — snapshot", () => {
           supportsImages: false,
           supportsTasks: false,
           supportsFileSnapshots: false,
+          supportsManualCompact: false,
         },
         model: { current: "gpt-5.2-codex", available: [{ id: "gpt-5.2-codex" }] },
         permissions: { presets: [{ id: "ask", label: "Ask", description: "" }], activePresetId: "ask" },

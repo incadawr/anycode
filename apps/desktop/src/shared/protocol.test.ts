@@ -152,6 +152,7 @@ describe("external engine host_ready projection", () => {
           supportsImages: false,
           supportsTasks: false,
           supportsFileSnapshots: false,
+          supportsManualCompact: false,
         },
       },
     } satisfies HostToUiMessage;
