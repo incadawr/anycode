@@ -141,6 +141,7 @@ import {
   dockState,
   dockTabClick,
   dockTabClose,
+  dockTabSplit,
   windowSetSize,
   lspPanelState,
   lspPanelToggle,
@@ -851,6 +852,12 @@ describe("dock probe/driver + window size (Taskana 4703)", () => {
     const deps = fakeDeps();
     await dockTabClose(deps, "git");
     expect(deps.callFacade).toHaveBeenCalledWith("dockTabClose", ["git"]);
+  });
+
+  it("dockTabSplit -> callFacade('dockTabSplit', [id])", async () => {
+    const deps = fakeDeps();
+    await dockTabSplit(deps, "preview:abc");
+    expect(deps.callFacade).toHaveBeenCalledWith("dockTabSplit", ["preview:abc"]);
   });
 
   it("windowSetSize resizes through the window's setContentSize", () => {

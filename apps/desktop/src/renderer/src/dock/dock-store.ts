@@ -26,11 +26,21 @@ export interface DockStoreState {
   width: number;
   /** Toggle flag (⌘\) — NOT persisted: a fresh window shows the dock. */
   hidden: boolean;
+  /**
+   * Stage 2 (§3): the tab PINNED to the dock's secondary pane, else null.
+   * NOT persisted — a boot never restores a split that the window may no
+   * longer afford; `splitRight` itself refuses when !canSplit(available).
+   */
+  splitTabId: string | null;
   open(tab: DockTab): void;
   close(id: string): void;
   focus(id: string): void;
   setWidth(width: number): void;
   toggleHidden(): void;
+  /** Pin `id` to the secondary pane (Stage 2). NO-OP unless `allowed`. */
+  splitRight(id: string, allowed: boolean): void;
+  /** Unpin the secondary pane (Stage 2). */
+  mergeSplit(): void;
 }
 
 export type DockStoreApi = ReturnType<typeof createDockStore>;
@@ -47,13 +57,18 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
     activeTabId: null,
     width: readDockWidth(storage),
     hidden: false,
+    splitTabId: null,
 
     open(tab): void {
       set((state) => openTabAlgebra(state.tabs, tab));
     },
 
     close(id): void {
-      set((state) => closeTabAlgebra(state.tabs, state.activeTabId, id));
+      set((state) => {
+        const { tabs, activeTabId } = closeTabAlgebra(state.tabs, state.activeTabId, id);
+        // A closed tab can never stay pinned to the secondary pane.
+        return state.splitTabId === id ? { tabs, activeTabId, splitTabId: null } : { tabs, activeTabId };
+      });
     },
 
     focus(id): void {
@@ -71,6 +86,16 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
 
     toggleHidden(): void {
       set((state) => ({ hidden: !state.hidden }));
+    },
+
+    splitRight(id, allowed): void {
+      set((state) =>
+        allowed && state.tabs.some((tab) => tab.id === id) ? { splitTabId: id } : state,
+      );
+    },
+
+    mergeSplit(): void {
+      set({ splitTabId: null });
     },
   }));
 }

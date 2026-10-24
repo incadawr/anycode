@@ -1420,6 +1420,11 @@ export function dockTabClose(deps: HandlerDeps, id: string): Promise<unknown> {
   return deps.callFacade("dockTabClose", [id]);
 }
 
+/** Stage 2 (§3): `POST /dock/tabs/:id/split` — the ⫿ button's driver. */
+export function dockTabSplit(deps: HandlerDeps, id: string): Promise<unknown> {
+  return deps.callFacade("dockTabSplit", [id]);
+}
+
 /** `POST /window/size {width,height}` (Taskana 4703): resizes the real window (dock mode legs). */
 export function windowSetSize(deps: HandlerDeps, width: number, height: number): { ok: true } | { ok: false; reason: string } {
   const win = deps.getWindow();

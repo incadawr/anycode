@@ -467,6 +467,7 @@ body {
 }
 
 .dock-body {
+  position: relative; /* Stage 2: the split pane's absolute anchor */
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -493,6 +494,78 @@ body {
   width: min(var(--dock-width, 640px), 92vw);
   z-index: 14;
   box-shadow: var(--shadow-menu);
+}
+
+/* ── Stage 2 (Taskana 4703 §3): split view on wide windows ── The pinned
+   tab's secondary pane: absolute right of the primary body inside the dock,
+   fixed DOCK_SPLIT_MIN_PX, border-left. No drag between panes by design. */
+.dock-split-pane {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  z-index: 1;
+}
+
+.dock-split-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.dock-split-pane-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.dock-split-merge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.dock-split-merge:hover {
+  color: var(--text-1);
+}
+
+/* The per-tab "Split right" affordance (⫿): same shape as the close ×;
+   disabled state is carried by title text only (the store refuses anyway). */
+.dock-tab-split {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.dock-tab-split:hover {
+  color: var(--text-1);
+}
+
+.dock-tab-split-active {
+  color: var(--text-1);
+  font-weight: var(--w-semibold);
 }
 
 /* ── native DOM markdown preview (TASK.99 M1, CUT.md CONTRACTS) ──

@@ -30,6 +30,18 @@ export interface DockTab {
   title: string;
 }
 
+// ── Stage 2 (§3): split view on wide windows ── A second tab can be PINNED
+// into a secondary pane inside the dock (width DOCK_WIDTH_MIN, border-left).
+// The threshold is the honest geometry: the conversation floor + TWO
+// minimum dock columns + their two handles. Below it the "Split right"
+// action renders disabled, and an open split auto-merges (never leaves a
+// broken split).
+export const DOCK_SPLIT_MIN_PX = DOCK_WIDTH_MIN;
+
+export function canSplit(available: number): boolean {
+  return available >= CONVERSATION_MIN_PX + 2 * DOCK_WIDTH_MIN + 2 * DOCK_HANDLE_PX;
+}
+
 /**
  * Minimal storage seam so tests run jsdom-free (App.test.ts header
  * precedent: this package's vitest env has no DOM). The real binding in

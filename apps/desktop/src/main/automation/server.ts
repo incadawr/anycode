@@ -184,6 +184,7 @@ import {
   dockState,
   dockTabClick,
   dockTabClose,
+  dockTabSplit,
   windowSetSize,
   replayDisarm,
   replayPlay,
@@ -1018,6 +1019,10 @@ async function route(
   }
   if (method === "POST" && parts[0] === "dock" && parts.length === 4 && parts[1] === "tabs" && parts[3] === "close") {
     return dockTabClose(deps, decodeURIComponent(parts[2]!));
+  }
+  // Stage 2 (§3): the ⫿ "Split right" driver, same route family.
+  if (method === "POST" && parts[0] === "dock" && parts.length === 4 && parts[1] === "tabs" && parts[3] === "split") {
+    return dockTabSplit(deps, decodeURIComponent(parts[2]!));
   }
   if (method === "POST" && pathname === "/window/size") {
     const body = parseBody(rawBody, windowSizeBody);

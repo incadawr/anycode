@@ -8,10 +8,12 @@ import { describe, expect, it } from "vitest";
 import {
   CONVERSATION_MIN_PX,
   DOCK_HANDLE_PX,
+  DOCK_SPLIT_MIN_PX,
   DOCK_WIDTH_DEFAULT,
   DOCK_WIDTH_MAX,
   DOCK_WIDTH_MIN,
   DOCK_WIDTH_STORAGE_KEY,
+  canSplit,
   clampDockWidth,
   closeTab,
   computeDockMode,
@@ -183,5 +185,23 @@ describe("closeTab", () => {
 describe("storage key contract", () => {
   it("the dock width persists under its own key", () => {
     expect(DOCK_WIDTH_STORAGE_KEY).toBe("anycode.dock.width");
+  });
+});
+
+// ── Stage 2 (§3) ──
+
+describe("canSplit (Stage 2)", () => {
+  it("the threshold is exactly conversation floor + two min dock columns + two handles (420+640+16=1076)", () => {
+    expect(CONVERSATION_MIN_PX + 2 * DOCK_WIDTH_MIN + 2 * DOCK_HANDLE_PX).toBe(1076);
+  });
+
+  it("boundary cases: 1075 no, 1076 yes, wider yes", () => {
+    expect(canSplit(1075)).toBe(false);
+    expect(canSplit(1076)).toBe(true);
+    expect(canSplit(1800)).toBe(true);
+  });
+
+  it("DOCK_SPLIT_MIN_PX aliases the dock's own min", () => {
+    expect(DOCK_SPLIT_MIN_PX).toBe(DOCK_WIDTH_MIN);
   });
 });

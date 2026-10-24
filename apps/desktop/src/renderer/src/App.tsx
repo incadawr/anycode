@@ -82,7 +82,7 @@ import {
 import { projectChildSplitRows } from "./child-split-projection.js";
 import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
-import { clampDockWidth, computeDockMode, derivePreviewTabs, DOCK_HANDLE_PX, type DockMode } from "./dock/dock-layout.js";
+import { canSplit, clampDockWidth, computeDockMode, derivePreviewTabs, DOCK_HANDLE_PX, type DockMode } from "./dock/dock-layout.js";
 import { selectDockOpen, useDockStore } from "./dock/dock-store.js";
 import { isSessionBusy, type SubagentSubStatus, type TranscriptBlock } from "./store.js";
 import "./settings.css";
@@ -561,6 +561,9 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   );
   const dockMode: DockMode = computeDockMode(availableWidth);
   const effectiveDockWidth = clampDockWidth(dockWidth, availableWidth);
+  // Stage 2 (§3): the split gate over the SAME measured available width.
+  const canSplitNow = canSplit(availableWidth);
+  const splitTabId = useDockStore((state) => state.splitTabId);
   // The dock participates in the grid only in column mode — drawer mode is
   // an absolute overlay (conversation full width).
   const splitOpen = dockOpen && dockMode === "column";
@@ -649,6 +652,15 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
     window.addEventListener("resize", remeasure);
     return () => window.removeEventListener("resize", remeasure);
   }, []);
+
+  // Stage 2 (§3 item 4): an open split NEVER survives a window too narrow
+  // for it — when `available` drops below canSplit's threshold the pinned
+  // tab unpins (auto-merge), so no broken split is ever left behind.
+  useEffect(() => {
+    if (!canSplitNow) {
+      useDockStore.getState().mergeSplit();
+    }
+  }, [canSplitNow]);
 
   // ── Taskana 4703 tab-derivation effects: mirror each source surface into
   // the dock's tab set. Each effect is [tabId]-scoped so a background tab's
@@ -808,6 +820,8 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
             width={effectiveDockWidth}
             onResizeStart={beginDockResize}
             onToast={onToast}
+            canSplitNow={canSplitNow}
+            splitTabId={splitTabId}
             subagents={{ rows: childSplitRows, expandedId: childView.kind === "split" ? childView.expandedId : "", surface: childSplitSurface }}
           />
         )}

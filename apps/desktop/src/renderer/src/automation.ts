@@ -1543,6 +1543,8 @@ export interface DockLayoutState {
   /** `.session-conversation`'s live width — the number the whole fix exists to protect. */
   conversationWidth: number | null;
   tabs: { id: string; kind: string; title: string; active: boolean }[];
+  /** Stage 2 (§3): the pinned split tab id, else null. */
+  split: string | null;
 }
 
 /**
@@ -1558,6 +1560,7 @@ export interface DockDom {
   tabButton(id: string): { disabled: boolean } | null;
   clickTab(id: string): boolean;
   clickTabClose(id: string): boolean;
+  clickTabSplit(id: string): boolean;
 }
 
 function realDockDom(): DockDom {
@@ -1585,6 +1588,14 @@ function realDockDom(): DockDom {
     },
     clickTabClose: (id: string) => {
       const el = document.querySelector<HTMLButtonElement>(`.dock-tab[data-tab-id="${CSS.escape(id)}"] .dock-tab-close`);
+      if (!el) {
+        return false;
+      }
+      el.click();
+      return true;
+    },
+    clickTabSplit: (id: string) => {
+      const el = document.querySelector<HTMLButtonElement>(`.dock-tab[data-tab-id="${CSS.escape(id)}"] [data-split-for="${CSS.escape(id)}"]`);
       if (!el) {
         return false;
       }
@@ -2910,6 +2921,8 @@ export interface AutomationFacade {
   dockLayoutState(): DockLayoutState;
   dockTabClick(id: string): FacadeResult;
   dockTabClose(id: string): FacadeResult;
+  /** Stage 2 (§3): pin a tab into the dock's secondary pane (the ⫿ button's driver). */
+  dockTabSplit(id: string): FacadeResult;
   // ── Slash-command menu probe/driver (design/slice-P7.23-cut.md §7 W4) — a
   // DEDICATED probe, every prior probe above stays byte-untouched. `draft`
   // doubles as the insert-assert (§7). `composerType`/`composerKey` drive the
@@ -9242,6 +9255,7 @@ export function createAutomationFacade(
           title: tab.title,
           active: tab.id === dockState.activeTabId,
         })),
+        split: dockState.splitTabId,
       };
     },
 
@@ -9259,6 +9273,13 @@ export function createAutomationFacade(
     dockTabClose(id: string): FacadeResult {
       // The close affordance has no disabled state — presence is the only gate.
       return dockDom.clickTabClose(id) ? { ok: true } : { ok: false, reason: "tab_not_present" };
+    },
+
+    dockTabSplit(id: string): FacadeResult {
+      // The ⫿ driver: a REAL click on the tab's own split affordance, same
+      // posture as dockTabClick/Close — the button's own disabled contract
+      // (title-only when !canSplit) is enforced by the store refusing.
+      return dockDom.clickTabSplit(id) ? { ok: true } : { ok: false, reason: "tab_not_present" };
     },
 
     slashMenuState(tabId: string): SlashMenuState | FacadeErr {
