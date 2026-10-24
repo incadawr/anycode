@@ -24,12 +24,30 @@
  * checkCodexBinaryTrustOnDisk above it in app-server-client.ts).
  */
 
-import { chmodSync, lstatSync, mkdirSync, readlinkSync, symlinkSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 
 /** Cut §2.6.1 charset — the SAME rule the C0 settings schema enforces on registry writes. */
 const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/**
+ * Taskana 4682 rework: one path segment naming a PRIVATE per-child temp dir
+ * under `~/.anycode/tmp/`. The child session id is a host-generated UUID (a
+ * `randomUUID()` bridge row id), never user input — but the value is treated
+ * as untrusted anyway (fail-closed, the same posture as a profile id): any
+ * separator, traversal, dot-segment or empty string refuses the boot rather
+ * than silently degrading to "no private temp dir" (which would resurrect
+ * exactly the broken-toolchain state — an unwritable TMPDIR — that this
+ * module exists to prevent).
+ */
+export function isSafeTempDirSegment(segment: string): boolean {
+  if (segment.length === 0 || segment.includes("/") || segment.includes("\\")) return false;
+  if (segment === "." || segment === "..") return false;
+  // Whitespace-only is refused too: a real bridge row id is a UUID, so blank
+  // input can only mean a parsing bug upstream — fail-closed, same as above.
+  return segment.trim().length > 0;
+}
 
 /** Raw, unvalidated profile argv (`--codex-profile` / `--codex-home` / `--codex-auth-link`). */
 export interface CodexProfileArgs {
@@ -223,4 +241,66 @@ function assertAuthLink(home: string, target: string): string | null {
     return `a detached credential copy appeared at ${linkPath} where the auth.json symlink should be; refusing to spawn (recreate the link from Settings → Codex)`;
   }
   return `${linkPath} is neither a symlink nor absent; refusing to spawn`;
+}
+
+/**
+ * Taskana 4682 rework: a codex CHILD's private temp dir path,
+ * `~/.anycode/tmp/<childSessionId>`. Derived from the SAME home-resolution
+ * inputs the managed profile tree above uses (the caller passes
+ * `resolveCodexProfilesHomeOverride(process.env) ?? homedir()` at the boot
+ * site — `codexProfilesHomeOverride` is a non-null automation lever there,
+ * so the dev/automation smoke plane and the production plane agree on one
+ * `~/.anycode` root). The path is DERIVED only — no fs effect; creation is
+ * `ensureChildTempDir`, teardown `removeChildTempDir`. Throws on an id that
+ * is not a safe single path segment (see `isSafeTempDirSegment`).
+ */
+export function resolveChildTempDir(childSessionId: string, homeDir: string = homedir()): string {
+  if (!isSafeTempDirSegment(childSessionId)) {
+    throw new Error(`invalid child session id for the private temp dir: ${JSON.stringify(childSessionId)}`);
+  }
+  return join(homeDir, ".anycode", "tmp", childSessionId);
+}
+
+/**
+ * Idempotent creation of the private temp dir, mode 0700 (only this user may
+ * traverse it — the dir holds another session's scratch artifacts, e.g. zsh
+ * heredoc temp files). A pre-existing dir keeps its inode; only a too-loose
+ * mode is tightened, mirroring `assertCodexProfileHome`'s managed-home rule
+ * (ours ⇒ we fix and continue). Throws (fail-closed) when the path exists
+ * but is not a directory we own — a symlink there would redirect the child's
+ * TMPDIR writes into a foreign tree, exactly the redirection the profile
+ * home guard refuses.
+ */
+export function ensureChildTempDir(dir: string): void {
+  const state = lstatSync(dir, { throwIfNoEntry: false });
+  if (state === undefined) {
+    // The base (~/.anycode/tmp) comes along for the ride; recursive mkdir
+    // applies the mode to every level it creates, the same call shape
+    // assertCodexProfileHome uses for the profile home.
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    return;
+  }
+  if (state.isSymbolicLink() || !state.isDirectory()) {
+    throw new Error(`child temp dir path is not a directory we own: ${dir}`);
+  }
+  if ((state.mode & 0o077) !== 0 && process.platform !== "win32") {
+    chmodSync(dir, 0o700);
+  }
+}
+
+/**
+ * Best-effort, never-fatal recursive removal of the private temp dir — called
+ * when the child finalizes AND on host shutdown (whichever lands first; both
+ * are idempotent on an already-removed path). A removal failure is swallowed:
+ * cleanup must never turn a completed child into an error terminal, nor block
+ * process exit.
+ */
+export function removeChildTempDir(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Deliberately silent: an undeletable scratch dir is a leak the owner can
+    // clear (~/.anycode/tmp is a pure scratch namespace), never a failure the
+    // child's terminal report should carry.
+  }
 }

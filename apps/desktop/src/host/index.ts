@@ -365,7 +365,10 @@ import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
 import { resumeCodexEngine, startCodexEngine } from "./engines/codex/codex-engine.js";
 import {
   assertCodexProfileHome,
+  ensureChildTempDir,
   parseCodexProfileArgs,
+  removeChildTempDir,
+  resolveChildTempDir,
   resolveCodexProfile,
   resolveCodexProfilesHomeOverride,
 } from "./engines/codex/codex-home.js";
@@ -694,6 +697,11 @@ let taskManager: InProcessTaskManager | null = null;
 
 let gitBridge: GitBridge | null = null;
 const gitAbort = new AbortController();
+// Taskana 4682 rework: a codex CHILD boot's private temp dir teardown. Set by
+// bootCodexSession when args.child is present; handleShutdown runs it as the
+// shutdown-side half (child finalize already ran the other half — both are
+// idempotent). Null for owner tabs and every non-codex boot.
+let codexChildTempDirCleanup: (() => void) | null = null;
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -780,11 +788,18 @@ function buildChildBrokerEmit(emitFn: (message: HostToUiMessage) => void): (mess
  * below). `onReady`/`onTerminal`/`onProgress` post directly onto this fork's
  * own `process.parentPort` — the child side of the wire — identically for
  * every engine.
+ *
+ * Taskana 4682 rework: `onTerminalFinalized` (optional, engine boots only)
+ * runs AFTER the terminal message has been posted, inside the same try/catch
+ * discipline — the child is done, its durable artifacts are flushed, so
+ * per-child scratch state (the codex child's private temp dir) may go. Never
+ * fatal: an exception is logged, never allowed to disturb the terminal.
  */
 function buildChildSessionOptions(
   flushHistory: () => Promise<void>,
   wrapUpRescue?: () => Promise<string>,
   responseModel?: () => string | undefined,
+  onTerminalFinalized?: () => void,
 ): ChildSessionOptions {
   return {
     // TASK.196: present ONLY for core-engine children — codex/claude have no
@@ -814,6 +829,15 @@ function buildChildSessionOptions(
         ...(report.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: report.finalTurnFinishReason } : {}),
         ...(report.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true } : {}),
       } satisfies ChildTerminal);
+      // Taskana 4682 rework: the terminal is committed — the child's private
+      // scratch may go. Best-effort, logged, never fatal (the message above
+      // already left; a cleanup failure must not masquerade as a child
+      // failure downstream).
+      try {
+        onTerminalFinalized?.();
+      } catch (cleanupError) {
+        console.error(`[host] child terminal cleanup failed: ${describeError(cleanupError)}`);
+      }
     },
     onProgress: (report) => {
       process.parentPort.postMessage({
@@ -883,6 +907,29 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     const rejected = assertCodexProfileHome(codexProfile);
     if (rejected !== null) throw new Error(`Codex profile home rejected: ${rejected}`);
   }
+  // Taskana 4682 rework: a codex CHILD gets a PRIVATE temp dir,
+  // `~/.anycode/tmp/<childSessionId>` (bridgeRowId = --session, the host
+  // minted UUID a child boot always carries), created here 0700 BEFORE the
+  // first spawn so both the app-server spawn env (TMPDIR/TMPPREFIX/TMP/TEMP)
+  // and the sandbox writableRoots can point at a dir that provably exists.
+  // It replaces the /tmp and $TMPDIR access a54b2f6d excluded — without it
+  // every tmp consumer inside the child breaks (zsh heredocs, tsx cache,
+  // mktemp, os.tmpdir()). Owner tabs (args.child undefined) get NOTHING here:
+  // no private dir, no env override, no writableRoots change. Derived from
+  // the same home inputs the profile tree above uses, so one automation
+  // lever moves both. An unsafe id segment (separator/traversal) throws —
+  // fail-closed, never a silent no-dir boot that would resurrect the broken
+  // toolchain state.
+  const bridgeRowId = args.sessionId ?? randomUUID();
+  const codexChildTempDir = args.child !== undefined ? resolveChildTempDir(bridgeRowId, codexProfilesHomeOverride ?? homedir()) : undefined;
+  if (codexChildTempDir !== undefined) ensureChildTempDir(codexChildTempDir);
+  /** Best-effort, idempotent removal — child finalize AND host shutdown both call it; never fatal. */
+  const cleanupCodexChildTempDir = (): void => {
+    if (codexChildTempDir !== undefined) removeChildTempDir(codexChildTempDir);
+  };
+  // Shutdown-side half: handleShutdown runs this regardless of whether the
+  // child ever finalized (a killed host never reaches onTerminal).
+  if (codexChildTempDir !== undefined) codexChildTempDirCleanup = cleanupCodexChildTempDir;
   // TASK.182 / Taskana 4136: MCP forwarding. After profile resolution: load
   // the specs ONCE (core reader; project → user → .mcp.json winners) and
   // serialize the Codex thread config map. Identical for system, managed and
@@ -913,7 +960,6 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         }
       : {}),
   };
-  const bridgeRowId = args.sessionId ?? randomUUID();
   const agentCardLog = new SqliteCodexAgentCardLog(persistence, bridgeRowId);
   let codexAgentBridge: CodexDynamicToolBridge | undefined;
   // The bridge's child port, kept so the Session below can surface its
@@ -969,6 +1015,10 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     // per-spawn calls.
     binaryTrust: (path: string) => checkCodexBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
     ...(processOwnership !== undefined ? { processOwnership } : {}),
+    // Taskana 4682 rework: the private temp dir rides the SAME env builder
+    // the profile home does — assigned after the allowlist, so the ambient
+    // TMPDIR can never win. Absent for owner tabs (byte-identical env).
+    ...(codexChildTempDir !== undefined ? { tempDir: codexChildTempDir } : {}),
     ...(codexProfile !== null
       ? {
           codexHome: codexProfile.home,
@@ -1005,6 +1055,17 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         if (existing.engineId !== "codex" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
           throw new Error(`Codex session ${args.sessionId} has no resumable native thread`);
         }
+        // Taskana 4682 rework: a CHILD being resumed re-derives its private
+        // temp dir from its own persisted id (`parentSessionId` on the row is
+        // the durable child marker — the same authority boot.ts's
+        // non-recursion locks use) and re-includes it in writableRoots. A
+        // kill -9 between finalize and shutdown can orphan the old dir; the
+        // mkdir here is idempotent. A root/owner resume keeps NOTHING tmp-
+        // related (a54b2f6d deliberately does not persist the flag).
+        const resumeChildTempDir = existing.parentSessionId !== undefined
+          ? resolveChildTempDir(existing.id, codexProfilesHomeOverride ?? homedir())
+          : undefined;
+        if (resumeChildTempDir !== undefined) ensureChildTempDir(resumeChildTempDir);
         const resumed = await resumeCodexEngine({
           ...options,
           externalSessionRef: existing.externalSessionRef,
@@ -1013,7 +1074,15 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
           // column carries the preset id verbatim (cut §2(k).4). A pre-TASK.39
           // row holds a core mode there ("build") — the engine treats an
           // unrecognized id as the default preset, silently.
-          selection: { model: existing.model, presetId: existing.mode, origin: "persisted" },
+          selection: {
+            model: existing.model,
+            presetId: existing.mode,
+            origin: "persisted",
+            // Taskana 4682: a resumed child re-asserts its tmp posture. The
+            // thread/boot string stays undecorated; only the per-turn
+            // override carries these.
+            ...(existing.parentSessionId !== undefined ? { excludeTmpRoots: true, childTempDir: resumeChildTempDir! } : {}),
+          },
         });
         // Persist whatever the resume actually settled on (the stored model may
         // have been removed from the catalog and fallen back) — only after the
@@ -1038,7 +1107,11 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
             ...(childPresetId !== undefined ? { presetId: childPresetId } : {}),
             // Taskana 4682: engine children get /tmp and $TMPDIR excluded from the
             // codex workspaceWrite sandbox; owner tabs keep the frozen defaults.
+            // The 4682 rework pairs the exclusion with the PRIVATE temp dir
+            // (writableRoots + TMPDIR/TMPPREFIX env) so excluding the shared
+            // tmp never breaks the child's toolchains.
             ...(args.child !== undefined ? { excludeTmpRoots: true } : {}),
+            ...(codexChildTempDir !== undefined ? { childTempDir: codexChildTempDir } : {}),
             ...(draft.effort !== undefined ? { effort: draft.effort } : {}),
             origin: "draft",
           },
@@ -1078,7 +1151,11 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
         });
         return { ...created, sessionMeta };
       })());
-
+  // The engine objects exist now: from here on a boot failure (below) must
+  // clean the private temp dir up — the finally in boot() cannot, it lives in
+  // another function scope. Every later await in this function body runs
+  // under this guard.
+  try {
   codexParentEngine = connected.engine;
   const booted = await plugin.boot({ codexEngine: connected.engine });
   const fs = new NodeFileSystemAdapter();
@@ -1238,9 +1315,22 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     ...(telemetry !== null
       ? { eventTap: buildEngineTelemetryTap(telemetry.port, telemetry.session, { baselineFromFirstEvent: args.resume }) }
       : {}),
-    ...(args.child !== undefined ? { child: buildChildSessionOptions(codexFlushHistory) } : {}),
+    ...(args.child !== undefined ? { child: buildChildSessionOptions(codexFlushHistory, undefined, undefined, () => {
+      // Taskana 4682 rework: finalize-time removal of the private temp dir
+      // (idempotent; host shutdown repeats it harmlessly).
+      if (args.child !== undefined) cleanupCodexChildTempDir();
+    }) } : {}),
   });
   console.log(`[host] initialized Codex native thread ${connected.threadId} session=${connected.sessionMeta.id} db=${dbPath}`);
+  } finally {
+    // Taskana 4682 rework: a boot that never reached Session (spawn failure,
+    // plugin.boot throw, a Session-constructor rejection) must not leak the
+    // private temp dir — the child never finalized, shutdown may never come.
+    // Best-effort and idempotent: a boot that SUCCEEDED later re-derives and
+    // re-creates the same path on resume, and the live dir is cleaned by
+    // child finalize / host shutdown instead.
+    if (session === null) cleanupCodexChildTempDir();
+  }
 }
 
 /**
@@ -3553,6 +3643,11 @@ async function handleShutdown(): Promise<void> {
   }
   await engineBootstrap?.dispose();
   engineBootstrap = null;
+  // Taskana 4682 rework: after the engine is disposed no tool child can hold
+  // the private temp dir open — the LAST safe moment to remove it. Best-effort
+  // (the helper swallows its own errors); idempotent with the finalize-time
+  // removal a completed child already performed.
+  codexChildTempDirCleanup?.();
   // Drain the write-behind queue and close the database (design §2.12,
   // mirrors cli/main.ts's task-1.7 wiring): best-effort, must never block
   // process exit on a persistence hiccup during teardown.

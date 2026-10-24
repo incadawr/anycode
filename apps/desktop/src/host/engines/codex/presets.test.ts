@@ -115,6 +115,65 @@ describe("Taskana 4682 — tmp-root exclusion", () => {
   });
 });
 
+describe("Taskana 4682 rework — extraWritableRoot (the child's private temp dir)", () => {
+  it("appends the private dir AFTER the workspace, exclusion flags intact — the exact child posture", () => {
+    const ask = findCodexPreset("ask")!.turnOverride("/repo/a", {
+      excludeTmpRoots: true,
+      extraWritableRoot: "/Users/me/.anycode/tmp/child-1",
+    });
+    expect(ask.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/repo/a", "/Users/me/.anycode/tmp/child-1"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    });
+  });
+
+  it("approve-for-me honors the extra root too (both workspace-write presets share the builder)", () => {
+    const approveForMe = findCodexPreset("approve-for-me")!.turnOverride("/repo/b", {
+      excludeTmpRoots: true,
+      extraWritableRoot: "/Users/me/.anycode/tmp/child-2",
+    });
+    expect(approveForMe.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/repo/b", "/Users/me/.anycode/tmp/child-2"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    });
+  });
+
+  it("the extra root alone (no exclusion) still lands — the opts are independent axes", () => {
+    const ask = findCodexPreset("ask")!.turnOverride("/repo/a", { extraWritableRoot: "/tmp-priv" });
+    expect(ask.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/repo/a", "/tmp-priv"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
+  it("full-access and legacy read-only ignore the extra root (no writableRoots axis exists there)", () => {
+    expect(findCodexPreset("full-access")!.turnOverride("/repo/a", { extraWritableRoot: "/tmp-priv" }).sandboxPolicy)
+      .toEqual({ type: "dangerFullAccess" });
+    expect(findCodexPreset("read-only")!.turnOverride("/repo/a", { extraWritableRoot: "/tmp-priv" }).sandboxPolicy)
+      .toEqual({ type: "readOnly", networkAccess: false });
+  });
+
+  it("no opts at all keeps the frozen default policy byte-identical (owner tabs)", () => {
+    const ask = findCodexPreset("ask")!.turnOverride("/repo/a");
+    expect(ask.sandboxPolicy).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/repo/a"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+});
+
 describe("codexPresetChoices (TASK.39 wire projection)", () => {
   it("exposes id/label/description only — never a policy object the renderer could edit", () => {
     const choices = codexPresetChoices();

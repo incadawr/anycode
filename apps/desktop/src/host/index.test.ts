@@ -33,6 +33,7 @@
  * strictly before the toolNames snapshot (index.ts:358-361/:464).
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,7 +84,8 @@ import type {
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type { ShellCapabilitiesProjection } from "../shared/protocol.js";
-import { parseCodexProfileArgs } from "./engines/codex/codex-home.js";
+import { ensureChildTempDir, parseCodexProfileArgs, removeChildTempDir, resolveChildTempDir } from "./engines/codex/codex-home.js";
+import { buildCodexChildEnv } from "./engines/codex/app-server-client.js";
 import { TerminalManager } from "./terminal.js";
 import { isChildSessionBoot } from "./boot.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
@@ -1314,6 +1316,77 @@ describe("host Codex boot shell/git wiring shape (design TASK.40 §2(f))", () =>
 });
 
 /**
+ * Taskana 4682 rework — the child-temp-dir SHAPE of bootCodexSession's boot
+ * site, mirrored over the REAL helpers (resolveChildTempDir /
+ * ensureChildTempDir / removeChildTempDir / buildCodexChildEnv) with the same
+ * "reproduce the seam's shape, don't import index.ts" idiom as every other
+ * block in this file. Pins the two owner invariants: a CHILD boot derives and
+ * creates the private dir, sets the tmp env family and passes the dir into
+ * the engine selection (writableRoots); an OWNER boot derives NOTHING — no
+ * dir, no env override, no selection key.
+ */
+describe("host Codex boot private temp dir shape (Taskana 4682 rework)", () => {
+  /** Mirrors bootCodexSession's derivation + selection spread verbatim. */
+  function bootCodexTmpShape(
+    args: { sessionId?: string; child?: { parentSessionId: string } },
+    homeDir: string,
+  ): { tempDir: string | undefined; selection: Record<string, unknown>; env: NodeJS.ProcessEnv } {
+    const bridgeRowId = args.sessionId ?? "018f-fresh-uuid";
+    const codexChildTempDir = args.child !== undefined ? resolveChildTempDir(bridgeRowId, homeDir) : undefined;
+    if (codexChildTempDir !== undefined) ensureChildTempDir(codexChildTempDir);
+    const options = { ...(codexChildTempDir !== undefined ? { tempDir: codexChildTempDir } : {}) };
+    const selection = {
+      ...(args.child !== undefined ? { excludeTmpRoots: true } : {}),
+      ...(codexChildTempDir !== undefined ? { childTempDir: codexChildTempDir } : {}),
+    };
+    const env = buildCodexChildEnv({ HOME: homeDir, PATH: "/bin", TMPDIR: "/var/folders/ambient" }, "darwin", undefined, options.tempDir);
+    return { tempDir: codexChildTempDir, selection, env };
+  }
+
+  it("a CHILD boot: the private dir exists 0700, rides the selection, and owns the tmp env family", () => {
+    const home = mkdtempSync(join(tmpdir(), "anycode-4682-shape-"));
+    try {
+      const childId = "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a";
+      const shape = bootCodexTmpShape(
+        { sessionId: childId, child: { parentSessionId: "parent-1" } },
+        home,
+      );
+      const expectedDir = join(home, ".anycode", "tmp", childId);
+      expect(shape.tempDir).toBe(expectedDir);
+      expect(existsSync(expectedDir)).toBe(true);
+      expect(statSync(expectedDir).mode & 0o077).toBe(0);
+      expect(shape.selection).toMatchObject({ excludeTmpRoots: true, childTempDir: expectedDir });
+      expect(shape.env.TMPDIR).toBe(expectedDir);
+      expect(shape.env.TMPPREFIX).toBe(`${expectedDir}/zsh`);
+      expect(shape.env.TMP).toBe(expectedDir);
+      expect(shape.env.TEMP).toBe(expectedDir);
+      // The finalize/shutdown cleanup removes exactly this dir (idempotent).
+      removeChildTempDir(expectedDir);
+      expect(existsSync(expectedDir)).toBe(false);
+      removeChildTempDir(expectedDir); // never fatal on the second call
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("an OWNER boot: no private dir is created, the ambient TMPDIR passes through, the selection carries NO tmp keys", () => {
+    const home = mkdtempSync(join(tmpdir(), "anycode-4682-shape-"));
+    try {
+      const shape = bootCodexTmpShape({ sessionId: "root-1" }, home);
+      expect(shape.tempDir).toBeUndefined();
+      expect(existsSync(join(home, ".anycode"))).toBe(false);
+      expect(shape.selection).toEqual({});
+      expect(shape.env.TMPDIR).toBe("/var/folders/ambient");
+      expect(shape.env.TMPPREFIX).toBeUndefined();
+      expect(shape.env.TMP).toBeUndefined();
+      expect(shape.env.TEMP).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
  * Codex-profiles Q1.3 (cut §3.3, completes W3-F): bootCodexSession's
  * create-session seam persists the spawn's `--codex-profile` id into the
  * session row, so main's cross-restart resume (main/index.ts
@@ -1323,8 +1396,7 @@ describe("host Codex boot shell/git wiring shape (design TASK.40 §2(f))", () =>
  * `parseCodexProfileArgs` and the REAL SqlitePersistenceAdapter, and reads the
  * row back FROM DISK through a second adapter instance, so the parse→persist
  * →reload chain is exercised for real; only the surrounding boot is mirrored.
- */
-describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut §3.3)", () => {
+ */describe("host Codex boot create-session profile pin (codex-profiles Q1.3, cut §3.3)", () => {
   let dbDir: string;
 
   beforeEach(async () => {

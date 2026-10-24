@@ -164,3 +164,63 @@ renamed or removed consumed method throws instead of silently extracting.
 rebuilds a synthetic schema straight from the committed pin (no live binary
 needed), confirms the unmutated round-trip still passes, then renames one
 method per registry and asserts the extractor throws.
+
+
+## Taskana 4682 rework — live seatbelt probe protocol (owner-run)
+
+The child temp-dir rework (private `~/.anycode/tmp/<childSessionId>` instead
+of losing `/tmp` and `$TMPDIR`) changes three sandbox-relevant things at
+once: `excludeTmpdirEnvVar`/`excludeSlashTmp` on every codex child's turn
+override (a54b2f6d), the private dir appended to `writableRoots`, and
+`TMPDIR`/`TMPPREFIX`/`TMP`/`TEMP` pointing at it in the app-server spawn
+env. Only a LIVE seatbelt run proves the composition; a unit fake cannot (it
+never applies a profile). Seatbelt cannot nest inside a codex/seatbelt
+session — `codex sandbox …` from an already-sandboxed shell fails with
+`sandbox-exec: sandbox_apply: Operation not permitted` (reproduced from the
+4682 worktree's own Bash, 2026-10-24) — so this protocol is run by the OWNER
+from an UNSANDBOXED terminal, once per codex-cli range bump or after any
+`workspaceWritePolicy` change.
+
+Step 0 — prepare (scratch workspace repo + the private dir, 0700):
+
+    WS="$(mktemp -d)/repo"; mkdir -p "$WS"; git -C "$WS" init -q
+    PRIV="$HOME/.anycode/tmp/probe-4682"
+    rm -rf "$PRIV" && mkdir -p -m 700 "$PRIV"
+
+Step 1 — write `probe.sh` next to this README is NOT needed; run the four
+checks in ONE child-equivalent invocation. The `-c` overrides mirror
+turn/start's sandboxPolicy (workspace-write, the workspace plus the private
+dir as writable roots, both tmp exclusions) and the `env` prefix mirrors the
+app-server spawn env:
+
+    codex sandbox \
+      -c 'sandbox_mode="workspace-write"' \
+      -c 'sandbox_workspace_write.writable_roots=["'"$WS"','""$PRIV""']' \
+      -c 'sandbox_workspace_write.exclude_tmpdir_env_var=true' \
+      -c 'sandbox_workspace_write.exclude_slash_tmp=true' \
+      -- env TMPDIR="$PRIV" TMP="$PRIV" TEMP="$PRIV" TMPPREFIX="$PRIV/zsh" \
+         /bin/zsh -c 'touch /tmp/x'
+
+ replacing the final command with each check below (same prefix):
+
+ 1. `touch /tmp/x` — expect REFUSED (the exclusion works; pre-fix this
+    silently succeeded — TASK.179's probe).
+ 2. a zsh heredoc writing a file inside `$WS`
+    (`zsh -c 'cat > "$WS/f" <<\EOD ... EOD'`) — expect ok: TMPPREFIX points
+    inside the private dir. This is the exact "can't create temp file for
+    here document" failure the rework fixes.
+ 3. `git -C "$WS" add -A && git -C "$WS" -c user.email=p@p -c user.name=p
+    commit -m probe` — expect ok (objects land in `$WS/.git`; nothing tmp
+    outside the private dir).
+ 4. `node -e 'require("fs").writeFileSync(require("os").tmpdir()+"/a","1")'`
+    — expect ok, with `$PRIV/a` on disk afterwards (`os.tmpdir()` resolved to
+    the private dir via TMPDIR).
+
+Then `ls -la "$PRIV"` (expect `a` plus zsh's heredoc scratch files) and clean
+up: `rm -rf "$PRIV" "$(dirname "$WS")"`. If any check fails, fix before
+shipping — do not weaken the flags to make it pass.
+
+Machine-checked coverage that does NOT need the live run: the child env
+family (app-server-client.test.ts), the writableRoots composition
+(presets.test.ts, codex-engine.test.ts), the owner-tab byte-identity
+(index.test.ts's 4682 shape block), and the dir lifecycle (codex-home.test.ts).

@@ -492,6 +492,49 @@ describe("AppServerClient", () => {
     expect(ambient.CODEX_HOME).toBe("/ambient-shell-home");
   });
 
+  // Taskana 4682 rework: the child's private temp dir replaces the tmp family
+  // in the app-server spawn env — assigned AFTER the passthrough, so the
+  // ambient TMPDIR the allowlist copied in can never win (the same
+  // last-assignment discipline as the profile home above).
+  it("a tempDir sets TMPDIR/TMP/TEMP and the zsh TMPPREFIX, overriding the ambient TMPDIR", () => {
+    const env = buildCodexChildEnv(
+      { HOME: "/home/test", PATH: "/bin", TMPDIR: "/var/folders/ambient" },
+      "darwin",
+      undefined,
+      "/home/test/.anycode/tmp/child-1",
+    );
+    expect(env.TMPDIR).toBe("/home/test/.anycode/tmp/child-1");
+    expect(env.TMP).toBe("/home/test/.anycode/tmp/child-1");
+    expect(env.TEMP).toBe("/home/test/.anycode/tmp/child-1");
+    expect(env.TMPPREFIX).toBe("/home/test/.anycode/tmp/child-1/zsh");
+  });
+
+  it("without a tempDir the ambient TMPDIR passthrough is preserved byte-identically (owner tabs)", () => {
+    const env = buildCodexChildEnv({ HOME: "/home/test", PATH: "/bin", TMPDIR: "/var/folders/ambient" }, "darwin");
+    expect(env.TMPDIR).toBe("/var/folders/ambient");
+    expect(env.TMP).toBeUndefined();
+    expect(env.TEMP).toBeUndefined();
+    expect(env.TMPPREFIX).toBeUndefined();
+  });
+
+  it("spawns the app-server with the private tmp env when tempDir is set", async () => {
+    const client = makeClient(["--env"], {
+      sourceEnv: { HOME: "/home/test", PATH: process.env.PATH, TMPDIR: "/var/folders/ambient" },
+      tempDir: "/home/test/.anycode/tmp/child-2",
+    });
+    try {
+      await client.start();
+      await client.request("initialize", {});
+      const childEnv = (await nextNotification(client)).params as NodeJS.ProcessEnv;
+      expect(childEnv.TMPDIR).toBe("/home/test/.anycode/tmp/child-2");
+      expect(childEnv.TMPPREFIX).toBe("/home/test/.anycode/tmp/child-2/zsh");
+      expect(childEnv.TMP).toBe("/home/test/.anycode/tmp/child-2");
+      expect(childEnv.TEMP).toBe("/home/test/.anycode/tmp/child-2");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("spawns the child with the profile CODEX_HOME even when the shell exported its own", async () => {
     const client = makeClient(["--env"], {
       sourceEnv: { HOME: "/home/test", PATH: process.env.PATH, CODEX_HOME: "/ambient-shell-home" },

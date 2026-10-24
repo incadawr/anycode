@@ -204,8 +204,22 @@ export interface CodexSessionSelection {
   presetId?: string;
   /** Draft effort tier (profile `effort:`), resolved against the live catalog; unrecognized degrades to the model default. */
   effort?: string;
-  /** Taskana 4682: exclude /tmp and $TMPDIR from the workspaceWrite writable roots (codex children). */
+  /**
+   * Taskana 4682: exclude /tmp and $TMPDIR from the workspaceWrite writable
+   * roots (codex children). The 4682 rework pairs this with `childTempDir`:
+   * the exclusion is only non-breaking because every tmp consumer inside the
+   * child is simultaneously redirected to the private dir.
+   */
   excludeTmpRoots?: boolean;
+  /**
+   * Taskana 4682 rework: the codex child's PRIVATE temp dir
+   * (`~/.anycode/tmp/<childSessionId>`, created 0700 by the boot site, also
+   * exported as TMPDIR/TMPPREFIX/TMP/TEMP in the app-server spawn env).
+   * Rides the selection exactly like `excludeTmpRoots` and is appended to the
+   * workspaceWrite `writableRoots` on every turn/start override. Undefined =
+   * an owner tab: no extra root, no tmp exclusion, byte-identical policy.
+   */
+  childTempDir?: string;
   /** A resumed session's stored ids predate this slice; an unrecognized one is a silent default, not a user error. */
   origin?: "draft" | "persisted";
 }
@@ -231,6 +245,8 @@ interface CodexEngineSettings {
   effortsByModel: Map<string, string>;
   /** Taskana 4682: exclude /tmp and $TMPDIR from the workspaceWrite sandbox writable roots. */
   excludeTmpRoots?: boolean;
+  /** Taskana 4682 rework: the child's private temp dir, appended to the workspaceWrite writable roots. */
+  childTempDir?: string;
   /** Boot-time warnings (unusable draft model, posture drift) — flushed into the first turn's event stream. */
   notices: AgentEvent[];
 }
@@ -313,6 +329,7 @@ function buildSettings(
   notices: AgentEvent[],
   requestedEffort?: string,
   excludeTmpRoots?: boolean,
+  childTempDir?: string,
 ): CodexEngineSettings {
   driftNotice(preset, result, notices);
   // The model is the SERVER-CONFIRMED one from the thread echo, so the effort is
@@ -338,6 +355,7 @@ function buildSettings(
     ...(effort !== undefined ? { effort } : {}),
     effortsByModel,
     ...(excludeTmpRoots !== undefined ? { excludeTmpRoots } : {}),
+    ...(childTempDir !== undefined ? { childTempDir } : {}),
     notices,
   };
 }
@@ -532,7 +550,7 @@ export async function createNativeCodexSession(
   }, { timeoutMs: bounds.bootRpcMs });
   const native = nativeThread(result, "thread/start");
   const quota = await pullQuotaSnapshot(client, bounds.bootRpcMs);
-  const settings = buildSettings(workspace, catalog, preset, result, native.model, notices, selection?.effort, selection?.excludeTmpRoots);
+  const settings = buildSettings(workspace, catalog, preset, result, native.model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir);
   return {
     // A fresh thread has zero prior turns: no history to hydrate, and the
     // FIRST turn this launch runs is native turn ordinal 0 (cut §2(e)).
@@ -614,7 +632,7 @@ export async function resumeNativeCodexSession(
   // say so (recoverable, TASK.39 DoD-2), rather than burning the user's turn.
   const stored = resolveModel(catalog, selection, notices);
   const model = stored ?? native.model;
-  const settings = buildSettings(workspace, catalog, preset, resumed, model, notices, selection?.effort, selection?.excludeTmpRoots);
+  const settings = buildSettings(workspace, catalog, preset, resumed, model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir);
   return {
     engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota, agentBridge, agentCardLog),
     threadId: native.threadId,
@@ -1012,7 +1030,10 @@ export class CodexEngine implements SessionEngine {
   private turnSettingsOverride(): Record<string, unknown> {
     const settings = this.settings;
     if (settings === undefined) return {};
-    const override = settings.preset.turnOverride(settings.workspace, { excludeTmpRoots: settings.excludeTmpRoots });
+    const override = settings.preset.turnOverride(settings.workspace, {
+      excludeTmpRoots: settings.excludeTmpRoots,
+      extraWritableRoot: settings.childTempDir,
+    });
     const verifiedModel = settings.catalog.has(settings.model) ? settings.model : undefined;
     return {
       ...(verifiedModel !== undefined ? { model: verifiedModel } : {}),

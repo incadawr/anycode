@@ -10,8 +10,12 @@
  * path — the table itself carries no per-session state.
  *
  * Tmp-root exclusion (Taskana 4682) is a per-boot child-only option threaded
- * through `CodexSessionSelection.excludeTmpRoots`; the public preset table
- * keeps its frozen shape.
+ * through `CodexSessionSelection.excludeTmpRoots`; the 4682 rework pairs it
+ * with `extraWritableRoot` (the child's private `~/.anycode/tmp/<id>` dir,
+ * also set as TMPDIR/TMPPREFIX in the spawn env) so excluding the SHARED
+ * /tmp and $TMPDIR never breaks the toolchains that write there (zsh
+ * heredocs, tsx/playwright caches, mktemp, os.tmpdir()). The public preset
+ * table keeps its frozen shape.
  *
  * The public choices match Codex's permission menu. Renderer/host can only
  * ever pick a `presetId` from this table (host-authoritative membership check),
@@ -58,14 +62,22 @@ export interface CodexPermissionPresetDefinition {
   description: string;
   /** Sent verbatim on `thread/start` (initial policy, cut §2(d) "Применение"). */
   threadParams: { approvalPolicy: CodexApprovalPolicy; approvalsReviewer: CodexApprovalsReviewer; sandbox: CodexThreadSandboxMode };
-  /** Pure function of the session workspace — never baked into this frozen table. */
-  turnOverride: (workspace: string, opts?: { excludeTmpRoots?: boolean }) => CodexTurnOverride;
+  /**
+   * Pure function of the session workspace — never baked into this frozen table.
+   * Taskana 4682 rework: `opts.extraWritableRoot` (a codex child's PRIVATE
+   * temp dir, `~/.anycode/tmp/<childSessionId>`) appends one writable root
+   * AFTER the workspace; `opts.excludeTmpRoots` (a54b2f6d) excludes /tmp and
+   * $TMPDIR from the sandbox — the pair is what makes excluding the shared
+   * tmp non-breaking: every `os.tmpdir()` consumer inside the child lands in
+   * the private dir instead.
+   */
+  turnOverride: (workspace: string, opts?: { excludeTmpRoots?: boolean; extraWritableRoot?: string }) => CodexTurnOverride;
 }
 
-function workspaceWritePolicy(workspace: string, excludeTmpRoots = false): CodexSandboxPolicyWorkspaceWrite {
+function workspaceWritePolicy(workspace: string, excludeTmpRoots = false, extraWritableRoot?: string): CodexSandboxPolicyWorkspaceWrite {
   return {
     type: "workspaceWrite",
-    writableRoots: [workspace],
+    writableRoots: extraWritableRoot !== undefined ? [workspace, extraWritableRoot] : [workspace],
     networkAccess: false,
     excludeTmpdirEnvVar: excludeTmpRoots,
     excludeSlashTmp: excludeTmpRoots,
@@ -79,14 +91,14 @@ export const CODEX_PERMISSION_PRESETS: readonly CodexPermissionPresetDefinition[
     label: "Ask for approval",
     description: "Codex works in this workspace and asks before going beyond it.",
     threadParams: { approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: "workspace-write" },
-    turnOverride: (workspace, opts) => ({ approvalPolicy: "on-request", approvalsReviewer: "user", sandboxPolicy: workspaceWritePolicy(workspace, opts?.excludeTmpRoots ?? false) }),
+    turnOverride: (workspace, opts) => ({ approvalPolicy: "on-request", approvalsReviewer: "user", sandboxPolicy: workspaceWritePolicy(workspace, opts?.excludeTmpRoots ?? false, opts?.extraWritableRoot) }),
   },
   {
     id: "approve-for-me",
     label: "Approve for me",
     description: "Codex keeps the workspace boundary and sends eligible approvals to automatic review.",
     threadParams: { approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandbox: "workspace-write" },
-    turnOverride: (workspace, opts) => ({ approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandboxPolicy: workspaceWritePolicy(workspace, opts?.excludeTmpRoots ?? false) }),
+    turnOverride: (workspace, opts) => ({ approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandboxPolicy: workspaceWritePolicy(workspace, opts?.excludeTmpRoots ?? false, opts?.extraWritableRoot) }),
   },
   {
     id: "full-access",

@@ -1789,6 +1789,100 @@ describe("Taskana 4682 — excludeTmpRoots rides selection into every turn/start
   });
 });
 
+describe("Taskana 4682 rework — childTempDir rides the selection into writableRoots", () => {
+  it("the private dir is appended to writableRoots on EVERY turn/start, alongside the exclusion", async () => {
+    const server = new FakeAppServer();
+    const privateDir = "/Users/me/.anycode/tmp/018f-child";
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      presetId: "ask",
+      origin: "draft",
+      excludeTmpRoots: true,
+      childTempDir: privateDir,
+    });
+
+    // Boot stays byte-identical: the coarse thread/start string carries none
+    // of this (the thread's sandbox mode is re-asserted per turn below).
+    expect(server.threadStartParams).toEqual({
+      cwd: "/work",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    });
+
+    await runTurn(server, connected.engine);
+    await runTurn(server, connected.engine, "again");
+
+    const expected = {
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/work", privateDir],
+        networkAccess: false,
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    };
+    const starts = server.turnStartParams();
+    expect(starts).toHaveLength(2);
+    expect(starts[0]).toMatchObject(expected);
+    expect(starts[1]).toMatchObject(expected);
+  });
+
+  it("survives resume: the dir rides the selection into the resumed thread's turns", async () => {
+    const server = new FakeAppServer();
+    const privateDir = "/Users/me/.anycode/tmp/018f-resumed";
+    const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, {
+      presetId: "ask",
+      origin: "persisted",
+      excludeTmpRoots: true,
+      childTempDir: privateDir,
+    });
+
+    await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/work", privateDir],
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    });
+  });
+
+  it("without childTempDir the policy is byte-identical to a54b2f6d's exclusion-only form (owner tabs)", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      presetId: "ask",
+      origin: "draft",
+      excludeTmpRoots: true,
+    });
+
+    await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/work"],
+        excludeTmpdirEnvVar: true,
+        excludeSlashTmp: true,
+      },
+    });
+    expect(JSON.stringify(server.turnStartParams()[0])).not.toContain(".anycode/tmp");
+  });
+
+  it("is moot under full-access: no writableRoots to decorate", async () => {
+    const server = new FakeAppServer();
+    const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
+      presetId: "full-access",
+      origin: "draft",
+      excludeTmpRoots: true,
+      childTempDir: "/Users/me/.anycode/tmp/018f-full",
+    });
+
+    await runTurn(server, connected.engine);
+    expect(server.turnStartParams()[0]).toMatchObject({ sandboxPolicy: { type: "dangerFullAccess" } });
+    expect(JSON.stringify(server.turnStartParams()[0])).not.toContain("writableRoots");
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TASK.42 — resume-history hydration + the command shadow log (cut §2(e)).
 // ─────────────────────────────────────────────────────────────────────────────
