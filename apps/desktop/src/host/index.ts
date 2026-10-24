@@ -943,11 +943,14 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     bootstrap,
     broker,
     // Taskana 4265: the codex approval bridge auto-accepts a file change only
-    // when every target is realpath-provably inside the workspace AND the
-    // session's policy already allows workspace writes — for a child, the
-    // inherited core mode (edit/auto/yolo, `codexChildAutoAcceptsWorkspacePatches`);
-    // a root session keeps `false`, so for it only a seeded Edit/Write
-    // always-allow rule can ever vouch for a patch.
+    // when every change is an add/update, every target is realpath-provably
+    // inside the workspace, AND the session's policy already allows workspace
+    // writes — for a child, the inherited core mode (edit/auto/yolo,
+    // `codexChildAutoAcceptsWorkspacePatches`); a root session keeps `false`,
+    // so for it only a seeded Edit/Write always-allow rule can ever vouch for
+    // a patch. Delete-kind changes still ask (cross-review M1: edit-parity
+    // only — neither core's Write/Edit containment nor Claude's acceptEdits
+    // silently deletes).
     patchAutoApproval: {
       fs: new NodeFileSystemAdapter(),
       workspaceWritesAllowed: args.child !== undefined && codexChildAutoAcceptsWorkspacePatches(args.child.initialMode),

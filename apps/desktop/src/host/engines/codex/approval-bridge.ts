@@ -20,7 +20,8 @@
  * Fail-closed still holds: every path that is not an explicit user allow ends
  * as a denial, and nothing is auto-approved except a file change that
  * `shouldAutoAcceptPatch` (patch-auto-approval.ts, Taskana 4265) proves inside
- * the workspace under a policy that already allows workspace writes; without
+ * the workspace under a policy that already allows workspace writes — add/update
+ * changes only, a delete still asks (cross-review M1); without
  * `patchAutoApproval` the bridge never auto-approves.
  */
 

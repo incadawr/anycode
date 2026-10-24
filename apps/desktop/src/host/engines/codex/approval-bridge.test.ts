@@ -388,6 +388,29 @@ describe("CodexApprovalBridge — workspace patch auto-accept (Taskana 4265)", (
     expect(broker.pendingCount).toBe(0);
   });
 
+  // Cross-review M1 (Taskana 4265): a delete-kind patch asks even inside the
+  // workspace — core's edit-mode containment widens only Write/Edit and
+  // Claude's workspace tier is acceptEdits, so the codex child must not become
+  // the only posture that silently deletes contained files.
+  it("asks for a delete-kind patch even inside the workspace", async () => {
+    const items = new TurnItemIndex();
+    items.record({
+      type: "fileChange",
+      id: "item-file",
+      status: "inProgress",
+      changes: [{ path: join(WS, "a.ts"), kind: { type: "delete" }, diff: "-a" }],
+    });
+    const { bridge, broker, emitted } = rig4265(items, { patchAutoApproval: patchCtx() });
+    const response = responder();
+    bridge.handle(file(), response);
+    await vi.waitFor(() => expect(emitted.some((m) => m.type === "permission_request")).toBe(true));
+    expect(ask(emitted).toolName).toBe("CodexApplyPatch");
+    expect(response.result).not.toHaveBeenCalled();
+    broker.handleResponse(ask(emitted).requestId, "deny");
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+  });
+
   it("still asks for a patch outside the workspace, and a deny settles it as decline", async () => {
     const { bridge, broker, emitted } = rig4265(fileItem(join(OUTSIDE, "x.ts")), { patchAutoApproval: patchCtx() });
     const response = responder();

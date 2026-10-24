@@ -7,10 +7,11 @@
  * bridge the SAME rules, under the same fail-closed discipline: every target
  * path must be realpath-provably inside the session workspace (the exact
  * facts the core dispatcher mints via `resolveWorkspaceWriteFacts`), the
- * active preset must be workspace-write, and either the inherited mode
- * pre-authorises workspace writes or an always-allow Edit/Write rule covers
- * every target. Anything it cannot prove with certainty fails closed to a
- * normal ask.
+ * active preset must be workspace-write, every change must be an add/update
+ * (the only kinds the parity rule covers — see AUTO_ACCEPTABLE_CHANGE_KINDS),
+ * and either the inherited mode pre-authorises workspace writes or an
+ * always-allow Edit/Write rule covers every target. Anything it cannot prove
+ * with certainty fails closed to a normal ask.
  */
 
 import { dirname } from "node:path";
@@ -36,6 +37,27 @@ export interface CodexPatchAutoApprovalContext extends CodexPatchAutoApprovalPol
 }
 
 const CHANGE_KEYS = new Set(["path", "kind", "diff"]);
+
+/**
+ * Cross-review M1 (Taskana 4265): the pinned contract's `PatchChangeKind`
+ * variants are exactly `add`, `update`, and `delete`. The parity rule this
+ * module mirrors covers file EDITS only — core's edit-mode containment widens
+ * just Write/Edit (`WORKSPACE_WRITE_TOOLS`) and Claude's `workspace` tier is
+ * acceptEdits; in both, a delete rides an ASKED Bash, never a silent patch.
+ * Auto-accepting a delete here would make the codex child the only posture
+ * that silently deletes contained files, so `delete` (and any kind outside
+ * this pinned set — unknown future kinds fail closed with it) falls back to
+ * the ordinary ask.
+ */
+const AUTO_ACCEPTABLE_CHANGE_KINDS: ReadonlySet<string> = new Set(["add", "update"]);
+
+/** True iff a `changes` entry's kind is on the auto-accept allowlist; a kind we cannot decode fails closed. */
+function isAutoAcceptableChangeKind(kind: unknown): boolean {
+  if (kind === undefined || kind === null) return false;
+  if (typeof kind !== "object") return false;
+  const type = (kind as Record<string, unknown>).type;
+  return typeof type === "string" && AUTO_ACCEPTABLE_CHANGE_KINDS.has(type);
+}
 
 /** Every path a fileChange item would touch, or null when that cannot be enumerated with certainty (fail-closed). */
 export function patchTargetPaths(item: Record<string, unknown> | undefined): string[] | null {
@@ -71,9 +93,12 @@ export async function isPathProvablyInsideWorkspace(fs: FileSystemPort, workspac
 
 /**
  * Taskana 4265: true iff a file-change approval may be accepted without asking, under the
- * SAME rules a core child gets: the patch lands provably inside the session workspace AND
- * (the inherited mode allows workspace writes OR an always-allow Edit/Write rule covers every
- * target). Never for a grantRoot request, never outside a workspace-write preset.
+ * SAME rules a core child gets: the patch lands provably inside the session workspace,
+ * every change is an add/update (cross-review M1: a delete asks — the parity rule covers
+ * file edits only, exactly core's Write/Edit-only containment and Claude's acceptEdits),
+ * AND (the inherited mode allows workspace writes OR an always-allow Edit/Write rule
+ * covers every target). Never for a grantRoot request, never outside a workspace-write
+ * preset.
  */
 export async function shouldAutoAcceptPatch(
   ctx: CodexPatchAutoApprovalContext,
@@ -85,6 +110,13 @@ export async function shouldAutoAcceptPatch(
   if (preset === null || !WORKSPACE_WRITE_PRESETS.has(preset)) return false;
   const targets = patchTargetPaths(item);
   if (targets === null) return false;
+  // Cross-review M1: an `undefined`/absent kind is NOT auto-acceptable either — the
+  // pinned contract makes `kind` required, so a wire item without one is not a shape
+  // this policy was arbitrated over; fail closed to the ask.
+  const changes = item?.changes;
+  if (!Array.isArray(changes) || !changes.every((entry) => isAutoAcceptableChangeKind((entry as Record<string, unknown> | null)?.kind))) {
+    return false;
+  }
   for (const target of targets) {
     if (!(await isPathProvablyInsideWorkspace(ctx.fs, ctx.workspace, target))) return false;
   }

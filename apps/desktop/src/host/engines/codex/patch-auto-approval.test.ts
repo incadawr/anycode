@@ -112,6 +112,48 @@ describe("shouldAutoAcceptPatch — containment over the real fs", () => {
     ).resolves.toBe(false);
   });
 
+  // Cross-review M1 (Taskana 4265): core's edit-mode containment widens ONLY
+  // Write/Edit (WORKSPACE_WRITE_TOOLS) and Claude's `workspace` tier is
+  // acceptEdits — file EDITS; in both, a delete rides an asked Bash instead.
+  // Auto-accepting a delete-kind patch would make the codex child the only
+  // posture that silently deletes contained files, so it must fall back to ask.
+  it("asks for a delete-kind change even inside the workspace", async () => {
+    await expect(
+      shouldAutoAcceptPatch(ctx(), item([{ path: join(WS, "a.ts"), kind: { type: "delete" }, diff: "-a" }]), null),
+    ).resolves.toBe(false);
+  });
+
+  it("asks when ANY change in the patch deletes (mixed add+delete)", async () => {
+    await expect(
+      shouldAutoAcceptPatch(
+        ctx(),
+        item([
+          { path: join(WS, "new.ts"), kind: { type: "add" }, diff: "+n" },
+          { path: join(WS, "a.ts"), kind: { type: "delete" }, diff: "-a" },
+        ]),
+        null,
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it("asks for a delete even when an always-allow Edit rule would vouch for it", async () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Edit" });
+    await expect(
+      shouldAutoAcceptPatch(
+        ctx({ workspaceWritesAllowed: false, rules }),
+        item([{ path: join(WS, "a.ts"), kind: { type: "delete" }, diff: "-a" }]),
+        null,
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it("asks when kind.type is not one of the pinned add/update variants", async () => {
+    await expect(
+      shouldAutoAcceptPatch(ctx(), item([{ path: join(WS, "a.ts"), kind: { type: "future-kind" }, diff: "x" }]), null),
+    ).resolves.toBe(false);
+  });
+
   it("never accepts a grantRoot request", async () => {
     await expect(
       shouldAutoAcceptPatch(ctx(), item([{ path: join(WS, "a.ts"), kind: { type: "update" }, diff: "+a" }]), "/x"),

@@ -34,6 +34,11 @@ if (args.includes("--version")) {
   if (!args.includes("--hang-version") && !args.includes("--version-grandchild")) process.exit(0);
 } else {
   const fixture = args.find((arg) => arg.startsWith("--fixture="));
+  // Taskana 4265 cross-review M2: the last id:88 RESPONSE line this fake
+  // app-server received (what the host answered an emitted approval with).
+  // `read-approval-answer` replays it so a driving test can observe the
+  // wrapped bridge's real accept without touching host internals.
+  let lastApprovalAnswer = null;
   if (args.includes("--malformed")) process.stdout.write("not-json\n");
   if (args.includes("--oversize")) process.stdout.write(`${"x".repeat(2_048)}\n`);
   if (args.includes("--pre-init-noise")) {
@@ -81,12 +86,34 @@ if (args.includes("--version")) {
       process.stdout.write(`${JSON.stringify({ id: request.id, result: { thread: { id: "thread-180", turns: [] }, model: "gpt-test" } })}\n`);
     } else if (request.method === "thread/read") {
       process.stdout.write(`${JSON.stringify({ id: request.id, result: { thread: { id: "thread-180", turns: [] } } })}\n`);
+    } else if (request.method === "turn/start") {
+      // Taskana 4265 cross-review M2: answers with a REAL native turn id so a
+      // driven turn can pass Phase A and own an active turn the approval
+      // correlates against. The turn is then left deliberately un-terminated
+      // (the driving test disposes the engine), matching a live turn parked
+      // on an approval.
+      process.stdout.write(`${JSON.stringify({ id: request.id, result: { turn: { id: "native-turn-1", status: "inProgress" } } })}\n`);
+    } else if (request.method === "emit-notification") {
+      // Forwards an arbitrary notification verbatim (no id to answer — this is
+      // a notify): the engine's transport tap indexes `item/started` lines at
+      // dispatch, exactly as a live app-server's stream would.
+      process.stdout.write(`${JSON.stringify(request.params)}\n`);
     } else if (request.method === "echo") {
       process.stdout.write(`${JSON.stringify({ id: request.id, result: request.params })}\n`);
+    } else if (request.method === "read-approval-answer") {
+      process.stdout.write(`${JSON.stringify({ id: request.id, result: lastApprovalAnswer })}\n`);
     } else if (request.id === 88 || request.id === "request-88") {
+      lastApprovalAnswer = request.result ?? null;
       process.stdout.write(`${JSON.stringify({ method: "test/server-response", params: request })}\n`);
     } else if (request.method === "emit-server-request") {
       process.stdout.write(`${JSON.stringify({ id: 88, method: "item/commandExecution/requestApproval", params: { command: "pwd" } })}\n`);
+    } else if (request.method === "emit-server-request-file") {
+      // Taskana 4265 cross-review M2: emits a file-change approval whose
+      // identity (threadId/turnId/itemId) the REQUEST's params carry — the
+      // driving test supplies the live turn's real values, so the wrapped
+      // bridge correlates it against the item the same stdout stream indexed.
+      const emit = { id: 88, ...request.params };
+      process.stdout.write(`${JSON.stringify(emit)}\n`);
     } else if (request.method === "emit-server-request-string") {
       process.stdout.write(`${JSON.stringify({ id: "request-88", method: "item/commandExecution/requestApproval", params: { command: "pwd" } })}\n`);
     } else if (request.method === "exit") {

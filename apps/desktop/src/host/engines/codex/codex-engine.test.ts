@@ -1,11 +1,15 @@
 import { readFileSync } from "node:fs";
+import * as fsp from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, beforeEach, afterEach, expect, it, vi } from "vitest";
 import type { AgentEvent, SessionSubagentPort } from "@anycode/core";
+import { NodeFileSystemAdapter } from "@anycode/core";
 import type { HostToUiMessage } from "../../../shared/protocol.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge } from "./approval-bridge.js";
+import type { CodexPatchAutoApprovalPolicy } from "./patch-auto-approval.js";
 import type { JsonRpcNotification, JsonRpcServerRequest } from "./protocol.js";
 import { NATIVE_PERSISTED, type ShadowCommandItem } from "./history-projection.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
@@ -2925,6 +2929,204 @@ describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding (TASK.18
       expect(events.filter((event) => event.type === "engine_notice")).toHaveLength(0);
     } finally {
       await connected.engine.dispose("session-close").catch(() => {});
+    }
+  });
+});
+
+// ── Taskana 4265 / cross-review M2: the PRODUCTION patchAutoApproval wiring ──
+//
+// The unit tests inject `CodexPatchAutoApprovalContext` straight into the
+// bridge, so nothing pinned the closure `startCodexEngine` itself builds:
+// `{...options.patchAutoApproval, workspace: options.workspace,
+// activePresetId: () => engine?.snapshot().activePresetId ?? null}`. These
+// run the REAL wrapper over the REAL AppServerClient + test-child.mjs (same
+// rig as the TASK.180 bootNotices tests — a live child process, real fd
+// transport, real initialize handshake, a real driven turn), so a future
+// refactor that drops `workspace`, freezes the preset at boot, or keys the
+// closure to a dead engine fails here instead of passing silently. Verified
+// by mutation: dropping `workspace` from the closure and reading the preset
+// from a dead closure both fail the accept test; a lying fs port fails it
+// too (containment genuinely runs through the supplied FileSystemPort).
+describe("startCodexEngine — patchAutoApproval wiring (Taskana 4265, cross-review M2)", () => {
+  let WS = "";
+  let OUTSIDE = "";
+
+  beforeEach(async () => {
+    WS = await fsp.realpath(await fsp.mkdtemp(join(tmpdir(), "p4265-wire-")));
+    OUTSIDE = await fsp.realpath(await fsp.mkdtemp(join(tmpdir(), "p4265-wire-out-")));
+    await fsp.writeFile(join(WS, "a.ts"), "a\n", "utf8");
+  });
+
+  afterEach(async () => {
+    for (const dir of [WS, OUTSIDE]) {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * One wrapped boot plus the live-wire pieces a file-change approval needs:
+   * the REAL `startCodexEngine` (real AppServerClient, real test-child.mjs
+   * process, real initialize handshake), a REAL broker whose parked ask the
+   * test settles, and one driven turn whose native id and item index the
+   * approval correlates against.
+   */
+  async function bootWired(patchAutoApproval: Partial<CodexPatchAutoApprovalPolicy> = {}) {
+    const emitted: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), 60_000);
+    const connected = await startCodexEngine({
+      binaryPath: process.execPath,
+      binaryArgs: [childPath],
+      cwd: process.cwd(),
+      sourceEnv: { HOME: "/home/test", PATH: process.env.PATH, CODEX_HOME: "/codex-home" },
+      binaryTrust: () => null,
+      bootstrap: { adopt: () => {} } as never,
+      broker,
+      workspace: WS,
+      patchAutoApproval: {
+        fs: new NodeFileSystemAdapter(),
+        workspaceWritesAllowed: true,
+        rules: null,
+        ...patchAutoApproval,
+      },
+    } as Parameters<typeof startCodexEngine>[0]);
+    const engine = connected.engine;
+    // The CodexClient the engine was built on IS the spawned AppServerClient.
+    const client = (engine as unknown as { client: CodexClient }).client;
+
+    return { connected, engine, client, broker, emitted };
+  }
+
+  /**
+   * Drives one file-change approval through the REAL transport: starts a turn
+   * (test-child answers turn/start with a real native id), streams the
+   * `item/started` (fileChange) the approval correlates with — live order,
+   * w1-p3: the item precedes the approval — then has the fake app-server emit
+   * the approval REQUEST as a live server request. Resolves once the wrapper
+   * ANSWERED it: `{accepted:true}` (auto-accept; no ask anywhere) or
+   * `{asked:true}` (the bridge parked a broker ask the caller must settle).
+   *
+   * How the answer is observed: the wrapped bridge writes its JSON-RPC
+   * response (`{id:88, result:{decision:"accept"}}`) to the child's stdin;
+   * the child latches it and replays it on the `read-approval-answer` RPC,
+   * so the test reads the REAL wire answer without touching host internals.
+   * The broker's ask is polled in parallel, so both outcomes are covered
+   * without hanging.
+   */
+  async function driveFileChangeApproval(
+    rig: Awaited<ReturnType<typeof bootWired>>,
+    itemId: string,
+    path: string,
+    kindType: "add" | "update",
+  ): Promise<{ accepted?: boolean; asked?: boolean }> {
+    const { engine, client, emitted } = rig;
+    const turn = (async () => {
+      for await (const _event of engine.runTurn("wire", { signal: new AbortController().signal })) {
+        void _event;
+      }
+    })();
+    // Phase A: wait for the engine to own the native turn the approval names.
+    let turnId = "";
+    for (let i = 0; i < 600 && turnId === ""; i += 1) {
+      const active = engine.activeTurnDetails;
+      if (active !== null) turnId = active.turnId;
+      else await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (turnId === "") throw new Error("the turn never started (no active native turn)");
+
+    // item/started BEFORE the approval (live wire order). The engine's
+    // transport tap indexes it synchronously at dispatch; poll the engine's
+    // own active-turn index until it holds the item, so the approval cannot
+    // race a line still in flight.
+    client.notify("emit-notification", {
+      method: "item/started",
+      params: {
+        threadId: engine.threadId,
+        turnId,
+        item: { type: "fileChange", id: itemId, status: "inProgress", changes: [{ path, kind: { type: kindType }, diff: "x" }] },
+      },
+    });
+    for (let i = 0; i < 600; i += 1) {
+      if (engine.activeTurnDetails?.items?.get(itemId) !== undefined) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (engine.activeTurnDetails?.items?.get(itemId) === undefined) {
+      throw new Error("the fileChange item was never indexed");
+    }
+
+    // The approval request, exactly the live w1-p3 shape, emitted by the fake
+    // app-server as a LIVE server request with THIS turn's identity.
+    client.request("emit-server-request-file", {
+      method: "item/fileChange/requestApproval",
+      params: { threadId: engine.threadId, turnId, itemId, startedAtMs: 1, reason: null, grantRoot: null },
+    }).catch(() => {});
+
+    // Bounded wait for whichever outcome arrives first: the auto-accept
+    // answer on the wire, or the parked broker ask.
+    const outcome = await new Promise<{ accepted?: boolean; asked?: boolean }>((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error("the wrapper neither accepted nor asked within 10s")), 10_000);
+      const askPoll = setInterval(() => {
+        if (emitted.some((message) => message.type === "permission_request")) {
+          clearInterval(askPoll);
+          clearInterval(acceptPoll);
+          clearTimeout(deadline);
+          resolve({ asked: true });
+        }
+      }, 10);
+      const acceptPoll = setInterval(() => {
+        client
+          .request("read-approval-answer", {})
+          .then((answer) => {
+            const decision = (answer as { decision?: unknown } | null)?.decision;
+            if (decision === "accept") {
+              clearInterval(askPoll);
+              clearInterval(acceptPoll);
+              clearTimeout(deadline);
+              resolve({ accepted: true });
+            }
+          })
+          .catch(() => {});
+      }, 25);
+    });
+    void turn;
+    return outcome;
+  }
+
+  // Live-process boot + a driven turn: needs a wider budget than the 5 s unit default.
+  it("accepts a provably in-workspace add without asking — the wiring carries workspace + live preset", { timeout: 30_000 }, async () => {
+    const rig = await bootWired();
+    try {
+      // The wrapper booted the default preset and the engine APPLIED it — the
+      // gate the closure reads must see exactly this value.
+      expect(rig.connected.presetId).toBe("ask");
+      expect(rig.engine.snapshot().activePresetId).toBe("ask");
+
+      const outcome = await driveFileChangeApproval(rig, "wire-add", join(WS, "wire.ts"), "add");
+
+      // THE assertion: the wrapped bridge auto-accepted a contained add —
+      // the closure carried the real workspace, the real fs port, and the
+      // live applied preset. And no ask ever reached the UI.
+      expect(outcome).toEqual({ accepted: true });
+      expect(rig.emitted.filter((message) => message.type === "permission_request")).toHaveLength(0);
+      expect(rig.broker.pendingCount).toBe(0);
+    } finally {
+      await rig.engine.dispose("session-close").catch(() => {});
+    }
+  });
+
+  it("asks for a patch outside the wired workspace — the closure carried the REAL workspace", { timeout: 30_000 }, async () => {
+    const rig = await bootWired();
+    try {
+      const outcome = await driveFileChangeApproval(rig, "wire-out", join(OUTSIDE, "x.ts"), "add");
+
+      // An out-of-workspace patch MUST park an ask (never a silent accept,
+      // never a scoped error) — the ask is the proof the closure's `workspace`
+      // is the real one and containment ran through the REAL fs port.
+      expect(outcome).toEqual({ asked: true });
+      const ask = rig.emitted.find((message) => message.type === "permission_request");
+      expect(ask).toMatchObject({ toolName: "CodexApplyPatch" });
+      if (ask && ask.type === "permission_request") rig.broker.handleResponse(ask.requestId, "deny");
+    } finally {
+      await rig.engine.dispose("session-close").catch(() => {});
     }
   });
 });
