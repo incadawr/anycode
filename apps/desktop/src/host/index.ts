@@ -1415,7 +1415,12 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
             // and a push with no live turn waits in the engine's queue for
             // the next turn's send barrier (stall notices ride child_report
             // instead, via onDetachedStall above).
-            onEvent: (event) => pushBridgeEvent?.(event),
+            // Codex-door parity (dynamic-tool-bridge.ts): once the call is
+            // aborted (Stop / CLI cancel) its late progress is dropped, not
+            // queued into the next turn's send barrier as a stale card patch.
+            onEvent: (event) => {
+              if (signal?.aborted !== true) pushBridgeEvent?.(event);
+            },
           });
           // The MCP `tools/call` response itself has no room for a card
           // payload (`{text, isError}` only — plan §3.1); the durable
