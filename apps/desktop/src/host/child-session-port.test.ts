@@ -347,6 +347,30 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
       await pending;
     });
 
+    // Taskana 4055 cross-review F1: the session tier's kind:"end" progress is
+    // the ONLY source of subagent_end (tools/agent.ts), so the ceiling summary
+    // must ride it or the UI budget line and telemetry never fire.
+    it("a terminal event carrying a ceiling summary puts it on the end-progress report (Taskana 4055 F1)", async () => {
+      const { port, sent, emit } = harness();
+      const onProgress = vi.fn();
+      const pending = port.run(
+        { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-ceiling-end" },
+        { onProgress },
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-ce", childTabId: "tab-ce", model: "m" });
+      onProgress.mockClear();
+
+      const ceiling = { rounds: 1, grantedTurns: 1, lastRefusal: "stalled" as const };
+      emit(terminalEvent(requestId, { status: "max_turns", childSessionId: "child-ce", ceiling }));
+
+      const ends = onProgress.mock.calls.map(([p]) => p as SubagentProgress).filter((p) => p.kind === "end");
+      expect(ends).toHaveLength(1);
+      expect(ends[0]).toMatchObject({ kind: "end", ceiling });
+      const outcome = await pending;
+      expect(outcome.ceiling).toEqual(ceiling);
+    });
+
     it("a terminal event with NO activitySuppressed carries no such key on the end-progress report (parity with inline's absent-when-zero form)", async () => {
       const { port, sent, emit } = harness();
       const onProgress = vi.fn();
