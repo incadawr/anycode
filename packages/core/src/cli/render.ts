@@ -49,6 +49,12 @@ export interface TranscriptOptions {
   collapse?: boolean;
   /** Render the model's reasoning stream (default on in interactive, off in print/non-TTY). */
   reasoning?: boolean;
+  /**
+   * `--print` is headless-by-contract: there is no REPL waiting for a next
+   * message, so the turn-limit stop line states the fact only (Taskana 4111
+   * cross-review) instead of naming a "send a message" action that does not exist.
+   */
+  headless?: boolean;
 }
 
 /**
@@ -518,7 +524,9 @@ export function renderEvent(
       // history with a fresh turn budget (the interactive REPL already accepts
       // the next message; `--print` is headless-by-contract and out of scope).
       write(event.reason === "max_turns"
-        ? `\n[stopped: turn limit reached (${event.turns} turns) — send a message to continue with the same history]\n`
+        ? transcript?.headless
+          ? `\n[stopped: turn limit reached (${event.turns} turns)]\n`
+          : `\n[stopped: turn limit reached (${event.turns} turns) — send a message to continue with the same history]\n`
         : `\n[loop_end: ${event.reason}, turns=${event.turns}]\n`);
       break;
     case "stream_retry":

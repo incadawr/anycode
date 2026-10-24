@@ -123,6 +123,20 @@ describe("runPrintMode — stdout/stderr split + exit codes (design §3.3)", () 
     expect(code).toBe(0);
   });
 
+  it("Taskana 4111 cross-review: the headless stderr stop line states the fact only — no 'send a message' hint (there is no REPL to continue into)", async () => {
+    async function* maxTurnsTurn(): AsyncGenerator<AgentEvent, void, unknown> {
+      yield { type: "loop_end", reason: "max_turns", turns: 40 };
+    }
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const getErr = collect(stderr);
+    const fakes = makeFakeShutdown();
+
+    await runPrintMode(baseOpts(makeFakeLoop(() => maxTurnsTurn()), fakes, stdout, stderr));
+    expect(getErr()).toContain("[stopped: turn limit reached (40 turns)]");
+    expect(getErr()).not.toContain("send a message");
+  });
+
   it("exit 1 on a stream-level error event (loop_end reason error)", async () => {
     async function* erroredTurn(): AsyncGenerator<AgentEvent, void, unknown> {
       yield { type: "error", error: new Error("stream exploded"), safe: { code: "network", message: "network error" } };

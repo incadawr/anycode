@@ -56,6 +56,14 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
     expect(collect([{ type: "loop_end", reason: "max_turns", turns: 100 }])).toContain(
       "send a message to continue with the same history",
     );
+    // Taskana 4111 cross-review: --print is headless — no REPL to continue into.
+    const headless = (text: string): string => {
+      let out = "";
+      renderEvent({ type: "loop_end", reason: "max_turns", turns: 100 }, (c) => (out += c), undefined, { headless: true });
+      return out;
+    };
+    expect(headless("")).toContain("[stopped: turn limit reached (100 turns)]");
+    expect(headless("")).not.toContain("send a message");
   });
 
   it("renders a ceiling grant with round, grant, total and remaining (TASK.124 T19)", () => {
