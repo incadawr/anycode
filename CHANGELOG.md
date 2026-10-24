@@ -14,6 +14,16 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   next healthy entry, or to the parent's model, with a visible notice. Engine
   roles in orchestrate mode also run in the background by default.
 
+### Security
+
+- A project folder's own process declarations no longer start on open: project
+  MCP servers, hooks, LSP servers and project-plugin MCP servers wait until you
+  trust the folder. The desktop app shows a dialog listing the commands (Trust,
+  Trust once, Don't trust); the CLI asks at startup. Non-interactive runs skip
+  them with a warning; `ANYCODE_TRUST_WORKSPACE=1` trusts one run only. Your
+  user-level config is unaffected. This is a behaviour change for existing
+  projects: each one asks once, and asks again if its commands change.
+
 ## [0.0.36] — 2026-10-25
 
 ### Added
