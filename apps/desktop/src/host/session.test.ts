@@ -1360,6 +1360,52 @@ describe("Session — core steer_message injection (Taskana 4110 / TASK.123)", (
       h.close();
     }
   });
+
+  it("cross-review F2: steer_requeued carries the steer text on every refusal path (reload recovery)", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // Idle refusal path: the message must carry the text so a renderer that
+      // reloaded between send and refusal can re-queue the user's words.
+      h.send({ type: "steer_message", requestId: "r-idle", text: "too late" });
+      const requeued = await h.waitFor((m): m is Of<"steer_requeued"> => m.type === "steer_requeued" && m.requestId === "r-idle");
+      expect(requeued.reason).toContain("No active core turn");
+      expect(requeued.text).toBe("too late");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("cross-review F3: session_checkpoint ships this tab's pending UI steers on ui_ready", async () => {
+    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // Park the turn mid-dispatch, then send a steer that stays pending in
+      // the loop's injection queue (the seam has not flushed yet).
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      const req = await h.waitFor(isPermissionRequest);
+      h.send({ type: "steer_message", requestId: "r-pend", text: "HELD-PENDING" });
+
+      // Reconnect BEFORE the seam flushes: the checkpoint must project the
+      // still-pending steer so a fresh renderer can show it.
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      const checkpoint = await h.waitFor(
+        (m): m is Of<"session_checkpoint"> => m.type === "session_checkpoint" && h.received.indexOf(m) >= before,
+      );
+      expect(checkpoint.pendingSteers).toEqual([{ requestId: "r-pend", text: "HELD-PENDING" }]);
+
+      // Drain the turn cleanly.
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+    } finally {
+      h.close();
+    }
+  });
 });
 
 describe("Session — vision fallback (TASK.198 срез C)", () => {

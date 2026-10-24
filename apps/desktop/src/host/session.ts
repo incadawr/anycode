@@ -1564,6 +1564,17 @@ export class Session {
    */
   private latestPublicResult: SessionPublicResult | null = null;
   private readonly messageTurns = new Map<string, { hostTurnId: string | null; nativeTurnId?: string }>();
+  /**
+   * Cross-review F3 (2026-10-24): this tab's UI steers accepted into the
+   * running core turn's injection queue but not yet flushed at the seam, in
+   * send order. Mirrors TASK.117's `pendingPrompt` discipline (host-owned
+   * truth a reconnecting renderer cannot reconstruct) at the breadth the
+   * 4110 seam needs (SEVERAL steers may pend at once). Cleared on delivery
+   * (handleUiSteerMessage's then), on refusal (its catch/emit paths), and
+   * swept at turn teardown (a frame that never flushed rejects through the
+   * engine and rides steer_requeued instead).
+   */
+  private pendingUiSteers: { requestId: string; text: string }[] = [];
 
   communicationResult() {
     const latest = this.latestPublicResult;
@@ -1622,23 +1633,35 @@ export class Session {
       return;
     }
     if (this.shuttingDown || !this.busy || this.relocating) {
-      this.outbound.emit({ type: "steer_requeued", requestId, reason: this.shuttingDown ? "shutting down" : "No active core turn" });
+      // Cross-review F2: the text rides the refusal so a renderer that
+      // reloaded between send and refusal (its pendingSteers entry died with
+      // performReset) can still re-queue the user's words from the replayed
+      // message.
+      this.outbound.emit({ type: "steer_requeued", requestId, reason: this.shuttingDown ? "shutting down" : "No active core turn", text });
       return;
     }
     const receivingTurnId = this.turnId;
+    // Cross-review F3: remember the accepted-but-undelivered steer so the
+    // per-connect session_checkpoint can project it to a reconnecting
+    // renderer (pendingSteers). Cleared on delivery (the same then() below),
+    // on refusal, and on turn teardown — failUndeliveredSteers' reject maps
+    // to steer_requeued (text rides it), and endTurn sweeps the rest.
+    this.pendingUiSteers.push({ requestId, text });
     void this.engine
       .steer(text)
       .then((ack) => {
         // Delivered into the running turn at the legal seam. The
         // user_injected event owns the transcript; messageTurns keeps the
         // correlation for status consumers.
+        this.pendingUiSteers = this.pendingUiSteers.filter((entry) => entry.requestId !== requestId);
         this.messageTurns.set(requestId, { hostTurnId: receivingTurnId, nativeTurnId: ack.turnId });
       })
       .catch(() => {
         // Honest loss report — CoreEngine rejects only when the frame cannot
         // land in THIS turn (Stop, ceiling/deadline, pre-loop failure,
         // superseded, turn raced to idle). The renderer re-queues the text.
-        this.outbound.emit({ type: "steer_requeued", requestId, reason: "core turn ended before injection" });
+        this.pendingUiSteers = this.pendingUiSteers.filter((entry) => entry.requestId !== requestId);
+        this.outbound.emit({ type: "steer_requeued", requestId, reason: "core turn ended before injection", text });
       });
   }
 
@@ -2559,6 +2582,11 @@ export class Session {
       // other source, and a >CAP overflow evicts it). Absent when nothing is
       // executing (idle turn / older renderer changes nothing).
       ...(this.runningTools.size > 0 ? { runningTools: [...this.runningTools.keys()] } : {}),
+      // Cross-review F3 (2026-10-24): this tab's undelivered UI steers, so a
+      // reconnecting renderer re-renders its pending-steer rows (its own
+      // pendingSteers died with performReset). Absent when nothing is pending
+      // — an older renderer ignores it, and an idle turn never holds one.
+      ...(this.pendingUiSteers.length > 0 ? { pendingSteers: [...this.pendingUiSteers] } : {}),
       ...(this.checkpointSessionTokens !== null
         ? { sessionTokens: this.checkpointSessionTokens, ...(this.checkpointCountedSteps.length > 0 ? { countedSteps: [...this.checkpointCountedSteps] } : {}) }
         : {}),

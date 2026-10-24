@@ -7921,4 +7921,94 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
     legacy.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
     expect(legacy.getState().steering).toBeNull();
   });
+
+  // ── cross-review F1/F2/F3/F4 (2026-10-24): reconnect/replay honesty ──
+
+  it("F1: a ring-replayed user_injected whose step is durably covered does NOT duplicate the hydrated bubble", () => {
+    // Reconnect shape: fresh store -> host_ready -> session_history carries the
+    // injected frame as a durable user item stamped {turnId: t1, step: 1} (the
+    // loop's seam stamps the frame with the SAME afterStep as the event) ->
+    // replayed turn_started re-arms the turn -> the ring replays the
+    // agent_event{user_injected} envelope (envelope step 2 — the FOLLOWING
+    // model step; the event's own step is 1). The hydrated user_text block
+    // owns the rendering; the replayed event must not append a twin.
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        { id: "u1", createdAt: 1, turnId: "t1", step: 0, message: { role: "user", content: "go" } },
+        { id: "u2", createdAt: 2, turnId: "t1", step: 1, message: { role: "user", content: "STEER!" } },
+      ] as WireHistoryItem[],
+    });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      step: 2,
+      event: { type: "user_injected", step: 1, text: "STEER!" },
+    });
+    const texts = store.getState().transcript.filter((b) => b.kind === "user_text").map((b) => (b as { text: string }).text);
+    expect(texts.filter((t) => t === "STEER!")).toHaveLength(1);
+  });
+
+  it("F2: steer_requeued with text survives a renderer reload (unknown requestId after performReset)", () => {
+    // The reload shape: a NEW store applies the reconnect cascade. The replay
+    // ring re-fires steer_requeued for a steer whose pendingSteers entry died
+    // with the old renderer. The message now carries the text (protocol fix),
+    // so the text is recovered into the prompt queue — never lost.
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "steer_requeued", requestId: "r-lost", reason: "core turn ended before injection", text: "PENDING STEER TEXT" });
+    expect(store.getState().promptQueue.map((q) => q.text)).toEqual(["PENDING STEER TEXT"]);
+  });
+
+  it("F2: a legacy steer_requeued without text on an unknown requestId stays a no-op (old-host compat)", () => {
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "steer_requeued", requestId: "r-legacy", reason: "core turn ended before injection" });
+    expect(store.getState().promptQueue).toEqual([]);
+    expect(store.getState().notice).toBeNull();
+  });
+
+  it("F3: session_checkpoint pendingSteers restores the pending-steer rows on a reconnected store", () => {
+    // The host ships this-tab's undelivered UI steers on every ui_ready (the
+    // same per-connect discipline as pending_prompt). A reconnected renderer
+    // re-renders its pending-steer rows instead of showing nothing until the
+    // seam flushes.
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({
+      type: "session_checkpoint",
+      liveTurnId: "t1",
+      pendingSteers: [{ requestId: "r1", text: "held-1" }, { requestId: "r2", text: "held-2" }],
+    } as HostToUiMessage);
+    expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["r1", "r2"]);
+    expect(store.getState().uiSteerPending).toEqual(["r1", "r2"]);
+    // Delivery still retires them in FIFO order (the restored rows ride the
+    // same user_injected retire path as live-sent ones).
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      step: 1,
+      event: { type: "user_injected", step: 1, text: "held-1" },
+    });
+    expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["r2"]);
+    expect(store.getState().uiSteerPending).toEqual(["r2"]);
+  });
+
+  it("F4: steer_requeued appends at the queue TAIL — an ordinary queued prompt typed earlier sends first", () => {
+    const store = runningStore();
+    // A was typed while running (queue); S was sent as a steer AFTER A.
+    store.getState().enqueuePrompt({ text: "A-first", images: [] });
+    store.getState().recordPendingSteer("r-s", "S-later", { text: "S-later", images: [] });
+    store.getState().markUiSteer("r-s");
+
+    store.getState().applyHostMessage({ type: "steer_requeued", requestId: "r-s", reason: "core turn ended before injection" });
+
+    expect(store.getState().promptQueue.map((q) => q.text)).toEqual(["A-first", "S-later"]);
+  });
 });

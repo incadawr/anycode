@@ -1191,6 +1191,16 @@ export interface DesktopState {
    * a host respawn (see the section comment above `QueuedPrompt`).
    */
   promptQueue: readonly QueuedPrompt[];
+  /**
+   * Cross-review F2 (2026-10-24): requestIds of the steers whose text was
+   * ALREADY recovered into `promptQueue` from a `steer_requeued` message (the
+   * reload-recovery path — no pendingSteers entry existed). NOT part of the
+   * session slice (mirrors promptQueue): the replay ring may re-deliver the
+   * same steer_requeued after a host_ready, and this list keeps that duplicate
+   * from enqueueing the text twice. Unbounded growth is not a concern: it
+   * holds one short id per REFUSED steer in this renderer's lifetime.
+   */
+  steerRequeueSeen: string[];
   /** True after an anomalous turn end / respawn / reject left the queue held for the user to Resume or Clear. */
   queuePaused: boolean;
   /**
@@ -3082,7 +3092,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           event.type === "reasoning_end" ||
           event.type === "tool_call" ||
           event.type === "tool_execution_start" ||
-          event.type === "tool_result";
+          event.type === "tool_result" ||
+          // Cross-review F1: the injected user frame is CONTENT — a below-cut
+          // replay must not resurrect a frame the truncated snapshot cut away.
+          event.type === "user_injected";
         if (isContentClass) {
           return;
         }
@@ -3146,7 +3159,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           event.type === "reasoning_start" ||
           event.type === "reasoning_delta" ||
           event.type === "reasoning_end" ||
-          event.type === "tool_call";
+          event.type === "tool_call" ||
+          // Cross-review F1: `user_injected`'s durable twin is the step's OWN
+          // user item (stamped with the same afterStep the event carries), so
+          // a covered-step replay would duplicate the hydrated user_text.
+          event.type === "user_injected";
         if (isContentClass) {
           return;
         }
@@ -3824,13 +3841,44 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // matching UI-owned pendingSteer is retired: this event is the
         // delivery confirmation the optimistic bubble was waiting for. Reaching this case means the turn guard above already
         // matched the running turnId.
-        case "user_injected":
-          appendBlock({
-            kind: "user_text",
-            id: `injected:${turnId}:${event.step}:${injectedSeq++}`,
-            text: event.text,
-            at: Date.now(),
-          });
+        case "user_injected": {
+          // Cross-review F1 (2026-10-24): REPLAY DEDUPE. The loop's seam
+          // stamps the durable user item with the SAME afterStep this event
+          // carries (`event.step` = the ordinal of the step whose results
+          // precede the frame), so on a reconnect-within-a-turn the fresh
+          // session_history hydrates the frame as `${itemId}:0` and a
+          // ring-replayed copy of THIS event would append a twin bubble.
+          // Suppress the append iff that exact (turnId, event.step) frame is
+          // durably covered — the same rule the covered/belowCut lists apply
+          // to text/tool_call, keyed on the EVENT's own step (NOT the
+          // envelope's: the envelope rides the FOLLOWING model step because
+          // the host stamps `currentStep` from the just-yielded turn_start,
+          // so an envelope-keyed check would miss the mid-step reconnect).
+          // The pendingSteer retire below still runs on a suppressed copy —
+          // a reconnected store restored its rows from the checkpoint
+          // (cross-review F3) and this replayed delivery confirmation is
+          // exactly what retires them; nothing renders twice because the
+          // retire only filters rows.
+          const injectedCovered = causalFoldEngaged && stepCovered(turnId, event.step);
+          const injectedBelowCut =
+            causalFoldEngaged &&
+            step !== undefined &&
+            historyCutBoundary !== null &&
+            (() => {
+              const boundary = historyCutBoundary.get(turnId);
+              if (boundary === undefined) {
+                return handshakeCutTurnIds !== null ? handshakeCutTurnIds.has(turnId) : turnId !== handshakeLiveTurnId;
+              }
+              return event.step < boundary;
+            })();
+          if (!injectedCovered && !injectedBelowCut) {
+            appendBlock({
+              kind: "user_text",
+              id: `injected:${turnId}:${event.step}:${injectedSeq++}`,
+              text: event.text,
+              at: Date.now(),
+            });
+          }
           // 4110 rework: retire the oldest matching pendingSteer AND forget its
           // owner bookkeeping — a delivered steer must never be re-queued by
           // a later loop_end / steer_requeued for the same requestId.
@@ -3848,6 +3896,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             };
           });
           return;
+        }
 
         // Turn-ceiling grant (TASK.124 cut-1): the ladder extended the turn
         // cap — must be visible in the feed, never silent. Minimal row: the
@@ -3904,6 +3953,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       promptQueue: [],
       queuePaused: false,
       queueInFlight: null,
+      // Cross-review F2: reload-recovery dedupe list — outside the session
+      // slice so a respawn+replay never double-enqueues a refused steer.
+      steerRequeueSeen: [],
 
       applyHostMessage(message: HostToUiMessage): void {
         switch (message.type) {
@@ -4129,12 +4181,38 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // this UI steer into the running turn (idle/pre-loop, Stop raced,
             // ceiling/deadline, superseded, shutting down). NEVER dropped: the
             // pending bubble becomes a prompt-queue item — the existing
-            // drainer sends it as the next turn. An unknown requestId (already
-            // delivered/re-queued) is a no-op.
-            const known = get().uiSteerPending.includes(message.requestId);
-            if (known) {
-              get().requeuePendingSteer(message.requestId, 0);
+            // drainer sends it as the next turn. An unknown requestId with no
+            // text (already delivered/re-queued, or a legacy host) is a no-op.
+            //
+            // Cross-review F2 (2026-10-24): `text` makes the message
+            // SELF-SUFFICIENT — a renderer that reloaded between send and
+            // refusal lost its pendingSteers entry (performReset), so the
+            // requestId alone identifies nothing; the text (carried by the
+            // replayed ring message) is recovered straight into the queue.
+            // `steerRequeueSeen` (OUTSIDE the session slice, like promptQueue)
+            // keeps the recovery idempotent across the reconnect cascade's
+            // replayed duplicate — one enqueue per refused steer.
+            //
+            // Cross-review F4 (2026-10-24): the queue item lands at the TAIL,
+            // matching the loop_end re-queue site's ordering — FIFO by send
+            // time across BOTH sites, so a steer refused late never jumps an
+            // ordinary prompt typed (and queued) before it.
+            const pending = get().pendingSteers.find((entry) => entry.requestId === message.requestId);
+            if (pending !== undefined) {
+              get().requeuePendingSteer(message.requestId);
               set({ notice: { kind: "steer_requeued", text: "Steer not delivered into the running turn — queued for the next turn." } });
+              return;
+            }
+            if (typeof message.text === "string" && message.text.length > 0 && !get().steerRequeueSeen.includes(message.requestId)) {
+              // Reload recovery: this store has no pending entry (performReset
+              // wiped it), but the host ONLY emits steer_requeued for a
+              // steer_message it could not deliver — the text is owed a
+              // next-turn send through the ordinary drainer.
+              set((state) => ({
+                promptQueue: [...state.promptQueue, { id: crypto.randomUUID(), text: message.text as string, images: [] }],
+                steerRequeueSeen: [...state.steerRequeueSeen, message.requestId],
+                notice: { kind: "steer_requeued", text: "Steer not delivered into the running turn — queued for the next turn." },
+              }));
             }
             return;
           }
@@ -4317,6 +4395,30 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                     ? { ...block, status: "running" as const }
                     : block,
                 ),
+              }));
+            }
+            // Cross-review F3 (2026-10-24): restore this tab's undelivered UI
+            // steers from the host's projection — a reconnected store's
+            // pendingSteers/uiSteerPending died with performReset, and until
+            // the seam flushes nothing else on the wire names them. REPLACES
+            // the slots (the host list is the whole truth, in send order);
+            // absent on an older host changes nothing. Restored rows ride the
+            // SAME lifecycle as live-sent ones: the replayed/live
+            // user_injected retires them FIFO, loop_end re-queues the
+            // survivors, and a later steer_requeued for a restored id takes
+            // the ordinary pending-entry path above.
+            if (message.pendingSteers !== undefined && Array.isArray(message.pendingSteers)) {
+              const restored = message.pendingSteers.filter(
+                (entry): entry is { requestId: string; text: string } =>
+                  typeof entry?.requestId === "string" && typeof entry?.text === "string",
+              );
+              set((state) => ({
+                pendingSteers: restored.map((entry) => ({
+                  requestId: entry.requestId,
+                  text: entry.text,
+                  sentMessage: { text: entry.text, images: [] },
+                })),
+                uiSteerPending: restored.map((entry) => entry.requestId),
               }));
             }
             set({
@@ -4804,6 +4906,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // first) — move it into the prompt queue (never dropped; the drainer
         // owns its next-turn delivery) and retire both the pending entry and
         // its owner bookkeeping. The bubble keeps rendering as a QUEUE item.
+        // Cross-review F4 (2026-10-24): the DEFAULT (and every current call
+        // site) appends at the TAIL — FIFO by send time, matching the
+        // loop_end re-queue site, so a steer never jumps an ordinary queued
+        // prompt typed before it. The explicit-index parameter stays for
+        // callers with a stronger ordering claim (none today).
         set((state) => {
           const entry = state.pendingSteers.find((e) => e.requestId === requestId);
           if (entry === undefined) return {};

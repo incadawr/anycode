@@ -581,8 +581,15 @@ export type HostToUiMessage =
    * renderer converts the pending bubble into a prompt-queue item; the
    * existing drainer delivers it as the next turn, so the text is never
    * lost. Absent on every other engine and on legacy hosts.
+   *
+   * Cross-review F2 (2026-10-24): `text` carries the steer's own words so a
+   * renderer that RELOADED between send and refusal (its pendingSteers entry
+   * died with performReset) can still re-queue the text — the message is in
+   * the replay ring, so it re-fires after the reload. Additive-optional:
+   * absent on legacy hosts, and the renderer's unknown-requestId no-op
+   * behavior is unchanged for a textless copy.
    */
-  | { type: "steer_requeued"; requestId: string; reason: string }
+  | { type: "steer_requeued"; requestId: string; reason: string; text?: string }
   | { type: "session_history"; sessionId: string; items: WireHistoryItem[]; truncated: boolean }
   | { type: "worktree_notice"; message: string }
   /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */
@@ -719,6 +726,20 @@ export type HostToUiMessage =
        * or an older host): the renderer changes nothing.
        */
       runningTools?: string[];
+      /**
+       * Cross-review F3 (2026-10-24): this tab's UI steers still pending in
+       * the running core turn's injection queue (accepted by
+       * `handleUiSteerMessage`, seam not flushed yet), in send order. A
+       * reconnecting renderer's pendingSteers/uiSteerPending died with
+       * `performReset`, and neither `pending_prompt` (turn-opening prompt
+       * only) nor `session_history` (nothing durable until the seam flushes)
+       * carries them — without this projection the sent text is invisible
+       * until `user_injected` lands. Restored entries ride the SAME retire
+       * paths as live-sent ones (`user_injected` FIFO pop, loop_end
+       * re-queue). Absent when nothing is pending (idle turn / no steers /
+       * non-core engine / older host) — the renderer changes nothing.
+       */
+      pendingSteers?: { requestId: string; text: string }[];
       sessionTokens?: { input: number; output: number; total: number; latestCacheRead?: number; latestCacheInput?: number };
       /**
        * Fold keys (`${turnId}:${step}`) of every finish whose usage the
