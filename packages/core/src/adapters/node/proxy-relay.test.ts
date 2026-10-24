@@ -271,6 +271,23 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     expect(relay).toBeUndefined();
   });
 
+  // F4 repro: the scrub-side drop covers the WHOLE proxy family (ALL_PROXY,
+  // npm_config_proxy, …) but the relay detection only scanned the four
+  // HTTP(S)_PROXY names — a credentialed ALL_PROXY was silently dropped with
+  // no relay and no warn, reproducing the exact breakage 4074 exists to fix
+  // one variable name later. Both must now start a relay.
+  it("F4 repro: a credentialed ALL_PROXY / npm_config_https_proxy also starts the relay", async () => {
+    closeProxyRelay();
+    const fromAllProxy = await resolveProxyRelay({ ALL_PROXY: "http://user:secret@127.0.0.1:9" });
+    expect(fromAllProxy).toBeDefined();
+    expect(fromAllProxy!.url).not.toContain("secret");
+    closeProxyRelay();
+
+    const fromNpm = await resolveProxyRelay({ npm_config_https_proxy: "http://user:secret@127.0.0.1:9" });
+    expect(fromNpm).toBeDefined();
+    closeProxyRelay();
+  });
+
   // F2 repro: the card's "log once" contract. A refused upstream must warn
   // exactly once per process no matter how many spawn sites re-ask
   // (ensureProxyRelay fires on EVERY Bash/PTY spawn); closeProxyRelay() is

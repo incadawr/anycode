@@ -217,6 +217,19 @@ describe("relayUrl rewrite (TASK.135 follow-up / Taskana 4074)", () => {
     expect(inverse.HTTPS_PROXY).toBe("http://clean-https:3129");
   });
 
+  // F4 companion: when the only credentialed member is OUTSIDE the four-name
+  // set (ALL_PROXY, npm_config_proxy), the drop still gets its relay remedy —
+  // the four HTTP(S)_PROXY names are absent, so they are written. Losing this
+  // would keep the F4 breakage alive at the child-env layer.
+  it("F4 companion: a dropped non-four-name credentialed proxy still yields the relay URL in the four names", () => {
+    const out = sanitizeChildEnv({ ALL_PROXY: "http://user:secret@corp:3128" }, RELAY);
+    expect(out.ALL_PROXY).toBeUndefined();
+    expect(out.HTTPS_PROXY).toBe(RELAY);
+    expect(out.https_proxy).toBe(RELAY);
+    expect(out.HTTP_PROXY).toBe(RELAY);
+    expect(out.http_proxy).toBe(RELAY);
+  });
+
   it("buildChildEnv threads relayUrl through the merge; a credential-less overlay still wins over the relay", () => {
     const out = buildChildEnv({ HTTPS_PROXY: "http://u:p@h:1" }, { EXTRA: "1" }, RELAY);
     expect(out.HTTPS_PROXY).toBe(RELAY);

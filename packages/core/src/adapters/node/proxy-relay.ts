@@ -57,6 +57,8 @@
 import * as http from "node:http";
 import net from "node:net";
 
+import { isProxyVarName } from "./child-env.js";
+
 /** The relay's own URL scheme: loopback plain HTTP, always. */
 const RELAY_SCHEME = "http";
 /** The relay's bind address: loopback only, never 0.0.0.0. */
@@ -512,16 +514,27 @@ export function closeProxyRelay(): void {
 
 /**
  * The one proxy-family value in `env` that carries credentials — searched in
- * HTTPS_PROXY/https_proxy/HTTP_PROXY/http_proxy order (the same family
- * `sanitizeChildEnv` drops, and the same precedence a child's tools would
- * apply). Returns the FIRST credentialed value, or undefined when every
- * present member is credential-free. Detection reuses the exact TASK.135
- * rule: a literal `@` means userinfo.
+ * HTTPS_PROXY/https_proxy/HTTP_PROXY/http_proxy order FIRST (the names a
+ * child's tools apply with the strongest precedence), then across the REST of
+ * the family `sanitizeChildEnv` drops (ALL_PROXY, npm_config_proxy, … —
+ * cross-review F4: the scrub predicate and this predicate must agree on what
+ * "the proxy family" is, or a credentialed ALL_PROXY was dropped with no
+ * relay, no warn and no network). Returns the FIRST credentialed value, or
+ * undefined when every present member is credential-free. Detection reuses
+ * the exact TASK.135 rule: a literal `@` means userinfo.
  */
 function credentialedProxyValue(env: NodeJS.ProcessEnv): string | undefined {
   for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
     const value = env[name];
     if (typeof value === "string" && value.includes("@")) {
+      return value;
+    }
+  }
+  for (const [name, value] of Object.entries(env)) {
+    if (name === "HTTPS_PROXY" || name === "https_proxy" || name === "HTTP_PROXY" || name === "http_proxy") {
+      continue; // already scanned above
+    }
+    if (typeof value === "string" && isProxyVarName(name) && value.includes("@")) {
       return value;
     }
   }

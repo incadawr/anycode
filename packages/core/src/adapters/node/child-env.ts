@@ -82,11 +82,14 @@ export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string): Nod
   const out: NodeJS.ProcessEnv = {};
   /** The four-case HTTP(S)_PROXY names the scrub actually removed (cross-review F3). */
   const droppedNames = new Set<string>();
+  /** True when ANY credentialed proxy-family member was dropped, four-name or not (cross-review F4). */
+  let droppedAny = false;
   for (const [name, value] of Object.entries(env)) {
     if (isEngineProxyCarrierName(name)) {
       continue;
     }
     if (typeof value === "string" && isProxyVarName(name) && proxyValueHasUserinfo(value)) {
+      droppedAny = true;
       if (name === "HTTPS_PROXY" || name === "https_proxy" || name === "HTTP_PROXY" || name === "http_proxy") {
         droppedNames.add(name);
       }
@@ -94,7 +97,7 @@ export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string): Nod
     }
     out[name] = value;
   }
-  if (relayUrl !== undefined && droppedNames.size > 0) {
+  if (relayUrl !== undefined && droppedAny) {
     for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
       if (droppedNames.has(name) || !(name in out)) {
         out[name] = relayUrl;
