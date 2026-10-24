@@ -231,7 +231,9 @@ export async function searchWithTgrep(
     return undefined; // exit 2 = tgrep error (bad regex, daemon refused); anything but 0/1 is not ours to interpret
   }
   // A capped stream is a TRIMMED answer (Taskana 4160 cross-review F1): never
-  // final; the rg tier (which also refuses capped output) answers instead.
+  // final; the rg tier answers instead (rg's own cap is the default path's
+  // long-standing behaviour — falling to the unbounded JS walk on every broad
+  // search in a large repo would be a regression, so rg keeps it).
   if (result.stdoutTruncated) return undefined;
 
   return shapeRgJsonOutput(input, result.stdout);
