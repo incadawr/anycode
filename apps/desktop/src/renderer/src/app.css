@@ -426,12 +426,10 @@ body {
   padding: var(--sp-1) var(--sp-2);
   color: var(--text-2);
   background: transparent;
-  border: none;
   border-bottom: 2px solid transparent;
   border-radius: var(--r-sm) var(--r-sm) 0 0;
   font-size: var(--fs-xs);
   white-space: nowrap;
-  cursor: pointer;
 }
 
 .dock-tab:hover {
@@ -439,10 +437,31 @@ body {
   background: var(--bg-hover);
 }
 
-.dock-tab[aria-selected="true"] {
+/* Cross-review D4: the tab is a wrapper holding real buttons (select / split /
+   close), each a keyboard tab stop; the active look rides the wrapper. */
+.dock-tab-active {
   color: var(--text-1);
   border-bottom-color: var(--text-1);
   font-weight: var(--w-semibold);
+}
+
+.dock-tab-select {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.dock-tab-select:focus-visible,
+.dock-tab-split:focus-visible,
+.dock-tab-close:focus-visible {
+  outline: 1px solid var(--text-1);
+  outline-offset: 1px;
 }
 
 .dock-tab-title {
@@ -456,6 +475,7 @@ body {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  padding: 0;
   color: var(--text-2);
   background: transparent;
   border: none;
@@ -554,13 +574,21 @@ body {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  padding: 0;
   color: var(--text-3);
   font-size: var(--fs-xs);
+  background: transparent;
+  border: none;
   cursor: pointer;
 }
 
 .dock-tab-split:hover {
   color: var(--text-1);
+}
+
+.dock-tab-split:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .dock-tab-split-active {

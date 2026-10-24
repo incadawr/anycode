@@ -42,6 +42,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Side panels (Markdown and web previews, subagents, Review) share one
+  right-hand dock with tabs instead of stacking separate columns, so opening a
+  second panel no longer squashes the conversation. The dock has one resizable
+  width, keeps the conversation at least 420px wide, and becomes an overlay
+  drawer on narrow windows. On wide windows a non-active tab can be split into
+  a second pane (not the active tab, and not a web preview). `⌘\` hides and
+  shows the dock; `⌘W` closes the active tab. Tab buttons are keyboard
+  reachable.
 - Language-server and hooks status moved from the header buttons into the
   Environment menu. Each row shows its state with a Details action; a crashed
   language server also gets a Restart action that respawns it.
