@@ -22,23 +22,12 @@ export async function attachChildReportDurability(options: {
   sessionId: string;
 }): Promise<void> {
   const { queue, persistence, sessionId } = options;
-  try {
-    const saved = await persistence.loadPendingChildReports(sessionId);
-    if (saved !== null) {
-      queue.restore(JSON.parse(saved) as ChildReportQueueSnapshot);
-    }
-  } catch (error) {
-    console.error(`[host] restoring pending child reports for session ${sessionId} failed: ${String(error)}`);
-  }
-  // Restore failure must NOT skip the persistence attach — a fresh snapshot
-  // still needs to overwrite whatever unreadable state sits in the column.
-  queue.onChange(() => {
-    const snapshot = queue.snapshot();
-    void persistence
-      .savePendingChildReports(sessionId, snapshot.reports.length > 0 ? JSON.stringify(snapshot) : null)
-      .catch((error) => {
-        console.error(`[host] saving pending child reports for session ${sessionId} failed: ${String(error)}`);
-      });
+  // One implementation: the engine twin below with the adapter as both seams.
+  await attachEngineChildReportDurability({
+    queue,
+    loadJson: () => persistence.loadPendingChildReports(sessionId),
+    saveJson: (json) => persistence.savePendingChildReports(sessionId, json),
+    logLabel: ` for session ${sessionId}`,
   });
 }
 
@@ -76,15 +65,18 @@ export async function attachEngineChildReportDurability(options: {
   queue: ChildReportQueue;
   loadJson: () => Promise<string | null>;
   saveJson: (json: string | null) => Promise<void>;
+  /** Appended to the log lines (the core path names its session id). */
+  logLabel?: string;
 }): Promise<PendingChildReportsOptions> {
   const { queue, loadJson, saveJson } = options;
+  const label = options.logLabel ?? "";
   try {
     const saved = await loadJson();
     if (saved !== null) {
       queue.restore(JSON.parse(saved) as ChildReportQueueSnapshot);
     }
   } catch (error) {
-    console.error(`[host] restoring pending child reports failed: ${String(error)}`);
+    console.error(`[host] restoring pending child reports${label} failed: ${String(error)}`);
   }
   // Restore failure must NOT skip the persistence attach (same contract as
   // attachChildReportDurability): a fresh snapshot still needs to overwrite
@@ -92,7 +84,7 @@ export async function attachEngineChildReportDurability(options: {
   queue.onChange(() => {
     const snapshot = queue.snapshot();
     void saveJson(snapshot.reports.length > 0 ? JSON.stringify(snapshot) : null).catch((error) => {
-      console.error(`[host] saving pending child reports failed: ${String(error)}`);
+      console.error(`[host] saving pending child reports${label} failed: ${String(error)}`);
     });
   });
   return {
