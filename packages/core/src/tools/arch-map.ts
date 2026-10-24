@@ -32,6 +32,8 @@ export const ARCH_MAP_MAX_FILES_DEFAULT = 2_000;
 export const ARCH_MAP_MAX_FILES_LIMIT = 10_000;
 export const ARCH_MAP_MAX_DEPTH = 24;
 export const ARCH_MAP_MODEL_EDGE_LIMIT = 400; // edges inlined into the model-visible summary
+/** Source files larger than this (minified bundles, generated code) are skipped unread. */
+export const ARCH_MAP_MAX_FILE_BYTES = 1_000_000;
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs", ".cjs"] as const;
 
 const IMPORT_RE = /(?:^|\n)\s*(?:import|export)\s+(type\s+)?(?:[^'";]*?\sfrom\s+)?['"]([^'"]+)['"]/g;
@@ -176,14 +178,20 @@ function isSourcePath(relPath: string): boolean {
   return !segments.some((seg) => EXCLUDED_DIR_SEGMENTS.has(seg));
 }
 
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw new Error("ArchMap: scan aborted");
+}
+
 async function walkSourceFiles(
   fs: FileSystemPort,
   root: string,
   maxFiles: number,
+  signal: AbortSignal | undefined,
 ): Promise<{ files: Array<{ absPath: string; relPath: string }>; truncated: boolean }> {
   const files: Array<{ absPath: string; relPath: string }> = [];
 
   async function walk(dir: string, relDir: string, depth: number): Promise<void> {
+    throwIfAborted(signal);
     if (files.length >= maxFiles) return;
     if (depth > ARCH_MAP_MAX_DEPTH) return;
     let entries: string[];
@@ -198,15 +206,19 @@ async function walkSourceFiles(
       const rel = relDir.length === 0 ? entry : posixJoin(relDir, entry);
       let stat;
       try {
-        stat = await fs.stat(full);
+        // Symlinks are never followed (lstat, when the port has it): a link
+        // could lead outside the scanned tree or into a cycle.
+        stat = fs.lstat !== undefined ? await fs.lstat(full) : await fs.stat(full);
       } catch {
         continue; // broken symlink or race with deletion
       }
+      if (stat.isSymbolicLink === true) continue;
       if (stat.isDirectory) {
         if (REPO_MAP_IGNORED_DIR_NAMES.has(entry)) continue;
         await walk(full, rel, depth + 1);
       } else if (stat.isFile) {
         if (!isSourcePath(rel)) continue;
+        if (stat.size > ARCH_MAP_MAX_FILE_BYTES) continue;
         files.push({ absPath: full, relPath: rel });
         if (files.length >= maxFiles) return;
       }
@@ -273,13 +285,14 @@ function externalPackageName(spec: string): string {
 export async function scanImportGraph(
   fs: FileSystemPort,
   root: string,
-  opts: { maxFiles: number },
+  opts: { maxFiles: number; signal?: AbortSignal },
 ): Promise<ArchMapOutput> {
-  const { files, truncated } = await walkSourceFiles(fs, root, opts.maxFiles);
+  const { files, truncated } = await walkSourceFiles(fs, root, opts.maxFiles, opts.signal);
 
   const scanned: ScannedFile[] = [];
   const absToId = new Map<string, string>();
   for (const file of files) {
+    throwIfAborted(opts.signal);
     let content: string;
     try {
       content = await fs.readFile(file.absPath);
@@ -370,7 +383,14 @@ export const archMapTool: ToolDefinition<ArchMapInput, ArchMapOutput> = {
   metadata,
   inputSchema: archMapInputSchema,
   handler: async (input, ctx) => {
-    const root = input.path ?? ctx.cwd;
+    // Relative paths resolve against the session cwd (not the process cwd),
+    // and the scan never leaves it: ArchMap is a workspace map, not a
+    // general file-system reader.
+    const cwd = normalizePosix(ctx.cwd).replace(/\/+$/, "") || "/";
+    const root = input.path === undefined ? ctx.cwd : posixResolve(cwd, normalizePosix(input.path));
+    if (input.path !== undefined && root !== cwd && !root.startsWith(cwd === "/" ? "/" : `${cwd}/`)) {
+      return { ok: false, error: `path is outside the workspace: ${input.path}` };
+    }
 
     const rootExists = await ctx.ports.fs.exists(root);
     if (!rootExists) {
@@ -384,6 +404,7 @@ export const archMapTool: ToolDefinition<ArchMapInput, ArchMapOutput> = {
     try {
       const output = await scanImportGraph(ctx.ports.fs, root, {
         maxFiles: input.max_files ?? ARCH_MAP_MAX_FILES_DEFAULT,
+        signal: ctx.abortSignal,
       });
       return { ok: true, output };
     } catch (err) {

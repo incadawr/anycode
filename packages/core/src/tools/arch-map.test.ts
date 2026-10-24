@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
@@ -294,5 +294,46 @@ describe("ArchMap scanner + tool", () => {
     const result = await archMapTool.handler({ path: join(dir, "pkg") }, ctxFor(dir));
     expect(result.ok).toBe(true);
     expect(result.output?.modules.map((m) => m.id)).toEqual(["main", "x"]);
+  });
+  it("stays inside the workspace: relative paths resolve against cwd, escapes are refused (16)", async () => {
+    const dir = await setup();
+    await fs.mkdir(join(dir, "pkg"));
+    await fs.writeFile(join(dir, "pkg", "main.ts"), "import { x } from \"./x\";\n");
+    await fs.writeFile(join(dir, "pkg", "x.ts"), "export const x = 1;\n");
+
+    const relative = await archMapTool.handler({ path: "pkg" }, ctxFor(dir));
+    expect(relative.ok).toBe(true);
+    expect(relative.output?.edges).toEqual([{ from: "main", to: "x", typeOnly: false, dynamic: false }]);
+
+    const up = await archMapTool.handler({ path: ".." }, ctxFor(join(dir, "pkg")));
+    expect(up.ok).toBe(false);
+    expect(up.error).toBe("path is outside the workspace: ..");
+    const abs = await archMapTool.handler({ path: "/" }, ctxFor(dir));
+    expect(abs.ok).toBe(false);
+  });
+
+  it("never follows symlinks out of the tree (17)", async () => {
+    const dir = await setup();
+    const outside = await mkdtemp(join(tmpdir(), "anycode-archmap-out-"));
+    try {
+      await fs.writeFile(join(outside, "secret.ts"), "export const s = 1;\n");
+      await fs.writeFile(join(dir, "a.ts"), "export const a = 1;\n");
+      await symlink(outside, join(dir, "linked"));
+      await symlink(join(outside, "secret.ts"), join(dir, "file-link.ts"));
+      const output = await scanImportGraph(fs, dir, { maxFiles: 100 });
+      expect(output.modules.map((m) => m.id)).toEqual(["a"]);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("honours the abort signal (18)", async () => {
+    const dir = await setup();
+    await fs.writeFile(join(dir, "a.ts"), "export const a = 1;\n");
+    const controller = new AbortController();
+    controller.abort();
+    const result = await archMapTool.handler({}, { ...ctxFor(dir), abortSignal: controller.signal });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("aborted");
   });
 });
