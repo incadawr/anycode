@@ -334,7 +334,7 @@ export type CodexPickBinaryResult =
 
 export type CodexUseBinaryResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
-  | { ok: false; reason: "busy" | "invalid" };
+  | { ok: false; reason: "busy" | "invalid" | "unlisted" };
 
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
