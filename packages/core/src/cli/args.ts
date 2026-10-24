@@ -56,6 +56,8 @@ export interface CliArgs {
   noCheckpoints: boolean;
   /** --image <path> / --image=<path>, repeatable (design slice-6.2-cut.md §2-D1): attaches to the next prompt (print: this run's one-shot prompt; interactive: pre-staged until the first submitted line drains it, or staged/listed/cleared via /image). Default []. */
   images: string[];
+  /** --tui (Taskana 4082, slice 1): opt in to the Ink composer UI in interactive mode. Silently ignored without a TTY or with --print — the gate lives in main.ts. Default false. */
+  tui: boolean;
 }
 
 export function isPermissionMode(value: string): value is PermissionMode {
@@ -123,6 +125,7 @@ function parseArgv(argv: string[]): ParsedArgv {
   let outputFormat: string | undefined;
   let model: string | undefined;
   let noCheckpoints = false;
+  let tui = false;
   const images: string[] = [];
   const unknownFlags: string[] = [];
 
@@ -189,6 +192,12 @@ function parseArgv(argv: string[]): ParsedArgv {
     }
     if (arg === "--no-checkpoints") {
       noCheckpoints = true;
+      continue;
+    }
+    if (arg === "--tui") {
+      // Flat boolean, mirrors --no-checkpoints/--yolo (Taskana 4082 slice 1).
+      // No value, no `=` form; the interactive-only gate lives in main.ts.
+      tui = true;
       continue;
     }
     if (arg === "--no-reasoning") {
@@ -281,6 +290,7 @@ function parseArgv(argv: string[]): ParsedArgv {
       modeExplicit,
       noCheckpoints,
       images,
+      tui,
     },
     unknownFlags,
   };
@@ -344,6 +354,7 @@ export function formatUsage(): string {
     "  --no-reasoning                       hide the model's reasoning stream (shown by default in interactive mode)",
     "  --no-checkpoints                     disable automatic workspace checkpoints for this session",
     "  --image <path>                       attach an image to the next prompt; repeatable (print: this run's prompt; interactive: pre-staged, also /image)",
+    "  --tui                                interactive mode only: Ink composer with slash autocomplete (ignored without a TTY or with --print)",
     "  --help, -h                           show this help and exit",
     "  --version                            show the CLI version and exit",
     "",

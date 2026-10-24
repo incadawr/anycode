@@ -137,6 +137,9 @@ import { withBackgroundTaskNotices } from "./background-notice.js";
 import { applyStatus, createStatusLine, withStatusClear } from "./status.js";
 import { createCliTheme, detectColorEnabled } from "./theme.js";
 import { createCliPermissionBroker, createReadlinePrompter } from "./terminal-broker.js";
+// Type-only import: the TUI module itself is loaded lazily inside the --tui
+// branch (see startTui below) so ink/react never load on other paths.
+import type { TuiHandle } from "./tui.js";
 import {
   runPrintMode,
   readPromptFromStdin,
@@ -163,6 +166,14 @@ export {
 } from "./render.js";
 export { KNOWN_SLASH_COMMANDS, isSlashCommand, parseAllowCommand, handleSlashCommand } from "./commands.js";
 export type { AllowCommandParse, SlashCommandDeps } from "./commands.js";
+// Taskana 4082 (slice 1) — framework-free completion/composer cores, re-exported
+// for main.test.ts-style importers. tui.tsx is deliberately NOT re-exported:
+// it pulls ink/react into every importer of this barrel; main.ts lazy-imports
+// it inside the --tui branch only.
+export { slashCompletions } from "./completions.js";
+export type { SlashCompletion } from "./completions.js";
+export { EMPTY_COMPOSER, reduceComposer, visibleCompletions } from "./composer-state.js";
+export type { ComposerEvent, ComposerState } from "./composer-state.js";
 
 /** Basename via a bare separator scan (mirrors tools/read-image.ts's private helper — no node:path). */
 function basenameOf(path: string): string {
@@ -231,6 +242,13 @@ export interface CliOptions {
   modelPortFactory?: (modelId: string) => ModelPort;
   /** Test-only override of interactivity (design slice-4.1-cut.md §2.5); default: input.isTTY && output.isTTY. */
   interactive?: boolean;
+  /**
+   * Test-only hook (Taskana 4082 slice 1): receives the Ink composer's handle
+   * when --tui engages, so tests can drive keypresses through the same
+   * emit() pipeline (PassThrough stdin supports no raw mode, so the TUI is
+   * otherwise inputless under a test harness). Production never sets it.
+   */
+  onTuiHandle?: (handle: TuiHandle) => void;
   /**
 
    * mirroring `interactive`. Production leaves this undefined so the gate falls
@@ -357,6 +375,10 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   const outputIsTTY = (output as NodeJS.WriteStream).isTTY === true;
   const interactive =
     (options?.interactive ?? (inputIsTTY && outputIsTTY)) && !parsedArgs.print;
+  // Taskana 4082 (slice 1): opt-in Ink composer. Gated on `interactive`, so
+  // --tui without a TTY or alongside --print is silently ignored (falls back
+  // to the readline REPL) — the flag is a preference, not an error.
+  const tui = parsedArgs.tui === true && interactive;
   const theme = createCliTheme({
     color: detectColorEnabled({ env, outputIsTTY, noColorFlag: parsedArgs.noColor }),
   });
@@ -1467,11 +1489,41 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     return count;
   };
 
-  const rl = createInterface({ input, output, prompt: "> " });
-
+  // Taskana 4082 (slice 1): in --tui mode the readline interface still exists
+  // (hidden — `terminal: false`, and its prompt() calls are guarded below)
+  // purely as the permission/rewind prompter's vehicle; the Ink composer owns
+  // the visible input. Permission widgets move into the TUI in slice 3.
+  const rl = createInterface({ input, output, prompt: "> ", terminal: tui ? false : undefined });
 
   // gate, so a non-TTY session gets a full no-op instance (zero status bytes).
   const status = createStatusLine({ output, enabled: statusEnabled, theme });
+
+  // Taskana 4082 (slice 1): the Ink composer. startTui is lazily imported so
+  // ink/react load only when the flag engages (non-TUI runs stay lean);
+  // submissions land in a queue drained by the lineStream generator below,
+  // which the REPL loop consumes exactly like readline's own lines. Ctrl+C in
+  // the TUI forwards to the existing SIGINT logic via handleSigintRef (the
+  // ref breaks the forward-reference cycle: handleSigint is defined below).
+  let tuiHandle: TuiHandle | undefined;
+  const tuiQueue: string[] = [];
+  let tuiResolve: (() => void) | undefined;
+  const handleSigintRef: { current: () => void } = { current: () => {} };
+  if (tui) {
+    const { startTui } = await import("./tui.js");
+    tuiHandle = startTui({
+      input,
+      output,
+      onSubmit: (line) => {
+        tuiQueue.push(line);
+        tuiResolve?.();
+        tuiResolve = undefined;
+      },
+      onInterrupt: () => {
+        handleSigintRef.current();
+      },
+    });
+    options?.onTuiHandle?.(tuiHandle);
+  }
 
   // prompter lazily now. The 4.1.1 stub brokers don't implement attachPrompter,
   // so this is a no-op today; 4.1.2's TerminalPermissionBroker consumes it. The
@@ -1500,13 +1552,52 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     if (interruptCount >= 2) {
       exitRequested = true;
       rl.close();
+      tuiHandle?.close();
+      // Wake the TUI lineStream's pending await so the loop observes
+      // exitRequested and falls through to the normal dispose path.
+      tuiResolve?.();
+      tuiResolve = undefined;
       return;
     }
     write("\n(Ctrl+C again to exit)\n");
+    showPrompt();
+  };
+  handleSigintRef.current = handleSigint;
+
+  rl.on("SIGINT", handleSigint);
+
+  // Taskana 4082 (slice 1): TUI mode never calls rl.prompt() — the Ink
+  // composer renders its own "> " line and readline must stay invisible.
+  const showPrompt = (): void => {
+    if (tuiHandle) {
+      return;
+    }
     rl.prompt();
   };
 
-  rl.on("SIGINT", handleSigint);
+  // The REPL's line source: readline events, or the TUI submission queue.
+  // The loop body below is byte-identical in both modes — only the source of
+  // `line` differs.
+  async function* lineStream(): AsyncGenerator<string> {
+    if (!tuiHandle) {
+      for await (const line of rl) {
+        yield line;
+      }
+      return;
+    }
+    for (;;) {
+      if (tuiQueue.length > 0) {
+        yield tuiQueue.shift() as string;
+        continue;
+      }
+      await new Promise<void>((resolve) => {
+        tuiResolve = resolve;
+      });
+      if (exitRequested) {
+        return;
+      }
+    }
+  }
 
   write(
     theme.paint(
@@ -1514,15 +1605,15 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
       `AnyCode CLI — mode=${mode}${yolo ? " (yolo)" : ""}. Ctrl+C to abort a turn, twice to exit.\n`,
     ),
   );
-  rl.prompt();
+  showPrompt();
 
-  for await (const line of rl) {
+  for await (const line of lineStream()) {
     if (exitRequested) {
       break;
     }
     const trimmed = line.trim();
     if (trimmed === "") {
-      rl.prompt();
+      showPrompt();
       continue;
     }
 
@@ -1834,12 +1925,15 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     if (exitRequested) {
       break;
     }
-    rl.prompt();
+    showPrompt();
   }
 
 
   // timer outlives the REPL (design §3.3 unref + explicit dispose).
   status.dispose();
+  // Taskana 4082 (slice 1): unmount the Ink composer BEFORE the readline
+  // interface closes so the terminal is restored exactly once, in order.
+  tuiHandle?.close();
   rl.close();
 
 

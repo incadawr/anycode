@@ -46,6 +46,7 @@ import type { WorkflowDefinition, WorkflowMeta } from "../ports/workflow.js";
 import { resolveIncludeUsage } from "../provider/openai-compatible.js";
 import { buildSystemPrompt, type SystemPromptEnv } from "../prompts/identity.js";
 import type { PersonaDefinition } from "../subagents/personas.js";
+import type { TuiHandle } from "./tui.js";
 import { backgroundCapableBashTool, bashKillTool, bashOutputTool, createDefaultToolRegistry } from "../tools/index.js";
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import { SUBAGENT_MAX_OUTPUT_TOKENS } from "../types/config.js";
@@ -4750,5 +4751,124 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     // two apart; the effort assertion above still does, and runner.test.ts
     // pins the cap against an explicit below-cap child ceiling.
     expect(childPort!.requests[0]!.maxOutputTokens).toBe(SUBAGENT_MAX_OUTPUT_TOKENS);
+  });
+});
+
+describe("--tui flag (Taskana 4082)", () => {
+  it("1. --tui with interactive:true boots the Ink composer, and a submitted line reaches the loop", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+    const modelPort = new CountingModelPort();
+
+    const tuiHandles: TuiHandle[] = [];
+    const runPromise = runCli({
+      argv: ["--tui"],
+      env: makeTitleTestEnv(dbPath),
+      input,
+      output,
+      modelPort,
+      cwd: workspace,
+      interactive: true,
+      onTuiHandle: (handle) => {
+        tuiHandles.push(handle);
+      },
+    });
+
+    // Wait for the TUI to mount (and the banner to land) before driving keys.
+    await vi.waitFor(() => {
+      if (tuiHandles.length === 0) {
+        throw new Error("tui handle has not been handed over yet");
+      }
+      if (!getText().includes("AnyCode CLI")) {
+        throw new Error("banner has not landed yet");
+      }
+    });
+
+    // Drive the composer through the same emit() pipeline the unit smoke uses:
+    // type a line, Enter, then /quit to leave the REPL cleanly.
+    tuiHandles[0]!.emit("input", "hello from tui");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tuiHandles[0]!.emit("input", "\r");
+    await vi.waitFor(() => {
+      if (modelPort.calls !== 1) {
+        throw new Error("submitted line has not reached the turn loop yet");
+      }
+    });
+    tuiHandles[0]!.emit("input", "/quit");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tuiHandles[0]!.emit("input", "\r");
+
+    expect(await runPromise).toBe(0);
+    // The submitted line became the session title (same proof the readline
+    // REPL tests use): the loop consumed it as a real turn.
+    const { title } = await readSessionTitle(dbPath, workspace);
+    expect(title).toBe("hello from tui");
+  });
+
+  it("1b. --tui banner renders and the readline '> ' prompt stays silent in TUI mode", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+
+    const tuiHandles: TuiHandle[] = [];
+    const runPromise = runCli({
+      argv: ["--tui"],
+      env: makeTitleTestEnv(dbPath),
+      input,
+      output,
+      modelPort: new CountingModelPort(),
+      cwd: workspace,
+      interactive: true,
+      onTuiHandle: (handle) => {
+        tuiHandles.push(handle);
+      },
+    });
+
+    await vi.waitFor(() => {
+      if (tuiHandles.length === 0) {
+        throw new Error("tui handle has not been handed over yet");
+      }
+    });
+    // Double Ctrl+C through the TUI's interrupt forwarding exits cleanly.
+    tuiHandles[0]!.emit("input", "");
+    tuiHandles[0]!.emit("input", "");
+
+    expect(await runPromise).toBe(0);
+    // The banner landed; the composer (not readline) owned the prompt — the
+    // raw "> " prompt bytes are written only by the Ink frame diff, which
+    // strips as ANSI-cleaned "> " lines with no trailing readline artifacts.
+    expect(getText()).toContain("AnyCode CLI");
+  });
+
+  it("2. --tui with --print is silently ignored: byte-identical print output", async () => {
+    const { workspace, dbPath } = setupTitleTestDirs();
+
+    const runPrint = async (argv: string[]): Promise<{ code: number | undefined; text: string }> => {
+      const output = new PassThrough();
+      const errorOutput = new PassThrough();
+      const getText = collectOutput(output);
+      const code = await runCli({
+        argv,
+        env: makeTitleTestEnv(dbPath),
+        input: new PassThrough(),
+        output,
+        errorOutput,
+        modelPort: new SequencedModelPort([
+          [{ type: "start" }, { type: "text_delta", id: "t", text: "42" }, { type: "finish", finishReason: "stop", usage: {} }],
+        ]),
+        cwd: workspace,
+      });
+      return { code, text: getText() };
+    };
+
+    const plain = await runPrint(["-p", "compute six times seven"]);
+    const withTui = await runPrint(["--tui", "-p", "compute six times seven"]);
+    expect(withTui.code).toBe(plain.code);
+    // Byte-identical stdout: --tui never engaged (interactive gate rejects it
+    // alongside --print), so the print path is untouched.
+    expect(withTui.text).toBe(plain.text);
   });
 });
