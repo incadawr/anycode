@@ -1295,12 +1295,52 @@ export class ClaudeEngine implements SessionEngine {
       // preTokens stays 0 — same fail-soft posture as mapContextUsageReading.
     }
 
-    // A compaction turn reuses the ordinary frame vocabulary: `--replay-user-messages`
-    // echoes the /compact frame (discarded like any user echo), `system` init /
-    // `status:"compacting"` pings are ignored, and the terminal `result` decides.
-    this.client.sendUserMessage(CLAUDE_SLASH_ALLOWLIST[0]);
-
     try {
+      // ── cross-review F4: the SEND BARRIER, `runTurn`'s own discipline. The
+      // /compact frame is sent only once no CLI-self-started (foreign) turn
+      // is still running: without the wait, the compaction's loop treats the
+      // FIRST `result` it sees as its terminal verdict — the FOREIGN turn's,
+      // whose subtype says nothing about compaction (a wrong ok either way,
+      // while two turns' frames interleave on one stream). While waiting,
+      // THIS loop is the single reader and every arriving frame is classified
+      // by absorbIdleFrame (a foreign `result` closes foreignTurn and ends
+      // the wait). NO TIMER, NO AUTO-INTERRUPT — an unsolicited turn may run
+      // arbitrarily long; the user's abort below and the settle deadline
+      // remain the only bounds.
+      while (this.foreignTurn !== null) {
+        yield { type: "engine_notice", level: "info",
+          message: "Claude is finishing a turn it started on its own; the compaction will run when it finishes." };
+        const foreignDone = this.foreignTurn.done.promise;
+        const raced = await Promise.race([
+          abort.promise.then(() => ({ kind: "abort" as const })),
+          foreignDone.then(() => ({ kind: "foreign-done" as const })),
+          this.takeFrame().then(
+            (value) => ({ kind: "notification" as const, value }),
+            (error_: unknown) => ({ kind: "rejected" as const, error: error_ }),
+          ),
+        ]);
+        if (raced.kind === "abort") {
+          // The user's Stop outranks the wait: break to the owner loop, where
+          // the already-armed abort fires first (interrupt + settle deadline).
+          break;
+        }
+        if (raced.kind === "foreign-done") continue; // re-check: an adjacent foreign turn may have opened
+        if (raced.kind === "rejected") throw raced.error;
+        this.frameConsumed();
+        if (raced.value.done) throw this.terminalError ?? new Error("Claude exited during compaction");
+        this.absorbIdleFrame(raced.value.value); // a result here resolves foreignTurn
+      }
+
+      // A compaction turn reuses the ordinary frame vocabulary: `--replay-user-messages`
+      // echoes the /compact frame (discarded like any user echo), `system` init /
+      // `status:"compacting"` pings are ignored, and the terminal `result` decides.
+      // (F3: INSIDE the try — the client's write guard can throw when stdin is
+      // already gone or the client latched a terminal error in the window
+      // between the engine's idle checks and this send; the catch below turns
+      // that into an honest compaction_end{ok:false} instead of a throw out
+      // of the generator after compaction_start was already yielded.)
+      this.client.sendUserMessage(CLAUDE_SLASH_ALLOWLIST[0]);
+
       while (!terminal) {
         const raced = await Promise.race([
           this.takeFrame().then(
@@ -1345,6 +1385,17 @@ export class ClaudeEngine implements SessionEngine {
         }
         if (frame.type === "result") {
           terminal = true;
+          // cross-review F7: cost IS session state — a manual compaction runs
+          // a REAL summarization model call, and its `total_cost_usd`/`usage`
+          // feed the session-cumulative counters exactly like any foreign
+          // turn's result (absorbIdleFrame's own result branch routes through
+          // onResult too). NO engine_session_tokens is emitted for a
+          // compaction (deliberate: REPLACE-semantics consumer — see the
+          // comment at the compaction_end yield); the counters are simply
+          // kept honest so the next owner turn's cumulative report includes
+          // the summarization call's tokens.
+          this.onResult(frame as unknown as ClaudeResultMessage);
+          this.consumeCompactionTokenUsage();
           // Tolerant subtype read: the pinned union names "success" today, but
           // a compaction result may carry a success variant we have not pinned
           // (e.g. "success_clears") — anything success-prefixed is a pass,
@@ -1573,6 +1624,25 @@ export class ClaudeEngine implements SessionEngine {
     const value = this.lastTurnTokenUsage;
     this.lastTurnTokenUsage = null;
     return value;
+  }
+
+  /**
+   * cross-review F7: a manual compaction's own `result.usage` (set by the
+   * `onResult` call on the compaction's result branch) folds into the
+   * SESSION-CUMULATIVE counters immediately — the summarization call's tokens
+   * must not silently vanish from the session's accounting — but emits NO
+   * `engine_session_tokens` event: that event's consumer (the renderer's
+   * sessionTokens chip, store.ts) REPLACES its snapshot, and a compaction is
+   * not a turn — the next owner turn's cumulative report carries the sum.
+   * Same method-split discipline as consumeLastTurnTokenUsage above.
+   */
+  private consumeCompactionTokenUsage(): void {
+    const value = this.lastTurnTokenUsage;
+    this.lastTurnTokenUsage = null;
+    if (value !== null) {
+      this.cumulativeInputTokens += value.input;
+      this.cumulativeOutputTokens += value.output;
+    }
   }
 
   private onResult(result: ClaudeResultMessage): void {
