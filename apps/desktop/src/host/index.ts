@@ -383,7 +383,7 @@ import { resolveClaudeConfigDir } from "../shared/claude-config-dir.js";
 import { resumeClaudeEngine, startClaudeEngine } from "./engines/claude/claude-engine.js";
 import { prepareEngineMcpForward, missingForwardedMcpServerNames } from "./engines/mcp-forward-boot.js";
 import { parseClaudeEngineArgs } from "./engines/claude/draft-args.js";
-import { catalogFromProfiles } from "./engines/claude/bridge-catalog.js";
+import { bridgeCallableCatalog, catalogFromProfiles } from "./engines/claude/bridge-catalog.js";
 import { ClaudeMcpBridge } from "./engines/claude/mcp-bridge.js";
 import { projectClaudeHistory } from "./engines/claude/history-projection.js";
 import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./engines/claude/process-ownership.js";
@@ -1338,6 +1338,13 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
       console.warn(`[host] claude mcp bridge: agent profile: ${problem}`);
     }
     const catalog: AgentBridgeCatalogEntry[] = catalogFromProfiles(discovered.profiles);
+    // Taskana 4101: per-call re-read, codex-door parity (index.ts resolveCatalog
+    // above): edited body/model live from the next spawn; names stay fixed to
+    // the boot snapshot the CLI's tools/list handshake already cached.
+    const resolveClaudeCatalog = async (): Promise<readonly AgentBridgeCatalogEntry[]> =>
+      bridgeCallableCatalog(catalog, catalogFromProfiles(
+        (await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []))).profiles,
+      ));
     // The switch (plan §5 S4 p.7): an empty `tools/list` is never worth
     // announcing — the door itself is the extra attack/complexity surface,
     // not just the tool inside it — so NOTHING below this `if` runs at all,
@@ -1383,8 +1390,18 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
           // TASK.226 план §2.3/Ruling 1: no `wallMs` override — the sync v1
           // wall is `runAgentBridgeCall`'s own default (SUBAGENT_TIME_BUDGET_MS,
           // 6h), the SAME stance every other bridge caller takes.
+          // Taskana 4101: resolve the catalog per call (fresh bodies/models,
+          // boot-declared names only); fail-soft to the boot snapshot on a
+          // disk race, mirroring discoverAgentProfiles's own never-throws
+          // posture — a transient re-read failure must not kill the call.
+          let callCatalog: readonly AgentBridgeCatalogEntry[];
+          try {
+            callCatalog = await resolveClaudeCatalog();
+          } catch {
+            callCatalog = catalog;
+          }
           const result = await runAgentBridgeCall(input, {
-            catalog,
+            catalog: callCatalog,
             port: childPort,
             spawnToolCallId: meta.toolUseId,
             signal,

@@ -36,3 +36,16 @@ export function catalogFromProfiles(profiles: readonly PersonaDefinition[]): Age
       ...(profile.connection !== undefined ? { connection: profile.connection } : {}),
     }));
 }
+
+/**
+ * Catalog a bridge CALL may use (Taskana 4101): entries re-read from disk now,
+ * filtered to names the boot snapshot declared (the CLI's tools/list cache and
+ * the codex thread's declarations are both per-session — names never hot-add).
+ * Parity with the codex door's own filter (dynamic-tool-bridge.ts handle()).
+ */
+export function bridgeCallableCatalog(
+  boot: readonly AgentBridgeCatalogEntry[],
+  current: readonly AgentBridgeCatalogEntry[],
+): readonly AgentBridgeCatalogEntry[] {
+  return current.filter((entry) => boot.some((declared) => declared.name === entry.name));
+}

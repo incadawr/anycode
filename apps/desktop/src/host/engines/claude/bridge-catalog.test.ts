@@ -5,8 +5,9 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { PersonaDefinition } from "@anycode/core";
-import { catalogFromProfiles } from "./bridge-catalog.js";
+import type { PersonaDefinition, SessionSubagentOutcome, SessionSubagentPort, SessionSubagentRequest } from "@anycode/core";
+import { runAgentBridgeCall, type AgentBridgeCatalogEntry } from "@anycode/core";
+import { bridgeCallableCatalog, catalogFromProfiles } from "./bridge-catalog.js";
 
 function profile(overrides: Partial<PersonaDefinition> = {}): PersonaDefinition {
   return {
@@ -110,5 +111,90 @@ describe("catalogFromProfiles — connection/provider routing (Taskana 4269)", (
     expect(catalogFromProfiles([profile()])).toEqual([
       { name: "reviewer", description: "Reviews code", systemPrompt: "You review code." },
     ]);
+  });
+});
+
+// Taskana 4101: the claude door's per-call refresh — `callTool` re-reads
+// profile files and filters to the boot snapshot's declared names, matching
+// the codex door's own declared-names filter (dynamic-tool-bridge.ts handle()
+// — pinned "uses edited body/model for the next child without changing native
+// tool declarations"). Pure-filter cases first, then the composed path
+// through the real core handler.
+describe("bridgeCallableCatalog (Taskana 4101)", () => {
+  const BOOT_LEAD: AgentBridgeCatalogEntry = {
+    name: "glm-lead",
+    description: "v1 lead",
+    systemPrompt: "v1 body",
+  };
+
+  function portReturning(outcome: SessionSubagentOutcome): SessionSubagentPort {
+    return { run: async () => outcome };
+  }
+
+  const BASE_OUTCOME: SessionSubagentOutcome = {
+    status: "completed",
+    finalText: "child session done",
+    truncated: false,
+    turns: 2,
+    toolCalls: 3,
+    durationMs: 500,
+    childSessionId: "child-1",
+    parentSessionId: "parent-1",
+    spawnToolCallId: "toolu_bridge_1",
+  };
+
+  it("edited entry survives with v2 fields; a new boot-unknown name is dropped", () => {
+    const current: AgentBridgeCatalogEntry[] = [
+      { name: "glm-lead", description: "v2 lead", systemPrompt: "v2 body", model: "glm-5.3-flash" },
+      { name: "new-profile", description: "added after boot", systemPrompt: "never declared at boot" },
+    ];
+    expect(bridgeCallableCatalog([BOOT_LEAD], current)).toEqual([
+      { name: "glm-lead", description: "v2 lead", systemPrompt: "v2 body", model: "glm-5.3-flash" },
+    ]);
+  });
+
+  it("empty current => []; empty boot => []", () => {
+    expect(bridgeCallableCatalog([BOOT_LEAD], [])).toEqual([]);
+    expect(bridgeCallableCatalog([], [{ name: "glm-lead", description: "d", systemPrompt: "p" }])).toEqual([]);
+  });
+
+  it("order follows current, not boot", () => {
+    const a: AgentBridgeCatalogEntry = { name: "a", description: "d", systemPrompt: "p" };
+    const b: AgentBridgeCatalogEntry = { name: "b", description: "d", systemPrompt: "p" };
+    expect(bridgeCallableCatalog([a, b], [b, a]).map((entry) => entry.name)).toEqual(["b", "a"]);
+  });
+
+  // Composed end-to-end through the real core handler: the filtered catalog
+  // is exactly what index.ts's callTool now feeds runAgentBridgeCall.
+  it("composed: the edited entry sends the edited model/body to the port; a boot-unknown name errors", async () => {
+    const boot: readonly AgentBridgeCatalogEntry[] = [BOOT_LEAD];
+    const current: readonly AgentBridgeCatalogEntry[] = [
+      { name: "glm-lead", description: "v2 lead", systemPrompt: "v2 body", model: "glm-5.3-flash" },
+      { name: "new-profile", description: "added after boot", systemPrompt: "never declared at boot" },
+    ];
+    const callable = bridgeCallableCatalog(boot, current);
+    expect(callable.map((entry) => entry.name)).toEqual(["glm-lead"]);
+
+    let seen: SessionSubagentRequest | undefined;
+    const recordingPort: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await runAgentBridgeCall(
+      { agent_type: "glm-lead", description: "d", prompt: "do it" },
+      { catalog: callable, port: recordingPort, spawnToolCallId: "toolu_4101_a" },
+    );
+    expect(seen?.model).toBe("glm-5.3-flash");
+    expect(seen?.prompt.startsWith("v2 body")).toBe(true);
+
+    const unknownPort = portReturning(BASE_OUTCOME);
+    const rejected = await runAgentBridgeCall(
+      { agent_type: "new-profile", description: "d", prompt: "p" },
+      { catalog: callable, port: unknownPort, spawnToolCallId: "toolu_4101_b" },
+    );
+    expect(rejected.isError).toBe(true);
+    expect(rejected.text).toBe('Unknown agent_type "new-profile". Available agent types: glm-lead.');
   });
 });
