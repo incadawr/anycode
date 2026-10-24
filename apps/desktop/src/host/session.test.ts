@@ -1288,6 +1288,28 @@ describe("Session — core steer_message injection (Taskana 4110 / TASK.123)", (
     }
   });
 
+  it("an agent-to-agent mode:'steer' envelope into a busy CORE session keeps its pre-branch immediate rejection (4110 rework, defect 4)", async () => {
+    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      const req = await h.waitFor(isPermissionRequest);
+
+      // Settles immediately (no waiting for the loop's next seam) and never
+      // reaches the model.
+      const delivery = await h.session.receiveAgentMessage({ messageId: "a2a", sender: "test-supervisor", recipientSessionId: h.session.communicationStatus().sessionId, payload: "AGENT-STEER", mode: "steer", kind: "agent_message", createdAt: new Date().toISOString() });
+      expect(delivery.state).toBe("rejected");
+      expect(delivery.detail).toContain("use next_turn");
+
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+      expect(h.received.some(agentEventOf("user_injected"))).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
   it("host_ready carries steering for core: supported, ready only while a turn runs", async () => {
     const h = createHarness({ steps: [finishStep()] });
     try {

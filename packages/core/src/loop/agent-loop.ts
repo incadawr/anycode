@@ -578,9 +578,10 @@ export class AgentLoop {
    * TASK.123 (Taskana 4110 rework): user frames scheduled for injection
    * between the CURRENT turn's steps. Written by `queueInjection` from
    * outside the generator (host CoreEngine.steer), flushed at the single
-   * legal seam — after step N's tool results are ALL appended and the loop
-   * has decided to continue, immediately before the step's `turn_end` — so a
-   * tool_call/tool_result pair is never split. FIFO by contract (Opus review
+   * legal seam — after step N's tool results are ALL appended, the loop
+   * has decided to continue and every exit gate of step N+1 has passed,
+   * immediately before step N+1's model request — so a tool_call/tool_result
+   * pair is never split and a flushed frame is always seen by the model. FIFO by contract (Opus review
    * defect 1): every frame queued during a step is delivered in send order,
    * one appended user frame + one `user_injected` event each. Frames still
    * pending when the turn ends (sentinel, transition, cancel, error, ceiling,
@@ -589,15 +590,6 @@ export class AgentLoop {
    * the text for the NEXT turn (4110: an undelivered steer is never lost).
    */
   private injectionQueue: { text: string; onDelivered?: (step: number) => void }[] = [];
-  /**
-   * 4110 rework (Opus defect 1, "delivered right before a ceiling/deadline"):
-   * frames the seam APPENDED but whose delivery confirmation is still held
-   * back — `onDelivered` fires only when the NEXT model request actually
-   * carries the frame (the streamText issuance below), or -1 at turn end if
-   * no request ever did (ceiling/deadline refused the very next iteration).
-   * A frame the model never got to answer counts as undelivered.
-   */
-  private pendingDeliveryConfirmations: { text: string; step: number; onDelivered?: (step: number) => void }[] = [];
   /**
    * TASK.123 (Taskana 4110): true exactly while a runTurn/continueTurn
    * generator of this loop is active (set at runTurnInner entry, cleared in
@@ -956,13 +948,7 @@ export class AgentLoop {
     for (const frame of frames) {
       frame.onDelivered?.(-1);
     }
-    // 4110 rework: frames the seam appended but no model request ever carried
-    // (flushed right before a ceiling/deadline exit) are equally undelivered.
-    const unseen = this.pendingDeliveryConfirmations.splice(0);
-    for (const frame of unseen) {
-      frame.onDelivered?.(-1);
-    }
-    return [...frames, ...unseen];
+    return frames;
   }
 
   /** TASK.123 (Taskana 4110): true exactly while a turn generator of this loop is active. */
@@ -1224,6 +1210,31 @@ export class AgentLoop {
           return;
         }
 
+        // TASK.123 (Taskana 4110): the injection seam. Placed AFTER every exit
+        // gate of this iteration (cancel, wall-clock deadline, turn ceiling,
+        // compaction-cancel) and immediately before the model request, so a
+        // flushed frame is ALWAYS carried by the very next streamText call: a
+        // frame is either in history AND in front of the model, or still in
+        // the queue — never both "appended" and "undelivered" (an exit right
+        // after a flush would otherwise leave it in history while the UI
+        // re-queues it — a double send). The previous step's tool results are
+        // all appended by now, so no tool_call/result pair is split. FIFO:
+        // every frame queued so far is appended in send order, one
+        // `user_injected` each; `step` is the ordinal of the step whose results
+        // precede the frame (`turn - 1`; 0 = before the first model step). The
+        // frame carries the outer turnId and keeps `origin` off — a steer is
+        // human-typed input, not a system report.
+        const injections = this.injectionQueue.splice(0);
+        for (const injection of injections) {
+          const afterStep = turn - 1;
+          this.history.append(
+            { role: "user", content: injection.text },
+            ...(turnId !== undefined ? [{ turnId, step: afterStep }] as const : []),
+          );
+          yield { type: "user_injected", step: afterStep, text: injection.text };
+          injection.onDelivered?.(afterStep);
+        }
+
         const textParts: string[] = [];
         const toolCalls: ProposedToolCall[] = [];
         let finishReason: FinishReason = "unknown";
@@ -1266,13 +1277,6 @@ export class AgentLoop {
               reasoningEffort: this.config.reasoningEffort,
               abortSignal: turnAbort.signal,
             });
-            // 4110 rework: this request's messages carry every frame flushed
-            // at the previous seam — NOW the steers are genuinely delivered
-            // (the model will answer them). Confirm the held-back waiters.
-            const confirmed = this.pendingDeliveryConfirmations.splice(0);
-            for (const frame of confirmed) {
-              frame.onDelivered?.(frame.step);
-            }
             for await (const event of stream) {
               if (event.type === "error") {
                 const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput);
@@ -1567,39 +1571,6 @@ export class AgentLoop {
           return;
         }
 
-        // TASK.123 (Taskana 4110): the injection seam. Reached ONLY when the
-        // loop is CONTINUING (the sentinel exit above, the workspace-transition
-        // exit and the mid-dispatch cancel exit have all returned already), so
-        // the history is balanced here — every one of this step's tool results
-        // is appended and no tool_call/result pair can be split. Flush the
-        // pending user frames NOW, before the step's turn_end, so the next
-        // iteration's streamText request (history.toMessages() at its top)
-        // already contains them: the messages influence the NEXT step of the
-        // SAME turn, no restart, the `turn` counter is unaffected. Each frame
-        // carries the outer turnId and the ordinal of the step it follows
-        // (boundary semantics: `step: turn` = after step `turn`) and keeps
-        // `origin` off — a steer is human-typed input, not a system report.
-        // 4110 rework (Opus defect 1): FIFO — every frame queued during the
-        // step is appended in send order, one user_injected event each.
-        const injections = this.injectionQueue.splice(0);
-        for (const injection of injections) {
-          this.history.append(
-            { role: "user", content: injection.text },
-            ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []),
-          );
-          yield { type: "user_injected", step: turn, text: injection.text };
-          // 4110 rework: hold the delivery confirmation back until the NEXT
-          // model request actually carries the frame (streamText issuance
-          // below). A seam flush followed by a ceiling/deadline exit means
-          // the model never saw it — that must surface as undelivered (-1),
-          // not a resolved steer.
-          this.pendingDeliveryConfirmations.push({
-            text: injection.text,
-            step: turn,
-            ...(injection.onDelivered !== undefined ? { onDelivered: injection.onDelivered } : {}),
-          });
-        }
-
         yield { type: "turn_end", turn, finishReason };
       }
     } finally {
@@ -1607,17 +1578,12 @@ export class AgentLoop {
         this.activeDispatchCtx = null;
       }
       // TASK.123 (Taskana 4110 rework): the turn ends — frames still pending
-      // in the injection queue die with it (never appended on an exit path),
-      // and frames the seam flushed but no model request ever carried (the
-      // ceiling/deadline exit right after a flush) are equally undelivered;
-      // each waiter is told so via onDelivered(-1) ("died with the turn") in
-      // send order. The engine layer re-queues every undelivered text for the
-      // NEXT turn (4110: an undelivered steer is never lost). turnActive
-      // clears so queueInjection honestly reports false again.
+      // in the injection queue die with it (never appended on an exit path:
+      // the seam sits after every exit gate, so nothing is ever both appended
+      // and reported undelivered); each waiter is told so via onDelivered(-1)
+      // in send order and the host re-queues the text for the NEXT turn.
+      // turnActive clears so queueInjection honestly reports false again.
       for (const frame of this.injectionQueue.splice(0)) {
-        frame.onDelivered?.(-1);
-      }
-      for (const frame of this.pendingDeliveryConfirmations.splice(0)) {
         frame.onDelivered?.(-1);
       }
       this.turnActive = false;

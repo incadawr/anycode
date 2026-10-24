@@ -4904,15 +4904,14 @@ describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
     expect(turnStarts.map((e) => (e as { turn: number }).turn)).toEqual([1, 2, 3]);
     expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
 
-    // The injected event sits AFTER c1's tool_result and BEFORE turn_start(2).
+    // The injected event sits AFTER turn_start(2) (every exit gate of step 2
+    // passed) and BEFORE step 2's model output — the frame is flushed only
+    // when the very next model request is certain to carry it.
     const injected = events.find((e) => e.type === "user_injected");
     expect(injected).toEqual({ type: "user_injected", step: 1, text: "STEER!" });
     const idx = (predicate: (e: AgentEvent) => boolean): number =>
       events.findIndex(predicate);
     expect(idx((e) => e.type === "user_injected")).toBeGreaterThan(
-      idx((e) => e.type === "tool_result"),
-    );
-    expect(idx((e) => e.type === "user_injected")).toBeLessThan(
       idx((e) => e.type === "turn_start" && (e as { turn: number }).turn === 2),
     );
 
@@ -4921,9 +4920,9 @@ describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
       "context_usage",
       "tool_execution_start",
       "tool_result",      // c1 result appended...
-      "user_injected",    // ...then the injected frame, still inside step1's tail
       "turn_end",         // step1 ends
-      "turn_start",       // step2 begins — its request already contains the frame
+      "turn_start",       // step2 begins, its exit gates pass...
+      "user_injected",    // ...then the frame is flushed, right before the request
       "start",
       "tool_call",
       "finish",
@@ -5108,14 +5107,11 @@ describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
     expect(deliveredSteps).toEqual([-1]);
   });
 
-  it("a frame flushed at the seam but never carried by a model request (max_turns refusal) reports -1 (4110 rework)", async () => {
-    // maxTurns: 1 — step 1 runs a tool (the steer queued mid-dispatch flushes
-    // at step 1's seam), then the ceiling check at iteration 2 REFUSES the
-    // continuation: no second model request ever carries the frame. The user_
-    // injected event fired and the frame IS in history, but the model never
-    // saw it — the waiter must be told -1 (undelivered), never a resolved
-    // delivery (4110: a frame the model never got to answer counts as
-    // undelivered → the UI re-queues it for the next turn).
+  it("a steer pending when the turn ceiling refuses the next step is never appended and reports -1 (4110 rework)", async () => {
+    // maxTurns: 1 — step 1 runs a tool (the steer is queued mid-dispatch),
+    // then the ceiling check at iteration 2 REFUSES the continuation. The
+    // seam sits after that gate, so the frame is never appended: the waiter
+    // is told -1 and the UI re-queues the text as the next turn.
     const steps: ModelStreamEvent[][] = [
       [
         { type: "start" },
@@ -5151,11 +5147,14 @@ describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
     parking.release();
     await run;
 
-    // The seam DID append + emit (the frame is in history), but the ceiling
-    // refused the continuation — no model request ever saw it.
-    expect(seen.some((e) => e.type === "user_injected")).toBe(true);
+    // The ceiling refused the continuation BEFORE the seam: the frame never
+    // entered history (no user_injected), so reporting -1 (the host re-queues
+    // it) cannot double-send it.
+    expect(seen.some((e) => e.type === "user_injected")).toBe(false);
+    expect(
+      loop.history.items.filter((item) => item.message.role === "user").map((i) => i.message.content),
+    ).toEqual(["go"]);
     expect(seen.at(-1)).toMatchObject({ type: "loop_end", reason: "max_turns", turns: 1 });
-    // …and the waiter was STILL told the truth: not delivered (-1).
     expect(deliveredSteps).toEqual([-1]);
   });
 

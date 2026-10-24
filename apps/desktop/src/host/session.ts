@@ -1611,9 +1611,9 @@ export class Session {
    * the renderer moves the pending bubble into its prompt queue, which the
    * existing drainer delivers as the next turn. On success the steer resolves
    * only when the loop actually flushed the frame at the legal seam — the
-   * user_injected event + FIFO pop own the transcript side. If the turn ends
-   * AFTER the flush (final text-only step, cancel), the renderer's loop_end
-   * re-queue picks the still-pending bubble up.
+   * user_injected event owns the transcript side. If the turn ends before
+   * the seam (final text-only step, cancel), the renderer's loop_end re-queue
+   * picks the still-pending bubble up and the later steer_requeued is a no-op.
    */
   private handleUiSteerMessage(requestId: string, text: string): void {
     if (this.engine.id !== "core" || this.engine.steer === undefined) {
@@ -1621,17 +1621,18 @@ export class Session {
       void this.receiveAgentMessage({ messageId: requestId, sender: "local-supervisor-ui", recipientSessionId: this.sessionId, kind: "agent_message", payload: text, mode: "steer", createdAt: new Date().toISOString() });
       return;
     }
-    if (!this.busy || this.relocating) {
-      this.outbound.emit({ type: "steer_requeued", requestId, reason: "No active core turn" });
+    if (this.shuttingDown || !this.busy || this.relocating) {
+      this.outbound.emit({ type: "steer_requeued", requestId, reason: this.shuttingDown ? "shutting down" : "No active core turn" });
       return;
     }
+    const receivingTurnId = this.turnId;
     void this.engine
       .steer(text)
       .then((ack) => {
         // Delivered into the running turn at the legal seam. The
         // user_injected event owns the transcript; messageTurns keeps the
         // correlation for status consumers.
-        this.messageTurns.set(requestId, { hostTurnId: this.turnId, nativeTurnId: ack.turnId });
+        this.messageTurns.set(requestId, { hostTurnId: receivingTurnId, nativeTurnId: ack.turnId });
       })
       .catch(() => {
         // Honest loss report — CoreEngine rejects only when the frame cannot
@@ -1639,46 +1640,6 @@ export class Session {
         // superseded, turn raced to idle). The renderer re-queues the text.
         this.outbound.emit({ type: "steer_requeued", requestId, reason: "core turn ended before injection" });
       });
-  }
-
-  /**
-   * The same UI-steer route for an already-built envelope arriving through
-   * receiveAgentMessage (the communication server can forward a
-   * local-supervisor-UI sender). Core: the dedicated route above (no
-   * agent_message delivery states on the wire for the user's own steer).
-   * Non-core: the pre-branch agent-to-agent protocol verbatim.
-   */
-  private handleUiSteerEnvelope(envelope: AgentEnvelope): void {
-    if (this.engine.id !== "core" || this.engine.steer === undefined) {
-      // Non-core engines keep the pre-branch agent-to-agent steer path —
-      // fall through by NOT handling it here; the caller's protocol owns it.
-      // (Reached only when receiveAgentMessage routed a UI-sender envelope
-      // here; re-run the generic branch by calling the engine directly.)
-      if (!this.busy || !this.engine.steer) {
-        const delivery = this.agentDeliveries.get(envelope.messageId)!;
-        delivery.state = "rejected";
-        delivery.detail = "Steering requires an active turn on an engine that supports it; use next_turn";
-        this.publishAgentDelivery(delivery);
-        return;
-      }
-      void this.engine.steer(agentMessageText(envelope)).then(
-        (ack) => {
-          const delivery = this.agentDeliveries.get(envelope.messageId)!;
-          this.messageTurns.set(envelope.messageId, { hostTurnId: this.turnId, nativeTurnId: ack.turnId });
-          delivery.state = "acknowledged";
-          delivery.detail = `app-server accepted input for turn ${ack.turnId}; model application unverified`;
-          this.publishAgentDelivery(delivery);
-        },
-        (error: unknown) => {
-          const delivery = this.agentDeliveries.get(envelope.messageId)!;
-          delivery.state = (error as { deliveryState?: string }).deliveryState === "unknown" ? "unknown" : "rejected";
-          delivery.detail = describeError(error);
-          this.publishAgentDelivery(delivery);
-        },
-      );
-      return;
-    }
-    this.handleUiSteerMessage(envelope.messageId, envelope.payload);
   }
 
   async receiveAgentMessage(envelope: AgentEnvelope): Promise<AgentDelivery> {
@@ -1692,25 +1653,15 @@ export class Session {
     const delivery: AgentDelivery = { envelope, state: "queued" };
     this.publishAgentDelivery(delivery);
     if (envelope.mode === "steer") {
-      // 4110 rework (Opus defect 4): a steer from the LOCAL supervisor UI
-      // (steer_message's synthetic envelope) never goes through the
-      // agent_message delivery protocol at all — its own route
-      // (handleUiSteerMessage) owns delivery/re-queue, and an agent_message
-      // transcript block ("Delivery: acknowledged — app-server accepted
-      // input…") must never render for the user's own words (defect 3).
-      if (envelope.sender === "local-supervisor-ui") {
-        this.handleUiSteerEnvelope(envelope);
-        return this.agentDeliveries.get(envelope.messageId)!;
-      }
-      // Agent-to-agent steers keep the PRE-BRANCH protocol and timing
-      // verbatim: the delivery promise settles when the ENGINE's steer call
-      // settles (codex: immediate app-server ack; core: enqueues into the
-      // running turn — resolved at the seam flush, rejected honestly if the
-      // turn ends first). Codex behaviour here is byte-identical to before
-      // this branch; core GAINED a path it previously rejected outright.
-      if (!this.busy || !this.engine.steer) {
+      // Taskana 4110 rework (Opus defect 4): agent-to-agent steers keep the
+      // PRE-BRANCH protocol and timing verbatim. Core gained `engine.steer`
+      // for the UI's own steer_message route (handleUiSteerMessage) only; an
+      // envelope steer into a core session is still rejected immediately
+      // (use next_turn), exactly as before — it must not block until the
+      // loop's next seam, nor be confused with the user's pending bubbles.
+      if (!this.busy || !this.engine.steer || this.engine.id === "core") {
         delivery.state = "rejected";
-        delivery.detail = "Steering requires an active turn on an engine that supports it; use next_turn";
+        delivery.detail = "Steering requires an active supported Codex turn; use next_turn";
       } else {
         try {
           const receivingTurnId = this.turnId;
@@ -1883,9 +1834,10 @@ export class Session {
     if (this.shuttingDown) {
       switch (message.type) {
         case "steer_message":
-        // 4110 rework: honest re-queue reply — the dying host can no longer
-        // inject; the renderer keeps the text in its prompt queue.
-        this.outbound.emit({ type: "steer_requeued", requestId: message.requestId, reason: "shutting down" });
+        // 4110 rework: core gets an honest re-queue reply — the dying host
+        // can no longer inject; the renderer keeps the text in its prompt
+        // queue. Non-core engines keep the pre-branch envelope route.
+        this.handleUiSteerMessage(message.requestId, message.text);
         return;
       case "user_message":
           this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });

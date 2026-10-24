@@ -3820,10 +3820,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // Taskana 4110 (TASK.123): a user frame force-delivered INTO the
         // running turn at the loop's legal seam. Rendered as an ordinary
         // user_text bubble (delivered-into-the-turn is visually DISTINCT from
-        // the queue pill — TASK.123's surface requirement), and the OLDEST
-        // pendingSteer is retired FIFO: the host delivers steers in order, so
-        // this event is the delivery confirmation the optimistic bubble was
-        // waiting for. Reaching this case means the turn guard above already
+        // the queue pill — TASK.123's surface requirement), and the oldest
+        // matching UI-owned pendingSteer is retired: this event is the
+        // delivery confirmation the optimistic bubble was waiting for. Reaching this case means the turn guard above already
         // matched the running turnId.
         case "user_injected":
           appendBlock({
@@ -3832,14 +3831,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             text: event.text,
             at: Date.now(),
           });
-          // 4110 rework: retire the OLDEST pendingSteer FIFO AND forget its
+          // 4110 rework: retire the oldest matching pendingSteer AND forget its
           // owner bookkeeping — a delivered steer must never be re-queued by
           // a later loop_end / steer_requeued for the same requestId.
+          // Matched by owner AND text, never blindly `[0]`: a steer that did
+          // not come from this composer (automation steerPrompt) has no
+          // pending entry and must not retire someone else's bubble.
           set((state) => {
-            const delivered = state.pendingSteers[0];
+            const delivered = state.pendingSteers.find(
+              (entry) => state.uiSteerPending.includes(entry.requestId) && entry.text === event.text,
+            );
             if (delivered === undefined) return {};
             return {
-              pendingSteers: state.pendingSteers.slice(1),
+              pendingSteers: state.pendingSteers.filter((entry) => entry !== delivered),
               uiSteerPending: state.uiSteerPending.filter((id) => id !== delivered.requestId),
             };
           });
@@ -4089,14 +4093,6 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
                 lastSentMessage: steer.sentMessage,
               }));
             }
-            // Taskana 4110 rework: a NEW turn beginning means the previous
-            // turn's lifecycle is over — any UI steer ids still marked pending
-            // were delivered into a turn that ended without a matching
-            // user_injected (or are stale duplicates); they can never be
-            // re-queued after this point without double-sending. The loop_end
-            // handler owns the actual re-queue; this is just the owner-list
-            // reset for the fresh turn.
-            set((state) => ({ uiSteerPending: [] }));
             return;
           }
           case "turn_rejected": {
@@ -4145,13 +4141,6 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           case "agent_message": {
             const d = message.delivery;
             const id = `agent-message:${d.envelope.messageId}`;
-            // Taskana 4110 rework (Opus defect 3): the LOCAL supervisor UI's
-            // own steers never render as agent-message delivery blocks — the
-            // user_injected bubble IS the transcript record for those, and a
-            // "Delivery: acknowledged…" block (Codex wording) would replace
-            // it. Skip the block AND the aggressive text-equality removal for
-            // the UI sender; agent-to-agent envelopes keep the full render.
-            if (d.envelope.sender === "local-supervisor-ui") return;
             const block: TranscriptBlock = { kind: "user_text", id, origin: "system", text: `${agentMessageText(d.envelope)}\nDelivery: ${d.state}${d.detail ? ` — ${d.detail}` : ""}` };
             set((state) => ({ transcript: [...state.transcript.filter((b) => b.id !== id && !(b.kind === "user_text" && b.text === agentMessageText(d.envelope))), block] }));
             return;
