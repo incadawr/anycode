@@ -5002,6 +5002,57 @@
             "type": "object"
           }
         ]
+      },
+      "WindowsSandboxReadiness": {
+        "enum": [
+          "ready",
+          "notConfigured",
+          "updateRequired"
+        ],
+        "type": "string"
+      },
+      "WindowsSandboxReadinessResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/WindowsSandboxReadiness"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "WindowsSandboxReadinessResponse",
+        "type": "object"
+      },
+      "WindowsSandboxSetupCompletedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
+          },
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mode",
+          "success"
+        ],
+        "title": "WindowsSandboxSetupCompletedNotification",
+        "type": "object"
+      },
+      "WindowsSandboxSetupMode": {
+        "enum": [
+          "elevated",
+          "unelevated"
+        ],
+        "type": "string"
       }
     }
   },
@@ -5059,6 +5110,10 @@
       "turn/start": {
         "params": "v2/TurnStartParams",
         "result": "v2/TurnStartResponse"
+      },
+      "windowsSandbox/readiness": {
+        "params": null,
+        "result": "v2/WindowsSandboxReadinessResponse"
       }
     },
     "serverNotifications": {
@@ -5097,6 +5152,9 @@
       },
       "turn/plan/updated": {
         "params": "v2/TurnPlanUpdatedNotification"
+      },
+      "windowsSandbox/setupCompleted": {
+        "params": "v2/WindowsSandboxSetupCompletedNotification"
       }
     },
     "serverRequests": {
