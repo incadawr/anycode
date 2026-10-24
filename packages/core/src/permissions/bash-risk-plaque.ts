@@ -108,12 +108,28 @@ export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
   if (verdict.class === "read-only") return { applies: true, plaque: BASH_RISK_PLAQUE.readOnly, binary: null };
   if (verdict.shellExpression) return { applies: true, plaque: null, binary: null }; // the shell hint already covers it
   // plain single command, unknown class: name the binary if we can
-  const binary = /^[^ \t]+/.exec(command.trim())?.[0] ?? null;
+  let binary = /^[^ \t]+/.exec(command.trim())?.[0] ?? null;
   // Cross-review D3: an empty/whitespace command has no binary at all —
   // fail closed to no plaque, exactly like every other "cannot extract"
   // case; the unknownBinary note asserts a fact about a binary that would
   // not exist.
   if (binary === null) return { applies: true, plaque: null, binary: null };
+  // Cross-review D4: a quote-spelled leading binary (`"sudo" rm`, `'git'
+  // push`) is still that binary — strip MATCHED surrounding quotes before
+  // the lookup so it keeps the write-capable plaque instead of the softer
+  // unknown-binary note (the 4ebfbe12 hardening's whole point). Odd/mixed
+  // or unmatched quotes are not a quoted spelling: left verbatim, and the
+  // plaque names the token as written. Presentation only — the classifier
+  // itself never changes its verdict for any quoted spelling.
+  if (binary.length >= 2) {
+    const first = binary.charAt(0);
+    const last = binary.charAt(binary.length - 1);
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      const stripped = binary.slice(1, -1);
+      // An empty or still-quoted interior (`""`, `"'"`) names no binary.
+      if (stripped.length > 0 && !stripped.includes('"') && !stripped.includes("'")) binary = stripped;
+    }
+  }
   // Look up by basename so `/bin/rm` is named like `rm`, never softened.
   const lookup = binary.split("/").pop() ?? binary;
   return {
