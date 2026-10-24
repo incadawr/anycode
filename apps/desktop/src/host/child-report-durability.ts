@@ -1,4 +1,5 @@
 import type { ChildReportQueue, ChildReportQueueSnapshot } from "./child-report-queue.js";
+import type { PendingChildReportsOptions } from "./session.js";
 
 /**
  * Taskana 4123 (TASK.145 residual): wires the host's pending detached-child
@@ -39,4 +40,63 @@ export async function attachChildReportDurability(options: {
         console.error(`[host] saving pending child reports for session ${sessionId} failed: ${String(error)}`);
       });
   });
+}
+
+/**
+ * Taskana 4123 follow-up: the engine-boot twin of `attachChildReportDurability`
+ * — wires the SAME `pending_child_reports_json` column (migration v19, no new
+ * migration) behind a codex/claude root session. Both engine boots were the
+ * last writers still keeping detached-child reports in memory only: their
+ * `deliverDetachedChildReport` enqueues into the same module-level
+ * `childReportQueue`, but nothing ever restored or persisted it, so a host
+ * restart silently dropped every still-unacknowledged report.
+ *
+ * Two engine-specific facts shape this helper's seams:
+ *
+ * 1. RESTORE needs a session ROW to read from, and only CODEX guarantees one
+ *    at boot (its row-creation point runs strictly before Session is built).
+ *    CLAUDE creates the row NATIVE-FIRST (session-row.ts: nothing exists until
+ *    the first turn-scoped `system/init`), so `loadPendingChildReports` is an
+ *    injected seam: codex passes the adapter directly; claude passes a closure
+ *    that reads through the row's existence gate — null (nothing restorable
+ *    yet) exactly until the row materializes, never a conjured early read.
+ *
+ * 2. PERSIST faces the mirror problem for SAVE: a write against a not-yet-
+ *    existing claude row is a silent no-op UPDATE. `savePendingChildReports` is
+ *    therefore injected too: codex again passes the adapter; claude routes
+ *    saves through its row's own serialized write chain, so a queued report
+ *    written before the row exists lands strictly after the CREATE — same
+ *    never-drop-never-conjure posture `ClaudeSessionRowWriter.touch` already
+ *    holds for title patches.
+ *
+ * A CHILD-mode engine boot passes nothing (callers gate on `args.child`) — a
+ * child never spawns detached children of its own, so its column stays null.
+ */
+export async function attachEngineChildReportDurability(options: {
+  queue: ChildReportQueue;
+  loadJson: () => Promise<string | null>;
+  saveJson: (json: string | null) => Promise<void>;
+}): Promise<PendingChildReportsOptions> {
+  const { queue, loadJson, saveJson } = options;
+  try {
+    const saved = await loadJson();
+    if (saved !== null) {
+      queue.restore(JSON.parse(saved) as ChildReportQueueSnapshot);
+    }
+  } catch (error) {
+    console.error(`[host] restoring pending child reports failed: ${String(error)}`);
+  }
+  // Restore failure must NOT skip the persistence attach (same contract as
+  // attachChildReportDurability): a fresh snapshot still needs to overwrite
+  // whatever unreadable state sits in the column.
+  queue.onChange(() => {
+    const snapshot = queue.snapshot();
+    void saveJson(snapshot.reports.length > 0 ? JSON.stringify(snapshot) : null).catch((error) => {
+      console.error(`[host] saving pending child reports failed: ${String(error)}`);
+    });
+  });
+  return {
+    resendAll: () => queue.resendAll(),
+    ack: (id) => queue.ack(id),
+  };
 }
