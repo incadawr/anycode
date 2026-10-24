@@ -1759,6 +1759,28 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   const foldSteps = new Map<string, FoldStepState>();
   /** Durable (turnId, step) pairs registered by the latest session_history. */
   const durableSteps = new Set<string>();
+  /**
+   * Opus2 F2 (2026-10-24): exact identities of the durable INJECTED USER
+   * items — `${turnId}:${step}:${text}` per hydrated user item with step > 0
+   * — the rendering-ownership evidence user_injected's replay dedupe keys on.
+   * `durableSteps` alone is NOT that evidence: it is registered by ANY
+   * user/assistant item (an assistant/tool pair at the same step stamps the
+   * key too), so "step covered" would also suppress a LIVE user_injected that
+   * flushed at the seam AFTER a mid-step reload — the frame is not in the
+   * snapshot, its hydrated bubble does not exist, and the live append is the
+   * only rendering it will ever get before the next reload. Cleared with the
+   * rest of the fold checkpoint (every path that discards the transcript);
+   * rebuilt by each session_history.
+   */
+  const durableUserInjections = new Set<string>();
+  /**
+   * Opus2 F2 (2026-10-24): registers the (turnId, step) of every TURN-CUT
+   * hydrated user item into `durableUserInjections`' key scheme — a snapshot
+   * truncated past a turn's head (its step-0 frame vanished below the cut)
+   * still owns the rendering of that turn's injected frames, so the replayed
+   * user_injected for those positions is suppressed without per-text checks.
+   */
+  const durableUserInjectionTurnCuts = new Set<string>();
   /** Durable toolCallId -> result status/modelText/presentation, from hydrated tool items. */
   const durableToolResults = new Map<string, { status: string; modelText: string }>();
   /**
@@ -1884,6 +1906,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   function clearFoldCheckpoint(): void {
     foldSteps.clear();
     durableSteps.clear();
+    durableUserInjections.clear();
+    durableUserInjectionTurnCuts.clear();
     durableToolResults.clear();
     loopEndEmitted.clear();
     // TASK.117 phase-1 defect 2: a discarded transcript has no durable
@@ -2834,6 +2858,23 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         if (item.message.role === "user" || item.message.role === "assistant") {
           durableSteps.add(`${item.turnId}:${item.step}`);
         }
+        // Opus2 F2 (2026-10-24): register ONLY a durable USER item at the
+        // injected position as injected-frame coverage — by (turnId, step,
+        // text) when the text survives stripping (the hydrated bubble owns
+        // the rendering of exactly that text), or by (turnId, step) when the
+        // item is a stripped-reminder husk. An assistant/tool pair at the
+        // same step does NOT cover the frame: a reload while step N's tool
+        // ran left N durable without the seam ever flushing, and the LIVE
+        // user_injected that lands afterwards is the frame's ONLY rendering
+        // — suppressing it would retire the pending row and show nothing.
+        if (item.message.role === "user" && item.step > 0) {
+          const stripped = stripReminderBlocks(item.message.content);
+          if (stripped.trim() !== "") {
+            durableUserInjections.add(`${item.turnId}:${item.step}:${stripped}`);
+          } else {
+            durableUserInjectionTurnCuts.add(`${item.turnId}:${item.step}`);
+          }
+        }
         // TASK.117: a durable user frame (step 0) supersedes the pending
         // bubble's rendering — the hydrated user_text block IS the prompt.
         if (item.step === 0 && item.message.role === "user") {
@@ -3400,6 +3441,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // the prompt queue (drained at idle) is the honest next-turn owner
           // of that text. Order among the survivors is preserved, and the
           // entries keep their ORIGINAL sent text+images for the next send.
+          // Opus2 F1 (2026-10-24): record EVERY re-queued id in
+          // steerRequeueSeen — the host's steer_requeued for this id (now
+          // carrying text since cross-review F2) may still arrive afterwards
+          // (loop_end races the engine's steer-promise rejection by a
+          // microtask, and the replay ring duplicates it) and must find the
+          // id already seen instead of enqueueing the text a second time.
           set((state) => {
             const uiPending = get().uiSteerPending;
             const requeue = state.pendingSteers.filter((entry) => uiPending.includes(entry.requestId));
@@ -3414,6 +3461,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               pendingSteers: state.pendingSteers.filter((entry) => !uiPending.includes(entry.requestId)),
               promptQueue: nextQueue,
               uiSteerPending: [],
+              ...(requeue.length > 0
+                ? { steerRequeueSeen: [...state.steerRequeueSeen, ...requeue.map((entry) => entry.requestId)] }
+                : {}),
               ...(event.reason !== "completed" && nextQueue.length > 0
                 ? { queuePaused: true }
                 : {}),
@@ -3859,7 +3909,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // (cross-review F3) and this replayed delivery confirmation is
           // exactly what retires them; nothing renders twice because the
           // retire only filters rows.
-          const injectedCovered = causalFoldEngaged && stepCovered(turnId, event.step);
+          // Opus2 F2 (2026-10-24): step coverage is NOT the evidence —
+          // `durableSteps` is registered by any user/assistant item, so an
+          // assistant/tool pair at the injected step would suppress a LIVE
+          // user_injected flushed at the seam after a mid-step reload (the
+          // frame is not in the snapshot, nothing hydrated owns its
+          // rendering, and the message would vanish until the next reload).
+          // Suppress ONLY when the durable injected USER item itself is
+          // present: the exact (turnId, step, text) identity, or the turn's
+          // step-0 frame being entirely cut away (turn-cut — the snapshot's
+          // ownership then extends to its injected frames by position).
+          const injectedCovered =
+            causalFoldEngaged &&
+            (durableUserInjections.has(`${turnId}:${event.step}:${event.text}`) ||
+              durableUserInjectionTurnCuts.has(`${turnId}:${event.step}`));
           const injectedBelowCut =
             causalFoldEngaged &&
             step !== undefined &&
@@ -4917,10 +4980,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           const queueItem: QueuedPrompt = { id: crypto.randomUUID(), text: entry.sentMessage.text, images: entry.sentMessage.images };
           const at = index !== undefined && index >= 0 && index <= state.promptQueue.length ? index : state.promptQueue.length;
           const promptQueue = [...state.promptQueue.slice(0, at), queueItem, ...state.promptQueue.slice(at)];
+          // Opus2 F1 (2026-10-24): mark the id seen — the host may STILL emit
+          // steer_requeued for it afterwards (a replayed duplicate, or the
+          // pre-loop race where the refusal outran the loop_end), and that
+          // message's text must not enqueue a second queue item.
           return {
             pendingSteers: state.pendingSteers.filter((e) => e.requestId !== requestId),
             uiSteerPending: state.uiSteerPending.filter((id) => id !== requestId),
             promptQueue,
+            steerRequeueSeen: [...state.steerRequeueSeen, requestId],
           };
         });
       },

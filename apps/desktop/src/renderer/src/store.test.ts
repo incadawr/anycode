@@ -8000,6 +8000,99 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
     expect(store.getState().uiSteerPending).toEqual(["r2"]);
   });
 
+  it("F1: a steer_requeued WITH text arriving after loop_end's re-queue does not enqueue twice (Stop race)", () => {
+    // The Stop-race shape (host session.test.ts:1105): the turn ends before
+    // the seam flushes, so loop_end re-queues the pending steer — and the
+    // engine's steer promise rejects a microtask later, making the host emit
+    // steer_requeued (now carrying text per F2) for the SAME requestId. The
+    // recovery path must recognize the id as already re-queued (exactly one
+    // queue item — never two next-turn sends of the same words).
+    const store = runningStore();
+    store.getState().recordPendingSteer("r-stop", "STOP-RACED", { text: "STOP-RACED", images: [] });
+    store.getState().markUiSteer("r-stop");
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      event: { type: "loop_end", reason: "cancelled", turns: 1 },
+    });
+    expect(store.getState().promptQueue.map((q) => q.text)).toEqual(["STOP-RACED"]);
+
+    store.getState().applyHostMessage({
+      type: "steer_requeued",
+      requestId: "r-stop",
+      reason: "core turn ended before injection",
+      text: "STOP-RACED",
+    });
+
+    expect(store.getState().promptQueue.map((q) => q.text)).toEqual(["STOP-RACED"]);
+    expect(store.getState().pendingSteers).toEqual([]);
+    expect(store.getState().uiSteerPending).toEqual([]);
+  });
+
+  it("F1: a steer_requeued WITH text arriving after steer_requeued's pending-entry re-queue does not enqueue twice", () => {
+    // The same race through the OTHER re-queue site: the host answered the
+    // steer first (steer_requeued without a pending-entry miss — the ordinary
+    // path re-queues via requeuePendingSteer), and a replayed duplicate
+    // carrying text must not add a second queue item.
+    const store = runningStore();
+    store.getState().recordPendingSteer("r-s", "ONCE-ONLY", { text: "ONCE-ONLY", images: [] });
+    store.getState().markUiSteer("r-s");
+
+    store.getState().applyHostMessage({ type: "steer_requeued", requestId: "r-s", reason: "No active core turn" });
+    expect(store.getState().promptQueue.map((q) => q.text)).toEqual(["ONCE-ONLY"]);
+
+    store.getState().applyHostMessage({
+      type: "steer_requeued",
+      requestId: "r-s",
+      reason: "core turn ended before injection",
+      text: "ONCE-ONLY",
+    });
+
+    expect(store.getState().promptQueue.map((q) => q.text)).toEqual(["ONCE-ONLY"]);
+  });
+
+  it("F2: LIVE user_injected renders when the injected step is covered ONLY by assistant/tool items (reload mid-step)", () => {
+    // The reload-mid-step shape (opus2 F2): step 1's assistant+tool items are
+    // already durable (the tool was running when the renderer reloaded), but
+    // the seam never flushed — no durable user item at {turnId, step 1} — and
+    // the seam NOW flushes live. durableSteps contains t1:1 (the assistant
+    // item registered it), yet step coverage is NOT evidence the injected
+    // USER frame itself is hydrated: suppressing the append would retire the
+    // pending row while rendering NOTHING (the message vanishes until the
+    // next reload). The bubble must render.
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({
+      type: "session_history",
+      sessionId: "s1",
+      truncated: false,
+      items: [
+        { id: "u1", createdAt: 1, turnId: "t1", step: 0, message: { role: "user", content: "go" } },
+        { id: "a1", createdAt: 2, turnId: "t1", step: 1, message: { role: "assistant", content: [{ type: "text", text: "working" }] } },
+        { id: "tool1", createdAt: 3, turnId: "t1", step: 1, message: { role: "tool", content: [{ type: "tool_result", toolCallId: "c1", status: "ok", text: "" }] } },
+      ] as WireHistoryItem[],
+    });
+    // The reconnecting store restored its pending steer from the checkpoint…
+    store.getState().applyHostMessage({
+      type: "session_checkpoint",
+      liveTurnId: "t1",
+      pendingSteers: [{ requestId: "r-live", text: "LIVE STEER" }],
+    } as HostToUiMessage);
+    // …the replayed turn_started re-arms the turn guard…
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
+    // …and the LIVE seam flush arrives (the frame only NOW becomes durable).
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      step: 2,
+      event: { type: "user_injected", step: 1, text: "LIVE STEER" },
+    });
+    const texts = store.getState().transcript.filter((b) => b.kind === "user_text").map((b) => (b as { text: string }).text);
+    expect(texts.filter((t) => t === "LIVE STEER")).toHaveLength(1);
+    expect(store.getState().pendingSteers).toEqual([]);
+  });
+
   it("F4: steer_requeued appends at the queue TAIL — an ordinary queued prompt typed earlier sends first", () => {
     const store = runningStore();
     // A was typed while running (queue); S was sent as a steer AFTER A.
