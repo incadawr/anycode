@@ -3913,7 +3913,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             const targetId = pinnedId ?? (byUrl.length === 1 ? byUrl[0]!.id : undefined);
             if (targetId !== undefined && connections.some((c) => c.id === targetId)) {
               const observedAt = new Date().toISOString();
-              const source = event.quota.sources[0] ?? "";
+              const source = event.quota.primarySource ?? "";
               const next = connections.map((connection) =>
                 connection.id === targetId
                   ? {
