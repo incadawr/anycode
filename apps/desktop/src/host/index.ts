@@ -1438,6 +1438,10 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // TASK.180: a claude child enforces the profile budget natively
     // (--max-turns); absent = the CLI's own default.
     ...(args.child?.maxTurns !== undefined ? { maxTurns: args.child.maxTurns } : {}),
+    // TASK.92: slash passthrough (allowlisted /compact) for ROOT sessions
+    // only. A child's prompt is model-authored, so its CLI keeps
+    // --disable-slash-commands — no model-driven slash injection.
+    enableSlashPassthrough: args.child === undefined,
     // Ambient by default (owner pivot): no override here, so ClaudeClient
     // sets no `CLAUDE_CONFIG_DIR` at all and the CLI resolves the SAME
     // `~/.claude` main's doctor diagnosed before it let this tab spawn.

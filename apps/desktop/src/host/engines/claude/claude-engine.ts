@@ -180,6 +180,13 @@ interface ClaudeEngineSettings {
   effortsByModel: Map<string, string>;
   /** Boot-time warnings (unusable draft model, quota pressure) flushed into the first turn's stream. */
   notices: AgentEvent[];
+  /**
+   * TASK.92: true only when this engine's CLI was spawned WITHOUT
+   * `--disable-slash-commands` (`ClaudeEngineCreateOptions.enableSlashPassthrough`).
+   * Absent/false: `compactNow` refuses and the Compact capability is off — a
+   * `/compact` frame to a flagged CLI would reach the model as plain text.
+   */
+  slashPassthrough?: boolean;
 }
 
 function warning(message: string): AgentEvent {
@@ -468,11 +475,13 @@ async function connectClaudeEngine(
     ...spawn,
     bootstrap: options.bootstrap,
     onControlRequest: approvals.handle,
-    // TASK.92: the ENGINE connection is the only flagged-off spawn — the CLI
-    // must interpret host-built allowlisted /compact user frames. Doctor,
-    // login and subagent children (engine-children.ts) keep the flag
-    // (isolation); the engine trusts the UI-side closed allowlist.
-    enableSlashPassthrough: true,
+    // TASK.92: only a ROOT engine session drops the flag, so the CLI
+    // interprets host-built allowlisted /compact user frames. Fail-closed:
+    // the host opts in explicitly (host/index.ts, root sessions only). Doctor,
+    // login, engine-children.ts AND session-tier claude children (whose
+    // prompt is model-authored — a leading "/" there would be slash
+    // injection) keep the flag.
+    enableSlashPassthrough: options.enableSlashPassthrough === true,
   });
   try {
     await client.start();
@@ -518,7 +527,15 @@ async function connectClaudeEngine(
     const effort = catalog.resolveEffort(model, requestedEffort);
     const effortsByModel = new Map<string, string>();
     if (effort !== undefined) effortsByModel.set(model, effort);
-    const settings: ClaudeEngineSettings = { catalog, model, preset, effortsByModel, notices, ...(effort !== undefined ? { effort } : {}) };
+    const settings: ClaudeEngineSettings = {
+      catalog,
+      model,
+      preset,
+      effortsByModel,
+      notices,
+      ...(effort !== undefined ? { effort } : {}),
+      slashPassthrough: options.enableSlashPassthrough === true,
+    };
     engine = new ClaudeEngine(client, sessionRef, approvals, settings, options.timeouts, options.takePresentation);
     // $0 quota snapshot, seeded before the first turn so a user already at
     // their limit learns it from the first reply rather than a failed turn.
@@ -657,7 +674,9 @@ export class ClaudeEngine implements SessionEngine {
     // Interactive approval is advertised only once the real bridge is installed
     // (the codex CODEX_BRIDGED_CAPABILITIES precedent); a bare test engine keeps
     // the fail-closed capability.
-    this.capabilities = approvals === undefined ? CLAUDE_ENGINE_CAPABILITIES : CLAUDE_BRIDGED_CAPABILITIES;
+    const base = approvals === undefined ? CLAUDE_ENGINE_CAPABILITIES : CLAUDE_BRIDGED_CAPABILITIES;
+    // TASK.92: no slash passthrough (child session, flagged spawn) => no Compact row.
+    this.capabilities = settings?.slashPassthrough === true ? base : { ...base, supportsManualCompact: false };
     this.bounds = { ...DEFAULT_CLAUDE_ENGINE_TIMEOUTS, ...overrides };
     // TASK.189: the idle reader owns the notification stream from boot, so an
     // unsolicited CLI turn BEFORE the first owner turn is absorbed too. If the
@@ -1242,6 +1261,12 @@ export class ClaudeEngine implements SessionEngine {
   async *compactNow(options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {
     if (this.terminalError !== null || this.disposed) {
       yield { type: "compaction_end", ok: false, preTokens: 0, durationMs: 0, error: "engine closed" };
+      return;
+    }
+    if (this.settings?.slashPassthrough !== true) {
+      // The CLI was spawned with --disable-slash-commands: /compact would
+      // reach the model as ordinary text, not run a compaction.
+      yield { type: "compaction_end", ok: false, preTokens: 0, durationMs: 0, error: "manual compaction unavailable in this session" };
       return;
     }
     this.stopIdleReader();

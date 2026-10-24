@@ -233,7 +233,7 @@ class FakeTransport implements ClaudeTransport {
  */
 function engineWith(
   transport: ClaudeTransport,
-  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts> } = {},
+  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts>; slashPassthrough?: boolean } = {},
 ): ClaudeEngine {
   const catalog = overrides.catalog ?? liveCatalog();
   return new ClaudeEngine(transport, "session-ref-1", undefined, {
@@ -242,6 +242,7 @@ function engineWith(
     preset: findClaudePreset(overrides.presetId ?? "ask")!,
     effortsByModel: new Map(),
     notices: [],
+    slashPassthrough: overrides.slashPassthrough ?? true,
   }, overrides.timeouts);
 }
 
@@ -1920,6 +1921,24 @@ describe("ClaudeEngine.compactNow — TASK.92 allowlisted /compact passthrough",
     expect(events[0]).toEqual({ type: "turn_start", turn: 1 });
     expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
     expect(transport.sent).toEqual(["/compact", "hi"]);
+  });
+
+  it("an engine spawned WITH --disable-slash-commands (child session) refuses compaction and hides the row", async () => {
+    const transport = new FakeTransport({
+      frames: [resultFrame157("completed")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport, { slashPassthrough: false });
+
+    expect(engine.capabilities.supportsManualCompact).toBe(false);
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    // Nothing is sent: a /compact frame to a flagged CLI would reach the model as text.
+    expect(transport.sent).toEqual([]);
+    expect(events).toEqual([
+      { type: "compaction_end", ok: false, preTokens: 0, durationMs: 0, error: "manual compaction unavailable in this session" },
+    ]);
+    expect(engineWith(new FakeTransport({ frames: [] })).capabilities.supportsManualCompact).toBe(true);
   });
 
   it("the leak discriminator: initialize.commands/ambient slash_commands never surface", async () => {
