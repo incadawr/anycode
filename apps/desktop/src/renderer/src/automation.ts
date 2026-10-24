@@ -39,13 +39,14 @@ import type {
   TranscriptBlock,
   TurnState,
 } from "./store.js";
-import { buildConfirmedGitCommand } from "./store.js";
+import { buildConfirmedGitCommand, isSessionBusy } from "./store.js";
 import { dispatchTryAgain } from "./App.js";
 import type { CtxPopoverRow } from "./components/Composer.js";
 import {
   COMPOSER_IMAGE_MAX_BYTES,
   COMPOSER_IMAGE_MAX_PER_MESSAGE,
   isSendBlockedByModelImages,
+  shouldEnqueue,
   sniffComposerImageMediaType,
 } from "./components/Composer.js";
 import { confirmDialogCopy } from "./components/GitConfirmDialog.js";
@@ -2514,6 +2515,27 @@ export interface AnycodeBridge {
   listSessions(limit?: number): Promise<SessionSummary[]>;
 }
 
+/**
+ * Taskana 4087 / TASK.55: one live reading of the composer's queue affordances
+ * for a running turn — the facts the owner repro needed, addressable from a
+ * smoke without a hand-driven app. `queueLength`/`paused`/`draining` come
+ * straight off the live store (no mirror); `inputEnabled`/`placeholder`/`draft`
+ * off the REAL textarea (the exact node a user types into); `enqueueWouldFire`
+ * reuses Composer's own exported `shouldEnqueue` predicate — no re-derivation.
+ */
+export interface ComposerQueueState {
+  ok: true;
+  running: boolean;
+  connection: ConnectionPhase;
+  inputEnabled: boolean | null;
+  placeholder: string | null;
+  draft: string;
+  enqueueWouldFire: boolean;
+  queueLength: number;
+  paused: boolean;
+  draining: boolean;
+}
+
 /** Frozen contract (design §3.2) that `window.__anycodeAutomation` exposes to the main-process HTTP server (S3). */
 export interface AutomationFacade {
   snapshot(transcriptTail?: number): SnapshotJson;
@@ -2792,6 +2814,7 @@ export interface AutomationFacade {
   slashMenuState(tabId: string): SlashMenuState | FacadeErr;
   composerType(tabId: string, text: string): FacadeResult;
   composerKey(tabId: string, key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Escape"): FacadeResult;
+  composerQueueState(tabId: string): ComposerQueueState | FacadeErr;
   // ── Keyboard shortcuts pane probe/driver (design/slice-P7.24-cut.md §4
   // W4) — a DEDICATED probe, every prior probe above stays byte-untouched.
   // `shortcutsStartRecord` mirrors a real click on a slot's pencil (or the
@@ -9136,6 +9159,30 @@ export function createAutomationFacade(
       // onKeyDown handler runs exactly as it would for a real keystroke.
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
       return { ok: true };
+    },
+
+    composerQueueState(tabId: string): ComposerQueueState | FacadeErr {
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      const store = registry.getStore(tabId);
+      if (!store) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const state = store.getState();
+      const textarea = composerSlashDom.textarea();
+      return {
+        ok: true,
+        running: isSessionBusy(state.turn.status),
+        connection: state.connection,
+        inputEnabled: textarea === null ? null : !textarea.disabled,
+        placeholder: textarea?.placeholder ?? null,
+        draft: textarea?.value ?? "",
+        enqueueWouldFire: shouldEnqueue(state.turn.status, state.queueInFlight, state.childSurface),
+        queueLength: state.promptQueue.length,
+        paused: state.queuePaused,
+        draining: state.queueInFlight !== null,
+      };
     },
 
     shortcutsPaneState(): ShortcutsPaneState {

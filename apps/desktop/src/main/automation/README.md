@@ -411,6 +411,25 @@ curl "${A[@]}" "$B/state/$TAB" | jq '.snapshot.states[$TAB].promptQueue'
 curl "${A[@]}" "${J[@]}" -X POST $B/queue/resume -d "{\"tabId\":\"$TAB\"}"
 ```
 
+### Composer queue probe (Taskana 4087 / TASK.55)
+
+`GET /tabs/:tabId/composer-queue` reports the composer's running-turn queue
+affordances in one read, mirroring `Composer.tsx` exactly: `enqueueWouldFire`
+is Composer's own exported `shouldEnqueue(turn.status, queueInFlight,
+childSurface)` predicate (no re-derivation — the probe cannot disagree with
+the component's enqueue-vs-direct-send decision), `inputEnabled`/`placeholder`
+are read off the REAL `.composer-textarea` node (`null` when unmounted — a
+valid reading, not an error; only the connection gate disables the textarea,
+a running turn never does), and `queueLength`/`paused`/`draining` come
+straight off the live store. This closes the observability gap behind
+TASK.55's "needs a live repro": type via `composerType`, press Enter via
+`composerKey(tabId, "Enter")`, then read this probe + `GET /state`'s
+`promptQueue` to watch the item land and drain FIFO.
+
+| Method / path | Body | Returns |
+|---|---|---|
+| `GET /tabs/:tabId/composer-queue` | — | `{ok:true, running, connection, inputEnabled, placeholder, draft, enqueueWouldFire, queueLength, paused, draining}` \| `{ok:false, reason:"tab_not_active"\|"unknown_tab"}` |
+
 ### Model pill probe/driver (slice-P7.15 F14, W4)
 
 Mirrors `ModelPill.tsx` (the single footer chip that replaced the old

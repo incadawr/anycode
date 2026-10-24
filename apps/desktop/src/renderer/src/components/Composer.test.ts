@@ -119,6 +119,11 @@ describe("shouldEnqueue (F15 — enqueue-vs-direct decision uses the truly-idle 
     expect(shouldEnqueue("running", null, true)).toBe(false);
     expect(shouldEnqueue("idle", IN_FLIGHT, true)).toBe(false);
   });
+
+  it("TASK.55 DoD regression: submit while running routes to ENQUEUE, submit while truly idle routes to DIRECT SEND", () => {
+    expect(shouldEnqueue("running", null)).toBe(true); // running ⇒ enqueue
+    expect(shouldEnqueue("idle", null)).toBe(false); // idle ⇒ direct send
+  });
 });
 
 describe("hasSendableDraft (F15 — the running-mode Queue button gate mirrors canSend)", () => {

@@ -161,6 +161,7 @@ import {
   slashMenuState,
   composerType,
   composerKey,
+  composerQueueState,
   shortcutsPaneState,
   shortcutsStartRecord,
   shortcutsPressChord,
@@ -821,6 +822,11 @@ async function route(
   // shape as the model-pill/ctx-popover GET routes above.
   if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "slash-menu") {
     return slashMenuState(deps, decodeURIComponent(parts[1]!));
+  }
+  // Taskana 4087 / TASK.55: composer queue-affordance probe — same
+  // `/tabs/:tabId/<probe>` shape as the model-pill/slash-menu GET routes.
+  if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "composer-queue") {
+    return composerQueueState(deps, decodeURIComponent(parts[1]!));
   }
   // Checkpoint timeline probe (design slice-P7.26-R2-ratification.md §1 W3):
   // same `/tabs/:tabId/<probe>` shape as the model-pill/ctx-popover/
