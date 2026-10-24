@@ -573,6 +573,11 @@ export function relayRegistryKey(upstreamUrl: string): string | undefined {
  *  - Idempotent per upstream: the first successful call caches its relay and
  *    later calls for the SAME upstream return it; a REFUSED resolve is also
  *    remembered, so re-asks stay silent.
+ *  - CONCURRENT calls for the same key share ONE in-flight promise
+ *    (cross-review F1): the old check-then-await let two rapid resolves both
+ *    bind, the second `relays.set` overwrote the first, and the overwritten
+ *    listener leaked with the credential it fronts. The shared promise also
+ *    means `closeProxyRelay()` mid-bind is observed by every waiter.
  */
 export async function resolveProxyRelay(
   upstreamUrl: string,
@@ -590,18 +595,49 @@ export async function resolveProxyRelay(
     // silently — the single warn below already said why, once.
     return undefined;
   }
-  const relay = await createProxyRelayAsync(upstreamUrl, {
-    // Log once per upstream, and never include the offending URL: it carries
-    // the very credential this whole module exists to contain.
-    onRefuse: (reason) => {
-      refusedUpstreams.add(key);
-      console.warn(`[proxy-relay] credentialed proxy cannot be relayed (${reason}); children fall back to TASK.135's direct behaviour`);
-    },
-  });
-  if (relay !== undefined) {
-    relays.set(key, relay);
+  const inFlight = pendingResolves.get(key);
+  if (inFlight !== undefined) {
+    return inFlight;
   }
-  return relay;
+  // Cross-review F2: the registry generation this resolve started under. A
+  // `closeProxyRelay()` while the bind is in flight bumps the generation and
+  // clears the cache; a settle into the NEW generation must NOT register —
+  // it closes its own relay instead, so shutdown is never undone by a late
+  // `relays.set` and no listener outlives the process that minted it.
+  const generation = registryGeneration;
+  const attempt = (async (): Promise<ProxyRelay | undefined> => {
+    const relay = await createProxyRelayAsync(upstreamUrl, {
+      // Log once per upstream, and never include the offending URL: it carries
+      // the very credential this whole module exists to contain.
+      onRefuse: (reason) => {
+        if (generation === registryGeneration) {
+          refusedUpstreams.add(key);
+        }
+        console.warn(`[proxy-relay] credentialed proxy cannot be relayed (${reason}); children fall back to TASK.135's direct behaviour`);
+      },
+    });
+    if (relay !== undefined && generation !== registryGeneration) {
+      // Shutdown raced the bind: keep the registry empty (closeProxyRelay
+      // already ran) and tear the freshly-bound listener down ourselves.
+      relay.close();
+      return relay;
+    }
+    if (relay !== undefined) {
+      relays.set(key, relay);
+    }
+    return relay;
+  })();
+  pendingResolves.set(key, attempt);
+  try {
+    return await attempt;
+  } finally {
+    // The SETTLED promise leaves the in-flight map; the settled RESULT lives
+    // on in `relays` (or `refusedUpstreams`) instead. A generation change
+    // already cleared this entry — deleting it again is a harmless no-op.
+    if (pendingResolves.get(key) === attempt) {
+      pendingResolves.delete(key);
+    }
+  }
 }
 
 /** The per-upstream relay cache (`resolveProxyRelay` fills it lazily). */
@@ -609,6 +645,22 @@ const relays = new Map<string, ProxyRelay>();
 
 /** The refuse memory behind "log once per upstream" (cross-review F2, keyed per upstream by B2). */
 const refusedUpstreams = new Set<string>();
+
+/**
+ * In-flight `resolveProxyRelay` attempts per key (cross-review F1): the
+ * check-then-await gap that let two concurrent resolves for one key both
+ * bind. Cleared per key on settle and wholesale by `closeProxyRelay`.
+ */
+const pendingResolves = new Map<string, Promise<ProxyRelay | undefined>>();
+
+/**
+ * Cross-review F2: bumped by every `closeProxyRelay()`. A resolve that
+ * settles into a generation it did not start under must not repopulate the
+ * registry (and must close its own relay) — otherwise a shutdown racing a
+ * bind left a credential-forwarding listener answering on 127.0.0.1 with no
+ * owner and no path to teardown.
+ */
+let registryGeneration = 0;
 
 /**
  * The relay URL for SYNC spawn sites (`buildChildEnv`'s third argument): the
@@ -678,6 +730,12 @@ export function closeProxyRelay(): void {
   }
   relays.clear();
   refusedUpstreams.clear();
+  // Cross-review F2: a resolve whose bind is still in flight must observe
+  // this shutdown when it settles — the generation bump is that signal, and
+  // the pending map (F1) is dropped so a POST-close resolve for the same key
+  // starts a fresh attempt instead of sharing the doomed one.
+  registryGeneration += 1;
+  pendingResolves.clear();
 }
 
 /**
