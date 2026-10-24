@@ -1513,3 +1513,14 @@ describe("recognizer (TASK.198 E1, additive-optional) — vision-fallback connec
     expect(afterUnrelatedPatch.ui.theme).toBe("dark");
   });
 });
+
+describe("preview.liveReload (Taskana 4100, additive-optional)", () => {
+  it("a persisted liveReload:false survives the parse (not stripped as an unknown key)", () => {
+    const withOff: AnycodeSettings = { ...cloneDefaults(), preview: { liveReload: false } };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withOff)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.preview?.liveReload).toBe(false);
+    }
+  });
+});

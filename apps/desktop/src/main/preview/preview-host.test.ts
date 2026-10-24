@@ -3610,4 +3610,72 @@ describe("PreviewHost — live-reload (Taskana 4100, stage 4)", () => {
       expect(rig.watchers.get(`${WORKSPACE_ROOT}/b.md`)!.closed).toBe(false);
     }
   });
+
+  it("reuse-navigate from a file onto a localhost URL closes the file watcher (no stale reloads of the URL page)", async () => {
+    const { rig, previewId } = await openedWebFileRig();
+    const second = rig.host.openForTab(TAB, { url: "http://localhost:5173/", previewId });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    expect((await second).ok).toBe(true);
+    expect(rig.watchers.get(`${WORKSPACE_ROOT}/a.html`)!.closed).toBe(true);
+
+    fireWatchEvent(rig, `${WORKSPACE_ROOT}/a.html`, "change");
+    await vi.advanceTimersByTimeAsync(LIVE_RELOAD_DEBOUNCE_MS);
+    expect(rig.windows[0]!.webContents.reloadCalls).toBe(0);
+  });
+
+  it("a watcher that fails synchronously leaves the record disarmed, so the next open re-arms", async () => {
+    let failNext = true;
+    const watched: string[] = [];
+    const rig = makeRig({
+      watchFile: (path, _onEvent, onError) => {
+        watched.push(path);
+        if (failNext) {
+          failNext = false;
+          onError(new Error("ENOENT"));
+        }
+        return { close: () => {} };
+      },
+    });
+    const first = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const opened = await first;
+    const previewId = opened.ok ? opened.value.previewId : "";
+
+    const again = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html`, previewId });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    expect((await again).ok).toBe(true);
+    expect(watched).toEqual([`${WORKSPACE_ROOT}/a.html`, `${WORKSPACE_ROOT}/a.html`]);
+  });
+
+  it("a rename event (atomic save) re-attaches the watcher so the NEXT save still reloads", async () => {
+    const { rig } = await openedWebFileRig();
+    const path = `${WORKSPACE_ROOT}/a.html`;
+    const wc = rig.windows[0]!.webContents;
+    const original = rig.watchers.get(path)!;
+
+    fireWatchEvent(rig, path, "rename");
+    await vi.advanceTimersByTimeAsync(LIVE_RELOAD_DEBOUNCE_MS);
+    expect(wc.reloadCalls).toBe(1);
+    expect(original.closed).toBe(true);
+    const fresh = rig.watchers.get(path)!;
+    expect(fresh).not.toBe(original);
+    expect(fresh.closed).toBe(false);
+
+    wc.fireDidFinishLoad();
+    fireWatchEvent(rig, path, "change");
+    await vi.advanceTimersByTimeAsync(LIVE_RELOAD_DEBOUNCE_MS);
+    expect(wc.reloadCalls).toBe(2);
+  });
+
+  it("turning the setting off stops an already-armed watcher at its next event", async () => {
+    const { rig } = await openedWebFileRig();
+    rig.liveReload.enabled = false;
+    fireWatchEvent(rig, `${WORKSPACE_ROOT}/a.html`, "change");
+    await vi.advanceTimersByTimeAsync(LIVE_RELOAD_DEBOUNCE_MS);
+    expect(rig.windows[0]!.webContents.reloadCalls).toBe(0);
+    expect(rig.watchers.get(`${WORKSPACE_ROOT}/a.html`)!.closed).toBe(true);
+  });
 });

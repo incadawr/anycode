@@ -530,7 +530,7 @@ interface WebPreviewRecord {
    * degradation, or a not-yet-armed fresh record); `armWatcher`/
    * `disarmWatcher` are the only mutators.
    */
-  watch?: { path: string; handle: { close(): void }; timer?: ReturnType<typeof setTimeout> };
+  watch?: { path: string; handle: { close(): void }; timer?: ReturnType<typeof setTimeout>; renamed?: boolean };
 }
 
 /**
@@ -567,7 +567,7 @@ interface MdDomPreviewRecord {
   lastOpenedAt: number;
   destroyed: boolean;
   /** Taskana 4100 stage 4: same live-reload watcher shape as the web record — every dom-md record is file-backed. */
-  watch?: { path: string; handle: { close(): void }; timer?: ReturnType<typeof setTimeout> };
+  watch?: { path: string; handle: { close(): void }; timer?: ReturnType<typeof setTimeout>; renamed?: boolean };
 }
 
 type PreviewRecord = WebPreviewRecord | MdDomPreviewRecord;
@@ -2032,18 +2032,42 @@ class PreviewHost implements PreviewHostHandle {
    * listener per record, re-pointed at the current realpath.
    */
   private armWatcher(record: WebPreviewRecord | MdDomPreviewRecord): void {
-    if (!this.deps.liveReloadEnabled()) return;
     const path = record.realSourcePath;
-    if (path === undefined) return;
-    if (record.viewKind === "web" && record.kind !== "file") return; // localhost/remote URLs have no artifact file
+    // Ineligible now (setting off, or a reuse-navigate onto a localhost/
+    // remote URL) — DISARM, never keep a watcher from the previous target:
+    // a stale file watcher would otherwise reload the unrelated URL page.
+    if (
+      !this.deps.liveReloadEnabled() ||
+      path === undefined ||
+      (record.viewKind === "web" && record.kind !== "file") // localhost/remote URLs have no artifact file
+    ) {
+      this.disarmWatcher(record);
+      return;
+    }
     if (record.watch !== undefined && record.watch.path === path) return;
     this.disarmWatcher(record);
+    // The watch slot is installed BEFORE watchFile runs, so an onError fired
+    // synchronously (fs.watch throws ENOENT) disarms THIS slot instead of
+    // being overwritten by it; the identity check keeps a late error from an
+    // old watcher off a newer slot.
+    const watch: NonNullable<WebPreviewRecord["watch"]> = { path, handle: { close: () => {} } };
+    record.watch = watch;
     const handle = this.deps.watchFile(
       path,
-      () => this.scheduleLiveReload(record, path),
-      () => this.disarmWatcher(record), // honest degradation, never a crash
+      (event) => this.scheduleLiveReload(record, path, event),
+      () => {
+        if (record.watch === watch) this.disarmWatcher(record); // honest degradation, never a crash
+      },
     );
-    record.watch = { path, handle };
+    if (record.watch === watch) {
+      watch.handle = handle;
+    } else {
+      try {
+        handle.close();
+      } catch {
+        // best-effort
+      }
+    }
   }
 
   /**
@@ -2052,14 +2076,32 @@ class PreviewHost implements PreviewHostHandle {
    * callback re-checks liveness — the record may have been closed, replaced,
    * or re-armed at a different path mid-debounce.
    */
-  private scheduleLiveReload(record: WebPreviewRecord | MdDomPreviewRecord, path: string): void {
+  private scheduleLiveReload(
+    record: WebPreviewRecord | MdDomPreviewRecord,
+    path: string,
+    event: "change" | "rename" = "change",
+  ): void {
     if (record.destroyed) return;
     const w = record.watch;
     if (w === undefined || w.path !== path) return;
+    if (event === "rename") w.renamed = true;
     if (w.timer !== undefined) clearTimeout(w.timer);
     w.timer = setTimeout(() => {
       w.timer = undefined;
-      if (record.destroyed || this.previews.get(record.previewId) !== record) return;
+      if (record.destroyed || this.previews.get(record.previewId) !== record || record.watch !== w) return;
+      // A setting flipped off since arm: stop following the file now, not
+      // only at the next arm decision.
+      if (!this.deps.liveReloadEnabled()) {
+        this.disarmWatcher(record);
+        return;
+      }
+      // Atomic save (write temp + rename over): fs.watch stays bound to the
+      // OLD inode and would go silent after this one event — re-attach to
+      // the path's current file (a still-missing file degrades via onError).
+      if (w.renamed === true) {
+        this.disarmWatcher(record);
+        this.armWatcher(record);
+      }
       if (record.viewKind === "web") {
         // The `status === "ready"` guard keeps the settle state machine
         // intact: a reload fired while "loading" would break waitForSettle

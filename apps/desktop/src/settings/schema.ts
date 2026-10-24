@@ -75,12 +75,15 @@ export const keybindingsSchema = z.object({
  * enabled (owner default ON) — main's `autoOpenEnabled()` applies that
  * default, never this schema. `displayMode` absent = "panel" (task
  * decision) — main's `displayMode()` dep (96-P1) applies that default the
- * same way, never this schema.
+ * same way, never this schema. `liveReload` absent = enabled (Taskana
+ * 4100) — main's `liveReloadEnabled()` applies that default; the key MUST be
+ * declared here, or zod's default strip drops a persisted `false`.
  */
 export const previewSchema = z
   .object({
     autoOpen: z.boolean().optional(),
     displayMode: z.enum(["panel", "window"]).optional(),
+    liveReload: z.boolean().optional(),
   })
   .optional();
 

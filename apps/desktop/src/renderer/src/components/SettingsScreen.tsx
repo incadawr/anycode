@@ -1841,7 +1841,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
                       <span className="settings-switch-thumb" />
                     </button>
                     <span id="settings-live-reload-caption" className="settings-switch-caption">
-                      Reload file previews automatically when the agent overwrites the artifact
+                      Reload file previews automatically when the file changes on disk
                     </span>
                   </div>
                 </div>
