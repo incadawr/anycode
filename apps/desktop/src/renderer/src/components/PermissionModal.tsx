@@ -57,15 +57,22 @@ import { classifyBashCommandLine, formatScopedRunnerPattern, recognizeScopedRunn
 // Taskana 4070: the classification-to-plaque mapping moved to core (shared
 // with the CLI terminal broker and the Codex commandExecution approvals);
 // imported here for describePermissionAsk and re-exported below for every
-// existing import from this module.
+// existing import from this module. Cross-review D1: imported through the
+// dedicated `@anycode/core/permissions/bash-risk-plaque` SUBPATH, never the
+// package root — the renderer is a plain web target, and a value import of
+// the root barrel would pull core's whole module graph (node:fs,
+// node:child_process, node:sqlite, …) into the browser bundle and break
+// `electron-vite build` (the invariant documented in subagent-card.ts).
+// bash-risk-plaque.ts only imports ./safe-command.js — the same
+// browser-safe graph the import above already reaches.
 import {
   BASH_RISK_PLAQUE,
   WRITE_CAPABLE_BINARIES,
   bashRiskFacts,
   bashRiskPlaque,
   bashWriteCapablePlaque,
-} from "@anycode/core";
-import type { BashRiskFacts, BashRiskPlaque } from "@anycode/core";
+} from "@anycode/core/permissions/bash-risk-plaque";
+import type { BashRiskFacts, BashRiskPlaque } from "@anycode/core/permissions/bash-risk-plaque";
 import "../settings.css";
 
 export interface PermissionModalProps {
