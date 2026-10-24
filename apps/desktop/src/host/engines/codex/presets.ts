@@ -78,7 +78,12 @@ export const CODEX_PERMISSION_PRESETS: readonly CodexPermissionPresetDefinition[
   {
     id: "ask",
     label: "Ask for approval",
-    description: "Codex works in this workspace and asks before going beyond it.",
+    // Honest text (Taskana 4078 / TASK.179): under `on-request` codex runs
+    // commands itself inside the OS sandbox — this workspace plus the temp
+    // dirs (/tmp, $TMPDIR) are writable without any prompt — and AnyCode is
+    // asked only when codex itself requests approval. The old "asks before
+    // going beyond it" wording overstated the prompting.
+    description: "Codex runs commands itself in a sandbox: this workspace and temp dirs (/tmp, $TMPDIR) are writable without a prompt; AnyCode asks you only when codex itself requests approval.",
     threadParams: { approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: "workspace-write" },
     turnOverride: (workspace) => ({ approvalPolicy: "on-request", approvalsReviewer: "user", sandboxPolicy: workspaceWritePolicy(workspace) }),
   },

@@ -12,19 +12,23 @@
  * |---|---|---|
  * | `plan`  | `read-only` | `read-only` |
  * | `build` | `ask`       | `child-ask` |
- * | `edit`  | `workspace` | `child-ask` |
- * | `auto`  | `workspace` (clamped down, RS4-0-2) | `child-ask` (clamped down, RS4-0-2) |
- * | `yolo`  | `workspace` (clamped down, RS4-0-2) | `child-ask` (clamped down, RS4-0-2) |
+ * | `edit`  | `workspace` | `ask` |
+ * | `auto`  | `workspace` (clamped down, RS4-0-2) | `ask` (clamped down, RS4-0-2) |
+ * | `yolo`  | `workspace` (clamped down, RS4-0-2) | `ask` (clamped down, RS4-0-2) |
  *
  * `edit`/`auto`/`yolo` all land on Claude's OWN `workspace` preset
  * (`acceptEdits`) rather than a one-shot argv — that preset already asks for
  * anything outside the session cwd, so it is not a widened posture, only
- * Claude's already-frozen "workspace" interactive tier. Codex children land
- * on the broker-mediated `child-ask` posture (TASK.179 / Taskana 4078):
- * `untrusted` sends every command approval through
- * CodexApprovalBridge -> IpcPermissionBroker instead of letting codex decide
- * silently under `on-request`. The interactive `ask` tier stays menu-only
- * for human-facing tabs. Neither function can ever produce a
+ * Claude's already-frozen "workspace" interactive tier. `build` is AnyCode's
+ * ASKING mode — the one the codex `ask`/`approve-for-me` presets map back to
+ * (`codexAgentPermissionMode`) and the one Claude's own table sends to `ask` —
+ * so a `build`-mode codex child boots on the broker-mediated `child-ask`
+ * posture (TASK.179 / Taskana 4078): `untrusted` sends every command approval
+ * through CodexApprovalBridge -> IpcPermissionBroker instead of letting codex
+ * decide silently under `on-request`. The explicit-autonomy modes
+ * (`edit`/`auto`/`yolo`) keep the pre-4078 interactive `ask` posture exactly:
+ * the owner chose autonomy for those children, and interposing the broker on
+ * their every command would contradict that choice. Neither function can ever
  * print-mode invocation (`claude -p` / `codex exec`) or a bypass/auto-review
  * posture: their return type is a strict subset of the ids the frozen
  * `presets.ts` tables (read-only imports below) expose, and those tables
@@ -50,22 +54,27 @@ export function claudeChildPresetId(mode: PermissionMode): "read-only" | "ask" |
 
 /**
  * Codex preset id an engine child boots with. `plan` keeps the `read-only`
- * legacy posture. Every other mode lands on `child-ask` (TASK.179 /
- * Taskana 4078): a broker-mediated posture — `untrusted` sends EVERY command
- * approval through CodexApprovalBridge -> IpcPermissionBroker instead of
- * letting codex decide silently under `on-request`. The interactive `ask`
- * tier stays menu-only for human-facing tabs. Like `read-only`, `child-ask`
- * resolves through `findCodexPreset`'s fallback and is absent from
+ * legacy posture. `build` — AnyCode's asking mode, the one the codex
+ * `ask`/`approve-for-me` presets map back to — lands on `child-ask`
+ * (TASK.179 / Taskana 4078): a broker-mediated posture where `untrusted`
+ * sends EVERY command approval through CodexApprovalBridge ->
+ * IpcPermissionBroker instead of letting codex decide silently under
+ * `on-request`. The explicit-autonomy modes (`edit`/`auto`/`yolo`) keep the
+ * interactive `ask` posture they always had: the owner chose autonomy for
+ * those children, and the broker interposing on their every command would
+ * contradict it. Like `read-only`, `child-ask` resolves through
+ * `findCodexPreset`'s fallback and is absent from
  * `CODEX_PERMISSION_PRESETS`/`codexPresetChoices()`.
  */
-export function codexChildPosture(mode: PermissionMode): "read-only" | "child-ask" {
+export function codexChildPosture(mode: PermissionMode): "read-only" | "child-ask" | "ask" {
   switch (mode) {
     case "plan":
       return "read-only";
     case "build":
+      return "child-ask";
     case "edit":
     case "auto":
     case "yolo":
-      return "child-ask";
+      return "ask";
   }
 }
