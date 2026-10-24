@@ -21,7 +21,11 @@
  *   `/bin/rm` is named like `rm`) is in WRITE_CAPABLE_BINARIES → the
  *   write-capable plaque naming that binary as written;
  * - unknown single command with any other binary → `unknownBinary` plaque;
- * - unknown shell expression → no plaque (the shell hint already covers it).
+ * - unknown shell expression → no plaque (the shell hint already covers it);
+ * - a `kind: "writeStdin"` ask → no plaque (cross-review D2: input to an
+ *   ALREADY-running command, the one case the Codex bridge's own metadata
+ *   rule refuses to de-risk — the plaque must not either);
+ * - no extractable binary (empty/whitespace command) → no plaque (D3).
  *
  * `toolName` membership (Bash / CodexExec) mirrors `isCommandLineTool` in
  * rules.ts — the plaque is about the shape of the subject (a shell command
@@ -89,20 +93,32 @@ export function isPlaqueCommandLineTool(toolName: string): boolean {
  * split and the fail-closed discipline. */
 export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
   if (!isPlaqueCommandLineTool(toolName)) return { applies: false, plaque: null, binary: null };
-  const command =
-    input !== null && typeof input === "object" ? (input as { command?: unknown }).command : undefined;
-  if (typeof command !== "string") return { applies: false, plaque: null, binary: null };
+  const record = input !== null && typeof input === "object" ? (input as { command?: unknown; kind?: unknown }) : undefined;
+  const command = record?.command;
+  if (typeof command !== "string") return { applies: true, plaque: null, binary: null };
+  // Cross-review D2: a `kind: "writeStdin"` ask is input sent to a command
+  // that is ALREADY running, not a new run of it — the classifier never
+  // reasoned about that interaction, and the Codex bridge's own TASK.184
+  // `!stdinWrite` gate refuses to de-risk it (metadata stays fail-closed
+  // high). The plaque must not contradict that in the same dialog by
+  // asserting the command line is provably read-only: no plaque, the
+  // stdin-write reason line already says what the ask is.
+  if (record?.kind === "writeStdin") return { applies: true, plaque: null, binary: null };
   const verdict = classifyBashCommandLine(command);
   if (verdict.class === "read-only") return { applies: true, plaque: BASH_RISK_PLAQUE.readOnly, binary: null };
   if (verdict.shellExpression) return { applies: true, plaque: null, binary: null }; // the shell hint already covers it
   // plain single command, unknown class: name the binary if we can
   const binary = /^[^ \t]+/.exec(command.trim())?.[0] ?? null;
+  // Cross-review D3: an empty/whitespace command has no binary at all —
+  // fail closed to no plaque, exactly like every other "cannot extract"
+  // case; the unknownBinary note asserts a fact about a binary that would
+  // not exist.
+  if (binary === null) return { applies: true, plaque: null, binary: null };
   // Look up by basename so `/bin/rm` is named like `rm`, never softened.
-  const lookup = binary === null ? null : (binary.split("/").pop() ?? binary);
+  const lookup = binary.split("/").pop() ?? binary;
   return {
     applies: true,
-    plaque:
-      lookup !== null && WRITE_CAPABLE_BINARIES.has(lookup) ? bashWriteCapablePlaque(binary!) : BASH_RISK_PLAQUE.unknownBinary,
+    plaque: WRITE_CAPABLE_BINARIES.has(lookup) ? bashWriteCapablePlaque(binary) : BASH_RISK_PLAQUE.unknownBinary,
     binary,
   };
 }

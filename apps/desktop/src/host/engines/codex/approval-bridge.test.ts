@@ -429,4 +429,21 @@ describe("CodexApprovalBridge — risk plaque for commandExecution approvals (Ta
     broker.handleResponse(presented.requestId, "deny");
     await flush();
   });
+
+  // Cross-review D2: the plaque follows the bridge's own TASK.184 stdin gate.
+  // A writeStdin approval is input to an ALREADY-running command; the bridge
+  // keeps the fail-closed high metadata for it, and the plaque must not
+  // contradict that by calling the command line "provably read-only" in the
+  // same dialog.
+  it("a writeStdin approval renders no plaque even when the command classifies read-only (metadata stays high)", async () => {
+    const { bridge, broker, emitted } = rig();
+    bridge.handle(command({ command: "git status", kind: "writeStdin" }), responder());
+    await flush();
+    const presented = ask(emitted);
+    expect(presented.input).toMatchObject({ command: "git status", kind: "writeStdin" });
+    expect(presented.metadata).toMatchObject({ readOnly: false, riskLevel: "high" }); // TASK.184 gate
+    expect(bashRiskPlaque("CodexExec", presented.input)).toBeNull(); // plaque agrees with the metadata
+    broker.handleResponse(presented.requestId, "deny");
+    await flush();
+  });
 });

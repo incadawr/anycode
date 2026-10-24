@@ -88,3 +88,49 @@ describe("bash-risk-plaque — fail-closed input discipline", () => {
     expect(bashRiskPlaque("Bash", { command: 42 })).toBeNull();
   });
 });
+
+/**
+ * Cross-review D2: a `kind: "writeStdin"` ask (codex 0.161+) is input sent to
+ * a command that is ALREADY running — the classifier never reasoned about
+ * that interaction, and the Codex bridge deliberately refuses to de-risk it
+ * (TASK.184's `!stdinWrite` gate: metadata stays fail-closed high). The
+ * plaque must not assert a safety property ("provably read-only") the ask's
+ * own metadata refuses to vouch for: no plaque, the reason line already says
+ * what the ask is.
+ */
+describe("bash-risk-plaque — writeStdin asks never get a plaque (cross-review D2)", () => {
+  it("a stdin write gets no plaque even when the command line classifies read-only", () => {
+    for (const input of [
+      { command: "grep foo", cwd: "/w", reason: "Send input…", kind: "writeStdin" },
+      { command: "ls", kind: "writeStdin" },
+      { command: "cat -", kind: "writeStdin" },
+    ]) {
+      const facts = bashRiskFacts("CodexExec", input);
+      expect(facts).toMatchObject({ applies: true, plaque: null, binary: null });
+      expect(bashRiskPlaque("CodexExec", input)).toBeNull();
+    }
+  });
+
+  it("kind: \"command\" (and an absent kind) keep the ordinary plaque split", () => {
+    expect(bashRiskPlaque("CodexExec", { command: "git status", kind: "command" })).toBe(
+      BASH_RISK_PLAQUE.readOnly,
+    );
+    expect(bashRiskPlaque("CodexExec", { command: "git status" })).toBe(BASH_RISK_PLAQUE.readOnly);
+  });
+});
+
+/**
+ * Cross-review D3: an empty/whitespace command has no binary at all — the
+ * plaque must not assert a fact ("this command's binary is not on the
+ * read-only list") about something that does not exist. Same fail-closed
+ * discipline as every other "cannot extract" case: no plaque.
+ */
+describe("bash-risk-plaque — no plaque when there is no binary to name (cross-review D3)", () => {
+  it("an empty or whitespace command gets no plaque", () => {
+    for (const command of ["", " ", "\t", "   "]) {
+      const facts = bashRiskFacts("Bash", { command });
+      expect(facts).toMatchObject({ applies: true, plaque: null, binary: null });
+      expect(bashRiskPlaque("Bash", { command })).toBeNull();
+    }
+  });
+});
