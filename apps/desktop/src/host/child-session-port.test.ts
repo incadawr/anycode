@@ -16,12 +16,14 @@ import {
   CHILD_PROVIDER_MAX_CHARS,
   CHILD_RUN_CANCEL_TYPE,
   CHILD_RUN_EVENT_TYPE,
+  CHILD_RUN_SEND_TYPE,
   CHILD_SPAWN_REQUEST_TYPE,
   type ChildRunCancel,
   type ChildRunEvent,
+  type ChildRunSend,
   type ChildSpawnRequest,
 } from "../shared/child-sessions.js";
-import { createChildSessionPort } from "./child-session-port.js";
+import { createChildSessionPort, CHILD_SEND_RPC_TIMEOUT_MS } from "./child-session-port.js";
 
 const PARENT_SESSION_ID = "parent-session-1";
 
@@ -29,7 +31,7 @@ const PARENT_SESSION_ID = "parent-session-1";
 const LIMIT_PARENT_MESSAGE =
   'Agent: session-subagent limit reached — this session already has 3 running child sessions. Wait for one to finish, or use tier "inline".';
 
-type SentMessage = ChildSpawnRequest | ChildRunCancel;
+type SentMessage = ChildSpawnRequest | ChildRunCancel | ChildRunSend;
 
 /**
  * Builds a port over fake send/subscribe closures. `subscribe` is called
@@ -1760,5 +1762,120 @@ describe("createChildSessionPort — profile connectionId routing (Taskana 4269)
     expect(outcome.finalText).toBe(
       'Agent: "provider" and "connectionId" are mutually exclusive on one spawn; the profile selects its own connection — omit "provider".',
     );
+  });
+});
+
+describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
+  /** The ChildRunSend op this port put on the wire (the only op kind besides spawn/cancel). */
+  function sends(sent: SentMessage[]): ChildRunSend[] {
+    return sent.filter((m): m is ChildRunSend => m.type === CHILD_RUN_SEND_TYPE);
+  }
+
+  it("resolves { ok: true } on a sent ack, having sent one ChildRunSend with the id and text", async () => {
+    const { port, sent, emit } = harness();
+    const pending = port.sendToChild({ childSessionId: "child-1", text: "re-review with these edits" });
+    await Promise.resolve();
+    expect(sends(sent)).toEqual([
+      { type: CHILD_RUN_SEND_TYPE, requestId: "req-1", childSessionId: "child-1", text: "re-review with these edits" },
+    ]);
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" });
+    await expect(pending).resolves.toEqual({ ok: true });
+  });
+
+  it("resolves { ok: false } carrying main's refusal message on a rejected ack", async () => {
+    const { port, emit } = harness();
+    const pending = port.sendToChild({ childSessionId: "child-1", text: "hello" });
+    await Promise.resolve();
+    emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "rejected",
+      reason: "spawn_failed",
+      message: "Agent: that child session is not running. Wait for its report and use a follow-up instead.",
+    });
+    const result = await pending;
+    expect(result).toEqual({
+      ok: false,
+      reason: "not_running",
+      message: "Agent: that child session is not running. Wait for its report and use a follow-up instead.",
+    });
+  });
+
+  it("maps a not-yours rejection onto the not_yours reason", async () => {
+    const { port, emit } = harness();
+    const pending = port.sendToChild({ childSessionId: "foreign-child", text: "hello" });
+    await Promise.resolve();
+    emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "rejected",
+      reason: "spawn_failed",
+      message: "Agent: that child session cannot be addressed — only a still-running AnyCode (core) child spawned by this session can.",
+    });
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: "not_yours" });
+  });
+
+  it("a malformed childSessionId resolves immediately without sending anything", async () => {
+    const { port, sent } = harness();
+    await expect(port.sendToChild({ childSessionId: "-dash-leading", text: "hi" })).resolves.toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+    await expect(port.sendToChild({ childSessionId: "x".repeat(CHILD_ID_MAX_CHARS + 1), text: "hi" })).resolves.toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+    await expect(port.sendToChild({ childSessionId: "child-1", text: "" })).resolves.toMatchObject({
+      ok: false,
+      reason: "unavailable",
+    });
+    await expect(
+      port.sendToChild({ childSessionId: "child-1", text: "a".repeat(CHILD_PROMPT_MAX_CHARS + 1) }),
+    ).resolves.toMatchObject({ ok: false, reason: "unavailable" });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("an already-aborted signal resolves immediately with unavailable and sends nothing", async () => {
+    const { port, sent } = harness();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(port.sendToChild({ childSessionId: "child-1", text: "hi" }, { signal: controller.signal })).resolves.toMatchObject({
+      ok: false,
+      reason: "unavailable",
+      message: "Agent: aborted before send.",
+    });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("times out with host_error when main never answers (CHILD_SEND_RPC_TIMEOUT_MS)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port, sent } = harness();
+      const pending = port.sendToChild({ childSessionId: "child-1", text: "hi" });
+      await vi.advanceTimersByTimeAsync(CHILD_SEND_RPC_TIMEOUT_MS - 1);
+      const settled = await Promise.race([pending.then(() => true), Promise.resolve(false)]);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        reason: "host_error",
+        message: "Agent: main did not answer the send; delivery unknown.",
+      });
+      expect(sends(sent)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the ack waiter is one-shot: a late duplicate ack after settlement is ignored, and unrelated kinds never settle it", async () => {
+    const { port, emit } = harness();
+    const pending = port.sendToChild({ childSessionId: "child-1", text: "hi" });
+    await Promise.resolve();
+    // A progress event for the same requestId must not settle the send.
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "progress", turns: 1, toolCalls: 0 });
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" });
+    await expect(pending).resolves.toEqual({ ok: true });
+    // A duplicate sent ack lands on a deleted waiter — silently ignored, no throw.
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" });
   });
 });

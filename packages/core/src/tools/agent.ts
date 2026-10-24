@@ -86,7 +86,7 @@ const BASE_DESCRIPTION =
   'Delegate a task to a subagent. agent_type "explore" = read-only recon for sweeping several files when you only need the conclusion; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
-  ' Tier "session" spawns a full child session the user can open and steer.';
+  ' Tier "session" spawns a full child session the user can open and steer. send_to delivers a follow-up to your own still-running child (tier session).';
 
 export interface CreateAgentToolOptions {
   /**
@@ -194,6 +194,20 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
+      // Taskana 4153 / TASK.216 wire: `send_to` addresses a STILL-RUNNING own
+      // child — the running twin of `continue_session` (finished-only). Same
+      // fail-fast precedent as provider/detach/continue_session above: it is
+      // session-tier-only and must stand ALONE (no provider/detach/
+      // continue_session on the same call), since a delivered follow-up
+      // selects no connection, detaches nothing, and resumes nothing.
+      if (input.send_to !== undefined && (tier !== "session" || input.provider !== undefined || input.detach === true || input.continue_session !== undefined)) {
+        return {
+          ok: false,
+          errorKind: "invalid_input",
+          error: 'Agent: "send_to" is only valid with tier "session", alone (no provider/detach/continue_session).',
+        };
+      }
+
       // Validate the agent_type (design §2.3/§3.4): the set of runnable types is
       // delegated to the port (built-in personas + md-profiles) so slice 3.3's
       // profiles are reachable WITHOUT touching the frozen schema. A port lacking
@@ -235,6 +249,16 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
             ok: false,
             errorKind: "invalid_input",
             error: `Agent: continue_session is supported only for AnyCode (core) profiles; "${agentType}" runs on ${engineProfile.engine}. Start a new call instead.`,
+          };
+        }
+        // Taskana 4153: a running follow-up is core-child-only too — engine
+        // children are not addressable yet (out-of-scope #2), same family of
+        // refusal as continue_session above.
+        if (input.send_to !== undefined) {
+          return {
+            ok: false,
+            errorKind: "invalid_input",
+            error: `Agent: send_to is supported only for AnyCode (core) children; "${agentType}" runs on ${engineProfile.engine}. Start a new call instead.`,
           };
         }
         // Fail-closed: without a SessionSubagentPort an engine profile cannot
@@ -373,6 +397,41 @@ async function runSessionTier(
     return {
       ok: false,
       error: "Agent: session-tier subagents are unavailable in this host.",
+    };
+  }
+
+  // Taskana 4153 / TASK.216 wire: a send_to call DELIVERS instead of spawning
+  // — the entire request-build machinery below is for a spawn/continuation
+  // and never runs for one. The handler's earlier validation already
+  // guaranteed send_to stands alone (tier session, no provider/detach/
+  // continue_session); `agentType` was validated above, so this call also
+  // rejects an unknown agent_type before delivering — same fail-fast as any
+  // other call shape. Fail-closed on a port without `send` (the field is
+  // optional so older/fake hosts keep compiling): an honest refusal, never
+  // a silent no-op. Mirrors AgentOutput's field set (schemas.ts) for a
+  // delivery that ran zero turns itself.
+  if (input.send_to !== undefined) {
+    const send = ctx.sessionSubagents.send;
+    if (send === undefined) {
+      return {
+        ok: false,
+        error: "Agent: sending to a running child is unavailable in this host.",
+      };
+    }
+    const sent = await send({ childSessionId: input.send_to, text: input.prompt }, { signal: ctx.abortSignal });
+    if (!sent.ok) {
+      return { ok: false, error: sent.message };
+    }
+    return {
+      ok: true,
+      output: {
+        status: "completed",
+        finalText: `Agent: message delivered to running child ${input.send_to}; it will run as the child's next input.`,
+        truncated: false,
+        turns: 0,
+        toolCalls: 0,
+        durationMs: 0,
+      },
     };
   }
 

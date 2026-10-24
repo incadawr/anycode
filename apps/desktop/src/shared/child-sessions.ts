@@ -7,9 +7,10 @@
  *
  * Two independent message families ride this file, mirroring
  * shared/credentials.ts's precedent:
- *  - parent host <-> main: ChildSpawnRequest / ChildRunCancel (host -> main)
- *    and ChildRunEvent (main -> host) — the parent's RPC client (host/
- *    child-session-port.ts, S2b) correlates replies by `requestId`.
+ *  - parent host <-> main: ChildSpawnRequest / ChildRunCancel /
+ *    ChildRunSend (host -> main) and ChildRunEvent (main -> host) — the
+ *    parent's RPC client (host/child-session-port.ts, S2b) correlates replies
+ *    by `requestId`.
  *  - child host <-> main: ChildReady / ChildProgress / ChildTerminal (child ->
  *    main) and ChildStart (main -> child host). Main correlates these SOLELY
  *    by the sending process (`tab.proc === sender`, then `tab.childOf.
@@ -47,6 +48,7 @@ export type ChildEffort = ReasoningEffort | "xhigh";
 
 export const CHILD_SPAWN_REQUEST_TYPE = "anycode:child-spawn-request" as const; // parent host -> main
 export const CHILD_RUN_CANCEL_TYPE = "anycode:child-run-cancel" as const; // parent host -> main
+export const CHILD_RUN_SEND_TYPE = "anycode:child-run-send" as const; // parent host -> main
 export const CHILD_RUN_EVENT_TYPE = "anycode:child-run-event" as const; // main -> parent host
 export const CHILD_READY_TYPE = "anycode:child-ready" as const; // child host -> main
 export const CHILD_START_TYPE = "anycode:child-start" as const; // main -> child host
@@ -119,6 +121,17 @@ export interface ChildRunCancel {
   requestId: string;
 }
 
+/** Parent host -> main: deliver a follow-up to the sender's OWN RUNNING child (Taskana 4153 / TASK.216 wire). */
+export interface ChildRunSend {
+  type: typeof CHILD_RUN_SEND_TYPE;
+  /** Wire-local correlation id, same role as ChildSpawnRequest.requestId. */
+  requestId: string;
+  /** The child session id from the run's "accepted" event — main re-derives ownership, never trusts the payload alone. */
+  childSessionId: string;
+  /** Free text; bounded by the same validator family as prompt. */
+  text: string;
+}
+
 export type ChildRunStatus = "completed" | "max_turns" | "cancelled" | "error";
 
 const CHILD_RUN_STATUSES: readonly ChildRunStatus[] = ["completed", "max_turns", "cancelled", "error"];
@@ -179,6 +192,13 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       /** Additive (TASK.219): the child's dedicated-port provider claim at terminal, when attributable. Absent on legacy payloads. */
       responseModel?: string;
     }
+  /**
+   * Additive (Taskana 4153): ack for a `ChildRunSend` — the follow-up message
+   * was queued for the parent's OWN RUNNING child (main already verified
+   * ownership and the child's running state). Carries no payload: the ack
+   * waiter in the parent host only needs the requestId correlation.
+   */
+  | { kind: "sent" }
 );
 
 // ── child host <-> main ──
@@ -531,8 +551,34 @@ export function parseChildRunCancel(msg: unknown): ChildRunCancel | null {
   return { type: CHILD_RUN_CANCEL_TYPE, requestId: msg.requestId };
 }
 
+const CHILD_RUN_SEND_KEYS = ["type", "requestId", "childSessionId", "text"] as const;
+
+/**
+ * Fail-closed parser for `ChildRunSend` (Taskana 4153), mirroring
+ * `parseChildRunCancel`'s discipline: exact keys, id-shaped `requestId`/
+ * `childSessionId`, and `text` bounded by the same prompt cap the spawn
+ * request's prompt rides. Proves WELL-FORMED only — ownership and the
+ * child's running state are main's to re-derive (file header).
+ */
+export function parseChildRunSend(msg: unknown): ChildRunSend | null {
+  if (!isRecord(msg) || msg.type !== CHILD_RUN_SEND_TYPE) {
+    return null;
+  }
+  if (!hasOnlyKeys(msg, CHILD_RUN_SEND_KEYS)) {
+    return null;
+  }
+  if (!isIdString(msg.requestId, CHILD_ID_MAX_CHARS) || !isIdString(msg.childSessionId, CHILD_ID_MAX_CHARS)) {
+    return null;
+  }
+  if (!isNonEmptyCappedString(msg.text, CHILD_PROMPT_MAX_CHARS)) {
+    return null;
+  }
+  return { type: CHILD_RUN_SEND_TYPE, requestId: msg.requestId, childSessionId: msg.childSessionId, text: msg.text };
+}
+
 const CHILD_RUN_EVENT_ACCEPTED_KEYS = ["type", "requestId", "kind", "childSessionId", "childTabId", "model"] as const;
 const CHILD_RUN_EVENT_REJECTED_KEYS = ["type", "requestId", "kind", "reason", "message"] as const;
+const CHILD_RUN_EVENT_SENT_KEYS = ["type", "requestId", "kind"] as const;
 const CHILD_RUN_EVENT_PROGRESS_KEYS = ["type", "requestId", "kind", "turns", "toolCalls", "lastTool"] as const;
 const CHILD_RUN_EVENT_ACTIVITY_KEYS = ["type", "requestId", "kind", "toolName", "summary"] as const;
 const CHILD_RUN_EVENT_ATTENTION_KEYS = ["type", "requestId", "kind", "waiting"] as const;
@@ -642,6 +688,13 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         return null;
       }
       return { type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: msg.waiting };
+    }
+    case "sent": {
+      // Taskana 4153: ack for ChildRunSend — requestId correlation only, no payload.
+      if (!hasOnlyKeys(msg, CHILD_RUN_EVENT_SENT_KEYS)) {
+        return null;
+      }
+      return { type: CHILD_RUN_EVENT_TYPE, requestId, kind: "sent" };
     }
     case "terminal": {
       if (!hasOnlyKeys(msg, CHILD_RUN_EVENT_TERMINAL_KEYS)) {

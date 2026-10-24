@@ -67,6 +67,26 @@ describe("authenticated session inbox", () => {
       finishes.shift()!(); await h.flush(); expect(inputs).toHaveLength(1);
     } finally { h.close(); }
   });
+
+  // Taskana 4153 / TASK.216 wire regression pin: main's ChildRunSend delivery
+  // addresses the child with sender "parent-session:<id>" — that principal must
+  // behave EXACTLY like the MCP supervisor principal above (queue while busy,
+  // drain into a new turn on settle, agent_message envelope in the input).
+  it("a parent-session sender behaves exactly like the supervisor principal: acknowledged when idle, queued while busy, drained on settle", async () => {
+    const { h, inputs, finishes, make } = fixture();
+    try {
+      const fromParent = (id: string): AgentEnvelope => ({ ...make(id), sender: "parent-session:parent-session-1" });
+      expect((await h.session.receiveAgentMessage(fromParent("p-one"))).state).toBe("acknowledged");
+      expect((await h.session.receiveAgentMessage(fromParent("p-two"))).state).toBe("queued");
+      expect(inputs).toHaveLength(1);
+      finishes.shift()!();
+      await h.waitUntil(() => inputs.length === 2);
+      expect(h.session.agentMessageStatus("p-two")?.state).toBe("acknowledged");
+      expect(inputs[1]).toContain('"sender":"parent-session:parent-session-1"');
+      finishes.shift()!(); await h.flush();
+      expect(inputs).toHaveLength(2);
+    } finally { h.close(); }
+  });
 });
 
 

@@ -125,6 +125,26 @@ export interface SessionSubagentOutcome extends SubagentOutcome {
   spawnToolCallId: string;
 }
 
+/**
+ * Taskana 4153 / TASK.216 wire: the result of delivering a follow-up message
+ * to the parent's OWN still-running child (`SessionSubagentPort.send`). The
+ * `reason` vocabulary is presentation-only — `message` is the load-bearing
+ * refusal text minted by main/host (mirroring `ChildRunEvent`'s rejected
+ * `message` discipline) — but coarse enough for the Agent handler to shape
+ * its error copy without string-matching in core.
+ */
+export type SessionSubagentSendResult = { ok: true } | { ok: false; reason: "unavailable" | "not_running" | "not_yours" | "busy" | "host_error"; message: string };
+
 export interface SessionSubagentPort {
   run(req: SessionSubagentRequest, opts: SubagentRunOptions): Promise<SessionSubagentOutcome>;
+  /**
+   * Taskana 4153: deliver a follow-up message to the parent's OWN RUNNING
+   * child; never spawns, never resumes. `childSessionId` comes from that
+   * run's accepted report; `text` is delivered as the child's next input
+   * (mode next_turn). The original sync-join `run()` call keeps waiting and
+   * its terminal includes the turns the delivered message causes. OPTIONAL
+   * so every host without the desktop main-process wiring (CLI, child
+   * sessions) keeps compiling and naturally fails closed at the handler.
+   */
+  send?(req: { childSessionId: string; text: string }, opts?: { signal?: AbortSignal }): Promise<SessionSubagentSendResult>;
 }

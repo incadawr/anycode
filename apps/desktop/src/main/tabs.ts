@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
+import type { AgentEnvelope } from "../shared/communication.js";
 import {
   CREDENTIAL_REQUEST_TYPE,
   CREDENTIAL_RESPONSE_TYPE,
@@ -33,6 +34,7 @@ import {
   CHILD_RUNS_PER_PARENT_MAX,
   CHILD_RUN_CANCEL_TYPE,
   CHILD_RUN_EVENT_TYPE,
+  CHILD_RUN_SEND_TYPE,
   CHILD_SPAWN_QUEUE_MAX,
   CHILD_SPAWN_REQUEST_TYPE,
   CHILD_START_DEADLINE_MS,
@@ -41,12 +43,14 @@ import {
   parseChildProgress,
   parseChildReady,
   parseChildRunCancel,
+  parseChildRunSend,
   parseChildSpawnRequest,
   parseChildTerminal,
   type ChildProgress,
   type ChildRunCancel,
   type ChildRunEvent,
   type ChildRunRejectReason,
+  type ChildRunSend,
   type ChildRunStatus,
   type ChildSpawnRequest,
   type ChildStart,
@@ -194,6 +198,23 @@ const CHILD_RESUME_BUSY_MESSAGE =
   "Agent: that child session is still running or open. Wait for its report before sending a follow-up.";
 const CHILD_RESUME_OVERRIDE_MESSAGE =
   "Agent: a continued child keeps its own connection and model; omit provider/model when continuing.";
+/**
+ * Taskana 4153 / TASK.216 wire: `ChildRunSend` refusals. The not-yours text
+ * deliberately covers both a foreign parent's child and a CHILD tab trying
+ * to send at all (recursion lock #3 symmetry: a child tab has `childOf` set,
+ * so it can never pass the sender check regardless of the target).
+ */
+const CHILD_SEND_NOT_YOURS_MESSAGE =
+  "Agent: that child session cannot be addressed — only a still-running AnyCode (core) child spawned by this session can.";
+const CHILD_SEND_NOT_RUNNING_MESSAGE =
+  "Agent: that child session is not running. Wait for its report and use a follow-up instead.";
+const CHILD_SEND_STARTING_MESSAGE =
+  "Agent: that child session is still starting and is not running yet; retry the send in a moment.";
+const CHILD_SEND_HOST_UNREACHABLE_MESSAGE =
+  "Agent: the child session host could not be reached for delivery; the message was not delivered.";
+/** Core-only slice (Taskana 4153 out-of-scope #2): engine children are not addressable yet. */
+const CHILD_SEND_ENGINE_MESSAGE =
+  "Agent: running engine children are not addressable yet; only AnyCode (core) children accept a running follow-up.";
 /** Bound on the finished-children memory below; the oldest entries are forgotten first. */
 const RESUMABLE_CHILDREN_MAX = 64;
 /** Bound on follow-up card aliases (`followUpChildSessionId`); the oldest are forgotten first. */
@@ -1319,6 +1340,17 @@ export class TabHostManager {
       }
       return;
     }
+    if (data.type === CHILD_RUN_SEND_TYPE) {
+      // Taskana 4153 / TASK.216 wire: a parent host's follow-up to its OWN
+      // RUNNING child. Same fail-closed discipline as the ops above; the
+      // handler re-derives ownership from `childOf` (file header) — the
+      // payload's `childSessionId` is only a lookup key, never an authority.
+      const send = parseChildRunSend(message);
+      if (send !== null) {
+        this.handleChildRunSend(tab, child, send);
+      }
+      return;
+    }
     if (data.type === CHILD_READY_TYPE) {
       const ready = parseChildReady(message);
       if (ready !== null) {
@@ -2018,6 +2050,77 @@ export class TabHostManager {
       return;
     }
     void this.cancelChildRun(entry.childTabId);
+  }
+
+  /**
+   * Taskana 4153 / TASK.216 wire: delivers a follow-up to the sender's OWN
+   * STILL-RUNNING core child (`ChildRunSend`). Never spawns, never resumes —
+   * the message rides the EXISTING `receiveAgentMessage`/`agentInbox` path as
+   * an `AgentEnvelope` (mode "next_turn", sender `parent-session:<id>`), so a
+   * busy child runs it as its next input BEFORE its terminal commits
+   * (session.ts's drain order). Ownership is re-derived from `childOf`, never
+   * from the payload: the sender must be the parent's live proc AND a root
+   * tab (recursion lock #3 symmetry — a child tab's send is refused), and the
+   * target must be a child tab of THIS parent, still running, core-engine.
+   * Refusals reuse the `spawn_failed` reject reason with their own texts; the
+   * ack on success is the additive `{ kind: "sent" }` `ChildRunEvent`.
+   */
+  private handleChildRunSend(parentTab: TabHost, sender: UtilityProcess, msg: ChildRunSend): void {
+    const fail = (message: string): void => {
+      this.replyChildRunEvent(parentTab, { type: CHILD_RUN_EVENT_TYPE, requestId: msg.requestId, kind: "rejected", reason: "spawn_failed", message });
+    };
+    if (parentTab.proc !== sender || parentTab.childOf !== undefined) return fail(CHILD_SEND_NOT_YOURS_MESSAGE);
+    const childTab = [...this.tabs.values()].find((t) => t.sessionId === msg.childSessionId && t.childOf !== undefined);
+    if (childTab === undefined || childTab.proc === null || childTab.state !== "running") return fail(CHILD_SEND_NOT_RUNNING_MESSAGE);
+    if (childTab.childOf!.parentTabId !== parentTab.tabId) return fail(CHILD_SEND_NOT_YOURS_MESSAGE);
+    // The tab is "running" from fork on, but the RUN is only addressable once
+    // child-ready released its initial prompt (ledger "running"): a send
+    // during "starting" would let the follow-up drain as the child's FIRST
+    // turn, ahead of its own task; a "cancelling" run would ack "sent" for a
+    // message its shutdown is about to reject.
+    const run = this.childRuns.get(childTab.childOf!.requestId);
+    if (run?.state === "starting") return fail(CHILD_SEND_STARTING_MESSAGE);
+    if (run?.state !== "running") return fail(CHILD_SEND_NOT_RUNNING_MESSAGE);
+    // Out-of-scope #2 (core-only slice): an engine child's host steers its CLI
+    // differently; the receiveAgentMessage/agentInbox path is a core contract.
+    if (childTab.engine !== "core") return fail(CHILD_SEND_ENGINE_MESSAGE);
+    void this.communicationRequest(
+      msg.childSessionId,
+      "send_message",
+      {
+        messageId: randomUUID(),
+        sender: `parent-session:${parentTab.sessionId}`,
+        recipientSessionId: msg.childSessionId,
+        payload: msg.text,
+        mode: "next_turn",
+        kind: "agent_message",
+        createdAt: new Date().toISOString(),
+      } satisfies AgentEnvelope,
+    )
+      .then((delivery) => {
+        const d = delivery as AgentDelivery;
+        this.replyChildRunEvent(
+          parentTab,
+          d.state === "queued"
+            ? { type: CHILD_RUN_EVENT_TYPE, requestId: msg.requestId, kind: "sent" }
+            : {
+                type: CHILD_RUN_EVENT_TYPE,
+                requestId: msg.requestId,
+                kind: "rejected",
+                reason: "spawn_failed",
+                message: `Agent: delivery state "${d.state}"${d.detail ? ` (${d.detail})` : ""}.`,
+              },
+        );
+      })
+      .catch(() =>
+        this.replyChildRunEvent(parentTab, {
+          type: CHILD_RUN_EVENT_TYPE,
+          requestId: msg.requestId,
+          kind: "rejected",
+          reason: "spawn_failed",
+          message: CHILD_SEND_HOST_UNREACHABLE_MESSAGE,
+        }),
+      );
   }
 
   /**
