@@ -328,6 +328,82 @@ describe("ClaudeApprovalBridge — TASK.226 S3: AnyCode's own MCP door", () => {
   });
 });
 
+/**
+ * Taskana 4070: the Claude bridge stamps classifier-proven read-only Bash
+ * commands readOnly/low, mirroring the Codex bridge's TASK.184 rule — a
+ * SINGLE plain command (no shell expression: no `;`, `&&`, pipes,
+ * substitutions, unmatched quotes). Everything else keeps the fail-closed
+ * high default. Presentation only: the decision still goes through the
+ * broker (the stub below captures what the modal would be shown).
+ */
+describe("ClaudeApprovalBridge — Taskana 4070 command-aware risk stamping", () => {
+  it("a classifier-proven read-only single command is presented readOnly/low", async () => {
+    const { broker, requests } = brokerStub({ behavior: "deny", reason: "x" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+
+    await bridge.handle(
+      inbound({ tool_name: "Bash", tool_use_id: "t1", input: { command: "git status" } }),
+      responderSpy().responder,
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.metadata.riskLevel).toBe("low");
+    expect(requests[0]!.metadata.readOnly).toBe(true);
+    expect(requests[0]!.metadata.destructive).toBe(false);
+  });
+
+  it("a write command keeps the fail-closed high default", async () => {
+    const { broker, requests } = brokerStub({ behavior: "deny", reason: "x" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+
+    await bridge.handle(
+      inbound({ tool_name: "Bash", tool_use_id: "t1", input: { command: "rm -rf build" } }),
+      responderSpy().responder,
+    );
+
+    expect(requests[0]!.metadata.riskLevel).toBe("high");
+    expect(requests[0]!.metadata.readOnly).toBe(false);
+  });
+
+  it("a read-only PIPELINE stays high — any shell expression keeps the fail-closed default (mirrors TASK.184)", async () => {
+    // `ls | wc -l` classifies read-only but IS a shell expression; the Codex
+    // bridge's documented rule (and this mirror) de-risks only plain single
+    // commands. Pinned so the widening can never happen by accident.
+    const { broker, requests } = brokerStub({ behavior: "deny", reason: "x" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+
+    await bridge.handle(
+      inbound({ tool_name: "Bash", tool_use_id: "t1", input: { command: "ls | wc -l" } }),
+      responderSpy().responder,
+    );
+
+    expect(requests[0]!.metadata.riskLevel).toBe("high");
+    expect(requests[0]!.metadata.readOnly).toBe(false);
+  });
+
+  it("a non-Bash tool's metadata is unchanged (high)", async () => {
+    const { broker, requests } = brokerStub({ behavior: "deny", reason: "x" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+
+    await bridge.handle(
+      inbound({ tool_name: "Write", tool_use_id: "t1", input: { file_path: "/tmp/x", content: "y" } }),
+      responderSpy().responder,
+    );
+
+    expect(requests[0]!.metadata.riskLevel).toBe("high");
+    expect(requests[0]!.metadata.readOnly).toBe(false);
+  });
+
+  it("Bash with no command field keeps the high default (fail-closed)", async () => {
+    const { broker, requests } = brokerStub({ behavior: "deny", reason: "x" });
+    const bridge = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask" });
+
+    await bridge.handle(inbound({ tool_name: "Bash", tool_use_id: "t1", input: {} }), responderSpy().responder);
+
+    expect(requests[0]!.metadata.riskLevel).toBe("high");
+  });
+});
+
 describe("decodeCanUseTool — tolerant of the live request's unprojected fields", () => {
   it("decodes the live request and ignores permission_suggestions/decision_reason without rejecting it", () => {
     const { request } = liveWriteProbeExchange();

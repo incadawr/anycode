@@ -127,6 +127,33 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * Taskana 4070: Codex MAY send the command as an argv ARRAY (rather than the
+ * string observed live in 0.144–0.161). The array is rendered as a POSIX-quoted
+ * command line — every element that is not plainly safe is single-quoted — and
+ * that rendering is what the dialog shows and what the shared classifier reads.
+ * A plain space join would let an argv's element boundaries be re-read through
+ * shell quoting (`["git", "log", "'", "--output=/x", "'"]` joined reads as ONE
+ * quoted literal around a flag git really receives), so the quoted form is the
+ * only faithful one — for the dialog, the classifier and any remembered rule
+ * (defense in depth: today's classifier already refuses that joined form). Anything other than a non-empty all-string
+ * array keeps today's behaviour (fall back to the item's own command, or no
+ * command: fail-closed high-risk metadata, no plaque).
+ */
+function optionalCommand(value: unknown, fallback: string | undefined): string | undefined {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (Array.isArray(value) && value.length > 0 && value.every((part) => typeof part === "string")) {
+    return (value as string[]).map(quoteArgvElement).join(" ");
+  }
+  return fallback;
+}
+
+/** POSIX single-quote an argv element unless it consists only of shell-inert characters. */
+export function quoteArgvElement(part: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(part)) return part;
+  return `'${part.replace(/'/g, `'\\''`)}'`;
+}
+
 function stringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const items = value.filter((entry): entry is string => typeof entry === "string");
@@ -156,8 +183,10 @@ function decode(request: JsonRpcServerRequest, items: TurnItemIndex | undefined)
   if (request.method === OBSERVED_COMMAND_APPROVAL_METHOD) {
     const fromItem = commandOf(indexed);
     // Live command approvals carry `command`/`cwd` but NO `reason` (L9); an
-    // absent optional field must never turn into a denial.
-    const command = optionalString(params.command) ?? fromItem.command;
+    // absent optional field must never turn into a denial. Taskana 4070: the
+    // command may arrive as an argv array — joined for display/classification
+    // only (see optionalCommand).
+    const command = optionalCommand(params.command, fromItem.command);
     const cwd = optionalString(params.cwd) ?? fromItem.cwd;
     // 0.161: `kind: "writeStdin"` is input sent to a command that is ALREADY
     // running, not a new command — the same `command` would otherwise read as

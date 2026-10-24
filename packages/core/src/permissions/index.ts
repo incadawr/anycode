@@ -14,6 +14,17 @@ export { isWithinWorkspace, isProvablyInsideWorkspace, WORKSPACE_CONFINED_WRITE_
 export { resolveWorkspaceWriteFacts } from "../util/path-containment.js";
 export { classifyBashCommandLine } from "./safe-command.js";
 export type { BashCommandLineClassification } from "./safe-command.js";
+// Taskana 4070: the shared classification-to-plaque mapping (CLI terminal
+// broker, desktop modal, Codex commandExecution approvals).
+export {
+  BASH_RISK_PLAQUE,
+  bashRiskFacts,
+  bashRiskPlaque,
+  bashWriteCapablePlaque,
+  isPlaqueCommandLineTool,
+  WRITE_CAPABLE_BINARIES,
+} from "./bash-risk-plaque.js";
+export type { BashRiskFacts, BashRiskPlaque } from "./bash-risk-plaque.js";
 // TASK.36 handoff (invariant 2): the ONE Bash segment splitter, exported.
 export { splitBashSegments } from "./rules.js";
 export type { BashSegments, BashSeparatorKind } from "./rules.js";

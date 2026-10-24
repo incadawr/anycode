@@ -20,6 +20,7 @@
 import { randomUUID } from "node:crypto";
 import type { Interface as ReadlineInterface } from "node:readline";
 import { AllowAllPermissionBroker, DenyPermissionBroker } from "../permissions/index.js";
+import { bashRiskPlaque } from "../permissions/bash-risk-plaque.js";
 import type { SessionPermissionRules } from "../permissions/index.js";
 import type { PermissionDecision, PermissionRequest } from "../types/permissions.js";
 import type { PermissionBroker } from "../types/permissions.js";
@@ -214,8 +215,17 @@ function formatPlanApprovalAsk(plan: string, theme: CliTheme): string {
  * theme roles; the trailing answer prompt is plain. Original prose — never copied
  * from another product.
  *
- *   [permission] Write (risk: medium, destructive) — {"file_path":"…"}
- *     y = allow once · n = deny · a = always allow Write this session (/allow Write <glob> for finer scope)
+ * Taskana 4070: a Bash ask additionally carries the SAME one-line per-command
+ * risk plaque the desktop modal shows (read-only pipeline / named write-capable
+ * binary / unknown binary), painted with the `askHint` role on its own line
+ * between the header and the y/n/a hint. The raw command stays in the header,
+ * uncapped-by-the-plaque and always visible; a shell expression shows no plaque
+ * (its "unknown shell expression" story is already the honest one). Presentation
+ * only — no answer mapping, rule or decision reads the plaque.
+ *
+ *   [permission] Bash (risk: high, destructive) — {"command":"pnpm install"}
+ *   This command runs pnpm, which can write or execute — …
+ *     y = allow once · n = deny · a = always allow Bash this session (/allow Bash <glob> for finer scope)
  *   answer [y/n/a]:
  */
 function formatAsk(request: PermissionRequest, theme: CliTheme): string {
@@ -228,7 +238,11 @@ function formatAsk(request: PermissionRequest, theme: CliTheme): string {
   const destructive = request.metadata.destructive ? ", destructive" : "";
   const header = `[permission] ${name} (risk: ${risk}${destructive}) — ${previewInput(request.input)}`;
   const hint = `  y = allow once · n = deny · a = always allow ${name} this session (/allow ${name} <glob> for finer scope)`;
-  return `${theme.paint("ask", header)}\n${theme.paint("askHint", hint)}\nanswer [y/n/a]: `;
+  // Taskana 4070: fail-closed by construction — bashRiskPlaque returns null for
+  // anything but a command-line tool with a string command.
+  const plaque = bashRiskPlaque(request.toolName, request.input);
+  const plaqueLine = plaque === null ? "" : `${theme.paint("askHint", `  ${plaque}`)}\n`;
+  return `${theme.paint("ask", header)}\n${plaqueLine}${theme.paint("askHint", hint)}\nanswer [y/n/a]: `;
 }
 
 /**

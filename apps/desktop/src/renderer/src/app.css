@@ -5476,6 +5476,15 @@ body {
   color: var(--danger);
 }
 
+/* Taskana 4070: the neutral badge/plaque wash for a classifier-proven
+   read-only command under still-high static metadata (core's Bash tool
+   grades every command high/destructive) — information, not a warning. */
+.permission-risk-neutral,
+.permission-risk-plaque-neutral {
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+
 .permission-destructive-tag {
   font-weight: var(--w-semibold);
   text-transform: uppercase;
@@ -5551,6 +5560,31 @@ body {
 .permission-ask-hint {
   font-size: var(--fs-sm);
   color: var(--text-2);
+}
+
+/* Taskana 4070 (TASK.105 §2): per-command risk plaque for a Bash ask — the
+   classifier-derived note (read-only pipeline / named write-capable binary /
+   unknown binary) under the ask's summary. Tinted by the ask's risk level
+   using the SAME theme-aware washes as the modal header
+   (.permission-modal-header-*), so it tracks light/dark themes for free. */
+.permission-risk-plaque {
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-top: 6px;
+}
+
+.permission-risk-plaque-low {
+  background: var(--success-soft);
+}
+
+.permission-risk-plaque-medium {
+  background: var(--warning-soft);
+}
+
+.permission-risk-plaque-high {
+  background: var(--danger-soft);
 }
 
 .permission-modal-actions {

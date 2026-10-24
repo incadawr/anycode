@@ -54,6 +54,25 @@ import { Markdown } from "./Markdown.js";
 import { X } from "./icons.js";
 import { commandBinary, isCommandLineTool, sanitizeBashPattern } from "../permission-pattern.js";
 import { classifyBashCommandLine, formatScopedRunnerPattern, recognizeScopedRunnerCommand } from "@anycode/core/permissions/safe-command";
+// Taskana 4070: the classification-to-plaque mapping moved to core (shared
+// with the CLI terminal broker and the Codex commandExecution approvals);
+// imported here for describePermissionAsk and re-exported below for every
+// existing import from this module. Cross-review D1: imported through the
+// dedicated `@anycode/core/permissions/bash-risk-plaque` SUBPATH, never the
+// package root — the renderer is a plain web target, and a value import of
+// the root barrel would pull core's whole module graph (node:fs,
+// node:child_process, node:sqlite, …) into the browser bundle and break
+// `electron-vite build` (the invariant documented in subagent-card.ts).
+// bash-risk-plaque.ts only imports ./safe-command.js — the same
+// browser-safe graph the import above already reaches.
+import {
+  BASH_RISK_PLAQUE,
+  WRITE_CAPABLE_BINARIES,
+  bashRiskFacts,
+  bashRiskPlaque,
+  bashWriteCapablePlaque,
+} from "@anycode/core/permissions/bash-risk-plaque";
+import type { BashRiskFacts, BashRiskPlaque } from "@anycode/core/permissions/bash-risk-plaque";
 import "../settings.css";
 
 export interface PermissionModalProps {
@@ -74,6 +93,16 @@ const RISK_LABELS: Record<RiskLevel, string> = {
   medium: "Medium risk",
   high: "High risk",
 };
+
+/**
+ * Taskana 4070: the NEUTRAL badge text shown when the classifier proves the
+ * command line read-only yet the ask's metadata still says high/destructive —
+ * core's Bash metadata is static (`riskLevel:"high", destructive:true` for
+ * every command), so without this the header would scream "High risk /
+ * Destructive" directly above a plaque saying "provably read-only". Pure
+ * cosmetics: the metadata object, the decision and the wire are untouched.
+ */
+export const NEUTRAL_RISK_LABEL = "Command-specific check";
 
 interface SummarizedInput {
   label: string;
@@ -159,6 +188,14 @@ export interface PermissionAskPresentation {
   denyLabel: string;
   /** One-line explanation of what approving actually does; null for generic asks. */
   hint: string | null;
+  /** Taskana 4070: per-command risk note for a Bash ask (read-only pipeline /
+   * named write-capable binary / unknown binary); null for everything else. */
+  plaque: string | null;
+  /** Taskana 4070: neutral badge text when the classifier proves the command
+   * read-only yet the metadata header would otherwise say "High risk" (+
+   * "Destructive") — core's static Bash metadata grades every command high.
+   * Null keeps the ordinary metadata-driven badge. */
+  neutralRiskLabel: string | null;
   /** Whether an "Always allow" rule may be offered for this ask at all. */
   canRemember: boolean;
 }
@@ -185,6 +222,37 @@ function bashUnknownShellHint(toolName: string, input: unknown): string | null {
   return verdict.class === "unknown" && verdict.shellExpression ? UNKNOWN_SHELL_HINT : null;
 }
 
+/** Taskana 4070: re-exports of the shared plaque API (see the import above) —
+ * the desktop modal is where the plaque was born (7d633a64/4ebfbe12); these
+ * keep every existing import from this module working unchanged. */
+export {
+  BASH_RISK_PLAQUE,
+  WRITE_CAPABLE_BINARIES,
+  bashRiskFacts,
+  bashRiskPlaque,
+  bashWriteCapablePlaque,
+};
+export type { BashRiskFacts, BashRiskPlaque };
+
+/** Taskana 4070: neutralises the header badge IFF the ask's command line is
+ * classifier-PROVEN read-only while the static metadata still grades it
+ * "High risk" (or flags it destructive) — exactly the mixed message core's
+ * static Bash metadata produces for `git status`. The badge then shows the
+ * neutral label INSTEAD of "High risk"+"Destructive", matching the readOnly
+ * plaque under it. Everything else keeps the metadata-driven badge: unknown
+ * and write-capable commands are honestly high-risk, and a metadata
+ * `riskLevel:"low"` ask (e.g. the Codex bridge's de-risked presentation)
+ * already agrees with the plaque. Presentation only.
+ * Exported for the header-neutralisation test. */
+export function neutralRiskLabelFor(
+  metadata: { riskLevel: RiskLevel; destructive: boolean },
+  plaque: string | null,
+): string | null {
+  if (plaque !== BASH_RISK_PLAQUE.readOnly) return null;
+  if (metadata.riskLevel !== "high" && !metadata.destructive) return null;
+  return NEUTRAL_RISK_LABEL;
+}
+
 /**
  * Resolves how an ask should be presented (TASK.27). The plan branch is a
  * PRESENTATION special case only — the tool reached this modal through the
@@ -202,12 +270,21 @@ function bashUnknownShellHint(toolName: string, input: unknown): string | null {
  * rule would auto-approve every future plan before anyone read it, which is the
  * one thing a plan gate exists to prevent.
  */
-export function describePermissionAsk(toolName: string, input: unknown): PermissionAskPresentation {
+export function describePermissionAsk(
+  toolName: string,
+  input: unknown,
+  /** Taskana 4070: the ask's live metadata, when the caller has it — drives
+   * the header neutralisation (a static-high core Bash ask whose command the
+   * classifier proves read-only). Absent → no neutralisation (fail-closed to
+   * today's metadata-driven badge). */
+  metadata?: { riskLevel: RiskLevel; destructive: boolean },
+): PermissionAskPresentation {
   const raw =
     toolName === "ExitPlanMode"
       ? (input !== null && typeof input === "object" ? (input as { plan?: unknown }).plan : undefined)
       : undefined;
   if (typeof raw !== "string") {
+    const plaque = bashRiskPlaque(toolName, input);
     return {
       kind: "generic",
       plan: null,
@@ -216,6 +293,8 @@ export function describePermissionAsk(toolName: string, input: unknown): Permiss
       allowLabel: "Allow",
       denyLabel: "Deny",
       hint: bashUnknownShellHint(toolName, input),
+      plaque,
+      neutralRiskLabel: metadata === undefined ? null : neutralRiskLabelFor(metadata, plaque),
       canRemember: true,
     };
   }
@@ -228,6 +307,8 @@ export function describePermissionAsk(toolName: string, input: unknown): Permiss
     allowLabel: "Approve plan",
     denyLabel: "Keep planning",
     hint: "Approving leaves plan mode and starts implementation — write actions still ask for approval individually.",
+    plaque: null,
+    neutralRiskLabel: null,
     canRemember: false,
   };
 }
@@ -422,7 +503,10 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
   // capability and the per-ask verdict into ONE flag used by both the checkbox
   // and fireAllow, so a plan can never carry a `remember` even if the checkbox
   // state somehow survived a request change.
-  const presentation = describePermissionAsk(request.toolName, request.input);
+  const presentation = describePermissionAsk(request.toolName, request.input, {
+    riskLevel: request.metadata.riskLevel,
+    destructive: request.metadata.destructive,
+  });
   const isPlan = presentation.kind === "plan";
   const showRemember = allowRemember && presentation.canRemember;
 
@@ -507,9 +591,19 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
             )}
           </span>
           {!isPlan && (
-            <span className={`permission-risk-badge permission-risk-${request.metadata.riskLevel}`}>
-              {RISK_LABELS[request.metadata.riskLevel]}
-              {request.metadata.destructive && <span className="permission-destructive-tag">Destructive</span>}
+            <span
+              className={`permission-risk-badge ${
+                presentation.neutralRiskLabel !== null
+                  ? "permission-risk-neutral"
+                  : `permission-risk-${request.metadata.riskLevel}`
+              }`}
+            >
+              {presentation.neutralRiskLabel !== null
+                ? presentation.neutralRiskLabel
+                : RISK_LABELS[request.metadata.riskLevel]}
+              {request.metadata.destructive && presentation.neutralRiskLabel === null && (
+                <span className="permission-destructive-tag">Destructive</span>
+              )}
             </span>
           )}
         </div>
@@ -627,6 +721,17 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
           <>
             {presentation.hint !== null && (
               <div className="permission-ask-hint">{presentation.hint}</div>
+            )}
+            {presentation.plaque !== null && (
+              <div
+                className={`permission-risk-plaque ${
+                  presentation.neutralRiskLabel !== null
+                    ? "permission-risk-plaque-neutral"
+                    : `permission-risk-plaque-${request.metadata.riskLevel}`
+                }`}
+              >
+                {presentation.plaque}
+              </div>
             )}
             <div className="permission-mode">Mode: {request.mode}</div>
           </>
