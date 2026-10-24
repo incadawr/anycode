@@ -444,6 +444,9 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       //  slice 1: subagent stall-detector silence threshold override
       // (ANYCODE_SUBAGENT_STALL_MS). Distinct from `stallTimeoutMs` above.
       subagentStallTimeoutMs: z.number().optional(),
+      // : Grep backend selector, mirror of ANYCODE_GREP_BACKEND
+      // (env > settings, default "rg"). Enum, never "auto".
+      grepBackend: z.enum(["rg", "tgrep"]).optional(),
     }),
     permissions: z.object({
       alwaysAllow: z.array(alwaysAllowRuleSchema),
