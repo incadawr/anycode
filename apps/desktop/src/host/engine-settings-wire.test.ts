@@ -154,6 +154,17 @@ interface Fixture {
 const open: Fixture[] = [];
 
 function fixture(): Fixture {
+  return fixtureWith({});
+}
+
+/**
+ * Taskana 4078 cross-review finding 2: a CHILD-mode engine session (a codex
+ * child tab's own host) must be posture-frozen — `set_engine_preset` is the
+ * one wire a renderer can widen a running child with (one click in the child
+ * tab's picker turns a `child-ask` boot into `full-access`), so the route is
+ * gated on `child === undefined` the same way `compact_request` already is.
+ */
+function fixtureWith(opts: { child?: boolean }): Fixture {
   const channel = new MessageChannel();
   const received: HostToUiMessage[] = [];
   channel.port1.on("message", (value: unknown) => received.push(value as HostToUiMessage));
@@ -173,6 +184,16 @@ function fixture(): Fixture {
     sessionId: "codex-session",
     rules: new SessionPermissionRules(),
     persistence: { touch: (patch) => touches.push(patch) },
+    ...(opts.child
+      ? {
+          child: {
+            onReady: () => {},
+            flushHistory: () => Promise.resolve(),
+            onTerminal: () => {},
+            onProgress: () => {},
+          },
+        }
+      : {}),
   });
   session.bindPort(nodeWirePort(channel.port2 as NodeMessagePort));
 
@@ -379,5 +400,33 @@ describe("TASK.39 — set_engine_preset / set_model routing", () => {
 
     ui.engine.finishTurn();
     await ui.settle();
+  });
+
+  // Taskana 4078 cross-review finding 2 (reproduction first): a codex CHILD
+  // boots posture-frozen (child-permission-map's `child-ask`/`read-only`/
+  // `ask`), but the child tab renders the same SessionSurface, so its picker
+  // could legitimately drive this route — one click replaces a broker-mediated
+  // `child-ask` boot with `full-access` (no sandbox, no approvals) on a
+  // session nobody deliberately chose a posture for. Children never respawn
+  // and have no between-turns owner standing; the route must refuse.
+  it("refuses set_engine_preset on a CHILD session entirely — a child is posture-frozen (Taskana 4078 finding 2)", async () => {
+    const ui = fixtureWith({ child: true });
+    ui.send({ type: "ui_ready" });
+    await ui.settle();
+
+    // Narrowing first: even the strictly-narrower direction is refused —
+    // freeze means freeze, not a one-way ratchet.
+    ui.send({ type: "set_engine_preset", presetId: "read-only" });
+    // And the widening direction that motivated the gate:
+    ui.send({ type: "set_engine_preset", presetId: "workspace" });
+    await ui.settle();
+
+    expect(ui.received.filter((message) => message.type === "mode_change_rejected")).toEqual([
+      { type: "mode_change_rejected", reason: "permission presets are frozen for a child session" },
+      { type: "mode_change_rejected", reason: "permission presets are frozen for a child session" },
+    ]);
+    expect(settings(ui.received)).toEqual([]);
+    expect(ui.touches).toEqual([]);
+    expect(ui.engine.snapshot()).toEqual({ model: "gpt-5.6-sol", activePresetId: "ask" });
   });
 });

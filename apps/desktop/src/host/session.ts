@@ -1859,6 +1859,27 @@ export class Session {
         // raw config JSON is accepted from the renderer, by construction of this
         // message (DoD-4). Between-turns discipline mirrors set_model.
         if (this.engineSettings === undefined) break;
+        // Taskana 4078 cross-review finding 2: an engine CHILD's posture is
+        // FROZEN. The child tab renders the same SessionSurface (and therefore
+        // the same preset picker) a root tab does, so without this gate one
+        // click in a `child-ask`-booted codex child's tab widens it to
+        // `full-access` — no sandbox, no approvals — on a session whose
+        // posture nobody deliberately chose: it was derived from the parent's
+        // snapshotted mode by child-permission-map at boot (CUT-S4 §4.2).
+        // Children never respawn (cut §0.6), have no between-turns owner
+        // standing to re-derive the posture from, and a refusal is
+        // recoverable-informational (mode_change_rejected), the same shape a
+        // mid-turn attempt already gets — so freezing is fail-closed in both
+        // directions: neither narrowing (`child-ask` on any session — which
+        // stays reachable for a ROOT via nothing, by design) nor widening
+        // (`full-access`) is expressible for a child.
+        if (this.child !== undefined) {
+          this.outbound.emit({
+            type: "mode_change_rejected",
+            reason: "permission presets are frozen for a child session",
+          });
+          break;
+        }
         if (this.busy) {
           this.outbound.emit({
             type: "mode_change_rejected",
