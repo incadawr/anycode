@@ -33,6 +33,7 @@
  * strictly before the toolNames snapshot (index.ts:358-361/:464).
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,7 +84,8 @@ import type {
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type { ShellCapabilitiesProjection } from "../shared/protocol.js";
-import { parseCodexProfileArgs } from "./engines/codex/codex-home.js";
+import { ensureChildTempDir, parseCodexProfileArgs, removeChildTempDir, resolveChildTempDir } from "./engines/codex/codex-home.js";
+import { buildCodexChildEnv } from "./engines/codex/app-server-client.js";
 import { TerminalManager } from "./terminal.js";
 import { isChildSessionBoot } from "./boot.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
@@ -1319,6 +1321,206 @@ describe("host Codex boot shell/git wiring shape (design TASK.40 §2(f))", () =>
   it("gitReadOnly and gitUserMutations always move together for Codex — one workspace-level gate, not two independent ones", () => {
     expect(computeCodexShell(true, true).gitReadOnly).toBe(computeCodexShell(true, true).gitUserMutations);
     expect(computeCodexShell(false, false).gitReadOnly).toBe(computeCodexShell(false, false).gitUserMutations);
+  });
+});
+
+/**
+ * Taskana 4682 rework — the child-temp-dir SHAPE of bootCodexSession's boot
+ * site, mirrored over the REAL helpers (resolveChildTempDir /
+ * ensureChildTempDir / removeChildTempDir / buildCodexChildEnv) with the same
+ * "reproduce the seam's shape, don't import index.ts" idiom as every other
+ * block in this file. Pins the two owner invariants: a CHILD boot derives and
+ * creates the private dir, sets the tmp env family and passes the dir into
+ * the engine selection (writableRoots); an OWNER boot derives NOTHING — no
+ * dir, no env override, no selection key.
+ */
+describe("host Codex boot private temp dir shape (Taskana 4682 rework)", () => {
+  /** Mirrors bootCodexSession's derivation + selection spread verbatim. */
+  function bootCodexTmpShape(
+    args: { sessionId?: string; child?: { parentSessionId: string } },
+    homeDir: string,
+  ): { tempDir: string | undefined; selection: Record<string, unknown>; env: NodeJS.ProcessEnv } {
+    const bridgeRowId = args.sessionId ?? "018f-fresh-uuid";
+    const codexChildTempDir = args.child !== undefined ? resolveChildTempDir(bridgeRowId, homeDir) : undefined;
+    if (codexChildTempDir !== undefined) ensureChildTempDir(codexChildTempDir);
+    const options = { ...(codexChildTempDir !== undefined ? { tempDir: codexChildTempDir } : {}) };
+    const selection = {
+      ...(args.child !== undefined ? { excludeTmpRoots: true } : {}),
+      ...(codexChildTempDir !== undefined ? { childTempDir: codexChildTempDir } : {}),
+    };
+    const env = buildCodexChildEnv({ HOME: homeDir, PATH: "/bin", TMPDIR: "/var/folders/ambient" }, "darwin", undefined, options.tempDir);
+    return { tempDir: codexChildTempDir, selection, env };
+  }
+
+  it("a CHILD boot: the private dir exists 0700, rides the selection, and owns the tmp env family", () => {
+    const home = mkdtempSync(join(tmpdir(), "anycode-4682-shape-"));
+    try {
+      const childId = "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a";
+      const shape = bootCodexTmpShape(
+        { sessionId: childId, child: { parentSessionId: "parent-1" } },
+        home,
+      );
+      const expectedDir = join(home, ".anycode", "tmp", childId);
+      expect(shape.tempDir).toBe(expectedDir);
+      expect(existsSync(expectedDir)).toBe(true);
+      expect(statSync(expectedDir).mode & 0o077).toBe(0);
+      expect(shape.selection).toMatchObject({ excludeTmpRoots: true, childTempDir: expectedDir });
+      expect(shape.env.TMPDIR).toBe(expectedDir);
+      expect(shape.env.TMPPREFIX).toBe(`${expectedDir}/zsh`);
+      expect(shape.env.TMP).toBe(expectedDir);
+      expect(shape.env.TEMP).toBe(expectedDir);
+      // The finalize/shutdown cleanup removes exactly this dir (idempotent).
+      removeChildTempDir(expectedDir);
+      expect(existsSync(expectedDir)).toBe(false);
+      removeChildTempDir(expectedDir); // never fatal on the second call
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("an OWNER boot: no private dir is created, the ambient TMPDIR passes through, the selection carries NO tmp keys", () => {
+    const home = mkdtempSync(join(tmpdir(), "anycode-4682-shape-"));
+    try {
+      const shape = bootCodexTmpShape({ sessionId: "root-1" }, home);
+      expect(shape.tempDir).toBeUndefined();
+      expect(existsSync(join(home, ".anycode"))).toBe(false);
+      expect(shape.selection).toEqual({});
+      expect(shape.env.TMPDIR).toBe("/var/folders/ambient");
+      expect(shape.env.TMPPREFIX).toBeUndefined();
+      expect(shape.env.TMP).toBeUndefined();
+      expect(shape.env.TEMP).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Cross-review F2 (Taskana 4682): the private temp dir was created at the TOP
+ * of bootCodexSession but the `try {` guard only started AFTER the whole
+ * connect phase (`startCodexEngine` — app-server spawn, trust preflights,
+ * `--version` round-trip — the single most likely failure site of the boot).
+ * A throw in between propagated to boot()'s catch; the boot-side `finally`
+ * (which removes the dir when `session === null`) was never entered, so the
+ * dir leaked until a graceful shutdown message that a killed host never
+ * sends. index.ts is not importable (see file header) — same idiom as the
+ * 4682 shape block above: this mirrors the ORDERING invariant over the REAL
+ * helpers (the exact order index.ts must now keep), plus a source-order pin
+ * (the "read the real source" idiom of the model-override suite) so the
+ * production call site cannot silently drift back.
+ */
+describe("host Codex boot private temp dir leak guard (cross-review F2, Taskana 4682)", () => {
+  /**
+   * Mirrors bootCodexSession's ordering with injectable steps: the dir must be
+   * ENSURED immediately before the guarded window opens, and a throw from ANY
+   * step after the ensure must leave no dir behind (the finally-equivalent
+   * cleanup runs for `session === null`).
+   */
+  async function bootCodexTmpLifecycle(
+    homeDir: string,
+    steps: { mcp?: () => Promise<void>; connect: () => Promise<void>; afterGuard?: () => Promise<void> },
+  ): Promise<void> {
+    const bridgeRowId = "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a";
+    const child = { parentSessionId: "parent-1" };
+    const codexChildTempDir = resolveChildTempDir(bridgeRowId, homeDir);
+    const cleanupCodexChildTempDir = (): void => removeChildTempDir(codexChildTempDir);
+    const codexChildTempDirCleanup = cleanupCodexChildTempDir; // module-level slot, set right after derivation
+    let session: unknown = null;
+    try {
+      try {
+        // The connect phase (spawn + trust + version) and every pre-guard
+        // await run INSIDE the guarded window.
+        if (steps.mcp !== undefined) await steps.mcp();
+        await steps.connect();
+        session = {}; // engine objects exist
+        if (steps.afterGuard !== undefined) await steps.afterGuard();
+      } finally {
+        if (session === null) cleanupCodexChildTempDir();
+      }
+    } catch {
+      // boot()'s catch: initFailure, degraded mode — the host survives.
+    } finally {
+      // handleShutdown's last-safe-moment removal (idempotent).
+      codexChildTempDirCleanup();
+    }
+  }
+
+  it("a connect-phase throw (the spawn-failure case) must not leak the private dir", async () => {
+    const home = mkdtempSync(join(tmpdir(), "anycode-4682-f2-"));
+    try {
+      const dir = join(home, ".anycode", "tmp", "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a");
+      await bootCodexTmpLifecycle(home, {
+        mcp: async () => {},
+        connect: async () => {
+          ensureChildTempDir(dir); // ← the fix: ensure sits inside the guarded window
+          throw new Error("spawn failed: codex app-server --version timed out");
+        },
+      });
+      expect(existsSync(dir)).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("a post-guard throw (the already-covered case) still must not leak, and a successful boot keeps the dir until shutdown", async () => {
+    const home = mkdtempSync(join(tmpdir(), "anycode-4682-f2-"));
+    try {
+      const dir = join(home, ".anycode", "tmp", "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a");
+      await bootCodexTmpLifecycle(home, {
+        connect: async () => {
+          ensureChildTempDir(dir);
+        },
+        afterGuard: async () => {
+          throw new Error("plugin.boot threw");
+        },
+      });
+      expect(existsSync(dir)).toBe(false);
+
+      // Success path: the dir SURVIVES the boot-side finally (session !== null)
+      // and is removed exactly once at the shutdown moment.
+      await bootCodexTmpLifecycle(home, {
+        connect: async () => {
+          ensureChildTempDir(dir);
+        },
+      });
+      expect(existsSync(dir)).toBe(false); // shutdown-side removal ran
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Source-order pin (the "read the real source" idiom): in index.ts, the
+   * `ensureChildTempDir(...)` call must appear AFTER the last statement the
+   * guard comment names as pre-connect and BEFORE the `try {` that opens the
+   * guarded window — concretely: after `parseCodexEngineArgs` (the last
+   * synchronous pre-connect step) and before `startCodexEngine`'s containing
+   * expression. On the pre-F2 code the ensure sat ABOVE `prepareEngineMcpForward`
+   * (the first await of the leak window), which this pin rejects.
+   */
+  it("index.ts ensures the dir inside the guarded window: after parseCodexEngineArgs, before the connect expression", async () => {
+    const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+    const ensureIdx = source.indexOf("if (codexChildTempDir !== undefined) ensureChildTempDir(codexChildTempDir);");
+    expect(ensureIdx).toBeGreaterThan(-1);
+    const draftIdx = source.indexOf("const draft = parseCodexEngineArgs(process.argv.slice(2));");
+    expect(draftIdx).toBeGreaterThan(-1);
+    const connectIdx = source.indexOf("const connected = await (args.resume");
+    expect(connectIdx).toBeGreaterThan(-1);
+    // Order: draft → ensure → connected. (All three literals are unique in the file.)
+    expect(source.indexOf("if (codexChildTempDir !== undefined) ensureChildTempDir(codexChildTempDir);", ensureIdx + 1)).toBe(-1);
+    expect(draftIdx).toBeLessThan(ensureIdx);
+    expect(ensureIdx).toBeLessThan(connectIdx);
+    // And the ensure no longer sits above the first pre-guard await.
+    const mcpForwardIdx = source.indexOf("const codexMcpForward = await prepareEngineMcpForward({");
+    expect(mcpForwardIdx).toBeGreaterThan(-1);
+    expect(ensureIdx).toBeGreaterThan(mcpForwardIdx);
+    // Review fix: the connect expression sits OUTSIDE the boot-side `try`, so
+    // it must clean the dir on its own rejection — pin the .catch that does it
+    // between the connect expression and the guarded window.
+    const tryIdx = source.indexOf("  try {\n  codexParentEngine = connected.engine;");
+    expect(tryIdx).toBeGreaterThan(connectIdx);
+    const between = source.slice(connectIdx, tryIdx);
+    expect(between).toMatch(/\}\)\(\)\)\.catch\(\(error: unknown\) => \{\s*(\/\/[^\n]*\s*)*cleanupCodexChildTempDir\(\);\s*throw error;/);
   });
 });
 

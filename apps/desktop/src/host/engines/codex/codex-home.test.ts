@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   assertCodexProfileHome,
+  ensureChildTempDir,
+  isSafeTempDirSegment,
   parseCodexProfileArgs,
+  removeChildTempDir,
+  resolveChildTempDir,
   resolveCodexProfile,
   resolveCodexProfilesHomeOverride,
 } from "./codex-home.js";
@@ -237,5 +241,90 @@ describe("resolveCodexProfilesHomeOverride (W4-F0b host lever, Fable ruling iter
     }
     // The refusal fires BEFORE any derivation or home assert — nothing was created.
     expect(existsSync(join(wouldBeRealHome, ".anycode"))).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Taskana 4682 rework — a codex CHILD's private temp dir (~/.anycode/tmp/<id>).
+// Same scratch-only discipline as every block above: freshDir trees only.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("resolveChildTempDir / ensureChildTempDir / removeChildTempDir (Taskana 4682)", () => {
+  it("derives the dir ONLY from the child session id under <home>/.anycode/tmp", () => {
+    expect(resolveChildTempDir("018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a", "/Users/someone")).toBe(
+      join("/Users/someone", ".anycode", "tmp", "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a"),
+    );
+  });
+
+  it("the id is validated as ONE safe path segment — traversal, separators and dot-segments refuse (fail-closed)", () => {
+    for (const bad of ["..", ".", "", "a/b", "a\\b", "/abs", "a/../b", "  "]) {
+      expect(() => resolveChildTempDir(bad, "/Users/someone")).toThrow(/invalid child session id/);
+    }
+    expect(isSafeTempDirSegment("018f1e2d-3c4b")).toBe(true);
+    expect(isSafeTempDirSegment("..")).toBe(false);
+  });
+
+  it("ensureChildTempDir creates the dir 0700, parents included, and is idempotent", () => {
+    const home = freshDir();
+    const dir = resolveChildTempDir("child-a", home);
+    ensureChildTempDir(dir);
+    ensureChildTempDir(dir); // idempotent: no throw, same inode semantics
+    const state = statSync(dir);
+    expect(state.isDirectory()).toBe(true);
+    expect(state.mode & 0o077).toBe(0);
+    expect(existsSync(join(home, ".anycode", "tmp"))).toBe(true);
+  });
+
+  it("ensureChildTempDir TIGHTENS a too-loose pre-existing dir back to 0700 (ours ⇒ fix and continue)", () => {
+    const home = freshDir();
+    const dir = resolveChildTempDir("child-b", home);
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    ensureChildTempDir(dir);
+    expect(statSync(dir).mode & 0o077).toBe(0);
+  });
+
+  it("ensureChildTempDir REFUSES a symlink planted at the dir path (redirected TMPDIR writes)", () => {
+    const home = freshDir();
+    const base = join(home, ".anycode", "tmp");
+    mkdirSync(base, { recursive: true, mode: 0o700 });
+    const target = freshDir();
+    symlinkSync(target, join(base, "child-c"));
+    expect(() => ensureChildTempDir(resolveChildTempDir("child-c", home))).toThrow(/not a directory we own/);
+  });
+
+  it("ensureChildTempDir REFUSES a symlinked ~/.anycode/tmp PARENT — no mkdir through the link, nothing in the foreign tree (cross-review F1)", () => {
+    const home = freshDir();
+    const foreign = freshDir();
+    mkdirSync(join(home, ".anycode"), { recursive: true });
+    // The exact F1 shape: the leaf does not exist, so the old leaf-only lstat
+    // returned undefined and recursive mkdir happily created <foreign>/child-e
+    // through the parent symlink.
+    symlinkSync(foreign, join(home, ".anycode", "tmp"));
+    expect(() => ensureChildTempDir(resolveChildTempDir("child-e", home))).toThrow(/not a directory we own/);
+    // Fail-closed means fail-BEFORE-the-mkdir: the foreign tree gained nothing.
+    expect(existsSync(join(foreign, "child-e"))).toBe(false);
+    // The refusal is idempotent — a retry (e.g. a supervisor re-boot) hits the
+    // same parent check and still refuses, still writing nothing.
+    expect(() => ensureChildTempDir(resolveChildTempDir("child-e", home))).toThrow(/not a directory we own/);
+    expect(existsSync(join(foreign, "child-e"))).toBe(false);
+  });
+
+  it("ensureChildTempDir also refuses a non-directory parent (e.g. a regular file at ~/.anycode/tmp)", () => {
+    const home = freshDir();
+    mkdirSync(join(home, ".anycode"), { recursive: true });
+    writeFileSync(join(home, ".anycode", "tmp"), "not a dir");
+    expect(() => ensureChildTempDir(resolveChildTempDir("child-f", home))).toThrow(/not a directory we own/);
+  });
+
+  it("removeChildTempDir removes recursively and never throws — including on a missing dir", () => {
+    const home = freshDir();
+    const dir = resolveChildTempDir("child-d", home);
+    ensureChildTempDir(dir);
+    writeFileSync(join(dir, "zsh123"), "scratch");
+    removeChildTempDir(dir);
+    expect(existsSync(dir)).toBe(false);
+    // Missing path: force:true keeps this a no-op, never a fatal error.
+    expect(() => removeChildTempDir(dir)).not.toThrow();
+    // A locked/EBUSY-style failure is swallowed by design (never fatal); the
+    // missing-dir case above is the testable representative of that contract.
   });
 });

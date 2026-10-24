@@ -55,6 +55,18 @@ export interface AppServerClientOptions {
    */
   codexHome?: string;
   /**
+   * Taskana 4682 rework: a codex CHILD's private temp dir
+   * (`~/.anycode/tmp/<childSessionId>`, created 0700 by the boot site). When
+   * present it OVERRIDES the TMPDIR passthrough value (and sets TMPPREFIX for
+   * zsh heredocs plus the TMP/TEMP Windows spellings) in EVERY env this
+   * client builds — the app-server spawn AND the `--version` preflight both
+   * run through the same builder. Absent = byte-identical owner-tab env.
+   * Codex itself does not redirect TMPDIR, so the exclusion of /tmp and
+   * $TMPDIR from the sandbox writable roots is only survivable because this
+   * replacement dir exists and is writable.
+   */
+  tempDir?: string;
+  /**
    * Per-spawn profile-home guard (cut §2.5 + amendment §A1.2), re-run
    * immediately before EACH spawn exactly like `binaryTrust`: returns null
    * when the home (and its auth.json symlink intent, when any) is still
@@ -223,9 +235,15 @@ export function augmentCodexPathForGui(pathValue: string | undefined, platform =
  * `codexHome` (codex-profiles cut §2.6.2) is assigned LAST, after the
  * passthrough list, so a selected profile's home always beats an ambient
  * `CODEX_HOME` from the developer shell; absent, the passthrough behaviour is
- * byte-identical to the pre-profiles build.
+ * byte-identical to the pre-profiles build. `tempDir` (Taskana 4682 rework)
+ * follows the SAME last-assignment discipline for the tmp family: a codex
+ * child's private temp dir beats the ambient TMPDIR/TEMP/TMP the passthrough
+ * copied in, and TMPPREFIX (zsh heredoc temp files) is set alongside — the
+ * child's sandbox excludes /tmp and $TMPDIR, so without this replacement
+ * every os.tmpdir() consumer inside the child would fail (the Opus review's
+ * zsh "can't create temp file for here document" reproduction).
  */
-export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process.platform, codexHome?: string): NodeJS.ProcessEnv {
+export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process.platform, codexHome?: string, tempDir?: string): NodeJS.ProcessEnv {
   const posix = [
     "HOME", "PATH", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "SHELL", "TERM",
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
@@ -255,6 +273,17 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
   applyEngineProxyOverride(env, source, ENV_CODEX_PROXY_URL);
   env.PATH = augmentCodexPathForGui(env.PATH, platform);
   if (codexHome !== undefined) env.CODEX_HOME = codexHome;
+  // Taskana 4682 rework: assigned AFTER the passthrough so the private dir
+  // always wins over the ambient values. All four spellings because the
+  // app-server inherits them verbatim into ITS tool children: TMPDIR/TMP
+  // (posix os.tmpdir() and various tools), TEMP/TMP on Windows, TMPPREFIX
+  // (zsh heredoc scratch files, `$TMPPREFIX<pid>`).
+  if (tempDir !== undefined) {
+    env.TMPDIR = tempDir;
+    env.TMP = tempDir;
+    env.TEMP = tempDir;
+    env.TMPPREFIX = `${tempDir}/zsh`;
+  }
   return env;
 }
 
@@ -342,7 +371,7 @@ export class AppServerClient {
 
   constructor(private readonly options: AppServerClientOptions) {
     this.spawnImpl = options.spawnImpl ?? ((command, args, opts) => spawn(command, args, opts));
-    this.env = buildCodexChildEnv(options.sourceEnv, process.platform, options.codexHome);
+    this.env = buildCodexChildEnv(options.sourceEnv, process.platform, options.codexHome, options.tempDir);
     this.maxLineBytes = options.maxLineBytes ?? CODEX_MAX_LINE_BYTES;
     this.maxPendingRequests = options.maxPendingRequests ?? CODEX_MAX_PENDING_REQUESTS;
     const highWater = options.notificationHighWater ?? CODEX_NOTIFICATION_HIGH_WATER;

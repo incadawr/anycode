@@ -98,6 +98,16 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
       expect(FORBIDDEN_CODEX_SANDBOX_MODES).not.toContain(preset!.threadParams.sandbox);
     }
   });
+
+  it("Taskana 4682: every non-plan child posture resolves to a preset whose turnOverride accepts the tmp exclusion (the boot site decorates exactly these)", () => {
+    for (const mode of PERMISSION_MODES) {
+      const preset = findCodexPreset(codexChildPosture(mode));
+      expect(preset).toBeDefined();
+      if (mode === "plan") continue; // read-only: no tmp roots to exclude
+      const policy = preset!.turnOverride("/ws", { excludeTmpRoots: true }).sandboxPolicy;
+      expect(policy).toMatchObject({ type: "workspaceWrite", excludeTmpdirEnvVar: true, excludeSlashTmp: true });
+    }
+  });
 });
 
 describe("codexChildAutoAcceptsWorkspacePatches (Taskana 4265)", () => {
