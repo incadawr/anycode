@@ -3331,10 +3331,20 @@ export class Session {
     // falls through to committing the terminal with the real reason. Core recoverable
     // provider errors set no such safe code and keep the drain-into-retry behavior.
     if (this.childEngineDead) { this.rejectQueuedSteerMessages(); return false; }
-    if (this.drainAgentInbox(true)) return true;
+    // TASK.240/4055 cross-review F4: a chain that starts here is a NEW run
+    // of the ladder — the refusal latched by an earlier chain ended THAT
+    // chain, not this one. Cleared only once a chain actually started, so a
+    // rejected drain never loses the refusal the terminal still reports.
+    if (this.drainAgentInbox(true)) {
+      this.childCeilingLastRefusal = undefined;
+      return true;
+    }
     let next = this.steerQueue.shift();
     while (next !== undefined) {
-      if (this.acceptUserMessage(next.requestId, next.text, next.images)) return true;
+      if (this.acceptUserMessage(next.requestId, next.text, next.images)) {
+        this.childCeilingLastRefusal = undefined;
+        return true;
+      }
       next = this.steerQueue.shift();
     }
     return false;

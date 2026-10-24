@@ -3658,6 +3658,49 @@ describe("Session — child mode: host-side steer queue (CUT-S2 §1.1/§2.6.3)",
   });
 });
 
+describe("Session — child mode: ceiling summary across a steer chain (Taskana 4055 F4)", () => {
+  it("a steer chain drained after a refused ceiling does not carry the earlier refusal onto a completed terminal", async () => {
+    const h = createChildHarness({
+      steps: [
+        toolStep("c1", "Write", WRITE_INPUT),
+        finishStep(),
+        toolStep("c2", "Write", WRITE_INPUT),
+        finishStep(),
+      ],
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("do it");
+      const req1 = await h.waitFor(isPermissionRequest);
+      // Chain 1 was refused by the ceiling ladder (the fold's state after
+      // ceiling_grant + ceiling_refused, set directly: the ladder itself is
+      // not what this test pins).
+      const folded = h.session as unknown as {
+        childCeilingRounds: number;
+        childCeilingGrantedTurns: number;
+        childCeilingLastRefusal: string | undefined;
+      };
+      folded.childCeilingRounds = 1;
+      folded.childCeilingGrantedTurns = 1;
+      folded.childCeilingLastRefusal = "verdict_rejected";
+
+      h.send({ type: "user_message", requestId: "steer-after-refusal", text: "continue" });
+      h.send({ type: "permission_response", requestId: req1.requestId, behavior: "deny" });
+      const req2 = await h.waitFor((m): m is Of<"permission_request"> => isPermissionRequest(m) && m.requestId !== req1.requestId);
+      h.send({ type: "permission_response", requestId: req2.requestId, behavior: "deny" });
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+
+      const report = h.onTerminal.mock.calls[0]![0];
+      // The granted budget is cumulative across the chains (honest total);
+      // the refusal that ENDED chain 1 is not the reason chain 2 ended.
+      expect(report.ceiling).toEqual({ rounds: 1, grantedTurns: 1 });
+    } finally {
+      h.close();
+    }
+  });
+});
+
 describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)", () => {
   it("chains a queued steer message before ever publishing the terminal — the terminal is never published while the queue is non-empty", async () => {
     const h = createChildHarness({
