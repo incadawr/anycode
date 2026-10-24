@@ -122,6 +122,12 @@ export interface CodexIpcDeps {
    * without this.
    */
   engineProxyUrl?: () => string | undefined;
+  /**
+   * : MAIN's own credential-free relay URL, read fresh per call.
+   * The doctor/login child-env builders swap a credentialed proxy family for
+   * it (fail-closed drop when absent/undefined).
+   */
+  relayUrl?: () => string | undefined;
   /** Reads the currently-persisted `settings.codex.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
   readBinaryPathSetting: () => Promise<string | undefined>;
   /** : reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
@@ -662,6 +668,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             signal: lifetime.signal,
             profile,
             consents,
+            ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}),
             ...(profileGuard !== undefined ? { profileGuard } : {}),
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
@@ -682,6 +689,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
           signal: lifetime.signal,
           profile,
           consents,
+          ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}),
           ...(profileGuard !== undefined ? { profileGuard } : {}),
           ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
         });
@@ -968,6 +976,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             openExternal: deps.openExternal,
             signal: controller.signal,
             env: doctorSourceEnv(),
+            ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}),
             // The login signs INTO the profile's home ( п.2): the
             // runner overwrites any ambient CODEX_HOME with it, so codex
             // writes the credential into the profile tree, never ~/.codex.
