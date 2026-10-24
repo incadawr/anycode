@@ -22,6 +22,7 @@ function lateSettlingPort(outcome: { status: "cancelled" | "completed"; presenta
     release = resolveRelease;
   });
   const port: SessionSubagentPort = {
+    send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     run: async (_req: SessionSubagentRequest, opts: SubagentRunOptions) => {
       // One progress event before the abort lands, so the run's card
       // accumulator actually started (a presentation is only finalized
