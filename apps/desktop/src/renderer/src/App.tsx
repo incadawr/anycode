@@ -350,17 +350,23 @@ export const CONTINUE_AFTER_CEILING_TEXT = "Continue from the turn limit — res
  * Taskana 4111 (TASK.124 remainder 1): the max_turns stop's one-action
  * continue — the Try-again seam, minus the replay payload: the click sends
  * ONE fixed user message, which restarts the turn budget over the intact
- * history. No images on this path ⇒ no enqueue branch: the offer only
- * exists while the turn is idle; if a race made the turn busy again, the
- * host's `turn_rejected "busy"` path already restores order.
+ * history. No images on this path, but the same enqueue-vs-direct-send
+ * decision as `dispatchTryAgain` still applies: the offer is painted while
+ * the turn is idle, and a click that races a turn going busy must be queued
+ * rather than sent into the host's `turn_rejected "busy"` (which restores
+ * nothing on the direct-send path — the text would be lost from the wire).
  */
 export function dispatchContinue(
   store: DesktopStoreApi,
   sendToHost: (message: UiToHostMessage) => void,
-): "not_ready" | "no_offer" | "sent" {
+): "not_ready" | "no_offer" | "sent" | "queued" {
   if (store.getState().connection !== "ready") return "not_ready";
   const offer = store.getState().consumeContinue();
   if (offer === null) return "no_offer";
+  if (shouldEnqueue(store.getState().turn.status, store.getState().queueInFlight)) {
+    store.getState().enqueuePrompt({ text: CONTINUE_AFTER_CEILING_TEXT, images: [] });
+    return "queued";
+  }
   const requestId = crypto.randomUUID();
   store.getState().appendUserText(requestId, CONTINUE_AFTER_CEILING_TEXT);
   store.getState().recordSentMessage(CONTINUE_AFTER_CEILING_TEXT, []);

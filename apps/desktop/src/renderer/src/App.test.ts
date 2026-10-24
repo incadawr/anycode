@@ -325,6 +325,20 @@ describe("dispatchContinue (Taskana 4111 — one-shot Continue on a max_turns st
     expect(sent).toEqual([]);
     expect(store.getState().continueOffer).toEqual({ loopEndBlockId: "loop_end:t1" });
   });
+
+  it("Taskana 4111 cross-review: a click that races a busy turn is enqueued (like Try-again), never direct-sent into a turn_rejected busy", () => {
+    const store = createDesktopStore();
+    armContinueViaRealPath(store);
+    store.setState({ turn: { ...store.getState().turn, status: "running" } });
+    const sent: UiToHostMessage[] = [];
+
+    const outcome = dispatchContinue(store, (m) => sent.push(m));
+
+    expect(outcome).toBe("queued");
+    expect(sent).toEqual([]);
+    expect(store.getState().promptQueue).toMatchObject([{ text: CONTINUE_AFTER_CEILING_TEXT, images: [] }]);
+    expect(store.getState().continueOffer).toBeNull();
+  });
 });
 
 // TASK.56 W3-FIX (fable-task56-w3-codex-ruling.md finding 2): `dispatchTryAgain`
