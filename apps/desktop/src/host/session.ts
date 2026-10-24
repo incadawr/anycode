@@ -864,6 +864,12 @@ export interface SessionOptions {
   /** Renderer Panels sub-slice B: static command-hook config list seam. */
   hooksList?: { list(): readonly CommandHookDeclaration[]; configError?: string };
   /**
+   * Taskana 4736: the pending workspace-trust prompt for this host, or undefined
+   * when the folder is decided. Re-sent on every ui_ready while pending so a
+   * reloaded renderer always sees the question. Absent seam = no prompt.
+   */
+  workspaceTrustRequired?: () => HostToUiMessage | undefined;
+  /**
 
    * telemetry + repo-map status seam, mirroring the `lsp` seam above. Absent
    * in legacy tests/harness -> `pushEnvStatus` is a no-op (zero new
@@ -1128,6 +1134,7 @@ export class Session {
   private lastTurnPublicText: string | undefined;
   private readonly lsp: SessionOptions["lsp"];
   private readonly hooksList: SessionOptions["hooksList"];
+  private readonly workspaceTrustRequired: SessionOptions["workspaceTrustRequired"];
   private readonly envStatus: SessionOptions["envStatus"];
   /** Slice P7.26/R2: rewind/list seam (undefined -> checkpoints disabled, fail-closed). */
   private readonly checkpoints: SessionOptions["checkpoints"];
@@ -1498,6 +1505,7 @@ export class Session {
     this.supervisorIdle = options.supervisorIdle;
     this.lsp = options.lsp;
     this.hooksList = options.hooksList;
+    this.workspaceTrustRequired = options.workspaceTrustRequired;
     this.envStatus = options.envStatus;
     this.checkpoints = options.checkpoints;
     this.imageInputEnabled = options.imageInputEnabled;
@@ -2108,6 +2116,7 @@ export class Session {
         this.git?.pushSnapshot();
         this.pushLspStatus();
         this.pushHooksList();
+        this.pushWorkspaceTrustRequired();
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         this.pushEnvStatus();
         this.pushPendingEngineSettings();
@@ -2707,6 +2716,14 @@ export class Session {
           }
         : {}),
     });
+  }
+
+  /** Taskana 4736: re-asserts the pending workspace-trust question on every ui_ready (no-op when decided). */
+  private pushWorkspaceTrustRequired(): void {
+    const message = this.workspaceTrustRequired?.();
+    if (message !== undefined) {
+      this.outbound.sendDirect(message);
+    }
   }
 
   private pushHooksList(): void {

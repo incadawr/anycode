@@ -334,6 +334,8 @@ import {
   type CredentialResponse,
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
+import { WORKSPACE_TRUST_PENDING_MESSAGE_TYPE } from "../shared/workspace-trust.js";
+import { establishHostWorkspaceTrust, type HostWorkspaceTrust } from "./workspace-trust.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { PROVIDER_QUOTA_EVENT_TYPE, type ProviderQuotaEvent } from "../shared/provider-quota.js";
 import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
@@ -498,6 +500,15 @@ const outbound = new Outbound();
 const emit = (message: HostToUiMessage): void => {
   outbound.emit(message);
 };
+
+// Taskana 4736: the workspace trust gate, decided once per boot (see boot()). Until
+// boot computes it the gate is closed. `projectTrusted` gates every project-level
+// spawn declaration (MCP, hooks, LSP, project-tier plugin MCP); the pending message
+// is replayed to the UI on every ui_ready while the folder is undecided or changed.
+let hostWorkspaceTrust: HostWorkspaceTrust = { projectTrusted: false };
+function workspaceTrustRequiredMessage(): HostToUiMessage | undefined {
+  return hostWorkspaceTrust.pending?.message;
+}
 // TASK.145 срез 2: one pending-report queue per host process, i.e. per parent
 // session — see child-report-queue.ts's own header for why a bare
 // `outbound.sendDirect` (срез 1) is not reconnect-safe on its own. Wired into
@@ -1288,6 +1299,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["codex"],
+    projectTrusted: hostWorkspaceTrust.projectTrusted,
   });
   if (codexMcpForward.codexNames.length > 0) {
     console.log(`[host] codex mcp forward: ${codexMcpForward.codexNames.length} server(s): ${codexMcpForward.codexNames.join(", ")}`);
@@ -1665,6 +1677,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
       })
     : undefined;
   session = new Session({
+    workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
     engine: booted.engine,
     // TASK.39: the SAME CodexEngine instance, handed to Session as its narrow
@@ -1974,6 +1987,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["claude"],
+    projectTrusted: hostWorkspaceTrust.projectTrusted,
   });
   if (mcpForward.claudeNames.length > 0) {
     console.log(`[host] claude mcp forward: ${mcpForward.claudeNames.length} server(s): ${mcpForward.claudeNames.join(", ")}`);
@@ -2303,6 +2317,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
       })
     : undefined;
   session = new Session({
+    workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
     engine: booted.engine,
     // CC-D-min: the RAW ClaudeEngine, Claude's own immediate-apply seam (never
@@ -2534,6 +2549,21 @@ async function boot(): Promise<void> {
     }
     // Selection/probe is deliberately before loadEnvConfig: an external engine
     // must never require AnyCode provider credentials merely to fail/boot.
+    // Taskana 4736: decide the workspace trust gate ONCE, before any engine, hook,
+    // LSP, MCP or plugin wiring. A pending decision is reported to main on the
+    // control channel (main keys the answer by tab and hash, never by the UI).
+    hostWorkspaceTrust = await establishHostWorkspaceTrust(new NodeFileSystemAdapter(), {
+      workspace,
+      home: homedir(),
+      env: process.env,
+    });
+    if (hostWorkspaceTrust.pending !== undefined) {
+      process.parentPort?.postMessage({
+        type: WORKSPACE_TRUST_PENDING_MESSAGE_TYPE,
+        state: hostWorkspaceTrust.pending.state,
+        hash: hostWorkspaceTrust.pending.hash,
+      });
+    }
     const plugin = selectEnginePlugin(process.env);
     engineBootstrap = await beginEngineBootstrap(plugin);
     if (engineBootstrap.id === "codex") {
@@ -3060,7 +3090,10 @@ async function boot(): Promise<void> {
     let hookDeclarations: CommandHookDeclaration[] = [];
     let hookConfigError: string | undefined;
     try {
-      const declarations = await loadHookConfigs(fsAdapter, workspace, homedir());
+      const declarations = await loadHookConfigs(fsAdapter, workspace, homedir(), {
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
+        onSkip: (message) => console.warn(`[host] ${message}`),
+      });
       hookDeclarations = declarations;
       for (const declaration of declarations) {
         hooks.register(createCommandHook(execAdapter, declaration, workspace));
@@ -3088,7 +3121,9 @@ async function boot(): Promise<void> {
     let lspServerSpecs: LspServerSpec[] = [];
     let lspIssues: string[] = [];
     try {
-      const loaded = await loadLspServerSpecs(fsAdapter, workspace, homedir());
+      const loaded = await loadLspServerSpecs(fsAdapter, workspace, homedir(), {
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
+      });
       lspServerSpecs = loaded.specs;
       lspIssues = loaded.issues;
     } catch (error) {
@@ -3160,7 +3195,9 @@ async function boot(): Promise<void> {
     let mcpSpecs: McpServerSpec[] = [];
     let mcpProblems: string[] = [];
     try {
-      const loaded = await loadMcpServerSpecs(fsAdapter, workspace, homedir());
+      const loaded = await loadMcpServerSpecs(fsAdapter, workspace, homedir(), {
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
+      });
       mcpSpecs = loaded.specs;
       mcpProblems = loaded.problems;
     } catch (error) {
@@ -3206,6 +3243,7 @@ async function boot(): Promise<void> {
         home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
         repoMapConfig,
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
         ...(builtinSkills.length > 0 ? { builtinSkills } : {}),
       });
     } catch (error) {
@@ -4082,6 +4120,7 @@ async function boot(): Promise<void> {
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     const coreHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
     session = new Session({
+      workspaceTrustRequired: workspaceTrustRequiredMessage,
       outbound,
       engine,
       broker,

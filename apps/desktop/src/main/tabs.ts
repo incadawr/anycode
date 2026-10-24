@@ -76,6 +76,10 @@ import {
 } from "../shared/engines.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
 import {
+  WORKSPACE_TRUST_ONCE_ENV,
+  WORKSPACE_TRUST_PENDING_MESSAGE_TYPE,
+} from "../shared/workspace-trust.js";
+import {
   WORKTREE_CLEANUP_ENV,
   WORKTREE_TRANSITION_MESSAGE_TYPE,
   type WorktreeCleanupIntent,
@@ -423,6 +427,12 @@ export interface TabHost {
   spawnedAt: number;
   /** Consecutive rapid (sub-healthy-uptime) crashes; reset by any healthy run. */
   rapidRespawns: number;
+  /**
+   * Taskana 4736: the undecided/changed workspace-trust hash the CURRENT host
+   * reported on the control channel. The decide handler keys its answer on this
+   * (never on anything the renderer sends). Cleared on every fork.
+   */
+  workspaceTrustPending?: { hash: string };
   state: "running" | "crash_looped" | "closing";
   /**
    * Whether this tab was opened as a resume (first spawn uses --resume) vs a new
@@ -610,6 +620,12 @@ export interface TabLogger {
 export interface TabHostManagerDeps {
   /** utilityProcess.fork (or a fake). */
   fork: HostForkFn;
+  /**
+   * Taskana 4736: the in-memory "trust once" hash approved for a workspace in this
+   * app run (never persisted). Stamped into the fork env as
+   * ANYCODE_WORKSPACE_TRUST_ONCE; absent/undefined = no approval.
+   */
+  workspaceTrustOnce?: (workspace: string) => string | undefined;
   /** Resolved host entry script path. */
   hostEntry: string;
   /** new MessageChannelMain() (or a fake). */
@@ -910,6 +926,11 @@ export class TabHostManager {
   private readonly logger: TabLogger;
   /** Fork count within the current storm window; reset by any healthy run. */
   private stormForks = 0;
+  /**
+   * Taskana 4736: utility processes killed on purpose to apply a trust decision.
+   * Their exit re-forks WITHOUT rapid-respawn or storm accounting (restartTabHost).
+   */
+  private readonly deliberateRestarts = new Set<UtilityProcess>();
   /** Set once quit begins: suppresses all respawn and host-exited notifications. */
   private quitting = false;
 
@@ -1244,6 +1265,7 @@ export class TabHostManager {
     tab.hostGeneration = nextGeneration;
     tab.engineProcess = null;
     const cleanup = tab.pendingWorktreeCleanup;
+    delete tab.workspaceTrustPending;
     const child = this.deps.fork(this.deps.hostEntry, args, {
       cwd: tab.workspace,
       env: {
@@ -1265,6 +1287,8 @@ export class TabHostManager {
           : {}),
         ...engineEnvOverlay,
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
+        // Taskana 4736: a main-approved "trust once" for this workspace, this app run only.
+        ...this.workspaceTrustOnceEnv(tab.workspace),
       },
       stdio: "inherit",
     });
@@ -1299,6 +1323,10 @@ export class TabHostManager {
       return;
     }
     const data = message as { type?: unknown; requestId?: unknown };
+    if (data.type === WORKSPACE_TRUST_PENDING_MESSAGE_TYPE) {
+      this.recordWorkspaceTrustPending(tab, child, message);
+      return;
+    }
     if (data.type === "communication_delivery") {
       const delivery = (message as { delivery?: AgentDelivery }).delivery;
       if (tab.proc !== child || !delivery || delivery.envelope?.recipientSessionId !== tab.sessionId) return;
@@ -2763,6 +2791,7 @@ export class TabHostManager {
    * respawns (with a fresh channel) unless a per-tab or global breaker tripped.
    */
   private handleExit(tab: TabHost, child: UtilityProcess, code: number): void {
+    const deliberate = this.deliberateRestarts.delete(child);
     // TASK.102 fix-wave F2 / review T3: read the snapshot BEFORE deleting —
     // consumed once, regardless of root/child. A root never needed the F2
     // half (its own `state === "closing"` guard below already short-circuits
@@ -2789,6 +2818,17 @@ export class TabHostManager {
       return;
     }
     tab.proc = null;
+
+    if (deliberate) {
+      // Taskana 4736: a restart we asked for (a trust decision was recorded). Not a
+      // crash: no rapid-respawn or storm accounting, and the same resume path re-forks.
+      void this.drainChildren(tab);
+      this.notifyHostExited(tab.tabId);
+      this.spawnTabHost(tab, { firstSpawn: false });
+      this.stormForks -= 1;
+      this.deliverTabPort(tab);
+      return;
+    }
 
     // TASK.102 CUT-S2 §0.6: a dead root cannot resume its children's
     // sync-join ("sync-join невосстановим") — cancel them before any
@@ -3140,6 +3180,53 @@ export class TabHostManager {
    * landing — a no-op kill in that narrow window is fine, the respawn is
    * already in flight.
    */
+  /**
+   * Taskana 4736: deliberately restarts a root tab's host so the boot re-decides
+   * the workspace trust gate after the user answered. Not a crash: the exit is
+   * re-forked with the resume path and no rapid-respawn or storm accounting.
+   */
+  restartTabHost(tabId: string): { ok: true } | { ok: false; reason: "unknown_tab" | "not_running" } {
+    const tab = this.tabs.get(tabId);
+    if (tab === undefined) {
+      return { ok: false, reason: "unknown_tab" };
+    }
+    const child = tab.proc;
+    if (child === null || tab.childOf !== undefined || tab.state !== "running" || this.quitting) {
+      return { ok: false, reason: "not_running" };
+    }
+    this.deliberateRestarts.add(child);
+    child.kill();
+    return { ok: true };
+  }
+
+  /** Taskana 4736: the trust question the tab's current host reported, or why there is none. */
+  workspaceTrustPendingFor(
+    tabId: string,
+  ): { workspace: string; hash: string } | "unknown_tab" | "no_pending" {
+    const tab = this.tabs.get(tabId);
+    if (tab === undefined) return "unknown_tab";
+    if (tab.workspaceTrustPending === undefined || tab.childOf !== undefined) return "no_pending";
+    return { workspace: tab.workspace, hash: tab.workspaceTrustPending.hash };
+  }
+
+  /** Taskana 4736: forgets the reported question once the user answered it. */
+  clearWorkspaceTrustPending(tabId: string): void {
+    const tab = this.tabs.get(tabId);
+    if (tab !== undefined) delete tab.workspaceTrustPending;
+  }
+
+  private recordWorkspaceTrustPending(tab: TabHost, child: UtilityProcess, message: unknown): void {
+    const hash = (message as { hash?: unknown }).hash;
+    if (tab.proc !== child || tab.childOf !== undefined) return;
+    if (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) return;
+    tab.workspaceTrustPending = { hash };
+  }
+
+  private workspaceTrustOnceEnv(workspace: string): NodeJS.ProcessEnv {
+    const hash = this.deps.workspaceTrustOnce?.(workspace);
+    return hash !== undefined && hash !== "" ? { [WORKSPACE_TRUST_ONCE_ENV]: hash } : {};
+  }
+
   killHost(tabId: string): { ok: true } | { ok: false; reason: "unknown_tab" } {
     const tab = this.tabs.get(tabId);
     if (tab === undefined) {

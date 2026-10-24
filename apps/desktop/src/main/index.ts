@@ -28,6 +28,11 @@ import { CODEX_LOGIN_PROGRESS_CHANNEL } from "../shared/codex-login.js";
 import { mkdirSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
 import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
+import {
+  nodeTrustStoreFs,
+  registerWorkspaceTrustIpc,
+  workspaceTrustOnceFor,
+} from "./workspace-trust-ipc.js";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -482,6 +487,8 @@ let win: BrowserWindow | null = null;
 let persistence: SqlitePersistenceAdapter | null = null;
 /** Multi-host lifecycle manager (§2.2); null until boot wires it. */
 let manager: TabHostManager | null = null;
+// Taskana 4736: "trust once" approvals for this app run only (folder -> hash). Never persisted.
+const workspaceTrustOnceApprovals = new Map<string, string>();
 /**
  * Taskana 4109 (old TASK.122): telemetry-directory retention handle. Boot
  * wires it right after registerProfileIpc (skipped under self-check); quit
@@ -2133,6 +2140,7 @@ void app.whenReady().then(async () => {
 
   manager = new TabHostManager({
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),
+    workspaceTrustOnce: (workspace) => workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace),
     hostEntry: resolveHostEntry(),
     createChannel: () => new MessageChannelMain(),
     getWindow: () => win,
@@ -2549,6 +2557,19 @@ void app.whenReady().then(async () => {
     },
   };
   registerSettingsIpc(settingsIpcDeps);
+  // Taskana 4736: the per-tab workspace-trust answer. Main resolves folder + hash
+  // from the tab's own record; the renderer sends a tab id and a decision only.
+  registerWorkspaceTrustIpc({
+    fs: nodeTrustStoreFs,
+    home: homedir(),
+    tabs: {
+      workspaceTrustPendingFor: (tabId) => manager?.workspaceTrustPendingFor(tabId) ?? "unknown_tab",
+      clearWorkspaceTrustPending: (tabId) => manager?.clearWorkspaceTrustPending(tabId),
+      restartTabHost: (tabId) => manager?.restartTabHost(tabId) ?? { ok: false, reason: "unknown_tab" },
+    },
+    onceApprovals: workspaceTrustOnceApprovals,
+    logger: { error: (message) => console.error(message) },
+  });
 
   // TASK.141 §6: "Check connection" for a proxy profile. The probe is a SPAWNED
   // child (`process.execPath` + ELECTRON_RUN_AS_NODE=1), never a fetch from

@@ -27,6 +27,8 @@ export interface PrepareEngineMcpForwardOptions {
   pid: number;
   /** Which engines this boot forwards for; at least one is expected. */
   engines: ReadonlyArray<"claude" | "codex">;
+  /** Workspace trust gate (Taskana 4736): false keeps project-level MCP out of the forward. */
+  projectTrusted?: boolean;
 }
 
 export interface PreparedEngineMcpForward {
@@ -58,7 +60,9 @@ export async function prepareEngineMcpForward(
   const specs: McpServerSpec[] = [];
   let loaderProblemCount = 0;
   try {
-    const loaded = await loadMcpServerSpecs(opts.fs, opts.workspace, opts.home);
+    const loaded = await loadMcpServerSpecs(opts.fs, opts.workspace, opts.home, {
+      projectTrusted: opts.projectTrusted,
+    });
     specs.push(...loaded.specs);
     loaderProblemCount = loaded.problems.length;
   } catch {

@@ -5340,6 +5340,24 @@ describe("desktop store — hooks_list (renderer panels sub-slice B)", () => {
     expect(store.getState().hookConfigError).toBeNull();
   });
 
+  it("workspace_trust_required holds the folder's pending question; decided (null) on a fresh tab", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    expect(store.getState().workspaceTrust).toBeNull();
+
+    store.getState().applyHostMessage({
+      type: "workspace_trust_required",
+      state: "unknown",
+      workspace: "/proj",
+      items: [{ kind: "mcp", name: "lint", commandLine: "node lint.js", source: "/proj/.anycode/config.json", envKeys: ["TOKEN"] }],
+    });
+    expect(store.getState().workspaceTrust).toEqual({
+      state: "unknown",
+      workspace: "/proj",
+      items: [{ kind: "mcp", name: "lint", commandLine: "node lint.js", source: "/proj/.anycode/config.json", envKeys: ["TOKEN"] }],
+    });
+  });
+
   it("stores and clears hook config errors based on later full snapshots", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

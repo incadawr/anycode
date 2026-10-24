@@ -55,6 +55,7 @@ import type { UsageLimitNotice } from "./usage-limit.js";
 // here rather than re-derived, so the UI wire's cap can never silently drift
 // from the id shape this system actually mints.
 import { CHILD_ID_MAX_CHARS } from "./child-sessions.js";
+import type { WorkspaceTrustItemWire } from "./workspace-trust.js";
 import type { ChildCeilingSummary } from "./child-sessions.js";
 // Slice 5.7 (design slice-5.7-cut.md §2.1): git-domain types for the additive
 // git wire surface. Type-only (verbatimModuleSyntax erases them from the renderer
@@ -907,6 +908,9 @@ export type HostToUiMessage =
   | { type: "lsp_status"; servers: LspServerStatus[] }
   // Renderer Panels sub-slice B: trusted static command-hook config list.
   | { type: "hooks_list"; hooks: CommandHookDeclaration[]; configError?: string }
+  // Taskana 4736: the project folder's own spawn declarations are held until the
+  // user decides (display-only rows; the answer goes back as a tab id + decision).
+  | { type: "workspace_trust_required"; state: "unknown" | "changed"; workspace: string; items: WorkspaceTrustItemWire[] }
   // Renderer Panels sub-slice D: trusted background-task snapshots and output chunks.
   | { type: "task_list"; tasks: BackgroundTaskSnapshot[] }
   | { type: "task_output"; taskId: string; snapshot: BackgroundTaskSnapshot | null; newOutput: string }

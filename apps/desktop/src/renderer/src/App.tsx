@@ -57,6 +57,7 @@ import { HooksPanel } from "./components/HooksPanel.js";
 import { TimelinePanel } from "./components/TimelinePanel.js";
 import { BackgroundTasksPanel } from "./components/BackgroundTasksPanel.js";
 import { NoticeStack, TabNoticeCapture } from "./components/NoticeToast.js";
+import { WorkspaceTrustPrompt } from "./components/WorkspaceTrustDialog.js";
 import { beginToastExit, enqueueToast, removeToast, rewriteToastText, type Toast, type ToastKind } from "./toasts.js";
 import { notificationBody, useTurnCompletionNotification } from "./notifications.js";
 import { watchExternalEngines } from "./engine-availability.js";
@@ -423,6 +424,8 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
       <ConnectedPermissionModal />
       {/* R8: store notice slot → App toast queue (render-less bridge). */}
       <TabNoticeCapture tabId={tabId} onNotice={(notice) => onToast(notice.kind, notice.text)} />
+      {/* Taskana 4736: this folder's project declarations wait for the user's decision. */}
+      <WorkspaceTrustPrompt tabId={tabId} />
     </>
   );
 }

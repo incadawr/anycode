@@ -143,6 +143,14 @@ import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card
 // provider_quota case projects the observation onto its snapshot's matching
 // connection `lastQuota` so the connect card updates live.
 import { useSettingsStore } from "./settings-store.js";
+import type { WorkspaceTrustItemWire } from "../../shared/workspace-trust.js";
+
+/** Taskana 4736: the pending project-trust question shown for a tab. */
+export interface WorkspaceTrustRequest {
+  state: "unknown" | "changed";
+  workspace: string;
+  items: WorkspaceTrustItemWire[];
+}
 
 /** Host's engine-switch announcement sentinel (mirrors host/engine-switch.ts ENGINE_SWITCH_TURN_ID). */
 const ENGINE_SWITCH_NOTICE_TURN_ID = "engine-switch";
@@ -1091,6 +1099,8 @@ export interface DesktopState {
   hookDeclarations: CommandHookDeclaration[];
   /** Hook config load error, if the host fail-softed to no command hooks. */
   hookConfigError: string | null;
+  /** Taskana 4736: this folder's pending project-trust question, or null once decided. */
+  workspaceTrust: WorkspaceTrustRequest | null;
   /** Latest background-task snapshots from the host, replaced wholesale. */
   backgroundTasks: BackgroundTaskSnapshot[];
   /** Accumulated output chunks keyed by taskId. */
@@ -1450,6 +1460,7 @@ interface SessionSlice {
   lspServers: LspServerStatus[];
   hookDeclarations: CommandHookDeclaration[];
   hookConfigError: string | null;
+  workspaceTrust: WorkspaceTrustRequest | null;
   backgroundTasks: BackgroundTaskSnapshot[];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
@@ -1513,6 +1524,7 @@ function initialSessionSlice(): SessionSlice {
     lspServers: [],
     hookDeclarations: [],
     hookConfigError: null,
+    workspaceTrust: null,
     backgroundTasks: [],
     backgroundTaskOutput: {},
     backgroundChildren: [],
@@ -4718,6 +4730,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // Renderer Panels sub-slice B: host boot's static command-hook list;
             // a plain replacement because ui_ready re-sends the complete set.
             set({ hookDeclarations: message.hooks, hookConfigError: message.configError ?? null });
+            return;
+          case "workspace_trust_required":
+            // Taskana 4736: host boot found declarations in an undecided or changed
+            // folder. Re-sent on every ui_ready while pending; cleared by the dialog
+            // once the user answers (the host then restarts and decides again).
+            set({
+              workspaceTrust: { state: message.state, workspace: message.workspace, items: message.items },
+            });
             return;
           case "task_list":
             // Renderer Panels sub-slice D: full snapshot replacement; output is

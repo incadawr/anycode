@@ -230,6 +230,23 @@ describe("LSP status protocol", () => {
 });
 
 describe("Hooks list protocol", () => {
+  it("workspace_trust_required is structured-clone-safe and carries display rows only (no env values)", () => {
+    const message = {
+      type: "workspace_trust_required",
+      state: "changed",
+      workspace: "/proj",
+      items: [
+        { kind: "mcp", name: "lint", commandLine: "node lint.js", source: "/proj/.anycode/config.json", envKeys: ["TOKEN"] },
+      ],
+    } satisfies HostToUiMessage;
+
+    const cloned = structuredClone(message);
+    expect(cloned).toEqual(message);
+    expect(cloned.type).toBe("workspace_trust_required");
+    expect(cloned.items[0]?.envKeys).toEqual(["TOKEN"]);
+    expect(Object.keys(cloned)).not.toContain("hash");
+  });
+
   it("hooks_list is structured-clone-safe with CommandHookDeclaration[] and configError", () => {
     const hooks: CommandHookDeclaration[] = [
       { event: "PreToolUse", matcher: "Write|Edit", command: "./guard.sh", timeoutMs: 2500 },

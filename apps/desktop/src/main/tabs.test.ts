@@ -6245,3 +6245,79 @@ describe("TabHostManager — send to a running own child (Taskana 4153)", () => 
     expect(event?.kind === "rejected" && event.message).toContain("not running");
   });
 });
+
+describe("TabHostManager — workspace trust (Taskana 4736)", () => {
+  const HASH = "b".repeat(64);
+
+  function rig(extra: { workspaceTrustOnce?: (ws: string) => string | undefined; limits?: object } = {}) {
+    const hosts: FakeHost[] = [];
+    const forkSpy = vi.fn<HostForkFn>((_entry, _args, _opts) => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+    const { window, posted } = windowRig();
+    const manager = new TabHostManager({
+      fork: forkSpy,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      logger: silentLogger,
+      now: () => 0,
+      limits: (extra.limits ?? {}) as never,
+      ...(extra.workspaceTrustOnce !== undefined ? { workspaceTrustOnce: extra.workspaceTrustOnce } : {}),
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "sess-T", resume: false });
+    expect(created.ok).toBe(true);
+    const tabId = created.ok ? created.tab.tabId : "";
+    return { manager, hosts, forkSpy, posted, tabId };
+  }
+
+  it("records the host's reported pending hash for its tab and answers the workspace it was forked in", () => {
+    const { manager, hosts, tabId } = rig();
+    hosts[0]!.emit("message", { type: "workspace_trust_pending", hash: HASH });
+    expect(manager.workspaceTrustPendingFor(tabId)).toEqual({ workspace: "/ws", hash: HASH });
+  });
+
+  it("ignores a malformed pending hash and a message from a stale host", () => {
+    const { manager, hosts, tabId } = rig();
+    hosts[0]!.emit("message", { type: "workspace_trust_pending", hash: "not-a-hash" });
+    expect(manager.workspaceTrustPendingFor(tabId)).toBe("no_pending");
+  });
+
+  it("reports unknown_tab for a missing tab", () => {
+    const { manager } = rig();
+    expect(manager.workspaceTrustPendingFor("no-such-tab")).toBe("unknown_tab");
+  });
+
+  it("restartTabHost re-forks with --resume and does NOT count against the rapid-respawn breaker", async () => {
+    // maxRapidRespawns 0: any counted respawn would give up. A deliberate restart must still re-fork.
+    const { manager, hosts, forkSpy, tabId } = rig({ limits: { maxRapidRespawns: 0, minHealthyUptimeMs: 1e9 } });
+    expect(manager.restartTabHost(tabId)).toEqual({ ok: true });
+    expect(hosts[0]!.kill).toHaveBeenCalledTimes(1);
+    hosts[0]!.emit("exit", 0);
+    await flush();
+    expect(forkSpy).toHaveBeenCalledTimes(2);
+    expect(forkSpy.mock.calls[1]?.[1]).toEqual(["--resume", "sess-T"]);
+    expect(manager.getTab(tabId)?.state).toBe("running");
+    expect(manager.getTab(tabId)?.rapidRespawns).toBe(0);
+  });
+
+  it("restartTabHost refuses an unknown tab", () => {
+    const { manager } = rig();
+    expect(manager.restartTabHost("nope")).toEqual({ ok: false, reason: "unknown_tab" });
+  });
+
+  it("stamps a main-approved trust-once hash into the fork env for that workspace", () => {
+    const { forkSpy } = rig({ workspaceTrustOnce: (ws) => (ws === "/ws" ? HASH : undefined) });
+    const env = (forkSpy.mock.calls[0]?.[2] as { env?: Record<string, string> }).env;
+    expect(env?.ANYCODE_WORKSPACE_TRUST_ONCE).toBe(HASH);
+  });
+
+  it("does not stamp a trust-once env when nothing was approved", () => {
+    const { forkSpy } = rig();
+    const env = (forkSpy.mock.calls[0]?.[2] as { env?: Record<string, string> }).env;
+    expect(env?.ANYCODE_WORKSPACE_TRUST_ONCE).toBeUndefined();
+  });
+});
