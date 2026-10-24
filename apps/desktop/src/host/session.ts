@@ -659,6 +659,8 @@ export interface SessionOptions {
     drainNotices(): BackgroundTaskNotice[];
     list?(): BackgroundTaskSnapshot[];
     readOutput?(taskId: string): { snapshot: BackgroundTaskSnapshot; newOutput: string } | undefined;
+    /** Non-consuming whole-buffer read (Taskana 4097): preferred over readOutput so the UI never advances the model's BashOutput cursor. */
+    peekOutput?(taskId: string): { snapshot: BackgroundTaskSnapshot; output: string } | undefined;
     kill?(taskId: string): boolean;
   };
   /**
@@ -887,6 +889,8 @@ export class Session {
   /** Design TASK.40 §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
   private readonly shell: ShellCapabilitiesProjection | undefined;
   private readonly tasks: SessionOptions["tasks"];
+  /** Taskana 4097: the renderer's own read cursor per background task (see pushTaskOutput). */
+  private readonly uiTaskOutputCursors = new Map<string, number>();
   /** TASK.145 срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
   private readonly backgroundChildren: SessionOptions["backgroundChildren"];
   private readonly lsp: SessionOptions["lsp"];
@@ -1565,6 +1569,8 @@ export class Session {
         // status pushes are safe from here on. Set BEFORE the snapshot cascade
         // below (which already pushes the current lsp_status).
         this.uiReady = true;
+        // Taskana 4097: a (re)attaching renderer starts with empty task output.
+        this.uiTaskOutputCursors.clear();
         // TASK.102 CUT-S2 §2.6.3: child-ready fires on the FIRST ui_ready only —
         // never before (nothing was listening yet) and never again on a later
         // reconnect (Open re-attaching to an already-running child).
@@ -2224,7 +2230,23 @@ export class Session {
   }
 
   private pushTaskOutput(taskId: string): void {
-    const result = this.tasks?.readOutput?.(taskId);
+    // Taskana 4097: the UI keeps its OWN per-task cursor over a non-consuming
+    // peek — `readOutput` would advance the cursor the model's BashOutput tool
+    // reads, so a user clicking "Output" would make the agent miss output.
+    // The buffer is append-only (capped, never a ring), so a length cursor is
+    // valid; ui_ready resets these cursors (a fresh renderer store starts empty).
+    const peek = this.tasks?.peekOutput;
+    let result: { snapshot: BackgroundTaskSnapshot; newOutput: string } | undefined;
+    if (peek !== undefined) {
+      const peeked = peek.call(this.tasks, taskId);
+      if (peeked !== undefined) {
+        const from = this.uiTaskOutputCursors.get(taskId) ?? 0;
+        this.uiTaskOutputCursors.set(taskId, peeked.output.length);
+        result = { snapshot: peeked.snapshot, newOutput: peeked.output.slice(from) };
+      }
+    } else {
+      result = this.tasks?.readOutput?.(taskId);
+    }
     this.outbound.sendDirect({
       type: "task_output",
       taskId,

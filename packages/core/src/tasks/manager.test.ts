@@ -273,6 +273,23 @@ describe("InProcessTaskManager", () => {
     expect(manager.kill(taskId)).toBe(false); // already terminal
   });
 
+  // Taskana 4097: the desktop panel's read must not steal the model's increment.
+  it(
+    "peekOutput returns the whole buffer without advancing the readOutput cursor",
+    async () => {
+      await fresh();
+      const res = manager.start({ command: "echo PEEKED", cwd: tmpDir });
+      const taskId = res.ok ? res.taskId : "";
+      await waitFor(() => manager.get(taskId)?.status === "completed");
+      expect(manager.peekOutput(taskId)?.output).toContain("PEEKED");
+      expect(manager.peekOutput(taskId)?.output).toContain("PEEKED");
+      expect(manager.readOutput(taskId)?.newOutput).toContain("PEEKED");
+      expect(manager.peekOutput(taskId)?.output).toContain("PEEKED");
+      expect(manager.peekOutput("task-42")).toBeUndefined();
+    },
+    20_000,
+  );
+
   it("get/readOutput return undefined for an unknown id", async () => {
     await fresh();
     expect(manager.get("task-42")).toBeUndefined();

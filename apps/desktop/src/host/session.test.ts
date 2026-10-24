@@ -691,6 +691,39 @@ describe("Session — background jobs panel wire", () => {
       h.close();
     }
   });
+
+  it("task_output_request reads through a non-consuming peek with its own UI cursor — the model's readOutput cursor is untouched (Taskana 4097)", async () => {
+    const running = taskSnapshot({ taskId: "task-1", command: "sleep 60" });
+    let buffer = "one\n";
+    let consumingReads = 0;
+    const tasks = Object.assign(new FakeTaskPort(), {
+      peekOutput: (taskId: string) => (taskId === "task-1" ? { snapshot: running, output: buffer } : undefined),
+    });
+    tasks.snapshots = [running];
+    tasks.readOutput = () => {
+      consumingReads += 1;
+      return undefined;
+    };
+    const h = createHarness({ steps: [finishStep()], tasks });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "task_output_request", taskId: "task-1" });
+      await h.waitUntil(() => h.received.filter(isTaskOutput).length >= 1);
+      buffer += "two\n";
+      h.send({ type: "task_output_request", taskId: "task-1" });
+      await h.waitUntil(() => h.received.filter(isTaskOutput).length >= 2);
+      // A re-attaching renderer (fresh store) starts from the top again.
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(isHostReady).length >= 2);
+      h.send({ type: "task_output_request", taskId: "task-1" });
+      await h.waitUntil(() => h.received.filter(isTaskOutput).length >= 3);
+      expect(h.received.filter(isTaskOutput).map((m) => m.newOutput)).toEqual(["one\n", "two\n", "one\ntwo\n"]);
+      expect(consumingReads).toBe(0);
+    } finally {
+      h.close();
+    }
+  });
 });
 
 describe("Session — stream bridge", () => {

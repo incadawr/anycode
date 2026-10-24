@@ -822,7 +822,8 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
       {supportsCorePanels && <LspPanel />}
       {supportsCorePanels && <HooksPanel />}
       {supportsRewind && <TimelinePanel />}
-      {supportsTasks && <BackgroundTasksPanel />}
+      {/* keyed: the panel's local selected-row state must not leak into another tab */}
+      {supportsTasks && <BackgroundTasksPanel key={tabId} />}
     </>
   );
 }

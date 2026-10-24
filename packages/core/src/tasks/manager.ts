@@ -154,6 +154,18 @@ export class InProcessTaskManager implements BackgroundTaskPort {
     return { snapshot: this.toSnapshot(record), newOutput };
   }
 
+  /**
+   * Non-consuming read of the whole (capped, append-only) buffer: the read
+   * cursor `readOutput` advances for the model's BashOutput tool is NOT
+   * touched. The desktop panel (Taskana 4097) reads through this so a user
+   * viewing a task's output never steals the increment the agent is owed.
+   */
+  peekOutput(taskId: string): { snapshot: BackgroundTaskSnapshot; output: string } | undefined {
+    const record = this.tasks.get(taskId);
+    if (!record) return undefined;
+    return { snapshot: this.toSnapshot(record), output: record.buffer };
+  }
+
   kill(taskId: string): boolean {
     const record = this.tasks.get(taskId);
     if (!record || record.status !== "running") return false;
