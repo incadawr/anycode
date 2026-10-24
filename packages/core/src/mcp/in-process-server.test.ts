@@ -287,6 +287,7 @@ describe("createInProcessMcpServer — agent result id/hint through runAgentBrid
           spawnToolCallId: req.spawnToolCallId,
         };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
   }
 
