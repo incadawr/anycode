@@ -58,6 +58,8 @@ export type {
 } from "./hooks.js";
 export {
   AGENT_PROFILE_PROMPT_MAX_BYTES,
+  // Taskana 4104: desktop main's boot sweep imports it from @anycode/core (curated-list precedent: SUBAGENT_ACTIVITY_MAX_EVENTS).
+  ARTIFACT_MAX_AGE_MS,
   BASH_MAX_TIMEOUT_MS,
   COMPACT_BUFFER_TOKENS,
   COMPACT_KEEP_RECENT_MESSAGES,

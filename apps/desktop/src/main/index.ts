@@ -52,6 +52,11 @@ const { autoUpdater } = electronUpdater;
 import { SqlitePersistenceAdapter } from "@anycode/core/persistence";
 import { NodeExecutionAdapter } from "@anycode/core/node-execution";
 import { NodeGitAdapter } from "@anycode/core/node-git";
+// Taskana 4104 (TASK.110): value imports from the core ROOT barrel (main
+// deliberately avoids whole-runtime subpaths elsewhere; the root barrel is the
+// sanctioned route for these two symbols — see core/src/index.ts).
+import { ARTIFACT_MAX_AGE_MS, NodeArtifactStore } from "@anycode/core";
+import { artifactsRootFor } from "../shared/artifacts-root.js";
 import {
   catalogProviderIds,
   findCatalogEntry,
@@ -1683,6 +1688,13 @@ void app.whenReady().then(async () => {
   await persistence.listSessionsForMaintenance({ limit: 1 });
   console.log(`[main] persistence opened + migrated: ${dbPath}`);
 
+  // Taskana 4104 (TASK.110): age-based GC of spilled artifacts, once per app
+  // start, fire-and-forget — never blocks the first window. This — not any
+  // per-session removeSession — is the collector that holds: crashed sessions
+  // never reach a cleanup path. Mirrors cli/main.ts's boot sweep.
+  const artifactStore = new NodeArtifactStore(artifactsRootFor(dbPath, homedir()));
+  void artifactStore.sweepExpired(ARTIFACT_MAX_AGE_MS).catch(() => {});
+
   // One global, ledger-driven pass before any tab host can mutate worktree
   // state. It never discovers deletion authority from a namespace/prefix: only
   // exact durable cleanup records are eligible, and every ambiguity is retained.
@@ -2138,6 +2150,11 @@ void app.whenReady().then(async () => {
     manager,
     persistence,
     dialog,
+    // Taskana 4104 (TASK.110): best-effort removal of hard-deleted sessions'
+    // artifact directories (removeSession per id — never throws by contract).
+    removeSessionArtifacts: async (ids) => {
+      await Promise.all(ids.map((id) => artifactStore.removeSession(id)));
+    },
     providerReadiness: async (connectionId) => {
       const current = currentSettings();
       const target = connectionId && connectionById(current, connectionId)

@@ -1640,6 +1640,79 @@ describe("handleSessionDelete (TASK.114)", () => {
       },
     });
   });
+
+  // Taskana 4104 (TASK.110): a hard delete is the ONLY session-death point that
+  // removes the session's artifact directory, and it must receive the CASCADE
+  // (removedIds = root + children), not just the root id.
+  it("Taskana 4104: removes artifacts for the whole cascade on a successful delete", async () => {
+    const removed: string[][] = [];
+    const removeSessionArtifacts = async (ids: readonly string[]) => {
+      removed.push([...ids]);
+    };
+    const { persistence } = makePersistence({
+      getRootSession: async () => metaOf("s1"),
+      deleteSession: async (id: string) => ({
+        deleted: [id],
+        removedIds: [id, "child-1"],
+        counts: { historyItems: 2, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+      }),
+    });
+    const manager = makeManagerWith({});
+    const res = await handleSessionDelete(
+      { manager, persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog, removeSessionArtifacts },
+      "s1",
+    );
+    expect(res).toEqual({ ok: true, summary: expect.objectContaining({ deleted: ["s1"] }) });
+    expect(removed).toEqual([["s1", "child-1"]]);
+  });
+
+  it("Taskana 4104: not_found / active refusals never touch artifacts", async () => {
+    const removed: string[][] = [];
+    const removeSessionArtifacts = async (ids: readonly string[]) => {
+      removed.push([...ids]);
+    };
+    const dialog = makeDialog({ canceled: true, filePaths: [] }).dialog;
+
+    const notFound = makePersistence({ getRootSession: async () => null });
+    const res1 = await handleSessionDelete(
+      { manager: makeManagerWith({}), persistence: notFound.persistence, dialog, removeSessionArtifacts },
+      "nope",
+    );
+    expect(res1).toEqual({ ok: false, reason: "not_found" });
+
+    const active = makePersistence({ getRootSession: async () => metaOf("s1") });
+    const res2 = await handleSessionDelete(
+      { manager: makeManagerWith({ openInTab: { s1: "tab-1" } }), persistence: active.persistence, dialog, removeSessionArtifacts },
+      "s1",
+    );
+    expect(res2).toEqual({ ok: false, reason: "active" });
+
+    expect(removed).toEqual([]);
+  });
+
+  it("Taskana 4104: a throwing artifact callback never fails the delete", async () => {
+    const { persistence } = makePersistence({ getRootSession: async () => metaOf("s1") });
+    const manager = makeManagerWith({});
+    const res = await handleSessionDelete(
+      {
+        manager,
+        persistence,
+        dialog: makeDialog({ canceled: true, filePaths: [] }).dialog,
+        removeSessionArtifacts: async () => {
+          throw new Error("boom");
+        },
+      },
+      "s1",
+    );
+    expect(res).toEqual({ ok: true, summary: expect.objectContaining({ deleted: ["s1"] }) });
+  });
+
+  it("Taskana 4104: an absent artifact callback (legacy deps) still deletes", async () => {
+    const { persistence } = makePersistence({ getRootSession: async () => metaOf("s1") });
+    const manager = makeManagerWith({});
+    const res = await handleSessionDelete({ manager, persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog }, "s1");
+    expect(res).toEqual({ ok: true, summary: expect.objectContaining({ deleted: ["s1"] }) });
+  });
 });
 
 describe("handleSessionsDeleteOlder (TASK.114)", () => {
@@ -1722,6 +1795,45 @@ describe("handleSessionsDeleteOlder (TASK.114)", () => {
     expect(listArgs[0]!.workspace).toBe("/proj");
     expect(listArgs[0]!.cutoff).toBeGreaterThanOrEqual(before - 30 * 24 * 60 * 60 * 1000);
     expect(listArgs[0]!.cutoff).toBeLessThanOrEqual(after - 30 * 24 * 60 * 60 * 1000);
+  });
+
+  // Taskana 4104 (TASK.110): the bulk delete receives the MERGED cascade of the
+  // whole batch in ONE callback; a dry run removes nothing.
+  it("Taskana 4104: non-dry-run removes artifacts once with the union of both summaries' removedIds", async () => {
+    const candidates = [metaOf("old-1"), metaOf("old-2")];
+    const removed: string[][] = [];
+    const removeSessionArtifacts = async (ids: readonly string[]) => {
+      removed.push([...ids]);
+    };
+    const { persistence } = makeBulkPersistence(candidates);
+    // The stub's deleteSessions echoes ids as removedIds; override to prove the
+    // MERGE of per-root cascades, not just the roots, reaches the callback.
+    (persistence as { deleteSessions?: unknown }).deleteSessions = async (ids: readonly string[]) => ({
+      deleted: [...ids],
+      removedIds: [...ids, "child-of-batch"],
+      counts: { historyItems: ids.length, checkpoints: 0, claudeTranscriptItems: 0, codexThreadItems: 0 },
+    });
+    const res = await handleSessionsDeleteOlder(
+      { manager: idleManager(), persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog, removeSessionArtifacts },
+      { workspace: "/proj", olderThanDays: 30 },
+    );
+    expect(res).toEqual({ ok: true, summary: expect.objectContaining({ deleted: ["old-1", "old-2"] }) });
+    expect(removed).toEqual([["old-1", "old-2", "child-of-batch"]]);
+  });
+
+  it("Taskana 4104: dryRun never removes artifacts", async () => {
+    const candidates = [metaOf("old-1"), metaOf("old-2")];
+    const removed: string[][] = [];
+    const removeSessionArtifacts = async (ids: readonly string[]) => {
+      removed.push([...ids]);
+    };
+    const { persistence, deletedIds } = makeBulkPersistence(candidates);
+    await handleSessionsDeleteOlder(
+      { manager: idleManager(), persistence, dialog: makeDialog({ canceled: true, filePaths: [] }).dialog, removeSessionArtifacts },
+      { workspace: "/proj", olderThanDays: 30, dryRun: true },
+    );
+    expect(deletedIds).toEqual([]);
+    expect(removed).toEqual([]);
   });
 });
 

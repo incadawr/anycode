@@ -358,6 +358,12 @@ export interface HarnessOptions {
    */
   checkpoints?: AgentLoopConfig["checkpoints"];
   /**
+   * Taskana 4104: threaded into AgentLoopConfig.artifacts exactly as host boot
+   * does. Omitted -> config has no `artifacts` (spill degrades to truncation,
+   * byte-identical for every existing test).
+   */
+  artifacts?: AgentLoopConfig["artifacts"];
+  /**
    * Slice P7.26/R2: the Session-level rewind/list seam (checkpoint_list /
    * rewind_request), threaded DIRECTLY into Session (distinct from the loop's
    * `checkpoints` capturer above). Host boot passes the SAME ShadowGitCheckpoints
@@ -587,6 +593,9 @@ export function createHarness(options: HarnessOptions): Harness {
     // Mirror host boot (slice P7.26/R1): a supplied capturer is spread into
     // config.checkpoints; absent -> the arc stays dormant (byte-identical).
     ...(options.checkpoints ? { checkpoints: options.checkpoints } : {}),
+    // Mirror host boot (Taskana 4104): artifacts store + sessionId spread into
+    // config.artifacts; absent -> spill degrades to truncation (byte-identical).
+    ...(options.artifacts ? { artifacts: options.artifacts } : {}),
     // Mirror host boot (TASK.27): planExitMode + onModeChange, or nothing at
     // all -> ctx.planMode is never built and ExitPlanMode fails closed.
     ...(planExit ?? {}),
