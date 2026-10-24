@@ -176,6 +176,14 @@ describe("shouldAutoAcceptPatch — containment over the real fs", () => {
     ).resolves.toBe(false);
   });
 
+  it("accepts under the child-ask preset (4078-on-4265: same workspace-write sandbox)", async () => {
+    // The child preset's sandbox IS workspace-write (TASK.179 / Taskana 4078),
+    // so a contained patch qualifies exactly like `ask`/`approve-for-me`.
+    await expect(
+      shouldAutoAcceptPatch(ctx({ activePresetId: () => "child-ask" }), item([{ path: join(WS, "a.ts"), kind: { type: "update" }, diff: "+a" }]), null),
+    ).resolves.toBe(true);
+  });
+
   it("never accepts when no preset is active (activePresetId null)", async () => {
     await expect(
       shouldAutoAcceptPatch(ctx({ activePresetId: () => null }), item([{ path: join(WS, "a.ts"), kind: { type: "update" }, diff: "+a" }]), null),

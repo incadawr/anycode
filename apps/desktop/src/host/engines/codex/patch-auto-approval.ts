@@ -18,8 +18,13 @@ import { dirname } from "node:path";
 import { isWithinWorkspace, resolveWorkspaceWriteFacts, type FileSystemPort } from "@anycode/core";
 import type { PermissionRuleMatcher } from "../../permission-broker.js";
 
-/** Presets whose sandbox is workspace-write; only these can auto-accept a contained patch (Taskana 4265). */
-export const WORKSPACE_WRITE_PRESETS: ReadonlySet<string> = new Set(["ask", "approve-for-me"]);
+/**
+ * Presets whose sandbox is workspace-write; only these can auto-accept a contained patch (Taskana 4265).
+ * Integration (release-rc): 4078's `child-ask` preset joins the
+ * set — it is the same workspace-write sandbox (TASK.179 / Taskana 4078), so a
+ * Codex child running under it qualifies for 4265's contained-patch auto-accept.
+ */
+export const WORKSPACE_WRITE_PRESETS: ReadonlySet<string> = new Set(["ask", "approve-for-me", "child-ask"]);
 
 /** What the host boot supplies (host/index.ts). */
 export interface CodexPatchAutoApprovalPolicy {
