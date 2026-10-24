@@ -55,8 +55,14 @@ const AUTO_ACCEPTABLE_CHANGE_KINDS: ReadonlySet<string> = new Set(["add", "updat
 function isAutoAcceptableChangeKind(kind: unknown): boolean {
   if (kind === undefined || kind === null) return false;
   if (typeof kind !== "object") return false;
-  const type = (kind as Record<string, unknown>).type;
-  return typeof type === "string" && AUTO_ACCEPTABLE_CHANGE_KINDS.has(type);
+  const record = kind as Record<string, unknown>;
+  const type = record.type;
+  if (typeof type !== "string" || !AUTO_ACCEPTABLE_CHANGE_KINDS.has(type)) return false;
+  // Taskana 4265 review: an update carrying `move_path` is a RENAME — it removes
+  // the source path, i.e. the same silent-delete M1 excludes. Neither core's
+  // Write/Edit nor Claude's acceptEdits can rename silently, so it asks; any
+  // other non-null kind field is likewise outside the arbitrated shape.
+  return Object.entries(record).every(([key, value]) => key === "type" || value === null || value === undefined);
 }
 
 /** Every path a fileChange item would touch, or null when that cannot be enumerated with certainty (fail-closed). */

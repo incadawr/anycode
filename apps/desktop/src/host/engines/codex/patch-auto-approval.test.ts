@@ -123,6 +123,16 @@ describe("shouldAutoAcceptPatch — containment over the real fs", () => {
     ).resolves.toBe(false);
   });
 
+  it("review: asks for a rename (update + move_path) even when both ends are inside the workspace", async () => {
+    await expect(
+      shouldAutoAcceptPatch(ctx(), item([{ path: join(WS, "a.ts"), kind: { type: "update", move_path: join(WS, "b.ts") } }]), null),
+    ).resolves.toBe(false);
+    // A null move_path is the plain-update wire shape and still auto-accepts.
+    await expect(
+      shouldAutoAcceptPatch(ctx(), item([{ path: join(WS, "a.ts"), kind: { type: "update", move_path: null }, diff: "+a" }]), null),
+    ).resolves.toBe(true);
+  });
+
   it("asks when ANY change in the patch deletes (mixed add+delete)", async () => {
     await expect(
       shouldAutoAcceptPatch(
