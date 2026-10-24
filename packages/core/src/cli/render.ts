@@ -530,8 +530,9 @@ export function renderEvent(
         : `\n[loop_end: ${event.reason}, turns=${event.turns}]\n`);
       break;
     case "stream_retry":
+      // Past the announced total (a network-budget retry) the total is dropped.
       write(
-        `\n[retry ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms: ${event.reason}]\n`,
+        `\n[retry ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`} in ${event.delayMs}ms: ${event.reason}]\n`,
       );
       break;
     case "microcompact":

@@ -460,6 +460,11 @@ describe("formatStreamRetryLine ( W8 — mirrors cli/render.ts's '[retry N/M in 
     expect(formatStreamRetryLine(1, 3, 500, "connect refused")).toBe("Retry 1/3 in 500ms: connect refused");
     expect(formatStreamRetryLine(2, 3, 1000, "ECONNRESET")).toBe("Retry 2/3 in 1000ms: ECONNRESET");
   });
+
+  it("drops the total once the network budget runs past maxRetries ( review: no 9/8)", () => {
+    expect(formatStreamRetryLine(8, 8, 500, "network")).toBe("Retry 8/8 in 500ms: network");
+    expect(formatStreamRetryLine(9, 8, 500, "network")).toBe("Retry 9 in 500ms: network");
+  });
 });
 
 describe("showTryAgainButton ( W8 button-visibility truth-table)", () => {
