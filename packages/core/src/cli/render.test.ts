@@ -1238,3 +1238,14 @@ describe("renderTelemetryStatus (design slice-6.6-cut.md §2-C3)", () => {
     );
   });
 });
+
+describe("stream_retry past the announced total (Taskana 4705 review)", () => {
+  it("drops the total once a network-budget retry outlives maxAttempts (no [retry 9/8])", () => {
+    const text = collect(
+      [{ type: "stream_retry", attempt: 9, maxAttempts: 8, delayMs: 100, reason: "network" }],
+      NOCOLOR,
+    );
+    expect(text).toContain("[retry 9 in 100ms: network]");
+    expect(text).not.toContain("9/8");
+  });
+});

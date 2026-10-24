@@ -359,7 +359,16 @@ export function formatErrorRetrySuffix(retry: ErrorRetryMeta | undefined): strin
  * testing.
  */
 export function formatStreamRetryLine(attempt: number, maxAttempts: number, delayMs: number, reason: string): string {
-  return `Retry ${attempt}/${maxAttempts} in ${delayMs}ms: ${reason}`;
+  return `Retry ${formatRetryAttempt(attempt, maxAttempts)} in ${delayMs}ms: ${reason}`;
+}
+
+/**
+ * `N/M`, or just `N` once the attempt is past the announced total: a retry
+ * granted by the transient-network budget (Taskana 4705) can outlive maxRetries,
+ * and "9/8" would be a lie.
+ */
+export function formatRetryAttempt(attempt: number, maxAttempts: number): string {
+  return attempt > maxAttempts ? `${attempt}` : `${attempt}/${maxAttempts}`;
 }
 
 /**

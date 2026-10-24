@@ -3586,14 +3586,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // TASK.33 W8: ADDITIVELY to that one-slot notice (which only ever
         // shows the latest retry), a `stream_retry` also leaves a persisted
         // transcript line per attempt — a full history of every attempt this
-        // turn made, not just the last one. A retry can only ever fire before
-        // any model output (isModelOutputEvent gates the port's own retry
-        // decision, provider/failure.ts) — text_start/reasoning_start are
-        // themselves model-output events, so no empty assistant_text/reasoning
-        // block can ever precede this line; the AI SDK's synthetic
-        // `{type:"start"}` between attempts is already a no-op below (the
-        // "start"/"turn_start"/tool_input_* case), so repeated attempts never
-        // plant an empty content block either (re-cut W8 note).
+        // turn made, not just the last one. A retry fires either before any
+        // model output or as a mid-stream replay (Taskana 4705: the port
+        // replays the whole step after partial output, provider/failure.ts).
+        // In the mid-stream case the discarded attempt's text block is already
+        // on screen above this line; the replayed attempt opens a fresh block.
+        // The AI SDK's synthetic `{type:"start"}` between attempts is a no-op
+        // below (the "start"/"turn_start"/tool_input_* case), so repeated
+        // attempts never plant an empty content block (re-cut W8 note).
         case "stream_retry":
           appendBlock({
             kind: "stream_retry",
@@ -3603,10 +3603,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             delayMs: event.delayMs,
             reason: event.reason,
           });
+          // Past the announced total (network-budget retry) the label drops it.
           set({
             notice: {
               kind: "stream_retry",
-              text: `Retrying… (attempt ${event.attempt}/${event.maxAttempts}: ${event.reason})`,
+              text: `Retrying… (attempt ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`}: ${event.reason})`,
             },
           });
           return;

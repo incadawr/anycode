@@ -989,6 +989,21 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     expect(store.getState().notice?.text.toLowerCase()).toContain("retrying");
   });
 
+  it("stream_retry past maxAttempts (network budget) shows the attempt without an impossible total (Taskana 4705 review)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const turnId = "turn-1";
+    beginTurn(store, turnId);
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId,
+      event: { type: "stream_retry", attempt: 9, maxAttempts: 8, delayMs: 500, reason: "network error" },
+    });
+
+    expect(store.getState().notice?.text).toBe("Retrying… (attempt 9: network error)");
+  });
+
   it("compaction_start and compaction_end (ok) raise notices; compaction_end (fail) surfaces the error", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
