@@ -322,8 +322,8 @@ describe("Session — engine switch (Taskana 4068)", () => {
       expect(firstInput.startsWith("Session continued in this codex engine")).toBe(true);
       expect(firstInput).toContain("# user first seeded turn");
       expect(firstInput).toContain("# assistant seeded answer");
-      // The import prompt REPLACES the typed text for this one engine call.
-      expect(firstInput).not.toContain("my typed message");
+      // The import is PREPENDED: the user's own message still reaches the engine.
+      expect(firstInput.endsWith("# user (current message)\nmy typed message")).toBe(true);
 
       // Second turn: raw user text, no header — the import was strictly one-shot.
       h.send({ type: "user_message", requestId: "r2", text: "plain follow-up" });
@@ -360,6 +360,96 @@ describe("Session — engine switch (Taskana 4068)", () => {
       expect(arrivals).toEqual([]);
       expect((h.session as unknown as { engine: SessionEngine }).engine.id).toBe("core");
       expect(oldEngine.disposeReasons).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
+  it("shutdown racing the factory: the switched-to engine is disposed, never orphaned", async () => {
+    const oldEngine = new SwitchableFakeEngine(seededHistory());
+    const next = new NextFakeEngine();
+    let resolveFactory!: (engine: SessionEngine) => void;
+    let factoryCalled = false;
+    const h = createHarness({
+      steps: [],
+      engine: oldEngine as SessionEngine,
+      switchEngineFactory: () => {
+        factoryCalled = true;
+        return new Promise<SessionEngine>((resolve) => (resolveFactory = resolve));
+      },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "sw7", engine: "codex" });
+      for (let i = 0; i < 100 && !factoryCalled; i++) await new Promise((r) => setTimeout(r, 5));
+      expect(factoryCalled).toBe(true);
+      const shutdown = h.session.shutdown();
+      resolveFactory(next);
+      await shutdown;
+      expect(next.disposeReasons).toEqual(["host-shutdown"]);
+      expect((h.session as unknown as { engine: SessionEngine }).engine.id).toBe("core");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("permission mode survives a swap between core-permission engines", async () => {
+    const corePerms = { ...NO_CORE_CAPS, supportsCorePermissions: true };
+    class ModalEngine extends NextFakeEngine {
+      override readonly capabilities = corePerms;
+      current: PermissionMode = "build";
+      override mode(): PermissionMode {
+        return this.current;
+      }
+      setMode(mode: PermissionMode): void {
+        this.current = mode;
+      }
+    }
+    const oldEngine = new SwitchableFakeEngine(seededHistory());
+    Object.defineProperty(oldEngine, "capabilities", { value: corePerms });
+    oldEngine.mode = () => "plan";
+    const next = new ModalEngine();
+    const h = createHarness({ steps: [], engine: oldEngine as SessionEngine, switchEngineFactory: async () => next });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "sw8", engine: "codex" });
+      await h.waitFor(isEngineSwitched);
+      expect(next.current).toBe("plan");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("prefers the old engine's live transcript over its boot snapshot", async () => {
+    const oldEngine = new SwitchableFakeEngine([]);
+    (oldEngine as unknown as { readTranscript: () => Promise<readonly HistoryItem[]> }).readTranscript = async () => seededHistory();
+    const next = new NextFakeEngine();
+    const h = createHarness({ steps: [], engine: oldEngine as SessionEngine, switchEngineFactory: async () => next });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "sw9", engine: "codex" });
+      await h.waitFor(isEngineSwitched);
+      h.send({ type: "user_message", requestId: "r1", text: "go" });
+      await h.waitFor(agentEventOf("loop_end"));
+      expect(next.inputs[0]).toContain("# user first seeded turn");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("empty import is announced honestly", async () => {
+    const oldEngine = new SwitchableFakeEngine([]);
+    const next = new NextFakeEngine();
+    const h = createHarness({ steps: [], engine: oldEngine as SessionEngine, switchEngineFactory: async () => next });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "sw10", engine: "codex" });
+      await h.waitFor(isEngineSwitched);
+      const notice = engineNoticeEvents(h.received)[0];
+      expect(notice?.event.type === "engine_notice" ? notice.event.message : "").toContain("no conversation history could be imported");
     } finally {
       h.close();
     }

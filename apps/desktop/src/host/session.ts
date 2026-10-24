@@ -893,11 +893,12 @@ export class Session {
   private engineSettingsUnsubscribe: (() => void) | undefined;
   /**
    * Taskana 4068: one-shot import prompt for the FIRST turn after an engine
-   * switch. runTurn consumes it by REPLACING the user's typed text for exactly
-   * that one engine call (the durable user frame acceptUserMessage appended is
-   * unaffected); the user's next typed message follows as the turn after.
+   * switch. runTurn consumes it by PREPENDING it to the user's own turn input
+   * for exactly that one engine call.
    */
   private engineSwitchImportPending: { prompt: string } | null = null;
+  /** Taskana 4068: set once an engine_switch_request succeeded (freezes the core ui_ready history rebuild). */
+  private engineSwitched = false;
   private readonly broker: IpcPermissionBroker;
   private readonly fs: FileSystemPort;
   private readonly workspace: string;
@@ -1650,7 +1651,11 @@ export class Session {
         // — COMPLETE later-completed replay rides the ring exactly as
         // before (native compat), and the rebuild gate must never touch
         // their history projection.
-        if (this.engine.id === "core") {
+        // Taskana 4068: after an in-session engine switch the live engine's
+        // history holds only post-switch turns — rebuilding from it would drop
+        // the pre-switch transcript; keep the switch-time snapshot (the ring
+        // carries everything newer, the native-engine discipline).
+        if (this.engine.id === "core" && !this.engineSwitched) {
           this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
         }
         if (this.sessionHistory) {
@@ -2573,9 +2578,18 @@ export class Session {
     this.currentTurn = op;
     try {
       const previousEngine = this.engine;
-      // Canonical transcript captured BEFORE anything else — the swap below
-      // never changes what the UI keeps rendering (continuity by construction).
-      const canonical = [...previousEngine.historyItems()];
+      // Canonical transcript captured BEFORE anything else. A native engine's
+      // `historyItems()` is only its BOOT snapshot (codex) or `[]` (claude);
+      // codex can re-read the live thread, so prefer that when available —
+      // otherwise the import would silently omit every turn of this launch.
+      let canonical: HistoryItem[] = [...previousEngine.historyItems()];
+      if (previousEngine.readTranscript !== undefined) {
+        try {
+          canonical = [...(await previousEngine.readTranscript())];
+        } catch (error) {
+          console.error(`[host] engine switch: live transcript read failed, using boot history: ${describeError(error)}`);
+        }
+      }
       let next: SessionEngine;
       try {
         next = await this.switchEngineFactory(message.engine);
@@ -2585,16 +2599,42 @@ export class Session {
         fail(error instanceof Error ? error.message : String(error));
         return;
       }
+      // Shutdown raced the factory await: shutdown() already disposed the OLD
+      // engine and is waiting on `currentTurn`; the freshly started engine
+      // would otherwise never be disposed (orphaned engine process).
+      if (this.shuttingDown) {
+        await next.dispose("host-shutdown").catch((error) =>
+          console.error(`[host] switched-to engine dispose threw during shutdown: ${describeError(error)}`),
+        );
+        fail("session is shutting down");
+        return;
+      }
       // The import prompt is rendered from `canonical` alone (the old
       // engine's items captured above) — nothing else feeds the render.
+      const plan = planEngineSwitchImport(canonical);
       this.engineSwitchImportPending = {
-        prompt: renderImportPrompt(previousEngine.id, next.id, planEngineSwitchImport(canonical), this.workspace),
+        prompt: renderImportPrompt(previousEngine.id, next.id, plan, this.workspace),
       };
+      // Permission posture survives the swap: when both engines run OUR
+      // permission modes, the new one must not silently start in its default
+      // (e.g. a plan-mode session becoming build after the switch).
+      if (
+        previousEngine.capabilities.supportsCorePermissions &&
+        next.capabilities.supportsCorePermissions &&
+        next.setMode !== undefined &&
+        next.mode() !== previousEngine.mode()
+      ) {
+        next.setMode(previousEngine.mode());
+      }
       this.engine = next;
+      this.engineSwitched = true;
       this.engineSettings = undefined; // foreign seam re-wired by the composition root later (§7 Q2)
       this.engineSettingsUnsubscribe?.();
       this.engineSettingsUnsubscribe = undefined;
-      // Transcript continuity: canonical history stays rendered from the SAME items.
+      // Transcript continuity: canonical history stays rendered from the SAME
+      // items; the replay ring is deliberately NOT cleared (unlike rewind,
+      // nothing was removed) — for a native engine it is the only record of
+      // this launch's turns.
       this.sessionHistory = buildSessionHistory(canonical, this.historyMaxItems);
       this.outbound.emit({
         type: "agent_event",
@@ -2602,17 +2642,23 @@ export class Session {
         event: {
           type: "engine_notice",
           level: "info",
-          message: `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives an imported summary of this conversation.`,
+          message:
+            plan.items.length > 0
+              ? `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives an imported summary of this conversation.`
+              : `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred and no conversation history could be imported; the new engine starts without prior context.`,
         },
       });
+      if (next.mode() !== previousEngine.mode()) {
+        this.outbound.emit({ type: "mode_changed", mode: next.mode() });
+      }
       // Dispose ONLY after the new engine is live and the notice emitted.
       await previousEngine.dispose("session-close").catch((error) =>
         console.error(`[host] previous engine dispose threw: ${error instanceof Error ? error.message : String(error)}`),
       );
-      this.outbound.clear();
       this.outbound.sendDirect({ type: "engine_switched", requestId: message.requestId, engine: next.id, previousEngine: previousEngine.id });
     } finally {
       release();
+      if (this.currentTurn === op) this.currentTurn = null;
       this.busy = false;
     }
   }
@@ -3335,15 +3381,13 @@ export class Session {
 
     try {
       // Taskana 4068: consume the one-shot engine-switch import prompt BEFORE
-      // the engine call — the import is delivered as the new engine's FIRST
-      // turn (the user's next typed message follows as the turn after), so
-      // the prompt REPLACES the user's typed text for exactly this one engine
-      // call. Only on the text branch (a continueTurn has no fresh user frame
-      // to replace); the durable user frame acceptUserMessage appended to the
-      // history BEFORE runTurn runs is unaffected — the canonical transcript
-      // keeps the user's own words.
+      // the engine call — the import is PREPENDED to the user's own turn
+      // input (typed text + any plan/notice augmentation) for exactly this one
+      // engine call; nothing else carries the user's message to the engine,
+      // so replacing it would silently drop what the user just asked. Only on
+      // the text branch (a continueTurn has no fresh user frame).
       if (this.engineSwitchImportPending !== null && text !== undefined) {
-        text = this.engineSwitchImportPending.prompt;
+        text = `${this.engineSwitchImportPending.prompt}\n\n# user (current message)\n${text}`;
         this.engineSwitchImportPending = null;
       }
       const options = {
