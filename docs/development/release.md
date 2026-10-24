@@ -97,8 +97,8 @@ not page on a flaky registry. The issue, not the cron, widens the range —
 widening still requires the live Codex smoke and then updating both copies as
 in step 4. To see the current verdict by hand without touching GitHub, run
 `node scripts/check-codex-manifest-scheduled.mjs --dry-run` (this is also the
-script's default mode; the scheduled workflow is what turns a stale verdict
-into an issue).
+script's default mode; the scheduled workflow passes `--open-issue`, which is
+what turns a stale verdict into an issue).
 
 ## Signing
 

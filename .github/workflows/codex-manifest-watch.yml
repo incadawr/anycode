@@ -43,6 +43,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The job reads the manifest and talks to the Issues API only; it
+          # never pushes, so the token is not left in .git/config.
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -56,4 +60,8 @@ jobs:
           # external secret. `--repo` is checked against the watched list in
           # scripts/lib/collect-watched-repos.mjs.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/check-codex-manifest-scheduled.mjs --repo ${{ github.repository }}
+          # Passed through env, never interpolated into the shell line.
+          REPO: ${{ github.repository }}
+        # --open-issue: the script's default is dry-run, which would make the
+        # watch silent.
+        run: node scripts/check-codex-manifest-scheduled.mjs --open-issue --repo "$REPO"

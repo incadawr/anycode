@@ -61,7 +61,20 @@ describe("codex-manifest-watch.yml", () => {
 
   it("runs the scheduled check script with the repo argument", () => {
     expect(WATCH_YML).toContain("scripts/check-codex-manifest-scheduled.mjs");
-    expect(WATCH_YML).toMatch(/--repo \$\{\{ github\.repository \}\}/);
+    // --open-issue: without it the script stays in its default dry-run and
+    // the watch would never signal anything.
+    expect(WATCH_YML).toMatch(/check-codex-manifest-scheduled\.mjs --open-issue --repo "\$REPO"/);
+    expect(WATCH_YML).toMatch(/REPO:\s*\$\{\{ github\.repository \}\}/);
+  });
+
+  it("never interpolates an expression straight into a run: script", () => {
+    const runLines = WATCH_YML.split("\n").filter((line) => /^\s*run:/.test(line));
+    expect(runLines.length).toBeGreaterThan(0);
+    for (const line of runLines) expect(line).not.toContain("${{");
+  });
+
+  it("checkout does not persist the token (the job never pushes)", () => {
+    expect(WATCH_YML).toMatch(/persist-credentials:\s*false/);
   });
 
   it("sets GH_TOKEN for the gh issue flow", () => {
