@@ -1849,10 +1849,12 @@ export interface LspPanelState {
  * injectable-for-tests discipline as `TodoPanelDom`. `panel()` returns `null`
  * when `<aside class="lsp-panel">` isn't in the DOM at all (closed) — the
  * facade turns that into the valid-empty `LspPanelState` reading, never an
- * error. `toggle()` fires a real `.click()` on the `SessionHeader` toggle
- * button (`aria-label="Toggle LSP status"`) — the exact control a user would
- * press; there is no store action to call instead without opening a second
- * path (design §1.3 discipline).
+ * error. Since Taskana 4711 removed the header toggle button, `toggle()`
+ * drives the Environment menu's `lsp-details` action: when the panel is open
+ * it clicks the panel's own close button, otherwise it opens the Environment
+ * dropdown (`.environment-trigger`) and clicks its Details action — the exact
+ * controls a user would press; there is no store action to call instead
+ * without opening a second path (design §1.3 discipline).
  */
 export interface LspPanelDom {
   panel(): { counts: string | null; servers: Array<{ name: string; state: string }> } | null;
@@ -1881,8 +1883,10 @@ export interface HooksPanelState {
  * DOM accessor DI for the Hooks-panel probe/driver (design §3 W3), same
  * injectable-for-tests discipline as `LspPanelDom`. `panel()` returns `null`
  * when `<aside class="hooks-panel">` isn't in the DOM at all (closed).
- * `toggle()` fires a real `.click()` on the `SessionHeader` toggle button
- * (`aria-label="Toggle hooks"`).
+ * Since Taskana 4711 removed the header toggle button, `toggle()` drives the
+ * Environment menu's `hooks-details` action (close via the panel's own
+ * `aria-label="Close hooks"` button, open via `.environment-trigger` +
+ * Details) — same shape as the LSP driver above.
  */
 export interface HooksPanelDom {
   panel(): { configError: string | null; groups: Array<{ event: string; count: number }> } | null;
@@ -4947,7 +4951,17 @@ function realLspPanelDom(): LspPanelDom {
       return { counts, servers };
     },
     toggle() {
-      document.querySelector<HTMLButtonElement>('.session-header-panel-toggle[aria-label="Toggle LSP status"]')?.click();
+      // Taskana 4711: the header button is gone — toggle via the Environment
+      // menu's Details action. If the panel is open, close it directly;
+      // otherwise open the menu (React flushes discrete clicks synchronously)
+      // and click its lsp-details action.
+      const el = aside();
+      if (el) {
+        el.querySelector<HTMLButtonElement>(".lsp-panel-close")?.click();
+        return;
+      }
+      document.querySelector<HTMLButtonElement>(".environment-trigger")?.click();
+      document.querySelector<HTMLButtonElement>('[data-environment-action="lsp-details"]')?.click();
     },
   };
 }
@@ -4981,7 +4995,16 @@ function realHooksPanelDom(): HooksPanelDom {
       return { configError, groups };
     },
     toggle() {
-      document.querySelector<HTMLButtonElement>('.session-header-panel-toggle[aria-label="Toggle hooks"]')?.click();
+      // Taskana 4711: the header button is gone — toggle via the Environment
+      // menu's Details action (same shape as the LSP driver above; the close
+      // button lives at HooksPanel.tsx's `aria-label="Close hooks"`).
+      const el = aside();
+      if (el) {
+        el.querySelector<HTMLButtonElement>('button[aria-label="Close hooks"]')?.click();
+        return;
+      }
+      document.querySelector<HTMLButtonElement>(".environment-trigger")?.click();
+      document.querySelector<HTMLButtonElement>('[data-environment-action="hooks-details"]')?.click();
     },
   };
 }

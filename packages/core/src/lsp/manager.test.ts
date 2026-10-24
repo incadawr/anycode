@@ -415,4 +415,135 @@ describe("LspManager (fixture integration)", () => {
     },
     15_000,
   );
+
+  // -------------------------------------------------------------------------
+  // Taskana 4711: restartCrashed — the Environment menu's Restart action.
+  // -------------------------------------------------------------------------
+
+  describe("restartCrashed (Taskana 4711)", () => {
+    const managers: LspManager[] = [];
+
+    afterEach(async () => {
+      await Promise.all(managers.map((m) => m.disposeAll()));
+      managers.length = 0;
+    });
+
+    function makeRestartManager(specs: LspServerSpec[], exec: ExecutionPort, onStatusChange?: () => void): LspManager {
+      const manager = new LspManager(exec, specs, CWD, onStatusChange);
+      managers.push(manager);
+      return manager;
+    }
+
+    /** Waits until the first status record reaches `state` (bounded). */
+    async function waitForState(manager: LspManager, state: "crashed" | "ready", timeoutMs = 5000): Promise<void> {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (manager.status()[0]!.state === state) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(manager.status()[0]!.state).toBe(state);
+    }
+
+    it(
+      "resets and respawns a crashed server: initializing synchronously, stderrTail and stale pid cleared",
+      async () => {
+        const { exec, spawnCount } = spyExec();
+        const manager = makeRestartManager([tsSpec("dead", ["--exit-now"])], exec);
+        const first = await manager.diagnosticsAfterWrite("/proj/a.ts", "x\n");
+        expect(first).toEqual({ available: false, reason: "server_failed" });
+        expect(manager.status()[0]!.state).toBe("crashed");
+        expect(spawnCount()).toBe(1);
+        const crashedPid = manager.status()[0]!.pid;
+        expect(crashedPid).toBeGreaterThan(0);
+
+        manager.restartCrashed();
+        expect(spawnCount()).toBe(2);
+        expect(manager.status()[0]!.state).toBe("initializing");
+        expect(manager.status()[0]!.stderrTail).toBe("");
+        // Stale pid dropped from the record (respawn assigns a fresh one).
+        expect(manager.status()[0]!.pid).not.toBe(crashedPid);
+        // The respawned --exit-now server exits again → crashed again (no
+        // auto-respawn loop; a second Restart would be needed).
+        await waitForState(manager, "crashed");
+      },
+      15_000,
+    );
+
+    it(
+      "a crashed healthy server (killed externally) becomes ready after restart and serves diagnostics again",
+      async () => {
+        const { exec, spawnCount } = spyExec();
+        const manager = makeRestartManager([tsSpec("ts")], exec);
+        const healthy = await manager.diagnosticsAfterWrite("/proj/a.ts", "DIAG:e\n");
+        expect(healthy.available).toBe(true);
+        expect(manager.status()[0]!.state).toBe("ready");
+        const pid = manager.status()[0]!.pid!;
+        // Kill the server out from under the manager (SIGKILL → exit → crashed).
+        process.kill(pid, "SIGKILL");
+        await waitForState(manager, "crashed");
+        expect(spawnCount()).toBe(1);
+
+        manager.restartCrashed();
+        expect(spawnCount()).toBe(2);
+        expect(manager.status()[0]!.state).toBe("initializing");
+
+        const after = await manager.diagnosticsAfterWrite("/proj/a.ts", "DIAG:e\n");
+        expect(after.available).toBe(true);
+        expect(manager.status()[0]!.state).toBe("ready");
+        expect(manager.status()[0]!.stderrTail).toBe("");
+      },
+      15_000,
+    );
+
+    it(
+      "leaves a ready server untouched (no extra spawn, still ready)",
+      async () => {
+        const { exec, spawnCount } = spyExec();
+        const manager = makeRestartManager([tsSpec("ts")], exec);
+        const outcome = await manager.diagnosticsAfterWrite("/proj/edit.ts", "ok\nDIAG:type mismatch\n");
+        expect(outcome.available).toBe(true);
+        expect(manager.status()[0]!.state).toBe("ready");
+        expect(spawnCount()).toBe(1);
+
+        manager.restartCrashed();
+        expect(spawnCount()).toBe(1);
+        expect(manager.status()[0]!.state).toBe("ready");
+      },
+      15_000,
+    );
+
+    it("leaves a not_started server untouched (lazy-spawn preserved)", () => {
+      const { exec, spawnCount } = spyExec();
+      const manager = makeRestartManager([tsSpec("ts")], exec);
+      expect(manager.status()[0]!.state).toBe("not_started");
+      expect(spawnCount()).toBe(0);
+
+      manager.restartCrashed();
+      expect(spawnCount()).toBe(0);
+      expect(manager.status()[0]!.state).toBe("not_started");
+    });
+
+    it("is a no-op for an empty manager and an all-ready manager (listener not fired)", async () => {
+      // Empty manager.
+      const callsA: number[] = [];
+      const empty = makeRestartManager([], new NodeExecutionAdapter(), () => callsA.push(1));
+      empty.restartCrashed();
+      await flushMicrotasks();
+      expect(callsA).toHaveLength(0);
+
+      // All-ready manager: bring one server to ready first.
+      const callsB: number[] = [];
+      const { exec } = spyExec();
+      const ready = makeRestartManager([tsSpec("ts")], exec, () => callsB.push(1));
+      const outcome = await ready.diagnosticsAfterWrite("/proj/a.ts", "clean code\n");
+      expect(outcome.available).toBe(true);
+      expect(ready.status()[0]!.state).toBe("ready");
+      await flushMicrotasks();
+      callsB.length = 0;
+      ready.restartCrashed();
+      await flushMicrotasks();
+      expect(callsB).toHaveLength(0);
+      expect(ready.status()[0]!.state).toBe("ready");
+    }, 15_000);
+  });
 });

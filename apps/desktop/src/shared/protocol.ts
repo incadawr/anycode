@@ -470,6 +470,8 @@ export type UiToHostMessage =
   | { type: "git_command"; requestId: string; command: GitCommand }
   // Renderer Panels sub-slice A: read-only LSP server-status request.
   | { type: "lsp_status_request" }
+  // Taskana 4711: payload-less; restarts every crashed language server
+  | { type: "lsp_restart_request" }
   // Slice P7.17 (F12, design §2.2): read-only per-category context-token
   // breakdown request. Mirror of lsp_status_request — payload-less, served even
   // mid-turn (contextBreakdown() is a pure read). Sent only when the ctx-meter
@@ -1203,6 +1205,13 @@ export const lspStatusRequestSchema = z
   })
   .strict();
 
+// Taskana 4711: payload-less restart request (mirror of
+// lspStatusRequestSchema). Untrusted ui->host direction, so it rides zod even
+// though it carries no data — fail-closed on any extra key under .strict().
+export const lspRestartRequestSchema = z
+  .object({ type: z.literal("lsp_restart_request") })
+  .strict();
+
 // Slice P7.17 (F12): payload-less breakdown request (mirror of
 // lspStatusRequestSchema). Untrusted ui->host direction, so it rides zod even
 // though it carries no data — fail-closed on any extra key under .strict().
@@ -1318,6 +1327,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   engineSwitchRequestSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
+  lspRestartRequestSchema,
   contextBreakdownRequestSchema,
   usageAuditRequestSchema,
   compactRequestSchema,

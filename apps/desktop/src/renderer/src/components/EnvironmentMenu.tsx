@@ -3,13 +3,17 @@
  * it keeps the current workspace/branch quiet in the chrome and funnels the
  * rare, detailed work into the existing Git inspector drawer.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { GitCommand } from "../../../shared/protocol.js";
+import type { CommandHookDeclaration, LspServerStatus } from "@anycode/core";
 import type { GitPendingRequest } from "../store.js";
-import { useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
+import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
+import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Ellipsis, Folder, GitBranch } from "./icons.js";
+import { RUN_ACTION_EVENT } from "../slash-menu.js";
+import { Ellipsis, Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
+import { groupHooksByEvent } from "./HooksPanel.js";
 
 type EnvironmentPlacement = "header" | "composer";
 
@@ -45,13 +49,38 @@ function changesLabel(count: number): string {
   return count === 0 ? "Working tree clean" : `${count} change${count === 1 ? "" : "s"}`;
 }
 
+/** Taskana 4711: per-server name + ready/✓ vs anything-else/— summary; "Not configured" when empty. */
+export function formatEnvironmentLspDetail(servers: readonly LspServerStatus[]): string {
+  if (servers.length === 0) return "Not configured";
+  return servers.map((s) => `${s.name} ${s.state === "ready" ? "✓" : "—"}`).join(", ");
+}
+
+/** Taskana 4711: the Restart action shows only when at least one server crashed. */
+export function hasCrashedLspServer(servers: readonly LspServerStatus[]): boolean {
+  return servers.some((s) => s.state === "crashed");
+}
+
+/** Taskana 4711: "3 hooks (PreToolUse 1, PostToolUse 2)" / "None" — reuses HooksPanel's stable event order. */
+export function formatEnvironmentHooksDetail(hooks: readonly CommandHookDeclaration[]): string {
+  if (hooks.length === 0) return "None";
+  const groups = groupHooksByEvent(hooks);
+  const parts = groups.map((g) => `${g.event} ${g.count}`).join(", ");
+  return `${hooks.length} ${hooks.length === 1 ? "hook" : "hooks"} (${parts})`;
+}
+
 export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement }) {
   const tabStore = useTabStoreApi();
   const send = useTabSend();
+  const tabId = useContext(TabContext)?.tabId;
   const workspace = useTabStore((state) => state.workspace);
   const status = useTabStore((state) => state.git.status);
   const statusKnown = useTabStore((state) => state.git.statusKnown);
   const branches = useTabStore((state) => state.git.branches);
+  // Taskana 4711: LSP/hooks status rows (core engines only — `engine === null`
+  // mirrors the old header-button gate and the panels' mount gate in App.tsx).
+  const engine = useTabStore((state) => state.engine);
+  const lspServers = useTabStore((state) => state.lspServers);
+  const hookDeclarations = useTabStore((state) => state.hookDeclarations);
   const gitAvailable = status !== null;
   const [open, setOpen] = useState(false);
   // D8 overlay wiring: the preview WebContentsView must hide while this
@@ -119,6 +148,26 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   function openInspector(): void {
     tabStore.getState().gitSetView("changes");
     tabStore.getState().gitSetPanelOpen(true);
+    setOpen(false);
+  }
+
+  function openLspDetails(): void {
+    if (tabId) useTabsStore.getState().setLspPanelOpen(tabId, true);
+    setOpen(false);
+  }
+
+  function openHooksDetails(): void {
+    if (tabId) useTabsStore.getState().setHooksPanelOpen(tabId, true);
+    setOpen(false);
+  }
+
+  // Menu stays open: the row's status text updates via the next lsp_status.
+  function restartLsp(): void {
+    send({ type: "lsp_restart_request" });
+  }
+
+  function openSettingsFromLsp(): void {
+    window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
     setOpen(false);
   }
 
@@ -226,6 +275,37 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                 </span>
                 <span className="environment-menu-open">Open</span>
               </button>
+            </>
+          )}
+          {engine === null && (
+            <>
+              <div className="environment-menu-row" role="menuitem" aria-label="Language servers">
+                <ServerStack />
+                <span className="environment-menu-row-main">
+                  <span>Language servers</span>
+                  <span className="environment-menu-row-detail">{formatEnvironmentLspDetail(lspServers)}</span>
+                </span>
+                <span className="environment-menu-actions">
+                  {hasCrashedLspServer(lspServers) && (
+                    <button type="button" className="environment-menu-open" data-environment-action="lsp-restart" onClick={restartLsp}>Restart</button>
+                  )}
+                  {lspServers.length > 0 ? (
+                    <button type="button" className="environment-menu-open" data-environment-action="lsp-details" onClick={openLspDetails}>Details</button>
+                  ) : (
+                    <button type="button" className="environment-menu-open" data-environment-action="lsp-setup" onClick={openSettingsFromLsp}>Set up</button>
+                  )}
+                </span>
+              </div>
+              <div className="environment-menu-row" role="menuitem" aria-label="Hooks">
+                <HookIcon />
+                <span className="environment-menu-row-main">
+                  <span>Hooks</span>
+                  <span className="environment-menu-row-detail">{formatEnvironmentHooksDetail(hookDeclarations)}</span>
+                </span>
+                <span className="environment-menu-actions">
+                  <button type="button" className="environment-menu-open" data-environment-action="hooks-details" onClick={openHooksDetails}>Details</button>
+                </span>
+              </div>
             </>
           )}
           {statusKnown && status === null && <div className="environment-menu-note">Git is not available for this workspace.</div>}

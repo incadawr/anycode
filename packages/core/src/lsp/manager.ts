@@ -223,6 +223,29 @@ export class LspManager implements LspPort {
     if (timer) clearTimeout(timer);
   }
 
+  /**
+   * Taskana 4711: restart every CRASHED server (the Environment menu's
+   * "Restart" action). Resets the record to a clean not_started state
+   * (no stale pid/client/handle/stderr) and immediately spawns it again —
+   * init then proceeds exactly like a first touch (lazy-spawn path).
+   * Ready/initializing/not_started records are untouched; disposed records
+   * are NOT restarted (disposed only happens at disposeAll/teardown).
+   */
+  restartCrashed(): void {
+    const restartable = this.records.filter((record) => record.state === "crashed");
+    for (const record of restartable) {
+      record.pid = undefined;
+      record.client = undefined;
+      record.handle = undefined;
+      record.stderrTail = "";
+      record.state = "not_started";
+      this.notifyStatusChange();
+    }
+    for (const record of restartable) {
+      this.spawnServer(record); // spawnServer guards absent exec.spawnPersistent itself
+    }
+  }
+
   // -------------------------------------------------------------------------
 
   /** Reads record.state through a method boundary so callers after an await are not held to a stale narrowing of the mutable field. */

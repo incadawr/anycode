@@ -32,7 +32,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ConnectionPhase, TurnState } from "../store.js";
-import { Collapse, Dot, Globe, History, HookIcon, ServerStack, Terminal } from "./icons.js";
+import { Collapse, Dot, Globe, History, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { usePreviewStore } from "../preview/preview-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
@@ -131,8 +131,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
 
   const tab = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId));
   const terminalOpen = tab?.terminalOpen ?? false;
-  const lspPanelOpen = tab?.lspPanelOpen ?? false;
-  const hooksPanelOpen = tab?.hooksPanelOpen ?? false;
   const timelinePanelOpen = tab?.timelinePanelOpen ?? false;
   const tasksPanelOpen = tab?.tasksPanelOpen ?? false;
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
@@ -225,14 +223,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
     useTabsStore.getState().setTerminalOpen(tabId, !terminalOpen);
   }
 
-  function toggleLspPanel(): void {
-    useTabsStore.getState().setLspPanelOpen(tabId, !lspPanelOpen);
-  }
-
-  function toggleHooksPanel(): void {
-    useTabsStore.getState().setHooksPanelOpen(tabId, !hooksPanelOpen);
-  }
-
   function toggleTimelinePanel(): void {
     useTabsStore.getState().setTimelinePanelOpen(tabId, !timelinePanelOpen);
   }
@@ -288,28 +278,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       </span>
 
       <span className="session-header-spacer" />
-
-      {!externalEngine && <button
-        type="button"
-        className={`session-header-panel-toggle${lspPanelOpen ? " session-header-panel-toggle-active" : ""}`}
-        aria-label="Toggle LSP status"
-        aria-pressed={lspPanelOpen}
-        title="LSP status"
-        onClick={toggleLspPanel}
-      >
-        <ServerStack />
-      </button>}
-
-      {!externalEngine && <button
-        type="button"
-        className={`session-header-panel-toggle${hooksPanelOpen ? " session-header-panel-toggle-active" : ""}`}
-        aria-label="Toggle hooks"
-        aria-pressed={hooksPanelOpen}
-        title="Hooks"
-        onClick={toggleHooksPanel}
-      >
-        <HookIcon />
-      </button>}
 
       {!externalEngine && supportsTasks && <button
         type="button"

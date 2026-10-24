@@ -1572,10 +1572,12 @@ their empty defaults, not an error. `servers[].state` is the raw
 "disposed"`), read off the row's own `lsp-state-<state>` CSS class —
 byte-parity with the on-screen badge, not a re-derived guess.
 `groups[].event` is a real `HookEvent` string (`HooksPanel.tsx`'s
-`formatHookEvent` labels are byte-identical to the enum values). The toggle
-routes drive a REAL click on the `SessionHeader` toggle button
-(`aria-label="Toggle LSP status"` / `"Toggle hooks"`) — no store poke, no
-second path.
+`formatHookEvent` labels are byte-identical to the enum values). Since Taskana
+4711 removed the header toggle buttons, the toggle routes drive REAL clicks on
+the Environment menu's Details actions: when a panel is open its own close
+button is clicked; otherwise the `.environment-trigger` dropdown opens and its
+`lsp-details`/`hooks-details` action is clicked — no store poke, no second
+path.
 
 | Method / path | Body | Returns |
 |---|---|---|

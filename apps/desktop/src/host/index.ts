@@ -4232,6 +4232,8 @@ async function boot(): Promise<void> {
                   if (lspStatusListener === listener) lspStatusListener = null;
                 };
               },
+              // Taskana 4711: Environment menu Restart → respawn crashed servers.
+              restart: () => lspManager!.restartCrashed(),
             },
           }
         : {}),

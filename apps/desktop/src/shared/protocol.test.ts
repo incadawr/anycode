@@ -11,6 +11,7 @@ import {
   engineSwitchRequestSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
+  lspRestartRequestSchema,
   taskKillRequestSchema,
   taskListRequestSchema,
   taskOutputRequestSchema,
@@ -205,6 +206,12 @@ describe("LSP status protocol", () => {
     expect(lspStatusRequestSchema.safeParse({ type: "lsp_status_request" }).success).toBe(true);
     expect(uiToHostMessageSchema.safeParse({ type: "lsp_status_request" }).success).toBe(true);
     expect(lspStatusRequestSchema.safeParse({ type: "lsp_status_request", extra: true }).success).toBe(false);
+  });
+
+  it("accepts the exact lsp_restart_request shape and rejects extras (Taskana 4711)", () => {
+    expect(lspRestartRequestSchema.safeParse({ type: "lsp_restart_request" }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "lsp_restart_request" }).success).toBe(true);
+    expect(lspRestartRequestSchema.safeParse({ type: "lsp_restart_request", extra: true }).success).toBe(false);
   });
 
   it("lsp_status is structured-clone-safe with LspServerStatus[]", () => {

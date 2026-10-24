@@ -855,7 +855,12 @@ export interface SessionOptions {
    * in LspManager). Returns an unsubscribe fn; absent -> pull-only (legacy
    * tests/harness stay byte-identical, no live push).
    */
-  lsp?: { status(): LspServerStatus[]; onStatusChange?(listener: () => void): () => void };
+  lsp?: {
+    status(): LspServerStatus[];
+    onStatusChange?(listener: () => void): () => void;
+    /** Taskana 4711 — Environment menu Restart; absent seam → no-op */
+    restart?(): void;
+  };
   /** Renderer Panels sub-slice B: static command-hook config list seam. */
   hooksList?: { list(): readonly CommandHookDeclaration[]; configError?: string };
   /**
@@ -2353,6 +2358,10 @@ export class Session {
         }
         break;
       case "lsp_status_request":
+        this.pushLspStatus();
+        break;
+      case "lsp_restart_request":
+        this.lsp?.restart?.();
         this.pushLspStatus();
         break;
       case "usage_audit_request":
