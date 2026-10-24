@@ -19,7 +19,7 @@
 
 import { PERMISSION_MODES } from "@anycode/core";
 import { describe, expect, it } from "vitest";
-import { claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./child-permission-map.js";
+import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./child-permission-map.js";
 import { CLAUDE_PERMISSION_PRESETS, findClaudePreset } from "./claude/presets.js";
 import { CODEX_PERMISSION_PRESETS, findCodexPreset } from "./codex/presets.js";
 
@@ -58,6 +58,36 @@ describe("claudeChildPresetId (CUT-S4 §4.2)", () => {
       const preset = findClaudePreset(claudeChildPresetId(mode));
       expect(preset).toBeDefined();
       expect(FORBIDDEN_CLAUDE_MODES).not.toContain(preset!.mode);
+    }
+  });
+});
+
+/**
+ * Taskana 4056 cross-review M1: the claude door's port seam. A bridge child's
+ * `ChildSpawnRequest.permissionMode` gates the spawned CORE child's own
+ * permission engine, so the mapping from the parent's LIVE preset must be a
+ * total, fail-narrow function of `snapshot().activePresetId` — the exact
+ * analogue of `codexAgentPermissionMode` for the codex door. The posture
+ * contract (never wider than the parent): `read-only` → `plan` (its Write/
+ * Edit/Bash are DENIED, matching "Claude plans and reads files, but cannot
+ * execute the plan"), every wider/unknown preset → `build` (asks). Codex-door
+ * parity: `build`/`edit` both mean "ask first", and no claude preset is ever
+ * `yolo`-adjacent, so nothing wider than `build` is ever produced.
+ */
+describe("claudeAgentPermissionMode (claude door port seam, Taskana 4056 M1)", () => {
+  it.each([
+    ["read-only", "plan"],
+    ["ask", "build"],
+    ["workspace", "build"],
+    ["unknown-future-preset", "build"],
+    ["", "build"],
+  ] as const)("%s maps to %s (never wider than the parent preset)", (presetId, expected) => {
+    expect(claudeAgentPermissionMode(presetId)).toBe(expected);
+  });
+
+  it("maps every preset id the frozen public table exposes", () => {
+    for (const preset of CLAUDE_PERMISSION_PRESETS) {
+      expect(claudeAgentPermissionMode(preset.id)).toBeDefined();
     }
   });
 });

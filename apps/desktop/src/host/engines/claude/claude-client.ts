@@ -118,6 +118,16 @@ export interface ClaudeSpawnArgsOptions {
    * children (engine-children.ts builds its own argv).
    */
   enableSlashPassthrough?: boolean;
+  /**
+   * Taskana 4056 cross-review M2: `CLAUDE_AGENT_BRIDGE_PROMPT`, supplied
+   * ONLY on a boot whose agent bridge is announced (a non-empty profile
+   * catalog, non-child boot — the same switch that supplies `mcpBridge`).
+   * When present it is appended to `--append-system-prompt`'s value as a
+   * second paragraph; when absent the argv is byte-identical to the
+   * pre-4056 spawn (a bridge-less session must never be taught the
+   * `mcp__anycode__agent` tool's name).
+   */
+  agentBridgePrompt?: string;
 }
 
 /**
@@ -129,9 +139,30 @@ export interface ClaudeSpawnArgsOptions {
  * without replacing the stock prompt outright. Static and prompt-cacheable;
  * no native truth exists for it (`system/init` never reports it back), so
  * there is nothing for a resend to clobber — same rationale as `effort` below.
+ *
+ * Taskana 4056 cross-review M2: the delegation sentence ("To delegate to an
+ * AnyCode agent profile, call the mcp__anycode__agent tool…") is deliberately
+ * NOT here. The bridge behind that tool is announced per-boot — only when the
+ * host's profile catalog is non-empty (`ClaudeEngineCreateOptions.mcpBridge`'s
+ * own switch doc) — so a static block naming it unconditionally would teach
+ * the model a tool that does not exist in a bridge-less session (a hard
+ * tool-use error when believed). The sentence lives in
+ * `CLAUDE_AGENT_BRIDGE_PROMPT` below and rides the argv only when the door is
+ * actually announced (`agentBridgePrompt`).
  */
 export const CLAUDE_GUI_SURFACE_PROMPT =
-  "IMPORTANT SURFACE CORRECTION: this session runs inside AnyCode, a desktop GUI application — not a terminal. Anything above that describes output as rendered in a terminal does not apply here: your replies render as markdown in AnyCode's chat panel; ANSI escape codes, terminal colors, cursor control, and TTY affordances do not work. The user cannot see the raw stdout/stderr of your tool calls — never refer them to \"the output above\"; restate important results in your reply. Ownership boundary: the subagent registry behind the Task tool, the skills catalog, and slash commands are Claude Code CLI features, not AnyCode features; their contents support no conclusions about AnyCode's own code, configuration, or agent profiles.";
+  "IMPORTANT SURFACE CORRECTION: this session runs inside AnyCode, a desktop GUI application — not a terminal. Anything above that describes output as rendered in a terminal does not apply here: your replies render as markdown in AnyCode's chat panel; ANSI escape codes, terminal colors, cursor control, and TTY affordances do not work. The user cannot see the raw stdout/stderr of your tool calls — never refer them to \"the output above\"; restate important results in your reply. Ownership boundary: the subagent registry behind the Task tool, the skills catalog, and slash commands are Claude Code CLI features, not AnyCode features; their contents support no conclusions about AnyCode's own code, configuration, or agent profiles. The Task tool's own registry is not AnyCode's.";
+
+/**
+ * Taskana 4056 cross-review M2: the catalog-conditional half of the append —
+ * appended (as a second paragraph) ONLY on a boot whose agent bridge is
+ * announced (`host/index.ts` supplies it exactly when `mcpBridge` exists,
+ * i.e. the profile catalog is non-empty and this is not a child boot). Kept
+ * a separate constant so the always-on block above stays byte-identical for
+ * bridge-less sessions and the condition remains testable at the argv seam.
+ */
+export const CLAUDE_AGENT_BRIDGE_PROMPT =
+  "To delegate to an AnyCode agent profile, call the mcp__anycode__agent tool; for long tasks pass detach: true and end the turn — the agent's report arrives as your next message.";
 
 /**
  * The exact argv contract §1.3 pins, including the flags W0 proved are
@@ -154,6 +185,10 @@ export const CLAUDE_GUI_SURFACE_PROMPT =
  * reason as `effort`: no native truth exists for it, so it rides EVERY spawn,
  * unconditionally, including `--resume` — there is nothing a resumed native
  * session could have of its own to protect from being overwritten.
+ * Taskana 4056 cross-review M2: `options.agentBridgePrompt` (the
+ * catalog-conditional delegation sentence) is appended as a second paragraph
+ * of the SAME single flag value — never a second flag — and only when the
+ * caller supplied it, which is exactly when the bridge is announced.
  */
 export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] {
   const args = [
@@ -173,7 +208,9 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     ...(options.mcpConfigPath !== undefined ? ["--mcp-config", options.mcpConfigPath] : []),
     "--strict-mcp-config",
     "--append-system-prompt",
-    CLAUDE_GUI_SURFACE_PROMPT,
+    options.agentBridgePrompt !== undefined
+      ? `${CLAUDE_GUI_SURFACE_PROMPT}\n\n${options.agentBridgePrompt}`
+      : CLAUDE_GUI_SURFACE_PROMPT,
   ];
   if (options.permissionModeFlag !== undefined) args.push("--permission-mode", options.permissionModeFlag);
   if (options.model !== undefined) args.push("--model", options.model);
@@ -383,6 +420,8 @@ export interface ClaudeClientOptions {
   mcpConfigPath?: string;
   /** See `ClaudeSpawnArgsOptions.enableSlashPassthrough` (TASK.92) — engine sessions only, never subagent children. */
   enableSlashPassthrough?: boolean;
+  /** See `ClaudeSpawnArgsOptions.agentBridgePrompt` (Taskana 4056 M2) — rides the spawn argv only when the bridge is announced. */
+  agentBridgePrompt?: string;
   binaryArgs?: readonly string[];
   bootstrap?: EngineBootstrap;
   /**
@@ -569,6 +608,7 @@ export class ClaudeClient {
         resume: this.options.resume,
         ...(this.options.mcpConfigPath !== undefined ? { mcpConfigPath: this.options.mcpConfigPath } : {}),
         enableSlashPassthrough: this.options.enableSlashPassthrough === true,
+        ...(this.options.agentBridgePrompt !== undefined ? { agentBridgePrompt: this.options.agentBridgePrompt } : {}),
       });
       const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], this.spawnOptions(true));
       this.child = child;

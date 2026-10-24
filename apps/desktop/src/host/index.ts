@@ -411,8 +411,8 @@ import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./en
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
-import { claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
-import { checkClaudeBinaryTrustOnDisk } from "./engines/claude/claude-client.js";
+import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
+import { checkClaudeBinaryTrustOnDisk, CLAUDE_AGENT_BRIDGE_PROMPT } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
 // TASK.103: the host-side consent reader. Host never WRITES settings.json
 // (main is the sole writer, host/boot.ts:239-245) — this is the sanctioned
@@ -1566,6 +1566,25 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // this above the connect call changes no persisted value, only its timing.
   const rowId = args.sessionId ?? randomUUID();
   let mcpBridge: ClaudeMcpBridge | undefined;
+  // Taskana 4056: hoisted out of the bridge block — the Session construction
+  // below wires this port's background-children seam into the
+  // background-agents strip (same TASK.145 shape the codex door uses at its
+  // own Session construction).
+  let claudeChildPort: ChildSessionPort | undefined;
+  // Taskana 4056 cross-review M1: late-bound parent engine for the child
+  // permission-mode seam — the port is constructed BEFORE connect (the bridge
+  // must exist before the CLI's own MCP handshake), but the engine exists
+  // only after, so `getPermissionMode` below closes over this cell exactly
+  // the way the codex door's `codexParentEngine` does; until the engine
+  // binds, a claude parent defaults to its own default-equivalent posture
+  // (`ask` preset → `build`), never wider.
+  let claudeParentEngine: import("./engines/claude/claude-engine.js").ClaudeEngine | undefined;
+  // Taskana 4056: late-bound live bridge-event tap. The bridge is built here,
+  // but the engine exists only after connect below — `onEvent` closes over
+  // this cell, and the `claudeEngine` assignment point binds it. Until then
+  // (and for detached children's post-turn progress, by design) pushes are
+  // no-ops.
+  let pushBridgeEvent: ((event: AgentEvent) => void) | undefined;
   const bridgePresentations = new Map<string, ToolResultPresentation>();
   if (args.child === undefined) {
     const discovered = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []));
@@ -1587,17 +1606,29 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     if (catalog.length > 0) {
       const childPort = createChildSessionPort({
         parentSessionId: rowId,
-        // A claude session's `mode()` is a fixed "build" display value — it
-        // never consults core's permission engine (claude-engine.ts's own
-        // doc on `ClaudeEngine.mode()`) — so, unlike the core tail's
-        // `() => config.mode` (a live, mutable value), this is a constant by
-        // construction, not a shortcut around one.
-        getPermissionMode: () => "build",
+        // Taskana 4056 cross-review M1: this seam feeds
+        // `ChildSpawnRequest.permissionMode` — the value that gates the
+        // spawned CORE child's permission engine — so it must be an honest
+        // function of the parent's LIVE preset, never a constant `"build"`.
+        // `ClaudeEngine.mode()` is display-only (a fixed "build" display
+        // value; claude-engine.ts's own doc), but this seam is not display:
+        // the codex door maps its live preset here the same way
+        // (`codexAgentPermissionMode`, host/index.ts's own codex tail).
+        // `claudeAgentPermissionMode` is the exact analogue: `read-only`
+        // parent → `plan` (the child's Write/Edit/Bash are DENIED, matching
+        // the preset's own "cannot execute the plan" contract), anything
+        // wider or unrecognized → `build` (ask-first). Late-bound through
+        // `claudeParentEngine` (bound at the `claudeEngine` assignment below)
+        // because the port exists before connect; pre-bind calls read the
+        // fail-narrow default, never wider than `ask`.
+        getPermissionMode: () =>
+          claudeAgentPermissionMode(claudeParentEngine?.snapshot().activePresetId ?? "ask"),
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
         onDetachedTerminal: deliverDetachedChildReport,
         onDetachedStall: deliverDetachedChildStall,
       });
+      claudeChildPort = childPort;
       mcpBridge = new ClaudeMcpBridge({
         serverName: "anycode",
         // Decorative only (R4 precedent, `appVersion` doc a few hundred
@@ -1605,7 +1636,14 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
         // reachable from this utility process.
         version: "1",
         listTools: () => {
-          const decl = buildAgentBridgeToolDecl(catalog);
+          // Taskana 4056: the door now offers detach + continue_session. The
+          // original withholding ("a bridge whose host cannot route a
+          // background report back never offers it") no longer holds HERE:
+          // this boot wires onDetachedTerminal (deliverDetachedChildReport,
+          // the TASK.145 delivery path the codex door uses) and the
+          // renderer's child_report prompt-queue delivery is engine-agnostic,
+          // so a detached child's report reaches this tab as a new turn.
+          const decl = buildAgentBridgeToolDecl(catalog, { detach: true, continueSession: true });
           return decl === null ? [] : [decl];
         },
         callTool: async (name, callArgs, signal, meta) => {
@@ -1640,6 +1678,20 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
             port: childPort,
             spawnToolCallId: meta.toolUseId,
             signal,
+            // Taskana 4056: live subagent_* events patch the SAME tool_call
+            // card the turn's translator created (the renderer patches by
+            // toolCallId), surfacing mid-turn through the engine's
+            // bridge-event race. Detached children never reach here after
+            // admit — the port does not bridge their post-admit progress —
+            // and a push with no live turn waits in the engine's queue for
+            // the next turn's send barrier (stall notices ride child_report
+            // instead, via onDetachedStall above).
+            // Codex-door parity (dynamic-tool-bridge.ts): once the call is
+            // aborted (Stop / CLI cancel) its late progress is dropped, not
+            // queued into the next turn's send barrier as a stale card patch.
+            onEvent: (event) => {
+              if (signal?.aborted !== true) pushBridgeEvent?.(event);
+            },
           });
           // The MCP `tools/call` response itself has no room for a card
           // payload (`{text, isError}` only — plan §3.1); the durable
@@ -1708,10 +1760,22 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     ...(mcpBridge !== undefined
       ? {
           mcpBridge,
+          // Taskana 4056 cross-review M2: the same switch that announces the
+          // door teaches the CLI the delegation sentence — the prompt names
+          // `mcp__anycode__agent` ONLY in sessions where the tool exists (a
+          // bridge-less boot's argv stays byte-identical to pre-4056).
+          agentBridgePrompt: CLAUDE_AGENT_BRIDGE_PROMPT,
           takePresentation: (toolUseId: string) => {
             const presentation = bridgePresentations.get(toolUseId);
             bridgePresentations.delete(toolUseId);
             return presentation;
+          },
+          // Taskana 4056 cross-review P1: the engine's turn-end sweep for
+          // presentations whose consuming tool_result never arrived (a
+          // cancelled/dying turn) — without this, one map entry per aborted
+          // bridge call would live for the process's lifetime.
+          dropPresentations: (toolUseIds: readonly string[]) => {
+            for (const id of toolUseIds) bridgePresentations.delete(id);
           },
         }
       : {}),
@@ -1780,6 +1844,15 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   }
 
   const claudeEngine = connected.engine;
+  // Taskana 4056 cross-review M1: bind the port's permission-mode seam to the
+  // live engine — from here on every bridge spawn snapshots the parent's
+  // CURRENT preset (fresh per run() call, cut §0.8), exactly the codex door's
+  // `codexParentEngine` binding.
+  claudeParentEngine = claudeEngine;
+  // Taskana 4056: bind the bridge's live event tap to the connected engine —
+  // from here on, a bridged agent call's subagent_* events surface inside the
+  // CLI's live turn (claude-engine.ts's bridge-event race).
+  pushBridgeEvent = (event: AgentEvent) => claudeEngine.pushBridgeEvent(event);
 
   // Identity facts, known the moment the transport connected. The POSTURE
   // (model/preset) is deliberately NOT here: it is written only from the
@@ -1991,6 +2064,21 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // CC-D-min: the RAW ClaudeEngine, Claude's own immediate-apply seam (never
     // codex's choose-now/apply-at-next-turn one — settings-seam.ts).
     engineSettings: new ClaudeSettingsSeam(claudeEngine),
+    // Taskana 4056: the background-agents strip seam — same shape the codex
+    // door wires (its own Session construction above) over the SAME
+    // TASK.145 port API. Without it, pushBackgroundChildren() sends `[]` and
+    // a detached child of a claude tab is invisible and unstoppable in the
+    // strip (BackgroundAgents.tsx renders from background_children).
+    ...(claudeChildPort !== undefined
+      ? {
+          backgroundChildren: {
+            list: () => claudeChildPort!.listBackgroundChildren(),
+            cancel: (childSessionId: string) => claudeChildPort!.cancelBackgroundChild(childSessionId),
+            cancelAll: () => claudeChildPort!.cancelAllBackgroundChildren(),
+            onChange: (listener: () => void) => claudeChildPort!.onBackgroundChildrenChanged(listener),
+          },
+        }
+      : {}),
     broker,
     fs,
     workspace,

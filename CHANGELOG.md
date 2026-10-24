@@ -61,6 +61,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   password stays out of every child's environment, whichever side exported
   the credential — the Claude/Codex engine tabs and the model connection keep
   the full URL by design (a known, separate follow-up).
+- Claude tabs can delegate to AnyCode agent profiles with live subagent cards, background agents (detach) that report back as a new turn, and follow-ups (continue_session) — parity with the Codex door (Taskana 4056).
 
 ## [0.0.35] — 2026-10-10
 

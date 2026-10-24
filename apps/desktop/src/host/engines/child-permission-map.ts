@@ -101,3 +101,25 @@ export function codexChildAutoAcceptsWorkspacePatches(mode: PermissionMode): boo
       return true;
   }
 }
+
+/**
+ * Taskana 4056 cross-review M1: the claude door's port seam. Maps the parent
+ * claude session's LIVE preset id (`ClaudeEngine.snapshot().activePresetId`)
+ * to the core `PermissionMode` stamped onto every `ChildSpawnRequest` — the
+ * value that gates the spawned CORE child's own permission engine, which is
+ * why this is a REAL mapping and not the display-only constant
+ * `ClaudeEngine.mode()` returns. The codex door's exact analogue is
+ * `codexAgentPermissionMode` (dynamic-tool-bridge.ts); same two rules:
+ *
+ *  - never WIDER than the parent: a `read-only` parent (the preset whose own
+ *    label is "Claude plans and reads files, but cannot execute the plan")
+ *    spawns children whose Write/Edit/Bash are DENIED outright (`plan`), not
+ *    children that merely ask;
+ *  - fail-narrow on the unfamiliar: any wider or unknown preset id maps to
+ *    `build` (ask-first), the same mid-ladder posture the codex door's
+ *    default arm produces — a future preset id can never widen a child.
+ */
+export function claudeAgentPermissionMode(presetId: string): PermissionMode {
+  if (presetId === "read-only") return "plan";
+  return "build";
+}

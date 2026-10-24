@@ -206,6 +206,12 @@ export class ClaudeTurnTranslator {
   /** Latches the ONE terminal `{type:"error"}` a turn may emit. */
   private errorEmitted = false;
   /**
+   * Taskana 4056 cross-review P1: the tool_use ids still open at the moment
+   * `finish()` ran (every terminalization path funnels through it) — the
+   * value `abandonedToolUseIds()` returns once finished.
+   */
+  private abandonedAtFinish: readonly string[] = [];
+  /**
    * A failure observed mid-turn (`assistant.error`, or an `api_retry` that can
    * never succeed). Forces the terminal to be an ERROR terminal even if the
    * `result` frame claims otherwise — the signed-out fixture claims
@@ -541,9 +547,28 @@ export class ClaudeTurnTranslator {
         },
       });
     }
+    // Taskana 4056 cross-review P1: the still-open tool_use ids at the moment
+    // the turn terminalized — recorded BEFORE the map is cleared so
+    // `abandonedToolUseIds()` below keeps answering after the fact.
+    this.abandonedAtFinish = [...this.tools.keys()];
     this.tools.clear();
     events.push({ type: "turn_end", turn: this.options.turn, finishReason: outcome.finish });
     events.push({ type: "loop_end", reason: outcome.loop, turns: this.options.turn });
     return events;
+  }
+
+  /**
+   * Taskana 4056 cross-review P1: this turn's tool_use ids whose paired
+   * top-level `tool_result` never arrived. Live view, not a snapshot-at-
+   * finish: EVERY terminalization path funnels through `finish()` (including
+   * `finishTerminal`), and a turn whose iterable ends abnormally without
+   * reaching it still reports its honestly-open ids — so the engine's
+   * turn-end sweep can drop any bridge presentation stamped for a
+   * tool_result that never came. Empty for a turn that saw every
+   * tool_result.
+   */
+  abandonedToolUseIds(): readonly string[] {
+    if (this.finished) return this.abandonedAtFinish;
+    return [...this.tools.keys()];
   }
 }
