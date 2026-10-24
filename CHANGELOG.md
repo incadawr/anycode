@@ -65,6 +65,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   the session. The `settings.tools.grepBackend` setting applies to the desktop
   app only; the CLI reads just `ANYCODE_GREP_BACKEND`.
 
+### Fixed
+
+- Switching the engine twice in a row without a message in between keeps the
+  conversation: the next engine receives the full imported history, and a
+  reload no longer shows an empty transcript. The switch notice now appears in
+  the transcript, and a reload after a switch no longer repeats the turns from
+  before it.
+
 ### Security
 
 - A proxy URL that contains credentials (and the internal engine proxy
