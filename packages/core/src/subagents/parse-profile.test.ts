@@ -247,7 +247,7 @@ describe("discoverAgentProfiles byte-invariance (post-extraction regression)", (
     expect(first.problems).toEqual([
       `Agent profile ${join(WS, "bad.md")}: name "bad name" must match ${/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.source} — ignored`,
       `Invalid agent profile ${join(WS, "broken.md")}: missing opening '---' frontmatter fence`,
-      `Agent profile ${join(WS, "reserved.md")}: name "explore" is reserved by a built-in persona — ignored`,
+      `Agent profile ${join(WS, "reserved.md")}: name "explore" is reserved by a built-in persona (general-purpose/explore) — ignored`,
       `Agent profile ${join(WS, "spawner.md")}: requests Agent — ignored (non-recursion lock)`,
     ]);
   });
