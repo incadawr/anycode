@@ -85,6 +85,21 @@ invisible to users, until a human reviews it and presses Publish. Running the
 workflow manually (`workflow_dispatch`) is always a dry run: it builds and
 touches no release.
 
+Between releases, `.github/workflows/codex-manifest-watch.yml` runs
+`scripts/check-codex-manifest-scheduled.mjs` daily (06:00 UTC). That script
+re-runs the same check as step 4 above, so a range that has gone stale since
+the last release surfaces within a day instead of waiting for the next tag:
+when the newest stable Codex is outside the declared range it opens — or, if
+one is already open, adds a status comment to — exactly one issue labeled
+`codex-manifest-watch`. Exit 2 (the check could not run, e.g. no network) is
+silent-green by design: an unknown answer is not a verdict, and the watch does
+not page on a flaky registry. The issue, not the cron, widens the range —
+widening still requires the live Codex smoke and then updating both copies as
+in step 4. To see the current verdict by hand without touching GitHub, run
+`node scripts/check-codex-manifest-scheduled.mjs --dry-run` (this is also the
+script's default mode; the scheduled workflow is what turns a stale verdict
+into an issue).
+
 ## Signing
 
 **Alpha releases are unsigned on every platform.** Signing is planned for the
