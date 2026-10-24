@@ -167,6 +167,26 @@ export function resetConnectionQuotaThrottles(): void {
 }
 
 /**
+ * Taskana 4090 review: drops a connection's coalesced-but-unwritten
+ * observation (and its trailing timer). Called when the connection is
+ * re-pointed or its key replaced: the pending value was observed against the
+ * OLD endpoint/key, and letting the trailing timer (or the quit flush) write
+ * it would resurrect the `lastQuota` the edit just cleared. A write already
+ * in flight is not cancelled; it serializes on the same settings lock.
+ */
+export function discardPendingConnectionQuota(connectionId: string): void {
+  const state = throttles.get(connectionId);
+  if (state === undefined) {
+    return;
+  }
+  if (state.timer !== undefined) {
+    clearTimeout(state.timer);
+    state.timer = undefined;
+  }
+  state.pending = undefined;
+}
+
+/**
  * Validates + throttle-gates one raw parentPort payload for `connectionId`.
  * Fire-and-forget by design (called from a message handler that must not
  * await); errors are swallowed into the logger — a quota write must never

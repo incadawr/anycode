@@ -107,6 +107,7 @@ import {
   isKnownSecretKey,
   resolveEffectiveTransport,
 } from "./host-env.js";
+import { discardPendingConnectionQuota } from "./connection-quota.js";
 import type { OAuthOutcome, OAuthProviderConfig } from "./oauth.js";
 import type { SecretSetResult, Vault } from "./vault.js";
 
@@ -1107,7 +1108,25 @@ export async function handleSetSecret(deps: SettingsIpcDeps, raw: unknown): Prom
       at: (deps.now ?? defaultNowIso)(),
     });
     if (withHealth !== undefined) {
-      finalSettings = withHealth;
+      // Taskana 4090 review: a replaced key invalidates the provider-reported
+      // quota exactly like it invalidates health — the line belongs to the
+      // superseded key. Deleted (optional on disk), and any coalesced pending
+      // observation from the old key is dropped so it cannot be written back.
+      finalSettings = {
+        ...withHealth,
+        provider: {
+          ...withHealth.provider,
+          connections: withHealth.provider.connections.map((connection) => {
+            if (connection.id !== conn.id || connection.lastQuota === undefined) {
+              return connection;
+            }
+            const cleared = { ...connection };
+            delete cleared.lastQuota;
+            return cleared;
+          }),
+        },
+      };
+      discardPendingConnectionQuota(conn.id);
       await saveSettings(deps.settingsPath, finalSettings);
     }
     const snapshot = await snapshotFrom(deps, finalSettings, false);
@@ -1796,6 +1815,9 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // baseUrl change below applies to a stale `models` list.
     if (endpointChanged) {
       delete updatedConnection.lastQuota;
+      // A coalesced observation from the OLD endpoint must not be written back
+      // by the throttle's trailing timer or the quit flush.
+      discardPendingConnectionQuota(existing.id);
     }
     // Transport clear (`""`) must remove the key entirely, not merely spread
     // `undefined` over it — `normalizedTransport === undefined` here can mean

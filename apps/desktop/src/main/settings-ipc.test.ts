@@ -2391,6 +2391,41 @@ describe("handleConnectionUpdate — re-point clears lastQuota (Taskana 4090 fol
     expect(loaded.settings.provider.connections[0]?.lastQuota).toBeUndefined();
   });
 
+  it("replacing the connection's key clears lastQuota (the line belongs to the superseded key)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    await seedLastQuota(55);
+
+    const res = await handleSetSecret(makeDeps({ catalogIds: CATALOG_IDS }), {
+      key: "provider.connection.conn-1.apiKey",
+      value: SECRET_VALUE,
+    });
+    expect(res.ok).toBe(true);
+
+    const loaded = await loadSettings(settingsPath);
+    expect("lastQuota" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+    expect(loaded.settings.provider.connections[0]?.lastHealth?.status).toBe("unchecked");
+  });
+
+  it("a re-point drops a coalesced pending observation from the OLD endpoint (no write-back by the trailing timer)", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
+    resetConnectionQuotaThrottles();
+    const quotaDeps = { settingsPath, writeIntervalMs: 20 };
+    expect(await recordConnectionQuota(quotaDeps, "conn-1", { usedPercent: 80 }, "x-ratelimit-requests-remaining")).toBe(true);
+    // Inside the window: coalesced as pending with a trailing timer.
+    expect(await recordConnectionQuota(quotaDeps, "conn-1", { usedPercent: 90 }, "x-ratelimit-requests-remaining")).toBe(false);
+
+    const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), {
+      id: "conn-1",
+      baseUrl: "https://api.kimi.com/v1",
+    });
+    expect(res.ok).toBe(true);
+    // Well past the trailing window: the old observation must not reappear.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const loaded = await loadSettings(settingsPath);
+    expect("lastQuota" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+    resetConnectionQuotaThrottles();
+  });
+
   it("a label-only edit (or resending the SAME baseUrl) keeps the line", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), {
       providerId: "z-ai",
