@@ -12,6 +12,7 @@ import {
   connectionDisplayName,
   connectionHealthStatus,
   connectionSecretKey,
+  connectionTileProviderLabel,
   describeConnectionHealth,
   HEALTH_LABEL,
   HEALTH_TONE,
@@ -368,5 +369,43 @@ describe("connectionDisplayName (task's own example: \"OpenAI\", \"OpenAI 2\", �
     const all = [openai1, zai1];
     expect(connectionDisplayName(openai1, "OpenAI", all)).toBe("OpenAI");
     expect(connectionDisplayName(zai1, "Z.AI", all)).toBe("Z.AI");
+  });
+});
+
+// TASK.70 (Taskana 4089): one brand = one card — the tile header label. This
+// package's vitest runs node-only (no jsdom, see the file docstring), so the
+// label is proven through the pure helper the header span renders.
+describe("connectionTileProviderLabel (TASK.70: one brand = one card)", () => {
+  it("a brand-grouped connection shows the brand plus its mode, not the long parenthesised name", () => {
+    expect(
+      connectionTileProviderLabel({
+        id: "kimi",
+        name: "Kimi (kimi.com subscription)",
+        authKind: "api_key",
+        models: [],
+        brand: "kimi",
+        modeLabel: "Subscription (kimi.com)",
+      }),
+    ).toBe("kimi · Subscription (kimi.com)");
+    expect(
+      connectionTileProviderLabel({
+        id: "moonshot",
+        name: "Moonshot (Kimi, platform API)",
+        authKind: "api_key",
+        models: [],
+        brand: "kimi",
+        modeLabel: "Platform API (moonshot.ai)",
+      }),
+    ).toBe("kimi · Platform API (moonshot.ai)");
+  });
+
+  it("a brandless entry still renders its exact entry name", () => {
+    expect(
+      connectionTileProviderLabel({ id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] }),
+    ).toBe("Z.AI (GLM)");
+  });
+
+  it("a missing catalog entry falls back to Custom (the bare/custom bucket)", () => {
+    expect(connectionTileProviderLabel(undefined)).toBe("Custom");
   });
 });

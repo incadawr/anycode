@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CatalogProviderEntry } from "./catalog.js";
-import { assertTransportContract, resolveEndpoint } from "./catalog.js";
+import { assertBrandContract, assertTransportContract, resolveEndpoint } from "./catalog.js";
 import {
   CUSTOM_PROVIDER_ID,
   catalogProviderIds,
@@ -87,6 +87,15 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + TASK.43 W5)", () => {
       baseUrl: "https://api.kimi.com/coding",
       defaultTransport: "anthropic-messages",
       supportedTransports: ["anthropic-messages"],
+    });
+    // TASK.70 (Taskana 4089): both Kimi entries belong to one brand card.
+    expect(findCatalogEntry("moonshot")).toMatchObject({
+      brand: "kimi",
+      modeLabel: "Platform API (moonshot.ai)",
+    });
+    expect(findCatalogEntry("kimi")).toMatchObject({
+      brand: "kimi",
+      modeLabel: "Subscription (kimi.com)",
     });
     expect(kimi?.authOptional).toBeUndefined();
     expect(kimi?.models.map((model) => model.id)).toEqual([
@@ -347,5 +356,47 @@ describe("modelsUrl (4244)", () => {
     for (const id of ["anthropic", "z-ai", "moonshot", "kimi", "openai", "openrouter", "vllm", "custom"]) {
       expect(findCatalogEntry(id)?.modelsUrl).toBeUndefined();
     }
+  });
+});
+
+// TASK.70 (Taskana 4089): one brand = one card. Only the Kimi pair declares a
+// brand; every other entry stays brandless so the flat list is byte-identical.
+describe("brand grouping (TASK.70, Taskana 4089)", () => {
+  it("4089: the Kimi brand declares exactly two modes and no other entry declares a brand", () => {
+    const branded = getBuiltinCatalog().providers.filter((entry) => entry.brand === "kimi");
+    // Catalog order: moonshot (index 3) precedes kimi (index 4) — same order
+    // the drawer's brand group must preserve.
+    expect(branded.map((entry) => entry.id)).toEqual(["moonshot", "kimi"]);
+    for (const entry of getBuiltinCatalog().providers) {
+      if (entry.id !== "kimi" && entry.id !== "moonshot") {
+        expect(entry.brand).toBeUndefined();
+        expect(entry.modeLabel).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe("assertBrandContract (TASK.70 dev-time invariant)", () => {
+  it("passes for the built-in catalog", () => {
+    expect(() => assertBrandContract(getBuiltinCatalog().providers)).not.toThrow();
+  });
+
+  it("throws on modeLabel without brand", () => {
+    const entry = {
+      id: "x",
+      name: "X",
+      modeLabel: "Some mode",
+    } as unknown as CatalogProviderEntry;
+    expect(() => assertBrandContract([entry])).toThrow(/declares modeLabel without brand/);
+  });
+
+  it("throws when a brand has a single entry", () => {
+    const entry = {
+      id: "x",
+      name: "X",
+      brand: "lonely",
+      modeLabel: "Only mode",
+    } as unknown as CatalogProviderEntry;
+    expect(() => assertBrandContract([entry])).toThrow(/Brand "lonely" has a single entry/);
   });
 });
