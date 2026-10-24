@@ -4102,7 +4102,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               return {
                 queueInFlight: null,
                 promptQueue,
-                ...(promptQueue.length > 0 ? { queuePaused: true } : {}),
+                // Taskana 4111: a respawn is a failure, not a turn limit — never
+                // leave a stale "max_turns" reason on the new pause.
+                ...(promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
                 ...(armedRetry !== null ? { retry: armedRetry } : {}),
               };
             });
@@ -4576,7 +4578,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // replay) still closes the newest open card by id.
             set((state) => ({
               lastFatal: message.message,
-              ...(state.promptQueue.length > 0 ? { queuePaused: true } : {}),
+              ...(state.promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
               ...(state.turn.status === "compacting"
                 ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
                 : {}),
@@ -4976,7 +4978,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             connection: "host_exited",
             queueInFlight: null,
             promptQueue,
-            ...(promptQueue.length > 0 ? { queuePaused: true } : {}),
+            ...(promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
           };
         });
       },

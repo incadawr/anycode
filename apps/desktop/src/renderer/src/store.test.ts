@@ -6046,6 +6046,25 @@ describe("Taskana 4111 — max_turns end: Continue offer + held-queue reason", (
     expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["drained"]);
   });
 
+  it("a later fatal / host exit re-pause does NOT keep a stale max_turns reason", () => {
+    const store = readyStore();
+    store.getState().enqueuePrompt({ text: "held", images: [] });
+    startTurn(store);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "max_turns", turns: 2 } });
+    expect(store.getState().queuePauseReason).toBe("max_turns");
+
+    store.getState().applyHostMessage({ type: "fatal", message: "boom" });
+    expect(store.getState().queuePauseReason).toBe("error");
+
+    const exited = readyStore();
+    exited.getState().enqueuePrompt({ text: "held", images: [] });
+    startTurn(exited);
+    exited.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason: "max_turns", turns: 2 } });
+    exited.getState().setHostExited();
+    expect(exited.getState().queuePaused).toBe(true);
+    expect(exited.getState().queuePauseReason).toBe("error");
+  });
+
   it("consumeContinue returns the armed offer exactly once, then null", () => {
     const store = readyStore();
     startTurn(store);
