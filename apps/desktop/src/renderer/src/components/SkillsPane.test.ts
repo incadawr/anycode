@@ -213,6 +213,28 @@ describe("buildSkillCreateRequest", () => {
       description: "does a thing",
     });
   });
+
+  // : the create dialog's scope radio is gone — the pane seeds
+  // `fields.scope` from the resolved scope-bar mode. The builder contract is
+  // unchanged; both write targets pinned.
+
+  it(" Global mode: no tabId + user-scope fields — the scaffold lands in personal skills", () => {
+    expect(buildSkillCreateRequest(undefined, { name: "s", description: "d", scope: "user" })).toEqual({
+      tabId: undefined,
+      scope: "user",
+      name: "s",
+      description: "d",
+    });
+  });
+
+  it(" Project mode: tabId + project-scope fields — the scaffold lands in the chosen tab's workspace", () => {
+    expect(buildSkillCreateRequest("t1", { name: "s", description: "d", scope: "project" })).toEqual({
+      tabId: "t1",
+      scope: "project",
+      name: "s",
+      description: "d",
+    });
+  });
 });
 
 describe("findCreatedSkillRow", () => {
@@ -306,6 +328,26 @@ describe("buildSkillsImportApplyRequest", () => {
   it("carries tabId + scope + only the checked identities", () => {
     const request = buildSkillsImportApplyRequest("tab-1", "user", { a: true, b: false });
     expect(request).toEqual({ tabId: "tab-1", scope: "user", ids: ["a"] });
+  });
+
+  // : the "Import into" radio is gone — the pane feeds the
+  // resolved scope-bar mode straight into the builder. Both write targets
+  // pinned: Global writes personal skills, Project writes the workspace's.
+
+  it(" Global mode: no tabId + 'user' — imports land in personal skills", () => {
+    expect(buildSkillsImportApplyRequest(undefined, "user", { a: true })).toEqual({
+      tabId: undefined,
+      scope: "user",
+      ids: ["a"],
+    });
+  });
+
+  it(" Project mode: tabId + 'project' — imports land in the chosen tab's workspace", () => {
+    expect(buildSkillsImportApplyRequest("t1", "project", { a: true })).toEqual({
+      tabId: "t1",
+      scope: "project",
+      ids: ["a"],
+    });
   });
 });
 
