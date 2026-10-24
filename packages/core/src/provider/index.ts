@@ -38,10 +38,12 @@ export {
   ENV_CONTEXT_WINDOW_MODEL,
   ENV_DB_PATH,
   ENV_IMAGE_INPUT,
+  ENV_IMAGE_INPUT_MODEL_OVERRIDE,
   ENV_MAX_RETRIES,
   ENV_MAX_TURNS,
   ENV_MODEL,
   loadEnvConfig,
+  parseImageInputModelOverride,
 } from "./env.js";
 export type { ModelBoundCoreEnvConfig } from "./env.js";
 export {
@@ -56,5 +58,6 @@ export {
   UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
 } from "./capabilities.js";
 export type { ContextWindowInfo, ImageInputOverride, LiveModelCapabilities } from "./capabilities.js";
+export type { ImageModalityLookup } from "./capabilities.js";
 export { buildChildModelSettingsResolver } from "./child-model-settings.js";
 export type { ChildModelSettings } from "./child-model-settings.js";
