@@ -382,6 +382,12 @@ function createRunner(
                 description: `workflow ${definition.name} step ${step.id}`,
                 prompt: cappedPrompt.text,
                 maxTurns: step.maxTurns,
+                // Taskana 4095 follow-up: the step's declared `tools:` extras
+                // (today: WebSearch). Threaded verbatim; the RUNNER resolves
+                // them against what boot provides (no backend => silent skip),
+                // so a preset step degrades instead of failing the run. A
+                // request without extras is byte-identical to before.
+                ...(step.tools !== undefined && step.tools.length > 0 ? { tools: step.tools } : {}),
               },
               subOpts,
             );

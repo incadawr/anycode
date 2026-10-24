@@ -20,29 +20,28 @@ describe("personas", () => {
     // Agent and Workflow are withheld by the non-recursion lock (SPAWN_TOOLS);
     // Skill is withheld because a child subagent inherits no SkillPort in v1
     // (design §2.7 — persona tool lists are unchanged by slices 3.3/3.4).
-    // WebSearch is the one ADDITION over that set: factory-built at boot only
-    // when a search backend is configured, so the bare default registry here
-    // does not carry it, but the persona still lists it (the runner threads
-    // the boot tool in when present; absent => silent skip).
+    // WebSearch is NOT a default either (Taskana 4095 follow-up): it is
+    // factory-built at boot only when a search backend is configured, and
+    // handing it to every general-purpose child would make paid search a new
+    // silent default. A child gets it only when its persona/profile `tools:`
+    // list or the workflow step that spawned it names it explicitly.
     const expected = defaults.filter(
       (name) => name !== "Agent" && name !== "Skill" && name !== "Workflow",
     );
-    expect([...PERSONAS["general-purpose"].tools].sort()).toEqual([...expected, "WebSearch"].sort());
+    expect([...PERSONAS["general-purpose"].tools].sort()).toEqual(expected);
     expect(PERSONAS["general-purpose"].tools).not.toContain("Agent");
     expect(PERSONAS["general-purpose"].tools).not.toContain("Skill");
     expect(PERSONAS["general-purpose"].tools).not.toContain("Workflow");
+    expect(PERSONAS["general-purpose"].tools).not.toContain("WebSearch");
   });
 
-  it("general-purpose carries WebFetch and (backend-conditional) WebSearch; explore stays fetch-only", () => {
-    // WebSearch is listed even though it is only registered into a child
-    // registry when boot supplied the tool (see runner tests): listing it is
-    // what makes the runner thread it in; an unconfigured site keeps the
-    // silent-skip miss path.
+  it("general-purpose carries WebFetch; neither built-in persona carries WebSearch", () => {
+    // WebFetch stays a default (free, no backend). WebSearch is opt-in per
+    // child (Taskana 4095 follow-up): md-profile `tools:` frontmatter or a
+    // workflow step's `tools:` entry — the runner threads the boot tool in
+    // only then (see runner tests).
     expect(PERSONAS["general-purpose"].tools).toContain("WebFetch");
-    expect(PERSONAS["general-purpose"].tools).toContain("WebSearch");
-    expect(PERSONAS["general-purpose"].tools.indexOf("WebSearch")).toBe(
-      PERSONAS["general-purpose"].tools.indexOf("WebFetch") + 1,
-    );
+    expect(PERSONAS["general-purpose"].tools).not.toContain("WebSearch");
     // Explore is deliberately unchanged: recon stays fetch-only, no search.
     expect(PERSONAS.explore.tools).toContain("WebFetch");
     expect(PERSONAS.explore.tools).not.toContain("WebSearch");
@@ -71,18 +70,15 @@ describe("personas", () => {
     expect(getPersona("explore").name).toBe("explore");
   });
 
-  it("every persona tool is a real registered tool, or the backend-conditional WebSearch", () => {
+  it("every persona tool is a real registered tool", () => {
     for (const persona of Object.values(PERSONAS)) {
       for (const name of persona.tools) {
-        // WebSearch is the ONE deliberate exception: factory-built at boot
-        // only when a search backend is configured, so the bare default
-        // registry (built here without options) does not carry it.
-        if (name === "WebSearch") {
-          expect(registry.has(name), "WebSearch must NOT be in the bare default registry").toBe(false);
-          continue;
-        }
         expect(registry.has(name), `${persona.name} references unknown tool ${name}`).toBe(true);
       }
     }
+    // WebSearch is factory-built at boot only when a search backend is
+    // configured, so the bare default registry never carries it — and no
+    // built-in persona may list it (Taskana 4095 follow-up: opt-in per child).
+    expect(registry.has("WebSearch")).toBe(false);
   });
 });

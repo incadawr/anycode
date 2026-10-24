@@ -195,11 +195,15 @@ export interface SubagentRunnerOptions {
   maxConcurrent?: number;
   /**
    * The WebSearch tool instance (factory-built at boot when a search backend
-   * is configured) threaded into every persona child registry whose tool list
-   * names "WebSearch". Absent — every existing wiring stays byte-compatible:
-   * the child registry simply has no WebSearch and a persona listing it keeps
-   * the silent skip (same as any tool name missing from the default registry),
-   * so the deep-research preset degrades honestly instead of erroring.
+   * is configured) threaded into a child registry ONLY when that child's
+   * declared tool list names "WebSearch" explicitly (Taskana 4095 follow-up):
+   * an md-profile's `tools:` frontmatter, or a workflow step's `tools:` entry
+   * resolved onto the SubagentRequest. Absent — every existing wiring stays
+   * byte-compatible: the child registry simply has no WebSearch and a list
+   * naming it keeps the silent skip (same as any tool name missing from the
+   * default registry), so the deep-research preset degrades honestly on a
+   * site without a backend instead of erroring. The built-in personas no
+   * longer list WebSearch: paid search is opt-in per child, never a default.
    */
   webSearchTool?: AnyToolDefinition;
 }
@@ -253,10 +257,21 @@ export function buildChildConfig(
   },
 ): AgentLoopConfig {
   const tokenizer = parent.tokenizer ?? new HeuristicTokenizer();
+  // Taskana 4095 follow-up: the effective tool list is the persona's own plus
+  // the REQUEST's extras (SubagentRequest.tools — a workflow step's declared
+  // `tools:`). The only extra today is "WebSearch", which general-purpose no
+  // longer lists by default (paid search is opt-in per child); merging here
+  // keeps buildPersonaRegistry the single place that resolves names, so the
+  // extras get the same SPAWN_TOOLS skip and the same silent-skip miss path
+  // as persona-declared names. Deduped; order-stable for the registry build.
+  const requestTools = req.tools ?? [];
+  const extraNames = requestTools.filter((name) => !persona.tools.includes(name));
+  const effectivePersona: PersonaDefinition =
+    extraNames.length > 0 ? { ...persona, tools: [...persona.tools, ...extraNames] } : persona;
   // NEW per-persona registry WITHOUT any spawn tool (structural non-recursion,
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
-  const registry = buildPersonaRegistry(persona, extras?.webSearchTool);
+  const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
   // TASK.160 §2.2, reaffirmed by TASK.171: same precedence as the
   // model-override resolution in run() (request > persona default) — the
   // spawn identity stamped onto every telemetry record this child produces,
@@ -385,11 +400,18 @@ export function buildChildConfig(
  *
  * `webSearchTool` (optional): WebSearch is factory-built at boot only when a
  * search backend is configured, so it is not in the default registry; when the
- * caller threads it AND the persona lists "WebSearch", it is registered after
- * the names sourced from the default registry. Absent tool + listed name keeps
- * the generic miss path: a silent skip, never an error.
+ * caller threads it AND the persona's tool list names "WebSearch" — an
+ * md-profile's explicit `tools:` line, or a workflow step's declared `tools:`
+ * resolved onto the request — it is registered after the names sourced from
+ * the default registry. Absent tool + listed name keeps the generic miss
+ * path: a silent skip, never an error. The built-in general-purpose persona
+ * deliberately does NOT list it (Taskana 4095 follow-up: paid search must
+ * never become a silent default for every child).
  */
-function buildPersonaRegistry(persona: PersonaDefinition, webSearchTool?: AnyToolDefinition): ToolRegistry {
+function buildPersonaRegistry(
+  persona: PersonaDefinition,
+  webSearchTool?: AnyToolDefinition,
+): ToolRegistry {
   const source = createDefaultToolRegistry();
   const registry = new ToolRegistry();
   for (const name of persona.tools) {

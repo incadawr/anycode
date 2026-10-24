@@ -84,6 +84,22 @@ describe("examples/workflows/deep-research.json — bundled preset", () => {
     }
   });
 
+  it("the search-wide step requests WebSearch explicitly; the other steps carry no extras (Taskana 4095 follow-up)", () => {
+    // WebSearch is NOT a general-purpose default anymore: the preset's sweep
+    // step must OPT IN through its own `tools:` entry — the only mechanism
+    // that puts the boot-built tool into a step child's registry when a
+    // backend is configured (absent backend => runner's silent skip, so the
+    // run degrades to WebFetch-only instead of erroring). fetch-sources and
+    // synthesize read and write only: they must NOT pay for search.
+    const definition = parsePreset().definition!;
+    const searchWide = definition.steps.find((s) => s.id === "search-wide")!;
+    expect(searchWide.tools).toEqual(["WebSearch"]);
+    const fetchSources = definition.steps.find((s) => s.id === "fetch-sources")!;
+    expect(fetchSources.tools).toBeUndefined();
+    const synthesize = definition.steps.find((s) => s.id === "synthesize")!;
+    expect(synthesize.tools).toBeUndefined();
+  });
+
   it("pins the input placeholder spelling the engine actually substitutes", () => {
     // The engine substitutes EXACTLY ${input} and ${steps.<id>} (template.ts);
     // a typo like $input or ${query} would silently stay inert literal text.

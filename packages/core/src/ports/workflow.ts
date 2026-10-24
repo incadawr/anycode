@@ -23,6 +23,18 @@ export interface WorkflowStepDefinition {
   promptTemplate: string;
   /** Step ids this step waits for; results become template variables. Absent = source step. */
   dependsOn?: readonly string[];
+  /**
+   * EXTRA tool names this step's child is opted into beyond its persona's own
+   * list (Taskana 4095 follow-up). The only meaningful member today is
+   * "WebSearch": the built-in general-purpose persona deliberately does NOT
+   * carry it (paid search must never be a silent default for every child), so
+   * a step that wants it — the deep-research preset's search-wide sweep —
+   * names it here and the engine forwards the list on the SubagentRequest.
+   * The runner intersects it with what boot can provide: on a site without a
+   * search backend the name is a silent skip, so the preset degrades to a
+   * WebFetch-only child instead of erroring.
+   */
+  tools?: readonly string[];
   /** Optional per-step turn budget; the runner caps it at SUBAGENT_MAX_TURNS_CEILING. */
   maxTurns?: number;
 }

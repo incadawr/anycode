@@ -69,6 +69,33 @@ describe("parseWorkflowDefinition — valid definitions", () => {
     expect(result.definition?.steps[1]).toMatchObject({ dependsOn: ["a"], maxTurns: 3 });
   });
 
+  // Taskana 4095 follow-up: a step's `tools:` extras (today: WebSearch) are
+  // shape-checked (non-empty strings) and carried through verbatim — the
+  // RUNNER resolves them against what boot provides, so an unresolvable name
+  // is a silent skip in the child registry, never a parse failure.
+  it("carries a step's tools extras through verbatim; a non-string entry rejects the whole definition", () => {
+    const raw = minimalRaw({
+      steps: [
+        { id: "a", agentType: "general-purpose", promptTemplate: "seed", tools: ["WebSearch"] },
+        { id: "b", agentType: "general-purpose", promptTemplate: "${steps.a}", dependsOn: ["a"] },
+      ],
+    });
+    const result = parseWorkflowDefinition(raw, ctx());
+    expect(result.problem).toBeUndefined();
+    expect(result.definition?.steps[0]?.tools).toEqual(["WebSearch"]);
+    // A step without `tools:` carries NO field — absent, not empty.
+    expect(result.definition?.steps[1]?.tools).toBeUndefined();
+
+    const bad = parseWorkflowDefinition(
+      minimalRaw({
+        steps: [{ id: "a", agentType: "general-purpose", promptTemplate: "x", tools: ["WebSearch", 42] }],
+      }),
+      ctx(),
+    );
+    expect(bad.definition).toBeUndefined();
+    expect(bad.problem).toContain("tools");
+  });
+
   it("carries an outputTemplate through verbatim", () => {
     const result = parseWorkflowDefinition(minimalRaw({ outputTemplate: "Result: ${steps.a}" }), ctx());
     expect(result.definition?.outputTemplate).toBe("Result: ${steps.a}");

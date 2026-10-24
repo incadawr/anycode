@@ -74,6 +74,8 @@ class FakeSubagentPort implements SubagentPort {
   private inflight = 0;
   readonly calls: string[] = [];
   readonly prompts = new Map<string, string>();
+  /** Taskana 4095 follow-up: the `tools` array each step's request carried (absent = no extras). */
+  readonly requestTools = new Map<string, readonly string[] | undefined>();
 
   constructor(
     private readonly agentTypes: string[],
@@ -93,6 +95,7 @@ class FakeSubagentPort implements SubagentPort {
     const id = stepIdOf(req);
     this.calls.push(id);
     this.prompts.set(id, req.prompt);
+    this.requestTools.set(id, req.tools);
     this.inflight += 1;
     this.maxInflight = Math.max(this.maxInflight, this.inflight);
     try {
@@ -522,6 +525,32 @@ describe("fail-fast", () => {
 
     expect(outcome.status).toBe("completed");
     expect(outcomeOf(outcome.steps, "a").status).toBe("completed");
+  });
+
+  // Taskana 4095 follow-up: WebSearch is NOT a general-purpose default
+  // anymore, so a workflow step opts its child in through the step's own
+  // `tools:` entry. The engine forwards it verbatim on the SubagentRequest —
+  // the RUNNER resolves it against what boot provides (a site without a
+  // backend keeps the silent skip), so the engine test pins only the
+  // forwarding, both directions:
+  it("a step's declared tools ride the SubagentRequest; a step without them carries no extras (Taskana 4095 follow-up)", async () => {
+    const port = new FakeSubagentPort(["general-purpose"], (id, req, opts) =>
+      emitAndComplete(opts, req, `out:${id}`),
+    );
+    const wf = def("step-tools", [
+      { id: "search", agentType: "general-purpose", promptTemplate: "${input}", tools: ["WebSearch"] },
+      { id: "plain", agentType: "general-purpose", promptTemplate: "${steps.search}", dependsOn: ["search"] },
+    ]);
+
+    const outcome = await createWorkflowRunner(port, [wf]).run({ name: "step-tools", input: "go" }, {});
+
+    expect(outcome.status).toBe("completed");
+    // The declaring step's request carries its extras verbatim.
+    expect(port.requestTools.get("search")).toEqual(["WebSearch"]);
+    // A step without `tools:` sends NO extras — the request is byte-identical
+    // to a pre-4095-follow-up spawn, so nothing downstream can mistake
+    // absent for empty.
+    expect(port.requestTools.get("plain")).toBeUndefined();
   });
 });
 
