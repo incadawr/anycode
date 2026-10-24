@@ -27,6 +27,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The connection drawer lets you set, per model, whether it accepts images
   (Auto, On or Off). Live model lists from providers that declare input
   modalities fill this in automatically.
+- For HTTP providers that report their subscription quota in response headers,
+  the connection card shows the remaining quota (and its reset time, when the
+  provider reports one), and AnyCode remembers the last value for each
+  connection.
 
 ### Security
 
