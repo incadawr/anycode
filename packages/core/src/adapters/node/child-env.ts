@@ -68,15 +68,49 @@ export function proxyValueHasUserinfo(value: string): boolean {
 const RELAY_URL_USER = "anycode";
 
 /**
+ * Cross-review F4 (opus2): the SHAPE-only test below exempted
+ * `http://anycode:<anything>@127.0.0.1:<any port>` — including a relay minted
+ * by a DIFFERENT anycode process (another window, another local user) whose
+ * token this process has no right to treat as credential-free. The exemption
+ * is therefore two conjuncts: the exact shape, AND a live-registry hit (the
+ * port AND token of a relay THIS process minted). `proxy-relay.ts` registers
+ * the validator at module load (both modules live in one process; neither
+ * imports the other's runtime — the seam is a plain callback), so callers of
+ * `proxyValueCarriesCredential` get the registry answer with no import cycle.
+ */
+let relayUrlRegistryCheck: ((url: URL) => boolean) | undefined;
+
+/**
+ * Registration seam for `proxy-relay.ts` (called once at its module load):
+ * installs the live-registry half of the relay-URL exemption. The callback
+ * receives the ALREADY-PARSED URL and answers whether THIS process minted
+ * exactly it.
+ */
+export function registerRelayUrlValidator(check: (url: URL) => boolean): void {
+  relayUrlRegistryCheck = check;
+}
+
+/**
+ * Test seam restoring the pristine shape-only detector: unit suites that
+ * assert the pure SHAPE rule (no relay registry involved) run free of
+ * process-global state. Production code never calls this.
+ */
+export function clearRelayUrlValidatorForTest(): void {
+  relayUrlRegistryCheck = undefined;
+}
+
+/**
  * Taskana 4685 rework: true ONLY for a relay URL this host minted —
  * `http://anycode:<token>@127.0.0.1:<port>` (loopback host, our fixed user, a
- * non-empty token password). This is the exact exemption the `@`-detectors
+ * non-empty token password) whose port and token live in this process's relay
+ * registry (cross-review F4). This is the exact exemption the `@`-detectors
  * grant: a relay URL is the one value whose `@` is not a leaked upstream
  * credential but the relay's own token, so `sanitizeChildEnv` passes it
  * through verbatim and every "swap a credentialed value for its relay" site
  * recognises it back. Anything else with an `@` — a different host, a
- * different user, an empty password, a non-loopback address — is NOT exempt
- * and keeps the TASK.135 drop/swap treatment.
+ * different user, an empty password, a non-loopback address, OR the right
+ * shape on a port this process does not own — is NOT exempt and keeps the
+ * TASK.135 drop/swap treatment.
  */
 export function isCredentialFreeRelayUrl(value: string): boolean {
   let url: URL;
@@ -85,7 +119,10 @@ export function isCredentialFreeRelayUrl(value: string): boolean {
   } catch {
     return false;
   }
-  return url.protocol === "http:" && url.hostname === "127.0.0.1" && url.username === RELAY_URL_USER && url.password !== "";
+  if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username !== RELAY_URL_USER || url.password === "") {
+    return false;
+  }
+  return relayUrlRegistryCheck === undefined ? false : relayUrlRegistryCheck(url);
 }
 
 /**

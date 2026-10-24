@@ -76,7 +76,27 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import * as http from "node:http";
 import net from "node:net";
 
-import { isProxyVarName, type RelayUrlLookup } from "./child-env.js";
+import { isProxyVarName, registerRelayUrlValidator, type RelayUrlLookup } from "./child-env.js";
+
+// Cross-review F4 (opus2): the child-env relay-URL exemption is gated on THIS
+// registry — only a URL whose port AND token match a relay this process
+// minted is "credential-free". Registered at module load (both modules are
+// in-process siblings; child-env owns the detector, this module owns the
+// truth). Exact-match on port + token, not prefix: two relays of this
+// process sit on different ports, and a foreign process's relay never
+// matches either.
+registerRelayUrlValidator((url) => {
+  const port = Number(url.port);
+  if (!Number.isInteger(port) || port <= 0) {
+    return false;
+  }
+  for (const relay of relays.values()) {
+    if (relay.port === port && relay.token === url.password) {
+      return true;
+    }
+  }
+  return false;
+});
 
 /** The relay's own URL scheme: loopback plain HTTP, always. */
 const RELAY_SCHEME = "http";

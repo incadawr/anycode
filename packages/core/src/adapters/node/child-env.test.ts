@@ -3,7 +3,7 @@
  * Every edge is its own `it`, exactly as the brief (§2.1) enumerates them.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import {
   buildChildEnv,
   isEngineProxyCarrierName,
@@ -277,14 +277,39 @@ describe("relayUrl rewrite (TASK.135 follow-up / Taskana 4074)", () => {
 });
 
 // ── Taskana 4685 rework: the relay URL's own userinfo and the per-value swap ──
-
+//
+// Cross-review F4 (opus2): the exemption is registry-gated — a relay URL is
+// "credential-free" only when THIS process minted it (port + token live in
+// the live relay registry). The suite therefore mints REAL relays through
+// `resolveProxyRelay` in beforeAll (and closes them in afterAll) instead of
+// hard-coding fixture URLs a foreign process could also have shaped.
 describe("relay-URL userinfo exemption + per-value swap (Taskana 4685 rework)", () => {
-  const RELAY_A = "http://anycode:tok-a@127.0.0.1:47557";
-  const RELAY_B = "http://anycode:tok-b@127.0.0.1:47558";
+  let RELAY_A = "";
+  let RELAY_B = "";
 
-  it("isCredentialFreeRelayUrl: ONLY our exact loopback relay shape is exempt", () => {
+  /** Mints (or re-mints) the two fixture relays; RELAY_A/B carry their URLs. */
+  const mintFixtures = async (): Promise<void> => {
+    const { closeProxyRelay, resolveProxyRelay } = await import("./proxy-relay.js");
+    closeProxyRelay();
+    const a = await resolveProxyRelay("http://u:p@relay-a-fixture:3128");
+    const b = await resolveProxyRelay("http://u:p@relay-b-fixture:3128");
+    if (a === undefined || b === undefined) {
+      throw new Error("fixture relays failed to bind");
+    }
+    RELAY_A = a.url;
+    RELAY_B = b.url;
+  };
+
+  beforeAll(mintFixtures);
+
+  afterAll(async () => {
+    const { closeProxyRelay } = await import("./proxy-relay.js");
+    closeProxyRelay();
+  });
+
+  it("isCredentialFreeRelayUrl: ONLY our exact minted relay shape is exempt", () => {
     expect(isCredentialFreeRelayUrl(RELAY_A)).toBe(true);
-    expect(isCredentialFreeRelayUrl("http://anycode:tok@127.0.0.1:1/path")) .toBe(true);
+    expect(isCredentialFreeRelayUrl(`${RELAY_A}/path`)).toBe(true);
     // A different user, host, scheme — or a relay user with an EMPTY password — is NOT a relay URL.
     expect(isCredentialFreeRelayUrl("http://anycode:@127.0.0.1:1")).toBe(false);
     expect(isCredentialFreeRelayUrl("http://other:tok@127.0.0.1:1")).toBe(false);
@@ -292,6 +317,39 @@ describe("relay-URL userinfo exemption + per-value swap (Taskana 4685 rework)", 
     expect(isCredentialFreeRelayUrl("https://anycode:tok@127.0.0.1:1")).toBe(false);
     expect(isCredentialFreeRelayUrl("http://u:p@corp:3128")).toBe(false);
     expect(isCredentialFreeRelayUrl("not a url")).toBe(false);
+    // F4: the right shape on a port this process does NOT own is not exempt.
+    expect(isCredentialFreeRelayUrl("http://anycode:foreign-tok@127.0.0.1:65534")).toBe(false);
+  });
+
+  // Cross-review F4 (opus2): `http://anycode:*@127.0.0.1:*` exempted ANY port —
+  // including a relay of a DIFFERENT anycode process (another window, another
+  // user) whose token this process must never treat as its own credential-free
+  // value. The exemption is now a live registry query: only ports THIS process
+  // minted pass. Shape alone is never enough again.
+  it("F4: an anycode-shaped URL on a port this process does not own is NOT exempt", async () => {
+    const { proxyRelayLookup, closeProxyRelay, resolveProxyRelay } = await import("./proxy-relay.js");
+    try {
+      // Foreign port (no relay of ours): NOT exempt — carries a credential.
+      expect(proxyValueCarriesCredential("http://anycode:foreign-tok@127.0.0.1:65534")).toBe(true);
+      // Own relay: exempt verbatim.
+      const relay = await resolveProxyRelay("http://user:secret@127.0.0.1:9");
+      expect(relay).toBeDefined();
+      expect(proxyValueCarriesCredential(relay!.url)).toBe(false);
+      // The registry lookup round-trips the relay URL of its own upstream.
+      const lookup = proxyRelayLookup();
+      expect(lookup).toBeDefined();
+      expect(lookup!("http://user:secret@127.0.0.1:9")).toBe(relay!.url);
+      // A DIFFERENT port than the minted one, token or not: not exempt.
+      expect(proxyValueCarriesCredential(`http://anycode:${relay!.token}@127.0.0.1:${relay!.port + 1}`)).toBe(true);
+      // And closeProxyRelay withdraws the exemption with the registry itself.
+      closeProxyRelay();
+      expect(proxyValueCarriesCredential(relay!.url)).toBe(true);
+      expect(isCredentialFreeRelayUrl(relay!.url)).toBe(false);
+    } finally {
+      // The close above tore the shared fixtures down too — re-mint for the
+      // rest of this describe's tests.
+      await mintFixtures();
+    }
   });
 
   it("proxyValueCarriesCredential: an @ is a credential EXCEPT the relay URL's own token userinfo", () => {
