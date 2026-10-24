@@ -2171,3 +2171,140 @@ describe("agentTool handler — role-route degrade at the session tier (Taskana 
     expect(result.output?.finalText).toContain('ran on the parent\'s model (every route entry is unhealthy: cooling down)');
   });
 });
+
+// Taskana 4735: an engine-profile role (a settings-derived role whose primary is
+// an engine entry) runs as a child session on the ENGINE path too, so an
+// orchestrate session must default it to detach:true exactly like the
+// non-engine session tier. Explicit detach:false still wins; the refusals for
+// continue_session / send_to are unchanged.
+describe("agentTool handler — engine-profile default-detach in orchestrate (Taskana 4735)", () => {
+  const full = createAgentTool({ sessionTier: true });
+  const ENGINE_PROFILE: EngineProfileInfo = { engine: "claude", systemPrompt: "ROLE BODY", model: "profile-model" };
+
+  function engineCtx(
+    extra: Partial<SubagentPort>,
+    orchestrate?: boolean,
+  ): { ctx: ToolContext; seen: () => SessionSubagentRequest | undefined; ran: () => boolean } {
+    let seen: SessionSubagentRequest | undefined;
+    let ran = false;
+    const sessionSubagents: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
+      run: async (req) => {
+        ran = true;
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, finalText: "child done", spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["executor"],
+      engineProfile: () => ENGINE_PROFILE,
+      ...extra,
+    };
+    return {
+      ctx: makeCtx({ subagents, sessionSubagents, ...(orchestrate !== undefined ? { orchestrate } : {}) }),
+      seen: () => seen,
+      ran: () => ran,
+    };
+  }
+
+  const CALL = { description: "d", prompt: "do it", agent_type: "executor" };
+
+  it("healthy engine primary (no route port) in orchestrate: request detaches by default, tier omitted or session", async () => {
+    const a = engineCtx({}, true);
+    const r1 = await full.handler({ ...CALL, tier: "session" }, a.ctx);
+    expect(r1.ok).toBe(true);
+    expect(a.seen()).toHaveProperty("detach", true);
+    expect(a.seen()?.engine).toBe("claude");
+
+    const b = engineCtx({}, true);
+    await full.handler(CALL, b.ctx);
+    expect(b.seen()).toHaveProperty("detach", true);
+  });
+
+  it("healthy route (no skips) in orchestrate: engine profile request detaches and keeps its profile shape", async () => {
+    const { ctx, seen } = engineCtx(
+      { resolveRoleRoute: () => ({ entries: [{ engine: "claude", model: "opus" }], skipped: [] }) },
+      true,
+    );
+    await full.handler({ ...CALL, tier: "session" }, ctx);
+    expect(seen()).toEqual({
+      agentType: "executor",
+      description: "d",
+      prompt: "ROLE BODY\n\n---\n\ndo it",
+      spawnToolCallId: "call-1",
+      model: "profile-model",
+      engine: "claude",
+      detach: true,
+    });
+  });
+
+  it("degraded fallback (cooling primary) in orchestrate: the fallback spawn detaches too", async () => {
+    const { ctx, seen } = engineCtx(
+      {
+        resolveRoleRoute: () => ({
+          entries: [{ provider: "conn-glm", model: "glm-5.3" }],
+          skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down" }],
+          turnBudget: 80,
+        }),
+      },
+      true,
+    );
+    await full.handler({ ...CALL, tier: "session" }, ctx);
+    expect(seen()?.model).toBe("glm-5.3");
+    expect(seen()).not.toHaveProperty("engine");
+    expect(seen()).toHaveProperty("detach", true);
+  });
+
+  it("exhausted chain (degrade to parent model) in orchestrate: the degraded spawn detaches too", async () => {
+    const { ctx, seen } = engineCtx(
+      {
+        resolveRoleRoute: () => ({
+          entries: [],
+          skipped: [{ entry: { engine: "claude", model: "opus" }, reason: "cooling down" }],
+          turnBudget: 60,
+        }),
+      },
+      true,
+    );
+    await full.handler({ ...CALL, tier: "session" }, ctx);
+    expect(seen()).not.toHaveProperty("engine");
+    expect(seen()?.maxTurns).toBe(60);
+    expect(seen()).toHaveProperty("detach", true);
+  });
+
+  it("explicit detach:false in orchestrate is honored: no detach key", async () => {
+    const { ctx, seen } = engineCtx({}, true);
+    await full.handler({ ...CALL, tier: "session", detach: false }, ctx);
+    expect(seen()).toBeDefined();
+    expect(seen()).not.toHaveProperty("detach");
+  });
+
+  it("orchestrate unset: engine profile request carries no detach key", async () => {
+    const { ctx, seen } = engineCtx({}, undefined);
+    await full.handler({ ...CALL, tier: "session" }, ctx);
+    expect(seen()).toEqual({
+      agentType: "executor",
+      description: "d",
+      prompt: "ROLE BODY\n\n---\n\ndo it",
+      spawnToolCallId: "call-1",
+      model: "profile-model",
+      engine: "claude",
+    });
+  });
+
+  it("continue_session and send_to stay refused for engine profiles in orchestrate, and nothing runs", async () => {
+    const resumed = engineCtx({}, true);
+    const r1 = await full.handler({ ...CALL, tier: "session", continue_session: "child-1" }, resumed.ctx);
+    expect(r1.ok).toBe(false);
+    expect(resumed.ran()).toBe(false);
+
+    const sent = engineCtx({}, true);
+    const r2 = await full.handler({ ...CALL, tier: "session", send_to: "child-1" }, sent.ctx);
+    expect(r2.ok).toBe(false);
+    expect(r2.error).toContain("send_to is supported only for AnyCode (core) children");
+    expect(sent.ran()).toBe(false);
+  });
+});
