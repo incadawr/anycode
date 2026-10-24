@@ -7,8 +7,24 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.36] — 2026-10-25
+
 ### Added
 
+- Built-in `planner`, `executor` and `reviewer` roles for orchestration, each
+  with its own turn budget. A same-named profile in `.anycode/agents/` replaces
+  the built-in role, and a role claimed by such a profile ignores the `roles`
+  settings.
+- Orchestrate mode (`/orchestrate <task>`): the tab plans read-only and hands
+  work to background child sessions, whose reports arrive as new turns.
+  Children run in the permission mode you had before orchestrate (never plan).
+  Leaving plan mode, including an approved plan, turns orchestrate off.
+- `roles` settings: per role, an ordered fallback chain of engine, connection,
+  model and effort. Infrastructure failures (quota, auth, unreachable, unknown
+  model) put an entry on cooldown and the next healthy one is used; when the
+  whole chain is down, the child runs on the parent's model with a notice. A
+  cap on parallel role children (`roles.maxParallelChildren`, default 4) refuses
+  extra spawns instead of queueing them.
 - Adaptive turn budget, off by default: turn on `tools.adaptiveTurnBudget` in
   Settings (or `ANYCODE_ADAPTIVE_TURN_BUDGET=1`). Subagents then get extra turns
   while their work makes real progress, and the base subagent budget is learned
@@ -78,6 +94,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `Agent(send_to)`, added in 0.0.35, now actually reaches the running child in
+  the desktop app (every call failed with "unavailable in this host"), and a
+  cancelled turn stops waiting for the delivery at once.
 - Switching the engine twice in a row without a message in between keeps the
   conversation: the next engine receives the full imported history, and a
   reload no longer shows an empty transcript. The switch notice now appears in
@@ -105,28 +124,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ## [0.0.35] — 2026-10-24
 
 ### Added
-- Built-in `planner`/`executor`/`reviewer` role personas for orchestration
-  (read-only planner briefs, literal executor implementation, adversarial
-  reviewer verdicts), overridable by a same-named user md-profile in
-  `.anycode/agents/` (the profile wins; `general-purpose`/`explore` stay
-  reserved). Each role carries its own turn budget (planner 30, executor 80,
-  reviewer 40).
-- Orchestrate tab mode and `/orchestrate <task>`: enabling orchestrate puts
-  the tab's session in plan permission with an orchestration reminder instead
-  of the plan reminder, and an Agent call with `tier:"session"` and no explicit
-  `detach` defaults to `detach:true` (reports arrive as new turns). Child
-  sessions spawned by an orchestrate parent run under the permission mode the
-  user had before enabling orchestrate (never `plan`; `yolo` only if it was
-  already `yolo`).
-- Roles settings (`roles` section, additive-optional): per role an ordered
-  engine/connection+model+effort fallback chain with a process-local health
-  cache (exponential cooldown, infrastructure failures only — quota/auth/
-  unreachable/model-not-found after retries; ordinary task failures never
-  fall back), detached role children respawn on the next healthy entry,
-  per-role turn budgets, and a parallel-children cap
-  (`roles.maxParallelChildren`, default 4, honest refusal — never queued).
-  The 4131 explore default folds into the same generic chain
-  (`ANYCODE_EXPLORE_MODEL` still feeds the chain head).
 - The built-in `explore` recon subagent can run on a cheaper model: set
   `ANYCODE_EXPLORE_MODEL` (exact model id) and every inline explore child
   defaults to it. An explicit `Agent(model: …)` still wins, and unset keeps
