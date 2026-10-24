@@ -1088,6 +1088,7 @@ function makeStore(snapshot: unknown): SettingsStoreApi {
     pendingConsent: null,
     subscribeUpdates: () => () => {},
     subscribeProviderHealth: () => () => {},
+    subscribeProviderQuota: () => () => {},
   };
   return { getState: () => state, subscribe: () => () => {}, setState: () => {} } as unknown as SettingsStoreApi;
 }
