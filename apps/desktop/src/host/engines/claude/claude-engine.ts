@@ -110,8 +110,11 @@ export const CLAUDE_ENGINE_CAPABILITIES: EngineCapabilities = {
  * list by construction — anything not here is never built into a user frame
  * by host code. Ambient catalog commands (`initialize.commands[]` /
  * `system/init.slash_commands[]`) are neither surfaced in the UI nor
- * forwarded; they stay reachable only if the user types them verbatim as
- * ordinary text, same as any text they could type anyway.
+ * forwarded; for a HUMAN-typed frame they stay reachable only if the user
+ * types them verbatim as ordinary text, same as any text they could type
+ * anyway. System-origin frames (child reports, agent messages) carry
+ * model-authored text and are additionally de-fanged at the send site — see
+ * `neutralizeSystemOriginSlashes` (cross-review F2).
  */
 const CLAUDE_SLASH_ALLOWLIST = ["/compact"] as const;
 
@@ -302,6 +305,35 @@ function userMessageContent(text: string, attachments?: ImageAttachment[]): stri
     })),
     { type: "text", text },
   ];
+}
+
+/**
+ * TASK.92 cross-review F2: the slash-injection guard for NON-HUMAN user
+ * frames. Root engine sessions interpret slash commands in stream-json user
+ * frames (w0-17 evidence, the same mechanism `compactNow` rides), and host
+ * paths DO convert model output into user frames with `origin:"system"` — a
+ * detached child's final report (`formatChildTaskNotification` ->
+ * `child_report` -> renderer prompt queue -> `user_message`) or an
+ * agent-to-agent message (`drainAgentInbox` -> `acceptUserMessage(...,
+ * "system")`). A child model that ends its report with a `\n/doctor` line
+ * (or `/update-config`, `/run`, …) must not get it executed in the parent
+ * root session where slash interpretation is now ON.
+ *
+ * Defense: for `origin === "system"` turns ONLY, every LINE-START `/` of the
+ * payload is de-fanged by prefixing one space. Position 0 interpretation is
+ * proven by fixture; a line-start `/` at position >0 is unproven either way —
+ * the guard deliberately does not bet on that answer. The slash character and
+ * everything after it stay intact (the model still reads its own command
+ * text); only its command position is broken. Human-typed text is NEVER
+ * touched: the user typing `/doctor` verbatim as ordinary text stays exactly
+ * as reachable as the allowlist's own comment promises, and a human frame
+ * with no slash is byte-identical to before.
+ */
+function neutralizeSystemOriginSlashes(text: string): string {
+  // Multiline-safe: a `/` at the very start or right after any newline. The
+  // single leading space breaks both the position-0 and the line-start
+  // interpretation while changing nothing else about the text.
+  return text.replace(/(^|\n)(\/)/g, "$1 $2");
 }
 
 /**
@@ -1092,7 +1124,16 @@ export class ClaudeEngine implements SessionEngine {
         }
         // A turn IS a user message on the shared stdin — one process, one
         // session, many turns (probe #1). There is no per-turn request/response.
-        this.client.sendUserMessage(userMessageContent(input, options.attachments));
+        // F2: a system-origin frame is HOST/MODEL-authored text, never human
+        // input — its line-start slashes are de-fanged so the root session's
+        // slash interpretation (w0-17) cannot execute a model-authored
+        // command. Human input goes out byte-identical.
+        this.client.sendUserMessage(
+          userMessageContent(
+            options.origin === "system" ? neutralizeSystemOriginSlashes(input) : input,
+            options.attachments,
+          ),
+        );
         break barrier;
       }
       if (sendCancelled) {

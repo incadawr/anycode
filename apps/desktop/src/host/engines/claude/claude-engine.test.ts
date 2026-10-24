@@ -2172,4 +2172,75 @@ describe("ClaudeEngine.compactNow — TASK.92 allowlisted /compact passthrough",
     expect(tokens!.output).toBe(400);
     expect(tokens!.total).toBe(1300);
   });
+
+  it("F2: a system-origin turn whose model-authored text starts with '/' is neutralized — never interpreted as a slash command", async () => {
+    // The injection boundary TASK.92's spawn change actually created: the
+    // ROOT engine session interprets a leading /command in a stream-json user
+    // frame (w0-17 evidence), and host paths DO convert model output into
+    // user frames — a detached child's final text (child_report ->
+    // enqueuePrompt -> user_message origin:"system") or an agent-to-agent
+    // message (drainAgentInbox -> acceptUserMessage(..., "system")). A child
+    // model that ends its report with "\n/doctor" (or /update-config, /run)
+    // must not get it executed in the parent root session.
+    const transport = new FakeTransport({
+      frames: [foreignAssistantFrame("m-sys-1", "handled"), foreignResultFrame("sys result")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    // POSITION 0: the frame's first non-whitespace character is the slash.
+    const events = await collect(
+      engine.runTurn("/doctor", { signal: new AbortController().signal, origin: "system" }),
+    );
+
+    expect(events.some((event) => event.type === "loop_end")).toBe(true);
+    // The wire frame is NOT a slash command: the guard rewrites position 0.
+    expect(transport.sent[0]).not.toBe("/doctor");
+    expect(String(transport.sent[0])).not.toMatch(/^\/doctor/);
+    // And it still carries the payload verbatim after the guard line.
+    expect(String(transport.sent[0])).toContain("/doctor");
+    // A HUMAN turn with the same text is untouched — the user typing /doctor
+    // verbatim as ordinary text stays reachable by design (claude-engine.ts's
+    // own allowlist comment).
+    transport.enqueue(foreignAssistantFrame("m-human", "handled"));
+    transport.enqueue(foreignResultFrame("human result"));
+    await collect(engine.runTurn("/doctor", { signal: new AbortController().signal }));
+    expect(transport.sent[1]).toBe("/doctor");
+  });
+
+  it("F2: a system-origin turn whose leading '/' sits on a LATER line (after the notification header) is neutralized too", async () => {
+    // The realistic child-report shape: host notification header first, then
+    // the model-authored body. The live CLI's interpretation of a line-start
+    // /cmd at position >0 was the deferred probe (review §10.2) — the host
+    // guard must not bet on the answer: every line-start '/' of a
+    // system-origin frame is de-fanged.
+    const transport = new FakeTransport({
+      frames: [foreignAssistantFrame("m-sys-2", "handled"), foreignResultFrame("sys result 2")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const text = "[SYSTEM NOTIFICATION - NOT USER INPUT]\nchild finished\n/doctor";
+    await collect(engine.runTurn(text, { signal: new AbortController().signal, origin: "system" }));
+
+    expect(String(transport.sent[0])).not.toMatch(/\n\/doctor/);
+    expect(String(transport.sent[0])).toContain("[SYSTEM NOTIFICATION - NOT USER INPUT]");
+  });
+
+  it("F2: ordinary system-origin text (no slash) and HUMAN-origin text are byte-identical to before", async () => {
+    const transport = new FakeTransport({
+      frames: [foreignAssistantFrame("m-plain", "handled"), foreignResultFrame("plain result")],
+      contextUsage: { totalTokens: 1000, maxTokens: 200000 },
+    });
+    const engine = engineWith(transport);
+
+    const sysText = "[SYSTEM NOTIFICATION - NOT USER INPUT]\nall clean here";
+    await collect(engine.runTurn(sysText, { signal: new AbortController().signal, origin: "system" }));
+    expect(transport.sent[0]).toBe(sysText);
+
+    transport.enqueue(foreignAssistantFrame("m-human2", "handled"));
+    transport.enqueue(foreignResultFrame("human result 2"));
+    await collect(engine.runTurn("/anything /at /all", { signal: new AbortController().signal }));
+    expect(transport.sent[1]).toBe("/anything /at /all");
+  });
 });
