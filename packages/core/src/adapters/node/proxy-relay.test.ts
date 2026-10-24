@@ -16,7 +16,9 @@ import net from "node:net";
 import {
   checkRelayAuthorization,
   closeProxyRelay,
+  closeUnreferencedProxyRelays,
   credentialedProxyValueForRelay,
+  credentialedProxyValuesForRelay,
   createProxyRelayForTest,
   isLoopbackPeer,
   parseUpstreamProxyUrl,
@@ -555,6 +557,41 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     closeProxyRelay();
   });
 
+  // Cross-review F5a (opus2): the boot scan must never pick an anycode relay
+  // URL as the upstream to front — a nested anycode CLI/host (a child of a
+  // Bash tool) inherits HTTPS_PROXY=<parent relay URL>, and relaying THAT
+  // chains a second relay in front of the first: double hops, double
+  // connection state, opaque inner 407s. The parent relay already carries the
+  // credential; a relay-of-a-relay is never needed.
+  it("F5a: the boot scan never returns an anycode-relay-shaped value as the upstream", () => {
+    const RELAY_SHAPED = "http://anycode:AbCdEf1234567890_-XyZ@127.0.0.1:47557";
+    expect(credentialedProxyValueForRelay({ HTTPS_PROXY: RELAY_SHAPED })).toBeUndefined();
+    // A real upstream BEHIND it is still found (family order respected).
+    expect(credentialedProxyValueForRelay({ HTTPS_PROXY: RELAY_SHAPED, HTTP_PROXY: "http://u:p@corp:3128" })).toBe("http://u:p@corp:3128");
+  });
+
+  // Cross-review F5b (opus2): the boot scan returned only the FIRST
+  // credentialed value — a shell with DISTINCT credentialed HTTP_PROXY and
+  // HTTPS_PROXY upstreams got a relay for the first and a fail-closed DROP
+  // for the second (its traffic went direct behind an authenticating proxy).
+  // The plural scan collects every DISTINCT credentialed upstream in family
+  // order, so the boot path can start each one's relay.
+  it("F5b: the plural boot scan collects ALL distinct credentialed upstreams, family order first", () => {
+    const https = "http://u:p@https-up:3128";
+    const http = "http://u:p@http-up:8080";
+    const all = "http://u:p@all-up:9";
+    expect(credentialedProxyValuesForRelay({ HTTPS_PROXY: https, HTTP_PROXY: http, npm_config_proxy: https, ALL_PROXY: all })).toEqual([
+      https,
+      http,
+      all,
+    ]);
+    // Same value under several names is ONE upstream; relay-shaped values are
+    // skipped here exactly as in the singular scan (F5a).
+    expect(credentialedProxyValuesForRelay({ HTTPS_PROXY: https, https_proxy: https })).toEqual([https]);
+    expect(credentialedProxyValuesForRelay({ HTTPS_PROXY: "http://anycode:tok@127.0.0.1:1", ALL_PROXY: all })).toEqual([all]);
+    expect(credentialedProxyValuesForRelay({ HTTPS_PROXY: "http://clean:3128" })).toEqual([]);
+  });
+
   // F2 repro: the card's "log once" contract. A refused upstream must warn
   // exactly once per process no matter how many spawn sites re-ask
   // (ensureProxyRelay fires on EVERY Bash/PTY spawn); closeProxyRelay() is
@@ -897,6 +934,57 @@ describe("resolveProxyRelay lifecycle (cross-review F1/F2)", () => {
     const fresh = await resolveProxyRelay(upstream);
     expect(fresh).toBeDefined();
     expect(fresh!.port).not.toBe(relay!.port);
+  });
+
+  // Cross-review F3 (opus2): the incremental close. A prewarm pass computes
+  // the upstreams the CURRENT settings can materialise; relays left from a
+  // PREVIOUS pass (rotated password/url, deleted profile) must close, while
+  // every referenced relay survives and refuses keep their warn memory.
+  it("F3: closeUnreferencedProxyRelays closes stale relays, keeps referenced ones and refused memory", async () => {
+    const upstreamA = "http://user:secret@127.0.0.1:9";
+    const upstreamB = "http://user:rotated@127.0.0.1:9";
+    const refused = "https://user:secret@proxy.corp:3128";
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg?: unknown) => { warns.push(String(msg)); };
+    try {
+      const a = await resolveProxyRelay(upstreamA);
+      const stale = await resolveProxyRelay(upstreamB);
+      expect(await resolveProxyRelay(refused)).toBeUndefined();
+      expect(a).toBeDefined();
+      expect(stale).toBeDefined();
+      // The new pass references ONLY upstreamA (B's password rotated).
+      closeUnreferencedProxyRelays([relayRegistryKey(upstreamA)!]);
+      // A survives and is still THE answer for its key.
+      expect(await resolveProxyRelay(upstreamA)).toBe(a);
+      // B is gone from the registry: its handle is closed (dial refused) and
+      // a fresh resolve mints a NEW relay (new port), not the closed one.
+      const portB = stale!.port;
+      const reborn = await resolveProxyRelay(upstreamB);
+      expect(reborn).toBeDefined();
+      expect(reborn!.port).not.toBe(portB);
+      await expect(
+        new Promise<void>((resolve, reject) => {
+          const probe = net.connect(portB, "127.0.0.1");
+          probe.on("error", () => resolve());
+          probe.on("connect", () => {
+            probe.destroy();
+            reject(new Error(`stale listener on ${portB} survived closeUnreferencedProxyRelays`));
+          });
+          setTimeout(() => {
+            probe.destroy();
+            resolve();
+          }, 2000).unref();
+        }),
+      ).resolves.toBeUndefined();
+      // The refused upstream's warn memory survives the incremental close —
+      // a re-ask stays silent (no second warn).
+      expect(await resolveProxyRelay(refused)).toBeUndefined();
+      expect(warns).toHaveLength(1);
+    } finally {
+      console.warn = originalWarn;
+      closeProxyRelay();
+    }
   });
 });
 
