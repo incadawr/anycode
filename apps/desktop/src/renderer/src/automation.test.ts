@@ -2368,23 +2368,24 @@ describe("automation facade — prompt queue (design/slice-P7.14-cut.md §5 W3)"
 });
 
 describe("automation facade — composerQueueState (Taskana 4087 / TASK.55)", () => {
-  /** The running-mode placeholder Composer actually renders (Composer.tsx's textarea placeholder). */
+  /**
+   * A FAKE textarea's placeholder: the probe only relays the node's attribute,
+   * so this pins pass-through, not Composer's running/idle copy (that needs
+   * the real DOM — the owner live smoke).
+   */
   const RUNNING_PLACEHOLDER = "Queue a message… (Esc to stop)";
 
   /**
-   * Minimal `ComposerSlashDom` fake for the queue probe: a live-updatable
-   * textarea double plus the two queue-affordance accessors. Supplied as
+   * Minimal `ComposerSlashDom` fake for the queue probe: a textarea double
+   * (value/disabled/placeholder are fixed fakes, never Composer's real
+   * render — inputEnabled here pins pass-through only). Supplied as
    * positional DI arg 16 (same slot automation.test.ts:732 pins).
    */
   function fakeComposerDom(over: Partial<ComposerSlashDom> = {}): ComposerSlashDom {
-    let value = "";
-    let disabled = false;
-    const placeholder = RUNNING_PLACEHOLDER;
-    const textarea = (): HTMLTextAreaElement => ({ value, disabled, placeholder }) as HTMLTextAreaElement;
+    const textarea = (): HTMLTextAreaElement =>
+      ({ value: "", disabled: false, placeholder: RUNNING_PLACEHOLDER }) as HTMLTextAreaElement;
     return {
       textarea,
-      textareaDisabled: () => disabled,
-      textareaPlaceholder: () => placeholder,
       menuMounted: () => false,
       rows: () => [],
       ...over,
@@ -2554,13 +2555,19 @@ describe("automation facade — composerQueueState (Taskana 4087 / TASK.55)", ()
   it("unmounted textarea is a valid reading, not an error: inputEnabled/placeholder null, draft empty", () => {
     const { facade, tabId } = buildQueueFacade({
       textarea: () => null,
-      textareaDisabled: () => null,
-      textareaPlaceholder: () => null,
     });
 
     const state = facade.composerQueueState(tabId);
 
     expect(state).toMatchObject({ ok: true, inputEnabled: null, placeholder: null, draft: "" });
+  });
+
+  it("relays the real node's disabled flag and draft (inputEnabled false when the connection gate disables it)", () => {
+    const { facade, tabId } = buildQueueFacade({
+      textarea: () => ({ value: "typed", disabled: true, placeholder: "Message the agent…" }) as HTMLTextAreaElement,
+    });
+
+    expect(facade.composerQueueState(tabId)).toMatchObject({ inputEnabled: false, draft: "typed", placeholder: "Message the agent…" });
   });
 
   it("TASK.102 §10.15.1 pin: a child surface ALWAYS direct-sends — enqueue is never armed there", () => {

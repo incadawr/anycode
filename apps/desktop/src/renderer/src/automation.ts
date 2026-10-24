@@ -46,16 +46,9 @@ import {
   COMPOSER_IMAGE_MAX_BYTES,
   COMPOSER_IMAGE_MAX_PER_MESSAGE,
   isSendBlockedByModelImages,
+  shouldEnqueue,
   sniffComposerImageMediaType,
 } from "./components/Composer.js";
-// Taskana 4087 / TASK.55: the exact F15 guard predicate that decides
-// enqueue-vs-direct-send in Composer's own handleSend (`composerQueueState`'s
-// `enqueueWouldFire` reuses it verbatim, no re-derivation). automation.ts
-// already value-imports from Composer.js above, and Composer.tsx never
-// imports automation.ts, so no cycle at all — but the same hoisted-function
-// safety rationale as ModelPill.tsx's `shouldEnqueue` import applies should
-// that ever change.
-import { shouldEnqueue } from "./components/Composer.js";
 import { transcriptTextWithImages } from "./queue-format.js";
 import { confirmDialogCopy } from "./components/GitConfirmDialog.js";
 import { buildDiffRequest } from "./components/GitPanel.js";
@@ -1695,10 +1688,6 @@ export interface SlashMenuState {
 export interface ComposerSlashDom {
   /** The active tab's composer `<textarea>`, or `null` before `ActiveTabBody` mounts. */
   textarea(): HTMLTextAreaElement | null;
-  /** The active tab's composer textarea `disabled` flag, `null` when unmounted. */
-  textareaDisabled(): boolean | null;
-  /** The composer textarea's `placeholder` attribute, `null` when unmounted. */
-  textareaPlaceholder(): string | null;
   /** Whether `.slash-menu` is currently in the DOM. */
   menuMounted(): boolean;
   /**
@@ -4506,8 +4495,6 @@ function realComposerSlashDom(): ComposerSlashDom {
   }
   return {
     textarea: () => document.querySelector<HTMLTextAreaElement>(".composer-textarea"),
-    textareaDisabled: () => (document.querySelector<HTMLTextAreaElement>(".composer-textarea")?.disabled ?? null),
-    textareaPlaceholder: () => (document.querySelector<HTMLTextAreaElement>(".composer-textarea")?.placeholder ?? null),
     menuMounted: () => menu() !== null,
     rows: () => {
       const menuEl = menu();
@@ -8877,7 +8864,7 @@ export function createAutomationFacade(
         running: isSessionBusy(state.turn.status),
         connection: state.connection,
         inputEnabled: textarea === null ? null : !textarea.disabled,
-        placeholder: composerSlashDom.textareaPlaceholder(),
+        placeholder: textarea?.placeholder ?? null,
         draft: textarea?.value ?? "",
         enqueueWouldFire: shouldEnqueue(state.turn.status, state.queueInFlight, state.childSurface),
         queueLength: state.promptQueue.length,
