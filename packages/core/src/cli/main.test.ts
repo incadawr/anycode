@@ -4843,6 +4843,84 @@ describe("--tui flag (Taskana 4082)", () => {
     expect(getText()).toContain("AnyCode CLI");
   });
 
+  it("1c. TUI defect regression: y/N confirm answers never leak into the prompt path", async () => {
+    // Reproduction of defect 2: /commit asks y/N via the prompter; with the
+    // rework the question renders INSIDE the TUI (confirm mode) and the "n"
+    // answer routes only to the confirm — the model port must never see a
+    // turn with prompt "n" (the pre-fix behavior double-captured the line).
+    const { workspace, dbPath } = setupTitleTestDirs();
+    const gitWorkspace = mkdtempSync(join(tmpdir(), "anycode-cli-tui-git-"));
+    titleTestTempDirs.push(gitWorkspace);
+    // A real repo with a dirty file, so /commit reaches its y/N question
+    // (a clean or non-git workspace short-circuits before asking).
+    execFileSync("git", ["init", "-q"], { cwd: gitWorkspace });
+    writeFileSync(join(gitWorkspace, "dirty.txt"), "change\n");
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+    const modelPort = new CountingModelPort();
+
+    const tuiHandles: TuiHandle[] = [];
+    const runPromise = runCli({
+      argv: ["--tui"],
+      env: makeTitleTestEnv(dbPath),
+      input,
+      output,
+      modelPort,
+      cwd: gitWorkspace,
+      interactive: true,
+      onTuiHandle: (handle) => {
+        tuiHandles.push(handle);
+      },
+    });
+
+    await vi.waitFor(() => {
+      if (tuiHandles.length === 0) {
+        throw new Error("tui handle has not been handed over yet");
+      }
+    });
+    const tui = tuiHandles[0]!;
+    tui.emit("input", "/help");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tui.emit("input", "\r");
+    await vi.waitFor(() => {
+      if (!getText().includes("/exit       same as /quit")) {
+        throw new Error("help output has not landed yet");
+      }
+    });
+
+    tui.emit("input", "/commit testmsg");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tui.emit("input", "\r");
+    // The y/N confirm now renders in the TUI; answer "n" through the same
+    // key pipeline (this is exactly what a real "n" keypress does).
+    await vi.waitFor(() => {
+      if (!getText().includes("answer [")) {
+        throw new Error("confirm question has not rendered yet");
+      }
+    });
+    tui.emit("input", "n");
+    await vi.waitFor(() => {
+      if (!getText().includes("[commit] cancelled")) {
+        throw new Error("commit cancellation has not landed yet");
+      }
+    });
+
+    // Leave cleanly, then prove no phantom turn ever started: every submitted
+    // line was a slash command, so the model port saw zero prompts — in
+    // particular no turn with prompt "n".
+    tui.emit("input", "/quit");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    tui.emit("input", "\r");
+
+    expect(await runPromise).toBe(0);
+    expect(modelPort.calls).toBe(0);
+    // Defect 1 regression in the same harness: the help tail (a Static
+    // transcript line written BEFORE composer redraws) is still present in
+    // the output after all the composer activity above.
+    expect(getText()).toContain("/exit       same as /quit");
+  });
+
   it("2. --tui with --print is silently ignored: byte-identical print output", async () => {
     const { workspace, dbPath } = setupTitleTestDirs();
 

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { COMMAND_HELP, KNOWN_SLASH_COMMANDS } from "./commands.js";
-import { EMPTY_COMPOSER, reduceComposer, visibleCompletions, type ComposerEvent } from "./composer-state.js";
+import {
+  EMPTY_COMPOSER,
+  isContinuation,
+  reduceComposer,
+  visibleCompletions,
+  type ComposerEvent,
+} from "./composer-state.js";
 import { slashCompletions } from "./completions.js";
 
 /** The full completion list, as the composer will be driven in production. */
@@ -174,5 +180,121 @@ describe("reduceComposer (Taskana 4082)", () => {
     // invariant instead of a hardcoded count: more commands match than the cap.
     expect(COMMAND_HELP.length).toBeGreaterThan(8);
     expect(COMMAND_HELP).toHaveLength(KNOWN_SLASH_COMMANDS.length);
+  });
+});
+
+describe("reduceComposer cursor editing + multiline (Taskana 4082 rework)", () => {
+  it("12. insert at cursor: 'ab' + cursor-left + 'X' => 'aXb', cursor 2", () => {
+    const state = drive(
+      undefined,
+      { type: "insert", value: "ab" },
+      { type: "cursor-left" },
+      { type: "insert", value: "X" },
+    );
+    expect(state.input).toBe("aXb");
+    expect(state.cursor).toBe(2);
+  });
+
+  it("13. cursor movement clamps: left at 0 stays 0, right at end stays at end", () => {
+    const base = drive(undefined, { type: "insert", value: "abc" }); // cursor 3
+    const leftEdge = drive(base, { type: "cursor-home" }, { type: "cursor-left" });
+    expect(leftEdge.cursor).toBe(0);
+    const rightEdge = drive(base, { type: "cursor-end" }, { type: "cursor-right" });
+    expect(rightEdge.cursor).toBe(3);
+  });
+
+  it("14. backspace deletes before the cursor; delete deletes at it", () => {
+    // "abc" with the cursor after the first 'a'.
+    const base = drive(undefined, { type: "insert", value: "abc" }, { type: "cursor-home" }, { type: "cursor-right" });
+    expect(base.cursor).toBe(1);
+    const backspaced = drive(base, { type: "backspace" });
+    expect(backspaced.input).toBe("bc");
+    expect(backspaced.cursor).toBe(0);
+    const deleted = drive(base, { type: "delete" });
+    expect(deleted.input).toBe("ac");
+    expect(deleted.cursor).toBe(1);
+    // Edge no-ops: backspace at 0, delete at the end.
+    const start = drive(undefined, { type: "insert", value: "a" }, { type: "cursor-home" });
+    expect(drive(start, { type: "backspace" }).input).toBe("a");
+    const end = drive(undefined, { type: "insert", value: "a" });
+    expect(drive(end, { type: "delete" }).input).toBe("a");
+  });
+
+  it("15. newline inserts '\\n' at the cursor and closes the slash popup", () => {
+    const slash = drive(undefined, { type: "text", value: "/c" });
+    expect(slash.popupOpen).toBe(true);
+    const multilined = drive(slash, { type: "newline" });
+    expect(multilined.input).toBe("/c\n");
+    // Multiline input is not a slash query — the popup must be closed.
+    expect(multilined.popupOpen).toBe(false);
+    expect(multilined.cursor).toBe(3);
+  });
+
+  it("16. newline mid-line splits the input at the cursor", () => {
+    const state = drive(undefined, { type: "insert", value: "ab" }, { type: "cursor-left" }, { type: "newline" });
+    expect(state.input).toBe("a\nb");
+    expect(state.cursor).toBe(2);
+  });
+
+  it("17. isContinuation: trailing backslash continues; empty/plain input submits", () => {
+    expect(isContinuation("foo\\")).toBe(true);
+    expect(isContinuation("foo")).toBe(false);
+    expect(isContinuation("")).toBe(false);
+  });
+
+  it("18. the trailing-backslash continuation pattern: drop the backslash, newline, keep typing, submit joins lines", () => {
+    // What the TUI does on Enter when isContinuation(input): backspace the
+    // trailing backslash, then newline. Pinned here so the wiring and the
+    // reducer cannot drift.
+    const state = drive(
+      undefined,
+      { type: "insert", value: "line1\\" },
+      { type: "backspace" }, // drop the continuation marker
+      { type: "newline" },
+      { type: "insert", value: "line2" },
+      { type: "submit" },
+    );
+    expect(state.history).toEqual(["line1\nline2"]);
+    expect(state.input).toBe("");
+    expect(state.cursor).toBe(0);
+  });
+
+  it("19. cursor events never open the popup and never touch history navigation state", () => {
+    const state = drive(
+      undefined,
+      { type: "text", value: "/c" },
+      { type: "popup-commit" }, // -> "/compact "
+      { type: "cursor-left" },
+      { type: "cursor-left" },
+      { type: "cursor-end" },
+    );
+    expect(state.input).toBe("/compact ");
+    expect(state.popupOpen).toBe(false);
+    expect(state.cursor).toBe(9);
+  });
+
+  it("20. text event parks the cursor at the end of the new value", () => {
+    const state = drive(
+      undefined,
+      { type: "insert", value: "ab" },
+      { type: "cursor-home" },
+      { type: "text", value: "abcdef" },
+    );
+    expect(state.input).toBe("abcdef");
+    expect(state.cursor).toBe(6);
+  });
+
+  it("21. popup-commit and history recall park the cursor at the end", () => {
+    const committed = drive(undefined, { type: "text", value: "/c" }, { type: "popup-commit" });
+    expect(committed.input).toBe("/compact ");
+    expect(committed.cursor).toBe(9);
+    const recalled = drive(
+      undefined,
+      { type: "text", value: "hello" },
+      { type: "submit" },
+      { type: "history-prev" },
+    );
+    expect(recalled.input).toBe("hello");
+    expect(recalled.cursor).toBe(5);
   });
 });

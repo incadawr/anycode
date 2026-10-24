@@ -136,7 +136,7 @@ import { withPlanModeReminder } from "../prompts/plan-reminder.js";
 import { withBackgroundTaskNotices } from "./background-notice.js";
 import { applyStatus, createStatusLine, withStatusClear } from "./status.js";
 import { createCliTheme, detectColorEnabled } from "./theme.js";
-import { createCliPermissionBroker, createReadlinePrompter } from "./terminal-broker.js";
+import { createCliPermissionBroker, createReadlinePrompter, type TerminalPrompter } from "./terminal-broker.js";
 // Type-only import: the TUI module itself is loaded lazily inside the --tui
 // branch (see startTui below) so ink/react never load on other paths.
 import type { TuiHandle } from "./tui.js";
@@ -309,13 +309,23 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   const input = options?.input ?? process.stdin;
   const output = options?.output ?? process.stdout;
 
-  const write = (text: string): void => {
+  // Taskana 4082 rework (defect 1): while the Ink TUI is mounted, every REPL
+  // byte goes through its transcript store (rendered via <Static>) — NEVER
+  // straight to stdout, which Ink's frame clear would eat. The sink starts
+  // undefined; the --tui branch below points it at handle.print. The name is
+  // `tuiWrite` (not `write`) so every call site reads as knowingly routed.
+  let tuiPrint: ((text: string) => void) | undefined;
+  const tuiWrite = (text: string): void => {
+    if (tuiPrint !== undefined) {
+      tuiPrint(text);
+      return;
+    }
     output.write(text);
   };
 
 
   if (parsedArgs.help) {
-    write(formatUsage());
+    tuiWrite(formatUsage());
     return 0;
   }
   if (parsedArgs.version) {
@@ -324,7 +334,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     // packages/core/package.json at runtime.
     const requirePkg = createRequire(import.meta.url);
     const pkg = requirePkg("../../package.json") as { version: string };
-    write(`anycode ${pkg.version}\n`);
+    tuiWrite(`anycode ${pkg.version}\n`);
     return 0;
   }
 
@@ -340,10 +350,10 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
 
   // byte-exception): in --print mode ALL boot notices/banners/warns go to stderr,
   // keeping stdout an answer-only (json/stream-json machine-clean) channel. When
-  // NOT print, `bootWrite === write` ⇒ every existing non-print byte is identical
-  // by construction. help/version stay on `write` (their stdout output is POSIX-
+  // NOT print, `bootWrite === tuiWrite` ⇒ every existing non-print byte is identical
+  // by construction. help/version stay on `tuiWrite` (their stdout output is POSIX-
   // correct product output, not a diagnostic).
-  const bootWrite = parsedArgs.print ? errWrite : write;
+  const bootWrite = parsedArgs.print ? errWrite : tuiWrite;
 
 
 
@@ -1489,14 +1499,18 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     return count;
   };
 
-  // Taskana 4082 (slice 1): in --tui mode the readline interface still exists
-  // (hidden — `terminal: false`, and its prompt() calls are guarded below)
-  // purely as the permission/rewind prompter's vehicle; the Ink composer owns
-  // the visible input. Permission widgets move into the TUI in slice 3.
+  // Taskana 4082 (rework): in --tui mode the readline interface still exists
+  // (hidden — `terminal: false`, and its prompt() calls are guarded below) as
+  // the NON-TUI fallback prompter vehicle, but every visible byte and every
+  // y/N question now routes through the Ink app (Static transcript + confirm
+  // mode): readline never draws and never reads while the TUI is mounted.
   const rl = createInterface({ input, output, prompt: "> ", terminal: tui ? false : undefined });
 
-  // gate, so a non-TTY session gets a full no-op instance (zero status bytes).
-  const status = createStatusLine({ output, enabled: statusEnabled, theme });
+  // Taskana 4082 (rework, defect 1): while the TUI is mounted the status line
+  // is force-disabled — its raw \r+EL2 writes on the shared output stream
+  // interleave with Ink's frame diff and corrupt it. Ink's composer frame is
+  // the only live-updating line in TUI mode.
+  const status = createStatusLine({ output, enabled: tui ? false : statusEnabled, theme });
 
   // Taskana 4082 (slice 1): the Ink composer. startTui is lazily imported so
   // ink/react load only when the flag engages (non-TUI runs stay lean);
@@ -1504,6 +1518,9 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   // which the REPL loop consumes exactly like readline's own lines. Ctrl+C in
   // the TUI forwards to the existing SIGINT logic via handleSigintRef (the
   // ref breaks the forward-reference cycle: handleSigint is defined below).
+  // The rework adds two wires: tuiPrint points the tuiWrite sink at the
+  // handle's <Static> transcript (defect 1), and tuiPrompter renders y/N
+  // questions inside the TUI instead of rl.question (defect 2).
   let tuiHandle: TuiHandle | undefined;
   const tuiQueue: string[] = [];
   let tuiResolve: (() => void) | undefined;
@@ -1522,19 +1539,30 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         handleSigintRef.current();
       },
     });
+    // Defect 1: from here until close(), every tuiWrite byte lands in the
+    // Ink-owned transcript (Static) — never straight on stdout.
+    tuiPrint = (text: string): void => {
+      tuiHandle?.print(text);
+    };
     options?.onTuiHandle?.(tuiHandle);
   }
 
-  // prompter lazily now. The 4.1.1 stub brokers don't implement attachPrompter,
-  // so this is a no-op today; 4.1.2's TerminalPermissionBroker consumes it. The
-  // prompter is wrapped so the status line is erased before the broker writes its
-
-  permissionBroker.attachPrompter?.(withStatusClear(createReadlinePrompter(rl), status));
-  // Dedicated readline prompter for the /rewind y/N confirmation (design
-
-  // prompter uses — slash commands dispatch strictly between turns (the status
-  // line is already cleared), so this confirmation never races an in-flight ask.
-  const rewindPrompter = createReadlinePrompter(rl);
+  // Taskana 4082 (rework, defect 2): the TUI's in-app ask() becomes the
+  // TerminalPrompter for BOTH the permission broker and the /rewind + /commit
+  // y/N confirms while the TUI is mounted. The answer is produced inside the
+  // TUI (confirm mode routes keys away from the composer), so it can never be
+  // double-captured as a model prompt the way an rl.question line over
+  // Ink-owned stdin was. Non-TUI runs keep the readline prompter unchanged.
+  const tuiPrompter: TerminalPrompter = tuiHandle
+    ? {
+        ask: (question, askOpts) => tuiHandle!.ask(question, askOpts),
+      }
+    : withStatusClear(createReadlinePrompter(rl), status);
+  permissionBroker.attachPrompter?.(tuiPrompter);
+  // Dedicated prompter for the /rewind and /commit y/N confirmations (design
+  // comment below); in TUI mode this is the same in-app ask — rendered in the
+  // Ink frame, answered with one key, echoed into the transcript on settle.
+  const rewindPrompter: TerminalPrompter = tuiHandle ? tuiPrompter : createReadlinePrompter(rl);
 
   let currentAbort: AbortController | null = null;
   let interruptCount = 0;
@@ -1552,6 +1580,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     if (interruptCount >= 2) {
       exitRequested = true;
       rl.close();
+      tuiPrint = undefined;
       tuiHandle?.close();
       // Wake the TUI lineStream's pending await so the loop observes
       // exitRequested and falls through to the normal dispose path.
@@ -1559,7 +1588,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
       tuiResolve = undefined;
       return;
     }
-    write("\n(Ctrl+C again to exit)\n");
+    tuiWrite("\n(Ctrl+C again to exit)\n");
     showPrompt();
   };
   handleSigintRef.current = handleSigint;
@@ -1599,7 +1628,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
     }
   }
 
-  write(
+  tuiWrite(
     theme.paint(
       "banner",
       `AnyCode CLI — mode=${mode}${yolo ? " (yolo)" : ""}. Ctrl+C to abort a turn, twice to exit.\n`,
@@ -1626,7 +1655,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         await handleSlashCommand(trimmed, {
           loop,
           rules: permissionRules,
-          write,
+          write: tuiWrite,
           signal: controller.signal,
           mcp: mcpManager,
           skills: ext.skills,
@@ -1852,7 +1881,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         // each transcript write; applyStatus maps every event to a status label;
         // theme + transcript thread through to renderEvent (theme = SGR since
         // 4.1.3, transcript = no-op until 4.2.2 rewrites its branches).
-        const turnWrite = status.wrapWrite(write);
+        const turnWrite = status.wrapWrite(tuiWrite);
 
         // plan mode, append the plan-discipline reminder to the prompt — the
         // model does not remember the mode between turns and the system prompt is
@@ -1889,7 +1918,7 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
         }
       }
     } catch (error) {
-      write(`\n[fatal] ${error instanceof Error ? error.message : String(error)}\n`);
+      tuiWrite(`\n[fatal] ${error instanceof Error ? error.message : String(error)}\n`);
       exitCode = 1;
     } finally {
       currentAbort = null;
@@ -1933,6 +1962,11 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   status.dispose();
   // Taskana 4082 (slice 1): unmount the Ink composer BEFORE the readline
   // interface closes so the terminal is restored exactly once, in order.
+  // The rework drops the tuiPrint sink FIRST: after this point tuiWrite
+  // degrades to the raw output writer, so any late byte (title flush warn,
+  // exit notices) prints below the unmounted frame instead of into a dead
+  // handle. print() after close() is already a no-op — this is belt+braces.
+  tuiPrint = undefined;
   tuiHandle?.close();
   rl.close();
 

@@ -165,3 +165,124 @@ describe("startTui ink smoke (Taskana 4082)", () => {
     expect(h.submit).not.toHaveBeenCalled();
   });
 });
+
+describe("startTui Static transcript (Taskana 4082 rework, defect 1)", () => {
+  it("5. print() renders lines that survive composer redraws (Static)", async () => {
+    const h = harness();
+    h.handle.print("AnyCode CLI — banner line\n");
+    h.handle.print("[help] the very last help line\n");
+    await h.waitForText("AnyCode CLI — banner line");
+    await h.waitForText("[help] the very last help line");
+
+    // Composer activity after the prints must NOT erase them: type and
+    // submit, then check the printed lines are still present in the stream.
+    h.key("hello\r");
+    await h.flush();
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    h.key("more\r");
+    await h.flush();
+    expect(h.text()).toContain("AnyCode CLI — banner line");
+    expect(h.text()).toContain("[help] the very last help line");
+  });
+
+  it("6. multiline rendering: trailing backslash + Enter continues the line", async () => {
+    const h = harness();
+    h.key("line1\\\r"); // trailing backslash: Enter continues (backslash dropped, newline inserted)
+    h.key("line2\r"); // Enter submits "line1\nline2"
+    await h.flush();
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submit).toHaveBeenLastCalledWith("line1\nline2");
+  });
+
+  it("7. cursor editing: Backspace deletes at the cursor after ArrowLeft", async () => {
+    const h = harness();
+    h.key("ab\u001b[D\u007f"); // "ab", ArrowLeft (cursor over 'b'), Backspace deletes 'a' -> "b"
+    await h.waitForText("> b");
+    h.key("\r");
+    await h.flush();
+    expect(h.submit).toHaveBeenLastCalledWith("b");
+  });
+});
+
+describe("startTui confirm mode (Taskana 4082 rework, defect 2)", () => {
+  it("8. ask() renders the question; 'n' answers it and never reaches onSubmit", async () => {
+    const h = harness();
+    const answer = h.handle.ask("stage everything and commit? [y/N]");
+    await h.waitForText("stage everything and commit?");
+
+    h.key("n"); // one-key answer
+    await expect(answer).resolves.toBe("n");
+
+    // The composer must be back and the answer must never have submitted.
+    h.key("hello\r");
+    await h.flush();
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submit).toHaveBeenLastCalledWith("hello");
+  });
+
+  it("9. Enter answers with the default; the question echoes into the transcript", async () => {
+    const h = harness();
+    const answer = h.handle.ask("stage everything and commit? [y/N]");
+    await h.waitForText("stage everything and commit?");
+    h.key("\r"); // Enter -> default "n"
+    await expect(answer).resolves.toBe("n");
+    // Answered confirms scroll into the transcript (question + answer).
+    await h.waitForText("stage everything and commit? [y/N] n");
+  });
+
+  it("10. Esc picks the non-default side; [Y/n] defaults to yes", async () => {
+    const h = harness();
+    const answer = h.handle.ask("approve plan? [Y/n]");
+    await h.waitForText("approve plan?");
+    h.key("\u001b"); // Esc: flips the [Y/n] default -> "n"
+    await expect(answer).resolves.toBe("n");
+  });
+
+  it("11. a confirm answer typed during the question never starts a model turn", async () => {
+    const h = harness();
+    const answer = h.handle.ask("rewind to checkpoint? [y/N]");
+    await h.waitForText("rewind to checkpoint?");
+    h.key("y");
+    await expect(answer).resolves.toBe("y");
+    expect(h.submit).not.toHaveBeenCalled();
+    // The composer resumes empty (its pre-question input stayed untouched):
+    h.key("\r");
+    await h.flush();
+    expect(h.submit).not.toHaveBeenCalled(); // empty input never submits
+  });
+
+  it("12. ask() rejects with AbortError when the signal aborts", async () => {
+    const h = harness();
+    const controller = new AbortController();
+    const answer = h.handle.ask("question? [y/N]", { signal: controller.signal });
+    await h.waitForText("question?");
+    controller.abort();
+    await expect(answer).rejects.toMatchObject({ name: "AbortError" });
+    // The composer is usable again afterwards.
+    h.key("hello\r");
+    await h.flush();
+    expect(h.submit).toHaveBeenLastCalledWith("hello");
+  });
+
+  it("13. close() rejects a pending ask and stops all callbacks", async () => {
+    const h = harness();
+    const answer = h.handle.ask("question? [y/N]");
+    await h.waitForText("question?");
+    h.handle.close();
+    await expect(answer).rejects.toMatchObject({ name: "AbortError" });
+    h.key("y\r");
+    await h.flush();
+    expect(h.submit).not.toHaveBeenCalled();
+  });
+
+  it("14. print() after close() is a no-op (writer fell back to raw output)", async () => {
+    const h = harness();
+    h.handle.close();
+    await h.flush(); // let Ink's final unmount frame flush
+    const before = h.text();
+    h.handle.print("ghost line\n");
+    await h.flush();
+    expect(h.text()).toBe(before); // no new bytes at all
+    expect(h.text()).not.toContain("ghost line");
+  });
+});
