@@ -1624,7 +1624,8 @@ export class Session {
    * only when the loop actually flushed the frame at the legal seam — the
    * user_injected event owns the transcript side. If the turn ends before
    * the seam (final text-only step, cancel), the renderer's loop_end re-queue
-   * picks the still-pending bubble up and the later steer_requeued is a no-op.
+   * picks the still-pending bubble up and the later steer_requeued is a no-op
+   * (opus2 F1: the renderer records the id as already re-queued).
    */
   private handleUiSteerMessage(requestId: string, text: string): void {
     if (this.engine.id !== "core" || this.engine.steer === undefined) {
@@ -1643,9 +1644,12 @@ export class Session {
     const receivingTurnId = this.turnId;
     // Cross-review F3: remember the accepted-but-undelivered steer so the
     // per-connect session_checkpoint can project it to a reconnecting
-    // renderer (pendingSteers). Cleared on delivery (the same then() below),
-    // on refusal, and on turn teardown — failUndeliveredSteers' reject maps
-    // to steer_requeued (text rides it), and endTurn sweeps the rest.
+    // renderer (pendingSteers). Cleared ONLY here, by this steer's own
+    // promise settling: on delivery (the then() below), on refusal (the
+    // catch() below — steer_requeued carries the text). There is NO separate
+    // turn-teardown sweep: a frame that never flushes at the seam rejects
+    // through the ENGINE (the loop's failUndeliveredSteers/onDelivered(-1)
+    // path fires the catch below), which is what empties the slot.
     this.pendingUiSteers.push({ requestId, text });
     void this.engine
       .steer(text)
