@@ -352,7 +352,7 @@ describe("projectCodexHistory — native-only projection", () => {
     });
   });
 
-  it("preserves reasoning summary/content text instead of only the type label (C0 review Medium)", () => {
+  it("hides a reasoning item that has a summary, as live Codex does (no bubble on resume)", () => {
     const thread: CodexThreadRead = {
       thread: {
         id: "t1",
@@ -365,26 +365,73 @@ describe("projectCodexHistory — native-only projection", () => {
         ],
       },
     };
-    const items = projectCodexHistory(thread, [], { maxItems: 200 });
-    expect(items).toHaveLength(1);
-    const message = items[0]?.message;
-    // Pre-fix: reasoning fell into the generic fallback, which shows ONLY the
-    // bare type label — this text would never appear.
-    expect(message?.role === "assistant" ? message.content[0] : null).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("Checking the file first"),
-    });
-    expect(message?.role === "assistant" ? message.content[0] : null).toMatchObject({
-      text: expect.stringContaining("Then I will run the test suite"),
-    });
+    expect(projectCodexHistory(thread, [], { maxItems: 200 })).toEqual([]);
   });
 
-  it("degrades an empty reasoning item gracefully, without crashing", () => {
+  it("hides a reasoning item with no summary: no placeholder bubble (live shows nothing)", () => {
     const thread: CodexThreadRead = {
       thread: { id: "t1", turns: [{ id: "turn-1", startedAt: 0, items: [{ type: "reasoning", id: "rs-1" }] }] },
     };
+    expect(projectCodexHistory(thread, [], { maxItems: 200 })).toEqual([]);
+  });
+
+  it("keeps agent messages on either side of a hidden reasoning item in their native order", () => {
+    const thread: CodexThreadRead = {
+      thread: {
+        id: "t1",
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 0,
+            items: [
+              { type: "userMessage", id: "u1", content: [{ type: "text", text: "question" }] },
+              { type: "reasoning", id: "rs-1", summary: ["thinking"] },
+              { type: "agentMessage", id: "a1", text: "first answer" },
+              { type: "reasoning", id: "rs-2" },
+              { type: "agentMessage", id: "a2", text: "second answer" },
+            ],
+          },
+        ],
+      },
+    };
     const items = projectCodexHistory(thread, [], { maxItems: 200 });
-    expect(items).toHaveLength(1);
+    expect(items.map((item) => item.id)).toEqual(["turn-1:u1", "turn-1:a1", "turn-1:a2"]);
+    expect(items.map((item) => item.message)).toEqual([
+      { role: "user", content: "question" },
+      { role: "assistant", content: [{ type: "text", text: "first answer" }] },
+      { role: "assistant", content: [{ type: "text", text: "second answer" }] },
+    ]);
+  });
+
+  it("does not shift a shadow command's anchor when a hidden reasoning item sits before it", () => {
+    const thread: CodexThreadRead = {
+      thread: {
+        id: "t1",
+        turns: [
+          {
+            id: "turn-1",
+            startedAt: 0,
+            items: [
+              { type: "userMessage", id: "u1", content: [{ type: "text", text: "run it" }] },
+              { type: "reasoning", id: "rs-1", summary: ["plan"] },
+              { type: "agentMessage", id: "a1", text: "done" },
+            ],
+          },
+        ],
+      },
+    };
+    // positionInTurn counts NATIVE_PERSISTED items only, so the reasoning item
+    // is not counted: the command sits after the user message, before the answer.
+    const shadow: ShadowCommandItem[] = [
+      { turnOrdinal: 0, positionInTurn: 1, seqInTurn: 2, command: "ls", exitCode: 0, outputHead: "a.txt" },
+    ];
+    const items = projectCodexHistory(thread, shadow, { maxItems: 200 });
+    expect(items.map((item) => item.id)).toEqual([
+      "turn-1:u1",
+      "turn-1:shadow:2:call",
+      "turn-1:shadow:2:result",
+      "turn-1:a1",
+    ]);
   });
 
   it("preserves plan text instead of only the type label (C0 review Medium)", () => {
