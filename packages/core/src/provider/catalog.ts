@@ -74,7 +74,8 @@ export interface CatalogProviderEntry {
    * catalog entries are the SAME vendor sold via different endpoints (Kimi:
    * kimi.com subscription vs the moonshot platform API). Entries that share a
    * `brand` render as ONE card with a mode selector; the pair below is data,
-   * not a merge. Absent on every single-mode brand.
+   * not a merge. Absent on every single-mode brand. It is also the
+   * user-visible card label (optgroup / tile header), so it is display-cased.
    */
   brand?: string;
   /**
