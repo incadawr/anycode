@@ -17,6 +17,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - A steer that cannot reach the running turn (you press Stop, the turn ends
   first, or the host refuses it) is moved into the prompt queue for the next turn
   instead of being lost.
+- When a turn stops at its turn limit, the transcript offers a Continue button
+  that resumes the same task, and a held prompt queue says why it is held (turn
+  limit, cancelled, error, or refused) instead of a generic pause.
 
 ### Security
 
