@@ -511,3 +511,63 @@ describe("startClaudeEngine/resumeClaudeEngine — maxTurns forwarding (TASK.180
     }
   });
 });
+
+/**
+ * Taskana 4056 cross-review M2, wiring level: the delegation sentence
+ * (`mcp__anycode__agent`) may appear on the spawn argv ONLY in a session
+ * whose bridge is announced. `connectClaudeEngine` enforces the pairing even
+ * against a confused caller (agentBridgePrompt without mcpBridge → plain
+ * always-on block), and both a bridge-less boot and the pairing failure are
+ * byte-identical to the pre-4056 argv.
+ */
+describe("agentBridgePrompt rides the argv only when the bridge is announced (Taskana 4056 M2)", () => {
+  const promptAt = (args: string[] | undefined): string | undefined => {
+    const list = args ?? [];
+    const at = list.indexOf("--append-system-prompt");
+    return at === -1 ? undefined : list[at + 1];
+  };
+
+  it("a boot with NO bridge never names mcp__anycode__agent in --append-system-prompt", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await startClaudeEngine(baseOptions(spawnImpl));
+    try {
+      expect(promptAt(capturedArgs())).not.toContain("mcp__anycode__agent");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("a boot with the bridge AND the prompt appends the sentence after the always-on block", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const bridge = {
+      announceOn: (extra: Record<string, unknown> = {}) => ({ ...extra, sdkMcpServers: ["anycode"] }),
+      handleControlRequest: async (_request: unknown, responder: { success(response?: unknown): void }) => {
+        responder.success();
+      },
+    } as unknown as ClaudeMcpBridge;
+    const connected = await startClaudeEngine({
+      ...baseOptions(spawnImpl),
+      mcpBridge: bridge,
+      agentBridgePrompt: "To delegate, call mcp__anycode__agent. BRIDGE-SENTINEL",
+    });
+    try {
+      const prompt = promptAt(capturedArgs()) ?? "";
+      expect(prompt).toContain("BRIDGE-SENTINEL");
+      expect(prompt.indexOf("IMPORTANT SURFACE CORRECTION")).toBeLessThan(prompt.indexOf("BRIDGE-SENTINEL"));
+      expect(prompt).toContain("mcp__anycode__agent");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("the pairing gate: agentBridgePrompt WITHOUT mcpBridge is stripped (never name an unannounced tool)", async () => {
+    const { spawnImpl, capturedArgs } = fakeSpawn();
+    const connected = await startClaudeEngine({ ...baseOptions(spawnImpl), agentBridgePrompt: "To delegate, call mcp__anycode__agent. BRIDGE-SENTINEL" });
+    try {
+      expect(promptAt(capturedArgs())).not.toContain("BRIDGE-SENTINEL");
+      expect(promptAt(capturedArgs())).not.toContain("mcp__anycode__agent");
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+});

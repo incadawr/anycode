@@ -9,6 +9,7 @@ import {
   materializeMcpForwardFile,
 } from "./mcp-forward-file.js";
 import {
+  CLAUDE_AGENT_BRIDGE_PROMPT,
   CLAUDE_GUI_SURFACE_PROMPT,
   ClaudeClient,
   ClaudeClientError,
@@ -542,6 +543,41 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append (TASK.90)", 
     // registry/skills/slash-commands support no conclusions about AnyCode.
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/Task tool/);
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/not AnyCode features/);
+  });
+
+  /**
+   * Taskana 4056 cross-review M2: the always-on block must not NAME a tool
+   * that exists only when the profile catalog is non-empty. The bridge (and
+   * with it `mcp__anycode__agent`) is announced per-boot
+   * (`ClaudeEngineCreateOptions.mcpBridge`'s own switch doc); on a machine
+   * with no `*.md` agent profiles the tool does not exist in the session, so
+   * the static prompt naming it unconditionally would teach the model a
+   * phantom capability (a hard tool-use error when believed). The delegation
+   * sentence rides the argv conditionally instead (see
+   * `appendSystemPrompt`'s tests below).
+   */
+  it("the always-on block never names mcp__anycode__agent — that sentence is catalog-conditional, not surface truth (Taskana 4056 M2)", () => {
+    expect(CLAUDE_GUI_SURFACE_PROMPT).not.toContain("mcp__anycode__agent");
+    expect(CLAUDE_GUI_SURFACE_PROMPT).not.toContain("detach: true");
+  });
+
+  it("buildClaudeSpawnArgs with no agentBridgePrompt appends exactly the always-on block (bridge-less sessions never learn the tool's name)", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(prompt).toBe(CLAUDE_GUI_SURFACE_PROMPT);
+    expect(prompt).not.toContain("mcp__anycode__agent");
+    // Exactly one --append-system-prompt pair: no conditional second append.
+    expect(args.filter((arg) => arg === "--append-system-prompt")).toHaveLength(1);
+  });
+
+  it("buildClaudeSpawnArgs appends the agent-bridge sentence AFTER the always-on block when the door is announced (Taskana 4056 M2)", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1", agentBridgePrompt: CLAUDE_AGENT_BRIDGE_PROMPT });
+    const at = args.lastIndexOf("--append-system-prompt");
+    expect(at).toBeGreaterThan(0);
+    expect(args[at + 1]).toBe(`${CLAUDE_GUI_SURFACE_PROMPT}\n\n${CLAUDE_AGENT_BRIDGE_PROMPT}`);
+    // Still exactly ONE flag pair — one argv flag, two logical blocks.
+    expect(args.filter((arg) => arg === "--append-system-prompt")).toHaveLength(1);
+    expect(args[at + 1]).toContain("mcp__anycode__agent");
   });
 });
 

@@ -374,6 +374,18 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    */
   mcpBridge?: ClaudeMcpBridge;
   /**
+   * Taskana 4056 cross-review M2: `CLAUDE_AGENT_BRIDGE_PROMPT`, re-declared
+   * here only to carry the engine-level contract — the host supplies it
+   * EXACTLY when it supplies `mcpBridge` (the same non-empty-catalog,
+   * non-child-boot switch), and `connectClaudeEngine` below additionally
+   * enforces the pairing (a caller who names the tool without announcing the
+   * door gets the plain always-on block), so the spawn argv can name
+   * `mcp__anycode__agent` only in sessions where the tool actually exists.
+   * Absent → the argv's `--append-system-prompt` value is byte-identical to
+   * the pre-4056 spawn.
+   */
+  agentBridgePrompt?: string;
+  /**
    * TASK.226 срез S4: looks up (and consumes) the durable subagent-card
    * snapshot for one `mcp__anycode__agent` tool_use id — stamped by the
    * bridge's `callTool` handler (host/index.ts) onto its own
@@ -384,6 +396,18 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    * reads it when it builds the paired top-level `tool_result`'s outcome.
    */
   takePresentation?(toolUseId: string): ToolResultPresentation | undefined;
+  /**
+   * Taskana 4056 cross-review P1: called once at the END of every turn with
+   * the ids of THIS turn's `tool_use` blocks whose paired top-level
+   * `tool_result` never arrived (a cancelled/dying turn's still-open tool
+   * calls). The host drops any bridge presentation stamped for those ids —
+   * without this, a snapshot whose consuming frame never came would survive
+   * in the host's map for the process's lifetime, one entry per aborted
+   * bridge call. Absent → the engine has nothing to sweep and skips the call
+   * (the pre-P1 behaviour, bounded and harmless for a host that never
+   * stamps).
+   */
+  dropPresentations?(toolUseIds: readonly string[]): void;
   /**
    * TASK.182: controlled MCP-forwarding warnings (mcp-forward-diagnostic.ts
    * templates only — no loader strings, no values) collected by the host boot
@@ -454,6 +478,13 @@ async function connectClaudeEngine(
     ...spawn,
     bootstrap: options.bootstrap,
     onControlRequest: approvals.handle,
+    // Taskana 4056 M2: the delegation sentence rides the argv only on the
+    // SAME switch that announces the bridge (`mcpBridge !== undefined`) —
+    // spread AFTER `...options` so an explicit undefined still overrides,
+    // and a bridge-less boot can never name the tool.
+    ...(options.mcpBridge !== undefined && options.agentBridgePrompt !== undefined
+      ? { agentBridgePrompt: options.agentBridgePrompt }
+      : { agentBridgePrompt: undefined }),
   });
   try {
     await client.start();
@@ -500,7 +531,15 @@ async function connectClaudeEngine(
     const effortsByModel = new Map<string, string>();
     if (effort !== undefined) effortsByModel.set(model, effort);
     const settings: ClaudeEngineSettings = { catalog, model, preset, effortsByModel, notices, ...(effort !== undefined ? { effort } : {}) };
-    engine = new ClaudeEngine(client, sessionRef, approvals, settings, options.timeouts, options.takePresentation);
+    engine = new ClaudeEngine(
+      client,
+      sessionRef,
+      approvals,
+      settings,
+      options.timeouts,
+      options.takePresentation,
+      options.dropPresentations,
+    );
     // $0 quota snapshot, seeded before the first turn so a user already at
     // their limit learns it from the first reply rather than a failed turn.
     await engine.refreshQuota();
@@ -660,6 +699,8 @@ export class ClaudeEngine implements SessionEngine {
     overrides?: Partial<ClaudeEngineTimeouts>,
     /** TASK.226 срез S4 — see `ClaudeEngineCreateOptions.takePresentation`'s own doc. */
     private readonly takePresentation?: (toolUseId: string) => ToolResultPresentation | undefined,
+    /** Taskana 4056 cross-review P1 — see `ClaudeEngineCreateOptions.dropPresentations`'s own doc. */
+    private readonly dropPresentations?: (toolUseIds: readonly string[]) => void,
   ) {
     // Interactive approval is advertised only once the real bridge is installed
     // (the codex CODEX_BRIDGED_CAPABILITIES precedent); a bare test engine keeps
@@ -1242,6 +1283,19 @@ export class ClaudeEngine implements SessionEngine {
       this.turnActive = false;
       cancelSettle();
       abort.dispose();
+      // Taskana 4056 cross-review P1: a turn that terminalized without the
+      // paired top-level tool_result (cancelled/dying) must not leave the
+      // bridge's stamped presentation behind in the host's map for the
+      // process's lifetime — drop what the translator's single terminal path
+      // recorded as abandoned. MCP tool_use ids are per-call, so a later turn
+      // can never legitimately consume them.
+      if (this.dropPresentations !== undefined && translator.abandonedToolUseIds().length > 0) {
+        try {
+          this.dropPresentations(translator.abandonedToolUseIds());
+        } catch {
+          // A host-side sweep failure must never fail the turn's cleanup.
+        }
+      }
       // Taskana 4056: settle the bridge-event seam with the turn — wake a
       // still-parked waiter with the spurious `null` and re-queue any
       // resolved-but-unconsumed event, so the next turn's send barrier (not a

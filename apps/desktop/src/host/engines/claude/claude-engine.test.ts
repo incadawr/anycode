@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "@anycode/core";
+import type { AgentEvent, ToolResultPresentation } from "@anycode/core";
 import {
   CLAUDE_ENGINE_CAPABILITIES,
   CLAUDE_PRESET_IDS,
@@ -637,6 +637,67 @@ describe("ClaudeEngine — Taskana 4056: bridge events surface mid-turn", () => 
 
     expect(events.filter((event) => event.type === "subagent_start")).toHaveLength(1);
     expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
+  });
+
+  /**
+   * Taskana 4056 cross-review P1: `takePresentation` is consumed exactly once
+   * by the PAIRED top-level tool_result — but a turn that terminalizes
+   * WITHOUT that frame (a dying transport, or a Stop whose interrupt lands
+   * between the MCP response and the `user` tool_result frame) must not
+   * leave its stamped snapshot behind for the process's lifetime. The engine
+   * owns the turn boundary, so the sweep is turn-scoped: when a turn ends
+   * with unconsumed snapshots, they are dropped (a LATER turn's tool_use can
+   * never legitimately target them — MCP tool_use ids are per-call).
+   */
+  it("a turn that dies mid-tool-call DROPS the bridge's unconsumed presentation snapshot (no cross-turn leak)", async () => {
+    // tool_use announced, then the held-back tool_result/result NEVER arrive —
+    // the turn parks on the quiet stream exactly like a real delegation whose
+    // child settled just as the transport died (the engine-death path).
+    const toolResult = userToolResultFrame("toolu_bridge");
+    const result = resultFrame157("completed");
+    const transport = new FakeTransport({
+      frames: [bridgeToolUseFrame(), toolResult, result],
+      contextUsage: { totalTokens: 1, maxTokens: 2 },
+    });
+    transport.holdBack([toolResult, result]);
+
+    const presentations = new Map<string, ToolResultPresentation>();
+    const dropped: string[][] = [];
+    const engine = new ClaudeEngine(
+      transport,
+      "session-ref-1",
+      undefined,
+      { catalog: liveCatalog(), model: "default", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [] },
+      undefined,
+      (id) => presentations.get(id),
+      (ids) => dropped.push([...ids]),
+    );
+
+    const events: AgentEvent[] = [];
+    let stamped = false;
+    const turn = (async () => {
+      for await (const event of engine.runTurn("delegate", { signal: new AbortController().signal })) {
+        events.push(event);
+        if (event.type === "tool_call" && !stamped) {
+          // The bridge's callTool handler stamped its snapshot for this
+          // tool_use id the moment the child settled — BEFORE the paired
+          // tool_result frame arrived. Then the CLI dies.
+          stamped = true;
+          presentations.set("toolu_bridge", { subagent: "opaque" } as never);
+          void engine.dispose("host-shutdown");
+        }
+      }
+    })();
+    await turn;
+
+    // The turn terminalized WITHOUT the tool_result frame (engine death).
+    const loopEnds = events.filter((event) => event.type === "loop_end");
+    expect(loopEnds).toHaveLength(1);
+    expect(["error", "cancelled"]).toContain(loopEnds[0]!.reason);
+    expect(stamped).toBe(true);
+    // The turn-scoped sweep fired exactly once, naming the dead call's
+    // tool_use id — the host's map entry cannot outlive the turn.
+    expect(dropped).toEqual([["toolu_bridge"]]);
   });
 });
 
