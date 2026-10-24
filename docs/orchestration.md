@@ -138,10 +138,11 @@ cp -n "$ANYCODE/examples/orchestration/glm-lead.md" \
 
 Then:
 
-- **Adding profile names** requires a **new Codex session** for the supervisor
-  to be able to call them.
-- **Editing an existing profile's body** applies from the **next spawn** — the
-  bridge re-reads profile files before each call, without a new session.
+- **Adding profile names** requires a **new Codex or Claude session** — the
+  tool declaration (and its `agent_type` list) is fixed for the session on
+  both engines.
+- **Editing an existing profile's body** applies from the **next spawn** —
+  both bridges re-read profile files before each call, without a new session.
 
 On the Native side both are live: profiles dropped into `.anycode/agents/`
 during a session become callable at the next turn.
