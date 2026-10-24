@@ -108,6 +108,23 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
       expect(policy).toMatchObject({ type: "workspaceWrite", excludeTmpdirEnvVar: true, excludeSlashTmp: true });
     }
   });
+
+  it("4682-on-4078: the child-ask preset threads BOTH tmp options into workspaceWritePolicy (private temp dir as second writable root)", () => {
+    const preset = findCodexPreset("child-ask");
+    expect(preset).toBeDefined();
+    const policy = preset!.turnOverride("/ws", { excludeTmpRoots: true, extraWritableRoot: "/private/tmp/child" }).sandboxPolicy;
+    expect(policy).toMatchObject({
+      type: "workspaceWrite",
+      writableRoots: ["/ws", "/private/tmp/child"],
+      excludeTmpdirEnvVar: true,
+      excludeSlashTmp: true,
+    });
+    // Undecorated (owner-tab) call keeps the bare workspace sandbox.
+    expect(preset!.turnOverride("/ws").sandboxPolicy).toMatchObject({ type: "workspaceWrite", writableRoots: ["/ws"] });
+    // The preset's own description must not claim /tmp and $TMPDIR are writable
+    // without a prompt (the 4078 review note) — the honest text instead.
+    expect(preset!.description).toContain("only this workspace and a private temp dir are writable without a prompt");
+  });
 });
 
 describe("codexChildAutoAcceptsWorkspacePatches (Taskana 4265)", () => {

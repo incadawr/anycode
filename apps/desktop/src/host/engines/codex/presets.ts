@@ -147,9 +147,16 @@ export const CODEX_CHILD_ASK_PRESET_ID = "child-ask";
 const CODEX_CHILD_ASK_PRESET: CodexPermissionPresetDefinition = {
   id: CODEX_CHILD_ASK_PRESET_ID,
   label: "Ask for approval (children)",
-  description: "Every command approval goes through the permission broker.",
+  // 4078 × 4682 (release-rc): honest text — the child's
+  // workspace-write sandbox is NOT "everything writable"; only this workspace
+  // and a private temp dir are writable without a prompt.
+  description: "Every command approval goes through the permission broker; only this workspace and a private temp dir are writable without a prompt.",
   threadParams: { approvalPolicy: "untrusted", approvalsReviewer: "user", sandbox: "workspace-write" },
-  turnOverride: (workspace) => ({ approvalPolicy: "untrusted", approvalsReviewer: "user", sandboxPolicy: workspaceWritePolicy(workspace) }),
+  turnOverride: (workspace, opts) => ({
+    approvalPolicy: "untrusted",
+    approvalsReviewer: "user",
+    sandboxPolicy: workspaceWritePolicy(workspace, opts?.excludeTmpRoots ?? false, opts?.extraWritableRoot),
+  }),
 };
 
 /** Current default posture (cut §2(d): "ask (default = текущее поведение)") — matches the pre-existing `createNativeCodexSession` thread/start literals verbatim. */
