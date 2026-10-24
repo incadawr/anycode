@@ -1983,6 +1983,7 @@ describe("agentTool handler — role-route degrade at the session tier (Taskana 
   }): { ctx: ToolContext; seen: () => SessionSubagentRequest | undefined } {
     let seen: SessionSubagentRequest | undefined;
     const sessionSubagents: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, finalText: "child done", spawnToolCallId: req.spawnToolCallId };
@@ -2129,6 +2130,7 @@ describe("agentTool handler — role-route degrade at the session tier (Taskana 
     };
     let ran = false;
     const sessionSubagents: SessionSubagentPort = {
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       run: async (req) => {
         ran = true;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
