@@ -11,57 +11,110 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - The built-in `explore` recon subagent can run on a cheaper model: set
   `ANYCODE_EXPLORE_MODEL` (exact model id) and every inline explore child
-  defaults to it — an explicit `Agent(model: …)` still wins, and unset keeps
-  inheriting the parent's model.
+  defaults to it. An explicit `Agent(model: …)` still wins, and unset keeps
+  inheriting the parent's model. If the active connection rejects the
+  configured id (unknown, disallowed, or after switching the session to another
+  provider), the child falls back to the parent's model and its report carries a
+  one-line notice instead of every explore call failing. An explicit disallowed
+  `Agent(model: …)` still errors.
+- Claude tabs can delegate to AnyCode agent profiles, as Codex tabs already do:
+  live subagent cards, background agents (detach) that report back as a new
+  turn, and follow-ups (`continue_session`).
+- Optional trigram-index backend for the Grep tool: set
+  `ANYCODE_GREP_BACKEND=tgrep` (or `settings.tools.grepBackend: "tgrep"`; the
+  env var wins, default `rg`) to route Grep through a `tgrep` binary found on
+  PATH (`ANYCODE_TGREP_BIN` sets its location). Any failure (missing binary,
+  refused daemon, error exit, timeout) silently falls back to ripgrep and then
+  the JS path, never to a trimmed result. A zero-match answer is re-checked with
+  a fresh ripgrep scan, so a stale index cannot hide a file the agent just wrote.
+  `--no-max-filesize` lifts tgrep's 64 MiB cap. AnyCode never starts, stops or
+  indexes for tgrep; running `tgrep serve` is up to the user.
+- New optional ArchMap tool: scans a TypeScript/JavaScript tree and returns its
+  import graph (modules with line counts, import edges with type-only and dynamic
+  flags, external package counts). It is off by default; enable it with
+  `ANYCODE_ARCHMAP=1` or `"tools": { "archMap": true }` in
+  `~/.anycode/settings.json` (the env var wins; new sessions only).
+- Permission prompts for shell commands show a command-specific risk note in
+  the desktop app and the CLI, and for Codex exec approvals. Wrappers, shells
+  and absolute paths always get the full note.
+- The CLI has an opt-in `--tui` mode: an interactive terminal composer with
+  prompt history and slash-command autocomplete. It needs a terminal and is
+  ignored with `--print`.
+- Per-step provider usage (input, output and cache tokens) is kept in a
+  persistent audit, so it survives an app restart.
+- Long conversations get a transcript minimap: a scrubber over your turns, with
+  a hover preview of the question, answer and touched files for each turn.
+- Images in the transcript show live thumbnails. Clicking one opens an image
+  viewer in a modal dialog.
+- A `deep-research` workflow example ships in `examples/workflows`.
+- The desktop app has a background-task panel for the engine's background
+  tasks. Output appears under each task, and the panel stays live while the
+  session is idle.
+- Claude tabs accept `/compact`, which compacts the conversation on demand.
+  Only root tabs can use it, not subagents.
+- Artifact previews can stay on top of other windows and reload when the
+  previewed file changes, including after atomic saves. The live-reload setting
+  is remembered.
+- `Agent(send_to)` delivers a follow-up to a running child agent that the current
+  session started. A child that is still starting or cancelling refuses it.
+- A supervising agent whose detached children have all finished, and whose last
+  message has no closing marker, gets an idle reminder from the host instead of
+  waiting forever.
+- The model is reminded to update a stale todo plan, and the todo panel marks a
+  plan that may be out of date.
 
-### Fixed
-
-- A `ANYCODE_EXPLORE_MODEL` default the active connection rejects (unknown or
-  disallowed id, e.g. after switching the session to another provider) now
-  falls back to the parent's model with a one-line notice in the child's
-  report instead of failing every explore call; an explicit disallowed
-  `Agent(model: …)` still errors as before.
 ### Changed
 
 - A Claude Code tab's agent bridge re-reads profile files before each
-  `mcp__anycode__agent` call, so an edited profile body or model applies from
-  the next spawn — the same behavior a Codex supervisor already had. Profile
-  names stay fixed for the session on both engines.
-- TASK.97 R2/R3 are closed by the shipped agent bridges: Codex tabs delegate
-  via the `anycode_agent` dynamic tool and Claude tabs via the in-band
-  `anycode` MCP server; projecting profiles into the CLI's own registry
-  (`--agents <json>`) was rejected because `engine:` has no meaning there.
-- Optional trigram-index backend for the Grep tool: set
-  `ANYCODE_GREP_BACKEND=tgrep` (or `settings.tools.grepBackend: "tgrep"`; env
-  wins, default `rg`) and AnyCode routes Grep through a `tgrep` binary
-  resolved from PATH (`ANYCODE_TGREP_BIN` overrides the location; on Windows
-  only absolute PATH candidates are used). tgrep is probed with `--version`
-  (own 5 s budget, abortable, cached per binary for the process lifetime);
-  any failure — missing binary, refused daemon, error exit, timeout —
-  silently falls back to ripgrep and then the JS path, never a trimmed
-  result. A zero-match tgrep answer is re-checked through a fresh ripgrep
-  scan before being returned, so a stale index can never hide a file the
-  agent just wrote. `--no-max-filesize` lifts tgrep's 64 MiB default cap so
-  it cannot answer "no matches" where `rg` would match. AnyCode never
-  starts, stops or indexes for tgrep — running `tgrep serve` is up to the
-  user.
-- New optional ArchMap tool: scans a TypeScript/JavaScript tree and returns
-  its import graph (modules with line counts, import edges with type-only and
-  dynamic flags, external package counts). It is opt-in and off by default —
-  enable it with `ANYCODE_ARCHMAP=1` or `"tools": { "archMap": true }` in
-  `~/.anycode/settings.json` (the env var wins; new sessions only).
+  `mcp__anycode__agent` call, so an edited profile body or model applies from the
+  next spawn, as it already did for Codex supervisors. Profile names stay fixed
+  for the session on both engines.
+- A root Claude tab no longer starts Claude Code with its slash commands
+  disabled, so a message that starts with `/` is handled by Claude Code itself.
+  Subagent sessions keep slash commands disabled.
+- A subagent's turn budget extends while it makes progress, such as successful
+  Agent or workflow dispatches. A rejected round is no longer reported as
+  stalled, and a refusal from the user is reported as a refusal.
+- Codex sub-agents whose mode allows workspace edits (edit, auto, yolo), or
+  whose edits an always-allow Edit/Write rule covers, apply file changes inside
+  the session workspace without asking, as Claude and core sub-agents already
+  do. Deletes, renames, and any path outside the workspace still ask.
+- Kimi appears once in the provider list as one brand card, with a subscription
+  or API mode selector, instead of as two cards.
+- Telemetry files are pruned automatically: files older than 180 days, beyond
+  20,000 files or beyond 64 MiB are removed, oldest first. Files of open
+  sessions and files changed in the last 24 hours are never removed.
+
+### Fixed
+
+- Codex that fails with exit 127 when launched from Finder gets a clear verdict
+  that names the PATH folders searched, and offers alternate binaries to choose
+  from.
+- A host restart no longer loses pending reports from detached child agents.
+  Root Claude and Codex sessions keep them across restarts.
+- On Windows, a Codex sandbox that is not ready now shows a warning instead of
+  refusing to start the engine.
+- Claude sessions connect the in-band AnyCode MCP server again, and an MCP server
+  that fails is shown in the turn.
+
 ### Security
 
-- A proxy URL that contains credentials (and the internal engine proxy
-  carriers) is no longer passed to the agent's shell commands, the terminal,
-  language servers or `inheritEnv` MCP servers; a credential-less proxy still
-  is. Behind an authenticating proxy those tools no longer connect directly:
-  a small loopback relay is started on `127.0.0.1` and the children receive
-  its credential-free URL instead, so npm/git/curl keep working while the
-  password stays out of every child's environment, whichever side exported
-  the credential — the Claude/Codex engine tabs and the model connection keep
-  the full URL by design (a known, separate follow-up).
-- Claude tabs can delegate to AnyCode agent profiles with live subagent cards, background agents (detach) that report back as a new turn, and follow-ups (continue_session) — parity with the Codex door (Taskana 4056).
+- A proxy URL that contains credentials is no longer passed to the agent's shell
+  commands, the terminal, language servers or `inheritEnv` MCP servers; a
+  credential-less proxy still is. Behind an authenticating proxy those tools reach
+  the network through a small loopback relay and receive its credential-free URL,
+  so npm, git and curl keep working while the password stays out of every child's
+  environment. The Claude and Codex engine tabs and the model connection keep the
+  full URL.
+- Codex sub-agents in ask mode run untrusted, so their permission requests reach
+  AnyCode's permission broker. The mode label now matches that behavior.
+- Extra tools requested by a subagent are limited to an allowlist. WebSearch is
+  the only one, and only for children that ask for it.
+- Always-allow rules no longer authorize writes outside the session workspace.
+  Codex file moves and Claude notebook edits also no longer ride a blanket write
+  rule.
+- Codex sub-agents no longer have `/tmp` or `$TMPDIR` among their writable
+  sandbox roots. Each gets a private temp directory.
 
 ## [0.0.35] — 2026-10-10
 
