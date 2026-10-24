@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_TOOL_TIMEOUT_MS } from "../types/config.js";
 import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
 import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
 import { NodeHttpAdapter } from "../adapters/node/node-http.js";
@@ -639,5 +640,65 @@ describe("grepTool — tgrep capped stdout falls through the ladder (Taskana 416
     expect(result.output?.files).toEqual([join(tmpDir, "a.ts"), join(tmpDir, "b.ts")]);
     const rgCalls = runBinary.mock.calls.filter((c) => (c[0] as BinaryExecRequest).file === "/usr/bin/rg-stub");
     expect(rgCalls.length).toBe(1);
+  });
+});
+
+describe("grepTool — tgrep + rg re-check stay inside the tool budget (Taskana 4160 cross-review F3)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    vi.stubEnv("ANYCODE_TGREP_BIN", "/usr/bin/tgrep");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(0));
+    __resetRgPathCacheForTests();
+    __resetTgrepPathCacheForTests();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    __resetRgPathCacheForTests();
+    __resetTgrepPathCacheForTests();
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("a slow zero-match tgrep scan leaves the rg re-check only the remaining budget; tgrep's own spawn is capped", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-grep-budget-"));
+    await fs.writeFile(join(tmpDir, "a.ts"), "needle\n");
+    await resolveRgPath(() => Promise.resolve({ rgPath: "/usr/bin/rg-stub" }));
+
+    const runBinary = vi.fn((req: BinaryExecRequest): Promise<ExecResult> => {
+      const base = { signal: null, stderr: "", stderrTruncated: false, stdoutTruncated: false, durationMs: 1 };
+      if (req.args.includes("--version")) {
+        return Promise.resolve({ ...base, status: "completed", exitCode: 0, stdout: "tgrep 0.1.0" });
+      }
+      if (req.args.includes("--no-max-filesize")) {
+        // tgrep answers zero matches after a 70 s scan
+        vi.setSystemTime(Date.now() + 70_000);
+        return Promise.resolve({ ...base, status: "completed", exitCode: 1, stdout: "" });
+      }
+      return Promise.resolve({ ...base, status: "completed", exitCode: 0, stdout: "" });
+    });
+    const ctx: ToolContext = {
+      toolCallId: "t1",
+      abortSignal: new AbortController().signal,
+      cwd: tmpDir,
+      ports: { fs, exec: { run: vi.fn(), runBinary }, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
+    };
+
+    const result = await grepTool.handler(
+      { pattern: "needle", output_mode: "files_with_matches", "-n": true, head_limit: 0, multiline: false },
+      ctx,
+    );
+    expect(result.ok).toBe(true);
+
+    const calls = runBinary.mock.calls.map((c) => c[0] as BinaryExecRequest);
+    const tgrepSearch = calls.find((r) => r.args.includes("--no-max-filesize"));
+    const rgRecheck = calls.find((r) => r.file === "/usr/bin/rg-stub");
+    expect(tgrepSearch?.timeoutMs).toBeLessThanOrEqual(DEFAULT_TOOL_TIMEOUT_MS / 2);
+    expect(rgRecheck).toBeDefined();
+    // tgrep spent 70 s of the 120 s tool budget; rg may only use what is left
+    expect(rgRecheck?.timeoutMs).toBeLessThanOrEqual(DEFAULT_TOOL_TIMEOUT_MS - 70_000);
   });
 });

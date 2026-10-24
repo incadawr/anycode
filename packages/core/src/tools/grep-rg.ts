@@ -199,6 +199,7 @@ export async function searchWithRipgrep(
   rgPath: string,
   root: string,
   isDirectory: boolean,
+  timeoutMs: number = DEFAULT_TOOL_TIMEOUT_MS,
 ): Promise<GrepOutput> {
   const runBinary = ctx.ports.exec.runBinary;
   if (!runBinary) {
@@ -210,7 +211,7 @@ export async function searchWithRipgrep(
     file: rgPath,
     args,
     cwd: ctx.cwd,
-    timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
+    timeoutMs,
     abortSignal: ctx.abortSignal,
   });
 

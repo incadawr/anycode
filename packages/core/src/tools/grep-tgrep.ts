@@ -48,6 +48,15 @@ import { buildTgrepArgs, shapeRgJsonOutput } from "./grep-rg.js";
 const TGREP_VERSION_TIMEOUT_MS = 5_000;
 
 /**
+ * The tgrep SEARCH gets half the tool budget (Taskana 4160 cross-review F3).
+ * tools/grep.ts may re-run a zero-match answer through rg on the SAME call,
+ * and the dispatcher kills the call at DEFAULT_TOOL_TIMEOUT_MS + grace: two
+ * full-budget spawns in sequence could exceed it and turn a correct answer
+ * into `timed_out`. Half for tgrep leaves the rg re-check the remainder.
+ */
+export const TGREP_SEARCH_TIMEOUT_MS = DEFAULT_TOOL_TIMEOUT_MS / 2;
+
+/**
  * Successful `--version` probes, keyed by resolved binary path, kept for the
  * process lifetime (4160 follow-up: the probe used to run on EVERY opt-in
  * call — one extra spawn per Grep, and an aborted call could kill it). A
@@ -187,7 +196,7 @@ export async function searchWithTgrep(
       file: tgrepPath,
       args,
       cwd: ctx.cwd,
-      timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
+      timeoutMs: TGREP_SEARCH_TIMEOUT_MS,
       abortSignal: ctx.abortSignal,
     });
   } catch {

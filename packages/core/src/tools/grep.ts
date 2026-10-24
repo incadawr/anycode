@@ -5,6 +5,9 @@ import { grepInputSchema, type GrepInput, type GrepMatch, type GrepOutput } from
 import { resolveRgPath, searchWithRipgrep } from "./grep-rg.js";
 import { resolveTgrepPath, searchWithTgrep } from "./grep-tgrep.js";
 
+/** Floor for the rg re-check budget when the tgrep tier used most of the tool timeout (Taskana 4160 cross-review F3). */
+const RG_RECHECK_MIN_BUDGET_MS = 1_000;
+
 const IGNORED_DIR_NAMES = new Set([".git", "node_modules", "dist"]);
 
 function joinPath(dir: string, entry: string): string {
@@ -158,12 +161,13 @@ async function tryRipgrep(
   ctx: ToolContext,
   root: string,
   isDirectory: boolean,
+  timeoutMs?: number,
 ): Promise<GrepOutput | undefined> {
   if (!ctx.ports.exec.runBinary) return undefined;
   const rgPath = await resolveRgPath();
   if (!rgPath) return undefined;
   try {
-    return await searchWithRipgrep(input, ctx, rgPath, root, isDirectory);
+    return await searchWithRipgrep(input, ctx, rgPath, root, isDirectory, timeoutMs);
   } catch {
     return undefined; // import/spawn/exit-code failure — JS path takes over
   }
@@ -219,10 +223,9 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
 
     const rootStat = await ctx.ports.fs.stat(root);
 
-    const tgrepOutput =
-      selectGrepBackend(process.env) === "tgrep"
-        ? await tryTgrep(input, ctx, root, rootStat.isDirectory)
-        : undefined;
+    const tgrepSelected = selectGrepBackend(process.env) === "tgrep";
+    const startedAt = Date.now();
+    const tgrepOutput = tgrepSelected ? await tryTgrep(input, ctx, root, rootStat.isDirectory) : undefined;
     // Zero-match re-check (Taskana 4160 follow-up): a trigram index answers
     // from what it has indexed — a file the agent just wrote may not be in a
     // stale index yet, so tgrep's "no matches" can be wrong where a fresh
@@ -233,7 +236,13 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
     // zero-match tgrep answer is never returned directly.
     if (tgrepOutput && tgrepOutput.totalMatches > 0) return { ok: true, output: tgrepOutput };
 
-    const rgOutput = await tryRipgrep(input, ctx, root, rootStat.isDirectory);
+    // Budget (Taskana 4160 cross-review F3): when the tgrep tier ran, the rg
+    // re-check gets only what is left of the tool timeout the dispatcher
+    // enforces (plus its grace), so tgrep + rg cannot together outlive it.
+    const rgTimeoutMs = tgrepSelected
+      ? Math.max(RG_RECHECK_MIN_BUDGET_MS, DEFAULT_TOOL_TIMEOUT_MS - (Date.now() - startedAt))
+      : undefined;
+    const rgOutput = await tryRipgrep(input, ctx, root, rootStat.isDirectory, rgTimeoutMs);
     if (rgOutput) {
       return { ok: true, output: rgOutput };
     }
