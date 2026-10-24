@@ -1144,6 +1144,7 @@ export interface DesktopState {
 
   /** Single reducer entry point: applies one HostToUiMessage to the store. */
   applyHostMessage(message: HostToUiMessage): void;
+
   /* */
   setAwaitingPort(): void;
   /** Marks the handshake in flight: port received and ui_ready sent, host_ready not yet received. */

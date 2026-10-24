@@ -42,6 +42,7 @@ function tab(overrides: Partial<TabInfo> & Pick<TabInfo, "tabId" | "workspace">)
     lspPanelOpen: false,
     hooksPanelOpen: false,
     timelinePanelOpen: false,
+    tasksPanelOpen: false,
     ...overrides,
   };
 }
