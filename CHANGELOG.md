@@ -32,6 +32,15 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   provider reports one), and AnyCode remembers the last value for each
   connection.
 
+### Changed
+
+- The optional `tgrep` Grep backend is stricter: a tgrep answer cut off by the
+  output cap is re-run through ripgrep instead of being returned trimmed, tgrep
+  gets half the tool timeout so the ripgrep re-check fits in the same budget, and
+  a tgrep binary whose searches keep timing out is switched off for the rest of
+  the session. The `settings.tools.grepBackend` setting applies to the desktop
+  app only; the CLI reads just `ANYCODE_GREP_BACKEND`.
+
 ### Security
 
 - A proxy URL that contains credentials (and the internal engine proxy

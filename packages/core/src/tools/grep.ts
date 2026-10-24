@@ -122,7 +122,10 @@ export type GrepBackend = "rg" | "tgrep";
 /**
  * env wins over the explicit argument; anything but "tgrep"
  * (case-insensitive) means "rg" — an unknown value must never route Grep to
- * a missing binary.
+ * a missing binary. The grep tool itself passes only `process.env`: the
+ * desktop host projects `settings.tools.grepBackend` into that env before
+ * forking (host-env.ts), so the settings argument is for direct callers and
+ * tests; the CLI has no settings projection and honours the env var only.
  */
 export function selectGrepBackend(env: NodeJS.ProcessEnv, settingsBackend?: string): GrepBackend {
   const raw = (env.ANYCODE_GREP_BACKEND ?? settingsBackend ?? "rg").trim().toLowerCase();
