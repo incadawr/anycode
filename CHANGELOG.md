@@ -10,11 +10,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Security
 
 - A proxy URL that contains credentials (and the internal engine proxy
-  carriers) is no longer passed to the agent's shell commands, the terminal or
-  language servers; a credential-less proxy still is. Behind an authenticating
-  proxy those tools now connect directly, whichever side exported the
-  credential — the Claude/Codex engines and the model connection keep the full
-  URL by design.
+  carriers) is no longer passed to the agent's shell commands, the terminal,
+  language servers or `inheritEnv` MCP servers; a credential-less proxy still
+  is. Behind an authenticating proxy those tools no longer connect directly:
+  a small loopback relay is started on `127.0.0.1` and the children receive
+  its credential-free URL instead, so npm/git/curl keep working while the
+  password stays out of every child's environment, whichever side exported
+  the credential — the Claude/Codex engine tabs and the model connection keep
+  the full URL by design (a known, separate follow-up).
 
 ## [0.0.35] — 2026-10-10
 

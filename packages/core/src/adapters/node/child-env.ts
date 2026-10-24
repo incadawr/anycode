@@ -17,6 +17,14 @@
  * choke point every non-engine spawn passes through — and never mutates any
  * `process.env`.
  *
+ * RELAY FOLLOW-UP (Taskana 4074): dropping the vars closed the leak but broke
+ * npm/git/curl behind an authenticating proxy. When the host runs the
+ * credential-free loopback relay (`proxy-relay.ts`, `resolveProxyRelay`),
+ * `buildChildEnv`'s optional THIRD argument replaces the dropped values with
+ * `http://127.0.0.1:<port>`: children regain the network, still see no
+ * credential, and the `ANYCODE_*_PROXY_URL` carriers stay removed. Callers
+ * that have not resolved a relay pass nothing and keep the plain drop.
+ *
  * Why a literal-`@` rule and not `maskProxyCredentials` (main/proxy-probe.ts):
  * that regex needs `//` and `:` separators, so it misses user-only
  * `http://TOKEN@proxy`, scheme-less `user:pass@proxy:3128` and `http:/u:p@h`.
@@ -51,17 +59,35 @@ export function proxyValueHasUserinfo(value: string): boolean {
  * `NO_PROXY` spellings pass through verbatim, as does everything else), and so
  * is every `ANYCODE_*_PROXY_URL` engine carrier regardless of value. Never
  * mutates `env`; exact names only, no case normalisation.
+ *
+ * `relayUrl` (TASK.135 follow-up): when the host runs a credential-free
+ * loopback relay, the dropped credentialed variables are REPLACED by it
+ * instead of vanishing — npm/git/curl keep working behind the authenticating
+ * proxy while the child still sees no credential. The four-case family is set
+ * (both spellings, HTTP and HTTPS), `NO_PROXY` keeps whatever the merged env
+ * already carried (a relay URL is loopback; if the host exempted loopback
+ * that stays correct, and if it did not the child must reach the relay
+ * THROUGH the env proxy var itself, so no rewriting either way), and the
+ * `ANYCODE_*_PROXY_URL` carriers are STILL removed — the relay replaces the
+ * value, never the carrier machinery.
  */
-export function sanitizeChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
+  let droppedCredentialed = false;
   for (const [name, value] of Object.entries(env)) {
     if (isEngineProxyCarrierName(name)) {
       continue;
     }
     if (typeof value === "string" && isProxyVarName(name) && proxyValueHasUserinfo(value)) {
+      droppedCredentialed = true;
       continue;
     }
     out[name] = value;
+  }
+  if (relayUrl !== undefined && droppedCredentialed) {
+    for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
+      out[name] = relayUrl;
+    }
   }
   return out;
 }
@@ -72,10 +98,18 @@ export function sanitizeChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * one overrides the base and is kept; `undefined`-valued keys — node-git uses
  * them to unset — are preserved as-is). Returns a NEW object; neither input is
  * mutated.
+ *
+ * `relayUrl` (TASK.135 follow-up): the credential-free loopback relay URL
+ * (`http://127.0.0.1:<port>`, from `resolveProxyRelay`). When set AND the
+ * merge actually dropped a credentialed proxy value, the four-case
+ * HTTP(S)_PROXY family is rewritten to the relay URL — see
+ * `sanitizeChildEnv`. Without a relay (or when nothing was dropped) the
+ * behaviour is byte-identical to the TASK.135 scrub.
  */
 export function buildChildEnv(
   base: NodeJS.ProcessEnv,
   overlay?: Record<string, string | undefined>,
+  relayUrl?: string,
 ): NodeJS.ProcessEnv {
-  return sanitizeChildEnv(overlay === undefined ? { ...base } : { ...base, ...overlay });
+  return sanitizeChildEnv(overlay === undefined ? { ...base } : { ...base, ...overlay }, relayUrl);
 }

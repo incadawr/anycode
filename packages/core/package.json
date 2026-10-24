@@ -13,6 +13,7 @@
     "./node-git": "./src/adapters/node/node-git.ts",
     "./node-execution": "./src/adapters/node/node-execution.ts",
     "./child-env": "./src/adapters/node/child-env.ts",
+    "./proxy-relay": "./src/adapters/node/proxy-relay.ts",
     "./communication-mcp": "./src/mcp/communication-server.ts",
     "./mcp-admin": "./src/mcp/admin.ts",
     "./skills-admin": "./src/skills/admin.ts",

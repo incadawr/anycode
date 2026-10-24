@@ -621,10 +621,23 @@ describe("NodeExecutionAdapter", () => {
       vi.stubEnv("ANYCODE_CLAUDE_PROXY_URL", '{"url":"http://user:s3cret@127.0.0.1:9"}');
     };
 
-    beforeEach(() => {
+    // This suite pins the DROP behaviour in isolation: the relay is neutered
+    // (no lazy start, no URL) so a credentialed proxy vanishes rather than
+    // being replaced. The relay-rewrite behaviour has its own suite below.
+    let restoreRelay: (() => void) | undefined;
+    beforeEach(async () => {
       stubProxyEnv();
+      const relayModule = await import("./proxy-relay.js");
+      const ensureSpy = vi.spyOn(relayModule, "ensureProxyRelay").mockImplementation(() => {});
+      const urlSpy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(undefined);
+      restoreRelay = () => {
+        ensureSpy.mockRestore();
+        urlSpy.mockRestore();
+      };
     });
     afterEach(() => {
+      restoreRelay?.();
+      restoreRelay = undefined;
       vi.unstubAllEnvs();
     });
 
@@ -731,6 +744,73 @@ describe("NodeExecutionAdapter", () => {
     it("after the spawns, the parent process.env still holds the credentialed value", () => {
       expect(process.env.HTTPS_PROXY).toBe(CREDENTIALED);
       expect(process.env.ANYCODE_CLAUDE_PROXY_URL).toBe('{"url":"http://user:s3cret@127.0.0.1:9"}');
+    });
+  });
+
+  // ── Taskana 4074 follow-up: the credential-free loopback relay replaces the
+  // dropped vars in real spawns (npm/git/curl keep working, no credential) ──
+  describe("child env relay rewrite (Taskana 4074)", () => {
+    const CREDENTIALED = "http://user:s3cret@127.0.0.1:9";
+    const RELAY_URL = "http://127.0.0.1:47557";
+
+    beforeEach(() => {
+      vi.stubEnv("HTTPS_PROXY", CREDENTIALED);
+      vi.stubEnv("https_proxy", CREDENTIALED);
+      vi.stubEnv("NO_PROXY", "localhost");
+      vi.stubEnv("ANYCODE_CLAUDE_PROXY_URL", '{"url":"http://user:s3cret@127.0.0.1:9"}');
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    /** Spy the relay URL in (the module-level cache `proxyRelayUrl` reads). */
+    async function stubRelayUrl(): Promise<() => void> {
+      const relayModule = await import("./proxy-relay.js");
+      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY_URL);
+      return () => spy.mockRestore();
+    }
+
+    it("a spawned shell child receives the relay URL instead of the credentialed proxy, and no credential anywhere", async () => {
+      const restore = await stubRelayUrl();
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+      try {
+        const result = await adapter.run({
+          command: `"${process.execPath}" -e "process.stdout.write(JSON.stringify(process.env))"`,
+          cwd: tmpDir,
+          timeoutMs: 10_000,
+        });
+        expect(result.status).toBe("completed");
+        const childEnv = JSON.parse(result.stdout) as Record<string, string | undefined>;
+        expect(childEnv.HTTPS_PROXY).toBe(RELAY_URL);
+        expect(childEnv.https_proxy).toBe(RELAY_URL);
+        expect(childEnv.ANYCODE_CLAUDE_PROXY_URL).toBeUndefined();
+        expect(childEnv.NO_PROXY).toBe("localhost");
+        expect(JSON.stringify(childEnv)).not.toContain("s3cret");
+        expect(JSON.stringify(childEnv)).not.toContain("user:");
+        // The relay URL itself never carries an @ (the whole DoD of the relay).
+        expect(childEnv.HTTPS_PROXY).not.toContain("@");
+        // The parent's own env keeps the credentialed value (engines still need it).
+        expect(process.env.HTTPS_PROXY).toBe(CREDENTIALED);
+      } finally {
+        restore();
+      }
+    });
+
+    it("runBinary child receives the same relay URL", async () => {
+      const restore = await stubRelayUrl();
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+      try {
+        const result = await adapter.runBinary({
+          file: process.execPath,
+          args: ["-e", "process.stdout.write(process.env.HTTPS_PROXY ?? '<absent>')"],
+          cwd: tmpDir,
+          timeoutMs: 10_000,
+        });
+        expect(result.status).toBe("completed");
+        expect(result.stdout).toBe(RELAY_URL);
+      } finally {
+        restore();
+      }
     });
   });
 });

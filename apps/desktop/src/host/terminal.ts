@@ -38,6 +38,7 @@
 
 import { z } from "zod";
 import { buildChildEnv } from "@anycode/core/child-env";
+import { ensureProxyRelay, proxyRelayUrl } from "@anycode/core/proxy-relay";
 import type { WirePort } from "../shared/protocol.js";
 import { TERM_NAME, TERM_REPLAY_MAX_BYTES, type TermToUiMessage } from "../shared/terminal.js";
 import { describeError } from "./serialize.js";
@@ -271,6 +272,11 @@ export class TerminalManager {
     let pty: PtyLike;
     try {
       const shell = this.resolveShell();
+      // Lazily start the credential-free loopback relay on the first shell
+      // spawn under a credentialed proxy (no-op otherwise); the FIRST spawn
+      // may still land pre-bind — the same honest window NodeExecutionAdapter
+      // has — every later shell gets the relay URL.
+      ensureProxyRelay();
       pty = spawner({
         file: shell.file,
         args: shell.args,
@@ -279,8 +285,10 @@ export class TerminalManager {
         cwd: this.workspace,
         // Read at spawn time so it is the LIVE post-scrub process.env in prod,
         // then scrubbed per child (TASK.135): a credentialed proxy URL and the
-        // engine proxy carriers never reach the interactive shell.
-        env: buildChildEnv(this.injectedEnv ?? process.env),
+        // engine proxy carriers never reach the interactive shell; when the
+        // relay is up, the shell instead receives the credential-free
+        // `http://127.0.0.1:<port>` (npm/git/curl keep working).
+        env: buildChildEnv(this.injectedEnv ?? process.env, undefined, proxyRelayUrl()),
         name: TERM_NAME,
       });
     } catch (error) {

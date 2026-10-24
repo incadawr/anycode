@@ -665,7 +665,8 @@ export function ProxySection({
         <span className="settings-field-hint">
           Stored in the encrypted vault under this profile's id, never in settings.json. The full proxy URL goes to the
           Claude/Codex engines and the model connection; the agent's shell commands, the terminal and language servers
-          do not receive a proxy URL that contains credentials, so they connect directly.
+          go through a local credential-free relay instead, so they keep working behind this proxy without ever seeing
+          the password.
         </span>
       </label>
 

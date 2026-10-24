@@ -255,6 +255,7 @@ import {
   withWorkflows,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
+import { closeProxyRelay, resolveProxyRelay } from "@anycode/core/proxy-relay";
 import type {
   AgentBridgeCatalogEntry,
   AgentEvent,
@@ -1890,6 +1891,13 @@ class VisionTelemetryModelPort implements ModelPort {
 
 async function boot(): Promise<void> {
   try {
+    // TASK.135 follow-up (Taskana 4074): start the credential-free loopback
+    // relay BEFORE the first non-engine spawn, when this fork holds a
+    // credentialed proxy. await-ed here so the very first Bash child, PTY
+    // shell, LSP and MCP stdio server already see the relay URL (the
+    // NodeExecutionAdapter/terminal spawn sites re-read it per spawn).
+    // No-op (settled, no server) when no proxy var carries credentials.
+    await resolveProxyRelay();
     // Selection/probe is deliberately before loadEnvConfig: an external engine
     // must never require AnyCode provider credentials merely to fail/boot.
     const plugin = selectEnginePlugin(process.env);
@@ -3511,6 +3519,10 @@ async function handleShutdown(): Promise<void> {
   // stage: git spawns are short-lived and the command queue drains to refusals
   // after abort.
   gitAbort.abort();
+  // Credential-free loopback proxy relay (TASK.135 follow-up): destroy its
+  // sockets before the children that may still be using it — every live
+  // tunnel collapses immediately rather than on its own TCP timeout.
+  closeProxyRelay();
   // Kill the terminal shell FIRST and synchronously (SIGHUP): the pty is a child
   // of this host, so tearing it down before session teardown keeps it inside the
   // existing 2 s graceful-stop deadline without a second lifecycle (design §3.3).

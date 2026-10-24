@@ -437,7 +437,9 @@ export interface AnycodeSettings {
      * `ANYCODE_CLAUDE_PROXY_URL`) plus any credentialed proxy value are
      * stripped from NON-engine children by `@anycode/core/child-env`
      * (TASK.135) — engine children are the deliberate exception and keep the
-     * full URL.
+     * full URL. Non-engine children instead receive the credential-free
+     * loopback relay URL (Taskana 4074 follow-up), so they stay online behind
+     * the authenticating proxy without ever seeing the password.
      *
      * Only a non-empty value is persisted (only-truthy-on-disk).
      */
@@ -669,7 +671,10 @@ export type SecretKey =
   // TASK.135 closed the non-engine half: `@anycode/core/child-env` drops any
   // proxy value carrying credentials (and the `ANYCODE_*_PROXY_URL` carriers)
   // from Bash/terminal/LSP children, so a model running `env` there reads no
-  // proxy password, whichever tier stored it.
+  // proxy password, whichever tier stored it. The Taskana 4074 follow-up
+  // replaced the plain drop with the credential-free loopback relay: those
+  // children now receive `http://127.0.0.1:<port>` instead, which keeps
+  // npm/git/curl working behind the authenticating proxy.
   | `proxy.profile.${string}.password`;
 
 /** What will actually win when a host is spawned (env-override is visible to the UI). */

@@ -42,6 +42,10 @@ import { JsonlTelemetrySink } from "../adapters/node/node-telemetry.js";
 // Artifact store (TASK.94): same direct-import pattern as the sinks above —
 // the adapters/node barrel is frozen.
 import { NodeArtifactStore } from "../adapters/node/node-artifacts.js";
+// Credential-free loopback proxy relay (TASK.135 follow-up / Taskana 4074):
+// started before the first child spawn when the env holds a credentialed
+// proxy; the exec adapter below re-reads its URL per spawn.
+import { closeProxyRelay, resolveProxyRelay } from "../adapters/node/proxy-relay.js";
 import { ConversationHistory } from "../context/history.js";
 import { deriveSessionTitle, generateSessionTitle, sanitizeTitleSource } from "../context/session-title.js";
 import { createDefaultTokenizer } from "../context/tokenizer.js";
@@ -561,6 +565,16 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   // (MODEL/BASE_URL/DB_PATH/...) are untouched. Applies on the injected-modelPort
   // path too (defense-in-depth). Local one-liner: no desktop code imported.
   delete env[ENV_API_KEY];
+
+  // TASK.135 follow-up (Taskana 4074): when this CLI holds a credentialed
+  // proxy, start the credential-free loopback relay BEFORE the exec adapter
+  // below can spawn anything, so the first Bash child already sees the relay
+  // URL instead of a dropped proxy var. No-op otherwise; a refused upstream
+  // (https:// scheme &c) logs once and keeps TASK.135's drop behaviour.
+  // (`env` here is the same source the adapter's spawns read — process.env in
+  // production, the injected test env otherwise — so the relay is started for
+  // exactly the env the children will be built from.)
+  await resolveProxyRelay(env);
 
   const fs = new NodeFileSystemAdapter();
   const exec = new NodeExecutionAdapter();
@@ -1849,6 +1863,10 @@ export async function runCli(options?: Partial<CliOptions>): Promise<number> {
   // own Promise.race), so this can never hang the CLI's exit; `tasks` is `null`
 
   await tasks?.disposeAll();
+  // Credential-free loopback proxy relay (TASK.135 follow-up): destroy its
+  // sockets AFTER the children are reaped — every live tunnel collapses
+  // immediately rather than on its own TCP timeout.
+  closeProxyRelay();
   // Language-server reap (design slice-6.1-cut.md §2-D1/§6#5): polite
   // shutdown-then-kill for every live server, bounded by LSP_DISPOSE_DEADLINE_MS
   // (LspManager's own Promise.race) — STRICTLY before mcpManager.dispose()

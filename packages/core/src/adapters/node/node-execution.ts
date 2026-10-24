@@ -8,12 +8,18 @@
  * differ only in how the child is spawned (shell string vs argv, optional
  * stdin). The child env is sanitised (TASK.135): buildChildEnv drops proxy
  * variables that carry credentials and the ANYCODE_*_PROXY_URL engine carriers
- * from every non-engine child, without ever touching process.env.
+ * from every non-engine child, without ever touching process.env. When a
+ * credential-free loopback relay is already up for this process (started by a
+ * boot path via resolveProxyRelay, or on the first spawn through
+ * ensureProxyRelay below), the dropped values are REPLACED by the relay URL —
+ * npm/git/curl keep working behind the authenticating proxy and the child
+ * still sees no credential.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TOOL_TIMEOUT_MS, SIGKILL_GRACE_MS } from "../../types/config.js";
 import { buildChildEnv } from "./child-env.js";
+import { ensureProxyRelay, proxyRelayUrl } from "./proxy-relay.js";
 import type {
   BinaryExecRequest,
   ExecRequest,
@@ -90,13 +96,14 @@ export class NodeExecutionAdapter implements ExecutionPort {
     if (request.abortSignal?.aborted) {
       return Promise.resolve(cancelledResult(start));
     }
+    ensureProxyRelay();
 
     return this.spawnAndTrack(
       start,
       () =>
         spawn(request.command, {
           cwd: request.cwd,
-          env: buildChildEnv(process.env, request.env),
+          env: buildChildEnv(process.env, request.env, proxyRelayUrl()),
           shell: true,
           detached: process.platform !== "win32",
           stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
@@ -117,13 +124,14 @@ export class NodeExecutionAdapter implements ExecutionPort {
     if (request.abortSignal?.aborted) {
       return Promise.resolve(cancelledResult(start));
     }
+    ensureProxyRelay();
 
     return this.spawnAndTrack(
       start,
       () =>
         spawn(request.file, request.args, {
           cwd: request.cwd ?? process.cwd(),
-          env: buildChildEnv(process.env, request.env),
+          env: buildChildEnv(process.env, request.env, proxyRelayUrl()),
           shell: false,
           detached: process.platform !== "win32",
           stdio: ["ignore", "pipe", "pipe"],
@@ -144,6 +152,7 @@ export class NodeExecutionAdapter implements ExecutionPort {
    * orphan/pgid discipline is inherited at the module level, not reinvented.
    */
   spawnPersistent(request: PersistentChildRequest): PersistentChildHandle {
+    ensureProxyRelay();
     let child: ChildProcess;
     let exited = false;
     let killInitiated = false;
@@ -169,7 +178,7 @@ export class NodeExecutionAdapter implements ExecutionPort {
     try {
       child = spawn(request.file, request.args, {
         cwd: request.cwd ?? process.cwd(),
-        env: buildChildEnv(process.env, request.env),
+        env: buildChildEnv(process.env, request.env, proxyRelayUrl()),
         shell: false,
         detached: process.platform !== "win32",
         stdio: ["pipe", "pipe", "pipe"],

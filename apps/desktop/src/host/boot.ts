@@ -521,6 +521,13 @@ function toPermissionRule(rule: { toolName: string; pattern?: string }): { toolN
  * (`buildChildEnv` in node-execution.ts and terminal.ts): a proxy URL that
  * carries credentials never reaches a Bash child, the terminal or an LSP.
  *
+ * Taskana 4074 follow-up: rather than merely DROPPING the credentialed value,
+ * the host boots a credential-free loopback relay
+ * (`@anycode/core/proxy-relay`, `resolveProxyRelay` — started at the top of
+ * boot()) and `buildChildEnv` rewrites the dropped family to
+ * `http://127.0.0.1:<port>`, so npm/git/curl keep working behind the
+ * authenticating proxy while the child still sees no credential.
+ *
  * Deliberate small duplication: main/host-env.ts exports the equivalent
  * one-liner for main's OWN process.env (ruling §3.3). Host does not import
  * main/* (that would be a host->main layering violation — see this module's

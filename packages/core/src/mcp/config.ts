@@ -24,6 +24,13 @@
 import { z } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { McpHttpServerSpec, McpServerSpec, McpStdioServerSpec } from "../ports/mcp.js";
+// Lazy require-style seam to the adapter layer: mcp/config.ts is a pure loader
+// (no node-adapter imports by design — it runs under injected fs ports in
+// tests), while the scrub + relay URL live in adapters/node. The indirection
+// keeps the import graph acyclic (adapters/node imports mcp spec types, not
+// this loader) and lets tests stub both halves.
+import { sanitizeChildEnv } from "../adapters/node/child-env.js";
+import { proxyRelayUrl } from "../adapters/node/proxy-relay.js";
 
 export interface LoadedMcpServerSpecs {
   specs: McpServerSpec[];
@@ -144,6 +151,14 @@ function resolveEnvRecord(record: Record<string, string> | undefined): EnvRecord
 // (the CLI's only env-scrub line for MCP; the host's process.env is already
 // scrubbed before it ever reaches this loader) — config env still applies on
 // top, so an explicit `env` entry can override an inherited value.
+//
+// TASK.135 follow-up: `inheritEnv:true` also passes the full env through
+// `sanitizeChildEnv` — a credentialed proxy URL (and the engine carriers)
+// never reach an MCP stdio server either; when the loopback relay is up
+// (proxy-relay.ts) the dropped values are replaced by the credential-free
+// relay URL, so an npx-installed server keeps working behind the
+// authenticating proxy. `inheritEnv:false` (the minimal base) never carries a
+// proxy var to begin with and is untouched.
 
 const MINIMAL_ENV_KEYS = ["PATH", "HOME", "LANG"] as const;
 
@@ -156,12 +171,22 @@ function buildStdioEnv(configEnv: Record<string, string>, inheritEnv: boolean): 
       }
       base[key] = value;
     }
-  } else {
-    for (const key of MINIMAL_ENV_KEYS) {
-      const value = process.env[key];
-      if (value !== undefined) {
-        base[key] = value;
+    // TASK.135 follow-up: scrub + relay-rewrite the inherited half. The
+    // config env still applies ON TOP (an explicit `env` entry can override
+    // even the relay URL — a server that must not be proxied at all).
+    const sanitized = sanitizeChildEnv(base, proxyRelayUrl());
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(sanitized)) {
+      if (typeof value === "string") {
+        out[key] = value;
       }
+    }
+    return { ...out, ...configEnv };
+  }
+  for (const key of MINIMAL_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined) {
+      base[key] = value;
     }
   }
   return { ...base, ...configEnv };

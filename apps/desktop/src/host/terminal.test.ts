@@ -239,6 +239,40 @@ describe("TerminalManager — fake pty", () => {
     expect(env).toEqual(envSnapshot);
   });
 
+  // Taskana 4074 follow-up: when the loopback relay is up, the shell receives
+  // the credential-free relay URL instead of the dropped credentialed vars —
+  // npm/git/curl keep working behind the authenticating proxy.
+  it("replaces the credentialed proxy vars with the relay URL in the shell env (Taskana 4074)", async () => {
+    const RELAY = "http://127.0.0.1:47557";
+    const relayModule = await import("@anycode/core/proxy-relay");
+    const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY);
+    try {
+      const s = makeSpawner();
+      const ch = makeChannel();
+      const env: NodeJS.ProcessEnv = {
+        PATH: "/bin",
+        HTTPS_PROXY: "http://u:s3cret@p:1",
+        http_proxy: "http://u:s3cret@p:1",
+        NO_PROXY: "localhost",
+        ANYCODE_CODEX_PROXY_URL: "direct",
+      };
+      const mgr = new TerminalManager({ workspace: "/ws", env, loadPty: s.loadPty });
+      mgr.bindPort(ch.port);
+
+      ch.send({ type: "term_open", cols: TERM_DEFAULT_COLS, rows: TERM_DEFAULT_ROWS });
+      await flush();
+
+      expect(s.spawns[0]?.env.HTTPS_PROXY).toBe(RELAY);
+      expect(s.spawns[0]?.env.http_proxy).toBe(RELAY);
+      expect(s.spawns[0]?.env.ANYCODE_CODEX_PROXY_URL).toBeUndefined();
+      expect(s.spawns[0]?.env.NO_PROXY).toBe("localhost");
+      expect(JSON.stringify(s.spawns[0]?.env)).not.toContain("s3cret");
+      expect(JSON.stringify(s.spawns[0]?.env)).not.toContain("u:");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("streams pty output as term_data", async () => {
     const s = makeSpawner();
     const ch = makeChannel();

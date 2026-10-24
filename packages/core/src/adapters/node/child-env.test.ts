@@ -148,6 +148,60 @@ describe("sanitizeChildEnv (TASK.135)", () => {
   });
 });
 
+describe("relayUrl rewrite (TASK.135 follow-up / Taskana 4074)", () => {
+  const RELAY = "http://127.0.0.1:47557";
+
+  it("replaces the dropped credentialed vars with the relay URL (all four cases), keeping NO_PROXY as-is", () => {
+    const out = sanitizeChildEnv(
+      {
+        HTTPS_PROXY: "http://user:pass@proxy:3128",
+        https_proxy: "http://user:pass@proxy:3128",
+        HTTP_PROXY: "http://user:pass@proxy:3128",
+        http_proxy: "http://user:pass@proxy:3128",
+        NO_PROXY: "localhost,127.0.0.1",
+        no_proxy: "localhost,127.0.0.1",
+      },
+      RELAY,
+    );
+    expect(out.HTTPS_PROXY).toBe(RELAY);
+    expect(out.https_proxy).toBe(RELAY);
+    expect(out.HTTP_PROXY).toBe(RELAY);
+    expect(out.http_proxy).toBe(RELAY);
+    expect(out.NO_PROXY).toBe("localhost,127.0.0.1");
+    expect(out.no_proxy).toBe("localhost,127.0.0.1");
+    // The card's DoD: no `@` anywhere in the built env (the relay URL is
+    // credential-free, and nothing else crept in).
+    expect(JSON.stringify(out)).not.toContain("@");
+  });
+
+  it("the ANYCODE_*_PROXY_URL carriers are still removed even with a relay", () => {
+    const out = sanitizeChildEnv({ ANYCODE_CLAUDE_PROXY_URL: "direct", HTTPS_PROXY: "http://u:p@h:1" }, RELAY);
+    expect(out.ANYCODE_CLAUDE_PROXY_URL).toBeUndefined();
+    expect(out.HTTPS_PROXY).toBe(RELAY);
+  });
+
+  it("a relay with nothing dropped changes nothing (credential-less proxies pass verbatim)", () => {
+    expect(sanitizeChildEnv({ HTTPS_PROXY: "http://proxy.corp:3128" }, RELAY)).toEqual({
+      HTTPS_PROXY: "http://proxy.corp:3128",
+    });
+  });
+
+  it("buildChildEnv threads relayUrl through the merge; a credential-less overlay still wins over the relay", () => {
+    const out = buildChildEnv({ HTTPS_PROXY: "http://u:p@h:1" }, { EXTRA: "1" }, RELAY);
+    expect(out.HTTPS_PROXY).toBe(RELAY);
+    expect(out.EXTRA).toBe("1");
+
+    const overridden = buildChildEnv({ HTTPS_PROXY: "http://u:p@h:1" }, { HTTPS_PROXY: "http://clean:2" }, RELAY);
+    expect(overridden.HTTPS_PROXY).toBe("http://clean:2");
+  });
+
+  it("a relay URL never leaks the credential it stands in for", () => {
+    const out = buildChildEnv({ HTTPS_PROXY: "http://user:s3cret@proxy:3128" }, undefined, RELAY);
+    expect(JSON.stringify(out)).not.toContain("s3cret");
+    expect(JSON.stringify(out)).not.toContain("user:");
+  });
+});
+
 describe("name predicates (TASK.135)", () => {
   it("isProxyVarName matches the family in any case and excludes no_proxy", () => {
     for (const name of [
