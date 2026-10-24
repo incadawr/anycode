@@ -675,7 +675,9 @@ function detachedRouteNotice(req: SessionSubagentRequest): string | undefined {
 function respawnRoutedRoleChild(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): boolean {
   const record = routedSpawns.get(req.spawnToolCallId);
   routedSpawns.delete(req.spawnToolCallId);
-  const decision = decideRoutedTerminal(record, outcome.status, outcome.finalText, roleHealth, Date.now());
+  // R2: classify the SAFE error descriptor only — never the child's free
+  // model text (see role-route.ts decideRoutedTerminal).
+  const decision = decideRoutedTerminal(record, outcome.status, outcome.finalText, roleHealth, Date.now(), outcome.errorDescriptor);
   if (decision.action === "deliver") {
     return false;
   }
@@ -709,13 +711,21 @@ function respawnRoutedRoleChild(outcome: SessionSubagentOutcome, req: SessionSub
   // at admit; a pre-flight/cap REFUSAL must still reach the orchestrator as
   // an honest failure report under the FAILED child's id, never as a silent
   // "retrying" that no report ever follows.
+  // R3 (Taskana 4704 cross-review): the honest refusal/failure report after
+  // a failed respawn rides a DISTINCT queue id — never the failed child's
+  // spawnToolCallId, which the "retrying" notice just took: the renderer
+  // dedupes child_report by originId (store.ts), so a second report under
+  // the same id is silently dropped. The distinct id is namespaced off the
+  // failed child's id (stable, one per respawn attempt, never collides with
+  // a real spawnToolCallId uuid shape) so the retrying notice AND the honest
+  // failure both reach the orchestrator.
   void childSessionPortForRespawn
     ?.run(respawnReq, {})
     .then((admit) => {
       if (admit.status === "error") {
         routedSpawns.delete(respawnId);
         childReportQueue.add(
-          req.spawnToolCallId,
+          `${req.spawnToolCallId}:respawn-refused`,
           formatChildTaskNotification({
             taskId: req.spawnToolCallId,
             toolUseId: req.spawnToolCallId,
@@ -732,7 +742,7 @@ function respawnRoutedRoleChild(outcome: SessionSubagentOutcome, req: SessionSub
       routedSpawns.delete(respawnId);
       console.error(`[host] routed role respawn failed: ${describeError(runError)}`);
       childReportQueue.add(
-        req.spawnToolCallId,
+        `${req.spawnToolCallId}:respawn-failed`,
         formatChildTaskNotification({
           taskId: req.spawnToolCallId,
           toolUseId: req.spawnToolCallId,
@@ -1149,6 +1159,7 @@ function buildChildSessionOptions(
         ...(report.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: report.finalTurnFinishReason } : {}),
         ...(report.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true } : {}),
         ...(report.ceiling !== undefined ? { ceiling: report.ceiling } : {}),
+        ...(report.errorDescriptor !== undefined ? { errorDescriptor: report.errorDescriptor } : {}),
       } satisfies ChildTerminal);
       // Taskana 4682 rework: the terminal is committed — the child's private
       // scratch may go. Best-effort, logged, never fatal (the message above
@@ -3691,6 +3702,22 @@ async function boot(): Promise<void> {
     // restores it), and the Session's childSpawnMode() (no longer takes an
     // override) derives the identical answer from its own state.
     let preOrchestrateMode: PermissionMode | undefined;
+    // R1 (Taskana 4704 cross-review): the single source of truth for the
+    // pre-orchestrate mode is the SESSION — onOrchestrateChanged fires AFTER
+    // onSetMode("plan") already flipped config.mode, so reading config.mode
+    // there captured "plan" and every orchestrate child ran as "build"
+    // (a yolo/accept-edits user lost their mode silently). The cell below
+    // captures the mode BEFORE the switch (same place the Session's own
+    // set_orchestrate handler does), and once the Session exists the port's
+    // getter delegates to session.childSpawnMode() — the Session's own
+    // orchestrate/preOrchestrateMode state — so the two can never drift.
+    let spawnModeCell: () => PermissionMode = () => {
+      if (!config.orchestrate) {
+        return config.mode;
+      }
+      const pre = preOrchestrateMode ?? "build";
+      return pre === "plan" ? "build" : pre;
+    };
     if (!isChildSessionBoot(args, sessionMeta)) {
       childSessionPortHandle = createChildSessionPort({
         parentSessionId: sessionMeta.id,
@@ -3701,13 +3728,7 @@ async function boot(): Promise<void> {
         // sessions return the live mode (byte-identical pre-4704 behavior —
         // the child inherits the parent's mode at the moment Agent was
         // invoked, cut §0.8).
-        getPermissionMode: () => {
-          if (!config.orchestrate) {
-            return config.mode;
-          }
-          const pre = preOrchestrateMode ?? "build";
-          return pre === "plan" ? "build" : pre;
-        },
+        getPermissionMode: () => spawnModeCell(),
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
         // TASK.145 срез 1: the detach-delivery seam. Fires strictly AFTER
@@ -3743,13 +3764,11 @@ async function boot(): Promise<void> {
         // stamped — a caller-passed explicit model/provider/connection is the
         // caller's own choice, never a role-chain hop, so a later infra
         // failure must NOT respawn it onto the chain (that would override the
-        // explicit request). Discriminator: the request is route-stamped iff
-        // its routing fields equal the resolved chain's HEAD entry exactly
-        // (agent.ts stamps entries[0] verbatim when the caller passed none of
-        // them; any explicit field makes at least one comparison diverge).
-        // The recorded entry is what was stamped — NOT resolution.entries[0]
-        // blindly — and the recorded tail is the chain AFTER the head (health
-        // skipping already reordered the chain the resolver returns now).
+        // explicit request). R7 (cross-review): the primary discriminator is
+        // core's routeStamped flag (tools/agent.ts sets it exactly when the
+        // route stamped the fields); the field-equality check stays as the
+        // secondary/defense-in-depth layer for direct port callers that do
+        // not set the flag.
         if (req.detach === true && isRoleRouteName(req.agentType) && req.resumeChildSessionId === undefined) {
           const resolution = resolveRoleRouteImpl(req.agentType);
           const head = resolution?.entries[0];
@@ -3758,10 +3777,11 @@ async function boot(): Promise<void> {
             const headConnection = head.connection;
             const headEngine = head.engine;
             const stamped =
-              req.provider === headProvider &&
-              req.connectionId === headConnection &&
-              req.engine === headEngine &&
-              req.model === head.model;
+              req.routeStamped === true ||
+              (req.provider === headProvider &&
+                req.connectionId === headConnection &&
+                req.engine === headEngine &&
+                req.model === head.model);
             if (stamped) {
               noteRoutedSpawn(req, head, resolution!.entries.slice(1), resolution!.skipped);
             }
@@ -4286,14 +4306,31 @@ async function boot(): Promise<void> {
       // orchestrate default-detach (§3.3).
       onOrchestrateChanged: (enabled: boolean) => {
         if (enabled) {
-          // A1/F1: remember the pre-orchestrate mode BEFORE flipping to plan
-          // — this cell is what the child port's getPermissionMode (above)
-          // reads for every spawn while orchestrate stays on.
-          preOrchestrateMode = config.mode;
+          // R1: remember the pre-orchestrate mode BEFORE flipping to plan.
+          // This callback fires AFTER the Session's onSetMode("plan") already
+          // mutated config.mode (Session.onSetOrchestrate switches the mode
+          // BEFORE notifying the host) — but the flip to plan is the very
+          // reason we read the mode HERE, so guard against exactly that: when
+          // the mode is already plan (the common enable-from-build path goes
+          // build -> plan, so "already plan" means either the user WAS in
+          // plan — remembered as plan, childSpawnMode coerces to build — or
+          // we raced the switch), the engine's own live mode is the
+          // pre-flip truth only the Session still holds: prefer the Session
+          // when it exists (it captured preOrchestrateMode BEFORE the flip),
+          // else fall back to config.mode.
+          preOrchestrateMode = config.mode === "plan" && session !== null
+            ? session.childSpawnPreOrchestrateMode() ?? config.mode
+            : config.mode;
           config.orchestrate = true;
         } else {
           preOrchestrateMode = undefined;
           delete config.orchestrate;
+        }
+        // R1: with the Session alive, the port's getter delegates to it from
+        // here on — one derivation, one owner.
+        if (session !== null) {
+          const live = session;
+          spawnModeCell = () => live.childSpawnMode();
         }
       },
       // Taskana 4704 §3.6: turn-start orchestrator-route check — the host

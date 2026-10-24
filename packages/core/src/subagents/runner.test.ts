@@ -5276,4 +5276,64 @@ describe("role route chain walk (Taskana 4704 §3.2)", () => {
     expect(outcome.status).toBe("error");
     expect(outcome.finalText).toContain("md-model-1");
   });
+
+  // R4 (Taskana 4704 cross-review, part 1): the resolver's entries are the
+  // HEALTH-FILTERED chain — when the settings primary sits in `skipped`
+  // (cooldown), the walk starts at the first HEALTHY entry and never
+  // re-prepends the dead primary. Before R4 the persona's model was pushed
+  // as an unconditional head: a spawn the health cache had already steered
+  // onto the fallback retried the dead primary first.
+  it("R4: a cooldown-skipped primary is NOT re-prepended — the walk starts at the filtered head", async () => {
+    const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
+    const fallbackModel = new ScriptedModelPort(() => textStep("fallback-report"));
+    const resolved: string[] = [];
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {
+      // Exactly the shape the host resolver returns when the health cache
+      // marked primary-1 dead: entries start at the first HEALTHY entry and
+      // `skipped` carries the dead primary with its reason.
+      profiles: [{ ...PERSONAS["executor"]!, model: "primary-1" }],
+      resolveRoleRoute: () => ({
+        entries: [{ model: "fallback-2" }],
+        skipped: [{ entry: { model: "primary-1" }, reason: "quota" }],
+      }),
+      resolveChildModelPort: (modelId) => {
+        resolved.push(modelId);
+        if (modelId === "primary-1") throw new Error("primary-1 is dead (cooldown)");
+        return fallbackModel;
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "executor" }, {});
+
+    expect(outcome.status).toBe("completed");
+    // The dead primary was NEVER attempted — the walk started at fallback-2.
+    expect(resolved).toEqual(["fallback-2"]);
+    expect(outcome.finalText).toBe("fallback-report");
+    expect(parentModel.calls).toBe(0);
+  });
+
+  // R4 (part 2): a hand-authored md-profile `executor` with `model:` wins
+  // over the settings role chain — its model is NOT the settings primary, so
+  // it keeps the honest explicit-id error instead of being walked as a
+  // chain head.
+  it("R4: an md-profile model that is NOT the settings primary keeps the explicit-id error (md > settings)", async () => {
+    const runner = createSubagentRunner(makeParent(), {
+      // Settings route for executor exists with primary-1; the md-profile
+      // declares a DIFFERENT model of its own.
+      profiles: [{ ...PERSONAS["executor"]!, model: "md-model-1" }],
+      resolveRoleRoute: () => ({
+        entries: [{ model: "primary-1" }, { model: "fallback-2" }],
+        skipped: [],
+      }),
+      resolveChildModelPort: () => {
+        throw new Error("md-model-1 is not available on this connection");
+      },
+    });
+
+    const outcome = await runner.run({ ...REQ, agentType: "executor" }, {});
+
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toContain("md-model-1");
+    expect(outcome.finalText).not.toContain("primary-1");
+  });
 });

@@ -806,9 +806,33 @@ export function createSubagentRunner(
       if (req.model === undefined && isRoleRouteName(req.agentType)) {
         const routeResolution = opts?.resolveRoleRoute?.(req.agentType) ?? null;
         if (routeResolution !== null && persona.model !== undefined && persona.connection === undefined && persona.engine === undefined) {
-          // The persona IS the primary entry of a settings-derived route.
-          personaCarriesRoute = true;
-          chainHeadModel = persona.model;
+          // R4 (Taskana 4704 cross-review): the persona is the settings route's
+          // PRIMARY when its model is the chain's primary — recognized against
+          // the resolver's HEALTH-FILTERED result: either the filtered head IS
+          // the persona's model (primary healthy — F4's original case, the
+          // persona model becomes the chain head), or the primary sits in
+          // `skipped` (cooldown/dead — the walk then uses the FILTERED entries
+          // as-is and does NOT prepend the dead primary). A hand-authored
+          // md-profile's `model:` never matches either (it is not in the
+          // settings chain), so md wins and keeps the honest explicit-id path.
+          const head = routeResolution.entries[0];
+          const headIsPersona =
+            head !== undefined &&
+            head.model === persona.model &&
+            head.connection === undefined &&
+            head.engine === undefined;
+          const personaIsSkippedPrimary = routeResolution.skipped.some(
+            (s) => s.entry.model === persona.model && s.entry.connection === undefined && s.entry.engine === undefined,
+          );
+          if (headIsPersona || personaIsSkippedPrimary) {
+            personaCarriesRoute = true;
+            // The chain head is the persona's own model ONLY when the primary
+            // is the filtered head (healthy); a skipped primary is not
+            // prepended — the filtered entries walk as-is.
+            if (headIsPersona) {
+              chainHeadModel = persona.model;
+            }
+          }
         }
       }
       // The chain candidates in order: [exploreDefault (explore only, compat)]
@@ -823,10 +847,13 @@ export function createSubagentRunner(
         if (exploreDefault !== undefined) {
           walkable.push({ model: exploreDefault });
         }
-        // F4: the settings-derived primary (the persona's own model, set when
-        // personaCarriesRoute) is the chain HEAD — it walks exactly like any
-        // other entry, so a rejected primary degrades to the next entry
-        // instead of erroring out.
+        // R4: the chain head is the resolver's HEALTH-FILTERED entries (the
+        // resolver already skipped cooldown/dead entries). For a
+        // personaCarriesRoute persona the head IS its own model — pushed once
+        // via chainHeadModel below; for any other chain the entries walk as-is
+        // with NO extra settings-primary prepended (the old code pushed the
+        // settings primary as an unconditional head, racing a spawn that
+        // should have started on the fallback the health cache picked).
         if (chainHeadModel !== undefined) {
           walkable.push({ model: chainHeadModel, ...(persona.effort !== undefined ? { effort: persona.effort } : {}) });
         }

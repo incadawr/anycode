@@ -484,6 +484,15 @@ export interface HarnessOptions {
    */
   supervisorIdle?: SessionOptions["supervisorIdle"];
   /**
+   * R1 (Taskana 4704 cross-review): opts the harness into the host's
+   * late-binding spawn-mode cell wiring — the option itself is the host's
+   * own onOrchestrateChanged copy (config.orchestrate + cell re-bind),
+   * composed with any test-provided callback. Read the cell through
+   * `h.childSpawnModeCell()`; behavioural tests assert the mode a child
+   * spawn request would carry, never source strings.
+   */
+  wireSpawnModeCell?: boolean;
+  /**
    * Taskana 4068: the engine-switch factory seam, threaded VERBATIM into
    * Session (the `engine` passthrough precedent directly above). Omitted ->
    * engine_switch_request is refused ("engine switch is not available in
@@ -564,6 +573,14 @@ export interface Harness {
    * orchestrate is on; the live engine mode otherwise).
    */
   sessionChildSpawnMode(): PermissionMode;
+  /**
+   * R1: the live child-spawn-mode CELL (host/index.ts's late-binding port
+   * seam — starts config-derived, re-binds to the Session on the first
+   * orchestrate transition). Asserting through THIS (not Session's method
+   * directly) pins the host wiring contract: the cell and the Session must
+   * agree.
+   */
+  childSpawnModeCell(): PermissionMode;
   /** Posts a UiToHostMessage from the UI side to the host. */
   send(message: UiToHostMessage): void;
   /** Resolves with the first received message matching the predicate (rejects on timeout). */
@@ -708,11 +725,36 @@ export function createHarness(options: HarnessOptions): Harness {
       touches.push(patch);
     },
   };
+  // R1 (Taskana 4704): mirror host/index.ts's spawn-mode cell EXACTLY — the
+  // config-derived base, re-bound to the Session's own childSpawnMode() at
+  // the first orchestrate transition (the host's onOrchestrateChanged does
+  // the same once `session` is constructed). A test that asserts through
+  // this cell pins the HOST wiring, not just the Session's derivation.
+  const sessionRef: { current: Session | null } = { current: null };
+  let harnessSpawnModeCell: () => PermissionMode = () => config.mode;
+  const orchestrateCallback = (enabled: boolean): void => {
+    if (enabled) {
+      if (config.mode === "plan") {
+        const pre = sessionRef.current?.childSpawnPreOrchestrateMode();
+        config.orchestrate = true;
+        harnessSpawnModeCell = () => sessionRef.current?.childSpawnMode() ?? config.mode;
+        return;
+      }
+      config.orchestrate = true;
+    } else {
+      delete config.orchestrate;
+    }
+    harnessSpawnModeCell = () => sessionRef.current?.childSpawnMode() ?? config.mode;
+  };
 
   const session = new Session({
     outbound,
     engine,
-    ...(options.onOrchestrateChanged !== undefined ? { onOrchestrateChanged: options.onOrchestrateChanged } : {}),
+    ...(options.onOrchestrateChanged !== undefined
+      ? { onOrchestrateChanged: (enabled: boolean) => { options.onOrchestrateChanged!(enabled); if (options.wireSpawnModeCell) orchestrateCallback(enabled); } }
+      : options.wireSpawnModeCell
+        ? { onOrchestrateChanged: orchestrateCallback }
+        : {}),
     ...(options.orchestratorRouteCheck !== undefined ? { orchestratorRouteCheck: options.orchestratorRouteCheck } : {}),
     ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),
     broker,
@@ -783,6 +825,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.supervisorIdle !== undefined ? { supervisorIdle: options.supervisorIdle } : {}),
   });
   session.bindPort(nodeWirePort(hostPort));
+  sessionRef.current = session;
 
   const waitFor = <T extends HostToUiMessage>(
     predicate: (message: HostToUiMessage) => message is T,
@@ -844,6 +887,9 @@ export function createHarness(options: HarnessOptions): Harness {
     },
     sessionChildSpawnMode(): PermissionMode {
       return session.childSpawnMode();
+    },
+    childSpawnModeCell(): PermissionMode {
+      return harnessSpawnModeCell();
     },
     armContinuation(): void {
       const internal = session as unknown as { continuationPending: boolean };

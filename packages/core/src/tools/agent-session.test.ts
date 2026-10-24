@@ -1844,4 +1844,81 @@ describe("agentTool handler — role route stamping (Taskana 4704 §3.3)", () =>
     expect(result.ok).toBe(true);
     expect(inlineSeen).toBe(true);
   });
+
+  // R6 (Taskana 4704 cross-review): a settings-derived role persona whose
+  // primary carries a CONNECTION makes BOTH mechanisms non-null — the
+  // persona's frontmatter mirrors the primary (profileRouting non-null) and
+  // the settings role route resolves (roleRoute non-null). The request must
+  // carry the ROUTE entry's fields and NEVER both mechanisms' fields at
+  // once: before R6 the profile-routing spread stamped provider/connectionId
+  // BEFORE the route's spread, and the two merged onto one request.
+  it("R6: role route REPLACES profile routing — one mechanism stamps the request, never both", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    // Exactly the double-resolution a settings-derived persona produces:
+    // profileRouting carries the primary's provider; the role route resolves
+    // to a DIFFERENT (health-filtered) entry carrying a connection.
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["planner", "executor", "reviewer"],
+      profileRouting: () => ({ provider: "z-ai" }),
+      resolveRoleRoute: () =>
+        ({ entries: [{ connection: "conn-glm", model: "glm-5.3" }], skipped: [], turnBudget: 80 }) as never,
+    };
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "executor" },
+      makeCtx({ sessionSubagents: port, subagents }),
+    );
+    expect(seen).toMatchObject({ connectionId: "conn-glm", model: "glm-5.3", maxTurns: 80 });
+    // The profile routing's provider is REPLACED, not merged.
+    expect(seen !== undefined && "provider" in seen).toBe(false);
+  });
+
+  // R7 (cross-review): the route-stamped marker rides the request exactly
+  // when the caller passed neither provider nor model — the host respawn
+  // bookkeeping's discriminator.
+  it("R7: routeStamped rides a route-stamped fresh spawn and is suppressed by an explicit model", async () => {
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      run: async (req) => {
+        seen = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const route = { entries: [{ model: "route-model" }], skipped: [] } as never;
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["planner", "executor", "reviewer"],
+      resolveRoleRoute: () => route,
+    };
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "planner" },
+      makeCtx({ sessionSubagents: port, subagents }),
+    );
+    expect(seen?.routeStamped).toBe(true);
+    // An explicit model equal to the head's model is the CALLER's choice —
+    // not a chain hop, never recorded for respawn.
+    let seen2: SessionSubagentRequest | undefined;
+    const port2: SessionSubagentPort = {
+      run: async (req) => {
+        seen2 = req;
+        return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    await full.handler(
+      { description: "d", prompt: "p", tier: "session", agent_type: "planner", model: "route-model" },
+      makeCtx({ sessionSubagents: port2, subagents }),
+    );
+    expect(seen2?.model).toBe("route-model");
+    expect(seen2 !== undefined && "routeStamped" in seen2).toBe(false);
+  });
 });

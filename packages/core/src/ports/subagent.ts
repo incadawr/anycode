@@ -115,6 +115,16 @@ export interface SubagentOutcome {
     grantedTurns: number;
     lastRefusal?: CeilingRefusalReason;
   };
+  /**
+   * R2 (Taskana 4704 cross-review): the redacted SAFE error descriptor of an
+   * `error` outcome — session.ts's finalizeChildTerminal carries it as the
+   * first line of `finalText` (the free model text follows). Set ONLY on
+   * error outcomes produced by a session host that separates the two; the
+   * host-side infra-failure classifier (desktop role-route.ts) classifies
+   * THIS, never the child's free prose. Absent on every non-error outcome
+   * and on outcomes with no separate descriptor (inline runner children).
+   */
+  errorDescriptor?: string;
 }
 
 /**

@@ -106,6 +106,23 @@ export type InfraFailureKind =
   | "timeout_first_token"
   | "none";
 
+/**
+ * R2 (Taskana 4704 cross-review): the text a terminal's classification runs
+ * over — the SAFE ERROR DESCRIPTOR ONLY (session.ts's onTerminal carries it
+ * as `errorDescriptor`, the first line of an error finalText), never the
+ * child's free model text. A child whose final prose discusses "forbidden"
+ * auth code, proxies or "rate limits" of the task domain must not respawn.
+ * Falls back to the finalText's first line when the structured descriptor is
+ * absent (legacy outcomes / direct decideRoutedTerminal callers).
+ */
+export function classifyableErrorText(finalText: string, errorDescriptor?: string): string {
+  if (errorDescriptor !== undefined && errorDescriptor.length > 0) {
+    return errorDescriptor;
+  }
+  const firstLine = finalText.split("\n", 1)[0] ?? "";
+  return firstLine;
+}
+
 export function classifyInfraFailure(text: string): InfraFailureKind {
   // The exact error terminal texts (host/session.ts finalizeChildTerminal
   // prefixes a redacted safe descriptor: "<message> (HTTP <status>)"):
@@ -235,6 +252,7 @@ export function decideRoutedTerminal(
   finalText: string,
   health: RoleHealthCache,
   now: number,
+  errorDescriptor?: string,
 ): RoutedTerminalDecision {
   if (facts === undefined) return { action: "deliver" };
   if (status === "completed") {
@@ -248,8 +266,12 @@ export function decideRoutedTerminal(
   // (the user's own Stop) are user-visible outcomes, never infra failures,
   // no matter what free text accompanies them.
   if (status !== "error") return { action: "deliver" };
-  // Fallback point 2: infrastructure classes ONLY (§2.7).
-  const kind = classifyInfraFailure(finalText);
+  // Fallback point 2: infrastructure classes ONLY (§2.7). R2: classification
+  // runs over the SAFE ERROR DESCRIPTOR (or the finalText's first line when
+  // no structured descriptor rode the terminal) — never the child's free
+  // model text, whose prose legitimately mentions "forbidden"/"network
+  // error"/"rate limits" of the task domain.
+  const kind = classifyInfraFailure(classifyableErrorText(finalText, errorDescriptor));
   if (kind === "none") return { action: "deliver" };
   const failedKey = entryKey(facts.role, facts.entry);
   health.markFailure(failedKey, kind, now);

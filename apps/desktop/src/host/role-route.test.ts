@@ -238,4 +238,63 @@ describe("decideRoutedTerminal (Taskana 4704 §3.6)", () => {
     expect(d).toEqual({ action: "deliver" });
     expect(cache.snapshot().size).toBe(0);
   });
+
+  // R2 (cross-review): classification runs over the SAFE ERROR DESCRIPTOR,
+  // never the child's free model text — an error terminal whose descriptor
+  // is a benign task failure but whose PROSE mentions infra-looking words
+  // must deliver, and the converse (infra descriptor + benign prose) must
+  // still respawn.
+  it("R2: an infra-sounding FREE-TEXT tail after a benign descriptor NEVER respawns", () => {
+    const cache = new RoleHealthCache();
+    const d = decideRoutedTerminal(
+      facts([{ connection: "conn-main" }]),
+      "error",
+      "task failed: the module could not be resolved\n\nAdditionally, while investigating I hit a network error and saw the endpoint was forbidden with rate_limit headers.",
+      cache,
+      T0,
+      "task failed: the module could not be resolved",
+    );
+    expect(d).toEqual({ action: "deliver" });
+    expect(cache.snapshot().size).toBe(0);
+  });
+
+  it("R2: an infra descriptor still respawns even when the free text is benign", () => {
+    const cache = new RoleHealthCache();
+    const d = decideRoutedTerminal(
+      facts([{ connection: "conn-main", model: "glm-5.3" }]),
+      "error",
+      "rate limited (HTTP 429)\n\nI was halfway through the edit; the work is on disk.",
+      cache,
+      T0,
+      "rate limited (HTTP 429)",
+    );
+    expect(d.action).toBe("respawn");
+    if (d.action !== "respawn") return;
+    expect(d.reason).toBe("quota");
+    expect(cache.isUnhealthy(entryKey("executor", { engine: "codex" }), T0 + 1)).toBe(true);
+  });
+
+  it("R2: without a structured descriptor, only the FIRST LINE of finalText classifies", () => {
+    const cache = new RoleHealthCache();
+    // Infra word buried in the prose tail only — first line is a task failure.
+    const d = decideRoutedTerminal(
+      facts([{ connection: "conn-main" }]),
+      "error",
+      "task failed: assertion mismatch\n\nnetwork error while fetching docs",
+      cache,
+      T0,
+    );
+    expect(d).toEqual({ action: "deliver" });
+    expect(cache.snapshot().size).toBe(0);
+    // First line IS the safe descriptor shape — legacy single-line behavior
+    // preserved.
+    const d2 = decideRoutedTerminal(
+      facts([{ connection: "conn-main" }]),
+      "error",
+      "server error (HTTP 500)\n\nchild report prose",
+      cache,
+      T0,
+    );
+    expect(d2.action).toBe("respawn");
+  });
 });

@@ -427,6 +427,13 @@ export interface ChildTerminalReport {
    * child never tripped the ceiling.
    */
   ceiling?: ChildCeilingSummary;
+  /**
+   * R2 (Taskana 4704 cross-review): the redacted SAFE error descriptor of an
+   * `error` terminal — the first line of finalText, carried separately so the
+   * parent host's infra-failure classifier never runs over the child's free
+   * model text. Present only on error terminals; absent everywhere else.
+   */
+  errorDescriptor?: string;
 }
 
 /**
@@ -3642,6 +3649,17 @@ export class Session {
     const childResult = this.childLoopStatus === "error"
       ? { ...this.childFinalText, final: `${this.childSafeError ?? safeFailureMessage("unknown")}\n\n${this.childFinalText.final}` }
       : this.childFinalText;
+    // R2 (Taskana 4704 cross-review): the INFRA-FAILURE CLASSIFIER downstream
+    // (host role-route.ts decideRoutedTerminal) must see ONLY the redacted
+    // safe descriptor — the free model text below it legitimately discusses
+    // "forbidden", auth code, proxies or "rate limits" of the task domain, and
+    // classifying the whole finalText respawned children whose actual failure
+    // was unrelated. The onTerminal.error seam therefore carries the safe
+    // descriptor as a separate field; finalText keeps its full
+    // descriptor + report shape for the orchestrator/human.
+    const errorDescriptor = this.childLoopStatus === "error"
+      ? this.childSafeError ?? safeFailureMessage("unknown")
+      : undefined;
     let { text: finalText, truncated } = finalizeFinalText(childResult);
     try {
       await this.child.flushHistory();
@@ -3728,6 +3746,9 @@ export class Session {
         status: this.childLoopStatus ?? "error",
         finalText,
         truncated,
+        // R2: the safe descriptor rides separately (see errorDescriptor above)
+        // so the respawn classifier never runs over the child's free text.
+        ...(errorDescriptor !== undefined ? { errorDescriptor } : {}),
         turns: this.childTurns,
         toolCalls: this.childToolCalls,
         durationMs,
@@ -4445,13 +4466,31 @@ export class Session {
    * its PermissionRequest. Engines that manage their own permission posture
    * still reject regardless of busy state.
    */
-  private onSetMode(mode: PermissionMode): void {
+  private onSetMode(mode: PermissionMode, fromOrchestrateTransition = false): void {
     if (!this.engine.capabilities.supportsCorePermissions || this.engine.setMode === undefined) {
       this.outbound.emit({
         type: "mode_change_rejected",
         reason: "permission modes are managed by this engine",
       });
       return;
+    }
+    // R5 (Taskana 4704 cross-review): orchestrate IS the plan-mode posture —
+    // a user set_mode that moves the tab OUT of plan while orchestrate is on
+    // leaves the flag asserting a posture the mode no longer holds (an
+    // orchestrator with WRITABLE tools). The transition is treated as an
+    // implicit orchestrate-off: clear the flag through the SAME transition
+    // path set_orchestrate(false) takes (host loop-config copy +
+    // orchestrate_changed ack), restoring the orchestrate invariants
+    // (default-detach off, plan reminder restored, children inherit the live
+    // mode). An approved ExitPlanMode mid-turn is EXEMPT (TASK.27's loop
+    // advance path calls notifyModeChanged, not here — and orchestrate has
+    // its own §3.7 continuation semantics); orchestrate's OWN internal
+    // switches pass fromOrchestrateTransition and are equally exempt.
+    if (!fromOrchestrateTransition && this.orchestrate && mode !== "plan") {
+      this.orchestrate = false;
+      this.preOrchestrateMode = null;
+      this.onOrchestrateChanged?.(false);
+      this.outbound.emit({ type: "orchestrate_changed", enabled: false });
     }
     this.engine.setMode(mode);
     // Persist the mode so a resume restores it (design §4.2); fire-and-forget.
@@ -4480,6 +4519,19 @@ export class Session {
   }
 
   /**
+   * R1 (Taskana 4704 cross-review): the pre-orchestrate mode the host's
+   * late-binding spawn-mode cell consults when onOrchestrateChanged fires
+   * after the mode already flipped to plan. The Session captured the true
+   * pre-orchestrate mode BEFORE the flip (onSetOrchestrate), so this — not
+   * config.mode — is the honest answer. Undefined only while orchestrate is
+   * off (nothing consults it then).
+   */
+  childSpawnPreOrchestrateMode(): PermissionMode | undefined {
+    if (!this.orchestrate) return undefined;
+    return this.preOrchestrateMode ?? undefined;
+  }
+
+  /**
    * Taskana 4704 §2.2/§3.7: `set_orchestrate` — between-turns only (busy =>
    * silent drop, the set_mode/set_model discipline). On enable: remember the
    * current mode (preOrchestrateMode), switch the mode to `plan` (the
@@ -4501,12 +4553,12 @@ export class Session {
     if (enabled) {
       this.preOrchestrateMode = this.engine.mode();
       this.orchestrate = true;
-      this.onSetMode("plan");
+      this.onSetMode("plan", true);
     } else {
       this.orchestrate = false;
       const restore = this.preOrchestrateMode ?? "build";
       this.preOrchestrateMode = null;
-      this.onSetMode(restore);
+      this.onSetMode(restore, true);
     }
     // §3.7: the host copies the flag onto the AgentLoopConfig (the dispatcher
     // threads it into every ToolContext — the Agent tool's default-detach).

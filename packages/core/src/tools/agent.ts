@@ -533,15 +533,34 @@ async function runSessionTier(
     // the child's own pin and never re-reads routing). Exactly one of these two
     // keys can be present — the parser refuses both-keys profiles and the
     // handler above refused a routed profile with an explicit `provider`.
-    ...(resumeChildSessionId === undefined && routing?.provider !== undefined ? { provider: routing.provider } : {}),
-    ...(resumeChildSessionId === undefined && routing?.connection !== undefined ? { connectionId: routing.connection } : {}),
+    //
+    // R6 (Taskana 4704 cross-review): a role-route resolution (settings
+    // roles) REPLACES the profile-routing fields below rather than merging
+    // with them — the runSessionTier signature threads roleRoute AFTER
+    // routing for exactly this reason (TS spread order = precedence order):
+    // a settings-derived role persona whose primary carries a connection
+    // ALSO makes profileRouting non-null (the derived persona's frontmatter
+    // mirrors the primary), and merging would stamp BOTH the profile's
+    // connectionId AND the route's provider on one request. The route entry
+    // (health-filtered, respawn-bookkept host-side) is the authoritative
+    // target for a role spawn; the profile routing stays authoritative only
+    // when no role route resolved.
+    ...(resumeChildSessionId === undefined && routing?.provider !== undefined && roleRoute === undefined ? { provider: routing.provider } : {}),
+    ...(resumeChildSessionId === undefined && routing?.connection !== undefined && roleRoute === undefined ? { connectionId: routing.connection } : {}),
     // Taskana 4704 §3.3: the role route's resolved FIRST entry stamps the
-    // fresh spawn exactly like `routing` above — provider/connection/model/
-    // effort and (closing the gap that only engine profiles stamped it)
-    // maxTurns from roleRoute.turnBudget. An explicit Agent(model:) still
-    // wins over the entry's model (existing precedence — buildSessionSub-
-    // agentRequest applies input.model first; the entry model only rides as
-    // a default when the caller passed none).
+    // fresh spawn exactly like `routing` above (R6: and REPLACES it — the
+    // guarded spreads above skip the routing keys when a role route
+    // resolved, so exactly ONE of the two mechanisms stamps this request) —
+    // provider/connection/model/effort and (closing the gap that only engine
+    // profiles stamped it) maxTurns from roleRoute.turnBudget. An explicit
+    // Agent(model:) still wins over the entry's model (existing precedence —
+    // buildSessionSubagentRequest applies input.model first; the entry model
+    // only rides as a default when the caller passed none). R7: the
+    // routeStamped flag marks a spawn whose routing fields came from the
+    // ROUTE (not the caller) so the host's respawn bookkeeping never
+    // mistakes a caller's coincidentally-equal explicit model for a chain
+    // hop — set exactly when every stamping spread below fired, i.e. the
+    // caller passed neither provider nor model.
     ...(resumeChildSessionId === undefined && roleRoute !== undefined && roleRoute.entries.length > 0
       ? {
           ...(input.provider === undefined && input.model === undefined && roleRoute.entries[0]!.provider !== undefined
@@ -568,6 +587,10 @@ async function runSessionTier(
           ...(roleRoute.turnBudget !== undefined && engineProfile?.turnBudget === undefined
             ? { maxTurns: roleRoute.turnBudget }
             : {}),
+          // R7: mark the spawn as route-stamped ONLY when the caller passed
+          // neither provider nor model — the two fields whose explicit
+          // presence means the caller chose the target themselves.
+          ...(input.provider === undefined && input.model === undefined ? { routeStamped: true } : {}),
         }
       : {}),
     // TASK.145 срез 1: only ever `true` here — the validation check above

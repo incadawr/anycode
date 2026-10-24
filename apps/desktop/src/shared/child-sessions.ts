@@ -229,6 +229,13 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       responseModel?: string;
       /** TASK.240/4055 (additive): the child's ceiling ladder summary. Absent on legacy payloads and runs that never tripped the ceiling. */
       ceiling?: ChildCeilingSummary;
+      /**
+       * R2 (Taskana 4704, additive): the redacted SAFE error descriptor of an
+       * error terminal (finalText's first line), carried separately so the
+       * parent host's infra-failure classifier never sees the child's free
+       * model text. Absent on non-error terminals and legacy payloads.
+       */
+      errorDescriptor?: string;
     }
   /**
    * Additive (Taskana 4153): ack for a `ChildRunSend` — the follow-up message
@@ -291,6 +298,12 @@ export interface ChildTerminal {
   responseModel?: string;
   /** TASK.240/4055 (additive): the child's ceiling ladder summary. Absent on legacy payloads. */
   ceiling?: ChildCeilingSummary;
+  /**
+   * R2 (Taskana 4704, additive): the redacted SAFE error descriptor of an
+   * error terminal (finalText's first line). Absent on non-error terminals
+   * and legacy payloads.
+   */
+  errorDescriptor?: string;
 }
 
 // ── admission/timing constants (§2.3) ──
@@ -642,6 +655,8 @@ const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   "responseModel",
   // TASK.240/4055: additive ceiling-ladder summary key.
   "ceiling",
+  // R2 (Taskana 4704): additive safe-error-descriptor key.
+  "errorDescriptor",
 ] as const;
 
 export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
@@ -776,6 +791,15 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       if (msg.ceiling !== undefined && ceiling === null) {
         return null;
       }
+      // R2: the safe error descriptor is present only on error terminals and
+      // only as a capped string — anything else fails closed (dropped, the
+      // classifier then falls back to the finalText's first line).
+      if (
+        msg.errorDescriptor !== undefined &&
+        ((msg.status as string) !== "error" || !isCappedString(msg.errorDescriptor, CHILD_FINAL_TEXT_MAX_CHARS))
+      ) {
+        return null;
+      }
       return {
         type: CHILD_RUN_EVENT_TYPE,
         requestId,
@@ -793,6 +817,7 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
         ...(msg.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true as const } : {}),
         ...(ceiling !== null ? { ceiling } : {}),
+        ...(msg.errorDescriptor !== undefined ? { errorDescriptor: msg.errorDescriptor as string } : {}),
       };
     }
     default:
@@ -948,6 +973,13 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
   if (msg.ceiling !== undefined && ceiling === null) {
     return null;
   }
+  // R2 (Taskana 4704): same fail-closed posture as the run-event parser.
+  if (
+    msg.errorDescriptor !== undefined &&
+    ((msg.status as string) !== "error" || !isCappedString(msg.errorDescriptor, CHILD_FINAL_TEXT_MAX_CHARS))
+  ) {
+    return null;
+  }
   return {
     type: CHILD_TERMINAL_TYPE,
     status: msg.status as ChildRunStatus,
@@ -962,5 +994,6 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
     ...(msg.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: msg.finalTurnFinishReason as "length" } : {}),
     ...(msg.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true as const } : {}),
     ...(ceiling !== null ? { ceiling } : {}),
+    ...(msg.errorDescriptor !== undefined ? { errorDescriptor: msg.errorDescriptor as string } : {}),
   };
 }

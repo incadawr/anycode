@@ -8196,6 +8196,138 @@ describe("Session — set_orchestrate (Taskana 4704 §3.7 / A1)", () => {
     }
   });
 
+  // R1 (Taskana 4704 cross-review): the HOST wiring contract. host/index.ts's
+  // onOrchestrateChanged used to capture config.mode AFTER the Session's
+  // onSetMode("plan") already flipped it — the cell always remembered "plan"
+  // and every orchestrate child ran as "build". The harness mirrors the
+  // production wiring exactly (childSpawnModeCell option: config-derived
+  // base, re-bound to session.childSpawnMode() on the first transition), so
+  // asserting through h.childSpawnModeCell() pins the same contract the
+  // host's child port answers with on every session-tier spawn request.
+  it("R1: host spawn-mode cell — orchestrate on from mode X => session-tier children carry X (plan->build); off => live mode", async () => {
+    const cases: Array<{ pre: "build" | "auto" | "yolo" | "plan"; expected: PermissionMode }> = [
+      { pre: "build", expected: "build" },
+      { pre: "auto", expected: "auto" },
+      { pre: "yolo", expected: "yolo" },
+      { pre: "plan", expected: "build" }, // plan coerced to build — an executor child must write
+    ];
+    for (const { pre, expected } of cases) {
+      const h = createHarness({
+        steps: [],
+        mode: pre,
+        engine: orchestrateEngine({ initialMode: pre }),
+        wireSpawnModeCell: true,
+      });
+      try {
+        h.send({ type: "ui_ready" });
+        await h.waitFor(isHostReady);
+        h.send({ type: "set_orchestrate", enabled: true });
+        await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && m.enabled);
+        // THE R1 ASSERTION: the cell the child port reads must answer with
+        // the PRE-orchestrate mode — the Session's own derivation, captured
+        // before the plan flip, not the already-flipped config.mode.
+        expect(h.childSpawnModeCell()).toBe(expected);
+        expect(h.childSpawnModeCell()).toBe(h.sessionChildSpawnMode());
+      } finally {
+        h.close();
+      }
+    }
+    // Orchestrate OFF (never enabled): the cell answers the LIVE mode.
+    const h2 = createHarness({
+      steps: [],
+      mode: "edit",
+      engine: orchestrateEngine({ initialMode: "edit" }),
+      wireSpawnModeCell: true,
+    });
+    try {
+      h2.send({ type: "ui_ready" });
+      await h2.waitFor(isHostReady);
+      expect(h2.childSpawnModeCell()).toBe("edit");
+    } finally {
+      h2.close();
+    }
+  });
+
+  it("R1: after disable, the cell answers the live (restored) mode again", async () => {
+    const h = createHarness({
+      steps: [],
+      mode: "yolo",
+      engine: orchestrateEngine({ initialMode: "yolo" }),
+      wireSpawnModeCell: true,
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && m.enabled);
+      expect(h.childSpawnModeCell()).toBe("yolo");
+      h.send({ type: "set_orchestrate", enabled: false });
+      await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && !m.enabled);
+      expect(h.childSpawnModeCell()).toBe("yolo");
+    } finally {
+      h.close();
+    }
+  });
+
+  // R5 (Taskana 4704 cross-review): orchestrate IS the plan posture — a
+  // user set_mode moving the tab OUT of plan while orchestrate is on turns
+  // orchestrate OFF (host loop-config copy + orchestrate_changed false),
+  // never leaving a writable orchestrator behind.
+  it("R5: set_mode away from plan while orchestrate is on => orchestrate turns off (orchestrate_changed false)", async () => {
+    const onOrchestrateChanged = vi.fn();
+    const h = createHarness({ steps: [], mode: "build", engine: orchestrateEngine({ initialMode: "build" }), onOrchestrateChanged });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && m.enabled);
+      // The user now picks a writable mode directly.
+      h.send({ type: "set_mode", mode: "auto" });
+      const changed = await h.waitFor((m): m is Of<"mode_changed"> => m.type === "mode_changed" && m.mode === "auto");
+      expect(changed.mode).toBe("auto");
+      const offAck = await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && !m.enabled);
+      expect(offAck.enabled).toBe(false);
+      expect(onOrchestrateChanged).toHaveBeenCalledWith(false);
+      // Children now inherit the live mode.
+      expect(h.sessionChildSpawnMode()).toBe("auto");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("R5: set_mode to plan while orchestrate is on keeps orchestrate on", async () => {
+    const onOrchestrateChanged = vi.fn();
+    const h = createHarness({ steps: [], mode: "build", engine: orchestrateEngine({ initialMode: "build" }), onOrchestrateChanged });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitFor((m): m is Of<"orchestrate_changed"> => m.type === "orchestrate_changed" && m.enabled);
+      h.send({ type: "set_mode", mode: "plan" });
+      await h.waitFor((m): m is Of<"mode_changed"> => m.type === "mode_changed" && m.mode === "plan");
+      await h.flush();
+      expect(h.received.some((m) => m.type === "orchestrate_changed" && !m.enabled)).toBe(false);
+      // Still orchestrate: children keep the pre-orchestrate mode.
+      expect(h.sessionChildSpawnMode()).toBe("build");
+    } finally {
+      h.close();
+    }
+  });
+
+  it("R5: a non-orchestrate session's set_mode emits no orchestrate_changed", async () => {
+    const h = createHarness({ steps: [], engine: orchestrateEngine({}), onOrchestrateChanged: () => {} });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_mode", mode: "auto" });
+      await h.waitFor((m): m is Of<"mode_changed"> => m.type === "mode_changed" && m.mode === "auto");
+      await h.flush();
+      expect(h.received.some((m) => m.type === "orchestrate_changed")).toBe(false);
+    } finally {
+      h.close();
+    }
+  });
+
   it("turn-start fallback: an unhealthy primary surfaces the engine_notice (via orchestratorRouteCheck)", async () => {
     const h = createHarness({
       steps: [],

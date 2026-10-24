@@ -798,6 +798,10 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 ...(event.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: event.finalTurnFinishReason } : {}),
                 ...(event.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true } : {}),
                 ...(event.ceiling !== undefined ? { ceiling: event.ceiling } : {}),
+                // R2 (Taskana 4704): the safe error descriptor rides through
+                // so the parent host's respawn classifier never sees the
+                // child's free model text.
+                ...(event.errorDescriptor !== undefined ? { errorDescriptor: event.errorDescriptor } : {}),
               };
               // TASK.145 срез 1: this run's `run()` promise already settled
               // at admit (above) — this terminal can no longer resolve it.

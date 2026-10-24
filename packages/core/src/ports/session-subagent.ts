@@ -75,6 +75,17 @@ export interface SessionSubagentRequest {
    */
   engine?: "claude" | "codex";
   /**
+   * R7 (Taskana 4704 cross-review): set ONLY by the role-route stamping in
+   * tools/agent.ts when the route's resolved head entry actually stamped this
+   * request's routing fields (caller passed none of model/provider). Consumed
+   * ENTIRELY by the parent host's respawn bookkeeping (host/index.ts's run()
+   * wrapper) to distinguish "route-stamped" from "caller-chosen" — the two
+   * are indistinguishable by field comparison alone when the caller's
+   * explicit model happens to equal the head entry's model. Never crosses
+   * the parentPort wire; absent = the routing fields are the caller's own.
+   */
+  routeStamped?: boolean;
+  /**
    * TASK.145 срез 1: `Agent{tier:"session", detach:true}`'s own field,
    * threaded straight through (tools/agent.ts validates it is only ever set
    * alongside `tier:"session"` before building this request). This flag is
