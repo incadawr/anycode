@@ -452,19 +452,13 @@ async function runSessionTier(
   // guaranteed send_to stands alone (tier session, no provider/detach/
   // continue_session); `agentType` was validated above, so this call also
   // rejects an unknown agent_type before delivering — same fail-fast as any
-  // other call shape. Fail-closed on a port without `send` (the field is
-  // optional so older/fake hosts keep compiling): an honest refusal, never
-  // a silent no-op. Mirrors AgentOutput's field set (schemas.ts) for a
-  // delivery that ran zero turns itself.
+  // other call shape. Cross-review Finding 1 (Taskana 4153): `send` is now
+  // REQUIRED on SessionSubagentPort, so the interface seam is enforced at
+  // compile time — no fail-closed branch for a missing method here anymore.
+  // Mirrors AgentOutput's field set (schemas.ts) for a delivery that ran zero
+  // turns itself.
   if (input.send_to !== undefined) {
-    const send = ctx.sessionSubagents.send;
-    if (send === undefined) {
-      return {
-        ok: false,
-        error: "Agent: sending to a running child is unavailable in this host.",
-      };
-    }
-    const sent = await send({ childSessionId: input.send_to, text: input.prompt }, { signal: ctx.abortSignal });
+    const sent = await ctx.sessionSubagents.send({ childSessionId: input.send_to, text: input.prompt }, { signal: ctx.abortSignal });
     if (!sent.ok) {
       return { ok: false, error: sent.message };
     }

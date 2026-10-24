@@ -44,6 +44,7 @@ import type {
   SessionSubagentOutcome,
   SessionSubagentPort,
   SessionSubagentRequest,
+  SessionSubagentSendResult,
 } from "../ports/session-subagent.js";
 import type {
   WorkflowDefinition,
@@ -1562,6 +1563,13 @@ class FakeSessionSubagentPort implements SessionSubagentPort {
   ): Promise<SessionSubagentOutcome> {
     this.requests.push(req);
     return this.behavior(req, opts);
+  }
+
+  // SessionSubagentPort.send is REQUIRED (cross-review Finding 1, Taskana
+  // 4153); workflow engine steps only ever spawn, never send — a loud
+  // refusal if send were reached unexpectedly.
+  async send(): Promise<SessionSubagentSendResult> {
+    return { ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" };
   }
 }
 

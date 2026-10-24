@@ -886,6 +886,7 @@ describe("executeToolCall — sessionSubagents plumbing (TASK.102 CUT-S2 §2.2/�
       parentSessionId: "parent-1",
       spawnToolCallId: "call-1",
     }),
+    send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
   };
 
   function captureTool(sink: { sessionSubagents?: SessionSubagentPort }): AnyToolDefinition {

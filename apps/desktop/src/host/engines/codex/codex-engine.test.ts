@@ -2765,7 +2765,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call-1" };
 
   it("advertises experimental tools only at creation and retains the native resume ref", async () => {
-    const bridge = new CodexDynamicToolBridge(catalog, { run: vi.fn().mockResolvedValue(completed) });
+    const bridge = new CodexDynamicToolBridge(catalog, { run: vi.fn().mockResolvedValue(completed), send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) });
     const server = new FakeAppServer();
     await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, bridge);
     expect(server.calls.find((c) => c.method === "initialize")?.params).toMatchObject({ capabilities: { experimentalApi: true } });
@@ -2803,7 +2803,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
       childSignal = options?.signal;
       return new Promise((resolve) => { finish = resolve; });
     });
-    const bridge = new CodexDynamicToolBridge(catalog, { run });
+    const bridge = new CodexDynamicToolBridge(catalog, { run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) });
     const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, undefined, 0, [], undefined, bridge);
     const controller = new AbortController();
     const turn = drive(engine, "delegate", controller.signal);
@@ -2865,7 +2865,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
       });
     });
     const log = { record: vi.fn(), list: vi.fn(async () => new Map()), flush: vi.fn(async () => {}) };
-    const bridge = new CodexDynamicToolBridge(catalog, { run }, log);
+    const bridge = new CodexDynamicToolBridge(catalog, { run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) }, log);
     const engine = new CodexEngine(server, THREAD, undefined, { postInterruptSettleMs: 500, bridgeSettleMs: 500 }, undefined, undefined, 0, [], undefined, bridge, log);
     const controller = new AbortController();
     const turn = drive(engine, "delegate", controller.signal);
@@ -2948,7 +2948,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
         else options?.signal?.addEventListener("abort", onAbort, { once: true });
       });
     });
-    const bridge = new CodexDynamicToolBridge(catalog, { run });
+    const bridge = new CodexDynamicToolBridge(catalog, { run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) });
     const engine = new CodexEngine(server, THREAD, undefined, { postInterruptSettleMs: 500, bridgeSettleMs: 500 }, undefined, undefined, 0, [], undefined, bridge);
     const controller = new AbortController();
     const turn = drive(engine, "delegate", controller.signal);
@@ -3002,7 +3002,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
         else options?.signal?.addEventListener("abort", onAbort, { once: true });
       });
     });
-    const bridge = new CodexDynamicToolBridge(catalog, { run });
+    const bridge = new CodexDynamicToolBridge(catalog, { run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) });
     const engine = new CodexEngine(server, THREAD, undefined, { postInterruptSettleMs: 300, bridgeSettleMs: 300 }, undefined, undefined, 0, [], undefined, bridge);
     const controller = new AbortController();
     const turn = drive(engine, "delegate", controller.signal);
@@ -3040,7 +3040,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
   it("a child that ignores cancellation never wedges the turn — the bounded settle still ends it cancelled", async () => {
     const server = new FakeAppServer();
     const run = vi.fn<SessionSubagentPort["run"]>().mockImplementation(() => new Promise(() => {}));
-    const bridge = new CodexDynamicToolBridge(catalog, { run });
+    const bridge = new CodexDynamicToolBridge(catalog, { run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) });
     const engine = new CodexEngine(server, THREAD, undefined, { postInterruptSettleMs: 500, bridgeSettleMs: 25 }, undefined, undefined, 0, [], undefined, bridge);
     const controller = new AbortController();
     const turn = drive(engine, "delegate", controller.signal);
@@ -3073,7 +3073,7 @@ describe("Codex dynamic Agent metadata at graceful shutdown", () => {
     const disposal = engine.dispose("host-shutdown");
     expect(engine.activeTurnDetails).toBeNull();
     const run = vi.fn<SessionSubagentPort["run"]>();
-    const bridge = new CodexDynamicToolBridge([{ name: "glm-lead", model: "glm-5.3", description: "Review", systemPrompt: "" }], { run });
+    const bridge = new CodexDynamicToolBridge([{ name: "glm-lead", model: "glm-5.3", description: "Review", systemPrompt: "" }], { run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) });
     const response = { result: vi.fn(), error: vi.fn() };
     await bridge.handle({ id: 1, method: "item/tool/call", params: {
       threadId: THREAD, turnId: before!.turnId, callId: "late-call", tool: ANYCODE_AGENT_TOOL,
@@ -3093,7 +3093,7 @@ describe("Codex dynamic Agent metadata at graceful shutdown", () => {
       return new Promise((resolve) => { finish = resolve; });
     });
     const log = { record: vi.fn(), list: vi.fn(async () => new Map()), flush: vi.fn(async () => {}) };
-    const bridge = new CodexDynamicToolBridge([{ name: "glm-lead", model: "glm-5.3", description: "Review", systemPrompt: "" }], { run }, log);
+    const bridge = new CodexDynamicToolBridge([{ name: "glm-lead", model: "glm-5.3", description: "Review", systemPrompt: "" }], { run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) }, log);
     const engine = new CodexEngine(server, THREAD, undefined, undefined, undefined, undefined, 0, [], undefined, bridge, log);
     const abort = new AbortController();
     const turn = drive(engine, "delegate", abort.signal);

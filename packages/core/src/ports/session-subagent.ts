@@ -153,9 +153,15 @@ export interface SessionSubagentPort {
    * child; never spawns, never resumes. `childSessionId` comes from that
    * run's accepted report; `text` is delivered as the child's next input
    * (mode next_turn). The original sync-join `run()` call keeps waiting and
-   * its terminal includes the turns the delivered message causes. OPTIONAL
-   * so every host without the desktop main-process wiring (CLI, child
-   * sessions) keeps compiling and naturally fails closed at the handler.
+   * its terminal includes the turns the delivered message causes.
+   *
+   * Cross-review Finding 1 (Taskana 4153): REQUIRED, not optional. The
+   * optionality is exactly what let the desktop port's original
+   * `sendToChild` name satisfy the interface without ever implementing the
+   * member core's Agent handler calls — typecheck green, feature dead in
+   * production. Every real implementer (the desktop root host's port) has
+   * the method; test fakes that only exercise run() now stub `send` with a
+   * loud refusal so an unexpected send is caught red-handed.
    */
-  send?(req: { childSessionId: string; text: string }, opts?: { signal?: AbortSignal }): Promise<SessionSubagentSendResult>;
+  send(req: { childSessionId: string; text: string }, opts?: { signal?: AbortSignal }): Promise<SessionSubagentSendResult>;
 }

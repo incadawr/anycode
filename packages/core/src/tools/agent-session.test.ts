@@ -48,7 +48,7 @@ const BASE_SESSION_OUTCOME: SessionSubagentOutcome = {
 };
 
 function portReturning(outcome: SessionSubagentOutcome): SessionSubagentPort {
-  return { run: async () => outcome };
+  return { run: async () => outcome, send: async () => ({ ok: true }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +241,7 @@ describe("agentTool handler — session-tier fail-closed lock (CUT-S2 §2.1)", (
       run: async () => {
         throw new Error("sessionSubagents.run must not be reached — this request never asked for tier:\"session\"");
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: sessionPort }));
     expect(result).toEqual({ ok: false, error: "Agent: subagents are unavailable in this context." });
@@ -357,6 +358,7 @@ describe("agentTool handler — continue_session (TASK.218)", () => {
           seen = req;
           return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
         },
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       },
     };
   }
@@ -418,6 +420,7 @@ describe("agentTool handler — continue_session (TASK.218)", () => {
         opts.onProgress?.({ kind: "start", agentType: "explore", description: "d" });
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -508,13 +511,19 @@ describe("agentTool handler — send_to (Taskana 4153)", () => {
     );
   });
 
-  it("a port WITHOUT send (older/fake host) => fail-closed, never a silent no-op", async () => {
-    const result = await full.handler(
-      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
-      makeCtx({ sessionSubagents: portReturning(BASE_SESSION_OUTCOME) }), // no send field
-    );
-    expect(result).toMatchObject({ ok: false });
-    expect(result.ok === false && result.error).toBe("Agent: sending to a running child is unavailable in this host.");
+  it("port.send throwing propagates out of the handler (same contract as any handler throw — the dispatcher owns error wrapping)", async () => {
+    const port: SessionSubagentPort = {
+      run: async () => BASE_SESSION_OUTCOME,
+      send: async () => {
+        throw new Error("boom");
+      },
+    };
+    await expect(
+      full.handler(
+        { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+        makeCtx({ sessionSubagents: port }),
+      ),
+    ).rejects.toThrow("boom");
   });
 
   it("send_to with tier inline (explicit) => invalid_input with the exact message", async () => {
@@ -595,6 +604,7 @@ describe("agentTool handler — session-tier presentation target (CUT-S2 §2.1)"
         opts.onProgress?.({ kind: "end", status: outcome.status, turns: outcome.turns, durationMs: outcome.durationMs });
         return outcome;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
   }
 
@@ -636,6 +646,7 @@ describe("agentTool handler — session-tier presentation target (CUT-S2 §2.1)"
   it("no presentation at all when the child never reaches subagent_start (mirrors inline's 'never fabricated' rule)", async () => {
     const port: SessionSubagentPort = {
       run: async () => ({ ...BASE_SESSION_OUTCOME, status: "error", finalText: "failed before start" }),
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -659,6 +670,7 @@ describe("agentTool handler — SessionSubagentRequest forwarding (CUT-S2 §2.1/
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       {
@@ -691,6 +703,7 @@ describe("agentTool handler — SessionSubagentRequest forwarding (CUT-S2 §2.1/
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler({ description: "d", prompt: "p", tier: "session" }, makeCtx({ sessionSubagents: port }));
     expect(seen?.agentType).toBe("general-purpose");
@@ -703,6 +716,7 @@ describe("agentTool handler — SessionSubagentRequest forwarding (CUT-S2 §2.1/
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler({ description: "d", prompt: "p", tier: "session" }, makeCtx({ sessionSubagents: port }));
     expect(seen && "provider" in seen).toBe(false);
@@ -726,6 +740,7 @@ describe("agentTool handler — spawnToolCallId is ctx.toolCallId, verbatim (CUT
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     // A value distinctive enough that no other field/constant in the handler
     // could accidentally match it (rules out both "hardcoded fallback" and
@@ -744,6 +759,7 @@ describe("agentTool handler — spawnToolCallId is ctx.toolCallId, verbatim (CUT
         opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const distinctiveToolCallId = "toolu_roundtrip_7b2c";
     const result = await full.handler(
@@ -774,6 +790,7 @@ describe("agentTool handler — spawnToolCallId is ctx.toolCallId, verbatim (CUT
         opts.onProgress?.({ kind: "start", agentType: req.agentType, description: req.description });
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: "some-other-id-the-host-made-up" };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -805,6 +822,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
         opts.onProgress?.({ kind: "attention", waiting: false });
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -833,6 +851,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
         });
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -859,6 +878,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
         opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 10 });
         return { ...BASE_SESSION_OUTCOME, status: "completed", spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const withoutAttentionPort: SessionSubagentPort = {
       run: async (req, opts) => {
@@ -866,6 +886,7 @@ describe("agentTool handler — subagent_attention bridges from a session-tier p
         opts.onProgress?.({ kind: "end", status: "completed", turns: 1, durationMs: 10 });
         return { ...BASE_SESSION_OUTCOME, status: "completed", spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const withAttn = await full.handler(
       { description: "d", prompt: "p", tier: "session" },
@@ -945,6 +966,7 @@ describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)",
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "do the task", agent_type: "claude-worker" },
@@ -966,6 +988,7 @@ describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)",
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const systemPrompt = "PERSONA BODY";
     const taskPrompt = "do the task";
@@ -989,6 +1012,7 @@ describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)",
         ran = true;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker", tier: "inline" },
@@ -1005,6 +1029,7 @@ describe("agentTool handler — engine-profile routing (TASK.102 CUT-S4 §2.2)",
         ran = true;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1035,6 +1060,7 @@ describe("agentTool handler — engine-profile model default (model plumbing fix
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", agent_type: "codex-worker" },
@@ -1058,6 +1084,7 @@ describe("agentTool handler — engine-profile model default (model plumbing fix
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "codex-worker", model: "explicit-model" },
@@ -1080,6 +1107,7 @@ describe("agentTool handler — engine-profile model default (model plumbing fix
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1098,6 +1126,7 @@ describe("agentTool handler — engine-profile model default (model plumbing fix
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1138,6 +1167,7 @@ describe("agentTool handler — codex engine profile now routes like claude (TAS
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "do the task", agent_type: "codex-worker" },
@@ -1160,6 +1190,7 @@ describe("agentTool handler — codex engine profile now routes like claude (TAS
         spawned = true;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", agent_type: "codex-worker", tier: "session", provider: "anthropic-2" },
@@ -1283,6 +1314,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (T
         seen = req;
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", tier: "session", detach: true },
@@ -1298,6 +1330,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (T
         seen.push(req);
         return BASE_SESSION_OUTCOME;
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler({ description: "d", prompt: "p", tier: "session" }, makeCtx({ sessionSubagents: port }));
     await full.handler(
@@ -1341,6 +1374,7 @@ describe("agentTool handler — detach admit outcome mapping (TASK.145 срез 
         parentSessionId: "parent-1",
         spawnToolCallId: "call-1",
       }),
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
   }
 
@@ -1393,6 +1427,7 @@ describe("agentTool handler — engine-profile turn budget (TASK.180)", () => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1412,6 +1447,7 @@ describe("agentTool handler — engine-profile turn budget (TASK.180)", () => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1438,6 +1474,7 @@ describe("agentTool handler — engine-profile effort", () => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1457,6 +1494,7 @@ describe("agentTool handler — engine-profile effort", () => {
         seen = req;
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
+      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
     };
     await full.handler(
       { description: "d", prompt: "p", agent_type: "claude-worker" },
@@ -1503,6 +1541,7 @@ describe("agentTool handler — profile routing (Taskana 4269)", () => {
           seen = req;
           return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
         },
+        send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
       },
     };
   }

@@ -1,12 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SUBAGENT_STALL_TIMEOUT_MS, formatChildTaskNotification } from "@anycode/core";
-import type {
-  PermissionMode,
-  SessionSubagentOutcome,
-  SessionSubagentRequest,
-  SubagentProgress,
-  SubagentStallReport,
-} from "@anycode/core";
+import { SUBAGENT_STALL_TIMEOUT_MS, createAgentTool, formatChildTaskNotification } from "@anycode/core";
+import type { PermissionMode, SessionSubagentOutcome, SessionSubagentRequest, SubagentProgress, SubagentStallReport, ToolContext } from "@anycode/core";
 import {
   CHILD_AGENT_TYPE_MAX_CHARS,
   CHILD_DESCRIPTION_MAX_CHARS,
@@ -23,7 +17,7 @@ import {
   type ChildRunSend,
   type ChildSpawnRequest,
 } from "../shared/child-sessions.js";
-import { createChildSessionPort, CHILD_SEND_RPC_TIMEOUT_MS } from "./child-session-port.js";
+import { createChildSessionPort, CHILD_SEND_RPC_TIMEOUT_MS, type ChildSessionPort } from "./child-session-port.js";
 
 const PARENT_SESSION_ID = "parent-session-1";
 
@@ -1789,7 +1783,7 @@ describe("createChildSessionPort — profile connectionId routing (Taskana 4269)
   });
 });
 
-describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
+describe("send / sendToChild (Taskana 4153 / TASK.216 wire)", () => {
   /** The ChildRunSend op this port put on the wire (the only op kind besides spawn/cancel). */
   function sends(sent: SentMessage[]): ChildRunSend[] {
     return sent.filter((m): m is ChildRunSend => m.type === CHILD_RUN_SEND_TYPE);
@@ -1797,7 +1791,7 @@ describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
 
   it("resolves { ok: true } on a sent ack, having sent one ChildRunSend with the id and text", async () => {
     const { port, sent, emit } = harness();
-    const pending = port.sendToChild({ childSessionId: "child-1", text: "re-review with these edits" });
+    const pending = port.send({ childSessionId: "child-1", text: "re-review with these edits" });
     await Promise.resolve();
     expect(sends(sent)).toEqual([
       { type: CHILD_RUN_SEND_TYPE, requestId: "req-1", childSessionId: "child-1", text: "re-review with these edits" },
@@ -1808,7 +1802,7 @@ describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
 
   it("resolves { ok: false } carrying main's refusal message on a rejected ack", async () => {
     const { port, emit } = harness();
-    const pending = port.sendToChild({ childSessionId: "child-1", text: "hello" });
+    const pending = port.send({ childSessionId: "child-1", text: "hello" });
     await Promise.resolve();
     emit({
       type: CHILD_RUN_EVENT_TYPE,
@@ -1827,7 +1821,7 @@ describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
 
   it("maps a not-yours rejection onto the not_yours reason", async () => {
     const { port, emit } = harness();
-    const pending = port.sendToChild({ childSessionId: "foreign-child", text: "hello" });
+    const pending = port.send({ childSessionId: "foreign-child", text: "hello" });
     await Promise.resolve();
     emit({
       type: CHILD_RUN_EVENT_TYPE,
@@ -1841,20 +1835,20 @@ describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
 
   it("a malformed childSessionId resolves immediately without sending anything", async () => {
     const { port, sent } = harness();
-    await expect(port.sendToChild({ childSessionId: "-dash-leading", text: "hi" })).resolves.toMatchObject({
+    await expect(port.send({ childSessionId: "-dash-leading", text: "hi" })).resolves.toMatchObject({
       ok: false,
       reason: "unavailable",
     });
-    await expect(port.sendToChild({ childSessionId: "x".repeat(CHILD_ID_MAX_CHARS + 1), text: "hi" })).resolves.toMatchObject({
+    await expect(port.send({ childSessionId: "x".repeat(CHILD_ID_MAX_CHARS + 1), text: "hi" })).resolves.toMatchObject({
       ok: false,
       reason: "unavailable",
     });
-    await expect(port.sendToChild({ childSessionId: "child-1", text: "" })).resolves.toMatchObject({
+    await expect(port.send({ childSessionId: "child-1", text: "" })).resolves.toMatchObject({
       ok: false,
       reason: "unavailable",
     });
     await expect(
-      port.sendToChild({ childSessionId: "child-1", text: "a".repeat(CHILD_PROMPT_MAX_CHARS + 1) }),
+      port.send({ childSessionId: "child-1", text: "a".repeat(CHILD_PROMPT_MAX_CHARS + 1) }),
     ).resolves.toMatchObject({ ok: false, reason: "unavailable" });
     expect(sent).toHaveLength(0);
   });
@@ -1863,7 +1857,7 @@ describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
     const { port, sent } = harness();
     const controller = new AbortController();
     controller.abort();
-    await expect(port.sendToChild({ childSessionId: "child-1", text: "hi" }, { signal: controller.signal })).resolves.toMatchObject({
+    await expect(port.send({ childSessionId: "child-1", text: "hi" }, { signal: controller.signal })).resolves.toMatchObject({
       ok: false,
       reason: "unavailable",
       message: "Agent: aborted before send.",
@@ -1875,7 +1869,7 @@ describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
     vi.useFakeTimers();
     try {
       const { port, sent } = harness();
-      const pending = port.sendToChild({ childSessionId: "child-1", text: "hi" });
+      const pending = port.send({ childSessionId: "child-1", text: "hi" });
       await vi.advanceTimersByTimeAsync(CHILD_SEND_RPC_TIMEOUT_MS - 1);
       const settled = await Promise.race([pending.then(() => true), Promise.resolve(false)]);
       expect(settled).toBe(false);
@@ -1893,7 +1887,7 @@ describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
 
   it("the ack waiter is one-shot: a late duplicate ack after settlement is ignored, and unrelated kinds never settle it", async () => {
     const { port, emit } = harness();
-    const pending = port.sendToChild({ childSessionId: "child-1", text: "hi" });
+    const pending = port.send({ childSessionId: "child-1", text: "hi" });
     await Promise.resolve();
     // A progress event for the same requestId must not settle the send.
     emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "progress", turns: 1, toolCalls: 0 });
@@ -1901,6 +1895,113 @@ describe("sendToChild (Taskana 4153 / TASK.216 wire)", () => {
     await expect(pending).resolves.toEqual({ ok: true });
     // A duplicate sent ack lands on a deleted waiter — silently ignored, no throw.
     emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" });
+  });
+
+  // Cross-review Finding 2 (Taskana 4153): the pre-flight `signal.aborted`
+  // check alone is NOT enough — the parent's turn can be cancelled WHILE the
+  // ChildRunSend RPC is in flight. run() registers an abort listener and
+  // reacts; the send waiter must too, or it lingers until the 30s
+  // CHILD_SEND_RPC_TIMEOUT_MS and reports "delivery unknown" long after the
+  // user cancelled.
+  it("a MID-FLIGHT abort (signal fires while the RPC is in flight) resolves promptly with SEND_ABORTED_MESSAGE, not the 30s timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port } = harness();
+      const controller = new AbortController();
+      const pending = port.send({ childSessionId: "child-1", text: "hi" }, { signal: controller.signal });
+      await vi.advanceTimersByTimeAsync(1_000);
+      controller.abort();
+      // The abort must settle the waiter on its own — no timer advance, no
+      // main-side ack required.
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        reason: "unavailable",
+        message: "Agent: aborted before send.",
+      });
+      // ...and it must have taken down its waiter: the 30s RPC timeout
+      // firing later resolves nothing (the promise is already settled) and
+      // no unhandled rejection is thrown for a deleted-waiter ack either.
+      await vi.advanceTimersByTimeAsync(CHILD_SEND_RPC_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a late ack after a mid-flight abort lands on a deleted waiter and is silently ignored (no unhandled rejection)", async () => {
+    const { port, emit } = harness();
+    const controller = new AbortController();
+    const pending = port.send({ childSessionId: "child-1", text: "hi" }, { signal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+    await expect(pending).resolves.toMatchObject({ ok: false, message: "Agent: aborted before send." });
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-review Finding 1 (Taskana 4153): the interface seam — core's Agent
+// handler delivers through SessionSubagentPort.send, while this port used to
+// name the method sendToChild. The unit suites above drive send directly
+// (and core's own tests inject a fake literally named `send`), so NOTHING
+// exercised the seam where the names must agree. This block runs core's REAL
+// Agent tool handler against the REAL createChildSessionPort object (fake
+// send/subscribe closures only) — the same wiring host/index.ts performs —
+// and asserts a ChildRunSend actually reaches the wire. If a future rename
+// ever diverges the interface method from the port's exposed surface again,
+// THIS test is the one that goes red.
+
+describe("createChildSessionPort × core agentTool handler — the interface seam (cross-review Finding 1)", () => {
+  /** Minimal ToolContext: only the fields runSessionTier's send branch reads. */
+  function agentCtx(port: ChildSessionPort): ToolContext {
+    return {
+      toolCallId: "call-seam-1",
+      abortSignal: new AbortController().signal,
+      cwd: "/work",
+      ports: {} as ToolContext["ports"],
+      sessionSubagents: port,
+    };
+  }
+
+  it("a send_to call against the REAL port reaches the wire as a ChildRunSend and returns ok — the interface seam holds", async () => {
+    const { port, sent, emit } = harness();
+    const tool = createAgentTool({ sessionTier: true });
+    const pending = tool.handler(
+      { description: "d", prompt: "re-review with these edits", tier: "session", send_to: "child-77" },
+      agentCtx(port),
+    );
+    await Promise.resolve();
+    expect(sent.filter((m) => m.type === CHILD_RUN_SEND_TYPE)).toEqual([
+      { type: CHILD_RUN_SEND_TYPE, requestId: "req-1", childSessionId: "child-77", text: "re-review with these edits" },
+    ]);
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" });
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.output?.finalText).toContain("delivered");
+      expect(result.output?.finalText).toContain("child-77");
+    }
+  });
+
+  it("the seam fail-closes honestly through the same shape when main rejects the send", async () => {
+    const { port, emit } = harness();
+    const tool = createAgentTool({ sessionTier: true });
+    const pending = tool.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      agentCtx(port),
+    );
+    await Promise.resolve();
+    emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "rejected",
+      reason: "spawn_failed",
+      message: "Agent: that child session is not running. Wait for its report and use a follow-up instead.",
+    });
+    const result = await pending;
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toBe(
+      "Agent: that child session is not running. Wait for its report and use a follow-up instead.",
+    );
   });
 });
 

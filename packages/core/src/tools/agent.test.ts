@@ -1024,6 +1024,9 @@ describe("agentTool — mapProgressToEvent's attention case (TASK.102 CUT-S2 §2
       run: async () => {
         throw new Error("sessionSubagents.run must not be reached — this request never asks for tier:\"session\"");
       },
+      send: async () => {
+        throw new Error("sessionSubagents.send must not be reached — this request never asks for tier:\"session\"");
+      },
     };
 
     const result = await agentTool.handler(

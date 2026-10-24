@@ -12,7 +12,7 @@ function setup() {
     status: "completed", finalText: "done", turns: 1, toolCalls: 0, truncated: false, durationMs: 1,
     childSessionId: "child-1", parentSessionId: "parent-1", spawnToolCallId: "call-1",
   });
-  const bridge = new CodexDynamicToolBridge(catalog, { run });
+  const bridge = new CodexDynamicToolBridge(catalog, { run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) });
   const response = { result: vi.fn(), error: vi.fn() };
   const events: AgentEvent[] = [];
   const call = (p: unknown = params, turn: typeof active | null = active) =>
@@ -217,7 +217,7 @@ describe("Codex profile refresh", () => {
     let current = [{ ...catalog[0]!, systemPrompt: "policy v1" }];
     const refresh = vi.fn(async () => current);
     const log = { record: vi.fn(), list: vi.fn(async () => new Map()) };
-    const bridge = new CodexDynamicToolBridge(catalog, { run: s.run }, log, refresh);
+    const bridge = new CodexDynamicToolBridge(catalog, { run: s.run, send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) }, log, refresh);
     const response = { result: vi.fn(), error: vi.fn() };
     const call = (callId: string, agentType = "glm-lead") => bridge.handle({ id: callId, method: "item/tool/call",
       params: { ...params, callId, arguments: { ...params.arguments, agent_type: agentType } } }, response, active, () => {});
