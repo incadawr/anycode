@@ -118,7 +118,19 @@ export type TelemetryEventRecord =
   | { t: "ceiling_grant"; round: number; granted: number; totalGranted: number }
   | { t: "error" }
   | { t: "checkpoint_created" }
-  | { t: "checkpoint_failed" };
+  | { t: "checkpoint_failed" }
+  /**
+   * Taskana 4702: the counter of consulted ask-zone decisions. Numbers, the
+   * classifier's configured id and the closed decision only — never the
+   * command, the classifier's reason or its score.
+   */
+  | {
+      t: "permission_auto_decided";
+      classifier: string;
+      decision: "allow" | "ask";
+      latencyMs: number;
+      error?: true;
+    };
 
 export type TelemetryLifecycleRecord =
   | {

@@ -462,6 +462,49 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect(JSON.stringify(rec)).not.toContain(SENTINEL);
   });
 
+  it("permission_auto_decided (Taskana 4702): classifier id, decision, latency and error PRESENCE only — reason/score/command never persisted", () => {
+    const event: AgentEvent = {
+      type: "permission_auto_decided",
+      toolCallId: "call-1",
+      toolName: "Bash",
+      classifier: "command:da",
+      decision: "allow",
+      reason: SENTINEL,
+      score: 0.9,
+      latencyMs: 42,
+      error: SENTINEL,
+    };
+    const rec = telemetryRecordFor(event);
+    expect(rec).toEqual({
+      t: "permission_auto_decided",
+      classifier: "command:da",
+      decision: "allow",
+      latencyMs: 42,
+      error: true,
+    });
+    expect(JSON.stringify(rec)).not.toContain(SENTINEL);
+    expect(rec && "reason" in rec).toBe(false);
+    expect(rec && "toolCallId" in rec).toBe(false);
+  });
+
+  it("permission_auto_decided without an error carries no error key", () => {
+    const event: AgentEvent = {
+      type: "permission_auto_decided",
+      toolCallId: "call-2",
+      toolName: "Bash",
+      classifier: "command:da",
+      decision: "ask",
+      reason: "no",
+      latencyMs: 3,
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "permission_auto_decided",
+      classifier: "command:da",
+      decision: "ask",
+      latencyMs: 3,
+    });
+  });
+
   it("error (value dropped, presence-only)", () => {
     const event: AgentEvent = { type: "error", error: SENTINEL };
     expect(telemetryRecordFor(event)).toEqual({ t: "error" });

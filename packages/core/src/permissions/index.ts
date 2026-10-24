@@ -31,3 +31,28 @@ export type { BashSegments, BashSeparatorKind } from "./rules.js";
 // TASK.138 slice 2: per-run Bash allow-list decorator (ANYCODE_RUN_ALLOW_BASH).
 export { parseRunAllowBash, RunAllowBashPermissionEngine } from "./run-allow-bash.js";
 export type { RunAllowBashEntry } from "./run-allow-bash.js";
+// Taskana 4702 Stage 1: ask-zone classifier (pure core) and its external-command implementation.
+export {
+  ASK_CLASSIFIER_DEFAULT_TIMEOUT_MS,
+  ASK_CLASSIFIER_MAX_COMMAND_CHARS,
+  ASK_CLASSIFIER_REASON_MAX_CHARS,
+  ASK_CLASSIFIER_USER_TURNS,
+  ASK_CLASSIFIER_USER_TURN_MAX_CHARS,
+  FORCE_PUSH_FLAGS,
+  NEVER_AUTO_BINARIES,
+  SHELL_PIPE_TARGETS,
+  classifyAsk,
+  isClassifiableAsk,
+  recentUserTurns,
+  validateAskVerdict,
+} from "./ask-classifier.js";
+export type {
+  AskClassifier,
+  AskClassifierInput,
+  AskClassifierVerdict,
+  AskEligibility,
+  ClassifyAskOptions,
+  ClassifyAskResult,
+} from "./ask-classifier.js";
+export { createCommandAskClassifier, parseClassifierCommand } from "./command-classifier.js";
+export type { CommandClassifierOptions } from "./command-classifier.js";

@@ -4099,6 +4099,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         case "ceiling_refused":
           return;
 
+        // Taskana 4702 Stage 1: an ask-zone auto-decision is journaled (the
+        // event is the source of truth; telemetry counts it). The muted
+        // transcript line "Auto-allowed by classifier <id>" is deferred to the
+        // follow-up card with the settings UI, so the transcript stays
+        // byte-identical for now.
+        case "permission_auto_decided":
+          return;
+
         default: {
           const _exhaustive: never = event;
           void _exhaustive;

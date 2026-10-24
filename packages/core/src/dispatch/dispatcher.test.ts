@@ -26,6 +26,7 @@ import type {
   PlanModeControl,
 } from "../types/permissions.js";
 import type { ProposedToolCall } from "../types/events.js";
+import type { AskClassifier as AskClassifierPort } from "../permissions/ask-classifier.js";
 import type {
   AnyToolDefinition,
   ImageLookupPort,
@@ -1925,5 +1926,209 @@ describe("executeToolCall — Taskana 4294 always-allow vs workspace boundary", 
     // The MultiEdit stub's handler is a no-op mock; only the permission
     // pipeline is under test here (zero broker asks below), not file mutation.
     expect(asked).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4702 Stage 1: the ask-zone classifier seam. The classifier may only
+// turn an ask into allow; it never runs on allow/deny, never overrides a hook,
+// and every failure leaves the broker in charge.
+
+describe("executeToolCall — ask-zone classifier (Taskana 4702)", () => {
+  const bashTool = makeTool({
+    metadata: { ...baseMetadata, name: "Bash" },
+    inputSchema: z.object({ command: z.string() }),
+  });
+  const bashRegistry = () => makeRegistry({ Bash: bashTool });
+  const bashCall = (command: string): ProposedToolCall => ({ id: "call-1", name: "Bash", input: { command } });
+
+  function classifierCtx(opts: {
+    engine?: PermissionEngine;
+    hooks?: HookRunner;
+    classify?: AskClassifierPort["classify"];
+    broker?: PermissionBroker;
+    timeoutMs?: number;
+  }): { ctx: DispatchContext; broker: PermissionBroker; brokerSpy: ReturnType<typeof vi.fn>; classify: ReturnType<typeof vi.fn> } {
+    const brokerSpy = vi.fn(async () => ({ behavior: "deny" as const, reason: "human said no" }));
+    const broker = opts.broker ?? ({ requestPermission: brokerSpy } as unknown as PermissionBroker);
+    const classify = vi.fn(opts.classify ?? (async () => ({ decision: "allow" as const, reason: "safe build" })));
+    const ctx = makeCtx({
+      registry: bashRegistry(),
+      permissionEngine: opts.engine ?? makeEngine({ decision: "ask" }),
+      permissionBroker: broker,
+      hooks: opts.hooks ?? makeHooks(),
+      askClassifier: {
+        classifier: { id: "command:test", classify: classify as unknown as AskClassifierPort["classify"] },
+        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+        userContext: () => ["please build"],
+      },
+    });
+    return { ctx, broker, brokerSpy, classify };
+  }
+
+  it("classifier allow: the handler runs, the broker is NEVER called, and a journal event is emitted", async () => {
+    const handler = vi.fn(async () => ({ ok: true, output: "built" }));
+    const bash = makeTool({ metadata: { ...baseMetadata, name: "Bash" }, inputSchema: z.object({ command: z.string() }), handler });
+    const { ctx, brokerSpy } = classifierCtx({});
+    ctx.registry = makeRegistry({ Bash: bash });
+    const emitted: ToolEmittedEvent[] = [];
+    const outcome = await executeToolCall(ctx, bashCall("npm run build"), undefined, (e) => emitted.push(e));
+
+    expect(outcome.status).toBe("success");
+    expect(handler).toHaveBeenCalledOnce();
+    expect(brokerSpy).not.toHaveBeenCalled();
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: "permission_auto_decided",
+        toolCallId: "call-1",
+        toolName: "Bash",
+        classifier: "command:test",
+        decision: "allow",
+        reason: "safe build",
+        latencyMs: expect.any(Number),
+      }),
+    ]);
+    expect(emitted[0]).not.toHaveProperty("error");
+  });
+
+  it("classifier input carries exactly the bounded fields (no registry, ports or history objects)", async () => {
+    const { ctx, classify } = classifierCtx({ classify: async () => ({ decision: "ask", reason: "unsure" }) });
+    await executeToolCall(ctx, bashCall("npm run build && echo ok"));
+    expect(classify).toHaveBeenCalledOnce();
+    const [input, opts] = classify.mock.calls[0] as unknown as [Record<string, unknown>, { signal?: AbortSignal }];
+    expect(Object.keys(input).sort()).toEqual(["command", "cwd", "segments", "toolName", "userContext"]);
+    expect(input).toMatchObject({
+      toolName: "Bash",
+      command: "npm run build && echo ok",
+      segments: ["npm run build ", " echo ok"],
+      cwd: "/work",
+      userContext: ["please build"],
+    });
+    expect(opts.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("classifier ask: the broker decides exactly as today", async () => {
+    const { ctx, brokerSpy } = classifierCtx({ classify: async () => ({ decision: "ask", reason: "unsure" }) });
+    ctx.registry = bashRegistry();
+    const outcome = await executeToolCall(ctx, bashCall("npm run build"));
+    expect(brokerSpy).toHaveBeenCalledOnce();
+    expect(outcome.status).toBe("denied");
+    expect(outcome.modelText).toBe("human said no");
+  });
+
+  it("classifier throws: falls back to the broker and journals the error", async () => {
+    const { ctx, brokerSpy } = classifierCtx({
+      classify: async () => {
+        throw new Error("boom");
+      },
+    });
+    const emitted: ToolEmittedEvent[] = [];
+    const outcome = await executeToolCall(ctx, bashCall("npm run build"), undefined, (e) => emitted.push(e));
+    expect(brokerSpy).toHaveBeenCalledOnce();
+    expect(outcome.status).toBe("denied");
+    expect(emitted).toEqual([
+      expect.objectContaining({ type: "permission_auto_decided", decision: "ask", error: expect.stringContaining("boom") }),
+    ]);
+  });
+
+  it("classifier hangs past its timeout: falls back to the broker", async () => {
+    const { ctx, brokerSpy } = classifierCtx({
+      classify: () => new Promise(() => {}),
+      timeoutMs: 10,
+    });
+    const outcome = await executeToolCall(ctx, bashCall("npm run build"));
+    expect(brokerSpy).toHaveBeenCalledOnce();
+    expect(outcome.status).toBe("denied");
+  });
+
+  it("classifier returns deny: coerced to ask, the broker decides", async () => {
+    const { ctx, brokerSpy } = classifierCtx({
+      classify: async () => ({ decision: "deny" as unknown as "allow", reason: "no" }),
+    });
+    const handler = vi.fn(async () => ({ ok: true, output: "ran" }));
+    ctx.registry = makeRegistry({
+      Bash: makeTool({ metadata: { ...baseMetadata, name: "Bash" }, inputSchema: z.object({ command: z.string() }), handler }),
+    });
+    await executeToolCall(ctx, bashCall("npm run build"));
+    expect(brokerSpy).toHaveBeenCalledOnce();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("engine deny: the classifier is NEVER consulted and the call is denied", async () => {
+    const { ctx, classify, brokerSpy } = classifierCtx({ engine: makeEngine({ decision: "deny", reason: "rule" }) });
+    const outcome = await executeToolCall(ctx, bashCall("npm run build"));
+    expect(classify).not.toHaveBeenCalled();
+    expect(brokerSpy).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("denied");
+  });
+
+  it("engine allow: the classifier is NEVER consulted", async () => {
+    const { ctx, classify, brokerSpy } = classifierCtx({ engine: makeEngine({ decision: "allow" }) });
+    const outcome = await executeToolCall(ctx, bashCall("npm run build"));
+    expect(classify).not.toHaveBeenCalled();
+    expect(brokerSpy).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("success");
+  });
+
+  it("a hook-demanded ask: the classifier is NEVER consulted, the broker decides", async () => {
+    const { ctx, classify, brokerSpy } = classifierCtx({
+      engine: makeEngine({ decision: "allow" }),
+      hooks: makeHooks({ permissionDecision: "ask", reason: "hook wants a human" }),
+    });
+    await executeToolCall(ctx, bashCall("npm run build"));
+    expect(classify).not.toHaveBeenCalled();
+    expect(brokerSpy).toHaveBeenCalledOnce();
+  });
+
+  it("a hook ask over an engine ask: still never consulted (the hook is an explicit demand)", async () => {
+    const { ctx, classify, brokerSpy } = classifierCtx({
+      hooks: makeHooks({ permissionDecision: "ask" }),
+    });
+    await executeToolCall(ctx, bashCall("npm run build"));
+    expect(classify).not.toHaveBeenCalled();
+    expect(brokerSpy).toHaveBeenCalledOnce();
+  });
+
+  it("a hook deny always wins: the classifier is never consulted and the call is denied", async () => {
+    const { ctx, classify, brokerSpy } = classifierCtx({
+      hooks: makeHooks({ permissionDecision: "deny", reason: "hook says no" }),
+    });
+    const outcome = await executeToolCall(ctx, bashCall("npm run build"));
+    expect(classify).not.toHaveBeenCalled();
+    expect(brokerSpy).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("denied");
+    expect(outcome.modelText).toBe("hook says no");
+  });
+
+  it("sudo in a parsed segment: the classifier is NEVER consulted", async () => {
+    const { ctx, classify, brokerSpy } = classifierCtx({});
+    await executeToolCall(ctx, bashCall("npm i && sudo make install"));
+    expect(classify).not.toHaveBeenCalled();
+    expect(brokerSpy).toHaveBeenCalledOnce();
+  });
+
+  it("a non-Bash ask: the classifier is NEVER consulted", async () => {
+    const { ctx, classify, brokerSpy } = classifierCtx({});
+    ctx.registry = makeRegistry({ Mock: makeTool() });
+    await executeToolCall(ctx, call({ value: "x" }, "Mock"));
+    expect(classify).not.toHaveBeenCalled();
+    expect(brokerSpy).toHaveBeenCalledOnce();
+  });
+
+  it("no classifier configured: the broker flow is identical and no journal event is emitted", async () => {
+    const brokerSpy = vi.fn(async () => ({ behavior: "allow" as const }));
+    const handler = vi.fn(async () => ({ ok: true, output: "ran" }));
+    const ctx = makeCtx({
+      registry: makeRegistry({
+        Bash: makeTool({ metadata: { ...baseMetadata, name: "Bash" }, inputSchema: z.object({ command: z.string() }), handler }),
+      }),
+      permissionEngine: makeEngine({ decision: "ask" }),
+      permissionBroker: { requestPermission: brokerSpy } as unknown as PermissionBroker,
+    });
+    const emitted: ToolEmittedEvent[] = [];
+    const outcome = await executeToolCall(ctx, bashCall("npm run build"), undefined, (e) => emitted.push(e));
+    expect(brokerSpy).toHaveBeenCalledOnce();
+    expect(outcome.status).toBe("success");
+    expect(emitted).toEqual([]);
   });
 });

@@ -53,6 +53,12 @@ import type { ArtifactContext } from "../ports/artifacts.js";
 import type { CheckpointCapturer, CheckpointCaptureResult } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { ConversationHistory } from "../context/history.js";
+import {
+  ASK_CLASSIFIER_USER_TURNS,
+  ASK_CLASSIFIER_USER_TURN_MAX_CHARS,
+  recentUserTurns,
+  type AskClassifier,
+} from "../permissions/ask-classifier.js";
 import { ContextManager } from "../context/manager.js";
 import {
   compactThresholdTokens,
@@ -229,6 +235,12 @@ export interface AgentLoopConfig {
   hooks: HookRunner;
   permissionEngine: PermissionEngine;
   permissionBroker: PermissionBroker;
+  /**
+   * Taskana 4702 Stage 1: optional ask-zone classifier (default off). Threaded
+   * to the dispatcher only; subagent children do NOT inherit it (buildChildConfig
+   * copies an explicit field list), so a child's ask still goes to the broker.
+   */
+  askClassifier?: { classifier: AskClassifier; timeoutMs?: number };
   mode: PermissionMode;
   ports: CorePorts;
   cwd: string;
@@ -1110,6 +1122,20 @@ export class AgentLoop {
     // this stretch to stay a single synchronous job with no spreads.
     if (this.config.orchestrate === true) {
       dispatchCtx.orchestrate = true;
+    }
+
+    // Taskana 4702: the optional ask-zone classifier rides the dispatch context
+    // as a plain assignment (the prologue guard forbids spreads in this stretch).
+    // The user context is a thunk over the live history, read at ask time, and
+    // carries human turns only (recentUserTurns). Absent config = no assignment.
+    const askClassifierConfig = this.config.askClassifier;
+    if (askClassifierConfig !== undefined) {
+      dispatchCtx.askClassifier = {
+        classifier: askClassifierConfig.classifier,
+        timeoutMs: askClassifierConfig.timeoutMs,
+        userContext: () =>
+          recentUserTurns(this.history.items, ASK_CLASSIFIER_USER_TURNS, ASK_CLASSIFIER_USER_TURN_MAX_CHARS),
+      };
     }
 
     // Plan-mode exit arc (design slice-4.3-cut.md §2.3): built ONLY when the

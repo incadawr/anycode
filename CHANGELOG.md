@@ -15,6 +15,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   from finished tasks that were accepted (completed, or declared done at the
   limit). Your explicit turn limits still win, and the learned value stays within
   fixed bounds.
+- Optional permission classifier, off by default (`permissions.classifier`
+  in settings). It is consulted only on a Bash call that would otherwise ask
+  you, and it can only turn that ask into allow. Its first form runs an
+  external command that gets the command line on stdin. Any failure, timeout
+  or unclear answer still asks you, and every decision is journaled.
 - User documentation in `docs/user/`: configuration files, engines, subagents,
   skills, MCP servers, permissions, proxy, orchestration and troubleshooting. The
   app ships a copy, and `docs/user/README.md` indexes it.

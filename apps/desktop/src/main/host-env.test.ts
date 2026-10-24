@@ -171,6 +171,32 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(unset.ANYCODE_NETWORK_RETRY_BUDGET_MS).toBeUndefined();
   });
 
+  it("projects permissions.classifier into ANYCODE_PERMISSION_CLASSIFIER as JSON (Taskana 4702; absent = unset)", async () => {
+    const record = { enabled: true, kind: "command" as const, command: "/opt/da --json", timeoutMs: 3000 };
+    const fromSettings = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ permissions: { alwaysAllow: [], classifier: record } }),
+      getSecret: noSecret,
+    });
+    expect(JSON.parse(fromSettings.ANYCODE_PERMISSION_CLASSIFIER ?? "null")).toEqual(record);
+
+    // a boot env value wins over settings (fillFromSettings fills blanks only);
+    // garbage there is off at the host reader, never a partial classifier.
+    const fromEnv = await buildHostEnv({
+      bootEnv: { ANYCODE_PERMISSION_CLASSIFIER: "{garbage" },
+      settings: settings({ permissions: { alwaysAllow: [], classifier: record } }),
+      getSecret: noSecret,
+    });
+    expect(fromEnv.ANYCODE_PERMISSION_CLASSIFIER).toBe("{garbage");
+
+    const unset = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ permissions: { alwaysAllow: [] } }),
+      getSecret: noSecret,
+    });
+    expect(unset.ANYCODE_PERMISSION_CLASSIFIER).toBeUndefined();
+  });
+
   it("projects tools.grepBackend into ANYCODE_GREP_BACKEND (Taskana 4160; env > settings)", async () => {
     // settings fill when the boot env is blank
     const fromSettings = await buildHostEnv({

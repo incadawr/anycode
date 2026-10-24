@@ -398,6 +398,8 @@ const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
  * `"pnpm test,pnpm typecheck"`.
  */
 const ENV_RUN_ALLOW_BASH = "ANYCODE_RUN_ALLOW_BASH";
+/** Taskana 4702: the ask-zone classifier record (JSON). Mirror of host-env.ts's constant. */
+const ENV_PERMISSION_CLASSIFIER = "ANYCODE_PERMISSION_CLASSIFIER";
 /**
  * 4088-on-4118 integration: the former ANYCODE_IMAGE_INPUT_MODELS local
  * literal is GONE — the live image-modality facts ride 4118's
@@ -474,6 +476,7 @@ import {
   type ChildSpawnRequest,
   type ChildTerminal,
 } from "../shared/child-sessions.js";
+import { parseAskClassifierEnv } from "./ask-classifier-env.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
 import { TerminalManager } from "./terminal.js";
 import { createWirePort } from "./wire.js";
@@ -2598,6 +2601,13 @@ async function boot(): Promise<void> {
     // change). Logged unconditionally so a widened run is never silent, even
     // when every configured entry was malformed and none were accepted.
     const runAllowBashEntries = parseRunAllowBash(process.env[ENV_RUN_ALLOW_BASH]);
+    // Taskana 4702 Stage 1: the ask-zone classifier (default off). Parsed
+    // defensively; garbage or absence = off. Only the core AgentLoop config
+    // below receives it — engine sessions have their own approval bridges.
+    const askClassifierBoot = parseAskClassifierEnv(process.env[ENV_PERMISSION_CLASSIFIER]);
+    if (askClassifierBoot !== undefined) {
+      console.log(`[host] ${ENV_PERMISSION_CLASSIFIER}: ask-zone classifier ${askClassifierBoot.classifier.id} enabled`);
+    }
     if (process.env[ENV_RUN_ALLOW_BASH] !== undefined) {
       console.log(
         `[host] ${ENV_RUN_ALLOW_BASH}: accepted ${runAllowBashEntries.length} entr${runAllowBashEntries.length === 1 ? "y" : "ies"} ` +
@@ -3540,6 +3550,8 @@ async function boot(): Promise<void> {
         rules,
       ),
       permissionBroker: broker,
+      // Taskana 4702 Stage 1: optional; absent = byte-identical to pre-4702.
+      ...(askClassifierBoot !== undefined ? { askClassifier: askClassifierBoot } : {}),
       mode,
       // TASK.124 remainder (owner rule 2026-08-22): "присмотр есть ⇒ корневая
       // сессия вообще без потолка" — a supervised interactive ROOT has no turn

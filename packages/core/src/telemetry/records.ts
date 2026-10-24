@@ -158,6 +158,17 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         granted: event.granted,
         totalGranted: event.totalGranted,
       };
+    case "permission_auto_decided":
+      // Taskana 4702: the counter's facts only. `reason` is the classifier's own
+      // free text and `toolCallId`/`score` are not needed for the counter, so
+      // they are dropped; `error` is presence-only, like `error` above.
+      return {
+        t: "permission_auto_decided",
+        classifier: event.classifier,
+        decision: event.decision,
+        latencyMs: event.latencyMs,
+        ...(event.error !== undefined ? { error: true as const } : {}),
+      };
     case "error":
       return { t: "error" };
     case "checkpoint_created":

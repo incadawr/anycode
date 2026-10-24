@@ -61,6 +61,12 @@ import {
 } from "../util/result-budget.js";
 import { resolveWorkspaceWriteFacts } from "../util/path-containment.js";
 import { WORKSPACE_CONFINED_WRITE_TOOLS } from "../permissions/workspace-policy.js";
+import {
+  classifyAsk,
+  isClassifiableAsk,
+  type AskClassifier,
+  type AskClassifierInput,
+} from "../permissions/ask-classifier.js";
 
 export interface DispatchContext {
   registry: ToolRegistry;
@@ -172,6 +178,18 @@ export interface DispatchContext {
    * consumer). Optional: absent => byte-identical pre-4704 behavior.
    */
   orchestrate?: boolean;
+  /**
+   * Taskana 4702 Stage 1: the ask-zone classifier. Optional and default-off:
+   * absent => the ask branch is byte-identical to the pre-4702 broker call.
+   * It is consulted ONLY for an eligible Bash ask (isClassifiableAsk) and can
+   * only turn that ask into allow; every other outcome keeps the broker.
+   * `userContext` is a thunk so it reads the loop's history at ask time.
+   */
+  askClassifier?: {
+    classifier: AskClassifier;
+    timeoutMs?: number;
+    userContext(): string[];
+  };
 }
 
 /**
@@ -317,7 +335,14 @@ export async function executeToolCall(
       if (decision === "deny") {
         return outcome("denied", budgetExternalText(denyReason ?? `Permission denied for ${toolName}.`));
       }
-      if (decision === "ask") {
+      // Taskana 4702: the ask-zone classifier may turn THIS ask into allow and
+      // skip the broker. Never consulted on allow/deny, on a hook-demanded ask,
+      // or on an ineligible call; every failure inside leaves the broker in charge.
+      const autoAllowed =
+        decision === "ask" && ctx.askClassifier !== undefined
+          ? await tryAutoDecideAsk(ctx, request, ruling.decision, hookDecision === "ask", toolCallId, emit, parentSignal)
+          : false;
+      if (decision === "ask" && !autoAllowed) {
 
         const broker = await ctx.permissionBroker.requestPermission(request, {
           signal: parentSignal,
@@ -469,6 +494,57 @@ export async function executeToolCall(
     parentSignal,
   );
   return finalOutcome;
+}
+
+/**
+ * Taskana 4702: consults the ask-zone classifier for one ask. Returns true only
+ * for a valid `allow` verdict. Emits one `permission_auto_decided` journal event
+ * per consulted ask (allow, ask-by-verdict or ask-by-error). Never throws: any
+ * throw on this path is an ask, so the broker decides.
+ */
+async function tryAutoDecideAsk(
+  ctx: DispatchContext,
+  request: PermissionRequest,
+  rulingDecision: "allow" | "ask" | "deny",
+  hookAsk: boolean,
+  toolCallId: string,
+  emit: ((event: ToolEmittedEvent) => void) | undefined,
+  parentSignal: AbortSignal | undefined,
+): Promise<boolean> {
+  const config = ctx.askClassifier;
+  if (config === undefined) return false;
+  try {
+    const eligibility = isClassifiableAsk(request, { decision: rulingDecision }, hookAsk);
+    if (!eligibility.eligible) return false;
+    const command = (request.input as { command?: unknown }).command;
+    if (typeof command !== "string") return false;
+    const input: AskClassifierInput = {
+      toolName: "Bash",
+      command,
+      segments: eligibility.segments,
+      cwd: ctx.cwd,
+      userContext: config.userContext(),
+    };
+    const consulted = await classifyAsk(config.classifier, input, {
+      ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
+      signal: parentSignal,
+    });
+    const autoAllowed = consulted.verdict.decision === "allow" && consulted.error === undefined;
+    emit?.({
+      type: "permission_auto_decided",
+      toolCallId,
+      toolName: request.toolName,
+      classifier: config.classifier.id,
+      decision: autoAllowed ? "allow" : "ask",
+      reason: consulted.verdict.reason,
+      ...(consulted.verdict.score !== undefined ? { score: consulted.verdict.score } : {}),
+      latencyMs: consulted.latencyMs,
+      ...(consulted.error !== undefined ? { error: consulted.error } : {}),
+    });
+    return autoAllowed;
+  } catch {
+    return false;
+  }
 }
 
 /**
