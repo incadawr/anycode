@@ -189,10 +189,13 @@ export interface ProviderConnection {
    *
    * Read that last part literally: Bash tool children inherit the host's whole
    * `process.env` (core's node-execution adapter), so a model that runs `env`
-   * can read this proxy's password into its own transcript. Scrubbing it there
-   * is not obviously right either — it would break `npm`/`git`/`curl` inside
-   * the very corporate-proxy setup this field exists for — so the trade sits
-   * with the owner as TASK.135 rather than being decided silently here.
+   * can read this proxy's password into its own transcript. TASK.135 closed
+   * that half: the child-env builder (`@anycode/core/child-env`, wired into
+   * node-execution.ts and the terminal) DROPS any proxy variable whose value
+   * carries credentials, so agent shells/terminal/LSP children connect
+   * directly instead of receiving the password — a credential-less proxy is
+   * still passed through verbatim, and the engines/core model traffic keep
+   * the full URL (they read the live `process.env`, not the scrubbed copy).
    *
    * Only a non-empty value is ever persisted (only-truthy-on-disk, same
    * discipline as `transport`/`authOptional`).
@@ -445,9 +448,14 @@ export interface AnycodeSettings {
      *
      * CUSTODY: identical to `ProviderConnection.proxyUrl` above — stored
      * verbatim in the 0644 settings.json, `user:pass@` userinfo deliberately
-     * allowed, and visible in the env of every process the engine starts. This
-     * field widens the TASK.135 perimeter by exactly two names,
-     * `ANYCODE_CODEX_PROXY_URL` and `ANYCODE_CLAUDE_PROXY_URL`.
+     * allowed, and visible in the env of every process the engine starts. The
+     * two carrier names this field rides (`ANYCODE_CODEX_PROXY_URL` /
+     * `ANYCODE_CLAUDE_PROXY_URL`) plus any credentialed proxy value are
+     * stripped from NON-engine children by `@anycode/core/child-env`
+     * (TASK.135) — engine children are the deliberate exception and keep the
+     * full URL. Non-engine children instead receive the credential-free
+     * loopback relay URL (Taskana 4074 follow-up), so they stay online behind
+     * the authenticating proxy without ever seeing the password.
      *
      * Only a non-empty value is persisted (only-truthy-on-disk).
      */
@@ -492,8 +500,9 @@ export interface AnycodeSettings {
      * exact mirror of `codex.proxyUrl` above: same ladder (`shell > this field >
      * connection.proxyUrl > none`), same carrier mechanism
      * (`ANYCODE_CLAUDE_PROXY_URL`), same custody (plain text in the 0644 file,
-     * userinfo allowed, inherited by every child the CLI starts, TASK.135
-     * perimeter). Read that field's doc for the reasoning; it is not repeated.
+     * userinfo allowed, inherited by every child the CLI starts — engine
+     * children only, per TASK.135's `@anycode/core/child-env` scrub). Read
+     * that field's doc for the reasoning; it is not repeated.
      *
      * One asymmetry worth naming: the claude LOGIN flow opens a real
      * Terminal.app window rather than spawning a child (main/claude-login.ts),
@@ -678,10 +687,15 @@ export type SecretKey =
   //
   // Custody, stated plainly and not oversold: the vault takes the password out
   // of the 0644 settings.json (and out of backups and dotfile syncs). It does
-  // NOT take it out of the env — the composed `http://user:pass@host:port` still
-  // rides `HTTPS_PROXY` into every child, where a model running `env` can read
-  // it. That half is TASK.135's open decision, and this slice widens TASK.135's
-  // perimeter to cover profiles and vault-sourced passwords.
+  // NOT take it out of every env — the composed `http://user:pass@host:port`
+  // still rides `HTTPS_PROXY` into every ENGINE child, where the CLI needs it.
+  // TASK.135 closed the non-engine half: `@anycode/core/child-env` drops any
+  // proxy value carrying credentials (and the `ANYCODE_*_PROXY_URL` carriers)
+  // from Bash/terminal/LSP children, so a model running `env` there reads no
+  // proxy password, whichever tier stored it. The Taskana 4074 follow-up
+  // replaced the plain drop with the credential-free loopback relay: those
+  // children now receive `http://127.0.0.1:<port>` instead, which keeps
+  // npm/git/curl working behind the authenticating proxy.
   | `proxy.profile.${string}.password`;
 
 /** What will actually win when a host is spawned (env-override is visible to the UI). */

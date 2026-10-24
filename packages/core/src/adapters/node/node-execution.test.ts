@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -596,5 +596,221 @@ describe("NodeExecutionAdapter", () => {
       },
       10_000,
     );
+  });
+
+  // ── TASK.135 / Taskana 4074: credentialed proxy vars never reach a non-engine child ──
+  describe("child env proxy scrub (TASK.135)", () => {
+    const CREDENTIALED = "http://user:s3cret@127.0.0.1:9";
+
+    /** Polls until `predicate` holds or the deadline (same shape as the spawnPersistent suite's helper). */
+    async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (predicate()) return true;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return predicate();
+    }
+
+    /** The env every scrub test stubs: both cases credentialed, a clean HTTP_PROXY, an exemption and a carrier. */
+    const stubProxyEnv = (): void => {
+      vi.stubEnv("HTTPS_PROXY", CREDENTIALED);
+      vi.stubEnv("https_proxy", CREDENTIALED);
+      vi.stubEnv("HTTP_PROXY", "http://proxy.corp:3128");
+      vi.stubEnv("NO_PROXY", "localhost");
+      vi.stubEnv("ANYCODE_CLAUDE_PROXY_URL", '{"url":"http://user:s3cret@127.0.0.1:9"}');
+    };
+
+    // This suite pins the DROP behaviour in isolation: the relay is neutered
+    // (no lazy start, no URL) so a credentialed proxy vanishes rather than
+    // being replaced. The relay-rewrite behaviour has its own suite below.
+    let restoreRelay: (() => void) | undefined;
+    beforeEach(async () => {
+      stubProxyEnv();
+      const relayModule = await import("./proxy-relay.js");
+      const ensureSpy = vi.spyOn(relayModule, "ensureProxyRelay").mockImplementation(() => {});
+      const urlSpy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(undefined);
+      restoreRelay = () => {
+        ensureSpy.mockRestore();
+        urlSpy.mockRestore();
+      };
+    });
+    afterEach(() => {
+      restoreRelay?.();
+      restoreRelay = undefined;
+      vi.unstubAllEnvs();
+    });
+
+    /** Shared assertions over a child's reported env (parsed JSON object). */
+    function expectScrubbedEnv(childEnv: Record<string, string | undefined>): void {
+      expect(JSON.stringify(childEnv)).not.toContain("s3cret");
+      expect(childEnv.HTTPS_PROXY).toBeUndefined();
+      expect(childEnv.https_proxy).toBeUndefined();
+      expect(childEnv.ANYCODE_CLAUDE_PROXY_URL).toBeUndefined();
+      expect(childEnv.HTTP_PROXY).toBe("http://proxy.corp:3128");
+      expect(childEnv.NO_PROXY).toBe("localhost");
+    }
+
+    it("run: a shell child sees no credentialed proxy var, no carrier; clean proxy and NO_PROXY survive", async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+      const result = await adapter.run({
+        command: `"${process.execPath}" -e "process.stdout.write(JSON.stringify(process.env))"`,
+        cwd: tmpDir,
+        timeoutMs: 10_000,
+      });
+      expect(result.status).toBe("completed");
+      expectScrubbedEnv(JSON.parse(result.stdout) as Record<string, string | undefined>);
+      // The parent's own process.env is untouched by the scrub (D1).
+      expect(process.env.HTTPS_PROXY).toBe(CREDENTIALED);
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "run: a literal env(1) child cannot observe the credential either",
+      async () => {
+        tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+        const result = await adapter.run({ command: "env", cwd: tmpDir, timeoutMs: 10_000 });
+        expect(result.status).toBe("completed");
+        expect(result.stdout).not.toContain("s3cret");
+        expect(result.stdout).not.toContain("ANYCODE_CLAUDE_PROXY_URL");
+        expect(result.stdout).toContain("HTTP_PROXY=http://proxy.corp:3128");
+      },
+    );
+
+    it("runBinary: an argv child sees the same scrubbed env", async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+      const result = await adapter.runBinary({
+        file: process.execPath,
+        args: ["-e", "process.stdout.write(JSON.stringify(process.env))"],
+        cwd: tmpDir,
+        timeoutMs: 10_000,
+      });
+      expect(result.status).toBe("completed");
+      expectScrubbedEnv(JSON.parse(result.stdout) as Record<string, string | undefined>);
+      expect(process.env.HTTPS_PROXY).toBe(CREDENTIALED);
+    });
+
+    it(
+      "spawnPersistent: an LSP-shaped child sees the same scrubbed env",
+      async () => {
+        const chunks: Buffer[] = [];
+        let exitInfo: PersistentExitInfo | undefined;
+        // Marked + newline-flushed: a bare process.exit(0) right after a
+        // multi-KiB write can cut the async pipe mid-JSON (observed at exactly
+        // 8192 bytes), and onExit can fire while bytes are still in flight.
+        adapter.spawnPersistent!({
+          file: process.execPath,
+          args: [
+            "-e",
+            "process.stdout.write(Buffer.concat([Buffer.from('ENV-START'), Buffer.from(JSON.stringify(process.env)), Buffer.from('ENV-END\\n')]));",
+          ],
+          onStdout: (chunk) => chunks.push(chunk),
+          onExit: (info) => {
+            exitInfo = info;
+          },
+        });
+        const full = (): string => Buffer.concat(chunks).toString("utf-8");
+        expect(await waitFor(() => full().includes("ENV-END"), 10_000)).toBe(true);
+        const match = full().match(/ENV-START([\s\S]*)ENV-END/);
+        expect(match).not.toBeNull();
+        expectScrubbedEnv(JSON.parse(match![1]!) as Record<string, string | undefined>);
+        expect(process.env.HTTPS_PROXY).toBe(CREDENTIALED);
+      },
+      15_000,
+    );
+
+    it("request.env: a credentialed overlay proxy is dropped; a credential-less one passes through", async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+      const result = await adapter.runBinary({
+        file: process.execPath,
+        args: ["-e", "process.stdout.write(process.env.HTTPS_PROXY ?? '<absent>')"],
+        cwd: tmpDir,
+        timeoutMs: 10_000,
+        env: { HTTPS_PROXY: "http://u:p@h:1" },
+      });
+      expect(result.status).toBe("completed");
+      expect(result.stdout).toBe("<absent>");
+
+      const clean = await adapter.runBinary({
+        file: process.execPath,
+        args: ["-e", "process.stdout.write(process.env.HTTPS_PROXY ?? '<absent>')"],
+        cwd: tmpDir,
+        timeoutMs: 10_000,
+        env: { HTTPS_PROXY: "http://h:1" },
+      });
+      expect(clean.status).toBe("completed");
+      expect(clean.stdout).toBe("http://h:1");
+    });
+
+    it("after the spawns, the parent process.env still holds the credentialed value", () => {
+      expect(process.env.HTTPS_PROXY).toBe(CREDENTIALED);
+      expect(process.env.ANYCODE_CLAUDE_PROXY_URL).toBe('{"url":"http://user:s3cret@127.0.0.1:9"}');
+    });
+  });
+
+  // ── Taskana 4074 follow-up: the credential-free loopback relay replaces the
+  // dropped vars in real spawns (npm/git/curl keep working, no credential) ──
+  describe("child env relay rewrite (Taskana 4074)", () => {
+    const CREDENTIALED = "http://user:s3cret@127.0.0.1:9";
+    const RELAY_URL = "http://127.0.0.1:47557";
+
+    beforeEach(() => {
+      vi.stubEnv("HTTPS_PROXY", CREDENTIALED);
+      vi.stubEnv("https_proxy", CREDENTIALED);
+      vi.stubEnv("NO_PROXY", "localhost");
+      vi.stubEnv("ANYCODE_CLAUDE_PROXY_URL", '{"url":"http://user:s3cret@127.0.0.1:9"}');
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    /** Spy the relay URL in (the module-level cache `proxyRelayUrl` reads). */
+    async function stubRelayUrl(): Promise<() => void> {
+      const relayModule = await import("./proxy-relay.js");
+      const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY_URL);
+      return () => spy.mockRestore();
+    }
+
+    it("a spawned shell child receives the relay URL instead of the credentialed proxy, and no credential anywhere", async () => {
+      const restore = await stubRelayUrl();
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+      try {
+        const result = await adapter.run({
+          command: `"${process.execPath}" -e "process.stdout.write(JSON.stringify(process.env))"`,
+          cwd: tmpDir,
+          timeoutMs: 10_000,
+        });
+        expect(result.status).toBe("completed");
+        const childEnv = JSON.parse(result.stdout) as Record<string, string | undefined>;
+        expect(childEnv.HTTPS_PROXY).toBe(RELAY_URL);
+        expect(childEnv.https_proxy).toBe(RELAY_URL);
+        expect(childEnv.ANYCODE_CLAUDE_PROXY_URL).toBeUndefined();
+        expect(childEnv.NO_PROXY).toBe("localhost");
+        expect(JSON.stringify(childEnv)).not.toContain("s3cret");
+        expect(JSON.stringify(childEnv)).not.toContain("user:");
+        // The relay URL itself never carries an @ (the whole DoD of the relay).
+        expect(childEnv.HTTPS_PROXY).not.toContain("@");
+        // The parent's own env keeps the credentialed value (engines still need it).
+        expect(process.env.HTTPS_PROXY).toBe(CREDENTIALED);
+      } finally {
+        restore();
+      }
+    });
+
+    it("runBinary child receives the same relay URL", async () => {
+      const restore = await stubRelayUrl();
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+      try {
+        const result = await adapter.runBinary({
+          file: process.execPath,
+          args: ["-e", "process.stdout.write(process.env.HTTPS_PROXY ?? '<absent>')"],
+          cwd: tmpDir,
+          timeoutMs: 10_000,
+        });
+        expect(result.status).toBe("completed");
+        expect(result.stdout).toBe(RELAY_URL);
+      } finally {
+        restore();
+      }
+    });
   });
 });

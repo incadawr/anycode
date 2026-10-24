@@ -35,6 +35,7 @@ import {
 import { getBuiltinCatalog } from "../provider/catalog-data.js";
 import { matchCatalogEntryByBaseUrl } from "./model.js";
 import { NodeFileSystemAdapter } from "../adapters/node/index.js";
+import { closeProxyRelay, proxyRelayUrl } from "../adapters/node/proxy-relay.js";
 import { SqlitePersistenceAdapter } from "../adapters/node/sqlite-persistence.js";
 import { deriveSessionTitle, sanitizeTitleSource } from "../context/session-title.js";
 import type { ExtensionsBootstrap } from "../extensions/bootstrap.js";
@@ -4863,5 +4864,67 @@ describe("CLI child-model settings seam (TASK.162 §0b: live SELECTED tier, not 
     // two apart; the effort assertion above still does, and runner.test.ts
     // pins the cap against an explicit below-cap child ceiling.
     expect(childPort!.requests[0]!.maxOutputTokens).toBe(SUBAGENT_MAX_OUTPUT_TOKENS);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Taskana 4074 cross-review F5: runCli's early-return paths must not leak
+// the (live) loopback relay listener. `await resolveProxyRelay(env)` happens
+// at boot, but closeProxyRelay() was only called on the interactive-REPL
+// exit — the print-mode return and future early exits resolved runCli with
+// the listener still open, keeping the event loop (and an embedder that
+// awaits runCli and keeps running, which tests do) alive indefinitely.
+// ─────────────────────────────────────────────────────────────────────────
+describe("CLI proxy-relay lifecycle (Taskana 4074 cross-review F5)", () => {
+  afterEach(() => {
+    closeProxyRelay();
+  });
+
+  it("a print-mode run closes the relay before runCli resolves (no dangling listener)", async () => {
+    // A credentialed http:// upstream with a valid port starts a REAL relay
+    // (the dial to 127.0.0.1:9 never happens — no client connects).
+    const exitCode = await runCli({
+      argv: ["-p", "say hi"],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        ANYCODE_MODEL: "test-model",
+        ANYCODE_DB_PATH: ":memory:",
+        ANYCODE_SETTINGS_PATH: isolatedSettingsPath(),
+        HTTPS_PROXY: "http://user:secret@127.0.0.1:9",
+      } as NodeJS.ProcessEnv,
+      input: new PassThrough(),
+      output: new PassThrough(),
+      errorOutput: new PassThrough(),
+      modelPort: new CountingModelPort(),
+      cwd: process.cwd(),
+    });
+    expect(exitCode).toBe(0);
+    // If runCli had leaked its relay, the module cache would still hold it
+    // here (the await resolved WITH the listener live). It must be empty.
+    expect(proxyRelayUrl()).toBeUndefined();
+  });
+
+  it("a guard-exit run (empty print prompt, exit 2) leaks no relay either", async () => {
+    const errorOutput = new PassThrough();
+    const input = new PassThrough();
+    const runPromise = runCli({
+      argv: ["-p"],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        ANYCODE_MODEL: "test-model",
+        ANYCODE_DB_PATH: ":memory:",
+        ANYCODE_SETTINGS_PATH: isolatedSettingsPath(),
+        HTTPS_PROXY: "http://user:secret@127.0.0.1:9",
+      } as NodeJS.ProcessEnv,
+      input,
+      output: new PassThrough(),
+      errorOutput,
+      modelPort: new CountingModelPort(),
+      cwd: process.cwd(),
+    });
+    input.end(""); // empty stdin ⇒ empty prompt ⇒ guard exit 2
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(2);
+    expect(proxyRelayUrl()).toBeUndefined();
   });
 });

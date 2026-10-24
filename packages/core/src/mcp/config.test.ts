@@ -304,6 +304,43 @@ describe("loadMcpServerSpecs — stdio env assembly", () => {
     }
   });
 
+  it("inheritEnv:true scrubs a credentialed proxy and hands the relay env to the server instead (TASK.135 follow-up)", async () => {
+    const savedEnv = process.env;
+    const RELAY = "http://127.0.0.1:47557";
+    const relayModule = await import("../adapters/node/proxy-relay.js");
+    const relayUrlSpy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY);
+    process.env = {
+      PATH: "/usr/bin",
+      HTTPS_PROXY: "http://user:s3cret@proxy.corp:3128",
+      https_proxy: "http://user:s3cret@proxy.corp:3128",
+      NO_PROXY: "localhost",
+      ANYCODE_CLAUDE_PROXY_URL: "direct",
+      CUSTOM_VAR: "keep-me",
+    } as NodeJS.ProcessEnv;
+    try {
+      const { fs } = makeFs({
+        [PROJECT_CONFIG]: JSON.stringify({
+          mcpServers: { srv: { command: "node", inheritEnv: true } },
+        }),
+      });
+      const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
+      expect(problems).toEqual([]);
+      const env = asStdio(specs[0]).env!;
+      // The relay env REPLACES the credentialed family (both cases), never
+      // carries an @ anywhere, and keeps NO_PROXY as-is.
+      expect(env.HTTPS_PROXY).toBe(RELAY);
+      expect(env.https_proxy).toBe(RELAY);
+      expect(env.NO_PROXY).toBe("localhost");
+      expect(env.CUSTOM_VAR).toBe("keep-me");
+      expect(env.ANYCODE_CLAUDE_PROXY_URL).toBeUndefined();
+      expect(JSON.stringify(env)).not.toContain("@");
+      expect(JSON.stringify(env)).not.toContain("s3cret");
+    } finally {
+      relayUrlSpy.mockRestore();
+      process.env = savedEnv;
+    }
+  });
+
   it("without inheritEnv, an unset minimal-base key is simply omitted (never an empty string)", async () => {
     vi.stubEnv("PATH", "/usr/bin");
     vi.stubEnv("HOME", undefined);
