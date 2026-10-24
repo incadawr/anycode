@@ -215,6 +215,13 @@ export interface SubagentRunnerOptions {
  * — and never forced to yolo; the child inherits the parent's engine/broker/mode
  * so plan-mode stays honest and every effect re-passes the same gate.
  */
+/**
+ * Tool names a SubagentRequest (a workflow step's `tools:`) may add beyond the
+ * persona's own list (Taskana 4095 follow-up). Only backend-conditional,
+ * opt-in tools belong here; anything else in a request is ignored.
+ */
+export const REQUEST_OPT_IN_TOOLS: readonly string[] = ["WebSearch"];
+
 export function buildChildConfig(
   parent: AgentLoopConfig,
   persona: PersonaDefinition,
@@ -264,8 +271,12 @@ export function buildChildConfig(
   // keeps buildPersonaRegistry the single place that resolves names, so the
   // extras get the same SPAWN_TOOLS skip and the same silent-skip miss path
   // as persona-declared names. Deduped; order-stable for the registry build.
-  const requestTools = req.tools ?? [];
-  const extraNames = requestTools.filter((name) => !persona.tools.includes(name));
+  // Review fix: the request may opt a child into REQUEST_OPT_IN_TOOLS only.
+  // Without this allowlist a workflow step could widen any persona with any
+  // default tool (e.g. `agentType: "explore", tools: ["Bash", "Write"]`),
+  // silently breaking explore's read-only contract.
+  const requestTools = (req.tools ?? []).filter((name) => REQUEST_OPT_IN_TOOLS.includes(name));
+  const extraNames = requestTools.filter((name, index) => !persona.tools.includes(name) && requestTools.indexOf(name) === index);
   const effectivePersona: PersonaDefinition =
     extraNames.length > 0 ? { ...persona, tools: [...persona.tools, ...extraNames] } : persona;
   // NEW per-persona registry WITHOUT any spawn tool (structural non-recursion,

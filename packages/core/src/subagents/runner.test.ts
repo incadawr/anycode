@@ -384,6 +384,20 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     });
     expect(noRecursion.registry.has("Agent")).toBe(false);
     expect(noRecursion.registry.has("Workflow")).toBe(false);
+
+    // Review fix: request extras are an allowlist (REQUEST_OPT_IN_TOOLS), not
+    // a widening seam — an explore step naming write/exec tools stays
+    // read-only, while WebSearch still opts in.
+    const widened = buildChildConfig(
+      parent,
+      getPersona("explore"),
+      { ...REQ, tools: ["Bash", "Write", "Edit", "WebSearch"] },
+      { webSearchTool: webSearch },
+    );
+    expect(widened.registry.has("Bash")).toBe(false);
+    expect(widened.registry.has("Write")).toBe(false);
+    expect(widened.registry.has("Edit")).toBe(false);
+    expect(widened.registry.get("WebSearch")).toBe(webSearch);
   });
 
   // Budget resolution: request > parent.subagentMaxTurns > DEFAULT, and ONLY
