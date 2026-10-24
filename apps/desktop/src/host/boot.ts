@@ -49,7 +49,13 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { CHILD_NETWORK_RETRY_BUDGET_MS, ConversationHistory, PERMISSION_MODES, SessionPermissionRules } from "@anycode/core";
+import {
+  CHILD_NETWORK_RETRY_BUDGET_MS,
+  ConversationHistory,
+  DEFAULT_RETRY_POLICY,
+  PERMISSION_MODES,
+  SessionPermissionRules,
+} from "@anycode/core";
 import type {
   DiagnosticSink,
   HistoryItem,
@@ -323,7 +329,10 @@ export function childRetryPolicy(
   retry?: Partial<RetryPolicy>,
 ): Partial<RetryPolicy> | undefined {
   if (!isChild) return retry;
-  return { ...retry, networkRetryBudgetMs: CHILD_NETWORK_RETRY_BUDGET_MS };
+  // Taskana 4705 review: children take the main session's settings (the same
+  // maxRetries/budget), with the 4226 180 s value only as a floor.
+  const mainBudget = retry?.networkRetryBudgetMs ?? DEFAULT_RETRY_POLICY.networkRetryBudgetMs;
+  return { ...retry, networkRetryBudgetMs: Math.max(CHILD_NETWORK_RETRY_BUDGET_MS, mainBudget) };
 }
 
 export interface BootSessionResult {

@@ -1098,7 +1098,7 @@ describe("isChildSessionBoot — second authority for non-recursion lock #2 (TAS
 
 describe("childRetryPolicy (Taskana 4226)", () => {
   it("gives child boots the network retry budget and leaves main sessions untouched", () => {
-    expect(childRetryPolicy(true)).toEqual({ networkRetryBudgetMs: 180_000 });
+    expect(childRetryPolicy(true)).toEqual({ networkRetryBudgetMs: 300_000 });
     expect(childRetryPolicy(false)).toBeUndefined();
     expect(childRetryPolicy(false, { maxRetries: 5 })).toEqual({ maxRetries: 5 });
   });
@@ -1107,8 +1107,15 @@ describe("childRetryPolicy (Taskana 4226)", () => {
     expect(childRetryPolicy(true, { maxRetries: 0, baseDelayMs: 7 })).toEqual({
       maxRetries: 0,
       baseDelayMs: 7,
-      networkRetryBudgetMs: 180_000,
+      networkRetryBudgetMs: 300_000,
     });
+  });
+
+  it("a child never gets a shorter network budget than the main session (Taskana 4705 review)", () => {
+    // Main default is 300 000: the child must match it, not fall back to 180 000.
+    expect(childRetryPolicy(true, { maxRetries: 4 })).toEqual({ maxRetries: 4, networkRetryBudgetMs: 300_000 });
+    // An explicit larger main budget is inherited as-is.
+    expect(childRetryPolicy(true, { networkRetryBudgetMs: 600_000 })).toEqual({ networkRetryBudgetMs: 600_000 });
   });
 });
 

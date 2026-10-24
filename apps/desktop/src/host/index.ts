@@ -2394,7 +2394,11 @@ async function boot(): Promise<void> {
           ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
-          ...(childRetryBoot ? { retry: childRetryPolicy(true) } : Object.keys(envRetry).length > 0 ? { retry: envRetry } : {}),
+          ...(childRetryBoot
+            ? { retry: childRetryPolicy(true, envRetry) }
+            : Object.keys(envRetry).length > 0
+              ? { retry: envRetry }
+              : {}),
           // Taskana 4090: setting an observer is what arms the factories'
           // wrapped fetch; the port itself captures the update and yields it
           // as a `provider_quota` event, so the host needs no state of its own.
