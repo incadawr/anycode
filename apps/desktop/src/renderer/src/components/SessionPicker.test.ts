@@ -128,6 +128,23 @@ describe("describeCreateTabFailure", () => {
   });
 });
 
+describe("describeCreateTabFailure — existing copy guards (Taskana 4103)", () => {
+  it("credential_missing keeps its existing copy", () => {
+    const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "credential_missing" };
+    expect(describeCreateTabFailure(result, "core")).toContain("Add an API key");
+  });
+
+  it("not_ready without a notReadyReason keeps the generic copy", () => {
+    const result: CreateTabResult = { ok: false, reason: "not_ready" };
+    expect(describeCreateTabFailure(result, "core")).toContain("Configure a provider");
+  });
+
+  it("connection_missing still states the deletion fact (guard against accidental copy refactors while in the file)", () => {
+    const result: CreateTabResult = { ok: false, reason: "connection_missing", connectionId: "conn-dead" };
+    expect(describeCreateTabFailure(result)).toBe("This task's provider connection was deleted.");
+  });
+});
+
 describe("resolveConnectionMissingAction (TASK.45 W10-FIX F1 re-pin affordance)", () => {
   it("arms a re-pin action for connection_missing when a current connection exists", () => {
     const result: CreateTabResult = { ok: false, reason: "connection_missing", connectionId: "conn-dead" };

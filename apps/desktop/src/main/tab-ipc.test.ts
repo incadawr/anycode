@@ -2071,6 +2071,48 @@ describe("handleTabRebind — TASK.106 cut-2 (§D6 fail-closed order)", () => {
     expect(res).toEqual({ ok: true, connectionId: "conn-new" });
     expect(touchSession).toHaveBeenCalledWith("session-1", { connectionId: "conn-new" });
   });
+
+  it("TASK.109: rebind re-pins the row and NEVER touches the old connection's config", async () => {
+    const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: (id) => id === "conn-new",
+      ensureConnectionEnv: async () => {},
+      readConnectionModel: () => "m2",
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    expect(res).toEqual({ ok: true, connectionId: "conn-new" });
+    // The rebind's durable footprint is EXACTLY one touchSession — pin + model
+    // atomically, never a pin-only write followed by a model write (no window
+    // where the row and the env disagree about the account).
+    expect(touchSession).toHaveBeenCalledTimes(1);
+    expect(touchSession).toHaveBeenCalledWith("session-1", { connectionId: "conn-new", model: "m2" });
+    expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new");
+    // TASK.109 contract: TabIpcDeps has NO seam that writes settings/connections
+    // — "conn-old" must appear in NO write. The old connection survives the
+    // switch configured and intact; only the session row's pin moved.
+    const writeCalls = touchSession.mock.calls.map((c) => JSON.stringify(c));
+    expect(writeCalls.every((s) => !s.includes("conn-old"))).toBe(true);
+  });
+
+  it("TASK.109: a refused rebind writes NOTHING (the old pin stays)", async () => {
+    const { deps, touchSession, rebindTab } = makeRebindDeps(runningCoreTab(), {
+      connectionExists: () => true,
+      ensureConnectionEnv: async () => {
+        throw new Error("vault read failed");
+      },
+    });
+
+    const res = await handleTabRebind(deps, { tabId: "tab-1", connectionId: "conn-new" });
+
+    // Complements the not_ready-propagation test above by asserting the
+    // session row too: a refused re-bind leaves the pin where the tab still
+    // runs — the old connection is neither deleted nor deconfigured, and the
+    // session row never names the target.
+    expect(res).toEqual({ ok: false, reason: "not_ready" });
+    expect(touchSession).not.toHaveBeenCalled();
+    expect(rebindTab).not.toHaveBeenCalled();
+  });
 });
 
 describe("tabRebindRequestSchema — bounds only (§D6)", () => {
@@ -2331,5 +2373,88 @@ describe("spawnableWhenKnown — codex spawn-freshness guard (Taskana 4230)", ()
       notReadyDetail: "0.99.0",
     });
     expect(createTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleCreate — TASK.109 re-pin matrix (dead pin → replacement, old connections untouched)", () => {
+  // TASK.109 (Taskana 4103): "continue on another connection without deleting
+  // the old one". The mechanism is TASK.106 cut 2's — this matrix pins the
+  // contract that keeps it true: the re-pin's entire durable footprint is ONE
+  // touchSession (the session row); the old connection is never deleted,
+  // deconfigured, or rewritten by the resume path.
+
+  function resumeMeta(over: Record<string, unknown> = {}) {
+    return {
+      id: "s-resume",
+      workspace: "/project",
+      model: "m",
+      mode: "build" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      ...over,
+    };
+  }
+
+  it("dead pin + replacement re-pins WITHOUT deleting anything", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const persistence: TabIpcDeps["persistence"] = {
+      ...persistenceStub,
+      getRootSession: async () => resumeMeta({ connectionId: "conn-dead" }),
+      touchSession: vi.fn(async () => {}),
+    };
+    const touchSession = persistence.touchSession as ReturnType<typeof vi.fn>;
+    // Mirror of the W10-FIX F1 rig: the stored pin is dead, the replacement resolves.
+    const resolveResumePin = vi.fn(async (meta: { connectionId?: string }) =>
+      meta.connectionId === "conn-dead"
+        ? { ok: false as const, connectionId: "conn-dead" }
+        : { ok: true as const, connectionId: "conn-new", release: () => {} });
+    // Read-only registry seam, spied: the TASK.109 contract is that the old
+    // connection is only ever READ, never written or deleted.
+    const connectionExists = vi.fn((id: string) => id === "conn-dead" || id === "conn-new");
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin, connectionExists };
+
+    const res = await handleCreate(deps, {
+      kind: "resume",
+      sessionId: "s-resume",
+      replacementConnectionId: "conn-new",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(persistence.touchSession).toHaveBeenCalledWith("s-resume", { connectionId: "conn-new" });
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ resume: true, connectionId: "conn-new" }));
+    // TASK.109 contract: the ONLY connection ids the read-only seam ever saw
+    // are the dead pin and the replacement — nothing else is even consulted,
+    // and `connectionExists` is a pure read (no settings-write seam exists in
+    // TabIpcDeps: the re-pin's entire durable footprint is one touchSession).
+    const seenIds = connectionExists.mock.calls.map((c) => c[0]);
+    expect(seenIds.every((id) => id === "conn-dead" || id === "conn-new")).toBe(true);
+    expect(touchSession).toHaveBeenCalledTimes(1);
+  });
+
+  // "live pin + replacement IGNORES the replacement" is already pinned by the
+  // W10-FIX F1 test above ("resume: a LIVE stored pin IGNORES a supplied
+  // replacement — never retarget a healthy pin") — deliberately not duplicated.
+
+  it("resume on a LIVE-but-dead pin is NOT refused connection_missing", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const persistence: TabIpcDeps["persistence"] = {
+      ...persistenceStub,
+      getRootSession: async () => resumeMeta({ connectionId: "conn-dead" }),
+      touchSession: vi.fn(async () => {}),
+    };
+    // The connection EXISTS but its key/quota is dead. `resolveResumePin`
+    // (main/index.ts) only checks EXISTENCE — a configured-but-unusable pinned
+    // connection resolves ok, so resume is not refused: the tab opens, and the
+    // model-chip rebind (TASK.106 cut 2) is the escape. This pins today's law:
+    // never strand the session in the picker over a live-but-dead pin.
+    const resolveResumePin = vi.fn(async () => ({ ok: true as const, connectionId: "conn-dead", release: () => {} }));
+    const deps: TabIpcDeps = { manager, persistence, dialog, resolveResumePin };
+
+    const res = await handleCreate(deps, { kind: "resume", sessionId: "s-resume" });
+
+    expect(res.ok).toBe(true);
+    expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ resume: true, connectionId: "conn-dead" }));
   });
 });
