@@ -1505,6 +1505,13 @@ describe("host Codex boot private temp dir leak guard (cross-review F2, Taskana 
     const mcpForwardIdx = source.indexOf("const codexMcpForward = await prepareEngineMcpForward({");
     expect(mcpForwardIdx).toBeGreaterThan(-1);
     expect(ensureIdx).toBeGreaterThan(mcpForwardIdx);
+    // Review fix: the connect expression sits OUTSIDE the boot-side `try`, so
+    // it must clean the dir on its own rejection — pin the .catch that does it
+    // between the connect expression and the guarded window.
+    const tryIdx = source.indexOf("  try {\n  codexParentEngine = connected.engine;");
+    expect(tryIdx).toBeGreaterThan(connectIdx);
+    const between = source.slice(connectIdx, tryIdx);
+    expect(between).toMatch(/\}\)\(\)\)\.catch\(\(error: unknown\) => \{\s*(\/\/[^\n]*\s*)*cleanupCodexChildTempDir\(\);\s*throw error;/);
   });
 });
 

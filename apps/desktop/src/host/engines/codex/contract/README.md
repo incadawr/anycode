@@ -183,6 +183,7 @@ from an UNSANDBOXED terminal, once per codex-cli range bump or after any
 
 Step 0 — prepare (scratch workspace repo + the private dir, 0700):
 
+    mkdir -p "$HOME/.anycode/tmp"   # mktemp does not create the template's parent
     WS="$(mktemp -d "$HOME/.anycode/tmp/probe-ws-XXXXXX")/repo"
     mkdir -p "$WS"; git -C "$WS" init -q
     PRIV="$HOME/.anycode/tmp/probe-4682"
@@ -204,9 +205,10 @@ Step 1 — write `probe.sh` next to this README is NOT needed; run the four
 checks in ONE child-equivalent invocation. The `-c` overrides mirror
 turn/start's sandboxPolicy (workspace-write, the workspace plus the private
 dir as writable roots, both tmp exclusions) and the `env` prefix mirrors the
-app-server spawn env:
+app-server spawn env. (`cd` rather than `codex sandbox -C`: codex-cli
+0.164.0 rejects `-C` without `--permission-profile`.)
 
-    codex sandbox -C "$WS" \
+    cd "$WS" && codex sandbox \
       -c 'sandbox_mode="workspace-write"' \
       -c 'sandbox_workspace_write.writable_roots=["'"$WS"'","'"$PRIV"'"]' \
       -c 'sandbox_workspace_write.exclude_tmpdir_env_var=true' \
