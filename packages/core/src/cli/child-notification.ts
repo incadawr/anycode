@@ -258,3 +258,59 @@ export function formatChildStallNotice(input: ChildStallNoticeInput): string {
     body
   );
 }
+
+/**
+ * taskana 4181: the SUPERVISOR idle reminder — delivered through the SAME
+ * channel as the child notifications above (the desktop host's
+ * `ChildReportQueue`) but for the opposite failure mode: not a child gone
+ * quiet, but the SUPERVISOR itself. Its turn ended, there are ZERO live
+ * detached children, and its final assistant text carried no terminal marker
+ * (READY/BLOCKED/DONE/ACCEPT) — the one state of the no-polling detach loop
+ * that previously sat silent forever. The host's SupervisorIdleWatchdog
+ * (apps/desktop/src/host/supervisor-idle-watchdog.ts) owns the timing; this
+ * formatter owns the text.
+ *
+ * Deliberately NOT a `<task-notification>` (same reasoning as
+ * `formatChildStallNotice`'s `<task-stall-notice>` above): that tag reports a
+ * CHILD's terminal outcome; reusing it for the parent's own liveness nudge
+ * would invite exactly the child/parent confusion the anti-spoofing header
+ * exists to prevent. A distinct root tag (`<supervisor-idle-reminder>`) keeps
+ * the three synthetic events (terminal report / stall notice / idle reminder)
+ * textually disjoint at every level.
+ */
+export interface SupervisorIdleReminderInput {
+  /** Wall-clock ms since the arm that fired (SupervisorIdleReport.idleMs). */
+  idleMs: number;
+  /** 1 for the first reminder, +1 per repeat. */
+  reminderCount: number;
+  /** True strictly after `escalateAfter` ignored reminders — swaps to the OWNER variant. */
+  escalated: boolean;
+  /** Current live detached-children count — always 0 when the watchdog fires, rides the field for the reader. */
+  liveChildren: number;
+}
+
+/**
+ * Builds the full reminder text: the SAME verbatim anti-spoofing header as a
+ * real task notification, then the `<supervisor-idle-reminder>` block and a
+ * closer telling the supervisor exactly how to close the task. The escalated
+ * variant prefixes "OWNER ATTENTION REQUIRED — " and names the count;
+ * escalation is still just TEXT in the same channel (the owner reads the
+ * transcript).
+ */
+export function formatSupervisorIdleReminder(input: SupervisorIdleReminderInput): string {
+  const body = [
+    "<supervisor-idle-reminder>",
+    `  <idle-for>${escapeXmlText(formatSilenceDuration(input.idleMs))}</idle-for>`,
+    `  <live-children>${input.liveChildren}</live-children>`,
+    `  <reminder-count>${input.reminderCount}</reminder-count>`,
+    "</supervisor-idle-reminder>",
+  ].join("\n");
+  const closer = input.escalated
+    ? "OWNER ATTENTION REQUIRED — " +
+      `This is reminder ${input.reminderCount}; the supervisor has not acted on the previous ones. ` +
+      "You have no running children and no pending work. Either dispatch the next task or reply with a " +
+      "terminal marker (READY / BLOCKED / DONE). Do not wait or poll."
+    : "You have no running children and no pending work. Either dispatch the next task or reply with a " +
+      "terminal marker (READY / BLOCKED / DONE). Do not wait or poll.";
+  return `${NOTIFICATION_HEADER}\n\n${body}\n\n${closer}`;
+}

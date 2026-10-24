@@ -164,6 +164,26 @@ The supervisor therefore never holds a turn open or polls while GLM works.
 Without `detach` the call blocks the supervisor's turn until the child ends,
 and ending that turn early cancels the child.
 
+Because the supervisor never polls, the HOST also watches for the one state
+the loop itself cannot escape: the supervisor's turn has ended, there are no
+live detached children, and its final message carries no terminal marker
+(`READY`, `BLOCKED`, `DONE` or `ACCEPT`) — a chain that is neither working
+nor closed would otherwise sit silent forever. After **15 idle minutes**
+(overridable with `ANYCODE_SUPERVISOR_IDLE_MS`), the desktop host's
+supervisor idle watchdog delivers a system reminder through the same channel
+as child reports, telling the supervisor to either dispatch the next task or
+close with a terminal marker. The reminder repeats every **10 minutes**, and
+after **two ignored reminders** the text escalates to an
+`OWNER ATTENTION REQUIRED` variant addressed to whoever reads the
+transcript; that escalated reminder is the last one until the supervisor
+dispatches a child or closes. The watchdog only arms in a session that has
+actually had a live detached child since its last marker, so an ordinary
+chat is never reminded. It only ever delivers text — it never kills sessions
+or cancels children — and a marker anywhere in the supervisor's final
+assistant message disarms it and ends supervision until the next dispatch. Its first reminder waits
+deliberately longer than one child-stall cycle (10 minutes), so a slow
+child's stall notice, not the watchdog, is what wakes the supervisor first.
+
 The `model:` frontmatter is a default, not a guarantee: the tool call's
 `model` argument outranks it.
 

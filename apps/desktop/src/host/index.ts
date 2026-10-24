@@ -228,6 +228,7 @@ import {
   formatChildStallNotice,
   childNotificationSummaryOverflows,
   formatChildTaskNotification,
+  formatSupervisorIdleReminder,
   generateSessionTitle,
   loadEnvConfig,
   loadHookConfigs,
@@ -247,6 +248,11 @@ import {
   resolveReasoningEffort,
   runWrapUp,
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
+  // taskana 4181: supervisor idle-watchdog defaults (see
+  // deliverSupervisorIdleReminder / the SupervisorIdleWatchdog constructions).
+  SUPERVISOR_IDLE_ESCALATE_AFTER,
+  SUPERVISOR_IDLE_FIRST_MS,
+  SUPERVISOR_IDLE_REPEAT_MS,
   DEFAULT_CONTEXT_WINDOW_TOKENS,
   REPO_MAP_MAX_TOKENS,
   REPO_MAP_MIN_TOKENS,
@@ -289,6 +295,12 @@ import type {
 import { buildAgentProfileRoots } from "@anycode/core/subagents-admin";
 import { hasDurableTransitionResult } from "./worktree-recovery.js";
 import { ChildReportQueue } from "./child-report-queue.js";
+import {
+  SUPERVISOR_IDLE_TERMINAL_MARKERS,
+  resolveSupervisorIdleFirstMs,
+  SupervisorIdleWatchdog,
+  type SupervisorIdleReport,
+} from "./supervisor-idle-watchdog.js";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
@@ -572,6 +584,33 @@ function deliverDetachedChildStall(
     waitingForApproval: report.waitingForApproval,
   });
   childReportQueue.upsert(`stall:${req.spawnToolCallId}`, text);
+}
+
+/**
+ * taskana 4181: delivers a supervisor idle reminder. The host's
+ * SupervisorIdleWatchdog (constructed below for a non-child codex boot and
+ * for the core root path) fires `onIdle` when the supervisor's turn has
+ * ended, ZERO live detached children remain, and the turn's final assistant
+ * text carried no terminal marker (READY/BLOCKED/DONE/ACCEPT) — the one
+ * state of the no-polling detach loop that previously sat silent forever.
+ *
+ * Rides the SAME ChildReportQueue as the stall notice above, with the same
+ * upsert-coalescing bound: every repeat of the reminder shares the one
+ * `"supervisor-idle-reminder"` id, so a long-ignored supervisor consumes at
+ * most ONE pending slot (latest text wins), never more. The renderer's
+ * existing `child_report` path enqueues it origin:"system" and starts a
+ * turn; a reminder that arrives mid-turn is dropped by the watchdog's own
+ * noteTurnStarted disarm, and one that still races through is held
+ * harmlessly by the busy queue.
+ */
+function deliverSupervisorIdleReminder(report: SupervisorIdleReport): void {
+  const text = formatSupervisorIdleReminder({
+    idleMs: report.idleMs,
+    reminderCount: report.reminderCount,
+    escalated: report.escalated,
+    liveChildren: 0,
+  });
+  childReportQueue.upsert("supervisor-idle-reminder", text);
 }
 
 // Preview RPC broker (night-track wave-1 cut §2.3): PreviewResponseMessage
@@ -938,6 +977,39 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
       codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog);
     }
   }
+  // taskana 4181: the supervisor idle watchdog for this (non-child) codex
+  // boot — one instance, constructed once, mirroring the stall clock's
+  // report-only posture. It watches for the supervisor's turn having ENDED
+  // with no live detached children and no terminal marker in its final
+  // assistant text, and fires a system reminder through the SAME child_report
+  // queue the detach loop already uses. Thresholds resolve from env exactly
+  // like the stall clock's (ANYCODE_SUPERVISOR_IDLE_MS overrides the first
+  // reminder's delay). Only exists for a root boot: a codex child never
+  // supervises anything.
+  let codexSupervisorIdleWatchdog: SupervisorIdleWatchdog | undefined;
+  if (args.child === undefined) {
+    codexSupervisorIdleWatchdog = new SupervisorIdleWatchdog(
+      {
+        terminalMarkers: SUPERVISOR_IDLE_TERMINAL_MARKERS,
+        firstAfterMs: resolveSupervisorIdleFirstMs(process.env, SUPERVISOR_IDLE_FIRST_MS),
+        repeatEveryMs: SUPERVISOR_IDLE_REPEAT_MS,
+        escalateAfter: SUPERVISOR_IDLE_ESCALATE_AFTER,
+      },
+      deliverSupervisorIdleReminder,
+    );
+    // The background-children feed is what makes the watchdog's supervising
+    // state reachable at all: it exists ONLY when the child port does (the
+    // `if (catalog.length)` gate above — an empty profile catalog means no
+    // port, no detachable children, and an inert, correctly-silent
+    // watchdog). Any future change that arms supervision without the port
+    // must first give this feed another source, or settle-time state
+    // (liveChildren) goes stale.
+    if (codexChildPort !== undefined) {
+      codexChildPort.onBackgroundChildrenChanged(() => {
+        codexSupervisorIdleWatchdog?.noteBackgroundChildrenChanged(codexChildPort!.listBackgroundChildren().length);
+      });
+    }
+  }
 
   const options = {
     bootstrap,
@@ -1195,6 +1267,16 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
             cancel: (childSessionId: string) => codexChildPort!.cancelBackgroundChild(childSessionId),
             cancelAll: () => codexChildPort!.cancelAllBackgroundChildren(),
             onChange: (listener: () => void) => codexChildPort!.onBackgroundChildrenChanged(listener),
+          },
+        }
+      : {}),
+    // taskana 4181: the supervisor idle-watchdog seam — constructed once
+    // above (root boots only), fed turn-start/settle signals by Session.
+    ...(codexSupervisorIdleWatchdog !== undefined
+      ? {
+          supervisorIdle: {
+            noteTurnSettled: (lastPublicText: string) => codexSupervisorIdleWatchdog!.noteTurnSettled(lastPublicText),
+            noteTurnStarted: () => codexSupervisorIdleWatchdog!.noteTurnStarted(),
           },
         }
       : {}),
@@ -3014,6 +3096,28 @@ async function boot(): Promise<void> {
       });
       config.sessionSubagents = childSessionPortHandle;
     }
+    // taskana 4181: the supervisor idle watchdog for a CORE root boot — the
+    // engine-agnostic twin of the codex boot's construction above (same
+    // facts, same delivery seam, same report-only posture). Threshold comes
+    // from the SAME envConfig the stall clock's own knob two lines above
+    // resolves through (loadEnvConfig surfaces ANYCODE_SUPERVISOR_IDLE_MS as
+    // supervisorIdleMs). Constructed only for a non-child boot; the
+    // background-children feed rides the SAME registry the port above owns.
+    let coreSupervisorIdleWatchdog: SupervisorIdleWatchdog | undefined;
+    if (!isChildSessionBoot(args, sessionMeta)) {
+      coreSupervisorIdleWatchdog = new SupervisorIdleWatchdog(
+        {
+          terminalMarkers: SUPERVISOR_IDLE_TERMINAL_MARKERS,
+          firstAfterMs: envConfig.supervisorIdleMs ?? SUPERVISOR_IDLE_FIRST_MS,
+          repeatEveryMs: SUPERVISOR_IDLE_REPEAT_MS,
+          escalateAfter: SUPERVISOR_IDLE_ESCALATE_AFTER,
+        },
+        deliverSupervisorIdleReminder,
+      );
+      childSessionPortHandle?.onBackgroundChildrenChanged(() => {
+        coreSupervisorIdleWatchdog?.noteBackgroundChildrenChanged(childSessionPortHandle!.listBackgroundChildren().length);
+      });
+    }
     // Subagent wiring (design §4.2, task 3.1.4; md-profile personas as of
     // slice-3.3-cut.md §6): withSubagents attaches a SubagentPort derived from
     // this same config to config.subagents BEFORE construction, so the Agent
@@ -3426,6 +3530,18 @@ async function boot(): Promise<void> {
               cancel: (childSessionId: string) => childSessionPortHandle!.cancelBackgroundChild(childSessionId),
               cancelAll: () => childSessionPortHandle!.cancelAllBackgroundChildren(),
               onChange: (listener: () => void) => childSessionPortHandle!.onBackgroundChildrenChanged(listener),
+            },
+          }
+        : {}),
+      // taskana 4181: the supervisor idle-watchdog seam for the core root —
+      // engine-agnostic on purpose (a core supervisor driving detached
+      // children deserves the same guard as a codex one); absent for a
+      // child-session boot, mirroring the backgroundChildren gate above.
+      ...(coreSupervisorIdleWatchdog !== undefined
+        ? {
+            supervisorIdle: {
+              noteTurnSettled: (lastPublicText: string) => coreSupervisorIdleWatchdog!.noteTurnSettled(lastPublicText),
+              noteTurnStarted: () => coreSupervisorIdleWatchdog!.noteTurnStarted(),
             },
           }
         : {}),

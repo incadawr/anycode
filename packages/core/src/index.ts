@@ -70,12 +70,14 @@ export {
   childNotificationSummaryOverflows,
   formatChildReportCapNotice,
   formatChildStallNotice,
+  formatSupervisorIdleReminder,
   mapChildRunStatusToNotification,
 } from "./cli/child-notification.js";
 export type {
   ChildStallNoticeInput,
   ChildTaskNotificationInput,
   ChildTaskNotificationStatus,
+  SupervisorIdleReminderInput,
 } from "./cli/child-notification.js";
 // Pure string helper (TASK.27): the plan-discipline reminder both the CLI REPL
 // and the desktop host append to a plan-mode turn's user prompt. Exported so
