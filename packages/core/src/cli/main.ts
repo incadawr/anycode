@@ -278,7 +278,27 @@ export interface CliOptions {
   home?: string;
 }
 
+/**
+ * The exported entry: delegates to `runCliInner` and closes the loopback
+ * proxy relay on EVERY exit path (cross-review F5). The inner body starts the
+ * relay at boot (`await resolveProxyRelay(env)`), but its own close sat only
+ * on the interactive-REPL exit — the print-mode return, the session-picker
+ * `return 130`, a thrown boot error, and any future early return resolved
+ * with the listener still live, keeping an embedder's event loop (and a
+ * credential-forwarding server on 127.0.0.1) alive past the function's
+ * documented lifetime. `closeProxyRelay` is idempotent, so the ordered
+ * mid-shutdown call inside the REPL path (tunnels collapse after children are
+ * reaped, before MCP/LSP teardown) is unaffected by this second close.
+ */
 export async function runCli(options?: Partial<CliOptions>): Promise<number> {
+  try {
+    return await runCliInner(options);
+  } finally {
+    closeProxyRelay();
+  }
+}
+
+async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   const argv = options?.argv ?? process.argv.slice(2);
   const parsedArgs = parseCliArgs(argv);
 
