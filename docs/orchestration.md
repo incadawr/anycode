@@ -226,6 +226,12 @@ workflow definition rather than a separate agent. It lives at
 workflow — a third root after project and user `.anycode/workflows`, so any
 definition you create with the same name `deep-research` shadows it.
 
+The bundled root is found relative to AnyCode's own source tree, so today the
+preset is discovered only when AnyCode runs from a source checkout. Packaged
+desktop builds do not include it yet: to use it there, copy
+`examples/workflows/deep-research.json` into your project's or your user
+`.anycode/workflows/` directory.
+
 The preset runs three steps over the built-in web tools: a wide `search-wide`
 sweep with several query variants, `fetch-sources` over the most promising
 URLs, and a `synthesize` step that writes one cited report from what was
