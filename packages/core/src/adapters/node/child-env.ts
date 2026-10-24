@@ -98,9 +98,18 @@ export function sanitizeChildEnv(env: NodeJS.ProcessEnv, relayUrl?: string): Nod
     out[name] = value;
   }
   if (relayUrl !== undefined && droppedAny) {
-    for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
-      if (droppedNames.has(name) || !(name in out)) {
-        out[name] = relayUrl;
+    // Per protocol pair: an ABSENT spelling is filled only when its case
+    // sibling did not survive clean — otherwise `HTTP_PROXY=clean` +
+    // relay-filled `http_proxy` re-routes every lowercase-preferring consumer
+    // (curl reads only `http_proxy`; Python's urllib lets lowercase win)
+    // through the credentialed upstream, the very F3 clobber one spelling over.
+    for (const [upper, lower] of [["HTTPS_PROXY", "https_proxy"], ["HTTP_PROXY", "http_proxy"]] as const) {
+      // Dropped names never reached `out`, so presence here means clean.
+      const cleanSibling = upper in out || lower in out;
+      for (const name of [upper, lower]) {
+        if (droppedNames.has(name) || (!(name in out) && !cleanSibling)) {
+          out[name] = relayUrl;
+        }
       }
     }
   }
