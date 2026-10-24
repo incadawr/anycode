@@ -1541,7 +1541,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         toolName: part.toolName,
         input: part.input,
         status: result ? result.status : "proposed",
-        modelText: result ? result.text : null,
+        modelText: result ? stripReminderBlocks(result.text) : null,
         snapshots: { before: null, after: null },
         subagent: snap !== null ? projectSubagentCard(snap) : null,
         workflow: workflowSnap !== null ? projectWorkflowCard(workflowSnap) : null,

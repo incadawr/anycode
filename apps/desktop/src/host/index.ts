@@ -2863,6 +2863,9 @@ async function boot(): Promise<void> {
       // / settings tools.subagentStallTimeoutMs (main/host-env.ts fills the env var
       // from the setting; envConfig re-reads it here exactly like subagentMaxTurns).
       subagentStallTimeoutMs: envConfig.subagentStallTimeoutMs,
+      ...(envConfig.todoReminderEvery !== undefined
+        ? { todoReminder: { everyToolCalls: envConfig.todoReminderEvery } }
+        : {}),
       maxOutputTokens: bootMaxOutputTokens,
       reasoningEffort: bootReasoningEffort,
       // Base prompt (identity/conventions/safety/tool-discipline/env, design
