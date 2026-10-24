@@ -9,6 +9,7 @@ import { InMemoryTodoStore } from "./todo-store.js";
 import type { ToolContext } from "../types/tools.js";
 import { grepTool, selectGrepBackend } from "./grep.js";
 import { __resetRgPathCacheForTests, resolveRgPath } from "./grep-rg.js";
+import { __resetTgrepPathCacheForTests } from "./grep-tgrep.js";
 import type { BinaryExecRequest, ExecResult } from "../ports/execution.js";
 
 const fs = new NodeFileSystemAdapter();
@@ -330,28 +331,42 @@ function tgrepNdjson(path: string): string {
 
 /**
  * Hermetic exec port for backend-selection tests:
- * - `--version` on file "tgrep" → exit 0 (resolveTgrepPath succeeds)
- *   unless tgrepVersionFails is set;
- * - a search whose argv carries `--no-max-filesize` (the tgrep-only flag)
- *   → canned NDJSON (or exit-2 when tgrepSearchFails is set);
- * - every other invocation (i.e. an accidental rg call) → spawn_error, so
- *   the rg tier fails too and the JS tier serves the request — keeping the
- *   whole block binary-free while still exercising the full ladder.
+ * - `--version` on an absolute tgrep candidate → exit 0 (resolveTgrepPath
+ *   succeeds) unless tgrepVersionFails is set;
+ * - a tgrep search (argv carries `--no-max-filesize`, the tgrep-only flag)
+ *   → canned NDJSON, exit 1 (zero matches) when tgrepZeroMatch is set, or
+ *   exit-2 when tgrepSearchFails is set;
+ * - an rg search (no `--no-max-filesize`) → spawn_error unless rgServes is
+ *   set (then NDJSON, or empty when rgZeroMatch) — the expected answer of
+ *   the zero-match re-check, whose test also forces the rg resolver to a
+ *   stub path.
  */
 function tgrepStubCtx(
   cwd: string,
-  opts: { tgrepVersionFails?: boolean; tgrepSearchFails?: boolean } = {},
+  opts: {
+    tgrepVersionFails?: boolean;
+    tgrepSearchFails?: boolean;
+    tgrepZeroMatch?: boolean;
+    rgServes?: boolean;
+    rgZeroMatch?: boolean;
+  } = {},
 ): { ctx: ToolContext; runBinary: ReturnType<typeof vi.fn> } {
   const runBinary = vi.fn((req: BinaryExecRequest): Promise<ExecResult> => {
     const args = req.args ?? [];
     if (args.includes("--version")) {
+      const file = req.file;
       return Promise.resolve(
-        req.file === "tgrep" && !opts.tgrepVersionFails ? completedResult("tgrep 0.1.0") : spawnErrorResult(),
+        (file.endsWith("/tgrep") || file.endsWith("\\tgrep.exe") || file.endsWith("/tgrep.exe")) && !opts.tgrepVersionFails
+          ? completedResult("tgrep 0.1.0")
+          : spawnErrorResult(),
       );
     }
-    if (req.file === "tgrep" && args.includes("--no-max-filesize")) {
-      return Promise.resolve(opts.tgrepSearchFails ? completedResult("regex parse error", 2) : completedResult(tgrepNdjson(cwd)));
+    if (args.includes("--no-max-filesize")) {
+      if (opts.tgrepSearchFails) return Promise.resolve(completedResult("regex parse error", 2));
+      if (opts.tgrepZeroMatch) return Promise.resolve(completedResult("", 1));
+      return Promise.resolve(completedResult(tgrepNdjson(cwd)));
     }
+    if (opts.rgServes) return Promise.resolve(completedResult(opts.rgZeroMatch ? "" : tgrepNdjson(cwd)));
     return Promise.resolve(spawnErrorResult());
   });
   const ctx: ToolContext = {
@@ -398,11 +413,13 @@ describe("grepTool — tgrep backend selection (Taskana 4160)", () => {
   beforeEach(() => {
     vi.stubEnv("ANYCODE_GREP_BACKEND", "");
     __resetRgPathCacheForTests();
+    __resetTgrepPathCacheForTests();
   });
 
   afterEach(async () => {
     vi.unstubAllEnvs();
     __resetRgPathCacheForTests();
+    __resetTgrepPathCacheForTests();
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -450,11 +467,86 @@ describe("grepTool — tgrep backend selection (Taskana 4160)", () => {
 
     const searchCall = tgrepCalls(runBinary).find((r) => r.args.includes("--no-max-filesize"));
     expect(searchCall).toBeDefined();
-    expect(searchCall?.file).toBe("tgrep");
+    expect(searchCall?.file.endsWith("/tgrep")).toBe(true); // absolute PATH-resolved candidate, never a bare name
+  });
+
+  it("tgrep ZERO matches → re-checked through rg (stale index can't hide a fresh file); rg's answer wins", async () => {
+    vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    vi.stubEnv("ANYCODE_TGREP_BIN", "/usr/bin/tgrep");
+    tmpDir = await setupTree();
+    const { ctx, runBinary } = tgrepStubCtx(tmpDir, { tgrepZeroMatch: true, rgServes: true });
+    // deterministic rg tier regardless of the host environment: the forced
+    // path is what grep.ts spawns, and the stub answers it with the fresh scan
+    __resetRgPathCacheForTests();
+    await resolveRgPath(() => Promise.resolve({ rgPath: "/usr/bin/rg-stub" }));
+
+    const result = await grepTool.handler(
+      { pattern: "needle", output_mode: "files_with_matches", "-n": true, head_limit: 0, multiline: false },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    // tgrep answered zero (stale index missed the file) — rg re-scanned and found it
+    expect(result.output?.files).toEqual([`${tmpDir}/from-tgrep.ts`]);
+    expect(result.output?.totalMatches).toBe(1);
+
+    const tgrepSearch = tgrepCalls(runBinary).filter((r) => r.args.includes("--no-max-filesize"));
+    expect(tgrepSearch.length).toBe(1); // tgrep was asked...
+    const rgSearch = tgrepCalls(runBinary).filter(
+      (r) => !r.args.includes("--version") && !r.args.includes("--no-max-filesize"),
+    );
+    expect(rgSearch.length).toBe(1); // ...then re-checked by rg (fresh scan)
+    expect(rgSearch[0]?.file).toBe("/usr/bin/rg-stub");
+  });
+
+  it("tgrep NON-ZERO matches → returned as-is, rg is never called", async () => {
+    vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    vi.stubEnv("ANYCODE_TGREP_BIN", "/usr/bin/tgrep");
+    tmpDir = await setupTree();
+    const { ctx, runBinary } = tgrepStubCtx(tmpDir); // non-zero NDJSON by default
+    __resetRgPathCacheForTests();
+    await resolveRgPath(() => Promise.resolve({ rgPath: "/usr/bin/rg-stub" }));
+
+    const result = await grepTool.handler(
+      { pattern: "needle", output_mode: "files_with_matches", "-n": true, head_limit: 0, multiline: false },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.output?.files).toEqual([`${tmpDir}/from-tgrep.ts`]); // tgrep's own answer
+    expect(result.output?.totalMatches).toBe(1);
+
+    const nonProbeCalls = tgrepCalls(runBinary).filter((r) => !r.args.includes("--version"));
+    expect(nonProbeCalls.length).toBe(1); // exactly one search call...
+    expect(nonProbeCalls[0]?.args.includes("--no-max-filesize")).toBe(true); // ...the tgrep one — no rg re-check
+  });
+
+  it("tgrep zero matches and the rg re-check also finds nothing → rg's empty answer returned (still ok)", async () => {
+    vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    vi.stubEnv("ANYCODE_TGREP_BIN", "/usr/bin/tgrep");
+    tmpDir = await setupTree();
+    // both tiers answer zero: tgrep exit 1 + an rg re-check with empty stdout
+    const { ctx, runBinary } = tgrepStubCtx(tmpDir, { tgrepZeroMatch: true, rgServes: true, rgZeroMatch: true });
+    __resetRgPathCacheForTests();
+    await resolveRgPath(() => Promise.resolve({ rgPath: "/usr/bin/rg-stub" }));
+
+    const result = await grepTool.handler(
+      { pattern: "needle", output_mode: "files_with_matches", "-n": true, head_limit: 0, multiline: false },
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.output?.files).toEqual([]);
+    expect(result.output?.totalMatches).toBe(0);
+    const rgSearch = tgrepCalls(runBinary).filter(
+      (r) => !r.args.includes("--version") && !r.args.includes("--no-max-filesize"),
+    );
+    expect(rgSearch.length).toBe(1); // the re-check ran and its empty answer was returned
   });
 
   it("ANYCODE_GREP_BACKEND=tgrep but --version probe fails → silent fallback, result still ok", async () => {
     vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    vi.stubEnv("ANYCODE_TGREP_BIN", "/usr/bin/tgrep");
     tmpDir = await setupTree();
     const { ctx, runBinary } = tgrepStubCtx(tmpDir, { tgrepVersionFails: true });
 
@@ -471,6 +563,7 @@ describe("grepTool — tgrep backend selection (Taskana 4160)", () => {
 
   it("ANYCODE_GREP_BACKEND=tgrep and search exit 2 → same silent fallback", async () => {
     vi.stubEnv("ANYCODE_GREP_BACKEND", "tgrep");
+    vi.stubEnv("ANYCODE_TGREP_BIN", "/usr/bin/tgrep");
     tmpDir = await setupTree();
     const { ctx, runBinary } = tgrepStubCtx(tmpDir, { tgrepSearchFails: true });
 

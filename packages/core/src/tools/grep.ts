@@ -129,10 +129,10 @@ export function selectGrepBackend(env: NodeJS.ProcessEnv, settingsBackend?: stri
 /**
  * Attempts the tgrep backend (Taskana 4160); same never-throw contract as
  * `tryRipgrep`: `undefined` => next tier (rg, then JS). Resolution
- * (`ANYCODE_TGREP_BIN` override, else PATH) and every failure mode (spawn
- * error, timeout, cancellation, exit 2 = tgrep error) map to `undefined`, so
- * a missing or broken tgrep installation degrades to rg silently — never a
- * trimmed result and never a failed call.
+ * (`ANYCODE_TGREP_BIN` override, else one absolute candidate per PATH entry)
+ * and every failure mode (spawn error, timeout, cancellation, exit 2 =
+ * tgrep error) map to `undefined`, so a missing or broken tgrep installation
+ * degrades to rg silently — never a trimmed result and never a failed call.
  */
 async function tryTgrep(
   input: GrepInput,
@@ -141,7 +141,7 @@ async function tryTgrep(
   isDirectory: boolean,
 ): Promise<GrepOutput | undefined> {
   if (!ctx.ports.exec.runBinary) return undefined;
-  const tgrepPath = await resolveTgrepPath(ctx.ports.exec, process.env.ANYCODE_TGREP_BIN);
+  const tgrepPath = await resolveTgrepPath(ctx.ports.exec, process.env, { abortSignal: ctx.abortSignal });
   if (!tgrepPath) return undefined;
   return searchWithTgrep(input, ctx, tgrepPath, root, isDirectory);
 }
@@ -175,7 +175,10 @@ async function tryRipgrep(
  * selects the trigram backend (tools/grep-tgrep.ts) AND a usable tgrep
  * binary resolves from PATH, it serves the request from the warm/on-disk
  * index; ANY failure (binary missing, daemon refused, exit 2, timeout)
- * silently falls back to the rg tier below — never a trimmed result.
+ * silently falls back to the rg tier below — never a trimmed result. A
+ * ZERO-match tgrep answer is re-checked through rg before being returned
+ * (a stale index must never hide a file the agent just wrote); a non-zero
+ * tgrep answer is final for the tgrep tier.
  *
  * Otherwise prefers a ripgrep backend (tools/grep-rg.ts) when
  * `@vscode/ripgrep` resolves and `ExecutionPort.runBinary` is available;
@@ -220,7 +223,15 @@ export const grepTool: ToolDefinition<GrepInput, GrepOutput> = {
       selectGrepBackend(process.env) === "tgrep"
         ? await tryTgrep(input, ctx, root, rootStat.isDirectory)
         : undefined;
-    if (tgrepOutput) return { ok: true, output: tgrepOutput };
+    // Zero-match re-check (Taskana 4160 follow-up): a trigram index answers
+    // from what it has indexed — a file the agent just wrote may not be in a
+    // stale index yet, so tgrep's "no matches" can be wrong where a fresh
+    // rg scan matches. Re-run every zero-match tgrep answer through the rg
+    // tier below (always a fresh scan) and prefer rg's result when rg runs;
+    // a non-zero tgrep match count is returned as-is. If rg itself is
+    // unavailable/fails, tgrep's zero-match answer stands (the JS path below
+    // would return the same emptiness over the same tree).
+    if (tgrepOutput && tgrepOutput.totalMatches > 0) return { ok: true, output: tgrepOutput };
 
     const rgOutput = await tryRipgrep(input, ctx, root, rootStat.isDirectory);
     if (rgOutput) {

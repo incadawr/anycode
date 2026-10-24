@@ -1,9 +1,9 @@
 /**
  * tgrep-backed Grep tier (Taskana 4160, microsoft/tgrep). Opt-in ONLY:
  * `ANYCODE_GREP_BACKEND=tgrep` or `settings.tools.grepBackend: "tgrep"`
- * (env > settings, default "rg"). tgrep is resolved from PATH via
- * `which`-style probing of `ANYCODE_TGREP_BIN` (absolute override) then
- * "tgrep" (executed through ExecutionPort.runBinary, argv only — no shell).
+ * (env > settings, default "rg"). tgrep is resolved as an ABSOLUTE path:
+ * `ANYCODE_TGREP_BIN` verbatim, else one `tgrep`/`tgrep.exe` join per PATH
+ * entry (executed through ExecutionPort.runBinary, argv only — no shell).
  *
  * No daemon lifecycle here (owner decision 09.09): AnyCode never runs
  * `tgrep serve`/`tgrep index`, never touches `.tgrep/`. With a live daemon
@@ -14,6 +14,13 @@
  * Binary trust: `resolveTgrepPath` executes a PATH-resolved binary through
  * the exec port — same trust class as Bash. Acceptable for an explicit
  * opt-in flag; not enabled for anyone by default.
+ *
+ * Zero-match re-check (Taskana 4160 follow-up): a trigram index can be
+ * STALE — files written moments ago may not be in it yet — so "no matches"
+ * from tgrep is not a final answer. tools/grep.ts re-runs every zero-match
+ * tgrep result through the rg tier (always a fresh scan) and only falls to
+ * tgrep's answer if rg agrees (or fails); a non-zero tgrep match count is
+ * returned as-is.
  *
  * Fallback contract (card, mandatory): `undefined` — NEVER a partial result —
  * on: resolution failure, spawn error, timeout, cancellation, or any exit
@@ -27,38 +34,126 @@
  * the five can be expressed by the schema today, so the rule holds vacuously.
  */
 
+import { isAbsolute, posix, win32 } from "node:path";
 import { DEFAULT_TOOL_TIMEOUT_MS } from "../types/config.js";
 import type { ToolContext } from "../types/tools.js";
 import type { GrepInput, GrepOutput } from "./schemas.js";
 import { buildTgrepArgs, shapeRgJsonOutput } from "./grep-rg.js";
 
 /**
+ * The `--version` probe is metadata, not search: it gets its own short
+ * budget instead of the full tool timeout, so a wedged binary cannot burn
+ * two minutes of a Grep call before the rg fallback even starts.
+ */
+const TGREP_VERSION_TIMEOUT_MS = 5_000;
+
+/**
+ * Successful `--version` probes, keyed by resolved binary path, kept for the
+ * process lifetime (4160 follow-up: the probe used to run on EVERY opt-in
+ * call — one extra spawn per Grep, and an aborted call could kill it). A
+ * FAILED probe is never cached: tgrep can appear mid-session (user installs
+ * it, starts serving), and caching a miss would pin "no tgrep" for the whole
+ * process. Cost asymmetry: a stale SUCCESS cache only wastes one spawn that
+ * then falls back to rg; a stale MISS cache would disable the tier outright.
+ */
+const tgrepProbeCache = new Map<string, Promise<string | undefined>>();
+
+/** Test-only: clears the memoized probe outcomes so a fresh probe run can be exercised. */
+export function __resetTgrepPathCacheForTests(): void {
+  tgrepProbeCache.clear();
+}
+
+/**
+ * Absolute tgrep candidates, mirroring `candidatesFromPath` in the codex
+ * binary resolver (apps/desktop/src/main/codex-binary.ts): `ANYCODE_TGREP_BIN`
+ * verbatim, else one `join(entry, "tgrep"|"tgrep.exe")` per PATH entry
+ * (`;` separator on win32). A bare `tgrep` name is NEVER used: on Windows
+ * CreateProcess resolves a bare name against the CURRENT DIRECTORY before
+ * PATH (POSIX execvp does not), so a planted `.\tgrep.exe` in cwd would win —
+ * the same reason the codex resolver rejects non-absolute paths.
+ */
+export function tgrepPathCandidates(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): string[] {
+  const explicit = env.ANYCODE_TGREP_BIN?.trim();
+  if (explicit) return [explicit];
+  const pathEnv = env.PATH;
+  if (pathEnv === undefined || pathEnv.trim() === "") return [];
+  const separator = platform === "win32" ? ";" : ":";
+  const fileName = platform === "win32" ? "tgrep.exe" : "tgrep";
+  const join = platform === "win32" ? win32.join : posix.join;
+  return pathEnv
+    .split(separator)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== "")
+    .map((segment) => join(segment, fileName));
+}
+
+/**
+ * One `--version` probe with the call's abort signal and the probe's own
+ * short timeout. The in-flight promise is shared through `tgrepProbeCache`
+ * (concurrent calls dedupe); only a SUCCESS outlives the call — a failure
+ * (spawn error, non-zero exit, timeout, cancellation, throw) deletes its
+ * cache entry so the next call re-probes.
+ */
+function probeTgrepVersion(
+  runBinary: NonNullable<ToolContext["ports"]["exec"]["runBinary"]>,
+  file: string,
+  abortSignal: AbortSignal | undefined,
+): Promise<string | undefined> {
+  const attempt = Promise.resolve(
+    runBinary({
+      file,
+      args: ["--version"],
+      timeoutMs: TGREP_VERSION_TIMEOUT_MS,
+      abortSignal,
+    }),
+  )
+    .then((result): string | undefined =>
+      result.status === "completed" && result.exitCode === 0 ? file : undefined,
+    )
+    .catch(() => undefined);
+  tgrepProbeCache.set(file, attempt);
+  void attempt.then((outcome) => {
+    if (outcome === undefined) tgrepProbeCache.delete(file);
+  });
+  return attempt;
+}
+
+/**
  * Resolves a usable tgrep executable, or `undefined` when none exists.
- *
- * Deliberately NOT memoized (unlike resolveRgPath's rgPathCache): the tgrep
- * daemon/binary can appear mid-session (user installs it, starts serving),
- * and the `--version` probe is cheap; caching a miss would pin "no tgrep"
- * for the whole process lifetime on a first-call race. The per-call probe
- * cost is one short-lived process spawn on the tgrep-selected path only.
+ * Walks `tgrepPathCandidates` in order and probes each; a non-absolute
+ * candidate is refused outright (never probed — see
+ * `tgrepPathCandidates`), and an explicit `ANYCODE_TGREP_BIN` that is not
+ * absolute therefore disables the tier instead of leaking to PATH lookup.
  *
  * Never throws: any rejection from the exec port maps to `undefined` so the
  * caller can silently fall back to rg.
  */
 export async function resolveTgrepPath(
   exec: ToolContext["ports"]["exec"],
-  explicitBin?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { abortSignal?: AbortSignal; platform?: NodeJS.Platform } = {},
 ): Promise<string | undefined> {
   try {
     const runBinary = exec.runBinary;
     if (!runBinary) return undefined;
 
-    const file = explicitBin ?? "tgrep";
-    const result = await runBinary({
-      file,
-      args: ["--version"],
-      timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
-    });
-    if (result.status === "completed" && result.exitCode === 0) return file;
+    const platform = opts.platform ?? process.platform;
+    const isAbsolutePath = (value: string): boolean =>
+      platform === "win32" ? win32.isAbsolute(value) : isAbsolute(value);
+
+    for (const candidate of tgrepPathCandidates(env, platform)) {
+      if (!isAbsolutePath(candidate)) continue; // non-absolute is refused, never executed (cwd-hijack guard)
+
+      const inFlight = tgrepProbeCache.get(candidate);
+      if (inFlight) {
+        const hit = await inFlight;
+        if (hit !== undefined) return hit;
+        continue; // failed probe (never cached) or a concurrent call's abort — try the next entry
+      }
+
+      const probed = await probeTgrepVersion(runBinary, candidate, opts.abortSignal);
+      if (probed !== undefined) return probed;
+    }
     return undefined;
   } catch {
     return undefined;
@@ -72,7 +167,8 @@ export async function resolveTgrepPath(
  * error code, e.g. bad regex or a daemon that refused the query) returns
  * `undefined` instead of throwing, so tools/grep.ts falls through to rg and
  * then the JS path. Exit code 1 is a normal "no matches" answer, not an
- * error. NEVER a partial/trimmed result on this boundary.
+ * error — the ZERO-match re-check happens one level up (tools/grep.ts), not
+ * here. NEVER a partial/trimmed result on this boundary.
  */
 export async function searchWithTgrep(
   input: GrepInput,
