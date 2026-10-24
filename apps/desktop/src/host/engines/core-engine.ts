@@ -94,14 +94,88 @@ export class CoreEngine implements SessionEngine {
         );
       }
     }
-    yield* this.options.loop.runTurn(input, options);
+    try {
+      yield* this.options.loop.runTurn(input, options);
+    } finally {
+      this.failUndeliveredSteers();
+    }
   }
 
   continueTurn(options: RunTurnOptions) {
     // TASK.117: continueTurn's AgentLoop path appends no user frame, but the
     // resumed steps' assistant/tool items still get {turnId, step} stamps —
     // options pass through verbatim, exactly like runTurn above.
-    return this.options.loop.continueTurn(options);
+    return this.wrapSteerLifecycle(this.options.loop.continueTurn(options));
+  }
+
+  /**
+   * TASK.123 (Taskana 4110): pending steer waiters — one entry per in-flight
+   * `steer()` call, resolved with the step ordinal the loop delivered the
+   * frame after, or rejected when the frame never landed. Drained by
+   * `failUndeliveredSteers` from the engine's own turn generators' `finally`
+   * (a turn that ends before the flush kills its undelivered steers).
+   */
+  private readonly pendingSteerWaiters = new Set<(step: number) => void>();
+
+  /** Wraps a loop generator so undelivered steers fail when the turn ends. */
+  private wrapSteerLifecycle(events: AsyncGenerator<AgentEvent>): AsyncGenerator<AgentEvent> {
+    const self = this;
+    return (async function* () {
+      try {
+        yield* events;
+      } finally {
+        self.failUndeliveredSteers();
+      }
+    })();
+  }
+
+  /** Rejects every waiter still registered at turn end (slot died with the turn). */
+  private failUndeliveredSteers(): void {
+    for (const waiter of this.pendingSteerWaiters) {
+      this.pendingSteerWaiters.delete(waiter);
+      waiter(-1);
+    }
+  }
+
+  steeringStatus(): { supported: boolean; ready: boolean } {
+    return { supported: true, ready: this.options.loop.hasActiveTurn() };
+  }
+
+  /**
+   * TASK.123 (Taskana 4110): force-delivers `input` into the RUNNING turn via
+   * the loop's deferred-injection slot. Resolves only once the loop has
+   * actually flushed the frame at the legal seam — `{ turnId: "core:step:N" }`
+   * names the step whose results the frame follows (self-describing, never
+   * collides with host UUIDs; the engine does not own the host turnId).
+   * Rejects with "No active core turn" when called idle, and with "core turn
+   * ended before injection" / "superseded by a newer steer" when the frame
+   * never landed.
+   */
+  async steer(input: string): Promise<{ turnId: string }> {
+    return new Promise<{ turnId: string }>((resolve, reject) => {
+      let settled = false;
+      const registered = (step: number): void => {
+        if (settled) return;
+        settled = true;
+        this.pendingSteerWaiters.delete(registered);
+        if (step === -1) {
+          // The slot never delivered THIS frame — either a newer steer
+          // overwrote it (the loop's last-value-wins callback) or the turn
+          // ended first (failUndeliveredSteers). The engine treats both as
+          // "never landed"; the message keeps the brief's wording.
+          reject(new Error("core turn ended before injection"));
+          return;
+        }
+        resolve({ turnId: `core:step:${step}` });
+      };
+      this.pendingSteerWaiters.add(registered);
+      const queued = this.options.loop.queueInjection(input, registered);
+      if (!queued) {
+        this.pendingSteerWaiters.delete(registered);
+        settled = true;
+        reject(new Error("No active core turn"));
+      }
+    });
   }
 
   compactNow(options: { signal: AbortSignal }) {

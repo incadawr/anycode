@@ -556,6 +556,13 @@ export type HostToUiMessage =
       imageFallback?: boolean;
       /** Taskana 4127: the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
       contextWindowAssumed?: boolean;
+      /**
+       * Taskana 4110 (TASK.123): the engine's live steering verdict over the
+       * deferred-injection slot (core) / app-server steer (codex). Absent on
+       * legacy hosts and engines without the seam (claude) — the renderer then
+       * keeps the prompt-queue fallback for sends while running.
+       */
+      steering?: { supported: boolean; ready: boolean };
       /** Present only for a non-core engine; absent retains legacy core wire exactly. */
       engine?: EnginePresentation;
       /** Present only alongside `engine` (never for core, cut §3.2/§2(f)); absent = every shell feature enabled. */

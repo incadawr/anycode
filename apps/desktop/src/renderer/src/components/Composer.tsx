@@ -1079,6 +1079,9 @@ export function Composer() {
   const engine = useTabStore((state) => state.engine);
   const pendingEngineChange = useTabStore((state) => state.pendingEngineChange);
   const shell = useTabStore((state) => state.shell);
+  // Taskana 4110 (TASK.123): the engine's live steering verdict — true means
+  // a send while running becomes a mid-turn steer instead of a queued prompt.
+  const steerSupported = useTabStore((s) => s.steering?.supported === true);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
 
   // Core keeps its exact legacy presentation when `engine` is null. External
@@ -1353,6 +1356,15 @@ export function Composer() {
         text: outgoing,
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       });
+    } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported) {
+      // Taskana 4110 (TASK.123): a supported running core/Codex session takes
+      // the message as a mid-turn steer (optimistic pendingSteer bubble; the
+      // user_injected event confirms delivery into the turn; the queue is the
+      // honest fallback everywhere else). Images while running keep the queue
+      // path (engine.steer is text-only).
+      const requestId = crypto.randomUUID();
+      tabStore.getState().recordPendingSteer(requestId, outgoing, { text: outgoing, images: [] });
+      sendToHost({ type: "steer_message", requestId, text: outgoing });
     } else if (shouldEnqueue(turn.status, queueInFlight, childSurface)) {
       // NOT truly idle: either a turn is running, or a queued item was already
       // drained and is still in flight (turn momentarily "idle" but its

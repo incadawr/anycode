@@ -148,6 +148,18 @@ export type AgentEvent =
   | ModelStreamEvent
   | { type: "turn_start"; turn: number }
   | { type: "turn_end"; turn: number; finishReason: FinishReason }
+  /**
+   * TASK.123 (Taskana 4110): a user frame injected between steps of the
+   * running turn at the single legal seam (all of the step's tool results
+   * appended, loop continuing — never between a tool_call and its result).
+   * Additive: rides the existing agent_event envelope on the desktop wire
+   * (sanitizeAgentEvent passes non-error variants through unchanged), same
+   * precedent as `ceiling_grant`. `step` is the ordinal of the step whose
+   * results precede the frame; `text` is the frame verbatim so a transcript
+   * can render it without correlation. The core loop emits it ONLY from the
+   * flush of a `queueInjection` slot.
+   */
+  | { type: "user_injected"; step: number; text: string }
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; input: unknown }
   | { type: "tool_result"; outcome: ToolCallOutcome }
   | { type: "workspace_transition"; transition: WorkspaceTransition }

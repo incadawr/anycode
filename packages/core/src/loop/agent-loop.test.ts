@@ -4829,3 +4829,251 @@ describe("AgentLoop.runTurn — stale todo reminder (Taskana 4665)", () => {
     expect(withReminder[0]).toContain("10 tool calls");
   });
 });
+
+// TASK.123 (Taskana 4110): the deferred-injection slot — queueInjection from
+// outside a RUNNING generator, flushed at the single legal seam (all of step
+// N's tool results appended, loop continuing). Script: step1 proposes a tool
+// whose handler parks on a test-controlled deferred, step2 proposes another,
+// step3 finishes text-only.
+
+describe("AgentLoop.queueInjection (Taskana 4110 / TASK.123)", () => {
+  /** A tool handler that parks until the test releases it (resolve captured). */
+  function makeParkingTool(): { tool: AnyToolDefinition; release: () => void } {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tool = makeTool({
+      handler: async () => {
+        await gate;
+        return { ok: true, output: { result: "ok" } };
+      },
+    });
+    return { tool, release };
+  }
+
+  function steerScript(): ModelStreamEvent[][] {
+    return [
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "c2", name: "Mock", input: { value: "y" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [
+        { type: "start" },
+        { type: "text_delta", id: "t3", text: "done" },
+        { type: "finish", finishReason: "stop", usage: {} },
+      ],
+    ];
+  }
+
+  it("injection lands between steps, in the SAME turn, with valid history", async () => {
+    const modelPort = new MockModelPort(steerScript());
+    const parking = makeParkingTool();
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: parking.tool }) });
+
+    const events: AgentEvent[] = [];
+    const run = (async () => {
+      for await (const event of loop.runTurn("go")) {
+        events.push(event);
+      }
+    })();
+
+    // Queue the steer while step1's tool call is parked mid-dispatch.
+    await new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (events.some((e) => e.type === "tool_execution_start")) {
+          resolve();
+        } else {
+          setTimeout(check, 0);
+        }
+      };
+      check();
+    });
+    expect(loop.queueInjection("STEER!")).toBe(true);
+    parking.release();
+    await run;
+
+    // ONE turn on the wire's own bookkeeping, three steps, monotonic ordinals.
+    const turnStarts = events.filter((e) => e.type === "turn_start");
+    expect(turnStarts.map((e) => (e as { turn: number }).turn)).toEqual([1, 2, 3]);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
+
+    // The injected event sits AFTER c1's tool_result and BEFORE turn_start(2).
+    const injected = events.find((e) => e.type === "user_injected");
+    expect(injected).toEqual({ type: "user_injected", step: 1, text: "STEER!" });
+    const idx = (predicate: (e: AgentEvent) => boolean): number =>
+      events.findIndex(predicate);
+    expect(idx((e) => e.type === "user_injected")).toBeGreaterThan(
+      idx((e) => e.type === "tool_result"),
+    );
+    expect(idx((e) => e.type === "user_injected")).toBeLessThan(
+      idx((e) => e.type === "turn_start" && (e as { turn: number }).turn === 2),
+    );
+
+    // Seam slice: the exact event-type sequence around the injection point.
+    expect(types(events).slice(4, 13)).toEqual([
+      "context_usage",
+      "tool_execution_start",
+      "tool_result",      // c1 result appended...
+      "user_injected",    // ...then the injected frame, still inside step1's tail
+      "turn_end",         // step1 ends
+      "turn_start",       // step2 begins — its request already contains the frame
+      "start",
+      "tool_call",
+      "finish",
+    ]);
+
+    // The second model request ends with the injected user frame, immediately
+    // after the c1 tool result — never between a tool_call and its result.
+    const second = modelPort.requests[1];
+    expect(second?.messages.at(-1)).toEqual({ role: "user", content: "STEER!" });
+    expect(second?.messages.at(-2)?.role).toBe("tool");
+
+    // History: user, assistant(c1), tool(c1), user(STEER!), assistant(c2), tool(c2), assistant(final).
+    const messages = loop.history.toMessages();
+    expect(messages.map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+    ]);
+    expect(messages[3]).toEqual({ role: "user", content: "STEER!" });
+    expect(loop.history.unansweredToolCallIds()).toEqual([]);
+  });
+
+  it("injected frame carries the outer turnId/step stamps", async () => {
+    const modelPort = new MockModelPort(steerScript());
+    const parking = makeParkingTool();
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: parking.tool }) });
+
+    const seen: AgentEvent[] = [];
+    const run = (async () => {
+      for await (const event of loop.runTurn("go", { turnId: "t-outer" })) {
+        seen.push(event);
+      }
+    })();
+    await new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (seen.some((e) => e.type === "tool_execution_start")) {
+          resolve();
+        } else {
+          setTimeout(check, 0);
+        }
+      };
+      check();
+    });
+    loop.queueInjection("STEER!");
+    parking.release();
+    await run;
+
+    const injectedItem = loop.history.items.find(
+      (item) => item.message.role === "user" && item.message.content === "STEER!",
+    );
+    expect(injectedItem?.turnId).toBe("t-outer");
+    expect(injectedItem?.step).toBe(1);
+  });
+
+  it("last-value-wins overwrite: exactly ONE user_injected with the newer text; the superseded waiter resolves -1", async () => {
+    const modelPort = new MockModelPort(steerScript());
+    const parking = makeParkingTool();
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: parking.tool }) });
+
+    const seen: AgentEvent[] = [];
+    const run = (async () => {
+      for await (const event of loop.runTurn("go")) {
+        seen.push(event);
+      }
+    })();
+    await new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (seen.some((e) => e.type === "tool_execution_start")) {
+          resolve();
+        } else {
+          setTimeout(check, 0);
+        }
+      };
+      check();
+    });
+    const supersededSteps: number[] = [];
+    loop.queueInjection("A", (step) => {
+      supersededSteps.push(step);
+    });
+    loop.queueInjection("B");
+    parking.release();
+    await run;
+
+    const injectedEvents = seen.filter((e) => e.type === "user_injected");
+    expect(injectedEvents).toEqual([{ type: "user_injected", step: 1, text: "B" }]);
+    expect(supersededSteps).toEqual([-1]);
+    expect(
+      loop.history.items.filter((item) => item.message.role === "user").map((i) => i.message.content),
+    ).toEqual(["go", "B"]);
+  });
+
+  it("no flush on the sentinel exit: queueInjection after the loop settled returns false and nothing lands", async () => {
+    const modelPort = new MockModelPort([
+      [
+        { type: "start" },
+        { type: "text_delta", id: "t1", text: "all done" },
+        { type: "finish", finishReason: "stop", usage: {} },
+      ],
+    ]);
+    const loop = makeLoop({ modelPort });
+
+    const events = await collect(loop.runTurn("go"));
+
+    expect(loop.hasActiveTurn()).toBe(false);
+    expect(loop.queueInjection("late")).toBe(false);
+    expect(events.some((e) => e.type === "user_injected")).toBe(false);
+    expect(loop.history.items.filter((item) => item.message.role === "user")).toHaveLength(1);
+  });
+
+  it("a pending slot dies with a cancelled turn: no user_injected, no extra user frame, waiter told -1", async () => {
+    const controller = new AbortController();
+    const parking = makeParkingTool();
+    const modelPort = new MockModelPort(steerScript());
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: parking.tool }) });
+
+    const seen: AgentEvent[] = [];
+    const run = (async () => {
+      for await (const event of loop.runTurn("go", { signal: controller.signal })) {
+        seen.push(event);
+      }
+    })();
+    await new Promise<void>((resolve) => {
+      const check = (): void => {
+        if (seen.some((e) => e.type === "tool_execution_start")) {
+          resolve();
+        } else {
+          setTimeout(check, 0);
+        }
+      };
+      check();
+    });
+    const deliveredSteps: number[] = [];
+    expect(loop.queueInjection("STEER!", (step) => deliveredSteps.push(step))).toBe(true);
+    controller.abort();
+    parking.release();
+    await run;
+
+    expect(seen.at(-1)).toMatchObject({ type: "loop_end", reason: "cancelled" });
+    expect(seen.some((e) => e.type === "user_injected")).toBe(false);
+    expect(loop.history.items.filter((item) => item.message.role === "user")).toHaveLength(1);
+    expect(deliveredSteps).toEqual([-1]);
+  });
+
+  it("queueInjection before any turn returns false", () => {
+    const loop = makeLoop({ modelPort: new MockModelPort([]) });
+    expect(loop.hasActiveTurn()).toBe(false);
+    expect(loop.queueInjection("x")).toBe(false);
+  });
+});

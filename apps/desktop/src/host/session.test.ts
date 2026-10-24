@@ -1156,6 +1156,72 @@ describe("Session — multimodal attachments", () => {
 const isImageFallbackChanged = (m: HostToUiMessage): m is Of<"image_fallback_changed"> =>
   m.type === "image_fallback_changed";
 
+describe("Session — core steer_message injection (Taskana 4110 / TASK.123)", () => {
+  it("steer_message while busy reaches the NEXT step of the SAME turn", async () => {
+    const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // The turn starts and parks on the Write permission ask.
+      h.send({ type: "user_message", requestId: "r1", text: "write it" });
+      const req = await h.waitFor(isPermissionRequest);
+
+      // Steer while the turn is parked mid-dispatch.
+      h.send({ type: "steer_message", requestId: "r-steer", text: "STEERED-OK" });
+
+      // Deny releases the ask; the injection flushes at the step seam.
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      // ONE turn on the wire; the injected frame is inside it.
+      expect(h.received.filter(isTurnStarted)).toHaveLength(1);
+      await h.waitFor(agentEventOf("user_injected"));
+      const model = h.config.modelPort as ScriptedModelPort;
+      const second = model.requests[1];
+      const last = second?.messages.at(-1);
+      expect(last?.role).toBe("user");
+      expect((last as { content: string }).content).toContain("STEERED-OK");
+      // No turn_rejected for the steer requestId.
+      expect(h.received.filter((m) => m.type === "turn_rejected" && m.requestId === "r-steer")).toHaveLength(0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("steer_message while idle is still rejected", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      h.send({ type: "steer_message", requestId: "r-idle", text: "too late" });
+      // The FIRST agent_message for this id reports "queued" (published before
+      // the steer branch decides); the FINAL delivery settles rejected.
+      const settled = await h.waitUntil(() =>
+        h.received.some((m) => m.type === "agent_message" && m.delivery.state === "rejected"),
+      ).then(() =>
+        h.received.filter((m) => m.type === "agent_message").at(-1),
+      );
+      expect(settled?.delivery.state).toBe("rejected");
+      expect((h.config.modelPort as ScriptedModelPort).requests).toHaveLength(0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it("host_ready carries steering for core: supported, ready only while a turn runs", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready.steering).toEqual({ supported: true, ready: false });
+    } finally {
+      h.close();
+    }
+  });
+});
+
 describe("Session — vision fallback (TASK.198 срез C)", () => {
   const image: ImageAttachment = { mediaType: "image/png", data: "QUJD", sourcePath: "shot.png" };
 

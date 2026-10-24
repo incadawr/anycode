@@ -1609,7 +1609,7 @@ export class Session {
     if (envelope.mode === "steer") {
       if (!this.busy || !this.engine.steer) {
         delivery.state = "rejected";
-        delivery.detail = "Steering requires an active supported Codex turn; use next_turn";
+        delivery.detail = "Steering requires an active turn on an engine that supports it; use next_turn";
       } else {
         try {
           const receivingTurnId = this.turnId;
@@ -1845,6 +1845,10 @@ export class Session {
           // claude, legacy tests) -> field absent, no fallback-aware gating.
           ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
           ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
+          // Taskana 4110 (TASK.123): the engine's live steering verdict —
+          // additive-optional, absent on legacy hosts/engines without the seam
+          // (mirrors imageInput/imageFallback's discipline above).
+          ...(this.engine.steeringStatus ? { steering: this.engine.steeringStatus() } : {}),
           ...(presentation !== undefined ? { engine: presentation } : {}),
           // Design TASK.40 §2(f)/§3.2: shell is emitted ONLY alongside a
           // present `engine` (never for core), so the core wire stays

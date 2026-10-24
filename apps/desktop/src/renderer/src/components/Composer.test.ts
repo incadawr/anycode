@@ -126,6 +126,25 @@ describe("shouldEnqueue (F15 — enqueue-vs-direct decision uses the truly-idle 
     expect(shouldEnqueue("running", null)).toBe(true); // running ⇒ enqueue
     expect(shouldEnqueue("idle", null)).toBe(false); // idle ⇒ direct send
   });
+
+  // Taskana 4110 (TASK.123) branch-table pin for handleSend's steer path:
+  // the NEW steer branch sits BEFORE this predicate and takes the message
+  // only when ALL of: not a child surface, turn not idle, no images, and
+  // `steering.supported === true` (verified end-to-end in session/store
+  // tests). shouldEnqueue itself is UNCHANGED — these cases pin that a
+  // running-but-UNsupported session still falls through to the queue (the
+  // honest fallback: claude, image-bearing sends, legacy hosts).
+  it("Taskana 4110: running + steering-unsupported keeps the queue fallback (shouldEnqueue unchanged by the steer branch)", () => {
+    // The steer branch never engages when steerSupported is false, so the
+    // decision reduces to the pre-4110 predicate verbatim:
+    expect(shouldEnqueue("running", null)).toBe(true);
+    expect(shouldEnqueue("compacting", null)).toBe(true);
+    // Images while running never steer (engine.steer is text-only) — they
+    // queue on every engine, supported or not.
+    expect(shouldEnqueue("running", IN_FLIGHT)).toBe(true);
+    // Truly idle still direct-sends regardless of steering capability.
+    expect(shouldEnqueue("idle", null)).toBe(false);
+  });
 });
 
 describe("hasSendableDraft (F15 — the running-mode Queue button gate mirrors canSend)", () => {

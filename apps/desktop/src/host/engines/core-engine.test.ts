@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AgentLoop, AgentLoopConfig, HistoryItem } from "@anycode/core";
+import { z } from "zod";
+import { AgentLoop, type CorePorts, type ToolRegistry } from "@anycode/core";
+import type {
+  AgentEvent,
+  AgentLoopConfig,
+  AnyToolDefinition,
+  HistoryItem,
+  HookRunner,
+  ModelStreamEvent,
+} from "@anycode/core";
 import { CoreEngine } from "./core-engine.js";
+import { ScriptedModelPort } from "../test-harness.js";
 
 async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const result: AgentEvent[] = [];
@@ -135,5 +145,139 @@ describe("CoreEngine", () => {
 
       expect(events).toEqual(emitted);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TASK.123 (Taskana 4110): CoreEngine.steer over the loop's deferred-injection
+// slot — the REAL CoreEngine over a REAL AgentLoop with the desktop harness's
+// ScriptedModelPort and a parking tool (a handler gated on a deferred).
+
+describe("CoreEngine.steer (Taskana 4110)", () => {
+  /** Minimal AgentLoopConfig-shaped wiring with a parking tool at "Mock". */
+  function makeEngineFixture(steps: ModelStreamEvent[][]) {
+    const port = new ScriptedModelPort(steps);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const parkingTool: AnyToolDefinition = {
+      metadata: {
+        name: "Mock",
+        description: "parking tool",
+        readOnly: false,
+        destructive: false,
+        concurrentSafe: false,
+        riskLevel: "low",
+        sideEffectScope: "none",
+        needsApproval: false,
+        timeoutMs: 60_000,
+      },
+      inputSchema: z.object({ value: z.string() }),
+      handler: async () => {
+        await gate;
+        return { ok: true, output: { result: "ok" } };
+      },
+    };
+    const loop = new AgentLoop({
+      modelPort: port,
+      registry: { get: () => parkingTool, all: () => [parkingTool] } as unknown as ToolRegistry,
+      hooks: {
+        register: () => {},
+        runPreToolUse: async () => ({}),
+        runUserPromptSubmit: async () => ({}),
+        runObservers: async () => {},
+      } as unknown as HookRunner,
+      permissionEngine: { check: () => ({ decision: "allow" }) },
+      permissionBroker: { requestPermission: async () => ({ behavior: "deny", reason: "no client" }) },
+      mode: "build",
+      ports: {} as CorePorts,
+      cwd: "/work",
+    });
+    const engine = new CoreEngine({ loop, config: { mode: "build" } as AgentLoopConfig });
+    return { engine, loop, port, release: () => release() };
+  }
+
+  const steerScript: ModelStreamEvent[][] = [
+    [
+      { type: "start" },
+      { type: "tool_call", toolCall: { id: "c1", name: "Mock", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ],
+    [
+      { type: "start" },
+      { type: "text_delta", id: "t2", text: "done" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ],
+  ];
+
+  /** Starts a runTurn and resolves once its first tool_execution_start landed. */
+  function startParkedRun(fx: { engine: CoreEngine }, signal: AbortSignal): {
+    done: Promise<AgentEvent[]>;
+    events: AgentEvent[];
+  } {
+    const events: AgentEvent[] = [];
+    const done = (async () => {
+      for await (const event of fx.engine.runTurn("go", { signal })) {
+        events.push(event);
+      }
+      return events;
+    })();
+    const parked = (async () => {
+      while (!events.some((e) => e.type === "tool_execution_start")) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    })();
+    return { done: Promise.race([done, parked.then(() => done)]), events };
+  }
+
+  it("steer resolves with core:step:N once the loop delivers", async () => {
+    const fx = makeEngineFixture(steerScript);
+    expect(fx.engine.steeringStatus()).toEqual({ supported: true, ready: false });
+
+    const run = startParkedRun(fx, new AbortController().signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Wait for the park (tool_execution_start observed) before steering.
+    while (!run.events.some((e) => e.type === "tool_execution_start")) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(fx.engine.steeringStatus()).toEqual({ supported: true, ready: true });
+
+    const steerPromise = fx.engine.steer("turn left");
+    fx.release();
+    await run.done;
+    await expect(steerPromise).resolves.toEqual({ turnId: "core:step:1" });
+    const second = fx.port.requests[1];
+    expect(second?.messages.at(-1)).toEqual({ role: "user", content: "turn left" });
+  });
+
+  it("a steer that misses the turn rejects", async () => {
+    const fx = makeEngineFixture(steerScript);
+    const controller = new AbortController();
+    const run = startParkedRun(fx, controller.signal);
+    while (!run.events.some((e) => e.type === "tool_execution_start")) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const steerPromise = fx.engine.steer("late");
+    controller.abort();
+    fx.release();
+    await run.done;
+    await expect(steerPromise).rejects.toThrow("core turn ended before injection");
+  });
+
+  it("superseded steer rejects, the newer one resolves", async () => {
+    const fx = makeEngineFixture(steerScript);
+    const run = startParkedRun(fx, new AbortController().signal);
+    while (!run.events.some((e) => e.type === "tool_execution_start")) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const first = fx.engine.steer("first");
+    const second = fx.engine.steer("second");
+    fx.release();
+    await run.done;
+    await expect(first).rejects.toThrow();
+    await expect(second).resolves.toEqual({ turnId: "core:step:1" });
   });
 });

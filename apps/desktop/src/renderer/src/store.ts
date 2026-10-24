@@ -1007,6 +1007,15 @@ export interface DesktopState {
   imageFallback: boolean | undefined;
   /** Taskana 4127: host says the context window is the assumed 8K fallback (set by host_ready/model_changed). */
   contextWindowAssumed: boolean | undefined;
+  /**
+   * Taskana 4110 (TASK.123): the host's steering verdict from `host_ready`
+   * (engine-level: core's deferred-injection slot / Codex app-server steer).
+   * null on a legacy host or an engine without the seam (claude) — the
+   * composer then keeps the prompt-queue fallback for sends while running.
+   * Reset with the host_ready respawn reset (performReset clears it via the
+   * same explicit re-set below).
+   */
+  steering: { supported: boolean; ready: boolean } | null;
   turn: TurnState;
   transcript: TranscriptBlock[];
   permission: PermissionUiRequest | null;
@@ -1628,6 +1637,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
   // blocks) it is not even scoped to a turnId the renderer trusts — see
   // onAgentEvent's turn-gate exemption below. Never reset, same posture as errorSeq.
   let previewConsoleSeq = 0;
+  // Taskana 4110 (TASK.123): monotonic id source for user_injected transcript
+  // blocks — the event carries no id of its own, so the block id is minted
+  // here (`injected:{turnId}:{step}:{seq}`). Never reset, same posture as
+  // previewConsoleSeq above.
+  let injectedSeq = 0;
   // Mints the id of a compaction card (TASK.227). Never reset: a session may
   // compact many times, and a reused id would patch the wrong card.
   let compactionSeq = 0;
@@ -3329,6 +3343,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           // drainer watches for.
           set((state) => ({
             turn: { status: "idle", turnId: null, requestId: null },
+            // Taskana 4110 (TASK.123): a steer that never landed in the turn
+            // must not linger as a ghost bubble — the turn is over, the
+            // queue fallback (or the user's re-send) owns that text now.
+            pendingSteers: [],
             ...(event.reason !== "completed" && state.promptQueue.length > 0
               ? { queuePaused: true }
               : {}),
@@ -3748,6 +3766,28 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           });
           return;
 
+        // Taskana 4110 (TASK.123): a user frame force-delivered INTO the
+        // running turn at the loop's legal seam. Rendered as an ordinary
+        // user_text bubble (delivered-into-the-turn is visually DISTINCT from
+        // the queue pill — TASK.123's surface requirement), and the OLDEST
+        // pendingSteer is retired FIFO: the host delivers steers in order, so
+        // this event is the delivery confirmation the optimistic bubble was
+        // waiting for. Reaching this case means the turn guard above already
+        // matched the running turnId.
+        case "user_injected":
+          appendBlock({
+            kind: "user_text",
+            id: `injected:${turnId}:${event.step}:${injectedSeq++}`,
+            text: event.text,
+            at: Date.now(),
+          });
+          set((state) =>
+            state.pendingSteers.length > 0
+              ? { pendingSteers: state.pendingSteers.slice(1) }
+              : {},
+          );
+          return;
+
         // Turn-ceiling grant (TASK.124 cut-1): the ladder extended the turn
         // cap — must be visible in the feed, never silent. Minimal row: the
         // interactive continuation button is cut-2.
@@ -3795,6 +3835,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
       imageInput: undefined,
       imageFallback: undefined,
       contextWindowAssumed: undefined,
+      steering: null,
       ...initialSessionSlice(),
       lastFatal: null,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
@@ -3884,6 +3925,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
               // `imageInput` alone.
               imageFallback: message.imageFallback,
               contextWindowAssumed: message.contextWindowAssumed,
+              // Taskana 4110 (TASK.123): the engine's live steering verdict.
+              // Absent (legacy host / engine without the seam) -> null -> the
+              // composer's steer branch never engages, the queue stays.
+              steering: message.steering ?? null,
             });
             return;
           case "mode_changed":

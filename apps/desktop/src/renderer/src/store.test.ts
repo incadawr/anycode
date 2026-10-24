@@ -7733,3 +7733,85 @@ describe("desktop store — provider usage audit (Taskana 4083 / TASK.34)", () =
     expect(store.getState().usageAudit).toEqual({ lastStep: null, totals: null, totalSteps: 0, list: null });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4110 (TASK.123) — user_injected & the pendingSteer lifecycle: the
+// injected frame renders as an ordinary user_text bubble (visually distinct
+// from the queue pill), the OLDEST pendingSteer retires FIFO on delivery, and
+// loop_end clears whatever never landed.
+
+describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
+  /** Synchronous-flush store, host_ready'd, with a RUNNING turn (turn guard admits events). */
+  function runningStore(): ReturnType<typeof createDesktopStore> {
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "t1" });
+    return store;
+  }
+
+  it("user_injected appends a user_text block and pops the OLDEST pendingSteer (FIFO)", () => {
+    const store = runningStore();
+    store.getState().recordPendingSteer("r1", "held-first", { text: "held-first", images: [] });
+    store.getState().recordPendingSteer("r2", "held-second", { text: "held-second", images: [] });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      step: 1,
+      event: { type: "user_injected", step: 1, text: "STEER!" },
+    });
+
+    const tail = store.getState().transcript.at(-1);
+    expect(tail).toMatchObject({ kind: "user_text", text: "STEER!" });
+    expect((tail as { id?: string }).id).toContain("injected:");
+    // Exactly the FIRST pending steer is gone.
+    expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["r2"]);
+  });
+
+  it("loop_end clears all remaining pendingSteers", () => {
+    const store = runningStore();
+    store.getState().recordPendingSteer("r1", "held", { text: "held", images: [] });
+    store.getState().recordPendingSteer("r2", "held-2", { text: "held-2", images: [] });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t1",
+      event: { type: "loop_end", reason: "completed", turns: 1 },
+    });
+
+    expect(store.getState().pendingSteers).toEqual([]);
+    expect(store.getState().turn.status).toBe("idle");
+  });
+
+  it("a user_injected from a stale turnId is dropped by the existing turn guard — no block, no pop", () => {
+    const store = runningStore();
+    store.getState().recordPendingSteer("r1", "held", { text: "held", images: [] });
+
+    store.getState().applyHostMessage({
+      type: "agent_event",
+      turnId: "t-stale",
+      step: 1,
+      event: { type: "user_injected", step: 1, text: "GHOST" },
+    });
+
+    expect(store.getState().transcript.filter((b) => b.kind === "user_text")).toHaveLength(0);
+    expect(store.getState().pendingSteers.map((s) => s.requestId)).toEqual(["r1"]);
+  });
+
+  it("host_ready with steering sets the field; a legacy host_ready without it leaves steering null", () => {
+    const withSteering = createDesktopStore({ schedule: (fn) => fn() });
+    withSteering.getState().applyHostMessage({
+      type: "host_ready",
+      workspace: "/ws",
+      mode: "build",
+      model: "m1",
+      sessionId: "s1",
+      steering: { supported: true, ready: false },
+    } as HostToUiMessage);
+    expect(withSteering.getState().steering).toEqual({ supported: true, ready: false });
+
+    const legacy = createDesktopStore({ schedule: (fn) => fn() });
+    legacy.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    expect(legacy.getState().steering).toBeNull();
+  });
+});

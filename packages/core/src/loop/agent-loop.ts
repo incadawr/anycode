@@ -575,6 +575,28 @@ export class AgentLoop {
   private activeDispatchCtx: DispatchContext | null = null;
 
   /**
+   * TASK.123 (Taskana 4110): a user frame scheduled for injection between the
+   * CURRENT turn's steps. Written by `queueInjection` from outside the
+   * generator (host CoreEngine.steer), flushed at the single legal seam —
+   * after step N's tool results are ALL appended and the loop has decided to
+   * continue, immediately before the step's `turn_end` — so a
+   * tool_call/tool_result pair is never split. A pending slot DIES with the
+   * turn on every exit path (sentinel, transition, cancel, error): the flush
+   * never runs there, and the engine layer observes the loss via the
+   * `onDelivered(step)` callback never firing (or firing with -1 when a newer
+   * steer supersedes this one — last-value-wins, mirroring
+   * `pendingRecognizerConfig`'s overwrite precedent).
+   */
+  private injection: { text: string; onDelivered?: (step: number) => void } | null = null;
+  /**
+   * TASK.123 (Taskana 4110): true exactly while a runTurn/continueTurn
+   * generator of this loop is active (set at runTurnInner entry, cleared in
+   * its `finally`). `queueInjection`'s honest gate: a caller sees false and
+   * must not queue (the frame could never land in a turn).
+   */
+  private turnActive = false;
+
+  /**
    * Ceiling-ladder state (TASK.124 cut-1). It lives on the LOOP, not inside one
    * runTurnInner, because MAX_CEILING_ROUNDS bounds the extensions of a SESSION:
    * kept locally, a follow-up user message would start with a fresh round
@@ -892,6 +914,29 @@ export class AgentLoop {
     }
   }
 
+  /**
+   * TASK.123 (Taskana 4110): schedules `text` for injection between the
+   * current turn's steps, at the single legal seam (all of step N's tool
+   * results appended, loop continuing). Returns false when no turn is
+   * running — callers must not queue in that state (the frame could never
+   * land). A second call while a slot is pending OVERWRITES it
+   * (last-value-wins) and reports the superseded waiter via its
+   * `onDelivered(-1)` if it registered one.
+   */
+  queueInjection(text: string, onDelivered?: (step: number) => void): boolean {
+    if (!this.turnActive) {
+      return false;
+    }
+    this.injection?.onDelivered?.(-1);
+    this.injection = { text, ...(onDelivered !== undefined ? { onDelivered } : {}) };
+    return true;
+  }
+
+  /** TASK.123 (Taskana 4110): true exactly while a turn generator of this loop is active. */
+  hasActiveTurn(): boolean {
+    return this.turnActive;
+  }
+
   private async *runTurnInner(
     userInput: string | undefined,
     options?: {
@@ -916,6 +961,10 @@ export class AgentLoop {
     const maxTurns = this.config.maxTurns ?? DEFAULT_MAX_TURNS;
     const deadlineAt = this.config.deadlineAt;
     const turnId = options?.turnId;
+
+    // TASK.123 (Taskana 4110): the turn is active for the WHOLE generator
+    // lifetime (cleared in the finally below) — queueInjection's honest gate.
+    this.turnActive = true;
 
     // Pre-aborted: end immediately, before hooks or any model call.
     if (signal?.aborted) {
@@ -1478,12 +1527,43 @@ export class AgentLoop {
           return;
         }
 
+        // TASK.123 (Taskana 4110): the injection seam. Reached ONLY when the
+        // loop is CONTINUING (the sentinel exit above, the workspace-transition
+        // exit and the mid-dispatch cancel exit have all returned already), so
+        // the history is balanced here — every one of this step's tool results
+        // is appended and no tool_call/result pair can be split. Flush the
+        // pending user frame NOW, before the step's turn_end, so the next
+        // iteration's streamText request (history.toMessages() at its top)
+        // already contains it: the message influences the NEXT step of the
+        // SAME turn, no restart, the `turn` counter is unaffected. The frame
+        // carries the outer turnId and the ordinal of the step it follows
+        // (boundary semantics: `step: turn` = after step `turn`), and keeps
+        // `origin` off — a steer is human-typed input, not a system report.
+        const injection = this.injection;
+        this.injection = null;
+        if (injection !== null) {
+          this.history.append(
+            { role: "user", content: injection.text },
+            ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []),
+          );
+          yield { type: "user_injected", step: turn, text: injection.text };
+          injection.onDelivered?.(turn);
+        }
+
         yield { type: "turn_end", turn, finishReason };
       }
     } finally {
       if (this.activeDispatchCtx === dispatchCtx) {
         this.activeDispatchCtx = null;
       }
+      // TASK.123 (Taskana 4110): the turn ends — a still-pending injection
+      // slot dies with it (never flushed on an exit path); its waiter is told
+      // so via onDelivered(-1) ("died with the turn", same sentinel value as a
+      // superseded steer). turnActive clears so queueInjection honestly
+      // reports false again.
+      this.injection?.onDelivered?.(-1);
+      this.injection = null;
+      this.turnActive = false;
     }
   }
 
