@@ -245,7 +245,9 @@ describe("TerminalManager — fake pty", () => {
   it("replaces the credentialed proxy vars with the relay URL in the shell env", async () => {
     const RELAY = "http://127.0.0.1:47557";
     const relayModule = await import("@anycode/core/proxy-relay");
-    const spy = vi.spyOn(relayModule, "proxyRelayUrl").mockReturnValue(RELAY);
+    //  rework: the per-value relay lookup (see proxy-relay.test.ts
+    // for the minted `anycode:<token>@` URL shape).
+    const spy = vi.spyOn(relayModule, "proxyRelayLookup").mockReturnValue(() => RELAY);
     try {
       const s = makeSpawner();
       const ch = makeChannel();

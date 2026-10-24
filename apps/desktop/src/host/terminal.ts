@@ -38,7 +38,7 @@
 
 import { z } from "zod";
 import { buildChildEnv } from "@anycode/core/child-env";
-import { ensureProxyRelay, proxyRelayUrl } from "@anycode/core/proxy-relay";
+import { ensureProxyRelay, proxyRelayLookup } from "@anycode/core/proxy-relay";
 import type { WirePort } from "../shared/protocol.js";
 import { TERM_NAME, TERM_REPLAY_MAX_BYTES, type TermToUiMessage } from "../shared/terminal.js";
 import { describeError } from "./serialize.js";
@@ -288,7 +288,7 @@ export class TerminalManager {
         // engine proxy carriers never reach the interactive shell; when the
         // relay is up, the shell instead receives the credential-free
         // `http://127.0.0.1:<port>` (npm/git/curl keep working).
-        env: buildChildEnv(this.injectedEnv ?? process.env, undefined, proxyRelayUrl()),
+        env: buildChildEnv(this.injectedEnv ?? process.env, undefined, proxyRelayLookup()),
         name: TERM_NAME,
       });
     } catch (error) {
