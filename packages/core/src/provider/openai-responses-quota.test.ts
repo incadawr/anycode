@@ -113,6 +113,7 @@ describe("createOpenAIResponsesLanguageModel quota fetch wiring (Taskana 4090)",
     expect(seen).toHaveLength(1); // quota saw the final response
     expect(seen[0]).toEqual({
       primary: { usedPercent: 80 },
+      primarySource: "x-ratelimit-requests-limit",
       sources: ["x-ratelimit-requests-limit", "x-ratelimit-requests-remaining"],
     });
   });

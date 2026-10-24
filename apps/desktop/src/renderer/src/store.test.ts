@@ -8229,13 +8229,18 @@ describe("Taskana 4110 — user_injected & pendingSteer lifecycle", () => {
 // slot shared with engine_quota, plus the live projection onto the global
 // settings-store snapshot's matching connection lastQuota.
 describe("desktop store — provider_quota (Taskana 4090)", () => {
-  function quotaEvent(baseUrl: string, usedPercent: number, sources: string[] = ["x-ratelimit-requests-remaining"]) {
+  function quotaEvent(
+    baseUrl: string,
+    usedPercent: number,
+    sources: string[] = ["x-ratelimit-requests-remaining"],
+    primarySource: string | undefined = sources[0],
+  ) {
     return {
       type: "agent_event" as const,
       turnId: "t1",
       event: {
         type: "provider_quota" as const,
-        quota: { primary: { usedPercent }, sources },
+        quota: { primary: { usedPercent }, primarySource, sources },
         baseUrl,
       },
     };
@@ -8279,6 +8284,35 @@ describe("desktop store — provider_quota (Taskana 4090)", () => {
     expect(connections?.[0]?.lastQuota?.source).toBe("x-ratelimit-requests-remaining");
     // Sibling untouched.
     expect(connections?.[1]?.lastQuota).toBeUndefined();
+  });
+
+  // Taskana 4090 cross-review A1: the persisted source follows the PRIMARY
+  // window's family, not the first family listed in `sources`.
+  it("persists the primary window's header source, not sources[0] (requests listed first, tokens tightest)", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    useSettingsStore.setState({
+      snapshot: {
+        settings: {
+          version: 2,
+          provider: { connections: [{ id: "c1", providerId: "zai", baseUrl: "https://api.z.ai/api/anthropic" }] },
+        } as never,
+        secrets: [],
+        providerReady: true,
+        envOverrides: [],
+        readOnly: false,
+      },
+    });
+    store.getState().applyHostMessage(
+      quotaEvent(
+        "https://api.z.ai/api/anthropic",
+        90,
+        ["x-ratelimit-requests-limit", "x-ratelimit-requests-remaining", "x-ratelimit-tokens-limit", "x-ratelimit-tokens-remaining"],
+        "x-ratelimit-tokens-limit",
+      ),
+    );
+    const connections = useSettingsStore.getState().snapshot?.settings.provider.connections;
+    expect(connections?.[0]?.lastQuota?.source).toBe("x-ratelimit-tokens-limit");
   });
 
   it("a pinned tab paints ITS connection only — never a sibling on the same host (two keys, one provider)", () => {

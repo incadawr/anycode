@@ -38,6 +38,13 @@ export interface ProviderQuotaWindow {
 export interface ProviderQuotaUpdate {
   primary?: ProviderQuotaWindow;
   secondary?: ProviderQuotaWindow;
+  /**
+   * The literal header name that produced the `primary` window (its family's
+   * limit leg, or the next leg when the limit name is absent). Taskana 4090
+   * cross-review A1: `sources` is in FAMILIES order, so index 0 is NOT
+   * necessarily the primary family's header; read this instead.
+   */
+  primarySource?: string;
   /** Raw header names that produced this update (diagnostics/inventory; never rendered). */
   sources: string[];
 }
@@ -137,8 +144,11 @@ interface FamilyAccumulator {
 
 export function providerQuotaFromHeaders(headers: QuotaHeaderBag, now: number): ProviderQuotaUpdate | null {
   // Case-insensitive canonical lookup: first occurrence of a canonical key wins.
+  // Names are visited in sorted order so a duplicated canonical key (e.g.
+  // `x-ratelimit-requests-remaining` and `ratelimit-requests-remaining`) resolves
+  // the same way whatever order the bag iterates in (Taskana 4090 A2).
   const canonical = new Map<string, { original: string; value: string }>();
-  for (const name of headers.names()) {
+  for (const name of [...headers.names()].sort()) {
     const key = canonicalHeaderName(name);
     if (!canonical.has(key)) {
       canonical.set(key, { original: name, value: headers.get(name) ?? "" });
@@ -213,6 +223,7 @@ export function providerQuotaFromHeaders(headers: QuotaHeaderBag, now: number): 
     const distinct = ranked.find((p) => p.ratio !== primary.ratio);
     return {
       primary: primary.window,
+      primarySource: primary.sources[0],
       ...(distinct !== undefined ? { secondary: distinct.window } : {}),
       sources: parsed.flatMap((p) => p.sources),
     };
@@ -227,6 +238,7 @@ export function providerQuotaFromHeaders(headers: QuotaHeaderBag, now: number): 
     if (seconds !== undefined) {
       return {
         primary: { usedPercent: 100, ...(seconds !== undefined ? { resetsAt: Math.round(now / 1000 + seconds) } : {}) },
+        primarySource: retryAfter.original,
         sources: [retryAfter.original],
       };
     }

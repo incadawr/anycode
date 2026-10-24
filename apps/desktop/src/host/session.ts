@@ -4035,7 +4035,7 @@ export class Session {
         // only for persistence, so it observes at emission time like the
         // health signal and never mutates the event itself.
         if (event.type === "provider_quota" && event.quota.primary !== undefined) {
-          this.reportProviderQuota?.(event.quota.primary, event.quota.sources[0] ?? "");
+          this.reportProviderQuota?.(event.quota.primary, event.quota.primarySource ?? "");
         }
         // TASK.117 control/accounting checkpoint: capture the wire state AT
         // EMISSION TIME (before any ring cap/cut could evict it). Core-only:

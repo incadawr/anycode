@@ -1025,13 +1025,21 @@ describe("Session — provider quota reporting (Taskana 4090)", () => {
           ...textStep("hello"),
           {
             type: "provider_quota",
-            quota: { primary: { usedPercent: 80, resetsAt: 1_789_999_999 }, sources: ["x-ratelimit-requests-remaining"] },
+            quota: {
+              primary: { usedPercent: 80, resetsAt: 1_789_999_999 },
+              primarySource: "x-ratelimit-requests-remaining",
+              sources: ["x-ratelimit-requests-remaining"],
+            },
             baseUrl: "https://api.example.com",
           },
         ],
         [
           ...textStep("again"),
-          { type: "provider_quota", quota: { sources: ["x-ratelimit-tokens-remaining"] }, baseUrl: "https://api.example.com" },
+          {
+            type: "provider_quota",
+            quota: { primary: undefined, sources: ["x-ratelimit-tokens-remaining"] },
+            baseUrl: "https://api.example.com",
+          },
         ],
       ],
       reportProviderQuota: (quota, source) => reports.push({ quota, source }),
@@ -1045,6 +1053,40 @@ describe("Session — provider quota reporting (Taskana 4090)", () => {
       await h.waitUntil(() => h.received.filter((m) => m.type === "agent_event" && m.event.type === "loop_end").length >= 2);
 
       expect(reports).toEqual([{ quota: { usedPercent: 80, resetsAt: 1_789_999_999 }, source: "x-ratelimit-requests-remaining" }]);
+    } finally {
+      h.close();
+    }
+  });
+
+  // Taskana 4090 cross-review A1: the persisted source is the PRIMARY window's
+  // header, not sources[0] (the first family in FAMILIES order).
+  it("reports the primary window's own header when another family is listed first", async () => {
+    const reports: Array<{ quota: unknown; source: string }> = [];
+    const h = createHarness({
+      steps: [
+        [
+          ...textStep("hello"),
+          {
+            type: "provider_quota",
+            quota: {
+              primary: { usedPercent: 90 },
+              secondary: { usedPercent: 10 },
+              primarySource: "x-ratelimit-tokens-limit",
+              sources: ["x-ratelimit-requests-limit", "x-ratelimit-requests-remaining", "x-ratelimit-tokens-limit", "x-ratelimit-tokens-remaining"],
+            },
+            baseUrl: "https://api.example.com",
+          },
+        ],
+      ],
+      reportProviderQuota: (quota, source) => reports.push({ quota, source }),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "r1", text: "hi" });
+      await h.waitFor(agentEventOf("loop_end"));
+
+      expect(reports).toEqual([{ quota: { usedPercent: 90 }, source: "x-ratelimit-tokens-limit" }]);
     } finally {
       h.close();
     }

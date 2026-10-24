@@ -51,6 +51,7 @@ describe("wrapFetchWithQuota", () => {
     expect(seen[0]!.baseUrl).toBe("http://base.example");
     expect(seen[0]!.update).toEqual({
       primary: { usedPercent: 80, resetsAt: 1_789_999_999 },
+      primarySource: "x-ratelimit-requests-limit",
       sources: ["x-ratelimit-requests-limit", "x-ratelimit-requests-remaining", "x-ratelimit-requests-reset"],
     });
   });

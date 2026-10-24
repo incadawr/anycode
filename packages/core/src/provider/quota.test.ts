@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { headerBagFrom } from "./quota-fetch.js";
-import { providerQuotaFromHeaders } from "./quota.js";
+import { providerQuotaFromHeaders, type QuotaHeaderBag } from "./quota.js";
 
 const NOW = 1_790_000_000_000; // fixed epoch ms
 
@@ -28,6 +28,7 @@ describe("providerQuotaFromHeaders", () => {
     );
     expect(update).toEqual({
       primary: { usedPercent: 80, resetsAt: 1_789_999_999 },
+      primarySource: "x-ratelimit-requests-limit",
       sources: ["x-ratelimit-requests-limit", "x-ratelimit-requests-remaining", "x-ratelimit-requests-reset"],
     });
   });
@@ -136,6 +137,7 @@ describe("providerQuotaFromHeaders", () => {
     const update = providerQuotaFromHeaders(bag(429, { "retry-after": "120" }), NOW);
     expect(update).toEqual({
       primary: { usedPercent: 100, resetsAt: 1_790_000_000 + 120 },
+      primarySource: "retry-after",
       sources: ["retry-after"],
     });
   });
@@ -145,6 +147,7 @@ describe("providerQuotaFromHeaders", () => {
     const update = providerQuotaFromHeaders(bag(429, { "retry-after": resetAt }), NOW);
     expect(update).toEqual({
       primary: { usedPercent: 100, resetsAt: 1_790_000_000 + 60 },
+      primarySource: "retry-after",
       sources: ["retry-after"],
     });
   });
@@ -239,5 +242,46 @@ describe("providerQuotaFromHeaders", () => {
     expect(
       providerQuotaFromHeaders(bag(200, { "x-ratelimit-requests-limit": "1.5", "x-ratelimit-requests-remaining": "1" }), NOW),
     ).toBeNull();
+  });
+
+  // Taskana 4090 cross-review A1: `primarySource` names the PRIMARY window's
+  // own header, not `sources[0]` (which is the first family in FAMILIES order).
+  it("names the primary window's own header, even when another family's header is listed first", () => {
+    const update = providerQuotaFromHeaders(
+      bag(200, {
+        "x-ratelimit-requests-limit": "1000",
+        "x-ratelimit-requests-remaining": "900",
+        "x-ratelimit-tokens-limit": "100",
+        "x-ratelimit-tokens-remaining": "10",
+      }),
+      NOW,
+    );
+    expect(update?.primary?.usedPercent).toBe(90);
+    expect(update?.secondary?.usedPercent).toBe(10);
+    expect(update?.primarySource).toBe("x-ratelimit-tokens-limit");
+  });
+
+  // Taskana 4090 cross-review A2: when two raw names canonicalize to the same
+  // key, the reported name and value must not depend on the bag's iteration order.
+  it("resolves a duplicated canonical family the same way whatever order the bag lists its names", () => {
+    const entries: Record<string, string> = {
+      "x-ratelimit-requests-remaining": "900",
+      "ratelimit-requests-remaining": "800",
+      "ratelimit-requests-limit": "1000",
+    };
+    const bagInOrder = (order: string[]): QuotaHeaderBag => ({
+      status: 200,
+      get: (name) => entries[name] ?? null,
+      names: () => order,
+    });
+    const forward = providerQuotaFromHeaders(
+      bagInOrder(["x-ratelimit-requests-remaining", "ratelimit-requests-remaining", "ratelimit-requests-limit"]),
+      NOW,
+    );
+    const reversed = providerQuotaFromHeaders(
+      bagInOrder(["ratelimit-requests-limit", "ratelimit-requests-remaining", "x-ratelimit-requests-remaining"]),
+      NOW,
+    );
+    expect(reversed).toEqual(forward);
   });
 });
