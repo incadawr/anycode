@@ -72,6 +72,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   reload no longer shows an empty transcript. The switch notice now appears in
   the transcript, and a reload after a switch no longer repeats the turns from
   before it.
+- A role whose primary model is an engine (Claude or Codex) and whose whole
+  route is cooling down no longer runs its session on that dead engine and
+  model: it runs on the parent's model, with a notice that names every skipped
+  entry and its reason. When only the primary is cooling, the session takes the
+  next healthy entry and says so.
 
 ### Security
 
