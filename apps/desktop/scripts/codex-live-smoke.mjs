@@ -1037,22 +1037,6 @@ function isBlankText(block) {
 }
 
 /**
- * The resume-side twin of the live `reasoning` filter. A persisted
- * `reasoning` thread item has no dedicated block kind on the hydration path:
- * history-projection.ts's `projectReasoning` renders it as an assistant text
- * prefixed `[Codex reasoning]` (with a placeholder when the model kept no
- * summary). Live, the same item arrives as a `reasoning` block, which the
- * filter above already drops — so without this, any turn on which the model
- * happened to emit a reasoning item (model-dependent, not version-dependent:
- * the 0.161/0.162 smoke threads had none, 0.162.1 rollouts routinely do)
- * reds step 9 on a healthy run. Only the exact projection prefix matches;
- * every real assistant message still counts.
- */
-function isProjectedReasoning(block) {
-  return block?.kind === "assistant_text" && typeof block?.text === "string" && block.text.startsWith("[Codex reasoning]\n");
-}
-
-/**
  * W18: also strips `loop_end` blocks. A live completed turn appends its own
  * `loop_end` footer block (store.ts:1461-1469), one per turn — this smoke
  * runs several turns (steps 4/5/6/7) before step 9's resume, so the live
@@ -1070,9 +1054,11 @@ function isProjectedReasoning(block) {
  * this filter, since it never inspects `loop_end` either.
  */
 function normalizedKindOrder(blocks) {
+  // Only the live `reasoning` block needs this filter: resume drops persisted
+  // reasoning thread items entirely (history-projection.ts, Taskana 4710), so
+  // no reasoning-derived assistant_text can appear on the hydration side.
   return blocks
     .filter((b) => b?.kind !== "reasoning")
-    .filter((b) => !isProjectedReasoning(b))
     .filter((b) => b?.kind !== "loop_end")
     .filter((b) => b?.kind !== "assistant_text" || !isBlankText(b))
     .map((b) => b?.kind ?? "?");
