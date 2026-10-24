@@ -33,6 +33,7 @@ const CODEX_CAPABILITIES: EngineCapabilities = {
   supportsImages: false,
   supportsTasks: false,
   supportsFileSnapshots: false,
+  supportsManualCompact: false,
 };
 
 /** The engine seam, with the SAME contract CodexEngine implements: validate host-side, send nothing, ack on apply. */

@@ -224,6 +224,7 @@ describe("plan-mode reminder injection", () => {
         supportsImages: false,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       mode: () => "plan",
       reasoningEffort: () => undefined,

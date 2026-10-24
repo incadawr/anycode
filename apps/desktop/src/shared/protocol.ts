@@ -93,6 +93,8 @@ export interface EngineCapabilitiesProjection {
   supportsImages: boolean;
   supportsTasks: boolean;
   supportsFileSnapshots: boolean;
+  /**  (additive wire field): engine can run a manual compaction — gates the Compact slash-menu row. */
+  supportsManualCompact: boolean;
 }
 
 /** One selectable model choice for a non-core engine's draft/mid-session picker (, cut §3.1). */

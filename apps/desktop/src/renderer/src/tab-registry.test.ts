@@ -140,6 +140,7 @@ function CODEX_HOST_READY(
         supportsImages: true,
         supportsTasks: false,
         supportsFileSnapshots: false,
+        supportsManualCompact: false,
       },
       model: {
         current: "gpt-5",
