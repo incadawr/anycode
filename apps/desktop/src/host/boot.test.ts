@@ -36,6 +36,7 @@ import {
   type PreviewResponseMessage,
 } from "../shared/preview.js";
 import type { SessionMeta } from "@anycode/core";
+import { claudeChildPresetId, codexChildPosture } from "./engines/child-permission-map.js";
 import {
   buildResolveApiKey,
   createMainCredentialProvider,
@@ -45,6 +46,7 @@ import {
   isChildSessionBoot,
   parseHostArgs,
   resolveChildMaxTurns,
+  resolveEngineDraftPresetId,
   resolveBootSession,
   routePreviewMessage,
   scrubSecretEnv,
@@ -1100,5 +1102,51 @@ describe("resolveChildMaxTurns (TASK.180)", () => {
   });
   it("a non-child boot (no args.child) preserves the env default", () => {
     expect(resolveChildMaxTurns(undefined, 40)).toBe(40);
+  });
+});
+
+// Taskana 4078 cross-review finding 5: the argv→preset seam of the engine
+// boots (CUT-S4 §4.2) had no test that goes through `parseHostArgs` →
+// child-permission-map — every child-ask test hand-fed a `selection` to
+// `createNativeCodexSession` directly. This drives the REAL argv a codex
+// child fork receives from main (`--child-mode build`, main/tabs.ts's
+// `childOf` argv push) through the REAL parse and the REAL map, asserting
+// exactly what `bootCodexSession` would put on `thread/start` — the branch's
+// core claim ("the broker now participates in a build-mode codex child")
+// depends on this resolving `child-ask`, not the draft's `ask`.
+describe("resolveEngineDraftPresetId — the engine boots' argv→preset seam (Taskana 4078 finding 5)", () => {
+  /** main's own argv for a build-mode codex child fork (main/tabs.ts childOf push + the draft flags a ROOT would carry). */
+  const CODEX_CHILD_ARGV = [
+    "--session", "child-1",
+    "--child-parent", "parent-1",
+    "--child-spawn-call", "call-1",
+    "--child-mode", "build",
+    "--engine-model", "gpt-5.6",
+    "--engine-preset", "ask", // the draft argv a child NEVER honors (§3.2 п.4: enginePreset is null for children)
+  ];
+
+  it("a --child-mode build codex child boot resolves child-ask THROUGH parseHostArgs — the draft preset argv is never consulted", () => {
+    const args = parseHostArgs(CODEX_CHILD_ARGV);
+    expect(args.child).toMatchObject({ initialMode: "build" });
+    // bootCodexSession's exact call: the map's codexChildPosture over the parsed child mode.
+    expect(resolveEngineDraftPresetId(args.child, "ask", codexChildPosture)).toBe("child-ask");
+  });
+
+  it("a --child-mode plan codex child boot resolves the read-only posture through the same seam", () => {
+    const args = parseHostArgs([...CODEX_CHILD_ARGV.slice(0, -2), "--child-mode", "plan"]);
+    expect(resolveEngineDraftPresetId(args.child, "ask", codexChildPosture)).toBe("read-only");
+  });
+
+  it("a NON-child codex boot keeps the draft preset argv verbatim (host-authoritative validation happens later, in the engine)", () => {
+    const args = parseHostArgs(["--session", "root-1", "--engine-preset", "full-access"]);
+    expect(args.child).toBeUndefined();
+    expect(resolveEngineDraftPresetId(args.child, "full-access", codexChildPosture)).toBe("full-access");
+    // and an absent draft stays absent — no default is invented at this seam.
+    expect(resolveEngineDraftPresetId(parseHostArgs(["--session", "root-2"]).child, undefined, codexChildPosture)).toBeUndefined();
+  });
+
+  it("the claude boot rides the same seam with claudeChildPresetId", () => {
+    const args = parseHostArgs(CODEX_CHILD_ARGV);
+    expect(resolveEngineDraftPresetId(args.child, "workspace", claudeChildPresetId)).toBe("ask");
   });
 });

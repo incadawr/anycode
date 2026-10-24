@@ -253,6 +253,28 @@ export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTur
 }
 
 /**
+ * Taskana 4078 cross-review finding 5: the engine boots' draft-selection
+ * preset seam (TASK.102 CUT-S4 §4.2), extracted verbatim from
+ * bootCodexSession/bootClaudeSession's identical
+ * `args.child !== undefined ? <childMap>(args.child.initialMode) : draft.preset`
+ * lines so the argv→preset seam is unit-testable end to end — `parseHostArgs`
+ * (the argv authority for `--child-mode`) feeding the same child-permission-map
+ * lookup the boots feed, which was previously only typechecked, never tested
+ * through argv. Pure: `childPosture` is one of child-permission-map's two
+ * total functions (`codexChildPosture`/`claudeChildPresetId`); the draft
+ * fallback passes the (unvalidated, host-authoritatively-checked-later)
+ * `--engine-preset` argv value through unchanged, byte-identical to the
+ * inline expression it replaces.
+ */
+export function resolveEngineDraftPresetId(
+  child: HostChildArgs | undefined,
+  draftPreset: string | undefined,
+  childPosture: (mode: PermissionMode) => string,
+): string | undefined {
+  return child !== undefined ? childPosture(child.initialMode) : draftPreset;
+}
+
+/**
  * TASK.180: a complete decimal positive integer within 1..200 — no sign, no
  * fraction, no exponent, no parseInt-prefix tolerance ("5x" fails). The
  * ceiling mirrors core's SUBAGENT_MAX_TURNS_CEILING.
