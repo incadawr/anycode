@@ -15,9 +15,13 @@ import {
   formatScopedRunnerPattern,
 } from "@anycode/core/permissions/safe-command";
 import {
+  BASH_RISK_PLAQUE,
   PLAN_PREVIEW_MAX_CHARS,
   UNKNOWN_SHELL_HINT,
   alwaysAllowCheckboxText,
+  bashRiskFacts,
+  bashRiskPlaque,
+  bashWriteCapablePlaque,
   buildAlwaysAllowRule,
   buildPermissionAllowMessage,
   canRememberPermission,
@@ -381,6 +385,77 @@ describe("describePermissionAsk — Bash unknown shell expression (TASK.35)", ()
 
   it("UM7: plan asks are unaffected — the plan hint keeps saying 'still ask' (already pinned at :261; not duplicated here)", () => {
     expect(describePermissionAsk("ExitPlanMode", { plan: "x" }).hint).toContain("still ask");
+  });
+});
+
+/**
+ * Taskana 4070 (TASK.105 §2): the per-command risk plaque, derived from the
+ * SAME lexical classifier that powers auto-allow. Presentation only — no
+ * engine decision reads this. The three-way split among ASKS:
+ *   (a) provably read-only pipelines → readOnly plaque,
+ *   (b) named write-capable single commands → plaque naming the binary,
+ *   (c) unknown single binaries → the not-a-verdict-of-danger plaque.
+ * A shell expression stays UNKNOWN_SHELL_HINT's case alone (no plaque), and
+ * plan asks never carry one.
+ */
+describe("describePermissionAsk — Bash risk plaque (Taskana 4070)", () => {
+  it("read-only pipeline → readOnly plaque, no hint, generic kind", () => {
+    const presentation = describePermissionAsk("Bash", { command: "ls | wc -l" });
+    expect(presentation.plaque).toBe(BASH_RISK_PLAQUE.readOnly);
+    expect(presentation.hint).toBeNull();
+    expect(presentation.kind).toBe("generic");
+  });
+
+  it("write-capable single command → plaque names the binary; no hint (shellExpression false)", () => {
+    const presentation = describePermissionAsk("Bash", { command: "rm -rf build" });
+    expect(presentation.plaque).toContain("rm");
+    expect(presentation.plaque).toContain("can write or execute");
+    expect(presentation.hint).toBeNull();
+  });
+
+  it("unknown binary → unknownBinary plaque; no hint", () => {
+    const presentation = describePermissionAsk("Bash", { command: "docker build ." });
+    expect(presentation.plaque).toBe(BASH_RISK_PLAQUE.unknownBinary);
+    expect(presentation.hint).toBeNull();
+  });
+
+  it("shell expression keeps TASK.35's hint alone — plaque is null (never co-occur)", () => {
+    const presentation = describePermissionAsk("Bash", { command: "cat f | tee out" });
+    expect(presentation.hint).toBe(UNKNOWN_SHELL_HINT);
+    expect(presentation.plaque).toBeNull();
+  });
+
+  it("fail-closed presentation: non-Bash tools and malformed Bash input never get a plaque", () => {
+    expect(describePermissionAsk("Write", { file_path: "/tmp/x", content: "y" }).plaque).toBeNull();
+    expect(describePermissionAsk("Bash", {}).plaque).toBeNull();
+    expect(describePermissionAsk("Bash", { command: 42 }).plaque).toBeNull();
+  });
+
+  it("copy pin — exact plaque strings, single source of truth", () => {
+    expect(BASH_RISK_PLAQUE.readOnly).toBe(
+      "This exact command line is provably read-only — every segment passed the same classifier that auto-allows in Auto mode. It asks only because of the session mode, a hook, or an engine bridge.",
+    );
+    expect(bashWriteCapablePlaque("rm")).toBe(
+      "This command runs rm, which can write or execute — the classifier cannot prove it read-only. Allow only if you intended this exact command.",
+    );
+    expect(BASH_RISK_PLAQUE.unknownBinary).toBe(
+      "This command's binary is not on AnyCode's read-only list, so it asks. Not-on-the-list is not a verdict of danger; review the exact command before allowing.",
+    );
+  });
+
+  it("plaque carries the binary's name (pure-function fallback for the DOM assertion)", () => {
+    // No jsdom in this package's vitest config (see file header), so the
+    // `.permission-risk-plaque-high` node itself is covered by the render
+    // code path this input feeds; pinned here at the function boundary.
+    expect(bashRiskPlaque("Bash", { command: "pnpm install" })).toContain("pnpm");
+    expect(bashRiskFacts("Bash", { command: "pnpm install" })).toMatchObject({
+      applies: true,
+      binary: "pnpm",
+    });
+  });
+
+  it("plan asks never carry a plaque (plan hint alone, as before)", () => {
+    expect(describePermissionAsk("ExitPlanMode", { plan: "x" }).plaque).toBeNull();
   });
 });
 

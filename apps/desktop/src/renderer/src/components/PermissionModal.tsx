@@ -159,6 +159,9 @@ export interface PermissionAskPresentation {
   denyLabel: string;
   /** One-line explanation of what approving actually does; null for generic asks. */
   hint: string | null;
+  /** Taskana 4070: per-command risk note for a Bash ask (read-only pipeline /
+   * named write-capable binary / unknown binary); null for everything else. */
+  plaque: string | null;
   /** Whether an "Always allow" rule may be offered for this ask at all. */
   canRemember: boolean;
 }
@@ -183,6 +186,81 @@ function bashUnknownShellHint(toolName: string, input: unknown): string | null {
   }
   const verdict = classifyBashCommandLine(command);
   return verdict.class === "unknown" && verdict.shellExpression ? UNKNOWN_SHELL_HINT : null;
+}
+
+/** Taskana 4070 (TASK.105 §2): per-command risk note for a Bash ask, derived
+ * from the SAME lexical classifier that powers auto-allow (presentation only;
+ * the allow decision never reads this). `writeCapable` is NOT in this object —
+ * its text names the concrete binary, so it is built by
+ * `bashWriteCapablePlaque(binary)` below. */
+export const BASH_RISK_PLAQUE = {
+  readOnly:
+    "This exact command line is provably read-only — every segment passed the same classifier that auto-allows in Auto mode. It asks only because of the session mode, a hook, or an engine bridge.",
+  unknownBinary:
+    "This command's binary is not on AnyCode's read-only list, so it asks. Not-on-the-list is not a verdict of danger; review the exact command before allowing.",
+} as const;
+
+export type BashRiskPlaque = (typeof BASH_RISK_PLAQUE)[keyof typeof BASH_RISK_PLAQUE];
+
+/** The write-capable plaque names the binary, so it is a function, not a
+ * const slot (Taskana 4070). Exported for the copy-pinning test. */
+export function bashWriteCapablePlaque(binary: string): string {
+  return `This command runs ${binary}, which can write or execute — the classifier cannot prove it read-only. Allow only if you intended this exact command.`;
+}
+
+/** Binaries the modal names in the write-capable plaque (Taskana 4070).
+ * Presentation-only superset of core's deny-lists: not consulted by any engine. */
+export const WRITE_CAPABLE_BINARIES: ReadonlySet<string> = new Set([
+  "rm", "rmdir", "mv", "cp", "ln", "mkdir", "touch", "tee", "truncate", "shred",
+  "chmod", "chown", "chgrp", "dd", "install",
+  "sed", "awk", "perl", "python", "python3", "node", "bun", "deno",
+  "git", "pnpm", "npm", "yarn", "curl", "wget", "ssh", "scp", "rsync",
+  "find", "xargs", "sort", "splice",
+]);
+
+/** Presentation facts about a Bash ask's command line (Taskana 4070). */
+export interface BashRiskFacts {
+  /** "Bash"-shaped tool with a string command; otherwise false. */
+  applies: boolean;
+  plaque: BashRiskPlaque | string | null;
+  /** Leading binary of the first plain segment, when extractable. */
+  binary: string | null;
+}
+
+/** Taskana 4070 (TASK.105 §2): the per-command risk plaque for a Bash ask.
+ * Mirrors `bashUnknownShellHint`'s input discipline exactly: presentation
+ * only, derived from the SAME lexical classifier that powers auto-allow, and
+ * fail-closed (non-Bash tool, no command string → nothing). The plaque and
+ * the TASK.35 shell-expression hint never co-occur: a shell expression that
+ * is not provably read-only is `bashUnknownShellHint`'s case alone.
+ *
+ * - proven read-only line (pipeline or single command) → `readOnly` plaque;
+ * - unknown single command whose binary is in WRITE_CAPABLE_BINARIES → the
+ *   write-capable plaque naming that binary;
+ * - unknown single command with any other binary → `unknownBinary` plaque. */
+export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
+  if (toolName !== "Bash") return { applies: false, plaque: null, binary: null };
+  const command =
+    input !== null && typeof input === "object" ? (input as { command?: unknown }).command : undefined;
+  if (typeof command !== "string") return { applies: false, plaque: null, binary: null };
+  const verdict = classifyBashCommandLine(command);
+  if (verdict.class === "read-only") return { applies: true, plaque: BASH_RISK_PLAQUE.readOnly, binary: null };
+  if (verdict.shellExpression) return { applies: true, plaque: null, binary: null }; // UNKNOWN_SHELL_HINT already covers it
+  // plain single command, unknown class: name the binary if we can
+  const binary = /^[^ \t]+/.exec(command.trim())?.[0] ?? null;
+  return {
+    applies: true,
+    plaque:
+      binary !== null && WRITE_CAPABLE_BINARIES.has(binary) ? bashWriteCapablePlaque(binary) : BASH_RISK_PLAQUE.unknownBinary,
+    binary,
+  };
+}
+
+/** The plaque string `describePermissionAsk` surfaces (Taskana 4070); null for
+ * everything the plaque does not apply to. Thin wrapper so the presentation
+ * object never depends on the facts struct. */
+export function bashRiskPlaque(toolName: string, input: unknown): string | null {
+  return bashRiskFacts(toolName, input).plaque;
 }
 
 /**
@@ -216,6 +294,7 @@ export function describePermissionAsk(toolName: string, input: unknown): Permiss
       allowLabel: "Allow",
       denyLabel: "Deny",
       hint: bashUnknownShellHint(toolName, input),
+      plaque: bashRiskPlaque(toolName, input),
       canRemember: true,
     };
   }
@@ -228,6 +307,7 @@ export function describePermissionAsk(toolName: string, input: unknown): Permiss
     allowLabel: "Approve plan",
     denyLabel: "Keep planning",
     hint: "Approving leaves plan mode and starts implementation — write actions still ask for approval individually.",
+    plaque: null,
     canRemember: false,
   };
 }
@@ -627,6 +707,11 @@ export function PermissionModal({ request, onAllow, onDeny, allowRemember = true
           <>
             {presentation.hint !== null && (
               <div className="permission-ask-hint">{presentation.hint}</div>
+            )}
+            {presentation.plaque !== null && (
+              <div className={`permission-risk-plaque permission-risk-plaque-${request.metadata.riskLevel}`}>
+                {presentation.plaque}
+              </div>
             )}
             <div className="permission-mode">Mode: {request.mode}</div>
           </>

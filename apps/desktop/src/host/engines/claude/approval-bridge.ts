@@ -22,6 +22,7 @@
  * a denial, and nothing is ever auto-approved.
  */
 
+import { classifyBashCommandLine } from "@anycode/core";
 import type { PermissionRequest, ToolMetadata } from "@anycode/core";
 import type { IpcPermissionBroker, SettleOrigin } from "../../permission-broker.js";
 import type { ControlRequestResponder, InboundControlRequest } from "./claude-client.js";
@@ -62,6 +63,24 @@ function claudeToolMetadata(toolName: string): ToolMetadata {
     needsApproval: true,
     timeoutMs: 120_000,
   };
+}
+
+/**
+ * Taskana 4070: a Bash can_use_tool whose command line the shared classifier
+ * proves read-only (and is not a shell expression) is presented readOnly/low,
+ * mirroring the Codex bridge's commandExecutionMetadata (TASK.184). Presentation
+ * only — the decision still goes through the broker.
+ */
+function commandAwareMetadata(toolName: string, input: Record<string, unknown>): ToolMetadata {
+  const meta = claudeToolMetadata(toolName);
+  if (toolName !== "Bash") return meta;
+  const command = typeof input.command === "string" ? input.command : null;
+  if (command === null) return meta;
+  const verdict = classifyBashCommandLine(command);
+  if (verdict.class === "read-only" && verdict.shellExpression === false) {
+    return { ...meta, readOnly: true, destructive: false, riskLevel: "low" };
+  }
+  return meta;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -251,7 +270,7 @@ export class ClaudeApprovalBridge {
       toolName: approval.toolName,
       toolCallId: approval.toolUseId,
       input: approval.description === undefined ? input : { ...input, description: approval.description },
-      metadata: claudeToolMetadata(approval.toolName),
+      metadata: commandAwareMetadata(approval.toolName, input),
       // Display-only: a Claude session never consults core's permission engine
       // (`supportsCorePermissions` is false); posture lives in presets.ts.
       mode: "build",
