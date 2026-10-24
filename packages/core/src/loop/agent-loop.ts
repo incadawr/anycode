@@ -1532,7 +1532,9 @@ export class AgentLoop {
       // verdict — the budget was not too small, the run just was not doing
       // anything with it. Any other rejection (round 3's missing nextAction,
       // an empty remaining list, ...) stays verdict_rejected.
-      const stalled = adaptive && this.ceilingProductiveToolCalls <= 0;
+      // Only round 2+ gates on productive progress, and an empty remaining
+      // list is a bad verdict whatever the counters say — neither is a stall.
+      const stalled = adaptive && round >= 2 && verdict.remaining.length > 0 && this.ceilingProductiveToolCalls <= 0;
       yield {
         type: "ceiling_refused",
         reason: stalled ? "stalled" : "verdict_rejected",
