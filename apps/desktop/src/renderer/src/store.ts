@@ -121,6 +121,7 @@ import type {
   GitCommandOutcome,
   HostToUiMessage,
   SerializedError,
+  UiToHostMessage,
   WireAgentEvent,
   WireBackgroundChild,
   WireCheckpointMeta,
@@ -1137,6 +1138,25 @@ export interface DesktopState {
 
   /** Single reducer entry point: applies one HostToUiMessage to the store. */
   applyHostMessage(message: HostToUiMessage): void;
+
+  /**
+   * TASK.91 (internal wiring, not part of the frozen action contract):
+   * replaces the outgoing-wire seam backing `requestBackgroundTaskRefresh`.
+   * Called ONCE by tab-registry at store birth (per-tab, live-connection
+   * routing). Reachable through a typeof guard precisely because host-side
+   * tests construct stores without it — see tab-registry.thisWireStoreSend.
+   */
+  setSendSeam(send: (message: UiToHostMessage) => void): void;
+
+  /**
+   * TASK.91 / Taskana 4097: dispatches `{ type: "task_list_request" }` through
+   * this store's injected send seam (the tab's live host connection). The
+   * BackgroundTasksPanel remains the primary sender via `useTabSend`
+   * (refresh-on-open); this action exists for refresh parity and any future
+   * non-component caller. No-op wiring (no connection injected) warns and
+   * drops, mirroring tab-registry's `sendToTab` posture.
+   */
+  requestBackgroundTaskRefresh(): void;
   /* */
   setAwaitingPort(): void;
   /** Marks the handshake in flight: port received and ui_ready sent, host_ready not yet received. */
@@ -1558,7 +1578,25 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
  * construct an isolated store with an injected `FrameScheduler` test double
  * instead of sharing a single store's buffered-delta state across test cases.
  */
-export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler) {
+export function createDesktopStore(
+  scheduler: FrameScheduler = defaultScheduler,
+  /**
+   * TASK.91: the store's outgoing-wire seam. The ui→host direction is owned
+   * by tab-context's `useTabSend` / tab-registry's `sendToTab`; this seam
+   * exists only so dispatch actions (requestBackgroundTaskRefresh) can reach
+   * the SAME connection without a store→tab-registry import cycle (store.ts
+   * is imported by node-context host tests; tab-registry imports the store).
+   * tab-registry injects `entry.connection.send` at registerPort time.
+   */
+  sendToHost: (message: UiToHostMessage) => void = (message) => {
+    console.warn("[desktop-store] dropping outgoing message, no send seam injected", message);
+  },
+) {
+  // TASK.91: `sendToHost` is the PARAMETER (rebinding a parameter is legal
+  // but lint-noisy); this local is the live seam, swapped by the optional
+  // `setSendSeam` action (tab-registry wires each tab's live connection at
+  // store birth) and read by `requestBackgroundTaskRefresh`.
+  const liveSend: { current: (message: UiToHostMessage) => void } = { current: sendToHost };
   // Buffered delta text, keyed by the minted transcript block id (see
   // `blockSeq`/`openStreamBlocks` below) that owns the block — NOT the raw
   // stream id, which repeats across steps. Mutated in place (never
@@ -4487,6 +4525,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             void _exhaustive;
           }
         }
+      },
+
+      requestBackgroundTaskRefresh(): void {
+        liveSend.current({ type: "task_list_request" });
+      },
+
+      setSendSeam(send: (message: UiToHostMessage) => void): void {
+        liveSend.current = send;
       },
 
       setAwaitingPort(): void {

@@ -56,6 +56,7 @@ import { ConfirmDialog } from "./components/ConfirmDialog.js";
 import { LspPanel } from "./components/LspPanel.js";
 import { HooksPanel } from "./components/HooksPanel.js";
 import { TimelinePanel } from "./components/TimelinePanel.js";
+import { BackgroundTasksPanel } from "./components/BackgroundTasksPanel.js";
 import { NoticeStack, TabNoticeCapture } from "./components/NoticeToast.js";
 import { beginToastExit, enqueueToast, removeToast, rewriteToastText, type Toast, type ToastKind } from "./toasts.js";
 import { notificationBody, useTurnCompletionNotification } from "./notifications.js";
@@ -450,6 +451,10 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const gitPanelOpen = computeGitPanelOpen(gitPanelOpenRequested, shell?.gitReadOnly);
   const supportsCorePanels = engine === null;
   const supportsRewind = engine?.capabilities.supportsRewind ?? true;
+  // TASK.91: the background-tasks drawer mounts for the native engine only —
+  // `engine` is null before host_ready (core default), and claude/codex keep
+  // supportsTasks:false.
+  const supportsTasks = engine?.capabilities.supportsTasks ?? true;
   const tabTitle = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId)?.title);
 
   // TASK.102 CUT-S2 §2.5 (slice S2c C3): which surface this root tab's pane
@@ -817,6 +822,7 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
       {supportsCorePanels && <LspPanel />}
       {supportsCorePanels && <HooksPanel />}
       {supportsRewind && <TimelinePanel />}
+      {supportsTasks && <BackgroundTasksPanel />}
     </>
   );
 }

@@ -134,10 +134,19 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   const lspPanelOpen = tab?.lspPanelOpen ?? false;
   const hooksPanelOpen = tab?.hooksPanelOpen ?? false;
   const timelinePanelOpen = tab?.timelinePanelOpen ?? false;
+  const tasksPanelOpen = tab?.tasksPanelOpen ?? false;
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
   const worktree = tab?.worktree;
   const externalEngine = engine !== null;
   const supportsRewind = engine?.capabilities.supportsRewind ?? true;
+  // TASK.91: core-only drawer gate — `engine` is null before host_ready ⇒
+  // default true; claude/codex advertise supportsTasks:false so the toggle
+  // disappears for them (mirrors supportsRewind's `?? true` posture).
+  const supportsTasks = engine?.capabilities.supportsTasks ?? true;
+  // TASK.91: third subscription — `data-running` badge on the toggle while
+  // any background task of this tab is still live.
+  const backgroundTasks = useTabStore((state) => state.backgroundTasks);
+  const tasksRunning = backgroundTasks.some((task) => task.status === "running");
   const exitControl = worktreeExitControlState(turnStatus, connection);
 
   // D15 (96-P3): the Previews menu — visible whenever the active tab has
@@ -228,6 +237,10 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
     useTabsStore.getState().setTimelinePanelOpen(tabId, !timelinePanelOpen);
   }
 
+  function toggleTasksPanel(): void {
+    useTabsStore.getState().setTasksPanelOpen(tabId, !tasksPanelOpen);
+  }
+
   return (
     <header className="session-header">
       {sidebarCollapsed && (
@@ -296,6 +309,18 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
         onClick={toggleHooksPanel}
       >
         <HookIcon />
+      </button>}
+
+      {!externalEngine && supportsTasks && <button
+        type="button"
+        className={`session-header-panel-toggle${tasksPanelOpen ? " session-header-panel-toggle-active" : ""}`}
+        aria-label="Toggle background tasks"
+        aria-pressed={tasksPanelOpen}
+        title="Background tasks"
+        data-running={tasksRunning ? "true" : undefined}
+        onClick={toggleTasksPanel}
+      >
+        <Terminal />
       </button>}
 
       <>{supportsRewind && <button

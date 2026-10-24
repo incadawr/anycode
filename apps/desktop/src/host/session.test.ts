@@ -652,6 +652,45 @@ describe("Session — background jobs panel wire", () => {
       h.close();
     }
   });
+
+  it("task_list_request re-serves the manager snapshot even with no turn in flight (TASK.91 panel refresh)", async () => {
+    const tasks = new FakeTaskPort();
+    const running = taskSnapshot({ taskId: "task-1", command: "sleep 60" });
+    const completed = taskSnapshot({
+      taskId: "task-2",
+      command: "echo done",
+      status: "completed",
+      exitCode: 0,
+      endedAt: 2_000,
+    });
+    tasks.snapshots = [running, completed];
+    tasks.outputs.set("task-1", ["tick\n"]);
+    const h = createHarness({ steps: [finishStep()], tasks });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+
+      // First push: ui_ready's own snapshot.
+      const first = await h.waitFor(isTaskList);
+      expect(first.tasks).toEqual([running, completed]);
+
+      // Second push: an explicit re-request with no turn in flight re-serves
+      // the SAME manager snapshot — the panel's refresh-on-open contract.
+      h.send({ type: "task_list_request" });
+      await h.waitUntil(() => h.received.filter(isTaskList).length >= 2);
+      const lists = h.received.filter(isTaskList);
+      expect(lists).toHaveLength(2);
+      expect(lists[0]?.tasks).toEqual(lists[1]?.tasks);
+
+      // Output request for the running id yields a task_output carrying that
+      // id's snapshot (the panel's Output toggle contract).
+      h.send({ type: "task_output_request", taskId: "task-1" });
+      const output = await h.waitFor(isTaskOutput);
+      expect(output).toMatchObject({ taskId: "task-1", snapshot: running, newOutput: "tick\n" });
+    } finally {
+      h.close();
+    }
+  });
 });
 
 describe("Session — stream bridge", () => {

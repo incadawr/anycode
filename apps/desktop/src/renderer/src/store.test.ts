@@ -5212,6 +5212,47 @@ describe("desktop store — task_list/task_output (renderer panels sub-slice D)"
     expect(store.getState().backgroundTasks).toEqual([]);
     expect(store.getState().backgroundTaskOutput).toEqual({});
   });
+
+  it("requestBackgroundTaskRefresh sends a task_list_request through the store's send seam (TASK.91)", () => {
+    const { scheduler } = createManualScheduler();
+    const sent: unknown[] = [];
+    const store = createDesktopStore(scheduler, (message) => {
+      sent.push(message);
+    });
+
+    store.getState().requestBackgroundTaskRefresh();
+
+    expect(sent).toEqual([{ type: "task_list_request" }]);
+  });
+
+  it("a task that finished between turns changes status in the projection (TASK.91 discriminating test)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "task_list", tasks: [TASK] });
+    expect(store.getState().backgroundTasks[0]?.status).toBe("running");
+
+    store.getState().applyHostMessage({
+      type: "task_output",
+      taskId: "task-1",
+      snapshot: { ...TASK, status: "completed", exitCode: 0, endedAt: 2_000 },
+      newOutput: "done\n",
+    });
+
+    expect(store.getState().backgroundTasks[0]?.status).toBe("completed");
+    expect(store.getState().backgroundTasks[0]?.exitCode).toBe(0);
+    expect(store.getState().backgroundTaskOutput["task-1"]?.endsWith("done\n")).toBe(true);
+  });
+
+  it("task_output for an unknown task with snapshot:null changes nothing", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "task_list", tasks: [TASK] });
+
+    store.getState().applyHostMessage({ type: "task_output", taskId: "ghost", snapshot: null, newOutput: "noise\n" });
+
+    expect(store.getState().backgroundTasks).toEqual([TASK]);
+    expect(store.getState().backgroundTaskOutput).toEqual({});
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
