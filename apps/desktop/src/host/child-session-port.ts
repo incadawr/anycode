@@ -384,6 +384,12 @@ export interface CreateChildSessionPortOptions {
    */
   onDetachedStall?: (report: SubagentStallReport, req: SessionSubagentRequest, childSessionId: string) => void;
   /**
+   * Taskana 4821: a detached child raised an approval ask (attention event with
+   * the ask's identity). Nobody watches a detached child's tab, so the host
+   * surfaces it to the parent instead of letting the ask silently expire.
+   */
+  onDetachedApproval?: (ask: { toolName: string; subject: string }, req: SessionSubagentRequest, childSessionId: string) => void;
+  /**
    * Silence threshold for this port's stall clock (TASK.148 slice 1/2).
    * SUBAGENT_STALL_TIMEOUT_MS when omitted — same resolution precedence as
    * the inline tier's `parent.subagentStallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS`
@@ -789,6 +795,13 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 stallClock.resume();
               }
               if (req.detach === true) {
+                if (event.waiting && event.toolName !== undefined) {
+                  options.onDetachedApproval?.(
+                    { toolName: event.toolName, subject: event.subject ?? "" },
+                    req,
+                    detachedChildSessionId ?? "",
+                  );
+                }
                 return;
               }
               const progress: SubagentProgress = { kind: "attention", waiting: event.waiting };

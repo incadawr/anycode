@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   childNotificationSummaryOverflows,
   formatChildReportCapNotice,
+  formatChildApprovalNotice,
   formatChildStallNotice,
   formatChildTaskNotification,
   formatSupervisorIdleReminder,
@@ -389,5 +390,34 @@ describe("formatSupervisorIdleReminder (taskana 4181)", () => {
     // escapeXmlText — pin the structure stays well-formed at any count.
     const text = formatSupervisorIdleReminder(idleInput({ reminderCount: 10 }));
     expect(text).toContain("<reminder-count>10</reminder-count>");
+  });
+});
+
+describe("formatChildApprovalNotice (Taskana 4821)", () => {
+  const base = {
+    taskId: "call-1",
+    toolUseId: "call-1",
+    agentId: "child-session-1",
+    subagentType: "general-purpose",
+    description: "triage",
+    toolName: "Write",
+    subject: "/tmp/report.md",
+  };
+
+  it("names the tool and path under the anti-spoofing header and says how to answer", () => {
+    const text = formatChildApprovalNotice(base);
+    expect(text.startsWith("[SYSTEM NOTIFICATION - NOT USER INPUT]\n")).toBe(true);
+    expect(text).toContain("<task-approval-notice>");
+    expect(text).toContain("<tool>Write</tool>");
+    expect(text).toContain("<subject>/tmp/report.md</subject>");
+    expect(text).toContain("open the child's tab");
+    expect(text).toContain("not be retried through another tool");
+    expect(text).not.toContain("<task-notification>");
+  });
+
+  it("omits an empty subject and escapes markup", () => {
+    const text = formatChildApprovalNotice({ ...base, subject: "", toolName: "A<B" });
+    expect(text).not.toContain("<subject>");
+    expect(text).toContain("<tool>A&lt;B</tool>");
   });
 });

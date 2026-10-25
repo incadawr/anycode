@@ -1042,3 +1042,24 @@ describe("external answers and the pending snapshot (Taskana 4763)", () => {
   });
 });
 
+
+describe("expired-ask deny reasons forbid a tool bypass (Taskana 4821)", () => {
+  it("the expiry reason and the later unattended reason both tell the model not to redo the effect via Bash", async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker } = makeBroker(50);
+      const first = broker.requestPermission(request);
+      await vi.advanceTimersByTimeAsync(60);
+      const expired = await first;
+      const later = await broker.requestPermission(request);
+      for (const d of [expired, later]) {
+        expect(d.behavior).toBe("deny");
+        const reason = d.behavior === "deny" ? d.reason : "";
+        expect(reason).toContain("Do NOT achieve the same effect through another tool");
+        expect(reason).toContain("Bash/shell redirect");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

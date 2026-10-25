@@ -88,11 +88,21 @@ export function brokerConfinedWriteTool(toolName: string): boolean {
  * explicitly: the refusal is not on the merits, the command itself did not fail,
  * and rephrasing it will not help.
  */
+/**
+ * Taskana 4821: a live run showed a child whose Write approval expired redoing
+ * the same write through a Bash `cat >` redirect. Both "nobody answered" texts
+ * forbid that explicitly: the approval gate guards the EFFECT, not the tool.
+ */
+const NO_BYPASS_CLAUSE =
+  `Do NOT achieve the same effect through another tool (a Bash/shell redirect, tee, cp, mv, sed -i, ` +
+  `a script that writes the file, etc.) — that circumvents the approval policy. `;
+
 function unansweredDenyReason(toolName: string, timeoutMs: number): string {
   return (
     `${toolName}: no one answered the approval request (it expired after ${timeoutMs}ms). ` +
     `This is NOT a refusal on the merits and NOT a failure of the command — there is no human at the screen. ` +
     `Retrying this command, or a rephrased equivalent, will be denied the same way. ` +
+    NO_BYPASS_CLAUSE +
     `Continue with work that needs no approval, or stop and report exactly what is blocked.`
   );
 }
@@ -102,6 +112,7 @@ function unattendedDenyReason(toolName: string): string {
     `${toolName}: denied without asking — an earlier approval request in this session expired unanswered, ` +
     `so the session is treated as unattended. This is NOT a refusal on the merits and NOT a failure of the command. ` +
     `Asking resumes as soon as a human interacts with the session. ` +
+    NO_BYPASS_CLAUSE +
     `Continue with work that needs no approval, or stop and report exactly what is blocked.`
   );
 }

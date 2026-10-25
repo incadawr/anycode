@@ -199,7 +199,7 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
   | { kind: "rejected"; reason: ChildRunRejectReason; message: string }
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
   | { kind: "activity"; toolName: string; summary: string }
-  | { kind: "attention"; waiting: boolean }
+  | { kind: "attention"; waiting: boolean; toolName?: string; subject?: string }
   | {
       kind: "terminal";
       status: ChildRunStatus;
@@ -263,7 +263,7 @@ export interface ChildStart {
 export type ChildProgress = { type: typeof CHILD_PROGRESS_TYPE } & (
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
   | { kind: "activity"; toolName: string; summary: string }
-  | { kind: "attention"; waiting: boolean }
+  | { kind: "attention"; waiting: boolean; toolName?: string; subject?: string }
 );
 
 /**
@@ -634,7 +634,7 @@ const CHILD_RUN_EVENT_REJECTED_KEYS = ["type", "requestId", "kind", "reason", "m
 const CHILD_RUN_EVENT_SENT_KEYS = ["type", "requestId", "kind"] as const;
 const CHILD_RUN_EVENT_PROGRESS_KEYS = ["type", "requestId", "kind", "turns", "toolCalls", "lastTool"] as const;
 const CHILD_RUN_EVENT_ACTIVITY_KEYS = ["type", "requestId", "kind", "toolName", "summary"] as const;
-const CHILD_RUN_EVENT_ATTENTION_KEYS = ["type", "requestId", "kind", "waiting"] as const;
+const CHILD_RUN_EVENT_ATTENTION_KEYS = ["type", "requestId", "kind", "waiting", "toolName", "subject"] as const;
 const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   "type",
   "requestId",
@@ -744,7 +744,21 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       if (!isBoolean(msg.waiting)) {
         return null;
       }
-      return { type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: msg.waiting };
+      // Taskana 4821: optional ask identity (what the child is blocked on).
+      if (msg.toolName !== undefined && !isNonEmptyCappedString(msg.toolName, CHILD_TOOL_NAME_MAX_CHARS)) {
+        return null;
+      }
+      if (msg.subject !== undefined && !isCappedString(msg.subject, CHILD_SUMMARY_MAX_CHARS)) {
+        return null;
+      }
+      return {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId,
+        kind: "attention",
+        waiting: msg.waiting,
+        ...(msg.toolName !== undefined ? { toolName: msg.toolName } : {}),
+        ...(msg.subject !== undefined ? { subject: msg.subject } : {}),
+      };
     }
     case "sent": {
       // Taskana 4153: ack for ChildRunSend — requestId correlation only, no payload.
@@ -854,7 +868,7 @@ export function parseChildStart(msg: unknown): ChildStart | null {
 
 const CHILD_PROGRESS_PROGRESS_KEYS = ["type", "kind", "turns", "toolCalls", "lastTool"] as const;
 const CHILD_PROGRESS_ACTIVITY_KEYS = ["type", "kind", "toolName", "summary"] as const;
-const CHILD_PROGRESS_ATTENTION_KEYS = ["type", "kind", "waiting"] as const;
+const CHILD_PROGRESS_ATTENTION_KEYS = ["type", "kind", "waiting", "toolName", "subject"] as const;
 
 export function parseChildProgress(msg: unknown): ChildProgress | null {
   if (!isRecord(msg) || msg.type !== CHILD_PROGRESS_TYPE) {
@@ -901,7 +915,19 @@ export function parseChildProgress(msg: unknown): ChildProgress | null {
       if (!isBoolean(msg.waiting)) {
         return null;
       }
-      return { type: CHILD_PROGRESS_TYPE, kind: "attention", waiting: msg.waiting };
+      if (msg.toolName !== undefined && !isNonEmptyCappedString(msg.toolName, CHILD_TOOL_NAME_MAX_CHARS)) {
+        return null;
+      }
+      if (msg.subject !== undefined && !isCappedString(msg.subject, CHILD_SUMMARY_MAX_CHARS)) {
+        return null;
+      }
+      return {
+        type: CHILD_PROGRESS_TYPE,
+        kind: "attention",
+        waiting: msg.waiting,
+        ...(msg.toolName !== undefined ? { toolName: msg.toolName } : {}),
+        ...(msg.subject !== undefined ? { subject: msg.subject } : {}),
+      };
     }
     default:
       return null;

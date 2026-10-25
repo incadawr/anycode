@@ -523,6 +523,31 @@ export interface ChildSessionOptions {
   now?: () => number;
 }
 
+/** Taskana 4821: what a child's pending approval is about, for the parent-visible notice. */
+export interface ChildApprovalAsk {
+  toolName: string;
+  subject: string;
+}
+
+/**
+ * Taskana 4821: the tool name plus its one-line subject (file path or command),
+ * capped to the wire limits of `ChildProgress{kind:"attention"}`.
+ */
+export function describeChildApprovalAsk(toolName: string, input: unknown): ChildApprovalAsk {
+  let subject = "";
+  if (input !== null && typeof input === "object") {
+    const rec = input as Record<string, unknown>;
+    for (const key of ["file_path", "notebook_path", "path", "command"]) {
+      const value = rec[key];
+      if (typeof value === "string" && value !== "") {
+        subject = value;
+        break;
+      }
+    }
+  }
+  return { toolName: toolName.slice(0, 80) || "unknown", subject: subject.slice(0, 160) };
+}
+
 /**
  * Permission-tap for a child session's broker (CUT-S2 §0.8/§2.6.3): wraps
  * the `emit` closure an `IpcPermissionBroker` is constructed with (host/
@@ -538,11 +563,11 @@ export interface ChildSessionOptions {
  */
 export function tapChildPermissions(
   emit: (message: HostToUiMessage) => void,
-  onAttention: (waiting: boolean) => void,
+  onAttention: (waiting: boolean, ask?: ChildApprovalAsk) => void,
 ): (message: HostToUiMessage) => void {
   return (message: HostToUiMessage): void => {
     if (message.type === "permission_request") {
-      onAttention(true);
+      onAttention(true, describeChildApprovalAsk(message.toolName, message.input));
     } else if (message.type === "permission_settled") {
       onAttention(false);
     }

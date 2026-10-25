@@ -8575,3 +8575,26 @@ function orchestrateEngine(opts: {
     dispose: async () => {},
   };
 }
+
+describe("tapChildPermissions ask identity (Taskana 4821)", () => {
+  it("passes the tool name and the path/command subject with attention(true), none with attention(false)", () => {
+    const calls: Array<{ waiting: boolean; ask?: { toolName: string; subject: string } }> = [];
+    const tapped = tapChildPermissions(
+      () => {},
+      (waiting, ask) => calls.push({ waiting, ...(ask !== undefined ? { ask } : {}) }),
+    );
+    tapped({
+      type: "permission_request",
+      requestId: "r1",
+      toolName: "Write",
+      input: { file_path: "/tmp/report.md", content: "x" },
+      mode: "build",
+      metadata: { name: "Write", description: "d", readOnly: false, destructive: false, riskLevel: "medium", sideEffectScope: "filesystem" },
+    } as HostToUiMessage);
+    tapped({ type: "permission_settled", requestId: "r1", behavior: "deny", origin: "timeout" });
+    expect(calls).toEqual([
+      { waiting: true, ask: { toolName: "Write", subject: "/tmp/report.md" } },
+      { waiting: false },
+    ]);
+  });
+});

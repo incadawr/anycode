@@ -2218,3 +2218,46 @@ describe("child-session-port — maxDetachedChildren cap (Taskana 4704 §2.8)", 
     expect((await p2).status).toBe("completed");
   });
 });
+
+describe("detached approval notice delivery (Taskana 4821)", () => {
+  function approvalHarness() {
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    const asks: Array<{ ask: { toolName: string; subject: string }; req: SessionSubagentRequest; childSessionId: string }> = [];
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => "req-appr",
+      onDetachedApproval: (ask, req, childSessionId) => {
+        asks.push({ ask, req, childSessionId });
+      },
+    });
+    return { port, sent, emit: (event: ChildRunEvent) => listener?.(event), asks };
+  }
+
+  it("a detached child's attention(waiting=true) with an ask identity reaches onDetachedApproval; waiting=false and identity-less events do not", async () => {
+    const { port, sent, emit, asks } = approvalHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "triage", prompt: "p", spawnToolCallId: "spawn-appr-1", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-appr-1", childTabId: "t1", model: "m" });
+    await pending;
+
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: true });
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false, toolName: "Write", subject: "/tmp/r.md" });
+    expect(asks).toHaveLength(0);
+
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: true, toolName: "Write", subject: "/tmp/r.md" });
+    expect(asks).toHaveLength(1);
+    expect(asks[0]!.ask).toEqual({ toolName: "Write", subject: "/tmp/r.md" });
+    expect(asks[0]!.childSessionId).toBe("child-appr-1");
+    expect(asks[0]!.req.spawnToolCallId).toBe("spawn-appr-1");
+  });
+});

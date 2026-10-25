@@ -2587,7 +2587,13 @@ export class TabHostManager {
         event = { ...base, kind: "activity", toolName: msg.toolName, summary: msg.summary };
         break;
       case "attention":
-        event = { ...base, kind: "attention", waiting: msg.waiting };
+        event = {
+          ...base,
+          kind: "attention",
+          waiting: msg.waiting,
+          ...(msg.toolName !== undefined ? { toolName: msg.toolName } : {}),
+          ...(msg.subject !== undefined ? { subject: msg.subject } : {}),
+        };
         break;
       default: {
         // Exhaustiveness guard (mirrors host/child-session-port.ts's own):

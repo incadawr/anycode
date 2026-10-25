@@ -274,6 +274,49 @@ export function formatChildStallNotice(input: ChildStallNoticeInput): string {
   );
 }
 
+/** Taskana 4821: a detached child is blocked on an approval nobody is present to answer. */
+export interface ChildApprovalNoticeInput {
+  taskId: string;
+  toolUseId: string;
+  agentId?: string;
+  subagentType: string;
+  description: string;
+  /** Tool the child asked to run (e.g. "Write"). */
+  toolName: string;
+  /** File path / command the ask is about; may be empty. */
+  subject: string;
+}
+
+/**
+ * Taskana 4821: parent-visible notice that a DETACHED child raised an approval
+ * ask. Distinct root tag (`<task-approval-notice>`) from the terminal report
+ * and stall notice. Tells the parent how to answer and what happens if nobody
+ * does (the ask expires fail-closed and the child is told not to bypass it).
+ */
+export function formatChildApprovalNotice(input: ChildApprovalNoticeInput): string {
+  const body = [
+    "<task-approval-notice>",
+    `  <task-id>${escapeXmlText(input.taskId)}</task-id>`,
+    `  <tool-use-id>${escapeXmlText(input.toolUseId)}</tool-use-id>`,
+    "  <task-type>subagent_child</task-type>",
+    ...(input.agentId !== undefined ? [`  <agent-id>${escapeXmlText(input.agentId)}</agent-id>`] : []),
+    `  <subagent-type>${escapeXmlText(input.subagentType)}</subagent-type>`,
+    `  <description>${escapeXmlText(input.description)}</description>`,
+    `  <tool>${escapeXmlText(input.toolName)}</tool>`,
+    ...(input.subject !== "" ? [`  <subject>${escapeXmlText(input.subject)}</subject>`] : []),
+    "</task-approval-notice>",
+  ].join("\n");
+  return (
+    `${NOTIFICATION_HEADER}\n\n` +
+    "This child session has NOT finished — it is paused on a permission request that needs a human " +
+    "answer. To unblock it, open the child's tab and approve or deny the pending request (or ask the " +
+    "user to). If nobody answers within the approval deadline the request is denied and the child is " +
+    "told to stop that action and report it as blocked; it will not be retried through another tool. " +
+    "This is a progress notice, not a completion report.\n\n" +
+    body
+  );
+}
+
 /**
  * taskana 4181: the SUPERVISOR idle reminder — delivered through the SAME
  * channel as the child notifications above (the desktop host's

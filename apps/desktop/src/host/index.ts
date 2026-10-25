@@ -230,6 +230,7 @@ import {
   exitWorktreeTool,
   discoverExtensions,
   formatChildStallNotice,
+  formatChildApprovalNotice,
   childNotificationSummaryOverflows,
   formatChildTaskNotification,
   formatSupervisorIdleReminder,
@@ -938,6 +939,30 @@ function deliverDetachedChildStall(
 }
 
 /**
+ * Taskana 4821: a detached child raised an approval ask — nobody is at its tab
+ * by construction, and the ask expires fail-closed. Tells the parent which
+ * tool/subject is blocked and how to answer, instead of the child silently
+ * waiting. `upsert` under `approval:<spawnToolCallId>` coalesces repeats to one
+ * pending slot per child (same bound as the stall notice).
+ */
+function deliverDetachedChildApproval(
+  ask: { toolName: string; subject: string },
+  req: SessionSubagentRequest,
+  childSessionId: string,
+): void {
+  const text = formatChildApprovalNotice({
+    taskId: req.spawnToolCallId,
+    toolUseId: req.spawnToolCallId,
+    ...(childSessionId !== "" ? { agentId: childSessionId } : {}),
+    subagentType: req.agentType,
+    description: req.description,
+    toolName: ask.toolName,
+    subject: ask.subject,
+  });
+  childReportQueue.upsert(`approval:${req.spawnToolCallId}`, text);
+}
+
+/**
  * taskana 4181: delivers a supervisor idle reminder. The host's
  * SupervisorIdleWatchdog (constructed below for a non-child codex boot and
  * for the core root path) fires `onIdle` when the supervisor's turn has
@@ -1178,11 +1203,12 @@ function resolveCodexDbPath(env: NodeJS.ProcessEnv): string {
  * shared by the codex/claude boots too.
  */
 function buildChildBrokerEmit(emitFn: (message: HostToUiMessage) => void): (message: HostToUiMessage) => void {
-  return tapChildPermissions(emitFn, (waiting) => {
+  return tapChildPermissions(emitFn, (waiting, ask) => {
     process.parentPort.postMessage({
       type: CHILD_PROGRESS_TYPE,
       kind: "attention",
       waiting,
+      ...(ask !== undefined ? { toolName: ask.toolName, subject: ask.subject } : {}),
     } satisfies ChildProgress);
   });
 }
@@ -1445,7 +1471,7 @@ async function bootCodexSession(
         parentSessionId: bridgeRowId,
         getPermissionMode: () => codexAgentPermissionMode(codexParentEngine?.snapshot().activePresetId ?? "read-only"),
         send: sendChildSessionMessage, subscribe: subscribeChildRunEvents,
-        onDetachedTerminal: deliverDetachedChildReport, onDetachedStall: deliverDetachedChildStall,
+        onDetachedTerminal: deliverDetachedChildReport, onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
       });
       codexChildPort = port;
     }
@@ -2087,7 +2113,7 @@ async function bootClaudeSession(
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
         onDetachedTerminal: deliverDetachedChildReport,
-        onDetachedStall: deliverDetachedChildStall,
+        onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
       });
       claudeChildPort = childPort;
     }
@@ -4136,7 +4162,7 @@ async function boot(): Promise<void> {
         // mid-run, zero or more times, independently of onDetachedTerminal
         // above. See deliverDetachedChildStall's own comment for the full
         // picture (queue coalescing, id namespacing).
-        onDetachedStall: deliverDetachedChildStall,
+        onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
         // TASK.148 slice 1/2: same knob as the inline tier just above
         // (config.subagentStallTimeoutMs) so both tiers share one resolved
         // value; the port's own default (SUBAGENT_STALL_TIMEOUT_MS) applies
