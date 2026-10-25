@@ -61,6 +61,7 @@ describe("anycode-setup docs sync", () => {
     const expected = [
       "configuration.md",
       "engines.md",
+      "lsp.md",
       "mcp.md",
       "orchestration.md",
       "permissions.md",

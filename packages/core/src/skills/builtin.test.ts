@@ -226,6 +226,7 @@ describe("anycode-setup builtin skill", () => {
       [
         "configuration.md",
         "engines.md",
+        "lsp.md",
         "mcp.md",
         "orchestration.md",
         "permissions.md",

@@ -92,6 +92,14 @@ file replaces the user object wholesale.
     }
   },
   "skills": { "disabled": ["example-skill"] },
+  "lspServers": [
+    {
+      "name": "typescript",
+      "command": "typescript-language-server",
+      "args": ["--stdio"],
+      "extensions": [".ts", ".tsx", ".js", ".jsx"]
+    }
+  ],
   "telemetry": { "enabled": true },
   "repoMap": { "enabled": true },
   "webSearch": { "backend": "brave", "apiKeyEnv": "BRAVE_API_KEY" }
@@ -101,6 +109,9 @@ file replaces the user object wholesale.
 - **MCP servers**: `mcpServers`, as a stdio or HTTP entry. See [mcp.md](mcp.md).
 - **Skills**: `skills.disabled` lists skill names to hide. The Skills pane
   toggles it for filesystem skills. See [skills.md](skills.md).
+- **Language servers**: `lspServers`, an array of server entries. The
+  Language servers pane writes it from its catalog; entries start with new
+  sessions. See [lsp.md](lsp.md).
 - **Subagent profiles** are not in this file. They are standalone
   `.anycode/agents/*.md` files. See [subagents.md](subagents.md).
 - **Telemetry**: `telemetry.enabled: true` turns on a local JSONL sink, and
@@ -121,6 +132,7 @@ telemetry and repo map.
 |---|---|
 | Add a provider connection or switch models | Settings → Provider |
 | Add or remove an MCP server | Settings → MCP, or `mcpServers` in the shared config |
+| Add or remove a language server | Settings → Language servers, or `lspServers` in the shared config |
 | Hide a skill | Settings → Skills, or `skills.disabled` in the shared config |
 | Add a subagent profile | `<project>/.anycode/agents/<name>.md`, not a JSON file |
 | Stop being asked about a command | Settings → Permissions (always-allow rule) |
@@ -132,6 +144,7 @@ telemetry and repo map.
 
 - [engines.md](engines.md): the three engines and how they differ from providers.
 - [mcp.md](mcp.md): the MCP walkthrough.
+- [lsp.md](lsp.md): the language-server walkthrough.
 - [skills.md](skills.md) and [subagents.md](subagents.md): extensibility surfaces.
 - [permissions.md](permissions.md): the approval model.
 - [troubleshooting.md](troubleshooting.md): when a change does not seem to apply.
