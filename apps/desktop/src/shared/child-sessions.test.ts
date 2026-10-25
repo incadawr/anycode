@@ -1118,3 +1118,33 @@ describe("parseChildSpawnRequest — maxTurns (TASK.180)", () => {
     expect(parseChildSpawnRequest({ ...valid, maxTurns: 42 })).toMatchObject({ maxTurns: 42 });
   });
 });
+
+// Taskana 4820 review F1: the accepted event's additive optional maxTurns —
+// the child host's EFFECTIVE turn cap, carried so the parent-side budget
+// latch can warn against the cap the child will actually stop at.
+describe("parseChildRunEvent — accepted maxTurns (Taskana 4820 F1)", () => {
+  const base = {
+    type: CHILD_RUN_EVENT_TYPE,
+    requestId: "req-acc",
+    kind: "accepted" as const,
+    childSessionId: "sess-acc",
+    childTabId: "tab-acc",
+    model: "model-x",
+  };
+
+  it("accepts an accepted event carrying a positive integer maxTurns, returned verbatim", () => {
+    expect(parseChildRunEvent({ ...base, maxTurns: 40 })).toEqual({ ...base, maxTurns: 40 });
+  });
+
+  it("accepts the pre-F1 shape (no maxTurns) unchanged — legacy payloads keep parsing", () => {
+    expect(parseChildRunEvent(base)).toEqual(base);
+  });
+
+  it("rejects a non-conforming maxTurns (0, negative, fraction, string, over-ceiling) — fail-closed, same gate as the spawn request", () => {
+    expect(parseChildRunEvent({ ...base, maxTurns: 0 })).toBeNull();
+    expect(parseChildRunEvent({ ...base, maxTurns: -3 })).toBeNull();
+    expect(parseChildRunEvent({ ...base, maxTurns: 2.5 })).toBeNull();
+    expect(parseChildRunEvent({ ...base, maxTurns: "40" })).toBeNull();
+    expect(parseChildRunEvent({ ...base, maxTurns: 201 })).toBeNull();
+  });
+});

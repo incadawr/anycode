@@ -66,7 +66,7 @@ import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/
 import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
 import { clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
-import { ENV_CONNECTION_ID, ENV_MODEL, ENV_REASONING_EFFORT } from "./host-env.js";
+import { ENV_CONNECTION_ID, ENV_MAX_TURNS, ENV_MODEL, ENV_REASONING_EFFORT } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import { sessionToolEnv } from "../shared/session-env.js";
 import { ENV_MCP_SECRETS } from "../shared/mcp-secrets.js";
@@ -2004,6 +2004,20 @@ export class TabHostManager {
         childSessionId,
         childTabId,
         model: modelOverride ?? (engine === "core" ? this.describeChildModel(connectionId) : "default"),
+        // Taskana 4820 review F1: the child's EFFECTIVE turn cap as THIS fork
+        // resolved it — the stamped `--child-max-turns` when the creating
+        // spawn had a budget, else the host env's resolved ANYCODE_MAX_TURNS
+        // off the SAME env() the fork itself used (buildHostEnv fills it from
+        // settings; core's loadEnvConfig reads it back out on the child side,
+        // and resolveChildMaxTurns keeps argv > env precedence). Absent when
+        // neither source set one (the child then runs at core's
+        // DEFAULT_MAX_TURNS internally). Only a CORE child consults it — the
+        // claude engine maps the stamped budget to its native --max-turns
+        // (never the env default) and codex enforces no turn cap at all, so
+        // for both an absent key is the honest report.
+        ...(engine === "core"
+          ? { maxTurns: this.resolveAcceptedChildMaxTurns(childTab.childOf.maxTurns, this.env(connectionId)) }
+          : {}),
       });
     } finally {
       releasePrepared();
@@ -2127,6 +2141,30 @@ export class TabHostManager {
     const env = this.env(connectionId);
     const model = env?.[ENV_MODEL];
     return typeof model === "string" && model.length > 0 ? model : "default";
+  }
+
+  /**
+   * Taskana 4820 review F1: the EFFECTIVE core-child turn cap to carry on the
+   * run's `accepted` event — `undefined` (field omitted) when neither source
+   * set one, in which case the child host internally falls back to core's
+   * DEFAULT_MAX_TURNS and the PARENT-side budget latch falls back to the SAME
+   * shared constant (never a duplicated literal). Precedence mirrors the
+   * child host's own resolveChildMaxTurns exactly: a stamped
+   * `--child-max-turns` (the creating spawn's budget, argv) outranks the
+   * connection env's ANYCODE_MAX_TURNS (settings-derived, read off the same
+   * `env()` the fork itself used). Returned raw when malformed — main never
+   * re-validates what buildHostEnv already wrote.
+   */
+  private resolveAcceptedChildMaxTurns(stamped: number | undefined, env: NodeJS.ProcessEnv | undefined): number | undefined {
+    if (stamped !== undefined) {
+      return stamped;
+    }
+    const raw = env?.[ENV_MAX_TURNS];
+    if (raw === undefined || raw.trim() === "") {
+      return undefined;
+    }
+    const parsed = Number(raw);
+    return Number.isInteger(parsed) ? parsed : undefined;
   }
 
   /** requestId -> its owning parent's cancel of a still-live run (Agent tool abort/timeout, cut §0.5's ctx.abortSignal). */

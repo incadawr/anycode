@@ -111,6 +111,7 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  DEFAULT_MAX_TURNS,
   SUBAGENT_STALL_TIMEOUT_MS,
   SubagentStallClock,
   type PermissionMode,
@@ -637,6 +638,14 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // has fired — the warning is once per run, never per progress event.
     let turnBudgetNotified = false;
 
+    // Taskana 4820 review F1: the child's EFFECTIVE turn cap this latch warns
+    // against — the request's own budget, else the child host's resolved cap
+    // carried on the `accepted` event, else core's DEFAULT_MAX_TURNS (the
+    // SAME constant the child's own resolveChildMaxTurns/agent-loop fall
+    // back to, imported — never a duplicated literal). Updated at accept
+    // below; read by the progress branch's latch check.
+    let effectiveMaxTurns: number = req.maxTurns ?? DEFAULT_MAX_TURNS;
+
     // TASK.148 slice 1/2: constructed for BOTH tiers now. A non-detached
     // run's notice still bridges to opts.onProgress (unchanged from slice
     // 1). A DETACHED run's notice can no longer reach opts.onProgress (that
@@ -733,6 +742,16 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 // moment it becomes known, mirroring the registry entry
                 // built in the same step below.
                 detachedChildSessionId = event.childSessionId;
+                // Taskana 4820 review F1: an unstamped spawn (persona/default
+                // budgets never ride session-tier wires) still caps at the
+                // child host's resolved limit — carried here when it differs
+                // from the default — so the budget latch below warns against
+                // the cap the child will ACTUALLY stop at. The request's own
+                // explicit budget always outranks it (a stamped budget IS the
+                // child's cap — argv precedence, resolveChildMaxTurns).
+                if (req.maxTurns === undefined && event.maxTurns !== undefined) {
+                  effectiveMaxTurns = event.maxTurns;
+                }
                 backgroundChildren.set(event.childSessionId, {
                   requestId,
                   snapshot: {
@@ -805,14 +824,28 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 // cap. Checked inside the detach branch (a sync-join parent
                 // is blocked inside the Agent call and cannot act on a
                 // mid-call warning). Once per run: the latch above.
+                //
+                // F1: `effectiveMaxTurns` is the child's EFFECTIVE cap
+                // (request budget > accepted-carried host limit >
+                // DEFAULT_MAX_TURNS), never a bare `req.maxTurns` gate — an
+                // unstamped spawn still stops at the child host's default
+                // cap, and the warning must fire for it too.
+                //
+                // F2: codex children are SKIPPED — codex enforces no turn
+                // cap, so a "turns" count against one is a warning about a
+                // wall that does not exist. Small budgets (< 5) are skipped
+                // too: the 10%-min-1 margin leaves no room between "warned"
+                // and "stopped" for the parent to act on.
                 if (
                   !turnBudgetNotified &&
-                  req.maxTurns !== undefined &&
-                  event.turns >= req.maxTurns - Math.max(1, Math.ceil(req.maxTurns / 10))
+                  req.engine !== "codex" &&
+                  effectiveMaxTurns >= 5 &&
+                  event.turns >= 1 &&
+                  event.turns >= effectiveMaxTurns - Math.max(1, Math.ceil(effectiveMaxTurns / 10))
                 ) {
                   turnBudgetNotified = true;
                   options.onDetachedTurnBudget?.(
-                    { turns: event.turns, maxTurns: req.maxTurns },
+                    { turns: event.turns, maxTurns: effectiveMaxTurns },
                     req,
                     detachedChildSessionId ?? "",
                   );

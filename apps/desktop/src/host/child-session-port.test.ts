@@ -1740,7 +1740,7 @@ describe("detached approaching-turn-budget notice (Taskana 4820)", () => {
     emit(terminalEvent(requestId, { childSessionId: "child-bud-2" }));
   });
 
-  it("maxTurns:1 warns on the very first progress event (margin floors at 1)", async () => {
+  it("maxTurns < 5 NEVER warns (F2: no room between the margin and the cap for the parent to act)", async () => {
     const { port, sent, emit, notices } = budgetHarness();
     const pending = port.run(
       { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-3", detach: true, maxTurns: 1 },
@@ -1751,13 +1751,12 @@ describe("detached approaching-turn-budget notice (Taskana 4820)", () => {
     await pending;
 
     emit(progressEvent(requestId, 1));
-    expect(notices).toHaveLength(1);
-    expect(notices[0]!.info).toEqual({ turns: 1, maxTurns: 1 });
+    expect(notices).toHaveLength(0);
 
     emit(terminalEvent(requestId, { childSessionId: "child-bud-3" }));
   });
 
-  it("a detached spawn with NO maxTurns never fires the seam", async () => {
+  it("a detached spawn with NO maxTurns warns near the child host's DEFAULT effective cap (100) — an unstamped budget is still a budget", async () => {
     const { port, sent, emit, notices } = budgetHarness();
     const pending = port.run(
       { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-4", detach: true },
@@ -1767,12 +1766,126 @@ describe("detached approaching-turn-budget notice (Taskana 4820)", () => {
     emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-bud-4", childTabId: "t1", model: "m" });
     await pending;
 
+    // Well below the default cap: silent.
     for (let turns = 1; turns <= 50; turns += 1) {
       emit(progressEvent(requestId, turns));
     }
     expect(notices).toHaveLength(0);
 
+    // DEFAULT_MAX_TURNS=100 minus the 10% margin (min 1) = warn from turn 90.
+    emit(progressEvent(requestId, 90));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.info).toEqual({ turns: 90, maxTurns: 100 });
+
+    // Later progress never re-fires — once per run.
+    emit(progressEvent(requestId, 95));
+    expect(notices).toHaveLength(1);
+
     emit(terminalEvent(requestId, { childSessionId: "child-bud-4" }));
+  });
+
+  it("an accepted event carrying the child host's resolved maxTurns replaces the default fallback (F1: env-configured cap)", async () => {
+    const { port, sent, emit, notices } = budgetHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-7", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId,
+      kind: "accepted",
+      childSessionId: "child-bud-7",
+      childTabId: "t1",
+      model: "m",
+      maxTurns: 20,
+    });
+    await pending;
+
+    // 10% of 20 = 2: warn from turn 18, not from the default's 90.
+    emit(progressEvent(requestId, 17));
+    expect(notices).toHaveLength(0);
+    emit(progressEvent(requestId, 18));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.info).toEqual({ turns: 18, maxTurns: 20 });
+
+    emit(terminalEvent(requestId, { childSessionId: "child-bud-7" }));
+  });
+
+  it("an explicit request maxTurns outranks the accepted event's value", async () => {
+    const { port, sent, emit, notices } = budgetHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-8", detach: true, maxTurns: 10 },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId,
+      kind: "accepted",
+      childSessionId: "child-bud-8",
+      childTabId: "t1",
+      model: "m",
+      maxTurns: 40,
+    });
+    await pending;
+
+    // The request's own budget (10, margin 1 => warn at 9) wins over the
+    // accepted-carried 40 (which would stay silent until 36).
+    emit(progressEvent(requestId, 9));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.info).toEqual({ turns: 9, maxTurns: 10 });
+
+    emit(terminalEvent(requestId, { childSessionId: "child-bud-8" }));
+  });
+
+  it("a codex-engine child NEVER fires the seam (F2: codex enforces no turn cap — the warning would name a wall that does not exist)", async () => {
+    const { port, sent, emit, notices } = budgetHarness();
+    const pending = port.run(
+      { agentType: "codex-reviewer", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-9", detach: true, engine: "codex", maxTurns: 10 },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId,
+      kind: "accepted",
+      childSessionId: "child-bud-9",
+      childTabId: "t1",
+      model: "m",
+    });
+    await pending;
+
+    // Even with a stamped budget and turns far past it: codex never stops at
+    // a turn cap, so the latch is explicitly skipped for it.
+    for (let turns = 1; turns <= 20; turns += 1) {
+      emit(progressEvent(requestId, turns));
+    }
+    expect(notices).toHaveLength(0);
+
+    emit(terminalEvent(requestId, { childSessionId: "child-bud-9" }));
+  });
+
+  it("requires turns >= 1 before the threshold comparison (F2: turn 0 must never satisfy a <=1 threshold)", async () => {
+    const { port, sent, emit, notices } = budgetHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-10", detach: true, maxTurns: 10 },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-bud-10", childTabId: "t1", model: "m" });
+    await pending;
+
+    // A 0-turn progress push (an engine child's first liveness ping before
+    // any model round) must not fire the latch even though 0 >= 10-10.
+    emit(progressEvent(requestId, 0));
+    expect(notices).toHaveLength(0);
+
+    emit(progressEvent(requestId, 9));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.info).toEqual({ turns: 9, maxTurns: 10 });
+
+    emit(terminalEvent(requestId, { childSessionId: "child-bud-10" }));
   });
 
   it("a NON-detached run (sync join) never fires the seam even with a budget", async () => {

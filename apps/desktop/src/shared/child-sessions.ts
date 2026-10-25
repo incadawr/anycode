@@ -195,7 +195,23 @@ const CHILD_RUN_REJECT_REASONS: readonly ChildRunRejectReason[] = [
  * `activity`/`attention`, then exactly one `terminal` (§0.5/§0.6).
  */
 export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: string } & (
-  | { kind: "accepted"; childSessionId: string; childTabId: string; model: string }
+  | {
+      kind: "accepted";
+      childSessionId: string;
+      childTabId: string;
+      model: string;
+      /**
+       * Taskana 4820 review F1 (additive): the child host's EFFECTIVE turn
+       * cap for this run — `--child-max-turns` when the spawn stamped one,
+       * else the host env's resolved `ANYCODE_MAX_TURNS`, else absent (the
+       * child falls back to DEFAULT_MAX_TURNS=100 internally). Absent on
+       * legacy payloads. Lets the parent's approaching-budget latch warn
+       * against the cap the child will ACTUALLY stop at, never a duplicated
+       * literal. NEVER outranks the request's own `maxTurns` (parent-side
+       * precedence: request > accepted > DEFAULT_MAX_TURNS).
+       */
+      maxTurns?: number;
+    }
   | { kind: "rejected"; reason: ChildRunRejectReason; message: string }
   | { kind: "progress"; turns: number; toolCalls: number; lastTool?: string }
   | { kind: "activity"; toolName: string; summary: string }
@@ -629,7 +645,16 @@ export function parseChildRunSend(msg: unknown): ChildRunSend | null {
   return { type: CHILD_RUN_SEND_TYPE, requestId: msg.requestId, childSessionId: msg.childSessionId, text: msg.text };
 }
 
-const CHILD_RUN_EVENT_ACCEPTED_KEYS = ["type", "requestId", "kind", "childSessionId", "childTabId", "model"] as const;
+const CHILD_RUN_EVENT_ACCEPTED_KEYS = [
+  "type",
+  "requestId",
+  "kind",
+  "childSessionId",
+  "childTabId",
+  "model",
+  // Taskana 4820 review F1: additive optional key (see the variant's own doc).
+  "maxTurns",
+] as const;
 const CHILD_RUN_EVENT_REJECTED_KEYS = ["type", "requestId", "kind", "reason", "message"] as const;
 const CHILD_RUN_EVENT_SENT_KEYS = ["type", "requestId", "kind"] as const;
 const CHILD_RUN_EVENT_PROGRESS_KEYS = ["type", "requestId", "kind", "turns", "toolCalls", "lastTool"] as const;
@@ -679,6 +704,15 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       ) {
         return null;
       }
+      // Taskana 4820 review F1: optional turn cap — same shape discipline as
+      // the spawn request's own maxTurns gate above (a safe integer within
+      // 1..CHILD_MAX_TURNS_CEILING), fail-closed on anything else.
+      if (
+        msg.maxTurns !== undefined &&
+        !(typeof msg.maxTurns === "number" && Number.isSafeInteger(msg.maxTurns) && msg.maxTurns >= 1 && msg.maxTurns <= CHILD_MAX_TURNS_CEILING)
+      ) {
+        return null;
+      }
       return {
         type: CHILD_RUN_EVENT_TYPE,
         requestId,
@@ -686,6 +720,7 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
         childSessionId: msg.childSessionId,
         childTabId: msg.childTabId,
         model: msg.model,
+        ...(msg.maxTurns !== undefined ? { maxTurns: msg.maxTurns } : {}),
       };
     }
     case "rejected": {
