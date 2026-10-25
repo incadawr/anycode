@@ -49,6 +49,7 @@ const tools = [
   { name: "send_message", description: "Send an authenticated agent envelope. next_turn queues while busy; steer uses active Codex turn/steer. Acknowledged is not model-applied.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, payload: { type: "string", minLength: 1, maxLength: 32000 }, mode: { enum: ["next_turn", "steer"] }, kind: { enum: ["agent_message", "task_result"] }, correlationId: { type: "string" }, replyTo: { type: "string" }, idempotencyKey: { type: "string" } }, required: ["sessionId", "payload", "mode"], additionalProperties: false } },
   { name: "get_message_status", description: "Read delivery state. Unknown means do not blindly retry; the model may have received it.", inputSchema: { type: "object", properties: { messageId: { type: "string" } }, required: ["messageId"], additionalProperties: false } },
   { name: "wait_for_result", description: "Long-poll until the turn that consumed the message reaches a terminal state. Returns the same shape as get_session_result plus status. On timeout returns {status:'pending'}; call again.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, messageId: { type: "string" }, correlationId: { type: "string", maxLength: 200 }, timeoutMs: { type: "integer", minimum: 1, maximum: 120000, default: 30000 } }, required: ["sessionId"], additionalProperties: false } },
+  { name: "cancel_turn", description: "Stop the running turn of an allowed session, like the Stop button: queued agent messages are rejected and parked approvals are denied. Idle is not an error (cancelled:false, reason:idle). Needs only the Sessions API switch.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
 ];
 
 async function writePrivateFile(path: string, text: string): Promise<void> {
@@ -194,6 +195,21 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           signal.removeEventListener("abort", onRequestGone);
           waiters.delete(controller);
         }
+      }
+      case "cancel_turn": {
+        const input = sessionSchema.parse(raw); const tab = await requireSession(input.sessionId);
+        let result: { cancelled?: unknown; reason?: unknown; turnId?: unknown } | undefined;
+        try {
+          result = await options.manager.communicationRequest(input.sessionId, "cancel_turn", undefined, tab.workspace) as typeof result;
+        } catch {
+          throw new Error("Session closed");
+        }
+        return {
+          sessionId: input.sessionId,
+          cancelled: result?.cancelled === true,
+          ...(typeof result?.reason === "string" ? { reason: result.reason } : {}),
+          ...(typeof result?.turnId === "string" ? { turnId: result.turnId } : {}),
+        };
       }
       case "get_session_result":
       case "get_session_status": {
