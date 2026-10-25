@@ -16,7 +16,7 @@ const timer = setTimeout(() => {
   forceTimer = setTimeout(() => {
     try { if (process.platform !== "win32") process.kill(-child.pid, "SIGKILL"); else child.kill("SIGKILL"); } catch {}
   }, 5000);
-}, 45000);
+}, 90000);
 try {
   const exitCode = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
   const line = output.split("\n").find(line => line.startsWith("ANYCODE_SELF_CHECK "));

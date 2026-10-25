@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The release self-check now opens every Settings pane in the packaged app and fails if one blanks the window, shows its error fallback or leaves a modal over the window.
 - The empty Timeline side panel is gone: the conversation now has a slim
   tick rail on the left edge — one tick per message (from two messages on),
   the current position highlighted — with a hover preview of the query,

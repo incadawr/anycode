@@ -3445,7 +3445,7 @@ void app.whenReady().then(async () => {
     win!.webContents.on("render-process-gone", (_event, details) => console.error(`[self-check] renderer exited (${details.reason})`));
     try {
       await runSelfCheck(win!, selfCheckProfile);
-      console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape"] })}`);
+      console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape", "settings-panes"] })}`);
       await shutdownEverything();
       app.exit(0);
     } catch (error) {
