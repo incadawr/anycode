@@ -200,7 +200,10 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
     const tail = events.slice(-2);
     expect(tail.map((event) => event.type)).toEqual(["turn_end", "loop_end"]);
     expect(tail[0]).toMatchObject({ type: "turn_end", turn: 1, finishReason: "stop" });
-    expect(tail[1]).toMatchObject({ type: "loop_end", reason: "completed", turns: 1 });
+    // 4820 F4: loop_end.turns reports MODEL ROUNDS (the result frame's
+    // num_turns — here 2: the probe turn ran two assistant rounds), not the
+    // runTurn ordinal.
+    expect(tail[1]).toMatchObject({ type: "loop_end", reason: "completed", turns: 2 });
     // The result frame is handed to the engine for cost accounting + the
     // post-result get_context_usage pull — never summed into a ctx meter here.
     expect(results).toHaveLength(1);
@@ -350,7 +353,9 @@ describe("ClaudeTurnTranslator — finish() guarantees (codex TurnTranslator par
     expect(events.map((event) => event.type)).toEqual(["text_end", "tool_result", "turn_end", "loop_end"]);
     const outcome = (events[1] as Extract<AgentEvent, { type: "tool_result" }>).outcome;
     expect(outcome).toMatchObject({ toolCallId: "toolu_open", toolName: "Bash", status: "cancelled" });
-    expect(events[3]).toMatchObject({ type: "loop_end", reason: "cancelled", turns: 3 });
+    // 4820 F4: one message_start was seen, so the round tally (1) wins over
+    // the runTurn ordinal (3) even on a cancelled finish — the round DID run.
+    expect(events[3]).toMatchObject({ type: "loop_end", reason: "cancelled", turns: 1 });
   });
 
   it("a second terminal frame is a no-op — a doubled `result` never double-reports (CC-B hazard (г))", () => {
@@ -575,11 +580,80 @@ describe("result subtype error_max_turns (TASK.180)", () => {
     expect(error).toContain("error_max_turns");
   });
 
-  it("num_turns on a capped result is consumed by the child-runner path (engine-children.test.ts maps it to outcome.turns); the stream translator's loop_end carries the translator turn ordinal, never misreading num_turns as a success", () => {
+  it("num_turns on a capped result is consumed by the child-runner path (engine-children.test.ts maps it to outcome.turns); the stream translator's loop_end now carries num_turns as its turn count (4820 F4 — the honest model-round tally, not the runTurn ordinal)", () => {
     const events = new ClaudeTurnTranslator({ turn: 1 }).onMessage(cappedResult({ terminal_reason: "max_turns" }));
     const loopEnd = events.find((event) => event.type === "loop_end") as Extract<AgentEvent, { type: "loop_end" }>;
-    expect(loopEnd?.turns).toBe(1);
+    expect(loopEnd?.turns).toBe(8);
     expect(loopEnd?.reason).toBe("max_turns");
+  });
+});
+
+/**
+ * Taskana 4820 review F2/F4: model rounds. The translator sees exactly one
+ * `message_start` per assistant message; turn_start/turn_end fire once per
+ * runTurn, so the loop_end `turns` ordinal undercounted multi-round turns
+ * (a 40-round claude runTurn reported "1") and the child's live progress
+ * `turns` — the count the parent's approaching-budget latch compares against
+ * the child's cap — never moved mid-turn. The translator now (a) emits an
+ * additive `engine_model_round` marker per assistant message and (b) stamps
+ * loop_end with the CLI's own `num_turns` when the result carries it (the
+ * authoritative round count), else the message_start tally.
+ */
+describe("ClaudeTurnTranslator — model rounds (Taskana 4820 F2/F4)", () => {
+  function messageStart(id: string): ClaudeStreamMessage {
+    return {
+      type: "stream_event",
+      event: { type: "message_start", message: { id, type: "assistant", role: "assistant", model: "m", content: [] } },
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  function resultFrame(fields: Record<string, unknown> = {}): ClaudeStreamMessage {
+    return {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      num_turns: 3,
+      duration_ms: 1,
+      duration_api_ms: 1,
+      total_cost_usd: 0,
+      ...fields,
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  it("emits one engine_model_round per message_start (F2)", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    const events = [
+      ...translator.onMessage(messageStart("msg_1")),
+      ...translator.onMessage(messageStart("msg_2")),
+    ].filter((event) => event.type === "engine_model_round");
+    expect(events).toHaveLength(2);
+  });
+
+  it("loop_end.turns carries the result frame's num_turns when present (F4)", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    translator.onMessage(messageStart("msg_1"));
+    const events = translator.onMessage(resultFrame({ num_turns: 7 }));
+    const loopEnd = events.find((event) => event.type === "loop_end") as Extract<AgentEvent, { type: "loop_end" }>;
+    expect(loopEnd?.turns).toBe(7);
+  });
+
+  it("loop_end.turns falls back to the message_start tally when num_turns is absent/malformed (F4)", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    translator.onMessage(messageStart("msg_1"));
+    translator.onMessage(messageStart("msg_2"));
+    translator.onMessage(messageStart("msg_3"));
+    const events = translator.onMessage(resultFrame({ num_turns: undefined }));
+    const loopEnd = events.find((event) => event.type === "loop_end") as Extract<AgentEvent, { type: "loop_end" }>;
+    // The tally counts THIS turn's three assistant messages — the ordinal
+    // (1) is never reported when rounds were observed.
+    expect(loopEnd?.turns).toBe(3);
+  });
+
+  it("a cancelled turn with no messages seen keeps the runTurn ordinal (no rounds observed — nothing better to report)", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 3 });
+    const events = translator.finishTerminal("cancelled");
+    const loopEnd = events.find((event) => event.type === "loop_end") as Extract<AgentEvent, { type: "loop_end" }>;
+    expect(loopEnd?.turns).toBe(3);
   });
 });
 

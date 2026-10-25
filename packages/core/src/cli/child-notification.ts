@@ -167,9 +167,15 @@ export function formatChildTaskNotification(input: ChildTaskNotificationInput): 
   // summary reads. Inside `summary`, it is capped along with everything else
   // rather than prepended past the cap — the cap exists to bound what the
   // parent pays attention to, and the cause line is short by construction.
+  // Taskana 4820 review F4: the count reads naturally at 1 ("1 turn", never
+  // "1 turns"). The number is a MODEL-ROUND count by construction — the
+  // claude translator stamps loop_end.turns from the CLI's own num_turns
+  // (F4's other half) and core's loop counts its own model turns — so it is
+  // printed whenever present (>= 1, the parser's own gate).
+  const turnLimitCount = input.turnLimitTurns;
   const withTurnLimit =
-    input.turnLimitTurns !== undefined
-      ? `The child stopped at its TURN LIMIT after ${input.turnLimitTurns} turns. ` +
+    turnLimitCount !== undefined
+      ? `The child stopped at its TURN LIMIT after ${turnLimitCount} turn${turnLimitCount === 1 ? "" : "s"}. ` +
         `The text below is its last output (wrap-up or partial), NOT a completion report.\n\n${base}`
       : base;
   const withLengthMarker = lengthCut

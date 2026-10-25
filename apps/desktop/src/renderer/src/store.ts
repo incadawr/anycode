@@ -4081,6 +4081,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           set({ sessionTokens: sessionTokensFromEngineEvent(event) });
           return;
 
+        // Taskana 4820 review F2: model-round marker emitted by the Claude
+        // engine's translator (one per assistant message). UI no-op: it is a
+        // host-side LIVENESS/counting signal (child-session progress turns
+        // and the approaching-turn-budget latch), never a transcript fact —
+        // the round's own blocks (text/tool_call) render on their own.
+        case "engine_model_round":
+          return;
+
         // Session consumes this control-plane event before it reaches the UI;
         // keep a defensive no-op for structural completeness on a rogue wire.
         case "workspace_transition":

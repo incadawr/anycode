@@ -399,7 +399,7 @@ describe("ClaudeEngine.runTurn — projection of a real W0 turn", () => {
     const turnEnd = events.find((event) => event.type === "turn_end");
     const loopEnd = events.find((event) => event.type === "loop_end");
     expect(turnEnd).toEqual({ type: "turn_end", turn: 1, finishReason: "stop" });
-    expect(loopEnd).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
+    expect(loopEnd).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
   });
 
   it("never renders the CLI's replayed user echo as a transcript message", async () => {
@@ -766,7 +766,7 @@ describe("ClaudeEngine — the context meter is get_context_usage, never a resul
       const transport = new FakeTransport({ frames: streamFrames("w0-02-control-writeprobe.jsonl"), contextUsage });
       const events = await collect(engineWith(transport).runTurn("hi", { signal: new AbortController().signal }));
       expect(types(events)).not.toContain("context_usage");
-      expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
+      expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
     }
   });
 });
@@ -927,7 +927,7 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     // death — no transport close, no engine_dead signal, semantics unchanged.
     expect(transport.closed).toBe(0);
     expect(events.some((event) => event.type === "error")).toBe(false);
-    expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "cancelled", turns: 1 });
+    expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "cancelled", turns: 2 });
   });
 
   it("TASK.156: a Stop that cannot settle in time closes the session and terminalizes as cancelled with a restart-required posture", async () => {
@@ -1217,7 +1217,7 @@ describe("ClaudeEngine — TASK.189: CLI self-started turns", () => {
     expect(events.some((event) => event.type === "error")).toBe(false);
     const loopEnds = events.filter((event) => event.type === "loop_end");
     expect(loopEnds).toHaveLength(1);
-    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
+    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
     expect(events.find((event) => event.type === "turn_end")).toEqual({ type: "turn_end", turn: 2, finishReason: "stop" });
     const serialized = JSON.stringify(events);
     expect(serialized).toContain("OWNER OUTPUT two");
@@ -1262,7 +1262,7 @@ describe("ClaudeEngine — TASK.189: CLI self-started turns", () => {
     expect(events.some((event) => event.type === "error")).toBe(false);
     const loopEnds = events.filter((event) => event.type === "loop_end");
     expect(loopEnds).toHaveLength(1);
-    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
+    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
     const serialized = JSON.stringify(events);
     expect(serialized).toContain("OWNER OUTPUT two");
     expect(serialized).not.toContain("F-A");
@@ -1295,7 +1295,7 @@ describe("ClaudeEngine — TASK.189: CLI self-started turns", () => {
     expect(events.some((event) => event.type === "error")).toBe(false);
     const loopEnds = events.filter((event) => event.type === "loop_end");
     expect(loopEnds).toHaveLength(1);
-    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
+    expect(loopEnds[0]).toEqual({ type: "loop_end", reason: "completed", turns: 1 });
     expect(events.find((event) => event.type === "turn_end")).toEqual({ type: "turn_end", turn: 2, finishReason: "stop" });
     const serialized = JSON.stringify(events);
     expect(serialized).not.toContain("FOREIGN RUNNING");
@@ -1318,7 +1318,7 @@ describe("ClaudeEngine — TASK.189: CLI self-started turns", () => {
     for (const f of ownerFrames("three")) transport.enqueue(f);
     const third = await collect(engine.runTurn("third", { signal: new AbortController().signal }));
     expect(third.some((event) => event.type === "error")).toBe(false);
-    expect(third.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 3 }]);
+    expect(third.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
     expect(JSON.stringify(third)).toContain("OWNER OUTPUT three");
   });
 
@@ -1344,7 +1344,7 @@ describe("ClaudeEngine — TASK.189: CLI self-started turns", () => {
     await turn2;
 
     expect(events.some((event) => event.type === "error")).toBe(false);
-    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 2 }]);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
     expect(transport.interrupts).toBe(0);
   });
 
@@ -1405,7 +1405,7 @@ describe("ClaudeEngine — TASK.189: CLI self-started turns", () => {
     for (const f of ownerFrames("three")) transport.enqueue(f);
     const third = await collect(engine.runTurn("third", { signal: new AbortController().signal }));
     expect(third.some((event) => event.type === "error")).toBe(false);
-    expect(third.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 3 }]);
+    expect(third.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
   });
 
   it("dispose while waiting for a self-started turn settles the waiting turn as cancelled", async () => {
@@ -1440,7 +1440,7 @@ describe("ClaudeEngine — TASK.189: CLI self-started turns", () => {
     const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
 
     expect(events.some((event) => event.type === "error")).toBe(false);
-    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 2 }]);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
     expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
     const foreignNotices = events.filter(
       (event) => event.type === "engine_notice" && String((event as { message?: string }).message).includes("started a turn on its own"),
@@ -1471,7 +1471,7 @@ describe("ClaudeEngine — TASK.189: CLI self-started turns", () => {
     const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
 
     expect(events.some((event) => event.type === "error")).toBe(false);
-    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 2 }]);
+    expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
     const foreignNotices = events.filter(
       (event) => event.type === "engine_notice" && String((event as { message?: string }).message).includes("started a turn on its own"),
     );

@@ -6181,6 +6181,72 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
     });
   });
 
+  /**
+   * Taskana 4820 review F2: the progress report's `turns` must count MODEL
+   * ROUNDS, not host runTurns. A claude engine child emits exactly ONE
+   * turn_end per runTurn while the CLI runs arbitrarily many assistant
+   * messages inside it — so the child reported "1 turn" to its parent for a
+   * 40-round run and the parent-side approaching-budget latch (comparing
+   * that count against the child's cap) could never fire. The claude
+   * translator now emits `engine_model_round` once per assistant message
+   * (message_start); the child-mode observer counts THOSE for a claude
+   * child, and the per-runTurn turn_end no longer double-increments.
+   */
+  describe("progress turns: claude model rounds (Taskana 4820 F2)", () => {
+    it("engine_model_round increments the progress turns — a claude child's rounds are visible mid-runTurn", () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+        // Three assistant messages inside ONE runTurn (a claude tool loop).
+        for (let round = 1; round <= 3; round += 1) {
+          currentTime = round * 2_000;
+          observeChildEventDirect(h.session, { type: "engine_model_round" });
+        }
+        const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress.length).toBeGreaterThan(0);
+        expect(progress.at(-1)!.turns).toBe(3);
+        expect(progress.at(-1)!.toolCalls).toBe(0);
+      } finally {
+        h.close();
+      }
+    });
+
+    it("a claude child's turn_end does NOT additionally increment turns when rounds were counted (no double count)", () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+        currentTime = 2_000;
+        observeChildEventDirect(h.session, { type: "engine_model_round" });
+        currentTime = 4_000;
+        observeChildEventDirect(h.session, { type: "engine_model_round" });
+        currentTime = 6_000;
+        // The runTurn's own turn_end: the rounds already counted the final
+        // assistant message — the host-boundary event adds nothing.
+        observeChildEventDirect(h.session, { type: "turn_end", turn: 1, finishReason: "stop" });
+        const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress.at(-1)!.turns).toBe(2);
+      } finally {
+        h.close();
+      }
+    });
+
+    it("a CORE child's turn_end still increments turns — engine_model_round is claude-only and never fires for core", () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+        currentTime = 2_000;
+        observeChildEventDirect(h.session, { type: "turn_end", turn: 1, finishReason: "stop" });
+        const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress.at(-1)!.turns).toBe(1);
+      } finally {
+        h.close();
+      }
+    });
+  });
+
   describe("progress counters (§10.7 п.6a.4)", () => {
     it("`turns` is the turn_end COUNT across the whole chain (mirrors runner.ts's turnEndCount — NOT the loop_end-summed childTurns); a steer turn keeps counting; `lastTool` updates on an invalid_input result too", async () => {
       const h = createChildHarness({

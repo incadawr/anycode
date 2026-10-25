@@ -231,6 +231,17 @@ describe("formatChildTaskNotification: turn-limit cause (Taskana 4820)", () => {
     expect(text).toContain("stopped at its TURN LIMIT after 40 turns");
     expect(text).toContain("[truncated — the full report");
   });
+
+  // Taskana 4820 review F4: the count must read naturally at 1 ("1 turn",
+  // never "1 turns"), and the number is only printed when it IS a model-round
+  // count (turnLimitTurns >= 1) — a non-count sentinel never reaches here.
+  it("singularises: 1 turn, not 1 turns (F4)", () => {
+    const text = formatChildTaskNotification(
+      input({ status: "failed", summary: "partial", turnLimitTurns: 1 }),
+    );
+    expect(text).toContain("stopped at its TURN LIMIT after 1 turn.");
+    expect(text).not.toContain("after 1 turns");
+  });
 });
 
 describe("mapChildRunStatusToNotification (spec §4bis: 4-way -> 3-way)", () => {

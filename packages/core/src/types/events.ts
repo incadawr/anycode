@@ -652,7 +652,23 @@ export type AgentEvent =
       level: "log" | "warn" | "error" | "pageerror";
       message: string;
       suppressed?: number;
-    };
+    }
+  /**
+   * Taskana 4820 review F2: ONE completed model round on an external engine
+   * whose native "turn" is coarser than a model round. Claude Code emits a
+   * `message_start` stream event exactly once per assistant message; every
+   * other engine-visible boundary (turn_start/turn_end) fires once per
+   * runTurn — so a claude child session running 40 model rounds inside one
+   * runTurn reported "1 turn" to its parent, and the parent's
+   * approaching-turn-budget latch (which compares that count against the
+   * child's cap) could never fire. Additive: the core loop NEVER emits this
+   * variant (same test-hazard #3 discipline as `engine_notice`/
+   * `engine_quota`/`engine_session_tokens` above); only the Claude engine's
+   * own translator constructs one, per assistant message seen. No payload
+   * beyond the marker: the consumer that needs a COUNT keeps its own tally,
+   * exactly like it tallies turn_end today.
+   */
+  | { type: "engine_model_round" };
 
 /**
  * Wire shape of a Codex quota/rate-limit snapshot, as carried by

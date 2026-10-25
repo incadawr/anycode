@@ -221,6 +221,18 @@ export class ClaudeTurnTranslator {
   private failureLatched = false;
   /** The message the terminal `error` event carries when nothing has been emitted yet. */
   private latchedFailureMessage: string | null = null;
+  /**
+   * Taskana 4820 review F2: assistant messages seen this turn (one
+   * `message_start` each). This turn's MODEL-ROUND count — the metric the
+   * loop_end `turns` field reports (F4) and the one the child-session
+   * progress tally keeps via the `engine_model_round` marker. The runTurn
+   * ordinal stays on `turn_end.turn` (UI turn numbering); `loop_end.turns`
+   * is the round tally, replaced by the result frame's `num_turns` when
+   * that authoritative count arrives at finish.
+   */
+  private modelRounds = 0;
+  /** Taskana 4820 review F4: the result frame's own `num_turns`, when it carries a usable one — the authoritative round count for loop_end. */
+  private resultNumTurns: number | null = null;
 
   constructor(private readonly options: ClaudeTurnTranslatorOptions) {}
 
@@ -418,10 +430,16 @@ export class ClaudeTurnTranslator {
       case "message_start": {
         const id = text(record(event.message)?.id);
         if (id !== undefined) this.currentMessageId = id;
-        // A new assistant message supersedes the previous one's blocks; any
-        // still-open block is closed so a lost `content_block_stop` cannot
-        // strand it (its id can never be patched again).
-        return this.closeOpenBlocks();
+        // Taskana 4820 review F2: one `message_start` == one assistant
+        // message == one MODEL ROUND — the only per-round marker the CLI's
+        // stream offers (turn_start/turn_end fire once per runTurn). The
+        // marker is emitted FIRST so a downstream tallyer counts this round
+        // before any of its blocks; the tally below feeds loop_end.turns
+        // (F4) when the result frame carries no `num_turns`. Then the
+        // still-open-block sweep closes the previous message's blocks
+        // exactly as before.
+        this.modelRounds += 1;
+        return [{ type: "engine_model_round" }, ...this.closeOpenBlocks()];
       }
       case "content_block_start":
         return this.onBlockStart(event);
@@ -502,6 +520,13 @@ export class ClaudeTurnTranslator {
 
   private onResult(message: ClaudeResultMessage): AgentEvent[] {
     this.options.onResult?.(message);
+    // Taskana 4820 review F4: `num_turns` is the CLI's own authoritative
+    // count of model rounds this turn ran — preferred over the local
+    // message_start tally at finish. Tolerant read of untyped wire data;
+    // anything non-positive/non-finite is ignored (the tally takes over).
+    if (typeof message.num_turns === "number" && Number.isFinite(message.num_turns) && message.num_turns > 0) {
+      this.resultNumTurns = message.num_turns;
+    }
     const outcome = resultOutcome(message);
     // A failure latched earlier (assistant.error / unrecoverable api_retry)
     // overrides a `result` that claims success — probe #12's fixture is exactly
@@ -559,7 +584,18 @@ export class ClaudeTurnTranslator {
     this.abandonedAtFinish = [...this.tools.keys()];
     this.tools.clear();
     events.push({ type: "turn_end", turn: this.options.turn, finishReason: outcome.finish });
-    events.push({ type: "loop_end", reason: outcome.loop, turns: this.options.turn });
+    // Taskana 4820 review F4: `loop_end.turns` reports MODEL ROUNDS, not the
+    // runTurn ordinal — the result frame's `num_turns` when it carried one
+    // (authoritative), else the message_start tally, else the ordinal (a
+    // turn that died before any assistant message: nothing better exists).
+    // The child-session consumer sums this into its terminal `turns`, which
+    // the TURN LIMIT notice prints — "after 1 turns" for a 40-round turn
+    // was exactly this seam lying.
+    events.push({
+      type: "loop_end",
+      reason: outcome.loop,
+      turns: this.resultNumTurns ?? (this.modelRounds > 0 ? this.modelRounds : this.options.turn),
+    });
     return events;
   }
 

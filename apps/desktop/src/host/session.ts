@@ -1546,6 +1546,16 @@ export class Session {
   private childActivitySuppressed = 0;
   /** NEW counter (CUT-S2 §10.7 п.3): count of `turn_end` events over the whole turn chain — the progress report's `turns` field, mirroring inline's local `turnEndCount` (runner.ts). Distinct from `childTurns`, which sums `loop_end.turns`. */
   private childTurnEndCount = 0;
+  /**
+   * Taskana 4820 review F2: model rounds counted via `engine_model_round`
+   * (one per assistant message on a claude child). Once ANY round arrives,
+   * this child's `turns` metric is round-based — the per-runTurn `turn_end`
+   * stops incrementing `childTurnEndCount` (the rounds already counted every
+   * assistant message, turn_end's own round included) so a 40-round claude
+   * runTurn reports 40, not 1-and-then-2. Zero for a core child (the core
+   * loop never emits the variant): its `turns` stays the turn_end count.
+   */
+  private childModelRounds = 0;
   /** The most recent tool_result's outcome.toolName, updated UNCONDITIONALLY (even on invalid_input) — mirrors `runner.ts:502`. */
   private childLastTool: string | undefined;
   /** Wall-clock (per `this.now`) of the last emitted progress report — `undefined` until the first boundary, so the first boundary always emits (leading edge). */
@@ -4144,9 +4154,28 @@ export class Session {
         this.emitChildProgressBoundary();
         this.emitChildActivity(event.outcome.toolCallId, event.outcome.status);
         break;
+      // Taskana 4820 review F2: one `engine_model_round` == one assistant
+      // message == one model round on a claude child. Counted FIRST (before
+      // any turn_end of the same round can arrive) and crossed through the
+      // throttled boundary so the parent sees the round land mid-runTurn —
+      // this is the count the approaching-budget latch compares against the
+      // child's cap, so it must move DURING a long runTurn, not once at its
+      // end. A core child never sees this variant (the core loop never
+      // emits it), so its `turns` stays the turn_end count.
+      case "engine_model_round":
+        this.childModelRounds += 1;
+        this.emitChildProgressBoundary();
+        break;
       case "turn_end":
         this.childFinalText = fixateFinalText(this.childFinalText);
-        this.childTurnEndCount += 1;
+        // Taskana 4820 review F2: for a claude child counting model rounds,
+        // turn_end (once per runTurn) is already covered by the rounds that
+        // preceded it — incrementing here too would double-count the final
+        // assistant message. A core child has no rounds and keeps counting
+        // turn_ends, exactly as before.
+        if (this.childModelRounds === 0) {
+          this.childTurnEndCount += 1;
+        }
         this.childFinalTurnFinishReason = event.finishReason === "length" ? "length" : undefined;
         this.emitChildProgressBoundary();
         break;
@@ -4225,7 +4254,10 @@ export class Session {
     this.childLastProgressEmitAt = now;
     this.child?.onProgress({
       kind: "progress",
-      turns: this.childTurnEndCount,
+      // Taskana 4820 review F2: model rounds once any were seen (a claude
+      // child — the metric the budget latch compares against the cap);
+      // otherwise the turn_end count (a core child), unchanged.
+      turns: this.childModelRounds > 0 ? this.childModelRounds : this.childTurnEndCount,
       toolCalls: this.childToolCalls,
       ...(this.childLastTool !== undefined ? { lastTool: this.childLastTool } : {}),
     });

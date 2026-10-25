@@ -1917,6 +1917,11 @@ export class TabHostManager {
     // preset comes from `--child-mode` (§4.2, host-side), the account is
     // ambient (RS4-0-4), and `connectionId` is "Never consulted for a
     // non-core engine" (tab-ipc law).
+    // TASK.180 + 4820 F1: the CREATING spawn's stamped budget (only a fresh
+    // child carries one) — minted once here, used both for the argv stamp
+    // (childOf.maxTurns, below) and for the accepted event's effective-cap
+    // carry (4820 F1, at admit).
+    const stampedMaxTurns = resumable === undefined ? req.maxTurns : undefined;
     const childTab: TabHost = {
       tabId: childTabId,
       workspace: parentTab.workspace,
@@ -1947,7 +1952,7 @@ export class TabHostManager {
         permissionMode: req.permissionMode,
         // TASK.180: only the CREATING spawn carries a budget; a follow-up
         // (resumable) child keeps whatever its session started with.
-        ...(resumable === undefined && req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
+        ...(stampedMaxTurns !== undefined ? { maxTurns: stampedMaxTurns } : {}),
       },
     };
 
@@ -2016,7 +2021,7 @@ export class TabHostManager {
         // (never the env default) and codex enforces no turn cap at all, so
         // for both an absent key is the honest report.
         ...(engine === "core"
-          ? { maxTurns: this.resolveAcceptedChildMaxTurns(childTab.childOf.maxTurns, this.env(connectionId)) }
+          ? { maxTurns: this.resolveAcceptedChildMaxTurns(stampedMaxTurns, this.env(connectionId)) }
           : {}),
       });
     } finally {
