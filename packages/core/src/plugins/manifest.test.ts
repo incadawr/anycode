@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { pluginManifestSchema } from "./manifest.js";
+import { expandServiceSecrets, pluginManifestSchema, serviceSecretRefs } from "./manifest.js";
 
 describe("pluginManifestSchema — name validation", () => {
   it("accepts a minimal manifest (only name) and applies defaults", () => {
@@ -393,5 +393,36 @@ describe("pluginManifestSchema — services (Taskana 4750a)", () => {
   it("invalid env key fails", () => {
     expect(pluginManifestSchema.safeParse({ ...base, services: [{ name: "s", command: "node", env: { "1BAD": "x" } }] }).success).toBe(false);
     expect(pluginManifestSchema.safeParse({ ...base, services: [{ name: "s", command: "node", env: { "A-B": "x" } }] }).success).toBe(false);
+  });
+});
+
+// Taskana 4751 part 0: `${secret:NAME}` in service env values.
+describe("service env secret references (Taskana 4751 part 0)", () => {
+  it("serviceSecretRefs returns the referenced names, sorted and unique", async () => {
+    expect(
+      serviceSecretRefs({
+        env: { B: "${secret:BRIDGE_USERS}", A: "x-${secret:BRIDGE_TOKEN}-${secret:BRIDGE_TOKEN}", C: "plain" },
+      }),
+    ).toEqual(["BRIDGE_TOKEN", "BRIDGE_USERS"]);
+    expect(serviceSecretRefs({})).toEqual([]);
+  });
+
+  it("env var ${env:X} is not interpolated", async () => {
+    const service = { env: { HOME_DIR: "${env:HOME}", BAD: "${secret:bad-name}" } };
+    expect(serviceSecretRefs(service)).toEqual([]);
+    expect(expandServiceSecrets("${env:HOME}", { HOME: "/x" })).toBe("${env:HOME}");
+    expect(expandServiceSecrets("${secret:bad-name}", { "bad-name": "v" })).toBe("${secret:bad-name}");
+    expect(expandServiceSecrets("a${secret:T}b${secret:MISSING}", { T: "1" })).toBe("a1b${secret:MISSING}");
+    // A substituted value is never re-scanned.
+    expect(expandServiceSecrets("${secret:T}", { T: "${secret:U}", U: "boom" })).toBe("${secret:U}");
+  });
+
+  it("a manifest with secret refs in service env parses and keeps the literal reference", () => {
+    const parsed = pluginManifestSchema.safeParse({
+      name: "bridge",
+      services: [{ name: "relay", command: "node", args: ["./r.mjs"], env: { TOKEN: "${secret:TOKEN}" } }],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.services?.[0]?.env).toEqual({ TOKEN: "${secret:TOKEN}" });
   });
 });

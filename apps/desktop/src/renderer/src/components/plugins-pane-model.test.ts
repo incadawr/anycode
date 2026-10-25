@@ -463,6 +463,7 @@ describe("serviceChip — one chip per supervised state (Taskana 4750a)", () => 
     expect(serviceChip(svcView({ state: "blocked", reason: "untrusted" })).text).toBe("Blocked: untrusted folder");
     expect(serviceChip(svcView({ state: "blocked", reason: "disabled" })).text).toBe("Disabled");
     expect(serviceChip(svcView({ state: "blocked", reason: "bad_command" })).text).toBe("Blocked: bad command");
+    expect(serviceChip(svcView({ state: "blocked", reason: "missing_secret", missingSecrets: ["BRIDGE_TOKEN"] })).text).toBe("Missing secret: BRIDGE_TOKEN");
   });
 });
 

@@ -29,6 +29,7 @@ import {
   rangeMatches,
   scanPluginsAdmin,
   serversHash,
+  serviceSecretRefs,
   servicesHash,
   type McpConsentEntry,
   PLUGIN_NAME_RE,
@@ -219,14 +220,18 @@ function refusal(reason: StoreRefusal | "signature", detail?: string): { ok: fal
   return { ok: false, reason: mapped, ...(detail !== undefined ? { detail } : {}) };
 }
 
-/** Taskana 4750a: the sheet's service rows — command, args, env KEY names (never values). */
+/** Taskana 4750a: the sheet's service rows — command, args, env KEY names (never values); 4751: secret NAMES. */
 function servicePreviewOf(services: readonly PluginServiceSpec[] | undefined): NonNullable<PluginInstallPreview["services"]> {
-  return (services ?? []).map((svc) => ({
-    name: svc.name,
-    command: svc.command,
-    args: [...(svc.args ?? [])],
-    envKeys: Object.keys(svc.env ?? {}).sort(),
-  }));
+  return (services ?? []).map((svc) => {
+    const secretNames = serviceSecretRefs(svc);
+    return {
+      name: svc.name,
+      command: svc.command,
+      args: [...(svc.args ?? [])],
+      envKeys: Object.keys(svc.env ?? {}).sort(),
+      ...(secretNames.length > 0 ? { secretNames } : {}),
+    };
+  });
 }
 
 // ── snapshot builder ──

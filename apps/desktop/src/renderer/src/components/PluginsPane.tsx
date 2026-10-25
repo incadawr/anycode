@@ -57,6 +57,7 @@ import {
   rollbackLabel,
   serviceChip,
   servicesNeedApproval,
+  serviceSecretNamesOf,
   sessionsApiHint,
   type SessionsApiState,
 } from "./plugins-pane-model.js";
@@ -739,6 +740,9 @@ function PluginCard({
             <div className="plugins-services" data-plugin-services={row.name}>
               {sessionsApiHint(true, sessionsState) !== undefined && (
                 <p className="mcp-row-hint">{sessionsApiHint(true, sessionsState)}</p>
+              )}
+              {serviceSecretNamesOf(row).length > 0 && (
+                <p className="mcp-row-hint">Reads secrets: {serviceSecretNamesOf(row).join(", ")}</p>
               )}
               {row.serviceNames.map((serviceName) => {
                 const view = services.find((candidate) => candidate.name === serviceName);

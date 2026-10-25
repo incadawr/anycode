@@ -83,6 +83,8 @@ value. `${secret:NAME}` does not apply to `command`, `args`, `cwd` or `url`, and
 it is not available in the terminal CLI, which takes `${env:NAME}` only. Servers
 declared by a plugin can use `${secret:NAME}` only when the same name is also
 referenced by one of your config files; otherwise they skip with the same message.
+Plugin services can also read these secrets with `${secret:NAME}` in their `env`;
+the install sheet lists the names a service reads.
 
 For `${env:NAME}`, the variable must exist in the environment AnyCode starts from:
 

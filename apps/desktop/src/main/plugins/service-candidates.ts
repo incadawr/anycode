@@ -6,9 +6,18 @@
  *    rows, each gated by that workspace's trust decision.
  * The service command/args/env VALUES are read here from the manifest and
  * handed only to the supervisor; no renderer-facing type ever carries them.
+ * `${secret:NAME}` references (Taskana 4751 part 0) are resolved here too, for
+ * services that are enabled, consented and eligible for a folder; an unset name
+ * is reported as missing and blocks the spawn.
  */
 
-import { pluginManifestSchema, scanPluginsAdmin, type PluginAdminRow, type ServiceConsentEntry } from "@anycode/core/plugins-admin";
+import {
+  pluginManifestSchema,
+  scanPluginsAdmin,
+  serviceSecretRefs,
+  type PluginAdminRow,
+  type ServiceConsentEntry,
+} from "@anycode/core/plugins-admin";
 import { defaultTrustStorePath, resolveWorkspaceTrust } from "@anycode/core/workspace-trust";
 import type { FileSystemPort } from "@anycode/core";
 import { statePath } from "./store.js";
@@ -23,6 +32,8 @@ export interface ServiceCandidatesDeps {
   serviceConsent(): Promise<readonly ServiceConsentEntry[]>;
   /** Project-folder trust (once-approval included); false when undecided or unreadable. */
   isWorkspaceTrusted(workspace: string): Promise<boolean>;
+  /** Values of the named secrets that are set (names absent from the store are omitted). */
+  resolveSecrets?(names: readonly string[]): Promise<Record<string, string>>;
 }
 
 /** Reads the service definition (values included) of one row from its manifest. */
@@ -30,6 +41,7 @@ async function candidatesOf(
   fs: FileSystemPort,
   row: PluginAdminRow,
   trusted: boolean,
+  resolveSecrets?: ServiceCandidatesDeps["resolveSecrets"],
 ): Promise<ServiceCandidate[]> {
   if (row.root === undefined || row.serviceNames.length === 0) return [];
   let parsed: ReturnType<typeof pluginManifestSchema.safeParse>;
@@ -40,20 +52,40 @@ async function candidatesOf(
   }
   if (!parsed.success) return [];
   const root = row.root;
-  return (parsed.data.services ?? []).map((svc) => ({
-    plugin: row.name,
-    tier: row.tier,
-    root,
-    service: {
-      name: svc.name,
-      command: svc.command,
-      args: [...(svc.args ?? [])],
-      env: { ...(svc.env ?? {}) },
-    },
-    enabled: row.status === "active",
-    consented: row.servicesConsentGranted === true,
-    trusted,
-  }));
+  const enabled = row.status === "active";
+  const consented = row.servicesConsentGranted === true;
+  const out: ServiceCandidate[] = [];
+  for (const svc of parsed.data.services ?? []) {
+    // Secrets are read only for a service that could actually start (saves vault reads for the rest).
+    const refs = enabled && consented && trusted ? serviceSecretRefs(svc) : [];
+    let secretValues: Record<string, string> = {};
+    if (refs.length > 0 && resolveSecrets !== undefined) {
+      try {
+        const resolved = await resolveSecrets(refs);
+        secretValues = Object.fromEntries(refs.filter((name) => typeof resolved[name] === "string").map((name) => [name, resolved[name]!]));
+      } catch {
+        secretValues = {};
+      }
+    }
+    const missingSecrets = refs.filter((name) => secretValues[name] === undefined);
+    out.push({
+      plugin: row.name,
+      tier: row.tier,
+      root,
+      service: {
+        name: svc.name,
+        command: svc.command,
+        args: [...(svc.args ?? [])],
+        env: { ...(svc.env ?? {}) },
+      },
+      enabled,
+      consented,
+      trusted,
+      secretValues,
+      missingSecrets,
+    });
+  }
+  return out;
 }
 
 export async function listServiceCandidates(deps: ServiceCandidatesDeps): Promise<ServiceCandidate[]> {
@@ -78,7 +110,7 @@ export async function listServiceCandidates(deps: ServiceCandidatesDeps): Promis
   }).catch(() => ({ rows: [] as PluginAdminRow[], problems: [] as string[] }));
   for (const row of homeScan.rows) {
     if (row.tier === "project") continue;
-    push(await candidatesOf(deps.fs, row, true));
+    push(await candidatesOf(deps.fs, row, true, deps.resolveSecrets));
   }
 
   for (const workspace of new Set(deps.liveWorkspaces())) {
@@ -93,7 +125,7 @@ export async function listServiceCandidates(deps: ServiceCandidatesDeps): Promis
     if (projectRows.length === 0) continue;
     const trusted = await deps.isWorkspaceTrusted(workspace);
     for (const row of projectRows) {
-      push(await candidatesOf(deps.fs, row, trusted));
+      push(await candidatesOf(deps.fs, row, trusted, deps.resolveSecrets));
     }
   }
   return out;

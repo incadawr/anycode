@@ -20,6 +20,7 @@ import {
   capabilities,
   pluginManifestSchema,
   pluginWorkflowsDirs,
+  serviceSecretRefs,
   type PluginCapabilities,
 } from "./manifest.js";
 import {
@@ -77,8 +78,8 @@ export interface PluginAdminRow {
   servicesHash?: string;
   /** True when serviceConsent holds a CURRENT grant for this plugin's services. */
   servicesConsentGranted?: boolean;
-  /** Service definitions for the install/consent sheet — env KEY names only, NEVER env values. */
-  services?: { name: string; command: string; args: string[]; envKeys: string[] }[];
+  /** Service definitions for the install/consent sheet — env KEY and secret NAMES only, NEVER values. */
+  services?: { name: string; command: string; args: string[]; envKeys: string[]; secretNames?: string[] }[];
   /** Managed-install bookkeeping (absent for project/legacy dir plugins). */
   managed?: {
     enabled: boolean;
@@ -262,6 +263,7 @@ export async function scanPluginsAdmin(
               command: svc.command,
               args: [...(svc.args ?? [])],
               envKeys: Object.keys(svc.env ?? {}).sort(),
+              ...(serviceSecretRefs(svc).length > 0 ? { secretNames: serviceSecretRefs(svc) } : {}),
             }));
           }
           const hash = serversHash(parsed.data.mcpServers ?? {});
@@ -375,6 +377,8 @@ export {
   MANIFEST_VERSION,
   OFFICIAL_ONLY_CONTRIBUTIONS,
   PLUGIN_NAME_RE,
+  serviceSecretRefs,
+  expandServiceSecrets,
 } from "./manifest.js";
 export type { PluginManifest, PluginCapabilities, PluginServiceSpec } from "./manifest.js";
 // Taskana 4732 S1-B: the desktop main store reuses the same semver helpers

@@ -119,3 +119,46 @@ describe("listServiceCandidates (Taskana 4750a)", () => {
     expect(await listServiceCandidates(deps(fs))).toEqual([]);
   });
 });
+
+describe("listServiceCandidates secret refs (Taskana 4751 part 0)", () => {
+  const SECRET_SERVICES = [
+    { name: "relay", command: "node", args: ["./relay.js"], env: { TOKEN: "${secret:BRIDGE_TOKEN}", USERS: "${secret:BRIDGE_USERS}" } },
+  ];
+  const withSecretServices = (): Record<string, string> => {
+    const files = managedBridge();
+    const manifestPath = `${USER_PLUGINS}/.store/bridge/1.0.0/.anycode-plugin/plugin.json`;
+    files[manifestPath] = JSON.stringify({ name: "bridge", version: "1.0.0", services: SECRET_SERVICES });
+    return files;
+  };
+  const granted = [{ plugin: "bridge", servicesHash: servicesHash(SECRET_SERVICES), grantedAt: "x" }];
+
+  it("resolves the referenced names for an eligible service and reports the unset ones as missing", async () => {
+    const requested: string[][] = [];
+    const out = await listServiceCandidates(
+      deps(makeFs(withSecretServices()), {
+        serviceConsent: async () => granted,
+        isWorkspaceTrusted: async () => true,
+        resolveSecrets: async (names): Promise<Record<string, string>> => {
+          requested.push([...names]);
+          return names.includes("BRIDGE_TOKEN") ? { BRIDGE_TOKEN: "tok-resolved" } : {};
+        },
+      }),
+    );
+    expect(requested).toEqual([["BRIDGE_TOKEN", "BRIDGE_USERS"]]);
+    expect(out[0]).toMatchObject({ secretValues: { BRIDGE_TOKEN: "tok-resolved" }, missingSecrets: ["BRIDGE_USERS"] });
+  });
+
+  it("reads no secret for a service that is not consented (it cannot start anyway)", async () => {
+    let calls = 0;
+    const out = await listServiceCandidates(
+      deps(makeFs(withSecretServices()), {
+        resolveSecrets: async () => {
+          calls += 1;
+          return {};
+        },
+      }),
+    );
+    expect(calls).toBe(0);
+    expect(out[0]!.missingSecrets).toEqual([]);
+  });
+});

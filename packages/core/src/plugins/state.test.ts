@@ -313,3 +313,28 @@ describe("servicesHash / service consent (Taskana 4750a)", () => {
     expect(hasServiceConsent(undefined, "p", hash)).toBe(false);
   });
 });
+
+// Taskana 4751 part 0: the secret NAMES a service reads are part of its consent definition.
+describe("servicesHash secret refs (Taskana 4751 part 0)", () => {
+  it("servicesHash unchanged for services without secret refs", () => {
+    // Golden values captured before the secret-ref material was added.
+    expect(
+      servicesHash([
+        { name: "bridge", command: "node", args: ["./service.mjs"], env: { B: "x", A: "y" } },
+        { name: "a", command: "x" },
+      ]),
+    ).toBe("4069e7086380db765879b25d48434ab467f9b2f92b1b72de036a0ce3fc4bee2f");
+    expect(servicesHash(undefined)).toBe("4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945");
+  });
+
+  it("secret ref change alters servicesHash and asks consent again", () => {
+    const base = { name: "bridge", command: "node", args: ["./service.mjs"] };
+    const a = servicesHash([{ ...base, env: { TOKEN: "${secret:TOKEN_A}" } }]);
+    const b = servicesHash([{ ...base, env: { TOKEN: "${secret:TOKEN_B}" } }]);
+    const literal = servicesHash([{ ...base, env: { TOKEN: "plain" } }]);
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(literal);
+    // A value edit that keeps the same reference is not a definition change.
+    expect(servicesHash([{ ...base, env: { TOKEN: "${secret:TOKEN_A}" } }])).toBe(a);
+  });
+});

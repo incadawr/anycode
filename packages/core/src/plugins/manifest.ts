@@ -68,7 +68,8 @@ function isValidServiceCommand(command: string): boolean {
  * One background service a plugin declares (Taskana 4750a). A service is a
  * long-lived process AnyCode supervises after the plugin is enabled AND the
  * user consents to its exact definition (`servicesHash`). `env` values are
- * literal strings; no `${...}` interpolation or secrets live here.
+ * literal strings, except `${secret:NAME}` (Taskana 4751 part 0): main resolves
+ * it from the vault at spawn time. The manifest itself never holds a value.
  */
 export const pluginServiceSchema = z.object({
   name: z.string().regex(PLUGIN_NAME_RE, NAME_ERROR),
@@ -88,6 +89,36 @@ export const pluginServiceSchema = z.object({
 });
 
 export type PluginServiceSpec = z.output<typeof pluginServiceSchema>;
+
+/**
+ * Taskana 4751 part 0: a `${secret:NAME}` reference inside a service env VALUE.
+ * Same name shape as MCP secrets (4752). `${env:X}` and any other text are NOT
+ * references and stay literal.
+ */
+const SERVICE_SECRET_REF_RE = /\$\{secret:([A-Za-z_][A-Za-z0-9_]{0,63})\}/g;
+
+/** Names every `${secret:NAME}` referenced in a service's env values: sorted, unique. */
+export function serviceSecretRefs(service: { env?: Readonly<Record<string, string>> }): string[] {
+  const names = new Set<string>();
+  for (const value of Object.values(service.env ?? {})) {
+    for (const match of value.matchAll(SERVICE_SECRET_REF_RE)) {
+      names.add(match[1]!);
+    }
+  }
+  return [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * Substitutes `${secret:NAME}` in one env value from `secrets`; a reference
+ * whose name is absent from `secrets` is left as literal text (callers refuse
+ * to spawn when any reference is unresolved, so this never reaches a child).
+ * One pass: a substituted value is never re-scanned.
+ */
+export function expandServiceSecrets(value: string, secrets: Readonly<Record<string, string>>): string {
+  return value.replace(SERVICE_SECRET_REF_RE, (match, name: string) =>
+    Object.prototype.hasOwnProperty.call(secrets, name) ? secrets[name]! : match,
+  );
+}
 
 /** Service names must be unique within one plugin: a duplicate fails the whole manifest. */
 const servicesList = z

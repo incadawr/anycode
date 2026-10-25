@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { atomicWriteText, describeConfigError, isPlainObject } from "../util/config-file.js";
 import { z } from "zod";
+import { serviceSecretRefs } from "./manifest.js";
 
 /** File name of the state file inside the user plugins root. */
 export const PLUGIN_STATE_FILE = "state.json";
@@ -198,8 +199,9 @@ export function hasMcpConsent(
 
 // ---------------------------------------------------------------------------
 // Service consent (Taskana 4750a): the same consent discipline as MCP, keyed
-// by `servicesHash`. The hash covers name/command/args and the env KEY set —
-// NOT env values, which a user may edit without re-approving the definition.
+// by `servicesHash`. The hash covers name/command/args, the env KEY set and the
+// `${secret:NAME}` names the env values read — NOT the env values themselves,
+// which a user may edit without re-approving the definition.
 
 /** Settings shape for a service grant (same shape as McpConsentEntry). */
 export interface ServiceConsentEntry {
@@ -229,6 +231,10 @@ export function servicesHash(services: readonly ServiceHashInput[] | undefined):
       command: service.command,
       args: [...(service.args ?? [])],
       envKeys: Object.keys(service.env ?? {}).sort(),
+      // Taskana 4751 part 0: the secret NAMES a service reads are part of its definition
+      // (a plugin update that starts reading another secret needs new consent). Omitted
+      // when empty so services without refs hash exactly as before.
+      ...(serviceSecretRefs(service).length > 0 ? { secretRefs: serviceSecretRefs(service) } : {}),
     }));
   return createHash("sha256").update(canonicalJson(canonical)).digest("hex");
 }

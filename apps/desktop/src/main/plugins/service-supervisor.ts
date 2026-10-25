@@ -19,7 +19,7 @@
  */
 
 import { isAbsolute, relative, resolve } from "node:path";
-import type { PluginTier } from "@anycode/core/plugins-admin";
+import { expandServiceSecrets, type PluginTier } from "@anycode/core/plugins-admin";
 
 // ── constants (exported for tests and the design record) ──
 
@@ -81,6 +81,13 @@ export interface ServiceCandidate {
   consented: boolean;
   /** Workspace trust for project-tier plugins (non-project tiers ignore it). */
   trusted: boolean;
+  /**
+   * Taskana 4751 part 0: values of the `${secret:NAME}` references in `service.env`,
+   * resolved by the candidate source. Goes only into the child env; never logged or viewed.
+   */
+  secretValues?: Readonly<Record<string, string>>;
+  /** Referenced secret NAMES that are not set. Any entry blocks the service (`missing_secret`). */
+  missingSecrets?: readonly string[];
 }
 
 export interface ServiceSpawnSpec {
@@ -106,7 +113,7 @@ export interface ServiceProcess {
   kill(tree: boolean): void;
 }
 
-export type ServiceBlockedReason = "no_consent" | "untrusted" | "disabled" | "bad_command";
+export type ServiceBlockedReason = "no_consent" | "untrusted" | "disabled" | "bad_command" | "missing_secret";
 
 export type ServiceState = "stopped" | "starting" | "running" | "backoff" | "crash_loop" | "blocked";
 
@@ -119,6 +126,8 @@ export interface ServiceView {
   restarts: number;
   restartInSec?: number;
   lastExit?: string;
+  /** Secret NAMES a `missing_secret` block is waiting for (names only). */
+  missingSecrets?: string[];
 }
 
 export interface ServiceSupervisorDeps {
@@ -221,6 +230,7 @@ interface Entry {
   backoffTimer?: unknown;
   restarts: number;
   lastExit?: string;
+  missingSecrets?: string[];
   log: LogRing;
   exitWaiters: (() => void)[];
   stdoutSplit: LineSplitter;
@@ -235,6 +245,7 @@ function eligibilityReason(c: ServiceCandidate): ServiceBlockedReason | undefine
   if (!c.enabled) return "disabled";
   if (!c.consented) return "no_consent";
   if (c.tier === "project" && !c.trusted) return "untrusted";
+  if ((c.missingSecrets ?? []).length > 0) return "missing_secret";
   return undefined;
 }
 
@@ -251,7 +262,11 @@ function resolveCommand(root: string, command: string): string | undefined {
   return command;
 }
 
-/** Builds the child env: base allow-list + manifest env + AnyCode vars. Inherited ANYCODE_* never pass. */
+/**
+ * Builds the child env: base allow-list + manifest env (with `${secret:NAME}`
+ * expanded from the candidate's resolved values) + AnyCode vars. Inherited
+ * ANYCODE_* never pass.
+ */
 export function buildServiceEnv(
   inherited: Readonly<Record<string, string | undefined>>,
   candidate: ServiceCandidate,
@@ -263,7 +278,7 @@ export function buildServiceEnv(
     if (value !== undefined) env[key] = value;
   }
   for (const [key, value] of Object.entries(candidate.service.env)) {
-    env[key] = value;
+    env[key] = expandServiceSecrets(value, candidate.secretValues ?? {});
   }
   env.ANYCODE_PLUGIN_NAME = candidate.plugin;
   env.ANYCODE_PLUGIN_DIR = candidate.root;
@@ -344,10 +359,11 @@ export function createServiceSupervisor(deps: ServiceSupervisorDeps): ServiceSup
     entry.backoffUntil = undefined;
   }
 
-  function setBlocked(entry: Entry, reason: ServiceBlockedReason): void {
+  function setBlocked(entry: Entry, reason: ServiceBlockedReason, missingSecrets?: readonly string[]): void {
     clearBackoff(entry);
     entry.state = "blocked";
     entry.reason = reason;
+    entry.missingSecrets = reason === "missing_secret" ? [...(missingSecrets ?? [])] : undefined;
     // A blocked service has no breaker state: the next eligibility starts fresh.
     entry.failures = 0;
     entry.failureTimes = [];
@@ -391,6 +407,12 @@ export function createServiceSupervisor(deps: ServiceSupervisorDeps): ServiceSup
     manual = false,
   ): void {
     clearBackoff(entry);
+    if ((candidate.missingSecrets ?? []).length > 0) {
+      // Defence in depth: reconcile never starts a candidate with unresolved refs.
+      setBlocked(entry, "missing_secret", candidate.missingSecrets);
+      supLog(entry, "not started: a referenced secret is not set");
+      return;
+    }
     const command = resolveCommand(candidate.root, candidate.service.command);
     if (command === undefined) {
       entry.state = "blocked";
@@ -529,7 +551,7 @@ export function createServiceSupervisor(deps: ServiceSupervisorDeps): ServiceSup
       const reason = eligibilityReason(candidate);
       if (reason !== undefined) {
         await stopEntry(entry);
-        setBlocked(entry, reason);
+        setBlocked(entry, reason, candidate.missingSecrets);
         continue;
       }
       const fp = fingerprintOf(candidate, discoveryPath);
@@ -610,7 +632,7 @@ export function createServiceSupervisor(deps: ServiceSupervisorDeps): ServiceSup
         const candidate = entry.candidate;
         const reason = eligibilityReason(candidate);
         if (reason !== undefined) {
-          setBlocked(entry, reason);
+          setBlocked(entry, reason, candidate.missingSecrets);
           return;
         }
         startProcess(entry, candidate, deps.discoveryFile(), true);
@@ -631,6 +653,9 @@ export function createServiceSupervisor(deps: ServiceSupervisorDeps): ServiceSup
           restarts: entry.restarts,
           ...(entry.backoffUntil !== undefined ? { restartInSec: Math.max(0, Math.ceil((entry.backoffUntil - now) / 1000)) } : {}),
           ...(entry.lastExit !== undefined ? { lastExit: entry.lastExit } : {}),
+          ...(entry.reason === "missing_secret" && entry.missingSecrets !== undefined
+            ? { missingSecrets: [...entry.missingSecrets] }
+            : {}),
         }));
     },
 

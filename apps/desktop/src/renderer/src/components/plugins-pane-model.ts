@@ -94,6 +94,15 @@ export function pluginMcpNeedsApproval(row: PluginRowView): boolean {
   return row.mcpServerNames.length > 0 && row.mcpConsentGranted !== true;
 }
 
+/** Secret NAMES a plugin's services read, sorted and unique (Taskana 4751 part 0; names only). */
+export function serviceSecretNamesOf(row: PluginRowView): string[] {
+  const names = new Set<string>();
+  for (const service of row.services ?? []) {
+    for (const name of service.secretNames ?? []) names.add(name);
+  }
+  return [...names].sort();
+}
+
 /** Whether the plugin declares background services that lack consent for their current definition (Taskana 4750a). */
 export function servicesNeedApproval(row: PluginRowView): boolean {
   return row.serviceNames.length > 0 && row.servicesConsentGranted !== true;
@@ -137,6 +146,9 @@ export function serviceChip(view: PluginServiceView): PluginChip {
           return { text: "Disabled", tone: "muted" };
         case "bad_command":
           return { text: "Blocked: bad command", tone: "warn" };
+        case "missing_secret":
+          // Names only (Taskana 4751 part 0): the secret VALUE never reaches the renderer.
+          return { text: `Missing secret: ${(view.missingSecrets ?? []).join(", ") || "?"}`, tone: "warn" };
         default:
           return { text: "Blocked", tone: "warn" };
       }

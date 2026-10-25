@@ -33,7 +33,7 @@ guide's [Services](../user/plugins.md#services) and
 | `name` | Matches `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`. Unique within the plugin; a duplicate fails the whole manifest. |
 | `command` | A bare executable on `PATH` (`node`), a `./` path inside the plugin root, or an absolute path. |
 | `args` | Optional string array. Put `./` paths here for scripts (`["./service.mjs"]`). |
-| `env` | Optional literal string values. Keys match `^[A-Za-z_][A-Za-z0-9_]*$` and must not start with `ANYCODE_`. No `${...}` interpolation; do not put secrets here. |
+| `env` | Optional literal string values. Keys match `^[A-Za-z_][A-Za-z0-9_]*$` and must not start with `ANYCODE_`. Only `${secret:NAME}` is interpolated: AnyCode resolves it from its secret store at spawn, and an unset name blocks the service (`missing_secret`, shown by name). Never put a literal secret here. |
 
 The service's working directory is the plugin root. A service is started only when
 the plugin is enabled and the user has approved its definition (see Consent).

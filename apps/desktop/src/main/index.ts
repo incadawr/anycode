@@ -3140,7 +3140,11 @@ void app.whenReady().then(async () => {
       listMcpSecretNames: () => (vault === null ? Promise.resolve([]) : vault.listMcpSecretNames()),
     },
     allowWeak: async () => (await loadSettings(settingsPath, fileLogger)).settings.security.allowWeakSecretStorage,
-    onMutation: () => mcpSecretCache.refreshAll(),
+    // Taskana 4751 part 0: a saved or deleted secret may unblock or block a plugin service.
+    onMutation: async () => {
+      await mcpSecretCache.refreshAll();
+      reconcileServices();
+    },
   });
 
   // Language-server config management control plane (Taskana 4743): same
@@ -3350,6 +3354,8 @@ void app.whenReady().then(async () => {
               workspace,
               workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
             ),
+          // Taskana 4751 part 0: the same vault store MCP `${secret:}` reads; values stay in memory only.
+          resolveSecrets: (names) => (vault === null ? Promise.resolve({}) : vault.getMcpSecretValues(names)),
         }),
       spawn: spawnServiceProcess,
       // Only the PATH of the discovery file crosses into the supervisor; the file itself stays unread.

@@ -113,7 +113,7 @@ export interface PluginRowView {
   serviceNames: string[];
   servicesHash?: string;
   servicesConsentGranted?: boolean;
-  services?: { name: string; command: string; args: string[]; envKeys: string[] }[];
+  services?: { name: string; command: string; args: string[]; envKeys: string[]; secretNames?: string[] }[];
   managed?: {
     enabled: boolean;
     pinned: boolean;
@@ -171,7 +171,7 @@ export interface PluginInstallPreview {
   /** One row per MCP server: red rows on the sheet (command + args). */
   mcpServers: { name: string; command: string; args: string[] }[];
   /** Taskana 4750a: red rows for each background service (command + args + env KEY names). */
-  services?: { name: string; command: string; args: string[]; envKeys: string[] }[];
+  services?: { name: string; command: string; args: string[]; envKeys: string[]; secretNames?: string[] }[];
   hasHooks: boolean;
   engines?: string;
   /** True when the manifest is incompatible with this app (grey out). */
@@ -232,7 +232,7 @@ export type PluginServiceStateView =
   | "blocked";
 
 /** Why a service is blocked from starting (the pane localizes the label). */
-export type PluginServiceBlockedReason = "no_consent" | "untrusted" | "disabled" | "bad_command";
+export type PluginServiceBlockedReason = "no_consent" | "untrusted" | "disabled" | "bad_command" | "missing_secret";
 
 /** One row of the services view: no argv, env, or paths. */
 export interface PluginServiceView {
@@ -240,6 +240,8 @@ export interface PluginServiceView {
   name: string;
   state: PluginServiceStateView;
   reason?: PluginServiceBlockedReason;
+  /** Secret NAMES the service needs and that are not set (`missing_secret` only; never values). */
+  missingSecrets?: string[];
   pid?: number;
   /** Restarts since the last manual start/restart. */
   restarts: number;

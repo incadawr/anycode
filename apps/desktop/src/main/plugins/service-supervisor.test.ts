@@ -550,3 +550,64 @@ describe("service supervisor — misc", () => {
     expect(sup2.snapshot()).toEqual([]);
   });
 });
+
+// Taskana 4751 part 0: `${secret:NAME}` in service env (values resolved by the candidate source).
+
+describe("service supervisor — secret refs (Taskana 4751 part 0)", () => {
+  const SECRET_VALUE = "SECRET-VALUE-XYZ-9731";
+
+  it("service env resolves secret refs at spawn", async () => {
+    const h = harness();
+    h.setCandidates([
+      cand({
+        service: { env: { TOKEN: "${secret:TOK}", MIXED: "a-${secret:TOK}-b", PLAIN: "${env:HOME}" } },
+        secretValues: { TOK: SECRET_VALUE },
+        missingSecrets: [],
+      }),
+    ]);
+    await h.sup.reconcile();
+    expect(h.spawns).toHaveLength(1);
+    const env = h.spawns[0]!.spec.env;
+    expect(env.TOKEN).toBe(SECRET_VALUE);
+    expect(env.MIXED).toBe(`a-${SECRET_VALUE}-b`);
+    // `${env:X}` is never interpolated.
+    expect(env.PLAIN).toBe("${env:HOME}");
+  });
+
+  it("missing secret blocks the service with the secret name only", async () => {
+    const h = harness();
+    h.setCandidates([cand({ service: { env: { TOKEN: "${secret:TOK}" } }, secretValues: {}, missingSecrets: ["TOK"] })]);
+    await h.sup.reconcile();
+    expect(h.spawns).toHaveLength(0);
+    const view = h.sup.snapshot().find((v) => v.name === "relay")!;
+    expect(view.state).toBe("blocked");
+    expect(view.reason).toBe("missing_secret");
+    expect(view.missingSecrets).toEqual(["TOK"]);
+    expect(JSON.stringify(view)).not.toContain(SECRET_VALUE);
+  });
+
+  it("secret value never appears in log snapshot or views", async () => {
+    const h = harness();
+    h.setCandidates([cand({ service: { env: { TOKEN: "${secret:TOK}" } }, secretValues: { TOK: SECRET_VALUE }, missingSecrets: [] })]);
+    await h.sup.reconcile();
+    h.spawns[0]!.proc.emitStdout("hello\n");
+    await h.flush();
+    h.spawns[0]!.proc.exit(1, null);
+    await h.flush();
+    const dump = JSON.stringify({ views: h.sup.snapshot(), logs: h.sup.logs("bridge", "relay") });
+    expect(dump).not.toContain(SECRET_VALUE);
+    expect(JSON.stringify(h.warnings)).not.toContain(SECRET_VALUE);
+  });
+
+  it("saving the missing secret unblocks via reconcile", async () => {
+    const h = harness();
+    h.setCandidates([cand({ service: { env: { TOKEN: "${secret:TOK}" } }, secretValues: {}, missingSecrets: ["TOK"] })]);
+    await h.sup.reconcile();
+    expect(h.sup.snapshot()[0]!.state).toBe("blocked");
+    // The user saves the secret: the candidate source now resolves it and reconcile runs again.
+    h.setCandidates([cand({ service: { env: { TOKEN: "${secret:TOK}" } }, secretValues: { TOK: SECRET_VALUE }, missingSecrets: [] })]);
+    await h.sup.reconcile();
+    expect(h.sup.snapshot()[0]!.state).toBe("running");
+    expect(h.spawns[0]!.spec.env.TOKEN).toBe(SECRET_VALUE);
+  });
+});

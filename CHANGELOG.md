@@ -16,6 +16,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   their state and a plain-text log in Settings → Plugins, and stops them when the
   plugin is disabled or the app quits. Project-folder services wait for the
   folder to be trusted. See the *Services* section of `docs/user/plugins.md`.
+- Plugin services can read secrets from Settings → MCP → Secrets with
+  `${secret:NAME}` in their `env`. A service whose secret is not set does not
+  start and shows the missing name.
 - Settings → Sessions API: enable the local MCP for external agents without
   environment variables, choose allowed folders, share sessions one tab at a
   time, copy the Claude Code / Codex config, and regenerate the token. The
