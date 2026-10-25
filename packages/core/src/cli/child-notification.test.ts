@@ -441,4 +441,12 @@ describe("formatChildApprovalNotice (Taskana 4821)", () => {
     expect(text).toContain("until a human interacts with the child session");
     expect(text).toContain("open or answer the child session");
   });
+
+  it("states the no-bypass consequence honestly — the child is INSTRUCTED, not mechanically prevented; suggests verifying the target (review F2)", () => {
+    for (const text of [formatChildApprovalNotice(base), formatChildApprovalNotice({ ...base, askTimeoutMs: 120_000 })]) {
+      expect(text).toContain("the child is instructed not to achieve the same effect through another tool");
+      expect(text).toContain("verify the target was not modified");
+      expect(text).not.toContain("will not be retried");
+    }
+  });
 });
