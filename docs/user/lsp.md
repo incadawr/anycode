@@ -50,7 +50,8 @@ custom-entry form covers servers not in the catalog.
 
 The pane also lists the configured entries per scope, shows the live status
 of the active tab's servers (with a Restart action for crashed ones), and
-surfaces config problems.
+surfaces config problems. The scope dropdown at the top picks the folder whose
+config the pane edits, the same way as in the MCP pane. The scope dropdown at the top picks **User · This computer** (your user files) or a recent folder. The folder list is built from your recent sessions and open tabs; a folder with no open tab can still be edited, and its changes apply when a session starts there. A folder that no longer exists is shown as "folder not found" and cannot be selected. The chip shows the number of configured entries.
 
 ## When changes apply
 

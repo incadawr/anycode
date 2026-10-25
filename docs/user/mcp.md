@@ -118,8 +118,7 @@ These problems appear as strips in **Settings → MCP**.
 
 ## Managing servers in the pane
 
-**Settings → MCP** lists the servers for the scope chosen at the top: **Global (user)**
-or **Project** (with a workspace picker). The pane offers:
+**Settings → MCP** lists the servers for the scope chosen at the top. The scope dropdown at the top picks **User · This computer** (your user files) or a recent folder. The folder list is built from your recent sessions and open tabs; a folder with no open tab can still be edited, and its changes apply when a session starts there. A folder that no longer exists is shown as "folder not found" and cannot be selected. The chip next to the dropdown shows how many entries the pane lists. The pane offers:
 
 - **Add server**: name, transport (stdio or HTTP), command, arguments, working
   directory, URL, and environment variables. Values typed into the environment

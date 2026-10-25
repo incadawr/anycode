@@ -121,8 +121,8 @@ and nothing else.
 
 ## How to verify it applied
 
-Open **Settings → Subagents**. The scope bar at the top switches between
-**Global (user)** and **Project**, which is the open workspace. Every profile that
+Open **Settings → Subagents**. The scope dropdown at the top switches between
+**User · This computer** and a recent folder. The scope dropdown at the top picks **User · This computer** (your user files) or a recent folder. The folder list is built from your recent sessions and open tabs; a folder with no open tab can still be edited, and its changes apply when a session starts there. A folder that no longer exists is shown as "folder not found" and cannot be selected. The chip next to the dropdown shows how many entries the pane lists. Every profile that
 loaded is listed. A profile
 that failed to load is missing from the list, and the pane shows a strip such as
 "1 profile(s) failed to load". Expand it for the reason. Then check the pickup
