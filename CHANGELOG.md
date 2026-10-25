@@ -38,6 +38,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Switching conversation tabs no longer flashes the previous tab's side-panel
+  tabs (previews/subagents/git) in the dock for one frame — the dock's tab
+  set is now owned by the active conversation tab and re-derived on switch.
 - The "provider reported" model note on a subagent card now appears as soon as
   the first response arrives, not only after the run ends, so a mismatched
   model is visible during a long run.
