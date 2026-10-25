@@ -120,6 +120,11 @@ import type {
   CommunicationRegenerateResult,
 } from "../../shared/communication-config";
 import type {
+  BrowserAccessChangedPayload,
+  BrowserAccessGetResult,
+  BrowserAccessSetResult,
+} from "../../shared/browser-access";
+import type {
   WorkspaceTrustDecideRequest,
   WorkspaceTrustDecideResult,
   WorkspaceTrustForgetRequest,
@@ -619,6 +624,13 @@ declare global {
         setDefaultAccess(access: "off" | "on"): Promise<CommunicationMutationResult>;
         setSessionAccess(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
         setSessionHandle(tabId: string, handle: string | null): Promise<CommunicationHandleResult>;
+      };
+      // Taskana 4759: "Full browser access" per session. Only the user can set it (the
+      // main window's sender is checked); set/get resolve the EFFECTIVE value.
+      browserAccess: {
+        get(): Promise<BrowserAccessGetResult>;
+        set(tabId: string, enabled: boolean): Promise<BrowserAccessSetResult>;
+        onChanged(callback: (payload: BrowserAccessChangedPayload) => void): () => void;
       };
       lspConfig: {
         status(req?: LspCatalogStatusRequest): Promise<LspConfigStatus>;

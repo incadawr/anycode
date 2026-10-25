@@ -372,6 +372,7 @@ import {
   scrubSecretEnv,
   seedAlwaysAllowRules,
 } from "./boot.js";
+import { browserFullAccessFromEnv, createBrowserAccess } from "./browser-access.js";
 import { artifactsRootFor } from "../shared/artifacts-root.js";
 /**
  * Mirrors main/index.ts's own literal (dev-profile settings path override,
@@ -995,6 +996,11 @@ const previewPort: PreviewPort = createPreviewRpcClient({
   send: sendPreviewRequest,
   subscribe: subscribePreviewResponses,
 });
+
+// Taskana 4759: this tab's "Full browser access" flag. Seeded from the fork env
+// main stamps, then kept live by `anycode:browser-access` messages (routed below).
+// A UX hint only: main re-checks every decision against its own live switch.
+const browserAccess = createBrowserAccess(browserFullAccessFromEnv(process.env));
 
 // Preview console/pageerror bridge (night-track wave-1 cut §2.4): the OTHER
 // consumer boot.ts's routePreviewMessage recognizes on this same control
@@ -3197,7 +3203,7 @@ async function boot(): Promise<void> {
       registry.register(browserScreenshotTool);
       // Taskana 4759: browser control. Built from the factory so
       // the "Full browser access" flag (Phase B) can drop the approval escalation.
-      const browserControl = createBrowserControlTools({ fullAccess: () => false });
+      const browserControl = createBrowserControlTools({ fullAccess: () => browserAccess.get() });
       registry.register(browserControl.navigate);
       registry.register(browserControl.snapshot);
       registry.register(browserControl.click);
@@ -5030,6 +5036,9 @@ process.parentPort.on("message", (event) => {
           turnId: PREVIEW_CONSOLE_TURN_ID,
           event: translatePreviewEvent(message),
         });
+      },
+      onBrowserAccess: (fullAccess) => {
+        browserAccess.set(fullAccess);
       },
     })
   ) {

@@ -4,6 +4,7 @@
  * rare, detailed work into the existing Git inspector drawer.
  */
 import { SessionAccessRow } from "./SessionAccessRow.js";
+import { BrowserAccessRow } from "./BrowserAccessRow.js";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { GitCommand } from "../../../shared/protocol.js";
 import type { CommandHookDeclaration, LspServerStatus } from "@anycode/core";
@@ -324,6 +325,8 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
           )}
           {/* Taskana 4747: the per-session Sessions API switch (any engine; main owns the state). */}
           <SessionAccessRow />
+          {/* Taskana 4759: the per-session "Full browser access" switch (asks before turning ON). */}
+          <BrowserAccessRow />
           {statusKnown && status === null && <div className="environment-menu-note">Git is not available for this workspace.</div>}
           {!statusKnown && <div className="environment-menu-note">Checking repository…</div>}
         </div>

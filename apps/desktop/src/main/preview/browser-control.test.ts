@@ -708,3 +708,52 @@ describe("BrowserController password typing under Full browser access (Taskana 4
     }
   });
 });
+
+describe("BrowserController hard limits while Full browser access is on (Taskana 4759, brief 44)", () => {
+  it("file inputs stay refused and password values never appear in a snapshot, even with the switch on", async () => {
+    const cdp = fakeCdp();
+    cdp.respond("Accessibility.getFullAXTree", axTree([
+      { nodeId: "1", role: "RootWebArea", childIds: ["2", "3"] },
+      { nodeId: "2", role: "textbox", name: "Upload", backendDOMNodeId: 41 },
+      { nodeId: "3", role: "textbox", name: "Secret", backendDOMNodeId: 42, properties: [{ name: "protected", value: { value: true } }] },
+    ]));
+    cdp.respond("DOM.getBoxModel", { model: { content: quad(0, 0, 10, 10) } });
+    cdp.respond("DOM.resolveNode", { object: { objectId: "obj-f" } });
+    cdp.respond("Runtime.callFunctionOn", (params?: object) => {
+      const fn = (params as { functionDeclaration?: string } | undefined)?.functionDeclaration ?? "";
+      if (fn.includes("tagName")) {
+        return { result: { value: { tag: "input", type: "file", editable: false, readOnly: false, disabled: false, label: "Upload" } } };
+      }
+      return { result: { value: true } };
+    });
+    cdp.respond("DOM.describeNode", describeAs(["type", "password"]));
+    const controller = new BrowserController({ clickSettleMs: 1, navigationWaitMs: 5, waitPollMs: 1 });
+    const ctx: BrowserControlContext = {
+      cdp,
+      previewId: "preview-1",
+      currentUrl: () => "https://example.org/",
+      navEpoch: () => 0,
+      settle: async () => "ready",
+      reload: async () => {},
+      goToOffset: async () => {},
+      navigationHistory: () => ({ entries: [], index: 0 }),
+      isNavigationAllowed: async () => true,
+      console: () => ({ entries: [], dropped: 0 }),
+      fullAccess: () => true,
+      signal: new AbortController().signal,
+    };
+    const snap = await controller.run({ action: "snapshot" }, ctx);
+    expect(snap.ok && snap.value.text).not.toMatch(/hunter2|sk-/);
+    const fileTyped = await controller.run({ action: "type", target: { ref: "e1" }, text: "/etc/passwd", clear: true, submit: false }, ctx);
+    expect(fileTyped).toMatchObject({ ok: false, errorKind: "not_allowed" });
+    expect(cdp.methods()).not.toContain("Input.insertText");
+  });
+
+  it("the policy keeps the eval blocklist to the driver: ON allows the eval step, the driver still refuses cookie reads", async () => {
+    expect(checkInteractionPolicy("eval", "remote", false, "https://example.org/", true)).toEqual({ allow: true });
+    const { run, cdp } = setup({ url: "https://example.org/" });
+    const refused = await run({ action: "eval", expression: "document.cookie" });
+    expect(refused).toMatchObject({ ok: false, errorKind: "not_allowed" });
+    expect(cdp.methods()).not.toContain("Runtime.evaluate");
+  });
+});

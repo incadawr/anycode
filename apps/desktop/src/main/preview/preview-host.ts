@@ -1628,6 +1628,9 @@ class PreviewHost implements PreviewHostHandle {
         return this.screenshotFor(tabId, op.previewId);
       case "control":
         return this.controlForTab(tabId, op);
+      default:
+        // An op this build does not know (e.g. a forged kind) is refused, never silently answered.
+        return Promise.resolve(this.fail("invalid_input", "unknown preview operation"));
     }
   }
 

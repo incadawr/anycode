@@ -65,6 +65,7 @@ import type {
   RetryPolicy,
   SessionMeta,
 } from "@anycode/core";
+import { BROWSER_ACCESS_HOST_MESSAGE_TYPE } from "../shared/browser-access.js";
 import { SECRET_ENV_KEYS, connectionById, type ModelCapabilitiesDto } from "../shared/settings.js";
 import { defaultSettingsPath, loadSettings } from "../settings/files.js";
 import { CREDENTIAL_REQUEST_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
@@ -900,6 +901,11 @@ export interface PreviewMessageConsumers {
    * silently dropped until 96-D registers this callback.
    */
   onEvent?: (message: PreviewEventMessage) => void;
+  /**
+   * Taskana 4759: the tab's live "Full browser access" flag, pushed by main. A
+   * malformed message (non-boolean fullAccess) is recognized and dropped.
+   */
+  onBrowserAccess?: (fullAccess: boolean) => void;
 }
 
 /**
@@ -923,6 +929,11 @@ export function routePreviewMessage(data: unknown, consumers: PreviewMessageCons
   }
   if (message.type === PREVIEW_EVENT_TYPE) {
     consumers.onEvent?.(data as PreviewEventMessage);
+    return true;
+  }
+  if (message.type === BROWSER_ACCESS_HOST_MESSAGE_TYPE) {
+    const fullAccess = (data as { fullAccess?: unknown }).fullAccess;
+    if (typeof fullAccess === "boolean") consumers.onBrowserAccess?.(fullAccess);
     return true;
   }
   return false;

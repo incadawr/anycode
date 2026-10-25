@@ -75,6 +75,24 @@ takes a new snapshot.
   runs without a prompt there. This matches how `BrowserOpen` already treats
   remote URLs.
 
+## Full browser access (per session)
+
+Each session has a **Full browser access** switch in its environment menu
+(the folder/branch menu in the header). While it is on, the agent can open any
+http(s) site, click, type (including passwords) and run JavaScript in that
+session's preview without asking. Turning it on asks you first; turning it off
+is immediate and takes effect on the next navigation or action.
+
+- A header chip, "Full browser access", shows while it is on.
+- A folder whose trust is not decided yet is always off: the row says
+  "Trust this folder first" until you trust the folder.
+- A child session (spawned by an agent) is on only if its parent is on.
+- The default for new sessions is set in Settings → Permissions
+  (`browser.fullAccessDefault`, off out of the box).
+- It still does not read cookies or stored credentials, and the eval blocklist,
+  the password-value masking, the loopback and `file:` rules stay in force.
+- The agent cannot switch it on: only the app window can change it.
+
 ## Troubleshooting
 
 - **"debugger unavailable (DevTools open on this preview ...)"**: Chromium

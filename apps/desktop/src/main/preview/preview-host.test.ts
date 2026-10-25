@@ -3989,3 +3989,76 @@ describe("PreviewHost — Full browser access (Taskana 4759 amendment, live read
     expect(await wc.requestGate!({ url: "https://new.example/x.js", resourceType: "script" })).toBe(true);
   });
 });
+
+// Taskana 4759 (briefs 43-45a): the live switch is re-read at every decision, the
+// hard limits hold while it is ON, and a forged "set access" op is refused.
+describe("PreviewHost — Full browser access, live limits and forged access ops (Taskana 4759)", () => {
+  const quadBox = (x: number, y: number, w: number, h: number) => [x, y, x + w, y, x + w, y + h, x, y + h];
+  const passwordTree = () => ({
+    nodes: [
+      { nodeId: "1", ignored: false, role: { value: "RootWebArea" }, name: { value: "" }, childIds: ["2"], properties: [] },
+      { nodeId: "2", ignored: false, role: { value: "textbox" }, name: { value: "Password" }, backendDOMNodeId: 31, childIds: [], properties: [] },
+    ],
+  });
+  async function call(rig: Rig, op: PreviewOp): Promise<PreviewResult<PreviewControlSuccess>> {
+    await rig.host.handleRequest(TAB, { type: PREVIEW_REQUEST_TYPE, requestId: `x-${Math.random()}`, op });
+    const posted = rig.posted.at(-1)!;
+    if (posted.message.type !== PREVIEW_RESPONSE_TYPE) throw new Error("no response");
+    return posted.message.result as PreviewResult<PreviewControlSuccess>;
+  }
+  async function remote(on: { value: boolean }) {
+    const rig = makeRig({ fullAccess: () => on.value });
+    const opened = rig.host.openForTab(TAB, { url: "https://example.org/" });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    rig.windows[0]!.webContents.cdp.respond("Accessibility.getFullAXTree", passwordTree());
+    rig.windows[0]!.webContents.cdp.respond("DOM.getBoxModel", { model: { content: quadBox(0, 0, 10, 10) } });
+    rig.windows[0]!.webContents.cdp.respond("DOM.resolveNode", { object: { objectId: "obj-1" } });
+    rig.windows[0]!.webContents.cdp.respond("Runtime.callFunctionOn", (params?: object) => {
+      const fn = (params as { functionDeclaration?: string } | undefined)?.functionDeclaration ?? "";
+      if (fn.includes("tagName")) {
+        return { result: { value: { tag: "input", type: "password", editable: false, readOnly: false, disabled: false, label: "Password" } } };
+      }
+      return { result: { value: true } };
+    });
+    return { rig, previewId: result.ok ? result.value.previewId : "" };
+  }
+
+  // Test 43 (password part): typing into a password field is refused the moment the switch is off.
+  it("a password field typed into while ON is refused once the switch goes OFF, with no restart", async () => {
+    const on = { value: true };
+    const { rig, previewId } = await remote(on);
+    await call(rig, { kind: "control", request: { action: "snapshot", previewId } });
+    const onTyped = await call(rig, { kind: "control", request: { action: "type", previewId, target: { ref: "e1" }, text: "hunter2", clear: true, submit: false } });
+    expect(onTyped.ok).toBe(true);
+
+    on.value = false;
+    const offTyped = await call(rig, { kind: "control", request: { action: "type", previewId, target: { ref: "e1" }, text: "hunter2", clear: true, submit: false } });
+    expect(offTyped).toMatchObject({ ok: false, errorKind: "not_allowed" });
+  });
+
+  // Test 44: ON does not weaken the hard limits.
+  it("ON keeps the eval blocklist: cookie and storage reads are refused before any Runtime.evaluate is sent", async () => {
+    const on = { value: true };
+    const { rig, previewId } = await remote(on);
+    for (const expression of ["document.cookie", "localStorage.getItem('t')", "navigator.credentials.get()"]) {
+      const result = await call(rig, { kind: "control", request: { action: "eval", previewId, expression } });
+      expect(result).toMatchObject({ ok: false, errorKind: "not_allowed" });
+    }
+    expect(rig.windows[0]!.webContents.cdp.methods()).not.toContain("Runtime.evaluate");
+  });
+
+  // Test 45(a): the op union has no set-access kind; a forged one is refused and changes nothing.
+  it("a forged set-access op is refused as an unknown op and the switch is unchanged", async () => {
+    const on = { value: false };
+    const { rig, previewId } = await remote(on);
+    const forged = { kind: "set-access", previewId, enabled: true } as unknown as PreviewOp;
+    const result = await call(rig, forged);
+    expect(result.ok).toBe(false);
+    expect(on.value).toBe(false);
+    const forgedControl = await call(rig, { kind: "control", request: { action: "setAccess", previewId, enabled: true } as unknown as PreviewControlRequest });
+    expect(forgedControl.ok).toBe(false);
+    expect(on.value).toBe(false);
+  });
+});

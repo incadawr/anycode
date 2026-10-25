@@ -34,6 +34,7 @@ import {
   isLoopbackUrl,
   mergeSettings,
   parseSettings,
+  browserSettingsSchema,
   communicationSettingsSchema,
   previewSchema,
   recognizerSchema,
@@ -2078,6 +2079,36 @@ describe("tools.adaptiveTurnBudget (TASK.4721)", () => {
     if (parsed.success) {
       expect(parsed.data.tools.adaptiveTurnBudget).toBeUndefined();
       expect(parsed.data.tools.maxTurns).toBe(40);
+    }
+  });
+});
+
+describe("browser (Taskana 4759) — browser.fullAccessDefault settings block (test 41)", () => {
+  it("a file with no browser key round-trips byte-identically and reads as undefined", () => {
+    const before = JSON.stringify(cloneDefaults());
+    const result = parseSettings(JSON.parse(before));
+    expect(result.status).toBe("ok");
+    expect(result.settings.browser).toBeUndefined();
+    expect(JSON.stringify(result.settings)).toBe(before);
+  });
+
+  it("keeps a valid fullAccessDefault", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), browser: { fullAccessDefault: "on" } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.browser).toEqual({ fullAccessDefault: "on" });
+  });
+
+  it("an unknown value falls back to off", () => {
+    expect(browserSettingsSchema.parse({ fullAccessDefault: "maybe" })?.fullAccessDefault).toBe("off");
+  });
+
+  it(".strict() rejects an extra key: the whole block degrades to undefined while siblings survive", () => {
+    expect(browserSettingsSchema.parse({ fullAccessDefault: "on", extra: true })).toBeUndefined();
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), browser: { fullAccessDefault: "on", extra: 1 } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.browser).toBeUndefined();
+      expect(parsed.data.permissions).toEqual({ alwaysAllow: [] });
     }
   });
 });

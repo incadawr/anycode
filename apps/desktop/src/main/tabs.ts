@@ -77,6 +77,7 @@ import {
   type EngineProcessRegistration,
 } from "../shared/engines.js";
 import { TERMINAL_INIT_MESSAGE_TYPE, TERMINAL_PORT_ENVELOPE_TYPE } from "../shared/terminal.js";
+import { BROWSER_FULL_ACCESS_ENV } from "../shared/browser-access.js";
 import {
   WORKSPACE_TRUST_ONCE_ENV,
   WORKSPACE_TRUST_PENDING_MESSAGE_TYPE,
@@ -646,6 +647,14 @@ export interface TabHostManagerDeps {
    * undefined => the var is not set.
    */
   mcpSecretsEnv?: (workspace: string) => string | undefined;
+  /**
+   * Taskana 4759: the tab's EFFECTIVE "Full browser access" value at fork time.
+   * ON stamps ANYCODE_BROWSER_FULL_ACCESS=1; OFF stamps nothing. main deletes any
+   * inherited value from its own env at startup, so an OFF host never sees one.
+   */
+  browserFullAccess?: (tabId: string) => boolean;
+  /** Taskana 4759: the host reported a trust question for this tab (its effective browser access just dropped to OFF). */
+  onWorkspaceTrustPending?: (tabId: string) => void;
   /** Resolved host entry script path. */
   hostEntry: string;
   /** new MessageChannelMain() (or a fake). */
@@ -1320,6 +1329,7 @@ export class TabHostManager {
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
         // Taskana 4736: a main-approved "trust once" for this workspace, this app run only.
         ...this.workspaceTrustOnceEnv(tab.workspace),
+        ...this.browserFullAccessEnv(tab.tabId),
       },
       stdio: "inherit",
     });
@@ -3292,6 +3302,12 @@ export class TabHostManager {
     if (tab.proc !== child || tab.childOf !== undefined) return;
     if (typeof hash !== "string" || !/^[0-9a-f]{64}$/.test(hash)) return;
     tab.workspaceTrustPending = { hash };
+    this.deps.onWorkspaceTrustPending?.(tab.tabId);
+  }
+
+  /** Taskana 4759: stamps the flag only when the tab's effective switch is on. */
+  private browserFullAccessEnv(tabId: string): NodeJS.ProcessEnv {
+    return this.deps.browserFullAccess?.(tabId) === true ? { [BROWSER_FULL_ACCESS_ENV]: "1" } : {};
   }
 
   private workspaceTrustOnceEnv(workspace: string): NodeJS.ProcessEnv {

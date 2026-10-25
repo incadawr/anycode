@@ -158,6 +158,7 @@ current workspace.
 | Stop being asked about a command | Settings → Permissions (always-allow rule) |
 | Route traffic through a proxy | Settings → Network |
 | Let an external agent message a live session | Settings → Sessions API (the `communication` block) |
+| Start new sessions with full browser access | Settings → Permissions (`browser.fullAccessDefault`, default off) |
 | Change tool concurrency or turn limits | Settings → Tools |
 | Turn on telemetry or the repo map | `telemetry` or `repoMap` in the shared config |
 

@@ -101,6 +101,7 @@ import { ProxyRefPicker } from "./ProxyRefPicker.js";
 import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
 import { ConsentDialog } from "./ConsentDialog.js";
 import { PermissionsEditor } from "./PermissionsEditor.js";
+import { BrowserAccessDefaultSection } from "./BrowserAccessDefaultSection.js";
 import { TrustedBinariesSection } from "./TrustedBinariesSection.js";
 import { TrustedFoldersSection } from "./TrustedFoldersSection.js";
 import { McpServersPane } from "./McpServersPane.js";
@@ -1767,6 +1768,8 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
             {activePane === "permissions" && <PermissionsEditor store={store} />}
 
             {activePane === "permissions" && <TrustedBinariesSection store={store} />}
+            {/* Taskana 4759: the default "Full browser access" switch for NEW sessions. */}
+            {activePane === "permissions" && <BrowserAccessDefaultSection store={store} />}
 
             {/* Taskana 4739: remembered workspace-trust decisions — a SIBLING
                 section after TrustedBinariesSection (same rationale: a trust

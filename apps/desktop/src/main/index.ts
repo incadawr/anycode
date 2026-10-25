@@ -1,6 +1,15 @@
 import { applyInputFromBlock, createCommunicationController, type CommunicationController } from "./communication-controller.js";
 import { createSessionAccessStore, defaultSessionAccessFromSettingsFile, type SessionAccessStore } from "./communication-sessions.js";
 import { registerCommunicationIpc } from "./communication-ipc.js";
+import { createBrowserAccessStore, defaultBrowserFullAccessFromSettingsFile, type BrowserAccessStore } from "./browser-access.js";
+import {
+  createBrowserAccessNotifier,
+  effectiveTabState,
+  registerBrowserAccessIpc,
+  type BrowserAccessIpcDeps,
+  type BrowserAccessNotifier,
+} from "./browser-access-ipc.js";
+import { BROWSER_ACCESS_CHANGED_CHANNEL, BROWSER_ACCESS_HOST_MESSAGE_TYPE } from "../shared/browser-access.js";
 import { stdioAdapterForHost } from "./communication-adapter.js";
 import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs } from "./self-check.js";
 import { assertChildModel } from "../shared/child-model.js";
@@ -515,6 +524,28 @@ let manager: TabHostManager | null = null;
 /** Taskana 4747: the Sessions API live controller and its per-session switch store (boot-wired). */
 let communicationController: CommunicationController | null = null;
 let communicationSessions: SessionAccessStore | null = null;
+// Taskana 4759: the per-session "Full browser access" switch and the notifier that pushes
+// each tab's EFFECTIVE value (renderer + host flag) exactly once per change.
+let browserAccessStore: BrowserAccessStore | null = null;
+let browserAccessNotifier: BrowserAccessNotifier | null = null;
+
+/** Live inputs of the browser-access IPC and the preview policy: the store, the tab list, trust, and the main window sender. */
+function browserAccessIpcDeps(): Omit<BrowserAccessIpcDeps, "onChanged"> | null {
+  const store = browserAccessStore;
+  if (store === null) return null;
+  return {
+    store,
+    tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId })),
+    trustPendingFor: (tabId) => manager?.workspaceTrustPendingFor(tabId) ?? "unknown_tab",
+    isMainWindowSender: (sender) => win !== null && !win.isDestroyed() && sender === win.webContents,
+  };
+}
+
+/** The EFFECTIVE (trust-gated) browser-access state of one tab, or undefined for an unknown tab or before the store exists. */
+function browserAccessEffectiveTab(tabId: string) {
+  const deps = browserAccessIpcDeps();
+  return deps === null ? undefined : effectiveTabState(deps, tabId);
+}
 // Taskana 4736: "trust once" approvals for this app run only (folder -> hash). Never persisted.
 const workspaceTrustOnceApprovals = new Map<string, string>();
 /**
@@ -2084,6 +2115,8 @@ void app.whenReady().then(async () => {
     // openForTab creates a NEW record. Absent -> "panel" (task decision),
     // same absent-default posture as autoOpenEnabled below.
     displayMode: () => settings?.preview?.displayMode ?? "panel",
+    // Taskana 4759: LIVE read at every decision (never cached on a record). Trust-gated; child sessions inherit only an ON parent.
+    fullAccess: (tabId) => browserAccessEffectiveTab(tabId)?.fullAccess === true,
     // D7: pushes the tab's current preview set to the renderer on every
     // record-set mutation (open-settle, status change, select, close, tab
     // close). It also runs under `closeAll()`, i.e. INSIDE the main window's
@@ -2203,6 +2236,25 @@ void app.whenReady().then(async () => {
     defaultOn: () => defaultSessionAccessFromSettingsFile(settingsPath),
     handlesFile: join(app.getPath("userData"), "communication-handles.json"),
   });
+  // Taskana 4759: an inherited ANYCODE_BROWSER_FULL_ACCESS must never reach a tab host;
+  // the host flag is only ever stamped by main (tabs.ts) from the live switch.
+  delete process.env.ANYCODE_BROWSER_FULL_ACCESS;
+  browserAccessStore = createBrowserAccessStore({
+    file: join(app.getPath("userData"), "browser-access.json"),
+    defaultOn: () => defaultBrowserFullAccessFromSettingsFile(settingsPath),
+  });
+  browserAccessNotifier = createBrowserAccessNotifier({
+    effective: (tabId) => browserAccessEffectiveTab(tabId),
+    push: (state) => {
+      sendToMainWindow(win, BROWSER_ACCESS_CHANGED_CHANNEL, state);
+      // The host reads the flag only to skip approval prompts; main stays authoritative.
+      try {
+        manager?.getTab(state.tabId)?.proc?.postMessage({ type: BROWSER_ACCESS_HOST_MESSAGE_TYPE, fullAccess: state.fullAccess });
+      } catch (error) {
+        console.warn(`[main] failed to post browser access to tab ${state.tabId}`, error);
+      }
+    },
+  });
   communicationController = createCommunicationController({
     manager: () => manager,
     userData: app.getPath("userData"),
@@ -2214,7 +2266,17 @@ void app.whenReady().then(async () => {
   });
 
   manager = new TabHostManager({
-    onSessionRegistered: (info) => communicationSessions?.register(info),
+    onSessionRegistered: (info) => {
+      communicationSessions?.register(info);
+      browserAccessStore?.register(info);
+    },
+    // Taskana 4759: the fork env carries the EFFECTIVE flag ("1"/"0"); the seed keeps the notifier's last-sent value in step.
+    browserFullAccess: (tabId) => {
+      const on = browserAccessEffectiveTab(tabId)?.fullAccess === true;
+      browserAccessNotifier?.seed(tabId, on);
+      return on;
+    },
+    onWorkspaceTrustPending: (tabId) => browserAccessNotifier?.refresh(tabId),
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),
     workspaceTrustOnce: (workspace) => workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
     mcpSecretsEnv: (workspace) => mcpSecretCache.get(workspace),
@@ -2420,6 +2482,7 @@ void app.whenReady().then(async () => {
     // and neither do the tab's artifact consent grants (TASK.77-A).
     onTabClosed: (tabId) => {
       previewHost?.closeForTab(tabId);
+      browserAccessNotifier?.forget(tabId);
       artifactConsentStore.clearTab(tabId);
       reconcileServices();
     },
@@ -2649,8 +2712,15 @@ void app.whenReady().then(async () => {
     home: homedir(),
     tabs: {
       workspaceTrustPendingFor: (tabId) => manager?.workspaceTrustPendingFor(tabId) ?? "unknown_tab",
-      clearWorkspaceTrustPending: (tabId) => manager?.clearWorkspaceTrustPending(tabId),
-      restartTabHost: async (tabId) => (await manager?.restartTabHost(tabId)) ?? { ok: false, reason: "unknown_tab" },
+      clearWorkspaceTrustPending: (tabId) => {
+        manager?.clearWorkspaceTrustPending(tabId);
+        browserAccessNotifier?.refresh(tabId);
+      },
+      restartTabHost: async (tabId) => {
+        const result = (await manager?.restartTabHost(tabId)) ?? { ok: false, reason: "unknown_tab" };
+        browserAccessNotifier?.refresh(tabId);
+        return result;
+      },
     },
     onceApprovals: workspaceTrustOnceApprovals,
     logger: { error: (message) => console.error(message) },
@@ -3112,6 +3182,15 @@ void app.whenReady().then(async () => {
       stdioScriptPath: () => stdioAdapterForHost(app.getPath("userData")),
       realpath: (path) => fsRealpath(path),
       stat: (path) => fsStat(path),
+    });
+  }
+
+  // Taskana 4759: the per-session "Full browser access" switch. Only the main window's
+  // webContents may call it (the handler checks the sender).
+  if (browserAccessStore !== null) {
+    registerBrowserAccessIpc({
+      ...browserAccessIpcDeps()!,
+      onChanged: (tabId) => browserAccessNotifier?.refresh(tabId),
     });
   }
 

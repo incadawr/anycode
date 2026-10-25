@@ -6542,3 +6542,68 @@ describe("TabHostManager — MCP secret hand-off env (Taskana 4752, part C)", ()
     expect(envs[1]?.ANYCODE_MCP_SECRETS).toBe('{"GH":"v2-value"}');
   });
 });
+
+// Taskana 4759: "Full browser access" rides the fork env as an explicit "1"/"0" stamp,
+// recomputed on every spawn, and a trust question from the host notifies main.
+describe("TabHostManager — browser access env stamp (Taskana 4759) — test 49", () => {
+  function browserRig(browserFullAccess: (tabId: string) => boolean, onWorkspaceTrustPending?: (tabId: string) => void) {
+    const hosts: FakeHost[] = [];
+    const forkSpy = vi.fn<HostForkFn>(() => {
+      const host = new FakeHost();
+      hosts.push(host);
+      return host as unknown as UtilityProcess;
+    });
+    const { window } = windowRig();
+    const manager = new TabHostManager({
+      fork: forkSpy,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => window,
+      env: () => ({}),
+      engineReady: () => true,
+      engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
+      logger: silentLogger,
+      now: () => 0,
+      limits: { maxRapidRespawns: 0, minHealthyUptimeMs: 1e9 } as never,
+      browserFullAccess,
+      ...(onWorkspaceTrustPending !== undefined ? { onWorkspaceTrustPending } : {}),
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "sess-B", resume: false });
+    const tabId = created.ok ? created.tab.tabId : "";
+    return { manager, hosts, forkSpy, tabId };
+  }
+  const stampOf = (spy: ReturnType<typeof vi.fn<HostForkFn>>, index: number) =>
+    (spy.mock.calls[index]?.[2] as { env?: Record<string, string> } | undefined)?.env?.ANYCODE_BROWSER_FULL_ACCESS;
+
+  it("stamps \"1\" only when the effective switch is on; an off tab gets no stamp", () => {
+    expect(stampOf(browserRig(() => true).forkSpy, 0)).toBe("1");
+    expect(stampOf(browserRig(() => false).forkSpy, 0)).toBeUndefined();
+  });
+
+  it("recomputes the stamp on every respawn", async () => {
+    let on = false;
+    const { manager, hosts, forkSpy, tabId } = browserRig(() => on);
+    on = true;
+    const restart = manager.restartTabHost(tabId);
+    hosts[0]!.emit("exit", 0);
+    await restart;
+    expect(forkSpy).toHaveBeenCalledTimes(2);
+    expect(stampOf(forkSpy, 0)).toBeUndefined();
+    expect(stampOf(forkSpy, 1)).toBe("1");
+  });
+
+  it("a host trust question notifies main for that tab (its effective switch just dropped to off)", () => {
+    const seen: string[] = [];
+    const { hosts, tabId } = browserRig(() => true, (id) => seen.push(id));
+    hosts[0]!.emit("message", { type: "workspace_trust_pending", hash: "c".repeat(64) });
+    expect(seen).toEqual([tabId]);
+  });
+
+  it("main ignores a browser-access message sent FROM the host: no reply and no state change", () => {
+    const seen: string[] = [];
+    const { hosts } = browserRig(() => false, (id) => seen.push(id));
+    hosts[0]!.emit("message", { type: "anycode:browser-access", fullAccess: true });
+    expect(hosts[0]!.postMessage).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
+  });
+});

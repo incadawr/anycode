@@ -49,6 +49,14 @@ import {
   type CommunicationRegenerateResult,
 } from "../shared/communication-config.js";
 import {
+  BROWSER_ACCESS_CHANGED_CHANNEL,
+  BROWSER_ACCESS_GET_CHANNEL,
+  BROWSER_ACCESS_SET_CHANNEL,
+  type BrowserAccessChangedPayload,
+  type BrowserAccessGetResult,
+  type BrowserAccessSetResult,
+} from "../shared/browser-access.js";
+import {
   LSP_CATALOG_STATUS_CHANNEL,
   LSP_CUSTOM_UPSERT_CHANNEL,
   LSP_DISABLE_CHANNEL,
@@ -1112,6 +1120,22 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, { tabId, enabled }) as Promise<CommunicationMutationResult>,
     setSessionHandle: (tabId: string, handle: string | null): Promise<CommunicationHandleResult> =>
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, { tabId, handle }) as Promise<CommunicationHandleResult>,
+  },
+  // Taskana 4759: `browserAccess.*` — the per-session "Full browser access" switch.
+  // The renderer names a tabId and a boolean only; main resolves the session, checks
+  // the sender is the main window, and answers with the EFFECTIVE (trust-gated) value.
+  browserAccess: {
+    get: (): Promise<BrowserAccessGetResult> =>
+      ipcRenderer.invoke(BROWSER_ACCESS_GET_CHANNEL, {}) as Promise<BrowserAccessGetResult>,
+    set: (tabId: string, enabled: boolean): Promise<BrowserAccessSetResult> =>
+      ipcRenderer.invoke(BROWSER_ACCESS_SET_CHANNEL, { tabId, enabled }) as Promise<BrowserAccessSetResult>,
+    onChanged: (callback: (payload: BrowserAccessChangedPayload) => void): (() => void) => {
+      function listener(_event: unknown, payload: BrowserAccessChangedPayload): void {
+        callback(payload);
+      }
+      ipcRenderer.on(BROWSER_ACCESS_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(BROWSER_ACCESS_CHANGED_CHANNEL, listener);
+    },
   },
   // P7.20/F23 W2 (design/slice-P7.20-cut.md §5): `skills.*` — seven thin invoke
   // wrappers over the skills management channels (main owns zod validation +

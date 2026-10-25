@@ -2282,6 +2282,13 @@ body {
   margin-left: var(--sp-2);
 }
 
+/* Taskana 4759: warning chip while "Full browser access" is effective for this tab. */
+.session-header-browser-access {
+  margin-left: var(--sp-2);
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
 .session-header-worktree {
   display: inline-flex;
   align-items: center;

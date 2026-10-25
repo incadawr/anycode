@@ -168,6 +168,20 @@ export const communicationSettingsSchema = z
   .catch(undefined);
 
 /**
+ * The `browser` settings section (Taskana 4759 owner amendment) — the initial
+ * "Full browser access" switch for NEW root sessions. Additive-optional, version
+ * NOT bumped. Fail closed: an unknown value or a corrupt block reads as "off";
+ * a child session never reads this default (it inherits its parent's switch).
+ */
+export const browserSettingsSchema = z
+  .object({
+    fullAccessDefault: z.enum(["off", "on"]).catch("off"),
+  })
+  .strict()
+  .optional()
+  .catch(undefined);
+
+/**
  * Strict-shape validator for a settings object. `.passthrough()` at the top
  * level keeps unknown keys from a future version alive across a read-modify-write
  * (design §2) — a v1 binary must not silently drop fields a v2 binary added.
@@ -822,6 +836,8 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // Sessions API (Taskana 4747, additive-optional; version NOT bumped). Declared
     // explicitly so it validates and survives a read-modify-write cycle.
     communication: communicationSettingsSchema,
+    // Taskana 4759 (additive-optional; version NOT bumped): the default "Full browser access" switch.
+    browser: browserSettingsSchema,
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
 

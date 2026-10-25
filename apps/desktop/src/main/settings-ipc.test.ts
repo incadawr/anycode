@@ -4716,3 +4716,22 @@ describe("TASK.141 design-review regressions", () => {
     });
   });
 });
+
+// Taskana 4759 (test 52): the default "Full browser access" switch rides the generic
+// settings-set patch; it persists, deep-merges, and an invalid value is refused.
+describe("settings-set — browser.fullAccessDefault (Taskana 4759)", () => {
+  it("writes browser.fullAccessDefault and leaves sibling sections untouched", async () => {
+    const res = await handleSet(makeDeps(), { browser: { fullAccessDefault: "on" } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.snapshot.settings.browser).toEqual({ fullAccessDefault: "on" });
+      expect(res.snapshot.settings.ui).toBeDefined();
+    }
+  });
+
+  it("a value outside off/on never reads as on (the reader's catch fails closed)", async () => {
+    const res = await handleSet(makeDeps(), { browser: { fullAccessDefault: "sometimes" } });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.snapshot.settings.browser?.fullAccessDefault).not.toBe("on");
+  });
+});

@@ -775,6 +775,14 @@ export interface AnycodeSettings {
     port?: number;
     defaultSessionAccess: "off" | "on";
   };
+  /**
+   * Taskana 4759 (additive-optional, version NOT bumped). `fullAccessDefault`: the
+   * "Full browser access" switch a NEW root session starts with (absent = "off").
+   * Child sessions never read it; the per-session switch lives in browser-access.json.
+   */
+  browser?: {
+    fullAccessDefault: "off" | "on";
+  };
 }
 
 /**

@@ -34,6 +34,7 @@ import { useTabsStore } from "../tabs-store.js";
 import type { ConnectionPhase, TurnState } from "../store.js";
 import { Collapse, Dot, Globe, History, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
+import { browserAccessChipVisible, useBrowserAccessState } from "./BrowserAccessRow.js";
 import { usePreviewStore } from "../preview/preview-store.js";
 import { useDockStore } from "../dock/dock-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
@@ -147,6 +148,8 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   const backgroundTasks = useTabStore((state) => state.backgroundTasks);
   const tasksRunning = backgroundTasks.some((task) => task.status === "running");
   const exitControl = worktreeExitControlState(turnStatus, connection);
+  // Taskana 4759: the chip shows while this tab's EFFECTIVE full browser access is on.
+  const [browserAccess] = useBrowserAccessState(tabId, window.anycode.browserAccess);
 
   // D15 (96-P3): the Previews menu — visible whenever the active tab has
   // >=1 preview of ANY container.
@@ -269,6 +272,15 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       )}
 
       {externalEngine && <span className="engine-identity session-header-engine">{engine.id === "codex" ? "Codex" : engine.id}</span>}
+      {browserAccessChipVisible(browserAccess) && (
+        <span
+          className="engine-identity session-header-browser-access"
+          data-testid="browser-full-access-chip"
+          title="The agent can open any website, click, type and run JavaScript in the preview without asking"
+        >
+          Full browser access
+        </span>
+      )}
 
       {!isNewSession && <EnvironmentMenu placement="header" />}
 
