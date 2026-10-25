@@ -10,7 +10,6 @@ import type { GitPendingRequest } from "../store.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { RUN_ACTION_EVENT } from "../slash-menu.js";
 import { Ellipsis, Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
 import { groupHooksByEvent } from "./HooksPanel.js";
@@ -172,10 +171,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     send({ type: "lsp_restart_request" });
   }
 
-  function openSettingsFromLsp(): void {
-    window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
-    setOpen(false);
-  }
 
   function switchBranch(name: string): void {
     if (!status || name === status.head.branch) {
@@ -298,7 +293,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   {lspServers.length > 0 ? (
                     <button type="button" className="environment-menu-open" data-environment-action="lsp-details" onClick={openLspDetails}>Details</button>
                   ) : (
-                    <button type="button" className="environment-menu-open" data-environment-action="lsp-setup" onClick={openSettingsFromLsp}>Set up</button>
+                    <button type="button" className="environment-menu-open" data-environment-action="lsp-setup" onClick={openLspDetails}>Set up</button>
                   )}
                 </span>
               </div>

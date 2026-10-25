@@ -58,3 +58,18 @@ describe("formatLspSummary", () => {
     expect(formatLspSummary(servers)).toBe("1 initializing · 1 crashed · 1 disposed · 1 not started");
   });
 });
+
+describe("LSP setup hint (empty state)", () => {
+  it("the example is a well-formed lspServers config (core schema shape)", async () => {
+    const { LSP_SETUP_EXAMPLE } = await import("./LspPanel.js");
+    const parsed = JSON.parse(LSP_SETUP_EXAMPLE) as {
+      lspServers: { name: unknown; command: unknown; args?: unknown; extensions: unknown }[];
+    };
+    expect(parsed.lspServers).toHaveLength(1);
+    const entry = parsed.lspServers[0]!;
+    // Mirrors packages/core/src/lsp/config.ts lspServerEntrySchema (required: name, command, extensions[>=1]).
+    expect(typeof entry.name).toBe("string");
+    expect(typeof entry.command).toBe("string");
+    expect(Array.isArray(entry.extensions) && (entry.extensions as unknown[]).length > 0).toBe(true);
+  });
+});

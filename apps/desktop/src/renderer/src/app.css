@@ -6525,6 +6525,23 @@ body {
   font-size: var(--fs-sm);
 }
 
+.lsp-empty p {
+  margin: 0 0 var(--sp-2);
+}
+
+.lsp-setup-example {
+  margin: 0 0 var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs, var(--fs-sm));
+  color: var(--text-2);
+  white-space: pre;
+  overflow-x: auto;
+  user-select: text;
+}
+
 .lsp-server-row {
   display: flex;
   flex-direction: column;
