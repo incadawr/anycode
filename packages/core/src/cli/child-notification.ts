@@ -327,6 +327,13 @@ export function formatChildApprovalNotice(input: ChildApprovalNoticeInput): stri
         `are auto-denied until a human interacts with the child session — open or answer the child session ` +
         `(its tab) and let the child retry to resume. `
       : "";
+  // Review F2: honest about the enforcement level. "Will not be retried
+  // through another tool" overstated it — nothing mechanically stops the
+  // child; the deny text INSTRUCTS it not to redo the effect. If it matters,
+  // verify the target was not modified.
+  const noBypass =
+    "On expiry, the child is instructed not to achieve the same effect through another tool; " +
+    "if it matters, verify the target was not modified. ";
   const body = [
     "<task-approval-notice>",
     `  <task-id>${escapeXmlText(input.taskId)}</task-id>`,
@@ -343,7 +350,7 @@ export function formatChildApprovalNotice(input: ChildApprovalNoticeInput): stri
     `${NOTIFICATION_HEADER}\n\n` +
     "This child session has NOT finished — it is paused on a permission request that needs a human " +
     "answer. To unblock it, open the child's tab and approve or deny the pending request (or ask the " +
-    `user to). ${deadlineSentence}${expiredRecovery}` +
+    `user to). ${deadlineSentence}${expiredRecovery}${noBypass}` +
     "This is a progress notice, not a completion report.\n\n" +
     body
   );
