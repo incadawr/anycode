@@ -8625,4 +8625,18 @@ describe("tapChildPermissions ask identity (Taskana 4821)", () => {
       "/tmp/Verylongpathsegment0123456789/ok.md",
     );
   });
+
+  it("describeChildApprovalAsk collapses whitespace and newlines in the subject to single spaces before capping (review F4)", () => {
+    const multi = describeChildApprovalAsk("Bash", { command: "git add -A\n\ngit commit -m\t'two\nlines'" });
+    expect(multi.subject).toBe("git add -A git commit -m 'two lines'");
+    // collapse happens BEFORE the cap: a multi-line subject whose first 160
+    // chars are mostly newlines/tabs still carries 160 chars of content.
+    // Segments stay under the scrubber's 32-char run rule (F3) with separator
+    // dots so the filler is not itself redacted.
+    const seg = (ch: string) => Array.from({ length: 10 }, () => ch.repeat(7)).join(".");
+    const padded = `${seg("x")} \n\n\t ${seg("y")}`;
+    const capped = describeChildApprovalAsk("Bash", { command: padded });
+    expect(capped.subject).toBe(`${seg("x")} ${seg("y")}`.slice(0, 160));
+    expect(capped.subject).not.toMatch(/[\n\t]/);
+  });
 });

@@ -540,7 +540,9 @@ export interface ChildApprovalAsk {
  * base64/hex-ish runs become `[redacted]`. Only the `command` key is
  * scrubbed: a file path identifies the ask and is not a credential (same
  * posture as `describeApproval`'s file-tool branch), while scrubbing it
- * anyway would redact long path SEGMENTS to uselessness.
+ * anyway would redact long path SEGMENTS to uselessness. Whitespace and
+ * newlines are collapsed to single spaces before the cap (review F4) so the
+ * one-line wire field never carries raw line breaks.
  */
 export function describeChildApprovalAsk(toolName: string, input: unknown): ChildApprovalAsk {
   let subject = "";
@@ -556,7 +558,11 @@ export function describeChildApprovalAsk(toolName: string, input: unknown): Chil
       }
     }
   }
-  const shown = isCommand ? scrubApprovalText(subject) : subject;
+  // Review F4: collapse BEFORE the cap (and before the scrub) — a multi-line
+  // command's 160-char budget must hold 160 chars of CONTENT, not newlines
+  // and indentation.
+  const flat = subject.replace(/\s+/g, " ").trim();
+  const shown = isCommand ? scrubApprovalText(flat) : flat;
   return { toolName: toolName.slice(0, 80) || "unknown", subject: shown.slice(0, 160) };
 }
 
