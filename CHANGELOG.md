@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.39] — 2026-10-25
+
 ### Added
 
 - Native agents can read the browser console and run JavaScript in the built-in preview (always asks).
@@ -42,6 +44,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - `examples/channel-echo`: a dependency-free example plugin service that turns
   files in an inbox folder into messages for a handle and writes the answers to an
   outbox folder. The author guide is `docs/development/channel-plugins.md`.
+
+### Changed
+
+- Settings → Sessions API is laid out as one short flow: an on/off switch with its status, three steps to connect an agent, and the folder, port, default-sharing and token controls under Advanced.
 
 ### Fixed
 
