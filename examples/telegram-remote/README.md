@@ -36,6 +36,8 @@ rules for services are in [channel plugins](../../docs/development/channel-plugi
 | `/use <handle, id, id prefix or number>` | Selects a session. `/use` alone shows the selection. |
 | any other text | Sends a new turn to the selected session (queued while it is busy). |
 | `/steer <text>` | Adds text to the running turn. Codex only; other engines may refuse it. |
+| `/stop` | Stops the running turn of the selected session, like the Stop button. |
+| `/approvals` | Lists the approvals waiting in the selected session, each with Allow and Deny buttons. |
 | `/status` | Bridge status, pending turns, and the selected session's engine and state. |
 | `/help` | The command list. |
 
@@ -72,8 +74,8 @@ does not start until you save that secret; saving it starts the service.
   API, and it names them by handle, state and folder name (not the full path).
 - Session output is plain text. The Sessions API token and the bot token are
   redacted from every reply, log line and state file.
-- Nothing is approved remotely. Permission prompts, diffs and tool output are not
-  forwarded, and there is no `/stop`. Those need Sessions API additions first.
+- Approvals reach Telegram only where the session's **External approvals** switch
+  is on (off by default). Diffs and tool output are not forwarded.
 - The token travels only to `https://api.telegram.org` (or a `127.0.0.1` test
   server). Any other `TELEGRAM_API_BASE` is refused.
 
@@ -105,3 +107,22 @@ does not start until you save that secret; saving it starts the service.
 - `service.mjs`: the bridge (polling, commands, delivery, state).
 - `lib.mjs`: pure rules (allowlist, command parsing, chunking, redaction, backoff).
 - `.anycode-plugin/plugin.json`: the manifest. Its service reads the two secrets.
+
+## Approvals from Telegram
+
+When a session asks for a tool (a command, an edit, a fetch) and its **External
+approvals** switch is on, the bridge sends one message with **Allow** and **Deny**
+buttons. Tapping a button answers the request in AnyCode, and the message then
+shows `Allowed.` or `Denied.`.
+
+- The switch is set in AnyCode's session menu, is off by default, and only appears
+  while the session is shared. Without it the bridge says so once in a while.
+- Only **Allow** and **Deny** are offered. Nothing creates an "always allow" rule.
+- A long command is shortened and its secrets are masked before it is sent.
+- A request that must be answered in AnyCode (a plan or a question) is sent without
+  buttons.
+- A button for a request that is already answered, expired or unknown says so.
+  If you answered in AnyCode first, the message says `Already answered (in AnyCode).`
+- Only the owner's private chat can tap the buttons. Forwarding the message to
+  someone else does nothing.
+
