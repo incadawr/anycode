@@ -25,6 +25,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Browser preview: a click or type on a preview that is not painting now fails within seconds with "the preview is not visible; open it in the pane or window and retry" instead of hanging in Running. The pane re-applies its bounds once a page has loaded. The popped-out preview window is titled with the page title (or host) and has "Return to AnyCode" (right-click menu, Cmd/Ctrl+Shift+D, menu bar on Windows/Linux) that puts the preview back into the pane.
 - A background subagent you stop from the UI is reported to the parent as stopped by the user (`<cancelled-by>user</cancelled-by>`), so the parent no longer relaunches it as a failure. The report card reads "stopped by you" and the Agent card shows "Cancelled" instead of "Done".
 - A new session can be started in Orchestrate mode from the start screen: the mode menu lists an Orchestrate row for AnyCode, and `/orchestrate <task>` in the first-message box starts one (the first-run role picker opens when no roles are set yet).
 
