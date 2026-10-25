@@ -300,3 +300,10 @@ describe("readCachedPluginIndex", () => {
     expect(result.status).toBe("unchecked");
   });
 });
+
+describe("productionPluginKeys (orchestrator hardening)", () => {
+  it("never includes a test-* key, so a test key cannot sign a production index", async () => {
+    const { productionPluginKeys } = await import("./index-client.js");
+    expect(productionPluginKeys().some((key) => key.keyId.startsWith("test-"))).toBe(false);
+  });
+});

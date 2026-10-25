@@ -24,6 +24,7 @@ import { z } from "zod";
 import {
   OFFICIAL_PLUGIN_INDEX_URL,
   OFFICIAL_PLUGIN_KEYS,
+  isProductionKey,
   PLUGIN_FETCH_TIMEOUT_MS,
   PLUGIN_INDEX_MAX_BYTES,
   isOfficialChannelConfigured,
@@ -160,7 +161,7 @@ async function readCache(fs: IndexClientFs, cacheDir: string): Promise<CacheFile
 export function verifyIndexSignature(
   raw: string,
   sigEnvelope: unknown,
-  keys: readonly OfficialPluginKey[] = OFFICIAL_PLUGIN_KEYS,
+  keys: readonly OfficialPluginKey[] = productionPluginKeys(),
 ): { ok: true; keyId: string } | { ok: false; reason: "malformed" | "unknown-key" | "bad-signature" } {
   const parsed = signatureEnvelopeSchema.safeParse(sigEnvelope);
   if (!parsed.success) {
@@ -184,6 +185,15 @@ export function verifyIndexSignature(
     return { ok: false, reason: "bad-signature" };
   }
   return verifies ? { ok: true, keyId: key.keyId } : { ok: false, reason: "bad-signature" };
+}
+
+/**
+ * The compiled keys a production verification may trust: `test-*` keys are
+ * never accepted unless a caller (tests) passes its key list explicitly, so
+ * adding the real key later cannot leave a test key able to sign an index.
+ */
+export function productionPluginKeys(): readonly OfficialPluginKey[] {
+  return OFFICIAL_PLUGIN_KEYS.filter((key) => isProductionKey(key));
 }
 
 /**
@@ -277,7 +287,7 @@ async function fetchText(
  * success. NEVER throws; every failure offers the cached verified index.
  */
 export async function checkPluginIndex(options: IndexClientOptions & { serialFloor?: number }): Promise<IndexCheckResult> {
-  const keys = options.keys ?? OFFICIAL_PLUGIN_KEYS;
+  const keys = options.keys ?? productionPluginKeys();
   const now = options.now ?? Date.now;
   const fetchImpl = options.fetchImpl ?? defaultFetch;
   const fs = options.fs ?? defaultFs;
@@ -399,7 +409,7 @@ export async function readCachedPluginIndex(options: {
   if (cached === null) {
     return { status: "unchecked", fromCache: false, expired: false };
   }
-  const verified = verifyIndex(cached.raw, safeJsonParse(cached.sig), { now: now(), keys: options.keys });
+  const verified = verifyIndex(cached.raw, safeJsonParse(cached.sig), { now: now(), keys: options.keys ?? productionPluginKeys() });
   if (!verified.ok) {
     return { status: "signature-failed", fromCache: true, expired: true, detail: verified.detail };
   }
