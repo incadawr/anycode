@@ -27,7 +27,7 @@ import { MAX_WORKFLOWS } from "../types/config.js";
 export interface WorkflowRoot {
   /** Absolute directory holding flat `*.json` definition files. */
   dir: string;
-  /** "project" | "user" (precedence label). */
+  /** "project" | "user" | "plugin:<pluginName>" | "bundled" (precedence label / rank key). */
   source: string;
 }
 
