@@ -479,10 +479,12 @@ export function importResultText(item: McpImportApplyResultItem): string {
 export interface McpServersPaneProps {
   /** Active tab's runtime MCP statuses — SettingsScreen's own `useActiveMcpServers()`, passed down (no re-subscription here). */
   servers: McpServerStatus[];
-  /** Active tab id, so bridge calls resolve a project-scope workspace main-side; omit for the pre-tab case (user-scope only). */
+  /** Scope reference (Taskana 4758): a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case (user-scope only). */
   tabId?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.mcpConfig` (same DI ethic as SettingsBridge). */
   bridge?: McpConfigBridge;
+  /** Taskana 4758: reports the pane's count for the scope chip (null while loading). */
+  onCountChange?: (count: number | null) => void;
 }
 
 /** The write-only secret bridge (preload `mcpSecrets.*`): list/set/delete, names only back. */
@@ -629,7 +631,7 @@ export function McpSecretsBlock({ bridge = window.anycode.mcpSecrets }: { bridge
   );
 }
 
-export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConfig }: McpServersPaneProps) {
+export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConfig, onCountChange }: McpServersPaneProps) {
   const [snapshot, setSnapshot] = useState<McpConfigSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [dismissedProblems, setDismissedProblems] = useState<Set<string>>(new Set());
@@ -652,6 +654,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
 
   useEffect(() => {
     let cancelled = false;
+    setSnapshot(null);
     void bridge.get({ tabId }).then((snap) => {
       if (!cancelled) {
         setSnapshot(snap);
@@ -667,6 +670,12 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
   const filtered = filterMcpRows(rows, searchQuery);
   const { configured, compat } = partitionMcpRows(filtered);
   const allConfigured = partitionMcpRows(rows).configured;
+  // Taskana 4758: the scope chip's count = configured rows (compat excluded).
+  const configuredCount = snapshot ? allConfigured.length : null;
+  useEffect(() => {
+    onCountChange?.(configuredCount);
+  }, [configuredCount, onCountChange]);
+  useEffect(() => () => onCountChange?.(null), [onCountChange]);
   const emptyKind = mcpEmptyKind(allConfigured.length, configured.length, searchQuery);
   const visibleProblems = (snapshot?.problems ?? []).filter((p) => !dismissedProblems.has(p));
 

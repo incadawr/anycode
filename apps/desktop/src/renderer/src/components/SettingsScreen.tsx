@@ -110,10 +110,19 @@ import { SettingsPaneBoundary } from "./SettingsPaneBoundary.js";
 import { SessionsApiPane } from "./SessionsApiPane.js";
 import { SESSIONS_API_DESCRIPTION, SESSIONS_API_LABEL } from "./sessions-api-model.js";
 import { SkillsPane } from "./SkillsPane.js";
-import { SubagentsPane, workspaceRootSegment } from "./SubagentsPane.js";
+import { SubagentsPane } from "./SubagentsPane.js";
 import { RolesPane } from "./RolesPane.js";
 import { PluginsPane } from "./PluginsPane.js";
-import { ScopeSwitcher, resolvePaneScope, type PaneScopeChoice } from "./ScopeSwitcher.js";
+import { ScopeDropdown } from "./ScopeSwitcher.js";
+import {
+  countLabel,
+  mcpStatusActive,
+  resolveScopeSelection,
+  scopeHintFor,
+  USER_SCOPE,
+  type ScopeSelection,
+} from "./scope-model.js";
+import type { ScopeWorkspaceEntry, ScopeWorkspacesListResult } from "../../../shared/scope-workspaces.js";
 import { ProfilePane } from "./ProfilePane.js";
 import { VisionPane } from "./VisionPane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
@@ -993,40 +1002,11 @@ export function resolvePendingAddConnection(
 }
 
 /**
- * Taskana 4706: the pure decision behind the Settings scope bar above the
- * MCP/Skills/Subagents panes. Maps the user's Global-vs-Project choice (plus
- * an optional explicitly chosen project tab) onto the concrete targets the
- * three panes consume:
- *
- *  - `resolved` — the effective choice; an explicit "project" with no tabs
- *    open degrades to "user" (same rule as `resolvePaneScope`, applied here
- *    so the bar and the panes can never disagree).
- *  - `scopeTabId` — the tab whose workspace main will resolve; `null` in
- *    Global mode (the panes then omit `tabId` and main degrades to a
- *    user-only snapshot). Follows the ACTIVE tab unless an explicit pick
- *    still exists; a pick whose tab has vanished (closed) falls back to the
- *    active tab rather than dangling.
- *  - `scopeWorkspace` — the display-only workspace root for that tab (badge
- *    labels/tooltips only; path custody stays tabId-only, design §3).
- *
- * Exported for unit testing (SettingsScreen.test.ts) — plain data mapping.
+ * Taskana 4758: the panes that take the scope dropdown (User or a recent
+ * folder). Exported for SettingsScreen.test.ts.
  */
-export function resolveScopeTargets(
-  activeTabId: string | null,
-  tabs: ReadonlyArray<{ tabId: string; workspace: string }>,
-  choice: PaneScopeChoice,
-  chosenProjectTabId: string | null,
-): { resolved: PaneScopeChoice; scopeTabId: string | null; scopeWorkspace: string | null } {
-  const resolved = resolvePaneScope(choice, tabs.length > 0);
-  if (resolved === "user") {
-    return { resolved, scopeTabId: null, scopeWorkspace: null };
-  }
-  const chosen = chosenProjectTabId !== null ? tabs.find((tab) => tab.tabId === chosenProjectTabId) : undefined;
-  const target = chosen ?? tabs.find((tab) => tab.tabId === activeTabId) ?? tabs[0];
-  if (!target) {
-    return { resolved: "user", scopeTabId: null, scopeWorkspace: null };
-  }
-  return { resolved, scopeTabId: target.tabId, scopeWorkspace: target.workspace };
+export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
+  return pane === "mcp" || pane === "language-servers" || pane === "skills" || pane === "subagents";
 }
 
 /**
@@ -1321,9 +1301,28 @@ export interface SettingsScreenProps {
   addConnectionRequest?: number;
   /** Taskana 4237: reports that the pending add request has been handled, so `SettingsDialog` can clear it. */
   onAddConnectionConsumed?: () => void;
+  /** Taskana 4758: the folder list for the scope dropdown; defaults to the preload bridge (absent outside Electron). */
+  scopeBridge?: ScopeWorkspacesBridge;
 }
 
-export function SettingsScreen({ store = useSettingsStore, onClose, initialPane, addConnectionRequest = 0, onAddConnectionConsumed }: SettingsScreenProps) {
+/** Taskana 4758: the one bridge call the scope dropdown needs (opaque ids only). */
+export interface ScopeWorkspacesBridge {
+  list(): Promise<ScopeWorkspacesListResult>;
+}
+
+/** The preload bridge, or undefined where there is no window (node tests). */
+function defaultScopeBridge(): ScopeWorkspacesBridge | undefined {
+  return typeof window === "undefined" ? undefined : window.anycode?.scopeWorkspaces;
+}
+
+export function SettingsScreen({
+  store = useSettingsStore,
+  onClose,
+  initialPane,
+  addConnectionRequest = 0,
+  onAddConnectionConsumed,
+  scopeBridge,
+}: SettingsScreenProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const notice = useStore(store, (s) => s.notice);
   const updateStatus = useStore(store, (s) => s.updateStatus);
@@ -1337,10 +1336,6 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
   // design §3 trust boundary). Read directly off the shell-level tabs-store,
   // same primitive `useActiveMcpServers` above already uses internally.
   const activeTabId = useStore(useTabsStore, (state) => state.activeTabId);
-  // TASK.128: display-only workspace root of the active tab (tabs-store mirror of
-  // main's manager.getTab(tabId).workspace) — shown in subagent badge labels/tooltips
-  // only; never sent to main (path custody stays tabId-only, design §3 trust boundary).
-  const activeTabWorkspace = useStore(useTabsStore, (state) => state.tabs.find((tab) => tab.tabId === state.activeTabId)?.workspace);
   // Slice P7.8 §3.5: same per-tab data source as mcpServers above, mirrored.
   const envStatus = useActiveEnvStatus();
 
@@ -1395,21 +1390,45 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
   const [searchQuery, setSearchQuery] = useState("");
   const navRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
-  // Taskana 4706: the explicit Global-vs-Project scope choice for the
-  // MCP/Skills/Subagents panes. Deliberately NOT reset when the active tab
-  // changes (the user's area selection outlives tab switches); the effect
-  // below keeps it honest instead — "project" with no tabs left degrades to
-  // "user" via `resolvePaneScope`. `chosenProjectTabId` null = follow the
-  // active tab (the default, card item 1); a non-null value is the explicit
-  // workspace-selector pick.
-  const [paneScopeChoice, setPaneScopeChoice] = useState<PaneScopeChoice>("user");
-  const [chosenProjectTabId, setChosenProjectTabId] = useState<string | null>(null);
-  // A tab exists ⇒ main will resolve its workspace (tabs-store `addTab`
-  // requires one), so tab presence alone is the availability signal.
-  const projectAvailableNow = activeTabId !== null;
-  useEffect(() => {
-    setPaneScopeChoice((c) => resolvePaneScope(c, projectAvailableNow));
-  }, [projectAvailableNow]);
+  // Taskana 4758: the one scope the MCP/Language servers/Skills/Subagents panes
+  // read and write. Default User; not persisted; shared by the four panes and
+  // kept across pane switches and active-tab changes. The selection is an opaque
+  // id; the folder list comes from main (`scopeBridge.list`), so the renderer
+  // never holds a path it could send back.
+  const [scopeSelection, setScopeSelection] = useState<ScopeSelection>(USER_SCOPE);
+  const scopeSelectionRef = useRef<ScopeSelection>(USER_SCOPE);
+  const [scopeEntries, setScopeEntries] = useState<ScopeWorkspaceEntry[]>([]);
+  const [scopeLoading, setScopeLoading] = useState(false);
+  const [scopeFellBackNote, setScopeFellBackNote] = useState<string | null>(null);
+  // The active pane's count for the scope chip (null while its snapshot loads).
+  const [paneCount, setPaneCount] = useState<number | null>(null);
+
+  function applyScope(next: ScopeSelection): void {
+    scopeSelectionRef.current = next;
+    setScopeSelection(next);
+  }
+
+  // Refetches the folder list. If the selected folder vanished or no longer
+  // exists, the scope falls back to User once, with a note.
+  const refreshScopeEntries = useCallback(async (): Promise<void> => {
+    const bridge = scopeBridge ?? defaultScopeBridge();
+    if (bridge === undefined) return;
+    setScopeLoading(true);
+    let result: ScopeWorkspacesListResult;
+    try {
+      result = await bridge.list();
+    } catch {
+      result = { ok: false, reason: "failed" };
+    }
+    setScopeLoading(false);
+    if (!result.ok) return;
+    setScopeEntries(result.workspaces);
+    const resolved = resolveScopeSelection(scopeSelectionRef.current, result.workspaces);
+    if (resolved.fellBack) {
+      applyScope(USER_SCOPE);
+      setScopeFellBackNote("That folder is no longer available, showing User.");
+    }
+  }, [scopeBridge]);
 
   // P7.23/F24 W2: re-applies `initialPane` on every change, not just at
   // mount — the initializer above covers a fresh open (dialog was closed,
@@ -1459,24 +1478,24 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
     ? requestedPane
     : visiblePanes[0]?.id;
 
-  // Taskana 4706: the scope bar's targets, shared by all three
-  // scope-dependent panes. One tabs-store subscription feeds the
-  // workspace-selector options (open tabs only — "recent workspaces" would
-  // need new main-side state, deliberately out of this pass); the selector's
-  // names reuse SubagentsPane's display-only root-segment helper.
+  // Taskana 4758: the tabs feed the refetch key below (a tab opening or closing
+  // changes the "open" badges and the MCP live join).
   const tabs = useStore(useTabsStore, (s) => s.tabs);
-  const workspaceOptions = tabs.map((t) => ({ tabId: t.tabId, workspace: t.workspace, name: workspaceRootSegment(t.workspace) }));
-  const { resolved: scopeResolved, scopeTabId, scopeWorkspace } = resolveScopeTargets(
-    activeTabId,
-    tabs,
-    paneScopeChoice,
-    chosenProjectTabId,
-  );
-  // MCP runtime status dots are only meaningful for the tab whose statuses
-  // `useActiveMcpServers` subscribes to — in Global mode (or when a non-active
-  // tab is chosen) every row falls to the neutral "applies to newly started
-  // tasks" detail instead of showing ANOTHER tab's live dots.
-  const scopeMcpServers = scopeTabId !== null && scopeTabId === activeTabId ? mcpServers : [];
+  const tabsKey = tabs.map((tab) => `${tab.tabId}\u0000${tab.workspace}`).sort().join("\n");
+  useEffect(() => {
+    void refreshScopeEntries();
+  }, [tabsKey, refreshScopeEntries]);
+
+  const scopeResolution = resolveScopeSelection(scopeSelection, scopeEntries);
+  const scopeRef = scopeResolution.ref;
+  const scopeEntry = scopeResolution.entry;
+  // MCP runtime status dots only for the folder whose tab is the active tab.
+  const mcpLive = mcpStatusActive(scopeEntry, activeTabId);
+  // Language servers' live section needs a real tab (never a workspace id): the
+  // active tab when it is in the folder, else the folder's first open tab.
+  const lspLiveTabId = mcpLive ? activeTabId : (scopeEntry?.tabIds[0] ?? null);
+  // A real tab id of the same folder, when one is open; the workspace id otherwise.
+  const lspTabId = lspLiveTabId ?? scopeRef;
 
   function onNavKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     const count = visiblePanes.length;
@@ -1712,36 +1731,24 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
           >
             <div className="settings-pane-content">
             <SettingsPaneBoundary paneId={activePane}>
-            {/* Taskana 4706: the explicit Global-vs-Project scope bar — rendered
-                ONCE above the pane content, only for the three scope-dependent
-                panes. "Global (user)" targets the user config files (panes call
-                their bridges without tabId; main degrades to user-only); the
-                project option names the selected workspace and offers the
-                open-tabs selector below. Same segmented idiom as the preview
-                location control above (start-engine-*), no new visual system. */}
-            {(activePane === "mcp" || activePane === "skills" || activePane === "subagents") && (
+            {/* Taskana 4758: one scope dropdown above the four config panes. */}
+            {paneHasScope(activePane) && (
               <div className="settings-scope-bar">
-                <ScopeSwitcher
-                  value={scopeResolved}
-                  projectAvailable={workspaceOptions.length > 0}
-                  workspaceName={scopeWorkspace !== null ? workspaceRootSegment(scopeWorkspace) : undefined}
-                  onChange={setPaneScopeChoice}
+                <ScopeDropdown
+                  selection={scopeSelection}
+                  entries={scopeEntries}
+                  loading={scopeLoading}
+                  onOpen={() => {
+                    void refreshScopeEntries();
+                  }}
+                  onSelect={(next) => {
+                    setScopeFellBackNote(null);
+                    applyScope(next);
+                  }}
+                  countLabel={countLabel(activePane ?? "", paneCount)}
+                  hint={scopeHintFor(scopeSelection, scopeEntry)}
+                  fellBackNote={scopeFellBackNote}
                 />
-                {scopeResolved === "project" && (
-                  <select
-                    className="settings-field-select"
-                    aria-label="Project scope workspace"
-                    value={scopeTabId ?? undefined}
-                    title={scopeWorkspace ?? undefined}
-                    onChange={(e) => setChosenProjectTabId(e.target.value)}
-                  >
-                    {workspaceOptions.map((o) => (
-                      <option key={o.tabId} value={o.tabId} title={o.workspace}>
-                        {o.name}
-                      </option>
-                    ))}
-                  </select>
-                )}
               </div>
             )}
             {activePane === "profile" && <ProfilePane />}
@@ -1890,16 +1897,25 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
               mode passes NO tabId (main degrades to a user-only snapshot) and
               the MCP join gets no runtime statuses (neutral details, never
               another tab's live dots); Project mode passes the chosen tab. */}
-          {activePane === "mcp" && <McpServersPane servers={scopeMcpServers} tabId={scopeTabId ?? undefined} />}
+          {activePane === "mcp" && (
+            <McpServersPane servers={mcpLive ? mcpServers : []} tabId={scopeRef} onCountChange={setPaneCount} />
+          )}
 
-          {/* Taskana 4743: language servers — like MCP above, the pane takes
-              the scope bar's tab (project mode) or none (Global = user-only
-              snapshot); detection and trust state resolve main-side. */}
-          {activePane === "language-servers" && <LanguageServersPane tabId={scopeTabId ?? undefined} tabStore={scopeTabId ? tabRegistry.getStore(scopeTabId) : undefined} />}
+          {/* Taskana 4743/4758: language servers take the same scope; the live
+              section needs a real tab, so it gets the folder's open tab (if any). */}
+          {activePane === "language-servers" && (
+            <LanguageServersPane
+              tabId={lspTabId ?? undefined}
+              tabStore={lspLiveTabId ? tabRegistry.getStore(lspLiveTabId) : undefined}
+              onCountChange={setPaneCount}
+            />
+          )}
 
-          {activePane === "skills" && <SkillsPane tabId={scopeTabId ?? undefined} />}
+          {activePane === "skills" && <SkillsPane tabId={scopeRef} onCountChange={setPaneCount} />}
 
-          {activePane === "subagents" && <SubagentsPane tabId={scopeTabId ?? undefined} workspace={scopeWorkspace ?? activeTabWorkspace ?? undefined} />}
+          {activePane === "subagents" && (
+            <SubagentsPane tabId={scopeRef} workspace={scopeEntry?.displayPath} onCountChange={setPaneCount} />
+          )}
 
           {/* Taskana 4704 §3.9 (part B): orchestration roles — sits right after
               Subagents (the persona/profile registry this builds on). */}

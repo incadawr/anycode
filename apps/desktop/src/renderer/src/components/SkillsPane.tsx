@@ -327,13 +327,15 @@ export function skillImportResultText(item: SkillsImportApplyResultItem): string
 // ── component ──
 
 export interface SkillsPaneProps {
-  /** Active tab id, so bridge calls resolve a project-scope workspace main-side; omit for the pre-tab case (user-scope only). */
+  /** Scope reference (Taskana 4758): a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case (user-scope only). */
   tabId?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.skills` (same DI ethic as SettingsBridge/McpConfigBridge). */
   bridge?: SkillsBridge;
+  /** Taskana 4758: reports the pane's count for the scope chip (null while loading). */
+  onCountChange?: (count: number | null) => void;
 }
 
-export function SkillsPane({ tabId, bridge = window.anycode.skills }: SkillsPaneProps) {
+export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChange }: SkillsPaneProps) {
   const [snapshot, setSnapshot] = useState<SkillsSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SkillsSourceFilter>("all");
@@ -359,6 +361,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills }: SkillsPane
 
   useEffect(() => {
     let cancelled = false;
+    setSnapshot(null);
     void bridge.list({ tabId }).then((snap) => {
       if (!cancelled) {
         setSnapshot(snap);
@@ -370,6 +373,13 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills }: SkillsPane
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, tabId]);
+
+  // Taskana 4758: the scope chip's count (null while the snapshot loads).
+  const rowCount = snapshot ? snapshot.rows.length : null;
+  useEffect(() => {
+    onCountChange?.(rowCount);
+  }, [rowCount, onCountChange]);
+  useEffect(() => () => onCountChange?.(null), [onCountChange]);
 
   async function refresh(): Promise<void> {
     const snap = await bridge.list({ tabId });

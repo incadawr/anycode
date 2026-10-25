@@ -481,15 +481,17 @@ export function formatEffectiveToolsLine(tools: readonly string[]): string {
 // ── component ──
 
 export interface SubagentsPaneProps {
-  /** Active tab id, so bridge calls resolve a project-scope workspace main-side; omit for the pre-tab case (user-scope only). */
+  /** Scope reference (Taskana 4758): a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case (user-scope only). */
   tabId?: string;
-  /** Display-only workspace root of the active tab (tabs-store mirror) — used for badge labels and tooltips; never sent anywhere. */
+  /** Display-only folder label of the selected scope (path custody stays id-only); used for badge labels and tooltips; never sent anywhere. */
   workspace?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.subagents` (same DI ethic as SkillsBridge/McpConfigBridge). */
   bridge?: SubagentsBridge;
+  /** Taskana 4758: reports the pane's count for the scope chip (null while loading). */
+  onCountChange?: (count: number | null) => void;
 }
 
-export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subagents }: SubagentsPaneProps) {
+export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subagents, onCountChange }: SubagentsPaneProps) {
   const [snapshot, setSnapshot] = useState<SubagentsSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SubagentsSourceFilter>("all");
@@ -530,6 +532,7 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
 
   useEffect(() => {
     let cancelled = false;
+    setSnapshot(null);
     void bridge.list({ tabId }).then((snap) => {
       if (!cancelled) {
         setSnapshot(snap);
@@ -541,6 +544,13 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, tabId]);
+
+  // Taskana 4758: the scope chip's count (null while the snapshot loads).
+  const rowCount = snapshot ? snapshot.rows.length : null;
+  useEffect(() => {
+    onCountChange?.(rowCount);
+  }, [rowCount, onCountChange]);
+  useEffect(() => () => onCountChange?.(null), [onCountChange]);
 
   // Lazy, once-per-engine model fetch (no polling, no dedicated bridge channel —
   // straight off the existing codex/claude onboarding recheck). Fires only when

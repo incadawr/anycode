@@ -48,7 +48,7 @@ import {
   ProviderSettings,
   resolvePendingAddConnection,
   resolveReplaceKeyAction,
-  resolveScopeTargets,
+  paneHasScope,
   secretFieldReducer,
   selectProviderEntry,
   SETTINGS_PANES,
@@ -1362,60 +1362,17 @@ describe("Taskana 4237 wiring: the empty-menu action reaches the add drawer", ()
   });
 });
 
-// ── Taskana 4706: the scope bar's pure target resolution (Global vs Project) ──
+// ── Taskana 4758: which panes show the one scope dropdown ──
 
-describe("scope bar state (Taskana 4706)", () => {
-  const TABS = [
-    { tabId: "t1", workspace: "/w/alpha" },
-    { tabId: "t2", workspace: "/w/beta" },
-  ];
-
-  it("an explicit user (global) choice stays global even with tabs open — no tabId, no workspace", () => {
-    expect(resolveScopeTargets("t1", TABS, "user", null)).toEqual({
-      resolved: "user",
-      scopeTabId: null,
-      scopeWorkspace: null,
-    });
-  });
-
-  it("a project choice with no tabs open degrades to global (resolvePaneScope rule, applied at the source)", () => {
-    expect(resolveScopeTargets(null, [], "project", null)).toEqual({
-      resolved: "user",
-      scopeTabId: null,
-      scopeWorkspace: null,
-    });
-  });
-
-  it("project with no explicit pick follows the ACTIVE tab (card item 1 default)", () => {
-    expect(resolveScopeTargets("t1", TABS, "project", null)).toEqual({
-      resolved: "project",
-      scopeTabId: "t1",
-      scopeWorkspace: "/w/alpha",
-    });
-  });
-
-  it("an explicit workspace-selector pick overrides the active tab", () => {
-    expect(resolveScopeTargets("t1", TABS, "project", "t2")).toEqual({
-      resolved: "project",
-      scopeTabId: "t2",
-      scopeWorkspace: "/w/beta",
-    });
-  });
-
-  it("a pick whose tab has vanished (closed) falls back to the active tab, never dangles", () => {
-    expect(resolveScopeTargets("t2", TABS, "project", "t-gone")).toEqual({
-      resolved: "project",
-      scopeTabId: "t2",
-      scopeWorkspace: "/w/beta",
-    });
-  });
-
-  it("project with no active tab and no valid pick resolves the first open tab rather than degrading", () => {
-    // The bar still names a concrete project as long as ANY tab is open.
-    expect(resolveScopeTargets(null, TABS, "project", null)).toEqual({
-      resolved: "project",
-      scopeTabId: "t1",
-      scopeWorkspace: "/w/alpha",
-    });
+describe("scope dropdown panes (Taskana 4758)", () => {
+  it("shows the dropdown for MCP, Language servers, Skills and Subagents only", () => {
+    expect(paneHasScope("mcp")).toBe(true);
+    expect(paneHasScope("language-servers")).toBe(true);
+    expect(paneHasScope("skills")).toBe(true);
+    expect(paneHasScope("subagents")).toBe(true);
+    expect(paneHasScope("provider")).toBe(false);
+    expect(paneHasScope("permissions")).toBe(false);
+    expect(paneHasScope("sessions-api")).toBe(false);
+    expect(paneHasScope(undefined)).toBe(false);
   });
 });

@@ -62,10 +62,12 @@ export interface LspConfigBridge {
 }
 
 export interface LanguageServersPaneProps {
-  /** Active tab id, so bridge calls resolve a project-scope workspace main-side; omit for the pre-tab case. */
+  /** Scope reference (Taskana 4758): a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case. */
   tabId?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.lspConfig`. */
   bridge?: LspConfigBridge;
+  /** Taskana 4758: reports the pane's count for the scope chip (null while loading). */
+  onCountChange?: (count: number | null) => void;
   /**
    * The scope tab's store, when the caller sits outside that tab's
    * <TabContext.Provider> (Settings does) — the live-status section then
@@ -74,7 +76,7 @@ export interface LanguageServersPaneProps {
   tabStore?: DesktopStoreApi;
 }
 
-export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, tabStore }: LanguageServersPaneProps) {
+export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, tabStore, onCountChange }: LanguageServersPaneProps) {
   const [status, setStatus] = useState<LspConfigStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -89,6 +91,7 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
 
   useEffect(() => {
     let cancelled = false;
+    setStatus(null);
     void bridge.status({ tabId }).then((snap) => {
       if (!cancelled) {
         setStatus(snap);
@@ -99,6 +102,13 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, tabId]);
+
+  // Taskana 4758: the scope chip's count = configured entries across scopes.
+  const configuredCount = status ? (status.entries.project ?? []).length + status.entries.user.length : null;
+  useEffect(() => {
+    onCountChange?.(configuredCount);
+  }, [configuredCount, onCountChange]);
+  useEffect(() => () => onCountChange?.(null), [onCountChange]);
 
   async function apply(result: Promise<LspMutationResult>): Promise<boolean> {
     const resolved = await result;
