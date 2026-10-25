@@ -15,12 +15,16 @@
  * file reads the discovery file, so the bearer token cannot reach a payload.
  */
 import { ipcMain } from "electron";
-import { isAbsolute } from "node:path";
+import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import {
   COMMUNICATION_ADD_WORKSPACE_CHANNEL,
+  COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL,
+  COMMUNICATION_AGENT_PROJECTS_LIST_CHANNEL,
+  COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL,
+  COMMUNICATION_AGENT_PROJECTS_SET_CHANNEL,
   COMMUNICATION_COPY_CONFIG_CHANNEL,
   COMMUNICATION_GET_CHANNEL,
   COMMUNICATION_MAX_WORKSPACES,
@@ -34,6 +38,8 @@ import {
   COMMUNICATION_SET_SESSION_HANDLE_CHANNEL,
 } from "../shared/communication-config.js";
 import type {
+  AgentProjectsGetResult,
+  AgentProjectsListResult,
   CommunicationCopyClient,
   CommunicationCopyConfigResult,
   CommunicationGetResult,
@@ -45,6 +51,8 @@ import type {
   CommunicationView,
 } from "../shared/communication-config.js";
 import { normalizeHandle, type SessionAccessStore } from "./communication-sessions.js";
+import type { AgentProjectsStore } from "./communication-agent-projects.js";
+import { displayPathFor } from "./scope-workspaces.js";
 
 /** The slice of the controller this module needs (structural, so tests can fake it). */
 export interface CommunicationControllerLike {
@@ -70,6 +78,11 @@ export interface CommunicationIpcDeps {
   /** Stable userData copy of the stdio adapter, or null when this build does not carry it. */
   stdioScriptPath(): string | null;
   realpath(path: string): Promise<string>;
+  /** Taskana 4768: per-project agent-open switch. Only this module writes it (and main's create_session hook reads it). */
+  agentProjects: AgentProjectsStore;
+  /** Synchronous realpath used only to canonicalise the sidebar's workspace identity. */
+  realpathSync(path: string): string;
+  homedir(): string;
   stat(path: string): Promise<{ isDirectory(): boolean }>;
 }
 
@@ -85,12 +98,20 @@ const copySchema = z.object({ client: z.enum(["claude-code", "codex", "generic"]
 const defaultAccessSchema = z.object({ access: z.enum(["off", "on"]) }).strict();
 const sessionAccessSchema = z.object({ tabId: z.string().min(1).max(200), enabled: z.boolean() }).strict();
 const sessionHandleSchema = z.object({ tabId: z.string().min(1).max(200), handle: z.string().max(200).nullable() }).strict();
+const agentProjectWorkspaceSchema = z.object({ workspace: z.string().min(1).max(4096) }).strict();
+const agentProjectSetSchema = z.object({ workspace: z.string().min(1).max(4096), enabled: z.boolean() }).strict();
+const agentProjectOffSchema = z.object({ key: z.string().min(1).max(4096) }).strict();
 const sessionApprovalsSchema = z.object({ tabId: z.string().min(1).max(200), enabled: z.boolean() }).strict();
 
 function blockOf(settings: AnycodeSettings): Block {
   const raw = settings.communication;
   if (raw === undefined) return { ...EMPTY_BLOCK, workspaces: [] };
   return { ...raw, workspaces: [...raw.workspaces], defaultSessionAccess: raw.defaultSessionAccess ?? "off" };
+}
+
+function agentProjectRows(deps: CommunicationIpcDeps): CommunicationView["agentProjects"] {
+  const home = deps.homedir();
+  return deps.agentProjects.allowedKeys().map((key) => ({ key, name: basename(key) || key, displayPath: displayPathFor(key, home) }));
 }
 
 function viewOf(deps: CommunicationIpcDeps, block: Block): CommunicationView {
@@ -100,6 +121,7 @@ function viewOf(deps: CommunicationIpcDeps, block: Block): CommunicationView {
     port: block.port ?? null,
     defaultSessionAccess: block.defaultSessionAccess,
     status: deps.controller.status(),
+    agentProjects: agentProjectRows(deps),
     tabs: deps.tabs().map((tab) => {
       const handle = deps.sessions.getHandle(tab.sessionId);
       return { tabId: tab.tabId, enabled: deps.sessions.isExposed(tab.sessionId), approvals: deps.approvals.isExposed(tab.sessionId), ...(handle !== undefined ? { handle } : {}) };
@@ -202,6 +224,40 @@ export async function handleRemoveWorkspace(deps: CommunicationIpcDeps, raw: unk
     if (!block.workspaces.includes(parsed.data.workspace)) return { ok: false, reason: "not_found" };
     return { ok: true, apply: true, block: { ...block, workspaces: block.workspaces.filter((w) => w !== parsed.data.workspace) } };
   });
+}
+
+/** Sidebar check state. Main canonicalises; the renderer never learns a key. */
+export async function handleAgentProjectsGet(deps: CommunicationIpcDeps, raw: unknown): Promise<AgentProjectsGetResult> {
+  const parsed = agentProjectWorkspaceSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, reason: "invalid" };
+  return { ok: true, enabled: deps.agentProjects.isAllowed(parsed.data.workspace) };
+}
+
+/** Settings list: exact main-owned keys with display strings. */
+export async function handleAgentProjectsList(deps: CommunicationIpcDeps, raw: unknown): Promise<AgentProjectsListResult> {
+  if (!emptyPayload.safeParse(raw).success) return { ok: false, reason: "invalid" };
+  return { ok: true, projects: agentProjectRows(deps) };
+}
+
+/** Sidebar toggle. The workspace is canonicalised by the store before any write. */
+export async function handleAgentProjectsSet(deps: CommunicationIpcDeps, raw: unknown): Promise<CommunicationMutationResult> {
+  const parsed = agentProjectSetSchema.safeParse(raw);
+  if (!parsed.success || !isAbsolute(parsed.data.workspace)) return { ok: false, reason: "invalid" };
+  if (deps.env() !== undefined && deps.env() !== "") return { ok: false, reason: "env_controlled" };
+  if (!deps.agentProjects.setAllowed(parsed.data.workspace, parsed.data.enabled)) return { ok: false, reason: "io_error" };
+  const loaded = await loadSettings(deps.settingsPath, deps.logger);
+  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
+}
+
+/** Settings Off button: an EXACT stored key (a lookup key, never a new path); unknown => not_found. */
+export async function handleAgentProjectsOff(deps: CommunicationIpcDeps, raw: unknown): Promise<CommunicationMutationResult> {
+  const parsed = agentProjectOffSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, reason: "invalid" };
+  if (deps.env() !== undefined && deps.env() !== "") return { ok: false, reason: "env_controlled" };
+  if (!deps.agentProjects.hasExactKey(parsed.data.key)) return { ok: false, reason: "not_found" };
+  if (!deps.agentProjects.forgetExactKey(parsed.data.key)) return { ok: false, reason: "io_error" };
+  const loaded = await loadSettings(deps.settingsPath, deps.logger);
+  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
 }
 
 /** New token = stop + start with the same config. The stdio adapter reads the file per process start, so connected clients must reconnect. */
@@ -324,5 +380,9 @@ export function registerCommunicationIpc(deps: CommunicationIpcDeps): void {
   ipcMain.handle(COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetDefaultAccess(deps, raw));
   ipcMain.handle(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetSessionAccess(deps, raw));
   ipcMain.handle(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, (_event, raw: unknown) => handleSetSessionHandle(deps, raw));
+  ipcMain.handle(COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL, (_event, raw: unknown) => handleAgentProjectsGet(deps, raw));
+  ipcMain.handle(COMMUNICATION_AGENT_PROJECTS_LIST_CHANNEL, (_event, raw: unknown) => handleAgentProjectsList(deps, raw));
+  ipcMain.handle(COMMUNICATION_AGENT_PROJECTS_SET_CHANNEL, (_event, raw: unknown) => handleAgentProjectsSet(deps, raw));
+  ipcMain.handle(COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL, (_event, raw: unknown) => handleAgentProjectsOff(deps, raw));
   ipcMain.handle(COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL, (_event, raw: unknown) => handleSetSessionApprovals(deps, raw));
 }

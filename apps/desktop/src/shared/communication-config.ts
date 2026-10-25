@@ -19,6 +19,15 @@ export const COMMUNICATION_SET_SESSION_ACCESS_CHANNEL = "anycode:communication-s
 export const COMMUNICATION_SET_SESSION_HANDLE_CHANNEL = "anycode:communication-set-session-handle";
 /** Taskana 4763: the per-session External approvals switch. Writable ONLY from this channel (the renderer's trusted UI). */
 export const COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL = "anycode:communication-set-session-approvals";
+/**
+ * Taskana 4768: the per-project "Allow agents to open tasks here" switch. The
+ * sidebar sends its workspace identity (like deleteSessionsOlder); main
+ * canonicalises. Settings lists main-owned exact keys and can only turn them Off.
+ */
+export const COMMUNICATION_AGENT_PROJECTS_LIST_CHANNEL = "anycode:communication-agent-projects-list";
+export const COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL = "anycode:communication-agent-projects-get";
+export const COMMUNICATION_AGENT_PROJECTS_SET_CHANNEL = "anycode:communication-agent-projects-set";
+export const COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL = "anycode:communication-agent-projects-off";
 
 /** Hard cap on the optional outer folder boundary. */
 export const COMMUNICATION_MAX_WORKSPACES = 20;
@@ -45,7 +54,12 @@ export interface CommunicationView {
   status: CommunicationStatus;
   /** `approvals` is the per-session External approvals switch (Taskana 4763); always false while `enabled` is false. */
   tabs: Array<{ tabId: string; enabled: boolean; approvals: boolean; handle?: string }>;
+  /** Taskana 4768: projects where agents may open tasks. `key` is the exact stored canonical key (a lookup key for Off, never a new path). */
+  agentProjects: Array<{ key: string; name: string; displayPath: string }>;
 }
+
+export type AgentProjectsGetResult = { ok: true; enabled: boolean } | { ok: false; reason: "invalid" };
+export type AgentProjectsListResult = { ok: true; projects: CommunicationView["agentProjects"] } | { ok: false; reason: "invalid" };
 
 export type CommunicationMutationReason =
   | "read_only"

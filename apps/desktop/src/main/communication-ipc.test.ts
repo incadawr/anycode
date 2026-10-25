@@ -8,9 +8,15 @@ import { cloneDefaults } from "../settings/schema.js";
 import { loadSettings, saveSettings } from "../settings/files.js";
 import { createCommunicationController } from "./communication-controller.js";
 import { createSessionAccessStore } from "./communication-sessions.js";
+import { createAgentProjectsStore } from "./communication-agent-projects.js";
+import { realpathSync, symlinkSync } from "node:fs";
 import {
   buildCopyConfig,
   handleAddWorkspace,
+  handleAgentProjectsGet,
+  handleAgentProjectsList,
+  handleAgentProjectsOff,
+  handleAgentProjectsSet,
   handleCommunicationGet,
   handleCopyConfig,
   handleRegenerateToken,
@@ -64,8 +70,12 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
   });
   const sessions = createSessionAccessStore({ file: join(dir, "sessions.json"), defaultOn: () => false });
   const approvals = createSessionAccessStore({ file: join(dir, "communication-approvals.json"), defaultOn: () => false });
+  const agentProjects = createAgentProjectsStore({ file: join(dir, "communication-agent-projects.json"), realpathSync });
   const deps: CommunicationIpcDeps = {
     settingsPath,
+    agentProjects,
+    realpathSync,
+    homedir: () => realpathSync(dir),
     logger: { warn: () => {}, error: () => {} },
     controller,
     sessions,
@@ -77,7 +87,7 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
     realpath: (p: string) => import("node:fs/promises").then((fs) => fs.realpath(p)),
     stat: (p: string) => import("node:fs/promises").then((fs) => fs.stat(p)),
   };
-  return { deps, controller, sessions, approvals, startServer, pickFolder: deps.pickFolder as ReturnType<typeof vi.fn> };
+  return { deps, controller, sessions, approvals, agentProjects, startServer, pickFolder: deps.pickFolder as ReturnType<typeof vi.fn> };
 }
 
 describe("Sessions API IPC (Taskana 4747) — writes go through the dedicated channel", () => {
@@ -415,3 +425,36 @@ describe("External approvals — the only writer (Taskana 4763)", () => {
   });
 });
 
+
+describe("Sessions API IPC — per-project agent-open switch (Taskana 4768)", () => {
+  it("agent projects: get answers by canonical comparison; set stores canonically and refuses relative paths; off removes by exact stored key; env mode refuses every write; view carries agentProjects rows", async () => {
+    const { deps, agentProjects } = rig();
+    const link = join(dir, "link-a");
+    symlinkSync(workspaceA, link);
+    expect(await handleAgentProjectsGet(deps, { workspace: workspaceA })).toEqual({ ok: true, enabled: false });
+
+    const set = await handleAgentProjectsSet(deps, { workspace: link, enabled: true });
+    expect(set).toMatchObject({ ok: true, view: { agentProjects: [{ key: realpathSync(workspaceA), name: "ws-a" }] } });
+    expect(agentProjects.allowedKeys()).toEqual([realpathSync(workspaceA)]);
+    expect(await handleAgentProjectsGet(deps, { workspace: workspaceA })).toEqual({ ok: true, enabled: true });
+    expect(await handleAgentProjectsGet(deps, { workspace: link })).toEqual({ ok: true, enabled: true });
+    expect(await handleAgentProjectsGet(deps, { workspace: workspaceB })).toEqual({ ok: true, enabled: false });
+
+    expect(await handleAgentProjectsSet(deps, { workspace: "relative/path", enabled: true })).toEqual({ ok: false, reason: "invalid" });
+    expect(await handleAgentProjectsSet(deps, { workspace: workspaceA, enabled: true, extra: 1 })).toEqual({ ok: false, reason: "invalid" });
+
+    const listed = await handleAgentProjectsList(deps, {});
+    expect(listed).toMatchObject({ ok: true, projects: [{ key: realpathSync(workspaceA), name: "ws-a" }] });
+    if (listed.ok) expect(listed.projects[0]!.displayPath.startsWith("~")).toBe(true);
+
+    expect(await handleAgentProjectsOff(deps, { key: link })).toEqual({ ok: false, reason: "not_found" });
+    expect(agentProjects.isAllowed(workspaceA)).toBe(true);
+    expect(await handleAgentProjectsOff(deps, { key: realpathSync(workspaceA) })).toMatchObject({ ok: true, view: { agentProjects: [] } });
+    expect(agentProjects.isAllowed(workspaceA)).toBe(false);
+
+    const env = rig({ env: "/abs/config.json" });
+    expect(await handleAgentProjectsSet(env.deps, { workspace: workspaceA, enabled: true })).toEqual({ ok: false, reason: "env_controlled" });
+    expect(await handleAgentProjectsOff(env.deps, { key: workspaceA })).toEqual({ ok: false, reason: "env_controlled" });
+    expect(env.agentProjects.allowedKeys()).toEqual([]);
+  });
+});
