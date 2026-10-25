@@ -285,6 +285,29 @@ export interface ChildApprovalNoticeInput {
   toolName: string;
   /** File path / command the ask is about; may be empty. */
   subject: string;
+  /**
+   * Review F1b: the broker's ask timeout (PERMISSION_ASK_TIMEOUT_MS /
+   * resolveAskTimeoutMs), i.e. how long the ask lives once RAISED. Stated as
+   * a duration relative to the raise — a wall-clock timestamp cannot be
+   * honestly computed here (the formatter is pure and has no raise time),
+   * and this notice may be (re)delivered long after it. Absent => the
+   * deadline sentence is omitted rather than invented.
+   */
+  askTimeoutMs?: number;
+}
+
+/**
+ * Renders an ask deadline as a coarse duration: whole seconds under ten
+ * minutes, else whole minutes (rounded). "About" because the deadline is
+ * armed at PRESENTATION in the child's broker (a queued ask's clock starts
+ * when it reaches the UI), so seconds-precision would be false precision.
+ */
+function formatAskDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 600) {
+    return `${totalSeconds}s`;
+  }
+  return `${Math.round(totalSeconds / 60)}m`;
 }
 
 /**
@@ -294,6 +317,16 @@ export interface ChildApprovalNoticeInput {
  * does (the ask expires fail-closed and the child is told not to bypass it).
  */
 export function formatChildApprovalNotice(input: ChildApprovalNoticeInput): string {
+  const deadlineSentence =
+    input.askTimeoutMs !== undefined && input.askTimeoutMs > 0
+      ? `It is denied if nobody answers within about ${formatAskDuration(input.askTimeoutMs)} of the request being raised; `
+      : "If nobody answers in time it is denied; ";
+  const expiredRecovery =
+    input.askTimeoutMs !== undefined && input.askTimeoutMs > 0
+      ? `If that deadline has already passed, the request was denied and further requests from this child ` +
+        `are auto-denied until a human interacts with the child session — open or answer the child session ` +
+        `(its tab) and let the child retry to resume. `
+      : "";
   const body = [
     "<task-approval-notice>",
     `  <task-id>${escapeXmlText(input.taskId)}</task-id>`,
@@ -310,8 +343,7 @@ export function formatChildApprovalNotice(input: ChildApprovalNoticeInput): stri
     `${NOTIFICATION_HEADER}\n\n` +
     "This child session has NOT finished — it is paused on a permission request that needs a human " +
     "answer. To unblock it, open the child's tab and approve or deny the pending request (or ask the " +
-    "user to). If nobody answers within the approval deadline the request is denied and the child is " +
-    "told to stop that action and report it as blocked; it will not be retried through another tool. " +
+    `user to). ${deadlineSentence}${expiredRecovery}` +
     "This is a progress notice, not a completion report.\n\n" +
     body
   );
