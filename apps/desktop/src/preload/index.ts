@@ -183,11 +183,13 @@ import {
   WORKSPACE_TRUST_DECIDE_CHANNEL,
   WORKSPACE_TRUST_FORGET_CHANNEL,
   WORKSPACE_TRUST_LIST_CHANNEL,
-  type WorkspaceTrustDecideRequest,
-  type WorkspaceTrustDecideResult,
-  type WorkspaceTrustForgetRequest,
-  type WorkspaceTrustForgetResult,
-  type WorkspaceTrustListResult,
+} from "../shared/workspace-trust-channels.js";
+import type {
+  WorkspaceTrustDecideRequest,
+  WorkspaceTrustDecideResult,
+  WorkspaceTrustForgetRequest,
+  WorkspaceTrustForgetResult,
+  WorkspaceTrustListResult,
 } from "../shared/workspace-trust.js";
 import type { RecognizerProbeRequest, RecognizerProbeResult, RecognizerSetRequest } from "../shared/recognizer.js";
 import {
