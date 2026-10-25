@@ -402,7 +402,7 @@ export async function readCachedPluginIndex(options: {
   now?: () => number;
   keys?: readonly OfficialPluginKey[];
   fs?: IndexClientFs;
-}): Promise<IndexCheckResult> {
+}): Promise<IndexCheckResult & { checkedAt?: string }> {
   const fs = options.fs ?? defaultFs;
   const now = options.now ?? Date.now;
   const cached = await readCache(fs, options.cacheDir);
@@ -411,10 +411,12 @@ export async function readCachedPluginIndex(options: {
   }
   const verified = verifyIndex(cached.raw, safeJsonParse(cached.sig), { now: now(), keys: options.keys ?? productionPluginKeys() });
   if (!verified.ok) {
-    return { status: "signature-failed", fromCache: true, expired: true, detail: verified.detail };
+    // xfix L1: even a failed verification still KNOWS when the cache was
+    // last fetched — surface it so the pane's "Last checked" is honest.
+    return { status: "signature-failed", fromCache: true, expired: true, detail: verified.detail, checkedAt: cached.fetchedAt };
   }
   const expired = indexIsExpired(verified.index, now());
-  return { status: expired ? "expired" : "ok", index: verified.index, fromCache: true, expired };
+  return { status: expired ? "expired" : "ok", index: verified.index, fromCache: true, expired, checkedAt: cached.fetchedAt };
 }
 
 /** sha256 hex of a byte string (archive integrity, shared with the store). */

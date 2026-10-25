@@ -13,6 +13,7 @@ import { makeTarball } from "./archive.js";
 import type { PluginIndex, PluginIndexEntry } from "./index-client.js";
 import {
   capabilitiesSubset,
+  createArchiveFetch,
   gcStore,
   installFromBytes,
   installFromIndex,
@@ -28,6 +29,7 @@ import {
   wipeStaging,
   type PluginStoreFs,
 } from "./store.js";
+import { statePath } from "./store.js";
 import { isStoreNameSafe, isStoreVersionSafe, sanitizePluginState } from "./store-state.js";
 
 // ── fake fs (directories tracked as a Set; files as a Map) ──
@@ -637,5 +639,174 @@ describe("legacy MCP grandfathering", () => {
     });
     expect(second.skipped).toBe(true);
     expect(files.size).toBeGreaterThan(0);
+  });
+});
+
+// ── Taskana 4732 xfix: store hardening (H3, M2, M3, L2, L7, grandfathering) ──
+
+const ENTRY = { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: [] };
+
+describe("installFromBytes pins the previewed bytes (xfix H3)", () => {
+  it("refuses bytes that differ from the previewed sha256 and installs the previewed ones", async () => {
+    const { fs, files } = makeFs();
+    const previewed = pluginTar("p", "1.0.0");
+    const swapped = pluginTar("p", "1.0.1");
+    const store = opts({ fs });
+    const bad = await installFromBytes(store, swapped, { fileName: "p.tgz", expectedSha256: sha256Of(previewed) });
+    expect(bad).toMatchObject({ ok: false, reason: "integrity" });
+    expect(files.has(statePath(HOME))).toBe(false);
+
+    const good = await installFromBytes(store, previewed, {
+      fileName: "p.tgz",
+      expectedSha256: sha256Of(previewed),
+      source: { kind: "url", url: "https://github.com/a/p.tgz" },
+    });
+    expect(good.ok).toBe(true);
+    const state = JSON.parse(files.get(statePath(HOME))!);
+    expect(state.plugins.p.source).toEqual({ kind: "url", url: "https://github.com/a/p.tgz" });
+    expect(state.plugins.p.sha256).toBe(sha256Of(previewed));
+  });
+});
+
+describe("selectUpdate picks the newest compatible version (xfix M3)", () => {
+  it("an ascending index list still yields the highest version", () => {
+    const t1 = pluginTar("p", "1.0.0");
+    const t2 = pluginTar("p", "2.0.0");
+    const index = makeIndex([{ name: "p", versions: [versionEntry("1.0.0", t1), versionEntry("2.0.0", t2)] }]);
+    expect(selectUpdate(index, { name: "p", active: "0.9.0", pinned: false }, "0.0.36")?.version).toBe("2.0.0");
+  });
+});
+
+describe("artifact download bounds (xfix M2)", () => {
+  it("refuses a body that streams past the compressed cap, without reading the rest", async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= 60) {
+          controller.close();
+          return;
+        }
+        pulled += 1;
+        controller.enqueue(chunk);
+      },
+    });
+    const fetchImpl = async () => new Response(body, { status: 200 });
+    const result = await createArchiveFetch(fetchImpl as unknown as typeof fetch)("https://github.com/a/p.tgz");
+    // Compare the reason only: a failing run must not dump a 60 MB buffer.
+    expect(result.ok ? "ok" : result.reason).toBe("too_large");
+    expect(pulled).toBeLessThan(60);
+  });
+
+  it("refuses up front when content-length already exceeds the cap", async () => {
+    const fetchImpl = async () =>
+      new Response(new Uint8Array(8), { status: 200, headers: { "content-length": String(30 * 1024 * 1024) } });
+    const result = await createArchiveFetch(fetchImpl as unknown as typeof fetch)("https://github.com/a/p.tgz");
+    expect(result).toEqual({ ok: false, reason: "too_large" });
+  });
+
+  it("still returns the bytes of an in-cap download", async () => {
+    const tar = pluginTar("p", "1.0.0");
+    const fetchImpl = async () => new Response(new Uint8Array(tar), { status: 200 });
+    const result = await createArchiveFetch(fetchImpl as unknown as typeof fetch)("https://github.com/a/p.tgz");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.bytes.equals(tar)).toBe(true);
+  });
+});
+
+describe("state.json read-modify-write is serialized (xfix L7)", () => {
+  it("overlapping mutations all persist (none is lost to a stale snapshot)", async () => {
+    const { fs, files } = makeFs();
+    files.set(statePath(HOME), JSON.stringify({ version: 1, plugins: { p: ENTRY, q: ENTRY }, removedDefaults: [], disabled: [] }));
+    // Reads snapshot the file, then writes land later: unserialized writers
+    // would each rewrite the stale snapshot and drop the earlier change.
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const slow: PluginStoreFs = {
+      ...fs,
+      readFile: async (path) => {
+        await pause(2);
+        return fs.readFile(path);
+      },
+      writeFile: async (path, content, o) => {
+        await pause(5);
+        return fs.writeFile(path, content, o);
+      },
+    };
+    const store = opts({ fs: slow });
+    await Promise.all([
+      setPinned(store, "p", true),
+      setEnabled(store, "p", false),
+      setPinned(store, "q", true),
+    ]);
+    const state = JSON.parse(files.get(statePath(HOME))!);
+    expect(state.plugins.p.pinned).toBe(true);
+    expect(state.disabled).toContain("p");
+    expect(state.plugins.q.pinned).toBe(true);
+  });
+});
+
+describe("concurrent install and uninstall (xfix L7)", () => {
+  it("two installs racing a remove all land in state.json", async () => {
+    const { fs, files } = makeFs();
+    files.set(statePath(HOME), JSON.stringify({ version: 1, plugins: { gone: ENTRY }, removedDefaults: [], disabled: [] }));
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const slow: PluginStoreFs = {
+      ...fs,
+      readFile: async (path) => {
+        await pause(2);
+        return fs.readFile(path);
+      },
+      writeFile: async (path, content, o) => {
+        await pause(5);
+        return fs.writeFile(path, content, o);
+      },
+    };
+    const store = opts({ fs: slow });
+    const a = pluginTar("alpha", "1.0.0");
+    const b = pluginTar("beta", "1.0.0");
+    const results = await Promise.all([
+      installFromBytes(store, a, { fileName: "a.tgz" }),
+      installFromBytes(store, b, { fileName: "b.tgz" }),
+      removePlugin(store, "gone", false),
+    ]);
+    expect(results.every((r) => r.ok)).toBe(true);
+    const state = JSON.parse(files.get(statePath(HOME))!);
+    expect(Object.keys(state.plugins).sort()).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("update pass policy (xfix L2)", () => {
+  it("a user-disabled official plugin is not auto-updated", async () => {
+    const { fs, files } = makeFs();
+    const t1 = pluginTar("p", "1.0.0");
+    const t2 = pluginTar("p", "2.0.0");
+    // Capabilities match the index's (no growth) so ONLY the disabled flag can block it.
+    const caps = ["skills", "agents"];
+    files.set(statePath(HOME), JSON.stringify({ version: 1, plugins: { p: { ...ENTRY, active: "1.0.0", capabilities: caps } }, removedDefaults: [], disabled: ["p"] }));
+    const index = makeIndex([{ name: "p", versions: [versionEntry("1.0.0", t1), versionEntry("2.0.0", t2)] }], 50);
+    const url2 = index.plugins[0]!.versions[1]!.url;
+    const store = opts({ fs, fetchImpl: storeFetch({ [url2]: t2 }) });
+    const result = await runUpdatePass({
+      ...store,
+      checkIndex: async () => ({ status: "ok", index }),
+      autoUpdateOfficial: true,
+    });
+    expect(result.installed).toEqual([]);
+    expect(JSON.parse(files.get(statePath(HOME))!).plugins.p.active).toBe("1.0.0");
+  });
+});
+
+describe("legacy grandfathering marks the migration done (xfix H1)", () => {
+  it("writes an empty consent list when there are no legacy MCP plugins", async () => {
+    const { fs } = makeFs();
+    let written: unknown = "not-called";
+    await legacyMcpGrandfathering({
+      ...opts({ fs }),
+      readMcpConsent: async () => undefined,
+      writeMcpConsent: async (entries) => {
+        written = entries;
+      },
+    });
+    expect(written).toEqual([]);
   });
 });

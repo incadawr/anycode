@@ -24,6 +24,7 @@ import {
   PLUGINS_SET_AUTO_UPDATE_CHANNEL,
   PLUGINS_SET_ENABLED_CHANNEL,
   PLUGINS_SET_PINNED_CHANNEL,
+  PLUGINS_UPDATE_CHANNEL,
 } from "../shared/plugins-config.js";
 import type { PluginIndex } from "./plugins/index-client.js";
 import { makeTarball } from "./plugins/archive.js";
@@ -39,7 +40,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { registerPluginsIpc, type PluginsIpcDeps } from "./plugins-ipc.js";
+import { activePluginsWorkspace, registerPluginsIpc, type PluginsIpcDeps } from "./plugins-ipc.js";
 
 async function invoke(channel: string, payload?: unknown): Promise<any> {
   const handler = handlers.get(channel);
@@ -404,5 +405,292 @@ describe("mutations push plugins-changed", () => {
     const result = await invoke(PLUGINS_REMOVE_CHANNEL, { name: "ghost" });
     expect(result).toMatchObject({ ok: false, reason: "not_found" });
     expect(scaffold.sent).toEqual([]);
+  });
+});
+
+// ── Taskana 4732 xfix: IPC hardening (H1, H2, H3, H4, M1, M4, M7, L3) ──
+
+const STATE = "/home/tester/.anycode/plugins/state.json";
+const ENTRY = { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: [] };
+const indexOf = (plugins: unknown[], serial = 7): PluginIndex =>
+  ({ schemaVersion: "anycode.plugins-index.v1", serial, issuedAt: "2026-10-01T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z", plugins }) as unknown as PluginIndex;
+
+describe("anti-rollback floor survives a restart (xfix H2)", () => {
+  it("the first check after a restart receives the floor persisted in state.json", async () => {
+    const scaffold = makeDeps();
+    scaffold.storeFiles.set(STATE, JSON.stringify({ version: 1, plugins: {}, removedDefaults: [], disabled: [], lastIndexSerial: 42 }));
+    const seen: (number | undefined)[] = [];
+    scaffold.deps.checkIndex = async (opts) => {
+      seen.push(opts.serialFloor);
+      return { status: "offline" };
+    };
+    registerPluginsIpc(scaffold.deps);
+    await invoke(PLUGINS_CHECK_UPDATES_CHANNEL);
+    expect(seen).toEqual([42]);
+  });
+
+  it("an accepted check persists its serial, so the next launch keeps the floor", async () => {
+    const scaffold = makeDeps();
+    scaffold.deps.checkIndex = async () => ({ status: "ok", index: indexOf([], 43) });
+    registerPluginsIpc(scaffold.deps);
+    await invoke(PLUGINS_CHECK_UPDATES_CHANNEL);
+    expect(JSON.parse(scaffold.storeFiles.get(STATE)!).lastIndexSerial).toBe(43);
+  });
+});
+
+describe("MCP consent through the install sheet (xfix H1b)", () => {
+  function mcpTar(name: string): Buffer {
+    return makeTarball([
+      { path: ".anycode-plugin/plugin.json", data: JSON.stringify({ manifestVersion: 1, name, version: "1.0.0", mcpServers: { api: { command: "node", args: ["api.js"] } } }) },
+    ]);
+  }
+
+  it("commit with allowMcp=true records a consent grant keyed by the installed servers hash", async () => {
+    const scaffold = makeDeps();
+    const tar = mcpTar("mcp-plug");
+    scaffold.setPickedFile("/Downloads/mcp-plug.tgz");
+    scaffold.storeBinaries.set("/Downloads/mcp-plug.tgz", tar);
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "file" } });
+    const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "file" }, allowMcp: true });
+    expect(committed.ok).toBe(true);
+    const grants = scaffold.settingsData.mcpConsent ?? [];
+    expect(grants).toHaveLength(1);
+    expect(grants[0]!.plugin).toBe("mcp-plug");
+    expect(grants[0]!.serversHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("commit without allowMcp records no grant (servers stay withheld until approved)", async () => {
+    const scaffold = makeDeps();
+    scaffold.setPickedFile("/Downloads/mcp-plug.tgz");
+    scaffold.storeBinaries.set("/Downloads/mcp-plug.tgz", mcpTar("mcp-plug"));
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "file" } });
+    const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "file" } });
+    expect(committed.ok).toBe(true);
+    expect(scaffold.settingsData.mcpConsent).toBeUndefined();
+  });
+
+  it("two approvals in one lifetime both persist (no once-only write)", async () => {
+    const scaffold = makeDeps();
+    for (const name of ["one", "two"]) {
+      scaffold.storeFiles.set(`/home/tester/.anycode/plugins/.store/${name}/1.0.0/.anycode-plugin/plugin.json`, JSON.stringify({ manifestVersion: 1, name, version: "1.0.0", mcpServers: { api: { command: "node", args: [name] } } }));
+    }
+    scaffold.storeFiles.set(STATE, JSON.stringify({ version: 1, plugins: { one: ENTRY, two: ENTRY }, removedDefaults: [], disabled: [] }));
+    registerPluginsIpc(scaffold.deps);
+    expect(await invoke(PLUGINS_APPROVE_MCP_CHANNEL, { name: "one" })).toMatchObject({ ok: true });
+    expect(await invoke(PLUGINS_APPROVE_MCP_CHANNEL, { name: "two" })).toMatchObject({ ok: true });
+    expect((scaffold.settingsData.mcpConsent ?? []).map((g) => g.plugin).sort()).toEqual(["one", "two"]);
+  });
+});
+
+describe("two-phase install binds preview to commit (xfix H3)", () => {
+  it("URL commit installs the EXACT previewed bytes — no second download", async () => {
+    const previewed = pluginTar("url-plug", "1.0.0");
+    const swapped = pluginTar("url-plug", "9.9.9");
+    let calls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(new Uint8Array(calls === 1 ? previewed : swapped), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const scaffold = makeDeps();
+      registerPluginsIpc(scaffold.deps);
+      const url = "https://example.com/url-plug.tgz";
+      const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "url", url } });
+      expect(prepared.ok).toBe(true);
+      const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "url", url } });
+      expect(committed.ok).toBe(true);
+      expect(calls).toBe(1);
+      const row = committed.snapshot.plugins.find((p: { name: string }) => p.name === "url-plug");
+      expect(row.version).toBe("1.0.0");
+      expect(row.source).toEqual({ kind: "url", url });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("folder commit installs the folder the sheet previewed — no second picker", async () => {
+    const scaffold = makeDeps();
+    const manifest = JSON.stringify({ manifestVersion: 1, name: "dev-link", version: "0.1.0" });
+    scaffold.storeFiles.set("/work/a/.anycode-plugin/plugin.json", manifest);
+    scaffold.storeFiles.set("/work/b/.anycode-plugin/plugin.json", manifest.replace("dev-link", "other"));
+    scaffold.setPickedFolder("/work/a");
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "folder" } });
+    expect(prepared.ok).toBe(true);
+    scaffold.setPickedFolder("/work/b"); // a second dialog would now return B
+    const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "folder" } });
+    expect(committed.ok).toBe(true);
+    const row = committed.snapshot.plugins.find((p: { name: string }) => p.name === "dev-link");
+    expect(row.source).toEqual({ kind: "local", path: "/work/a" });
+    expect(committed.snapshot.plugins.find((p: { name: string }) => p.name === "other")).toBeUndefined();
+  });
+});
+
+describe("engines ranges at every IPC surface (xfix H4)", () => {
+  const rangedIndex = (range: string) =>
+    indexOf([{ name: "anycode-essentials", default: true, versions: [{ version: "1.4.2", engines: { anycode: range }, url: "https://github.com/x/y.tgz", sha256: "ab".repeat(32), size: 1, capabilities: ["skills"] }] }]);
+
+  it("the available list and install-prepare accept a range that matches the app", async () => {
+    const scaffold = makeDeps({ index: rangedIndex(">=0.0.35"), raw: "", sigRaw: "" } as never);
+    registerPluginsIpc(scaffold.deps);
+    const snapshot = await invoke(PLUGINS_CHECK_UPDATES_CHANNEL);
+    expect(snapshot.available).toEqual([expect.objectContaining({ name: "anycode-essentials", version: "1.4.2" })]);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "official", name: "anycode-essentials" } });
+    expect(prepared.ok).toBe(true);
+  });
+
+  it("a range that does not match the app is refused everywhere", async () => {
+    const scaffold = makeDeps({ index: rangedIndex(">=0.1.0"), raw: "", sigRaw: "" } as never);
+    registerPluginsIpc(scaffold.deps);
+    const snapshot = await invoke(PLUGINS_CHECK_UPDATES_CHANNEL);
+    expect(snapshot.available[0].incompatibleReason).toContain("no version compatible");
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "official", name: "anycode-essentials" } });
+    expect(prepared).toMatchObject({ ok: false, reason: "incompatible" });
+  });
+});
+
+describe("expired index (xfix M1)", () => {
+  it("an expired cached index lists but refuses prepare and update", async () => {
+    const tar = pluginTar("anycode-essentials", "1.0.0");
+    const signed = signedIndex(tar);
+    const scaffold = makeDeps(signed);
+    scaffold.deps.checkIndex = async () => ({ status: "expired", index: signed.index });
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "official", name: "anycode-essentials" } });
+    expect(prepared.ok).toBe(false);
+    const updated = await invoke(PLUGINS_UPDATE_CHANNEL, { name: "anycode-essentials" });
+    expect(updated).toMatchObject({ ok: false });
+  });
+
+  it("an index that expires BETWEEN prepare and commit refuses the commit before any download", async () => {
+    const tar = pluginTar("anycode-essentials", "1.0.0");
+    const signed = signedIndex(tar);
+    const scaffold = makeDeps(signed);
+    registerPluginsIpc(scaffold.deps);
+    const originalFetch = globalThis.fetch;
+    let downloads = 0;
+    globalThis.fetch = (async () => {
+      downloads += 1;
+      return new Response(new Uint8Array(tar), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "official", name: "anycode-essentials" } });
+      expect(prepared.ok).toBe(true);
+      const downloadsAtPrepare = downloads;
+      scaffold.deps.checkIndex = async () => ({ status: "expired", index: signed.index });
+      const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "official", name: "anycode-essentials" } });
+      expect(committed).toMatchObject({ ok: false });
+      expect(downloads).toBe(downloadsAtPrepare);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("an official MCP plugin installed with allowMcp records consent for its index-declared servers", async () => {
+    const tar = makeTarball([
+      { path: ".anycode-plugin/plugin.json", data: JSON.stringify({ manifestVersion: 1, name: "official-mcp", version: "1.0.0", mcpServers: { api: { command: "node", args: ["api.js"] } } }) },
+    ]);
+    const base = signedIndex(tar, "official-mcp");
+    const entry = (base.index.plugins[0] as unknown as { versions: { capabilities: string[] }[] });
+    entry.versions[0]!.capabilities = ["mcp:api"];
+    const raw = JSON.stringify(base.index);
+    const sigRaw = JSON.stringify({ keyId: KEY.keyId, sig: ed25519Sign(null, Buffer.from(raw, "utf8"), privateKey).toString("base64") });
+    const scaffold = makeDeps({ index: JSON.parse(raw), raw, sigRaw });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(new Uint8Array(tar), { status: 200 })) as typeof fetch;
+    try {
+      registerPluginsIpc(scaffold.deps);
+      const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "official", name: "official-mcp" } });
+      expect(prepared.ok).toBe(true);
+      const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "official", name: "official-mcp" }, allowMcp: true });
+      expect(committed.ok).toBe(true);
+      expect((scaffold.settingsData.mcpConsent ?? []).map((g) => g.plugin)).toEqual(["official-mcp"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("remove tombstone (xfix M4)", () => {
+  it("removing an official plugin tombstones it even with no cached index", async () => {
+    const scaffold = makeDeps();
+    scaffold.storeFiles.set(STATE, JSON.stringify({ version: 1, plugins: { p: ENTRY }, removedDefaults: [], disabled: [] }));
+    registerPluginsIpc(scaffold.deps);
+    expect(await invoke(PLUGINS_REMOVE_CHANNEL, { name: "p" })).toMatchObject({ ok: true });
+    expect(JSON.parse(scaffold.storeFiles.get(STATE)!).removedDefaults).toEqual(["p"]);
+  });
+
+  it("removing a third-party plugin does not tombstone it", async () => {
+    const scaffold = makeDeps();
+    scaffold.storeFiles.set(STATE, JSON.stringify({ version: 1, plugins: { p: { ...ENTRY, trust: "third-party", source: { kind: "url", url: "https://x/y.tgz" } } }, removedDefaults: [], disabled: [] }));
+    registerPluginsIpc(scaffold.deps);
+    expect(await invoke(PLUGINS_REMOVE_CHANNEL, { name: "p" })).toMatchObject({ ok: true });
+    expect(JSON.parse(scaffold.storeFiles.get(STATE)!).removedDefaults).toEqual([]);
+  });
+});
+
+describe("renderer forgery and malformed manifests (xfix H1, M7)", () => {
+  it("approve-mcp with a forged plugin field grants ONLY the named plugin", async () => {
+    const scaffold = makeDeps();
+    for (const name of ["one", "two"]) {
+      scaffold.storeFiles.set(`/home/tester/.anycode/plugins/.store/${name}/1.0.0/.anycode-plugin/plugin.json`, JSON.stringify({ manifestVersion: 1, name, version: "1.0.0", mcpServers: { api: { command: "node", args: [name] } } }));
+    }
+    scaffold.storeFiles.set(STATE, JSON.stringify({ version: 1, plugins: { one: ENTRY, two: ENTRY }, removedDefaults: [], disabled: [] }));
+    registerPluginsIpc(scaffold.deps);
+    expect(await invoke(PLUGINS_APPROVE_MCP_CHANNEL, { name: "one", plugin: "two", grantedAt: "x" })).toMatchObject({ ok: true });
+    expect((scaffold.settingsData.mcpConsent ?? []).map((g) => g.plugin)).toEqual(["one"]);
+  });
+
+  it("a folder whose manifest fails the schema is refused before any token is minted", async () => {
+    const scaffold = makeDeps();
+    scaffold.storeFiles.set("/work/bad/.anycode-plugin/plugin.json", JSON.stringify({ manifestVersion: 1, name: 5 }));
+    scaffold.setPickedFolder("/work/bad");
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "folder" } });
+    expect(prepared).toMatchObject({ ok: false, reason: "invalid" });
+    expect(prepared.token).toBeUndefined();
+  });
+});
+
+describe("install preview and provenance (xfix M7, L3)", () => {
+  it("a folder preview shows the manifest's real MCP servers and capabilities", async () => {
+    const scaffold = makeDeps();
+    scaffold.storeFiles.set("/work/mcp/.anycode-plugin/plugin.json", JSON.stringify({ manifestVersion: 1, name: "folder-mcp", version: "0.1.0", mcpServers: { api: { command: "curl", args: ["https://x"] } } }));
+    scaffold.setPickedFolder("/work/mcp");
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "folder" } });
+    expect(prepared.ok).toBe(true);
+    expect(prepared.preview.mcpServers).toEqual([{ name: "api", command: "curl", args: ["https://x"] }]);
+    expect(prepared.preview.capabilities).toContain("mcp:api");
+  });
+
+  it("a picked file records its own file name as provenance", async () => {
+    const scaffold = makeDeps();
+    scaffold.setPickedFile("/Downloads/plugin.tgz");
+    scaffold.storeBinaries.set("/Downloads/plugin.tgz", pluginTar("prov", "1.0.0"));
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "file" } });
+    await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "file" } });
+    expect(JSON.parse(scaffold.storeFiles.get(STATE)!).plugins.prov.source).toEqual({ kind: "file", fileName: "plugin.tgz" });
+  });
+});
+
+describe("the pane scans the live tab workspace (xfix M6)", () => {
+  it("activePluginsWorkspace picks the first tab workspace, else the fallback", () => {
+    expect(activePluginsWorkspace([{ workspace: "" }, { workspace: "/repo" }], "/home/x")).toBe("/repo");
+    expect(activePluginsWorkspace([], "/home/x")).toBe("/home/x");
+  });
+
+  it("a project plugin in the live workspace is listed", async () => {
+    const scaffold = makeDeps();
+    await scaffold.fs.mkdir("/repo/.anycode/plugins/proj");
+    scaffold.storeFiles.set("/repo/.anycode/plugins/proj/.anycode-plugin/plugin.json", JSON.stringify({ manifestVersion: 1, name: "proj", version: "0.1.0" }));
+    scaffold.deps.activeWorkspace = () => "/repo";
+    registerPluginsIpc(scaffold.deps);
+    const snapshot = await invoke(PLUGINS_LIST_CHANNEL);
+    expect(snapshot.plugins.map((p: { name: string }) => p.name)).toContain("proj");
   });
 });

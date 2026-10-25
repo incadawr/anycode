@@ -19,11 +19,19 @@
  * expire after 5 minutes.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { ipcMain } from "electron";
 import { z } from "zod";
-import { scanPluginsAdmin } from "@anycode/core/plugins-admin";
+import {
+  capabilities,
+  pluginManifestSchema,
+  rangeMatches,
+  scanPluginsAdmin,
+  serversHash,
+  type McpConsentEntry,
+} from "@anycode/core/plugins-admin";
+import type { FileSystemPort } from "@anycode/core";
 import {
   PLUGINS_APPROVE_MCP_CHANNEL,
   PLUGINS_CHECK_UPDATES_CHANNEL,
@@ -46,7 +54,6 @@ import {
   type PluginInstallSource,
   type PluginInstallPreview,
 } from "../shared/plugins-config.js";
-import type { FileSystemPort } from "@anycode/core";
 import {
   checkPluginIndex,
   readCachedPluginIndex,
@@ -54,24 +61,27 @@ import {
 } from "./plugins/index-client.js";
 import {
   capabilitiesSubset,
+  compareVersionsDesc,
   createArchiveFetch,
   guessNameFromArchive,
+  installFromBytes,
   installFromIndex,
+  installLocalLink,
   previewArchive,
   readSanitizedState,
   removePlugin as storeRemovePlugin,
   rollbackPlugin as storeRollbackPlugin,
+  runUpdatePass as storeRunUpdatePass,
   setEnabled as storeSetEnabled,
   setPinned as storeSetPinned,
   stagingDir,
   storeDir,
+  withPluginStateLock,
   type PluginStoreFs,
   type PluginStoreOptions,
   type StoreRefusal,
 } from "./plugins/store.js";
-import { statePath } from "./plugins/store.js";
-import type { McpConsentEntry } from "@anycode/core/plugins-admin";
-
+import { statePath, writePluginState } from "./plugins/store.js";
 // ── deps ──
 
 export interface PluginsIpcDeps {
@@ -96,9 +106,19 @@ export interface PluginsIpcDeps {
   revealPath(path: string): void;
   /** Broadcast target — every window (BrowserWindow.getAllWindows). */
   getWindows(): { webContents: { send(channel: string, payload: unknown): void } }[];
-  /** Reserved names passed to discoverExtensions by the host (S1-A surface). */
+  /** Fallback scan workspace (used when no live tab exposes one). */
   workspace: string;
-  checkIndex?(): Promise<{ status: string; index?: PluginIndex; detail?: string }>;
+  /**
+   * Taskana 4732 xfix M6: resolved on EVERY scan (not frozen at registration)
+   * so the pane follows the live tab workspace; see activePluginsWorkspace.
+   */
+  activeWorkspace?(): string | undefined;
+  /**
+   * Test/embedder seam for the whole index check. Receives the persisted
+   * anti-rollback floor exactly as the production path passes it to
+   * checkPluginIndex (Taskana 4732 xfix H2).
+   */
+  checkIndex?(opts: { serialFloor?: number }): Promise<{ status: string; index?: PluginIndex; detail?: string; expired?: boolean }>;
   now?: () => number;
   logger?: { warn(message: string, ...args: unknown[]): void };
 }
@@ -111,6 +131,15 @@ interface PendingInstall {
   sha256?: string;
   /** Bytes for file/url installs (commit replays them). */
   bytes?: Buffer;
+  /**
+   * Taskana 4732 xfix H3: for folder installs, the EXACT path main's picker
+   * resolved at PREPARE time. Commit reuses it — a second OS dialog at
+   * commit (the old behaviour) could install a DIFFERENT folder than the
+   * one the sheet previewed.
+   */
+  folderPath?: string;
+  /** Picked .tgz basename (file installs) — state.json provenance (xfix L3). */
+  fileName?: string;
   expiresAt: number;
 }
 
@@ -130,6 +159,10 @@ const prepareSchema = z.object({ source: installSourceSchema });
 const commitSchema = z.object({
   token: z.string().min(1),
   source: installSourceSchema,
+  // Taskana 4732 xfix H1(b): the confirmation sheet's "Install and allow MCP
+  // servers" checkbox — main records the consent grant (hash main-computed)
+  // when true. Optional on the wire so stale renderers keep working.
+  allowMcp: z.boolean().optional(),
 });
 const nameSchema = z.object({ name: z.string().min(1) });
 const setNameSchema = z.object({ name: z.string().min(1), value: z.boolean() });
@@ -153,7 +186,7 @@ function refusal(reason: StoreRefusal | "signature", detail?: string): { ok: fal
 async function buildSnapshot(deps: PluginsIpcDeps, indexCheck?: { status: string; index?: PluginIndex; detail?: string }): Promise<PluginsSnapshot> {
   const settings = await deps.settings.getPlugins();
   const scan = await scanPluginsAdmin(deps.fs, {
-    workspace: deps.workspace,
+    workspace: workspaceOf(deps),
     home: deps.home,
     pluginStatePath: statePath(deps.home),
     appVersion: deps.appVersion,
@@ -186,9 +219,12 @@ async function buildSnapshot(deps: PluginsIpcDeps, indexCheck?: { status: string
   if (index !== undefined) {
     for (const entry of index.plugins) {
       if (!entry.default || installedNames.has(entry.name) || state.state.removedDefaults.includes(entry.name)) continue;
+      // Taskana 4732 xfix H4: engines.anycode is a RANGE (">=0.0.35", "^0.1.0")
+      // — string equality against the app version matched nothing. Same
+      // rangeMatches the store layer uses, at every IPC surface.
       const compatible = entry.versions
-        .filter((v) => v.engines?.anycode === undefined || v.engines.anycode === deps.appVersion)
-        .sort((a, b) => b.version.localeCompare(a.version, "en", { numeric: true }))[0];
+        .filter((v) => v.engines?.anycode === undefined || rangeMatches(v.engines.anycode, deps.appVersion))
+        .sort((a, b) => compareVersionsDesc(a.version, b.version))[0];
       available.push({
         name: entry.name,
         displayName: entry.displayName,
@@ -218,10 +254,26 @@ async function buildSnapshot(deps: PluginsIpcDeps, indexCheck?: { status: string
 
 async function readCachedPluginIndexSafe(deps: PluginsIpcDeps): Promise<{ status: string; index?: PluginIndex; checkedAt?: string }> {
   try {
+    // `checkedAt` (xfix L1) comes from the cache's own fetchedAt, so the
+    // pane's "Last checked" is real rather than "Not checked yet" forever.
     return await readCachedPluginIndex({ cacheDir: cacheDirFor(deps) });
   } catch {
     return { status: "unchecked" };
   }
+}
+
+/**
+ * The workspace the Plugins pane scans (Taskana 4732 xfix M6): the first live
+ * tab's workspace — the runtime's own project tier — falling back to `fallback`
+ * (home) when no tab has one. Pure; main supplies the tab list.
+ */
+export function activePluginsWorkspace(tabs: readonly { workspace?: string }[], fallback: string): string {
+  return tabs.find((tab) => tab.workspace !== undefined && tab.workspace !== "")?.workspace ?? fallback;
+}
+
+/** Scan workspace for this call (live tab when known, else the configured fallback). */
+function workspaceOf(deps: PluginsIpcDeps): string {
+  return deps.activeWorkspace?.() ?? deps.workspace;
 }
 
 function cacheDirFor(deps: PluginsIpcDeps): string {
@@ -239,22 +291,38 @@ function updateFor(
   if (index === undefined || pinned) return undefined;
   const entry = index.plugins.find((p) => p.name === name);
   if (entry === undefined) return undefined;
+  // Taskana 4732 xfix H4: range matching (see buildSnapshot's available list).
   const candidate = entry.versions
-    .filter((v) => v.engines?.anycode === undefined || v.engines.anycode === appVersion)
-    .filter((v) => compareDesc(v.version, active) < 0)
-    .sort((a, b) => compareDesc(a.version, b.version))[0];
+    .filter((v) => v.engines?.anycode === undefined || rangeMatches(v.engines.anycode, appVersion))
+    .filter((v) => compareVersionsDesc(v.version, active) < 0)
+    .sort((a, b) => compareVersionsDesc(a.version, b.version))[0];
   if (candidate === undefined) return undefined;
   return { version: candidate.version, needsApproval: !autoUpdate };
 }
 
-function compareDesc(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    const diff = (pb[i] ?? 0) - (pa[i] ?? 0);
-    if (diff !== 0) return diff;
+// ── serial-floor persistence (Taskana 4732 xfix H2) ──
+
+/**
+ * state.json's persisted anti-rollback floor (`lastIndexSerial`). undefined =
+ * never checked, or no readable state — the only case with no floor at all.
+ */
+async function readPersistedSerialFloor(deps: PluginsIpcDeps): Promise<number | undefined> {
+  try {
+    const { state } = await readSanitizedState(deps.fs, deps.home);
+    return state.lastIndexSerial;
+  } catch {
+    return undefined; // fail-soft
   }
-  return 0;
+}
+
+/** Raise-only write of the floor into state.json, under the state lock. */
+async function persistSerialFloor(deps: PluginsIpcDeps, serial: number): Promise<void> {
+  await withPluginStateLock(deps.home, async () => {
+    const { state } = await readSanitizedState(deps.fs, deps.home);
+    if ((state.lastIndexSerial ?? -1) >= serial) return;
+    state.lastIndexSerial = serial;
+    await writePluginState(deps.fs, statePath(deps.home), state);
+  });
 }
 
 // ── registration ──
@@ -271,7 +339,19 @@ export interface PluginsIpc {
 export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
   const now = deps.now ?? Date.now;
   const pending = new Map<string, PendingInstall>();
+  // Taskana 4732 xfix H2: the anti-rollback serial floor must SURVIVE a
+  // restart. state.json's `lastIndexSerial` (written by every successful
+  // update pass) is the persisted floor — seed from it here so a replayed
+  // lower-serial index is refused after relaunch, not only within one
+  // process lifetime. Fail-soft: an unreadable/absent state means no floor.
   let lastSerialFloor: number | undefined;
+  // Every index check awaits this seed first, so the first check after a
+  // restart can never run without the persisted floor.
+  const floorSeeded: Promise<void> = readPersistedSerialFloor(deps).then((persisted) => {
+    if (persisted !== undefined && (lastSerialFloor === undefined || persisted > lastSerialFloor)) {
+      lastSerialFloor = persisted;
+    }
+  });
 
   function storeOpts(): PluginStoreOptions {
     return {
@@ -290,20 +370,35 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
   }
 
   async function checkIndex(): Promise<{ status: string; index?: PluginIndex; detail?: string }> {
+    await floorSeeded;
+    const floorOpts = lastSerialFloor !== undefined ? { serialFloor: lastSerialFloor } : {};
     // Tests / embedders may inject the whole check; production hits the wire.
+    let result: { status: string; index?: PluginIndex; detail?: string; expired?: boolean };
     if (deps.checkIndex !== undefined) {
-      return deps.checkIndex();
+      result = await deps.checkIndex(floorOpts);
+    } else {
+      const settings = await deps.settings.getPlugins();
+      result = await checkPluginIndex({
+        cacheDir: cacheDirFor(deps),
+        ...(settings.officialIndexUrl !== undefined ? { indexUrl: settings.officialIndexUrl } : {}),
+        ...floorOpts,
+      });
     }
-    const settings = await deps.settings.getPlugins();
-    const result = await checkPluginIndex({
-      cacheDir: cacheDirFor(deps),
-      ...(settings.officialIndexUrl !== undefined ? { indexUrl: settings.officialIndexUrl } : {}),
-      ...(lastSerialFloor !== undefined ? { serialFloor: lastSerialFloor } : {}),
-    });
     if (result.index !== undefined && !result.expired) {
-      lastSerialFloor = result.index.serial;
+      // Raise-only, in memory AND persisted: the next launch seeds from it.
+      if (lastSerialFloor === undefined || result.index.serial > lastSerialFloor) {
+        lastSerialFloor = result.index.serial;
+      }
+      await persistSerialFloor(deps, result.index.serial).catch(() => undefined);
     }
     return { status: result.status, ...(result.index !== undefined ? { index: result.index } : {}), ...(result.detail !== undefined ? { detail: result.detail } : {}) };
+  }
+
+  // Taskana 4732 xfix M1: a cached index past its own expiresAt must not
+  // serve installs/updates (design §4) — the check returns it for LISTING
+  // with status "expired", so every mutating surface refuses on that status.
+  function indexUsableForInstall(check: { status: string; index?: PluginIndex }): boolean {
+    return check.index !== undefined && check.status !== "expired";
   }
 
   function isDefaultInIndex(index: PluginIndex | undefined, name: string): boolean {
@@ -312,23 +407,29 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
 
   async function handlePrepare(source: PluginInstallSource): Promise<PluginInstallPrepareResult> {
     const expiresAt = now() + TOKEN_TTL_MS;
+    // xfix L10: expired tokens are evicted here (bounded by install attempts).
+    for (const [staleToken, staleInstall] of pending) {
+      if (staleInstall.expiresAt < now()) pending.delete(staleToken);
+    }
     if (source.kind === "git") {
       return { ok: false, reason: "invalid", detail: "git sources arrive in Stage 2" };
     }
     if (source.kind === "official") {
       const check = await checkIndex();
-      if (check.index === undefined) {
+      // Taskana 4732 xfix M1: an expired (cached-past-expiry) index lists but
+      // never installs — the old gate let prepare/commit/update proceed on it.
+      if (!indexUsableForInstall(check)) {
         return refusal(check.status === "signature-failed" || check.status === "rollback" ? "signature" : check.status === "expired" ? "incompatible" : check.status === "offline" ? "network" : "network", check.detail ?? `index unavailable (${check.status})`);
       }
       // Preview from the INDEX entry (no download yet — the sheet needs
       // name/version/capabilities/mcp list, all index-declared).
-      const entry = check.index.plugins.find((p) => p.name === source.name);
+      const entry = check.index!.plugins.find((p) => p.name === source.name);
       if (entry === undefined) {
         return refusal("not_found", `${source.name} is not in the official index`);
       }
       const candidate = entry.versions
-        .filter((v) => v.engines?.anycode === undefined || v.engines.anycode === deps.appVersion)
-        .sort((a, b) => compareDesc(a.version, b.version))
+        .filter((v) => v.engines?.anycode === undefined || rangeMatches(v.engines.anycode, deps.appVersion))
+        .sort((a, b) => compareVersionsDesc(a.version, b.version))
         .find((v) => source.version === undefined || v.version === source.version);
       if (candidate === undefined) {
         return refusal("incompatible", `no compatible version of ${source.name}`);
@@ -375,12 +476,16 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         return refusal(preview.reason, preview.detail);
       }
       const token = randomUUID();
+      // Taskana 4732 xfix H3: pin the sha256 of the EXACT previewed bytes —
+      // commit installs `bytes` and verifies this hash, so a server that
+      // serves different content at commit time can never swap the payload.
+      const previewSha = createHash("sha256").update(fetched.bytes).digest("hex");
       pending.set(token, {
         token,
         source,
         name: preview.manifest.name,
         version: preview.manifest.version!,
-        sha256: undefined,
+        sha256: previewSha,
         bytes: fetched.bytes,
         expiresAt,
       });
@@ -398,7 +503,11 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
           mcpServers: preview.mcpServers,
           hasHooks: preview.capabilities.includes("hooks"),
           engines: preview.manifest.engines?.anycode,
-          ...(preview.manifest.engines?.anycode !== undefined ? { incompatible: false } : {}),
+          // xfix L4: compute the real compat verdict with rangeMatches — the
+          // old hardcode showed "compatible" for a too-new plugin until commit.
+          ...(preview.manifest.engines?.anycode !== undefined
+            ? { incompatible: !rangeMatches(preview.manifest.engines.anycode, deps.appVersion) }
+            : {}),
         },
       };
     }
@@ -428,6 +537,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         name: preview.manifest.name,
         version: preview.manifest.version!,
         bytes,
+        fileName: path.split(/[\\/]/).pop() ?? path,
         expiresAt,
       });
       return {
@@ -464,16 +574,40 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     } catch {
       return refusal("invalid", "manifest is not JSON");
     }
-    const manifest = previewManifestJson(parsed);
-    if (manifest === undefined) {
-      return refusal("invalid", "manifest invalid");
+    // Taskana 4732 xfix M7: run the REAL manifest schema (not a name-only
+    // peek) so the sheet previews the folder plugin's derived capabilities
+    // and — critically — its MCP servers, which the old preview hardcoded
+    // to [] (the user confirmed a sheet that lied about what would install).
+    const manifestResult = pluginManifestSchema.safeParse(parsed);
+    if (!manifestResult.success) {
+      return refusal("invalid", `manifest invalid: ${manifestResult.error.issues[0]?.message ?? "shape"}`);
     }
+    const manifest = manifestResult.data;
+    const caps = capabilities(manifest);
+    const capabilityList: string[] = [];
+    if (caps.skills > 0) capabilityList.push("skills");
+    if (caps.agents > 0) capabilityList.push("agents");
+    if (caps.workflows > 0) capabilityList.push("workflows");
+    capabilityList.push(...caps.mcp.map((name) => `mcp:${name}`));
+    if (caps.commands > 0) capabilityList.push("commands");
+    if (caps.hooks) capabilityList.push("hooks");
+    if (caps.docs) capabilityList.push("docs");
+    capabilityList.push(...caps.engineSupport.map((name) => `engineSupport:${name}`));
+    if (caps.promptOverlays > 0) capabilityList.push("promptOverlays");
+    const mcpServers = Object.entries(manifest.mcpServers ?? {}).map(([name, server]) => ({
+      name,
+      command: "command" in server ? String(server.command) : "stdio",
+      args: "args" in server && Array.isArray(server.args) ? server.args.map(String) : [],
+    }));
     const token = randomUUID();
     pending.set(token, {
       token,
       source,
       name: manifest.name,
       version: manifest.version ?? "0.0.0",
+      // xfix H3: bind the token to the folder main picked HERE — commit
+      // reuses it and never re-opens the dialog.
+      folderPath: path,
       expiresAt,
     });
     return {
@@ -485,26 +619,58 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         displayName: manifest.displayName,
         description: manifest.description,
         source,
-        capabilities: [],
-        mcpServers: [],
-        hasHooks: false,
+        capabilities: capabilityList.sort(),
+        mcpServers,
+        hasHooks: caps.hooks,
+        ...(manifest.engines?.anycode !== undefined
+          ? {
+              engines: manifest.engines.anycode,
+              incompatible: !rangeMatches(manifest.engines.anycode, deps.appVersion),
+            }
+          : {}),
       },
     };
   }
 
-  function previewManifestJson(parsed: unknown): { name: string; version?: string; displayName?: string; description?: string } | undefined {
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const record = parsed as Record<string, unknown>;
-    if (typeof record.name !== "string" || record.name === "") return undefined;
-    return {
-      name: record.name,
-      ...(typeof record.version === "string" ? { version: record.version } : {}),
-      ...(typeof record.displayName === "string" ? { displayName: record.displayName } : {}),
-      ...(typeof record.description === "string" ? { description: record.description } : {}),
-    };
+  /**
+   * Taskana 4732 xfix H1(b): records an MCP consent grant for the plugin
+   * main just installed — the hash is computed MAIN-side from the installed
+   * plugin's manifest (never renderer-supplied), matching what discovery
+   * will check at the next host boot. Fail-soft: a consent write failure
+   * must not fail an otherwise-successful install.
+   */
+  async function recordInstallConsent(name: string): Promise<void> {
+    try {
+      const scan = await scanPluginsAdmin(deps.fs, {
+        workspace: workspaceOf(deps),
+        home: deps.home,
+        pluginStatePath: statePath(deps.home),
+        appVersion: deps.appVersion,
+      });
+      const row = scan.rows.find((candidate) => candidate.name === name);
+      if (row === undefined || row.mcpServersHash === undefined) {
+        return; // no MCP servers — nothing to consent to
+      }
+      const settings = await deps.settings.getPlugins();
+      const consent = [...(settings.mcpConsent ?? [])];
+      const grant: McpConsentEntry = {
+        plugin: name,
+        serversHash: row.mcpServersHash,
+        grantedAt: new Date(now()).toISOString(),
+      };
+      const existing = consent.findIndex((entry) => entry.plugin === name);
+      if (existing >= 0) {
+        consent[existing] = grant;
+      } else {
+        consent.push(grant);
+      }
+      await deps.settings.setMcpConsent(consent);
+    } catch {
+      // fail-soft: the install stands; the user can Approve MCP from the row.
+    }
   }
 
-  async function handleCommit(token: string, source: PluginInstallSource): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: PluginsRefusalReason; detail?: string }> {
+  async function handleCommit(token: string, source: PluginInstallSource, allowMcp: boolean): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: PluginsRefusalReason; detail?: string }> {
     const prepared = pending.get(token);
     if (prepared === undefined || prepared.expiresAt < now() || JSON.stringify(prepared.source) !== JSON.stringify(source)) {
       return refusal("invalid", "unknown, expired or mismatched install token — prepare again");
@@ -512,48 +678,65 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     const opts = storeOpts();
     if (source.kind === "official") {
       const check = await checkIndex();
-      if (check.index === undefined) {
+      // xfix M1: expired index refuses commit too.
+      if (!indexUsableForInstall(check)) {
         return refusal("network", `index unavailable (${check.status})`);
       }
-      const result = await installFromIndex(opts, check.index, { name: source.name, version: prepared.version });
+      const result = await installFromIndex(opts, check.index!, { name: source.name, version: prepared.version });
       if (!result.ok) {
         return refusal(result.reason, result.detail);
       }
       // Capability growth check on commit: compare state capabilities.
       const { state } = await readSanitizedState(deps.fs, deps.home);
       const entry = state.plugins[source.name];
-      const indexEntry = check.index.plugins.find((p) => p.name === source.name);
+      const indexEntry = check.index!.plugins.find((p) => p.name === source.name);
       const indexVersion = indexEntry?.versions.find((v) => v.version === prepared.version);
       if (entry !== undefined && indexVersion !== undefined && !capabilitiesSubset(entry.capabilities, indexVersion.capabilities)) {
         // Explicit confirmation IS the approval — proceed.
       }
       pending.delete(token);
+      if (allowMcp) {
+        await recordInstallConsent(source.name);
+      }
       notifyChanged("install");
       return { ok: true, snapshot: await buildSnapshot(deps, check) };
     }
     if (prepared.bytes !== undefined) {
-      const { installFromBytes, installFromUrl } = await import("./plugins/store.js");
+      // Taskana 4732 xfix H3: commit installs the EXACT previewed bytes —
+      // never a re-download. The URL pin is the sha256 computed at prepare over
+      // these very bytes; installFromBytes refuses any difference.
       const result = source.kind === "url"
-        ? await installFromUrl(opts, source.url)
-        : await installFromBytes(opts, prepared.bytes, { fileName: prepared.name });
+        ? await installFromBytes(opts, prepared.bytes, {
+          fileName: prepared.name,
+          expectedName: prepared.name,
+          expectedSha256: prepared.sha256,
+          source: { kind: "url", url: source.url },
+        })
+        : await installFromBytes(opts, prepared.bytes, { fileName: prepared.fileName ?? prepared.name });
       if (!result.ok) {
         return refusal(result.reason, result.detail);
       }
       pending.delete(token);
+      if (allowMcp) {
+        await recordInstallConsent(result.value.name);
+      }
       notifyChanged("install");
       return { ok: true, snapshot: await buildSnapshot(deps) };
     }
     if (source.kind === "folder") {
-      const { installLocalLink } = await import("./plugins/store.js");
-      const path = await deps.pickPluginFolder();
-      if (path === undefined) {
-        return refusal("invalid", "no folder picked");
+      // xfix H3: the token carries the folder main picked at PREPARE —
+      // reusing it (no second OS dialog) is what binds preview to install.
+      if (prepared.folderPath === undefined) {
+        return refusal("invalid", "stale install token — prepare again");
       }
-      const result = await installLocalLink(opts, path);
+      const result = await installLocalLink(opts, prepared.folderPath);
       if (!result.ok) {
         return refusal(result.reason, result.detail);
       }
       pending.delete(token);
+      if (allowMcp) {
+        await recordInstallConsent(result.value.name);
+      }
       notifyChanged("install");
       return { ok: true, snapshot: await buildSnapshot(deps) };
     }
@@ -584,17 +767,18 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     if (!parsed.success) {
       return refusal("invalid", "payload rejected");
     }
-    return handleCommit(parsed.data.token, parsed.data.source);
+    return handleCommit(parsed.data.token, parsed.data.source, parsed.data.allowMcp ?? false);
   });
 
   ipcMain.handle(PLUGINS_UPDATE_CHANNEL, async (_event, payload: unknown) => {
     const parsed = nameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     const check = await checkIndex();
-    if (check.index === undefined) {
+    // xfix M1: expired index refuses updates.
+    if (!indexUsableForInstall(check)) {
       return refusal("network", `index unavailable (${check.status})`);
     }
-    const result = await installFromIndex(storeOpts(), check.index, { name: parsed.data.name });
+    const result = await installFromIndex(storeOpts(), check.index!, { name: parsed.data.name });
     if (!result.ok) return refusal(result.reason, result.detail);
     notifyChanged("update");
     return { ok: true } satisfies PluginsMutationResult;
@@ -630,8 +814,21 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
   ipcMain.handle(PLUGINS_REMOVE_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = nameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
+    // Taskana 4732 xfix M4: tombstoning must not depend on the OFFLINE cache
+    // alone — with no cached (or stale) index the old code derived
+    // isDefault=false and the next update pass silently reinstalled the
+    // plugin the user explicitly removed. Derive from any index copy we can
+    // reach WITHOUT network: the cache; when that is silent, tombstone any
+    // official-trust store entry unconditionally (a default it may have been
+    // — the cost of a wrong tombstone is zero: it only blocks auto-reinstall
+    // of a plugin the user removed).
     const cached = await readCachedPluginIndexSafe(deps);
-    const result = await storeRemovePlugin(storeOpts(), parsed.data.name, isDefaultInIndex(cached.index, parsed.data.name));
+    let isDefault = isDefaultInIndex(cached.index, parsed.data.name);
+    if (!isDefault) {
+      const { state } = await readSanitizedState(deps.fs, deps.home);
+      isDefault = state.plugins[parsed.data.name]?.trust === "official";
+    }
+    const result = await storeRemovePlugin(storeOpts(), parsed.data.name, isDefault);
     if (!result.ok) return refusal(result.reason, result.detail);
     notifyChanged("remove");
     return { ok: true };
@@ -642,7 +839,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     if (!parsed.success) return refusal("invalid");
     // Grant consent for the plugin's CURRENT serversHash (read from scan).
     const scan = await scanPluginsAdmin(deps.fs, {
-      workspace: deps.workspace,
+      workspace: workspaceOf(deps),
       home: deps.home,
       pluginStatePath: statePath(deps.home),
       appVersion: deps.appVersion,
@@ -701,12 +898,12 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     snapshot: () => buildSnapshot(deps),
     runUpdatePass: async () => {
       const check = await checkIndex();
-      if (check.index === undefined) {
+      // xfix M1: an expired index never drives an automatic install either.
+      if (!indexUsableForInstall(check)) {
         return { installed: [], status: check.status };
       }
-      const { runUpdatePass: storePass } = await import("./plugins/store.js");
       const settings = await deps.settings.getPlugins();
-      const result = await storePass({
+      const result = await storeRunUpdatePass({
         ...storeOpts(),
         checkIndex: async () => check,
         autoUpdateOfficial: settings.autoUpdateOfficial,

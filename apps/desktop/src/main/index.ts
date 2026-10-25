@@ -84,6 +84,7 @@ import {
 } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
 import { defaultSecretsPath, defaultSettingsPath, loadSettings, readTrustedBinaryConsentsSync, saveSettings, withSettingsFileLock } from "../settings/files.js";
+import { grandfatherPluginsMcpConsent, setPluginsMcpConsent } from "./plugins/consent-settings.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById, resolveProviderConnection } from "../shared/settings.js";
 import {
@@ -146,7 +147,7 @@ import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 import { startTelemetryRetention, type TelemetryRetentionHandle } from "./telemetry-retention.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
 import { NodePluginsFs } from "./plugins-fs.js";
-import { registerPluginsIpc, type PluginsIpc } from "./plugins-ipc.js";
+import { activePluginsWorkspace, registerPluginsIpc, type PluginsIpc } from "./plugins-ipc.js";
 import {
   gcStore,
   legacyMcpGrandfathering,
@@ -3026,6 +3027,16 @@ void app.whenReady().then(async () => {
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
     fs: new NodeMcpConfigFs(),
+    // Taskana 4732 xfix H1: the plugin-server rows consent state from the
+    // SAME settings.json cell the host runtime + Plugins pane read/write.
+    readMcpConsent: async () => {
+      try {
+        const current = await loadSettings(settingsPath, fileLogger);
+        return current.settings.plugins?.mcpConsent;
+      } catch {
+        return undefined;
+      }
+    },
   });
 
   // Taskana 4752 part C: the write-only MCP secret store. The weak-storage consent
@@ -3145,7 +3156,11 @@ void app.whenReady().then(async () => {
       appVersion: app.getVersion(),
       isPackaged: app.isPackaged,
       fs: pluginsFs,
+      // Taskana 4732 xfix M6: the pane scans the live tab workspace (a project
+      // plugin in `<repo>/.anycode/plugins/` is runtime-loaded and must show
+      // here), resolved per scan; home when no tab exists.
       workspace: pluginsHome,
+      activeWorkspace: () => activePluginsWorkspace(manager?.listTabs() ?? [], pluginsHome),
       settings: {
         getPlugins: async () => {
           const current = settings ?? (await loadSettings(settingsPath, fileLogger)).settings;
@@ -3166,14 +3181,10 @@ void app.whenReady().then(async () => {
           settings = (await loadSettings(settingsPath, fileLogger)).settings;
         },
         setMcpConsent: async (entries) => {
-          await withSettingsFileLock(settingsPath, async () => {
-            const current = await loadSettings(settingsPath, fileLogger);
-            if (current.settings.plugins?.mcpConsent !== undefined) return; // lost a race: keep the winner
-            await saveSettings(settingsPath, {
-              ...current.settings,
-              plugins: { ...(current.settings.plugins ?? {}), mcpConsent: [...entries] },
-            });
-          });
+          // Taskana 4732 xfix H1(c): the user-facing consent writer (install
+          // "allow", Approve MCP, re-approval) — never a no-op once an array
+          // exists. See main/plugins/consent-settings.ts.
+          await setPluginsMcpConsent(settingsPath, entries, fileLogger);
           settings = (await loadSettings(settingsPath, fileLogger)).settings;
         },
       },
@@ -3214,14 +3225,7 @@ void app.whenReady().then(async () => {
           return current.settings.plugins?.mcpConsent;
         },
         writeMcpConsent: async (entries) => {
-          await withSettingsFileLock(settingsPath, async () => {
-            const current = await loadSettings(settingsPath, fileLogger);
-            if (current.settings.plugins?.mcpConsent !== undefined) return; // lost a race: keep the winner
-            await saveSettings(settingsPath, {
-              ...current.settings,
-              plugins: { ...(current.settings.plugins ?? {}), mcpConsent: [...entries] },
-            });
-          });
+          await grandfatherPluginsMcpConsent(settingsPath, entries, fileLogger);
         },
       }).catch((error) =>
         fileLogger.warn(`[plugins] legacy MCP grandfathering failed (continuing): ${error instanceof Error ? error.message : String(error)}`),

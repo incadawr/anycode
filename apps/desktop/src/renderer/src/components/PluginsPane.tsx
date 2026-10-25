@@ -67,7 +67,7 @@ export interface PluginsBridge {
   list(): Promise<PluginsSnapshot>;
   checkUpdates(): Promise<PluginsSnapshot>;
   installPrepare(source: PluginInstallSource): Promise<{ ok: true; token: string; preview: PluginInstallPreview } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
-  installCommit(token: string, source: PluginInstallSource): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
+  installCommit(token: string, source: PluginInstallSource, allowMcp?: boolean): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
   update(name: string): Promise<PluginsMutationResult>;
   rollback(name: string): Promise<PluginsMutationResult>;
   setPinned(name: string, value: boolean): Promise<PluginsMutationResult>;
@@ -161,7 +161,10 @@ export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProp
   const rows = snapshot ? filterPluginRows(snapshot.plugins, searchQuery) : [];
   const emptyKind = pluginsEmptyKind(snapshot?.plugins.length ?? 0, rows.length, searchQuery);
   const indexHeader = snapshot ? pluginIndexStatusText(snapshot.index.status) : null;
-  const autoUpdate = snapshot?.settings.autoUpdateOfficial ?? true;
+  // Taskana 4732 xfix M5: the default is FALSE everywhere (schema, main,
+  // scheduler, docs) — the old `?? true` rendered the toggle ON while the
+  // scheduler's gate evaluated false: nothing ever auto-updated.
+  const autoUpdate = snapshot?.settings.autoUpdateOfficial ?? false;
 
   /**
    * Run a `{ok:true}`-style mutation and refetch: main's S1-B per-plugin
@@ -264,9 +267,10 @@ export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProp
     }
     try {
       // CUSTODY: the wire carries the token + the ORIGINAL source only —
-      // never a path or hash; `allowMcp` is the consent checkbox. Main
-      // re-validates that the token was prepared for exactly this source.
-      const result = await bridge.installCommit(token, pendingSource);
+      // never a path or hash; `allowMcp` is the consent checkbox (Taskana
+      // 4732 xfix H1(b): main records the grant for the previewed command
+      // lines when true; unchecked = servers stay off until Approve MCP).
+      const result = await bridge.installCommit(token, pendingSource, allowMcp);
       if (result.ok) {
         setSnapshot(result.snapshot);
         setInstallOpen(false);

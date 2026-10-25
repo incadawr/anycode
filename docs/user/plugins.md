@@ -76,9 +76,9 @@ approval, every time. You can also grant approval later from the plugin's row
 (**Approve MCP**). Consent is per plugin, user-global; project and legacy
 plugin rows show the same consent state.
 
-Official plugins auto-update by default (toggle **Auto-update official
-plugins** in the pane header); third-party and local plugins never update
-without an explicit **Update** click.
+Auto-update for official plugins is OFF by default (toggle **Auto-update
+official plugins** in the pane header); third-party and local plugins never
+update without an explicit **Update** click.
 
 ## Updates, rollback, pin
 

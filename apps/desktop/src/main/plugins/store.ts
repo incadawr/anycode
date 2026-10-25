@@ -40,7 +40,7 @@ import {
 import { extractTgz } from "./archive.js";
 import { sha256Hex, type PluginIndex } from "./index-client.js";
 import { sanitizePluginState } from "./store-state.js";
-import { OFFICIAL_ARTIFACT_REDIRECT_HOSTS, PLUGIN_FETCH_TIMEOUT_MS } from "../../shared/plugin-trust.js";
+import { OFFICIAL_ARTIFACT_REDIRECT_HOSTS, PLUGIN_ARCHIVE_MAX_COMPRESSED_BYTES, PLUGIN_FETCH_TIMEOUT_MS } from "../../shared/plugin-trust.js";
 
 export {
   defaultPluginStatePath,
@@ -110,6 +110,28 @@ export function cacheDir(home: string): string {
 
 export function statePath(home: string): string {
   return join(pluginsRoot(home), PLUGIN_STATE_FILE);
+}
+
+/**
+ * Taskana 4732 xfix L7/concurrency: every state.json read-modify-write runs
+ * under one per-state-file queue. Two overlapping mutations (an install and a
+ * remove, a pin and an update pass) used to read the same snapshot and the
+ * later write silently dropped the earlier change. Serialization is in-process
+ * only — the desktop main process is the sole writer of state.json.
+ */
+const stateQueues = new Map<string, Promise<unknown>>();
+export function withPluginStateLock<T>(home: string, task: () => Promise<T>): Promise<T> {
+  const key = statePath(home);
+  const next = (stateQueues.get(key) ?? Promise.resolve()).then(task);
+  const settled = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  stateQueues.set(key, settled);
+  void settled.then(() => {
+    if (stateQueues.get(key) === settled) stateQueues.delete(key);
+  });
+  return next;
 }
 
 export type StoreRefusal =
@@ -260,7 +282,15 @@ interface InstallRequest {
   pinned?: { sha256: string; size: number };
 }
 
-async function installArchive(
+function installArchive(
+  opts: PluginStoreOptions,
+  request: InstallRequest,
+  bytes: Buffer,
+): Promise<StoreResult<{ state: PluginsState; name: string; version: string; manifest: PluginManifest; capabilities: string[] }>> {
+  return withPluginStateLock(opts.home, () => installArchiveUnlocked(opts, request, bytes));
+}
+
+async function installArchiveUnlocked(
   opts: PluginStoreOptions,
   request: InstallRequest,
   bytes: Buffer,
@@ -413,7 +443,8 @@ export async function installFromIndex(
   };
 }
 
-function compareVersionsDesc(a: string, b: string): number {
+/** Shared version ordering (newest first) — the ONE sort every surface uses (Taskana 4732 xfix M3). */
+export function compareVersionsDesc(a: string, b: string): number {
   const pa = a.split(".").map(Number);
   const pb = b.split(".").map(Number);
   for (let i = 0; i < 3; i++) {
@@ -423,17 +454,30 @@ function compareVersionsDesc(a: string, b: string): number {
   return 0;
 }
 
-/** Installs from raw bytes (a picked .tgz file — path custody lives in ipc). */
+/**
+ * Installs from raw bytes (a picked .tgz file, or the bytes a URL preview
+ * already downloaded — path custody lives in ipc). `expectedSha256` (Taskana
+ * 4732 xfix H3) pins the EXACT previewed bytes: a mismatch refuses, so commit
+ * can never install content the user did not see on the sheet.
+ */
 export async function installFromBytes(
   opts: PluginStoreOptions,
   bytes: Buffer,
-  meta: { fileName: string; expectedName?: string },
+  meta: {
+    fileName: string;
+    expectedName?: string;
+    expectedSha256?: string;
+    source?: PluginStateEntry["source"];
+  },
 ): Promise<StoreResult<{ name: string; version: string; manifest: PluginManifest; capabilities: string[] }>> {
-  // No pin: validate + record the computed hash.
+  if (meta.expectedSha256 !== undefined && sha256Hex(bytes) !== meta.expectedSha256) {
+    return { ok: false, reason: "integrity", detail: "archive bytes differ from the previewed artifact" };
+  }
   return installArchive(opts, {
     expectedName: meta.expectedName ?? guessNameFromArchive(bytes) ?? "",
     trust: "third-party",
-    source: { kind: "file", fileName: meta.fileName },
+    source: meta.source ?? { kind: "file", fileName: meta.fileName },
+    ...(meta.expectedSha256 !== undefined ? { pinned: { sha256: meta.expectedSha256, size: bytes.length } } : {}),
   }, bytes);
 }
 
@@ -466,7 +510,14 @@ export async function installFromUrl(
  * Dev link (design §3 "local directory"): no copy — state records the
  * absolute path; discovery reads it in place. The manifest must validate.
  */
-export async function installLocalLink(
+export function installLocalLink(
+  opts: PluginStoreOptions,
+  path: string,
+): Promise<StoreResult<{ name: string; version: string; capabilities: string[] }>> {
+  return withPluginStateLock(opts.home, () => installLocalLinkUnlocked(opts, path));
+}
+
+async function installLocalLinkUnlocked(
   opts: PluginStoreOptions,
   path: string,
 ): Promise<StoreResult<{ name: string; version: string; capabilities: string[] }>> {
@@ -566,7 +617,11 @@ function loadManifestFromEntriesSync(entries: { path: string; type: "file" | "di
 // ── lifecycle: rollback / remove / pin / enable ──
 
 /** Rollback: swap active/previous, pin (design §5). */
-export async function rollbackPlugin(opts: PluginStoreOptions, name: string): Promise<StoreResult<PluginsState>> {
+export function rollbackPlugin(opts: PluginStoreOptions, name: string): Promise<StoreResult<PluginsState>> {
+  return withPluginStateLock(opts.home, () => rollbackPluginUnlocked(opts, name));
+}
+
+async function rollbackPluginUnlocked(opts: PluginStoreOptions, name: string): Promise<StoreResult<PluginsState>> {
   const { fs, home } = opts;
   const { state } = await readSanitizedState(fs, home);
   const entry = state.plugins[name];
@@ -594,7 +649,11 @@ export async function rollbackPlugin(opts: PluginStoreOptions, name: string): Pr
 }
 
 /** Remove: delete state entry (+ store dirs at next GC); tombstone defaults. */
-export async function removePlugin(opts: PluginStoreOptions, name: string, isDefault: boolean): Promise<StoreResult<PluginsState>> {
+export function removePlugin(opts: PluginStoreOptions, name: string, isDefault: boolean): Promise<StoreResult<PluginsState>> {
+  return withPluginStateLock(opts.home, () => removePluginUnlocked(opts, name, isDefault));
+}
+
+async function removePluginUnlocked(opts: PluginStoreOptions, name: string, isDefault: boolean): Promise<StoreResult<PluginsState>> {
   const { fs, home } = opts;
   const { state } = await readSanitizedState(fs, home);
   const entry = state.plugins[name];
@@ -619,7 +678,11 @@ export async function removePlugin(opts: PluginStoreOptions, name: string, isDef
 }
 
 /** Pin/unpin. */
-export async function setPinned(opts: PluginStoreOptions, name: string, pinned: boolean): Promise<StoreResult<PluginsState>> {
+export function setPinned(opts: PluginStoreOptions, name: string, pinned: boolean): Promise<StoreResult<PluginsState>> {
+  return withPluginStateLock(opts.home, () => setPinnedUnlocked(opts, name, pinned));
+}
+
+async function setPinnedUnlocked(opts: PluginStoreOptions, name: string, pinned: boolean): Promise<StoreResult<PluginsState>> {
   const { fs, home } = opts;
   const { state } = await readSanitizedState(fs, home);
   const entry = state.plugins[name];
@@ -639,7 +702,11 @@ export async function setPinned(opts: PluginStoreOptions, name: string, pinned: 
  * Enable/disable is USER-GLOBAL by name (state.json `disabled`), covering
  * managed, project and legacy plugins (design §3).
  */
-export async function setEnabled(opts: PluginStoreOptions, name: string, enabled: boolean): Promise<StoreResult<PluginsState>> {
+export function setEnabled(opts: PluginStoreOptions, name: string, enabled: boolean): Promise<StoreResult<PluginsState>> {
+  return withPluginStateLock(opts.home, () => setEnabledUnlocked(opts, name, enabled));
+}
+
+async function setEnabledUnlocked(opts: PluginStoreOptions, name: string, enabled: boolean): Promise<StoreResult<PluginsState>> {
   const { fs, home } = opts;
   const { state } = await readSanitizedState(fs, home);
   if (!enabled && !state.disabled.includes(name)) {
@@ -676,9 +743,15 @@ export function selectUpdate(
 ): UpdateCandidate | undefined {
   const entry = index.plugins.find((p) => p.name === current.name);
   if (entry === undefined || current.pinned) return undefined;
+  // Taskana 4732 xfix M3: SORT before picking — the index schema does not
+  // enforce version ordering, and `candidates[0]` on an ascending list
+  // picked the OLDEST compatible version (the IPC surface sorts; this
+  // sibling did not, so the scheduler could auto-install a lower version
+  // than the pane advertised).
   const candidates = entry.versions
     .filter((v) => v.engines?.anycode === undefined || rangeMatches(v.engines!.anycode, appVersion))
-    .filter((v) => compareVersionsDesc(v.version, current.active) < 0);
+    .filter((v) => compareVersionsDesc(v.version, current.active) < 0)
+    .sort((a, b) => compareVersionsDesc(a.version, b.version));
   const pick = candidates[0];
   if (pick === undefined) return undefined;
   return { name: current.name, version: pick.version, needsApproval: false };
@@ -730,7 +803,8 @@ export async function runUpdatePass(
 
   // Updates for installed official plugins.
   for (const [name, entry] of Object.entries(state.plugins)) {
-    if (entry.source.kind !== "official" || entry.pinned) continue;
+    // xfix L2: a user-disabled plugin is not auto-updated (burns no rollback slot).
+    if (entry.source.kind !== "official" || entry.pinned || state.disabled.includes(name)) continue;
     const candidate = selectUpdate(check.index, { name, active: entry.active, pinned: entry.pinned }, opts.appVersion);
     if (candidate === undefined) continue;
     const indexEntry = check.index.plugins.find((p) => p.name === name);
@@ -750,13 +824,17 @@ export async function runUpdatePass(
 
   // Remember the serial (anti-rollback floor).
   if (check.index.serial !== undefined) {
-    const { state: fresh } = await readSanitizedState(opts.fs, opts.home);
-    fresh.lastIndexSerial = check.index.serial;
-    try {
-      await writePluginState(opts.fs, statePath(opts.home), fresh);
-    } catch {
-      // advisory
-    }
+    const serial = check.index.serial;
+    await withPluginStateLock(opts.home, async () => {
+      const { state: fresh } = await readSanitizedState(opts.fs, opts.home);
+      if ((fresh.lastIndexSerial ?? -1) >= serial) return; // raise-only floor
+      fresh.lastIndexSerial = serial;
+      try {
+        await writePluginState(opts.fs, statePath(opts.home), fresh);
+      } catch {
+        // advisory
+      }
+    });
   }
   return { installed, needsApproval, status: check.status };
 }
@@ -842,17 +920,22 @@ export async function legacyMcpGrandfathering(
       }
     }
   }
-  if (entries.length > 0) {
-    await opts.writeMcpConsent(entries);
-  }
+  // Always write — even an empty list — so the migration is marked done. An
+  // absent mcpConsent would re-run the grandfathering on every boot and grant
+  // consent to any legacy dir hand-dropped later (a consent bypass).
+  await opts.writeMcpConsent(entries);
   return { granted, skipped: false };
 }
 
 // ── default archive fetch (production) ──
 
 /**
- * https-only artifact fetch with the redirect-host allowlist (design §4):
- * github.com / objects.githubusercontent.com / raw.githubusercontent.com.
+ * Taskana 4732 xfix M2: the artifact download is BOUNDED while streaming.
+ * The old implementation buffered the entire response (`arrayBuffer()`)
+ * before any size check — a malicious URL could push gigabytes into main
+ * memory (the 20 MB compressed cap only ran after the full download). Now:
+ *  - `content-length` (when present) over the cap refuses immediately;
+ *  - the body is read in chunks with a hard cumulative byte cap.
  */
 export function createArchiveFetch(fetchImpl: typeof fetch = fetch): PluginArchiveFetch {
   return async (url): Promise<ArchiveFetchResult> => {
@@ -869,7 +952,6 @@ export function createArchiveFetch(fetchImpl: typeof fetch = fetch): PluginArchi
       if (!response.ok) {
         return { ok: false, reason: "network" };
       }
-      const bytes = Buffer.from(await response.arrayBuffer());
       // Redirect custody: verify the FINAL url host against the allowlist
       // when the implementation reports one (undici does via response.url).
       const finalUrl = (response as Response & { url?: string }).url ?? url;
@@ -877,7 +959,12 @@ export function createArchiveFetch(fetchImpl: typeof fetch = fetch): PluginArchi
       if (host !== undefined && !OFFICIAL_ARTIFACT_REDIRECT_HOSTS.includes(host)) {
         return { ok: false, reason: "forbidden_redirect" };
       }
-      return { ok: true, bytes };
+      const declared = Number(response.headers.get("content-length") ?? "");
+      if (Number.isFinite(declared) && declared > PLUGIN_ARCHIVE_MAX_COMPRESSED_BYTES) {
+        return { ok: false, reason: "too_large" };
+      }
+      const bytes = await readCapped(response);
+      return bytes;
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         return { ok: false, reason: "network" };
@@ -887,6 +974,34 @@ export function createArchiveFetch(fetchImpl: typeof fetch = fetch): PluginArchi
       clearTimeout(timer);
     }
   };
+}
+
+/** Streams a response body into a Buffer, refusing over the compressed cap. */
+async function readCapped(response: Response): Promise<ArchiveFetchResult> {
+  if (response.body === null) {
+    // No stream surface (odd transports, tests): fall back to arrayBuffer,
+    // still bounded by the post-hoc length check below.
+    const buffered = Buffer.from(await response.arrayBuffer());
+    return buffered.length > PLUGIN_ARCHIVE_MAX_COMPRESSED_BYTES
+      ? { ok: false, reason: "too_large" }
+      : { ok: true, bytes: buffered };
+  }
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value !== undefined) {
+      total += value.byteLength;
+      if (total > PLUGIN_ARCHIVE_MAX_COMPRESSED_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return { ok: false, reason: "too_large" };
+      }
+      chunks.push(Buffer.from(value));
+    }
+  }
+  return { ok: true, bytes: Buffer.concat(chunks) };
 }
 
 function safeHost(url: string): string | undefined {

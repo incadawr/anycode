@@ -875,8 +875,8 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(PLUGINS_CHECK_UPDATES_CHANNEL) as Promise<PluginsSnapshot>,
     installPrepare: (source: PluginInstallSource): Promise<PluginInstallPrepareResult> =>
       ipcRenderer.invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source }) as Promise<PluginInstallPrepareResult>,
-    installCommit: (token: string, source: PluginInstallSource): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: string; detail?: string }> =>
-      ipcRenderer.invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token, source }),
+    installCommit: (token: string, source: PluginInstallSource, allowMcp?: boolean): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: string; detail?: string }> =>
+      ipcRenderer.invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token, source, allowMcp }),
     update: (name: string): Promise<PluginsMutationResult> =>
       ipcRenderer.invoke(PLUGINS_UPDATE_CHANNEL, { name }) as Promise<PluginsMutationResult>,
     rollback: (name: string): Promise<PluginsMutationResult> =>

@@ -31,6 +31,7 @@ import * as fsp from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import { discoverPlugins } from "@anycode/core/plugins";
+import { defaultPluginStatePath } from "@anycode/core/plugins-admin";
 import {
   applyMcpImport,
   deleteMcpServer,
@@ -130,6 +131,15 @@ export interface McpConfigIpcDeps {
   /** Resolves the active tab's workspace from main's own tab-meta fact (tab-ipc.ts) — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: McpConfigFs;
+  /**
+   * Taskana 4732 xfix H1: the plugin MCP consent list from settings.json
+   * `plugins.mcpConsent` (undefined keeps the honest-default `false` the pane
+   * rendered before; the Plugins pane remains the writer). Optional so the
+   * registration stays backward-compatible with existing test scaffolds.
+   */
+  readMcpConsent?(): Promise<
+    { plugin: string; serversHash: string; grantedAt: string }[] | undefined
+  >;
 }
 
 
@@ -406,8 +416,23 @@ async function collectPluginServers(
       workspace: workspace ?? home,
       home,
       claimedMcpNames: discoveryClaimed,
+      // Taskana 4732 xfix C1: without the state path the MANAGED store
+      // (state.json's .store/<name>/<active> + local dev links) contributed
+      // nothing here either — the MCP pane never listed an installed
+      // plugin's servers while the runtime (post-host-fix) starts them.
+      pluginStatePath: defaultPluginStatePath(home),
+      // H1: consent-gate the rows the same way the host runtime does, so the
+      // pane's "Needs approval" badge reflects the settings.json truth.
+      ...(deps.readMcpConsent !== undefined
+        ? { mcpConsent: (await deps.readMcpConsent()) ?? [] }
+        : {}),
     });
     problems.push(...discovery.problems);
+    // With the consent gate enabled (readMcpConsent wired) discovery admits a
+    // plugin's servers ONLY when a current grant matches their serversHash, so
+    // every row built here is a granted row. Non-consented servers are not
+    // listed (the Plugins pane shows "needs approval" for them).
+    const consentGateOn = deps.readMcpConsent !== undefined;
     const rows: McpPluginServerView[] = [];
     for (const spec of discovery.mcpServerSpecs) {
       // Runtime name is `plugin_<plugin>_<server>`; the owner plugin is the
@@ -423,9 +448,7 @@ async function collectPluginServers(
           spec.kind === "http"
             ? spec.url
             : [spec.command, ...spec.args].filter((part) => part !== "").join(" "),
-        // Stage 1 honest default: consent state is the Plugins pane's truth
-        // (settings mirror lands with S1-B); the row never blocks anything here.
-        consentGranted: false,
+        consentGranted: consentGateOn,
         shadowed: configClaimedNames.has(spec.name),
         pluginRoot: spec.kind === "stdio" ? spec.cwd ?? "" : "",
       });

@@ -308,6 +308,7 @@ import type {
   WorkspaceTransition,
 } from "@anycode/core";
 import { buildAgentProfileRoots } from "@anycode/core/subagents-admin";
+import { pluginsDiscoveryWiring } from "./plugin-wiring.js";
 import { hasDurableTransitionResult } from "./worktree-recovery.js";
 import {
   createSubagentBudgetPort,
@@ -3459,6 +3460,9 @@ async function boot(): Promise<void> {
       previewAvailable,
       anycodeSetupDocs: anycodeSetupDocsForHost(),
     });
+    // Taskana 4732 xfix H1(a): the settings block is re-read here (not only at
+    // module load) so a grandfathering write from this app run is visible.
+    refreshPluginsSettings();
     try {
       ext = await discoverExtensions(fsAdapter, {
         workspace,
@@ -3469,14 +3473,18 @@ async function boot(): Promise<void> {
         secrets: mcpSecrets,
         ...(builtinSkills.length > 0 ? { builtinSkills } : {}),
         // Taskana 4732 S1-B (design §7 host wiring): app version (the
-        // ANYCODE_APP_VERSION carrier main stamps from app.getVersion()) +
-        // the MCP consent list from settings `plugins.mcpConsent`. Both
-        // conditional so a bare boot (no env var, no settings block) keeps
-        // discovery byte-identical. 4736 interplay: projectTrusted above
-        // already gates project-tier plugin MCP; mcpConsent governs the
-        // user-tier (official/third-party/local/legacy) plugins only.
+        // ANYCODE_APP_VERSION carrier main stamps from app.getVersion()).
+        // 4736 interplay: projectTrusted above already gates project-tier
+        // plugin MCP; the consent list governs the user-tier plugins only.
         ...(hostAppVersion !== undefined ? { appVersion: hostAppVersion } : {}),
-        ...(pluginsSettings?.mcpConsent !== undefined ? { mcpConsent: pluginsSettings.mcpConsent } : {}),
+        // Managed store state path, consent list (deny-until-granted), and the
+        // reserved builtin names — see host/plugin-wiring.ts (C1, C2, H1(a)).
+        ...pluginsDiscoveryWiring({
+          home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
+          pluginsSettings,
+          builtinSkillNames: builtinSkills.map((skill) => skill.name),
+          builtinPersonaNames: Object.keys(PERSONAS),
+        }),
       });
     } catch (error) {
       console.error(`[host] extensions discovery failed; continuing with zero skills/agent profiles/plugins: ${describeError(error)}`);

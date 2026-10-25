@@ -197,6 +197,10 @@ function stripSingleTopDir(members: ArchiveEntry[]): ArchiveEntry[] {
 /**
  * Full pipeline: cap the compressed bytes → gunzip → parse tar → strip an
  * optional single top-level dir → verify the manifest member exists.
+ *
+ * Taskana 4732 xfix M2: decompression is bounded DURING expansion (see
+ * gunzipCapped) — the uncompressed cap is enforced by zlib, not after a full
+ * materialization.
  */
 export function extractTgz(
   compressed: Buffer,
@@ -205,15 +209,11 @@ export function extractTgz(
   if (compressed.length > PLUGIN_ARCHIVE_MAX_COMPRESSED_BYTES) {
     return { ok: false, refusal: "too_large", detail: `compressed archive is ${compressed.length} bytes (cap ${PLUGIN_ARCHIVE_MAX_COMPRESSED_BYTES})` };
   }
-  let decompressed: Buffer;
-  try {
-    decompressed = gunzipSync(compressed);
-  } catch (error) {
-    return { ok: false, refusal: "invalid", detail: `not a gzip stream: ${error instanceof Error ? error.message : String(error)}` };
+  const gunzipped = gunzipCapped(compressed);
+  if (!gunzipped.ok) {
+    return { ok: false, refusal: gunzipped.refusal, detail: gunzipped.detail };
   }
-  if (decompressed.length > PLUGIN_ARCHIVE_MAX_UNCOMPRESSED_BYTES) {
-    return { ok: false, refusal: "too_large", detail: `uncompressed archive is ${decompressed.length} bytes (cap ${PLUGIN_ARCHIVE_MAX_UNCOMPRESSED_BYTES})` };
-  }
+  const decompressed = gunzipped.bytes;
   const parsed = parseTar(decompressed);
   if (!parsed.ok) {
     return parsed;
@@ -226,6 +226,28 @@ export function extractTgz(
     return { ok: false, refusal: "invalid", detail: `archive does not carry ${MANIFEST_PATH}` };
   }
   return { ok: true, entries };
+}
+
+/**
+ * Bounded gunzip (Taskana 4732 xfix M2). `maxOutputLength` makes zlib abort
+ * the inflate as soon as the output crosses the uncompressed cap, so a
+ * decompression bomb (zeros compress ~1000x: a 20 MB compressed cap admitted
+ * ~20 GB of attempted expansion) never materializes. Node raises
+ * ERR_BUFFER_TOO_LARGE for that case, which maps to "too_large".
+ */
+function gunzipCapped(compressed: Buffer): { ok: true; bytes: Buffer } | { ok: false; refusal: "too_large" | "invalid"; detail: string } {
+  try {
+    return { ok: true, bytes: gunzipSync(compressed, { maxOutputLength: PLUGIN_ARCHIVE_MAX_UNCOMPRESSED_BYTES }) };
+  } catch (error) {
+    if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") {
+      return {
+        ok: false,
+        refusal: "too_large",
+        detail: `uncompressed archive exceeds ${PLUGIN_ARCHIVE_MAX_UNCOMPRESSED_BYTES} bytes`,
+      };
+    }
+    return { ok: false, refusal: "invalid", detail: `not a gzip stream: ${error instanceof Error ? error.message : String(error)}` };
+  }
 }
 
 // ── test/authoring helper: build a ustar tarball in memory ──
