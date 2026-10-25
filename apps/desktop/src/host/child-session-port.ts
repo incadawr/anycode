@@ -836,6 +836,15 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 // wall that does not exist. Small budgets (< 5) are skipped
                 // too: the 10%-min-1 margin leaves no room between "warned"
                 // and "stopped" for the parent to act on.
+                //
+                // F5 (Slice B, known limit): `event.turns` is CUMULATIVE
+                // across steer continuations (a follow-up send to a live
+                // child keeps counting on the same tally), while the cap the
+                // child enforces is PER runTurn — the argv-stamped
+                // --child-max-turns budget resets on every turn boundary. A
+                // child steered many times can therefore warn (or even
+                // terminal at max_turns) on a count that no single turn
+                // approached; honest until the wire carries a per-turn count.
                 if (
                   !turnBudgetNotified &&
                   req.engine !== "codex" &&
