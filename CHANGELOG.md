@@ -27,6 +27,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   hash of the servers so any command change needs fresh approval. Existing
   hand-dropped plugins and older manifests keep working unchanged; a boot
   with no plugins is byte-identical.
+- Publishing a release now announces it in the Telegram channel — version,
+  release notes, and link — when the repo secrets `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_CHAT_ID` are configured; otherwise the announcement step is
+  skipped without failing the release.
 
 ### Fixed
 
