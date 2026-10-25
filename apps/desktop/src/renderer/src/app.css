@@ -302,6 +302,9 @@ body {
    WebContentsView paints over the body's screen rect main-side (D9) — this
    file only ever draws the chrome AROUND the preview, never its content. */
 .preview-panel {
+  /* Fills .dock-body (a column flex): without it the panel sizes to its
+     content, and the absolute-positioned body collapses to 0 height. */
+  flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
