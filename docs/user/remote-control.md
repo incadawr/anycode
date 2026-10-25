@@ -20,5 +20,6 @@ Short version of what you will see in Settings → Plugins:
 | `no_sessions_api` | The Sessions API is off; the bridge answers with a hint. |
 | `Missing secret: NAME` | A secret the service reads is not set yet. |
 
-Only your own private chat reaches a session. Permission prompts, diffs and `/stop`
-are not available from Telegram yet.
+Only your own private chat reaches a session. `/stop` stops the selected session's
+running turn. Approvals reach Telegram as Allow and Deny buttons, but only for a
+session whose **External approvals** switch you turned on in AnyCode.

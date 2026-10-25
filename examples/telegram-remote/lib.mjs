@@ -38,7 +38,7 @@ export function clampMaxReply(raw) {
   return Math.min(60000, Math.max(1000, value));
 }
 
-const KNOWN_COMMANDS = new Set(["start", "help", "sessions", "use", "steer", "status"]);
+const KNOWN_COMMANDS = new Set(["start", "help", "sessions", "use", "steer", "status", "stop", "approvals"]);
 
 /**
  * Splits an incoming text into a plain message or a command. Commands are
@@ -226,6 +226,8 @@ export const HELP_TEXT = [
   "/sessions — list shared sessions",
   "/use <name|id|number> — choose a session",
   "/steer <text> — add to the running turn (Codex only)",
+  "/stop — stop the running turn of the selected session",
+  "/approvals — list the approvals waiting in the selected session",
   "/status — session and bridge status",
   "/help — this list",
   "Any other text starts a new turn in the selected session.",
@@ -233,3 +235,68 @@ export const HELP_TEXT = [
 
 export const API_OFF_TEXT = "AnyCode Sessions API is off. Enable it in Settings -> Sessions API.";
 export const UNREACHABLE_TEXT = "AnyCode is not reachable right now.";
+
+// ── approvals (Taskana 4763) ──
+
+/** Approval tokens kept in state.json (oldest dropped) and their lifetime. */
+export const APPROVAL_TOKEN_MAX = 50;
+export const APPROVAL_TTL_MS = 2 * 60 * 60 * 1000;
+/** The Sessions API's fixed text when a session's External approvals switch is off. */
+export const APPROVAL_OFF_SERVER_TEXT = "External approval is off for this session";
+export const APPROVAL_OFF_TEXT = "External approvals are off for this session; approve in AnyCode or switch them on in the session menu.";
+export const APPROVAL_EXPIRED_TEXT = "This request expired or was already settled.";
+export const APPROVAL_OFF_TAP_TEXT = "External approvals are off for this session. Switch them on in AnyCode (session menu) first.";
+
+/** The one line shown for an approval. Not answerable asks say so and carry no buttons. */
+export function renderApproval(approval, label) {
+  const suffix = approval.answerable === false ? " — answer this in AnyCode" : "";
+  return `Approval needed [${label}]: ${approval.tool} — ${approval.description}${suffix}`;
+}
+
+/** Allow and Deny only. callback_data carries a short local token, never a session or approval id. */
+export function buildApprovalKeyboard(token) {
+  return { inline_keyboard: [[{ text: "Allow", callback_data: `a:${token}:y` }, { text: "Deny", callback_data: `a:${token}:n` }]] };
+}
+
+/** A bridge-local token: base36 of a counter, at most 8 characters. */
+export function nextApprovalToken(sequence) {
+  return (sequence % 36 ** 8).toString(36);
+}
+
+const CALLBACK_PATTERN = /^a:([0-9a-z]{1,8}):([yn])$/;
+
+/** `{token, decision}` for our own callback data, else null. Anything else is dropped by the caller. */
+export function parseCallbackData(data) {
+  const match = CALLBACK_PATTERN.exec(String(data ?? ""));
+  if (!match) return null;
+  return { token: match[1], decision: match[2] === "y" ? "allow" : "deny" };
+}
+
+/** The reply shown under an approval message after a tap (or a refusal). */
+export function approvalAnswerText(status, decision, settledBy) {
+  switch (status) {
+    case "answered": return decision === "allow" ? "Allowed." : "Denied.";
+    case "already_answered": return settledBy === "ui" ? "Already answered (in AnyCode)." : "Already answered.";
+    case "not_found": return APPROVAL_EXPIRED_TEXT;
+    case "not_answerable": return "This request must be answered in AnyCode.";
+    default: return "The answer could not be sent.";
+  }
+}
+
+/**
+ * A callback is accepted only from a private chat whose sender is the same
+ * allowlisted user (the chat id equals the sender id). Everything else is dropped.
+ */
+export function screenCallback(update, allowlist) {
+  if (!update || typeof update !== "object") return { drop: "invalid" };
+  const callback = update.callback_query;
+  if (!callback || typeof callback !== "object") return { drop: "not_callback" };
+  const from = callback.from;
+  const chat = callback.message?.chat;
+  if (!from || typeof from !== "object" || !chat || typeof chat !== "object") return { drop: "invalid" };
+  if (from.is_bot === true) return { drop: "bot" };
+  if (chat.type !== "private" || chat.id !== from.id) return { drop: "not_private" };
+  if (!isAllowed(allowlist, from.id)) return { drop: "not_allowlisted", senderId: from.id };
+  return { callback };
+}
+

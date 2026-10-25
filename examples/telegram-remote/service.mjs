@@ -18,7 +18,19 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   API_OFF_TEXT,
+  APPROVAL_EXPIRED_TEXT,
+  APPROVAL_OFF_SERVER_TEXT,
+  APPROVAL_OFF_TAP_TEXT,
+  APPROVAL_OFF_TEXT,
+  APPROVAL_TOKEN_MAX,
+  APPROVAL_TTL_MS,
   HELP_TEXT,
+  approvalAnswerText,
+  buildApprovalKeyboard,
+  nextApprovalToken,
+  parseCallbackData,
+  renderApproval,
+  screenCallback,
   SESSION_PAYLOAD_MAX,
   TELEGRAM_CHUNK_LIMIT,
   UNREACHABLE_TEXT,
@@ -47,6 +59,8 @@ const NUMBERED_TTL_MS = 10 * 60 * 1000;
 const HEARTBEAT_MS = 10 * 60 * 1000;
 const UNKNOWN_LOG_MS = 60 * 1000;
 const RESULT_RETRY_MAX = 3;
+const APPROVAL_POLL_MS = 3000;
+const APPROVAL_OFF_NOTICE_MS = 10 * 60 * 1000;
 
 class TgError extends Error {
   constructor(cls, status) {
@@ -95,7 +109,7 @@ export function validApiBase(base) {
 }
 
 function emptyState() {
-  return { offset: undefined, lastUpdateId: 0, chats: {}, pending: [] };
+  return { offset: undefined, lastUpdateId: 0, chats: {}, pending: [], approvals: [], tokenSeq: 0 };
 }
 
 /** Tolerant load: anything unreadable or malformed becomes defaults. Pending turns older than 2 h are dropped. */
@@ -117,7 +131,15 @@ export function sanitizeState(raw, now) {
         .map((p) => ({ chatId: p.chatId, sessionId: p.sessionId, messageId: p.messageId, startedAt: p.startedAt, label: typeof p.label === "string" ? p.label : p.sessionId.slice(0, 8) }))
         .slice(0, PENDING_MAX)
     : [];
-  return { offset, lastUpdateId, chats, pending };
+  // Approval tokens: a tap maps back to {chatId, sessionId, approvalId} only through this list.
+  const approvals = Array.isArray(raw.approvals)
+    ? raw.approvals
+        .filter((a) => a && typeof a === "object" && typeof a.token === "string" && typeof a.chatId === "number" && typeof a.sessionId === "string" && typeof a.approvalId === "string" && Number.isFinite(a.at) && now - a.at <= APPROVAL_TTL_MS)
+        .map((a) => ({ token: a.token, chatId: a.chatId, sessionId: a.sessionId, approvalId: a.approvalId, text: typeof a.text === "string" ? a.text : "", at: a.at, ...(Number.isSafeInteger(a.messageId) ? { messageId: a.messageId } : {}) }))
+        .slice(-APPROVAL_TOKEN_MAX)
+    : [];
+  const tokenSeq = Number.isSafeInteger(raw.tokenSeq) && raw.tokenSeq >= 0 ? raw.tokenSeq : 0;
+  return { offset, lastUpdateId, chats, pending, approvals, tokenSeq };
 }
 
 /** The default state store: a 0700 directory and 0600 files, written atomically. */
@@ -346,6 +368,26 @@ export function createBridge(options = {}) {
     return "dropped";
   }
 
+  /** Runs a task after the chat's queued replies, so approval messages and answers keep their order. */
+  function inChat(chatId, task) {
+    const previous = chainByChat.get(chatId) ?? Promise.resolve();
+    const next = previous.then(task);
+    chainByChat.set(chatId, next.catch(() => {}));
+    return next;
+  }
+
+  /** Sends one message (paced like reply) and returns its Telegram message_id. */
+  async function sendWithId(chatId, text, markup) {
+    const wait = (lastSentByChat.get(chatId) ?? -Infinity) + pacingMs - now();
+    if (wait > 0) await pause(wait);
+    if (stopped) throw new StopError("stopped");
+    const body = { chat_id: chatId, text: redact(text, secrets()) };
+    if (markup !== undefined) body.reply_markup = markup;
+    const result = await tg("sendMessage", body, 30_000);
+    lastSentByChat.set(chatId, now());
+    return Number.isSafeInteger(result?.message_id) ? result.message_id : undefined;
+  }
+
   // ── pending turns and result waiters ──
 
   const pendingFor = (chatId) => state.pending.filter((entry) => entry.chatId === chatId);
@@ -418,7 +460,11 @@ export function createBridge(options = {}) {
         continue;
       }
       if (result.status === "pending") continue;
-      if (result.status === "done") {
+      if (result.status === "done" && result.latestResult?.terminalReason === "cancelled") {
+        const partial = result.latestResult?.publicAnswer;
+        const tail = typeof partial === "string" && partial.trim() !== "" ? `\n${partial}` : "";
+        await reply(entry.chatId, `[${entry.label}] Stopped.${tail}`);
+      } else if (result.status === "done") {
         const answer = result.latestResult?.publicAnswer;
         await reply(entry.chatId, `[${entry.label}] ${typeof answer === "string" && answer.trim() !== "" ? answer : "(empty answer)"}`);
       } else if (result.status === "rejected") {
@@ -524,6 +570,28 @@ export function createBridge(options = {}) {
       await reply(chatId, lines.join("\n"));
       return;
     }
+    if (name === "stop") {
+      if (!state.chats[String(chatId)]) {
+        await reply(chatId, "No session selected. Send /sessions, then /use <name>.");
+        return;
+      }
+      const session = await revalidate(chatId);
+      if (!session) return;
+      const result = await api("cancel_turn", { sessionId: session.sessionId });
+      if (result?.cancelled === true) await reply(chatId, "Stopped.");
+      else if (result?.reason === "idle") await reply(chatId, "Nothing is running.");
+      else await reply(chatId, `Cannot stop right now (${result?.reason ?? "unknown"}).`);
+      return;
+    }
+    if (name === "approvals") {
+      const chat = state.chats[String(chatId)];
+      if (!chat) {
+        await reply(chatId, "No session selected. Send /sessions, then /use <name>.");
+        return;
+      }
+      await sweepChat(chatId, chat.sessionId, { listAll: true });
+      return;
+    }
     if (name === "sessions") {
       const list = await sessionsNow();
       numbered.set(chatId, { at: now(), ids: list.map((session) => session.sessionId) });
@@ -581,6 +649,128 @@ export function createBridge(options = {}) {
     return true;
   }
 
+  // ── approvals (Taskana 4763) ──
+
+  async function dropApproval(token) {
+    const before = state.approvals.length;
+    state.approvals = state.approvals.filter((entry) => entry.token !== token);
+    if (state.approvals.length !== before) await persist();
+  }
+
+  /** Removes the buttons of a message whose approval is gone. Best effort. */
+  async function clearButtons(entry) {
+    if (entry.messageId === undefined) return;
+    await inChat(entry.chatId, () => tg("editMessageReplyMarkup", { chat_id: entry.chatId, message_id: entry.messageId, reply_markup: { inline_keyboard: [] } }, 30_000)).catch(() => {});
+  }
+
+  async function offNotice(chatId, sessionId) {
+    const key = `approvals-off:${sessionId}`;
+    const at = now();
+    if (at - (lastNoticeAt.get(key) ?? -Infinity) < APPROVAL_OFF_NOTICE_MS) return;
+    lastNoticeAt.set(key, at);
+    await reply(chatId, APPROVAL_OFF_TEXT);
+  }
+
+  async function notifyApproval(chatId, sessionId, item, label) {
+    state.tokenSeq += 1;
+    const token = nextApprovalToken(state.tokenSeq);
+    const text = renderApproval(item, label);
+    const entry = { token, chatId, sessionId, approvalId: String(item.approvalId), text, at: now() };
+    state.approvals = [...state.approvals, entry].slice(-APPROVAL_TOKEN_MAX);
+    await persist();
+    const markup = item.answerable === false ? undefined : buildApprovalKeyboard(token);
+    const messageId = await inChat(chatId, () => sendWithId(chatId, text, markup)).catch(() => undefined);
+    if (messageId !== undefined) {
+      entry.messageId = messageId;
+      await persist();
+    }
+  }
+
+  /**
+   * One look at a selected session's pending approvals: notifies new ones, drops
+   * the buttons of ones that are gone. `listAll` (for /approvals) re-sends every
+   * current item with its buttons.
+   */
+  async function sweepChat(chatId, sessionId, { listAll = false } = {}) {
+    let items;
+    try {
+      const page = await api("list_pending_approvals", { sessionId });
+      items = Array.isArray(page?.approvals) ? page.approvals : [];
+    } catch (error) {
+      if (error instanceof ToolError && error.message === APPROVAL_OFF_SERVER_TEXT) {
+        await offNotice(chatId, sessionId);
+      } else if (listAll && error instanceof ToolError) {
+        await reply(chatId, `AnyCode: ${error.message}`);
+      }
+      return;
+    }
+    const listed = new Set(items.map((item) => String(item.approvalId)));
+    for (const entry of state.approvals.filter((e) => e.sessionId === sessionId && e.chatId === chatId && !listed.has(e.approvalId))) {
+      await clearButtons(entry);
+      await dropApproval(entry.token);
+    }
+    const label = labelOfSelection(chatId) ?? sessionId.slice(0, 8);
+    if (listAll && items.length === 0) await reply(chatId, "No approvals waiting.");
+    for (const item of items) {
+      const known = state.approvals.some((e) => e.sessionId === sessionId && e.approvalId === String(item.approvalId));
+      if (known && !listAll) continue;
+      await notifyApproval(chatId, sessionId, item, label);
+    }
+  }
+
+  /** Every chat with a selected session and a pending turn, once. */
+  async function sweepApprovals() {
+    for (const [key, chat] of Object.entries(state.chats)) {
+      const chatId = Number(key);
+      if (pendingFor(chatId).length === 0) continue;
+      if (stopped) return;
+      await sweepChat(chatId, chat.sessionId).catch(() => {});
+    }
+  }
+
+  async function approvalLoop() {
+    while (!stopped) {
+      await sweepApprovals().catch((error) => log(`[err] approvals: ${error instanceof Error ? error.message : String(error)}`));
+      await pause(APPROVAL_POLL_MS);
+    }
+  }
+
+  /** A tap on Allow/Deny. Only our own tokens from the same private chat are acted on. */
+  async function dispatchCallback(update) {
+    const screened = screenCallback(update, cfg.allowlist);
+    if (screened.drop !== undefined) {
+      if (screened.drop === "not_allowlisted") logUnknown(screened.senderId);
+      return;
+    }
+    const callback = screened.callback;
+    const parsed = parseCallbackData(callback.data);
+    if (parsed === null) return;
+    const chatId = callback.message.chat.id;
+    const entry = state.approvals.find((candidate) => candidate.token === parsed.token);
+    if (!entry) {
+      await tg("answerCallbackQuery", { callback_query_id: callback.id, text: APPROVAL_EXPIRED_TEXT }, 30_000).catch(() => {});
+      return;
+    }
+    if (entry.chatId !== chatId) return;
+    await tg("answerCallbackQuery", { callback_query_id: callback.id }, 30_000).catch(() => {});
+    let text;
+    try {
+      const answer = await api("answer_approval", { sessionId: entry.sessionId, approvalId: entry.approvalId, decision: parsed.decision });
+      text = approvalAnswerText(answer?.status, parsed.decision, answer?.settledBy);
+    } catch (error) {
+      if (error instanceof ToolError && error.message === APPROVAL_OFF_SERVER_TEXT) {
+        await reply(chatId, APPROVAL_OFF_TAP_TEXT);
+        return;
+      }
+      if (error instanceof StopError) throw error;
+      text = approvalAnswerText("error", parsed.decision);
+    }
+    if (entry.messageId !== undefined) {
+      await inChat(chatId, () => tg("editMessageText", { chat_id: chatId, message_id: entry.messageId, text: redact(`${entry.text}\n\n${text}`, secrets()) }, 30_000)).catch(() => {});
+    }
+    await dropApproval(entry.token);
+  }
+
   async function dispatch(update) {
     const screened = screenUpdate(update, cfg.allowlist);
     if (screened.drop !== undefined) {
@@ -634,7 +824,7 @@ export function createBridge(options = {}) {
     while (!stopped) {
       let updates;
       try {
-        updates = await tg("getUpdates", { offset: state.offset, timeout: pollTimeoutSec, allowed_updates: ["message"] }, (pollTimeoutSec + 15) * 1000);
+        updates = await tg("getUpdates", { offset: state.offset, timeout: pollTimeoutSec, allowed_updates: ["message", "callback_query"] }, (pollTimeoutSec + 15) * 1000);
       } catch (error) {
         if (stopped || error instanceof StopError) return;
         if (error instanceof TgError) {
@@ -676,7 +866,8 @@ export function createBridge(options = {}) {
         if (typeof update?.update_id !== "number") continue;
         if (update.update_id > state.lastUpdateId) {
           try {
-            await dispatch(update);
+            if (update.callback_query !== undefined) await dispatchCallback(update);
+            else await dispatch(update);
           } catch (error) {
             log(`[err] dispatch failed: ${error instanceof Error ? error.message : String(error)}`);
           }
@@ -706,6 +897,8 @@ export function createBridge(options = {}) {
     }
     setStatus("starting");
     for (const entry of [...state.pending]) startWaiter(entry);
+    // The 3 s approval poll is switched on by main() only; tests drive sweepApprovals() directly.
+    if (options.approvalLoop === true) void approvalLoop();
     await pollLoop();
     if (!stopped) return idleForever();
     return stoppedPromise;
@@ -721,13 +914,13 @@ export function createBridge(options = {}) {
     await persist().catch(() => {});
   }
 
-  return { run, stop, status: () => status, state: () => state };
+  return { run, stop, status: () => status, state: () => state, sweepApprovals };
 }
 
 /** Process entry: runs the bridge and keeps the process alive while idle. */
 export async function main() {
   const log = (line) => console.log(line);
-  const bridge = createBridge({ log });
+  const bridge = createBridge({ log, approvalLoop: true });
   const shutdown = () => {
     const timer = setTimeout(() => process.exit(0), 2000);
     timer.unref();

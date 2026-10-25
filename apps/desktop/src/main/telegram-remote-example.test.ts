@@ -117,6 +117,7 @@ interface Harness {
   run: Promise<void> | undefined;
   apiCalls: { count: number };
   send: { state: string; detail: string };
+  approvals: { on: Set<string>; items: any[]; answer: (payload: any) => unknown; cancel: () => unknown };
   close(): Promise<void>;
 }
 
@@ -151,6 +152,13 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
   const sleeps: number[] = [];
   const apiCalls = { count: 0 };
   const send = { state: "acknowledged", detail: "transport accepted" };
+  const approvalsOn = new Set<string>(["_none_"]);
+  const approvals = {
+    on: approvalsOn,
+    items: [] as any[],
+    answer: (_payload: any): unknown => ({ result: "answered" }),
+    cancel: (): unknown => ({ cancelled: true, turnId: "turn-1" }),
+  };
   const manager = {
     listTabs: () => tabs.map((tab) => ({ sessionId: tab.id, workspace: tab.ws, state: "idle", pid: 1 })),
     communicationRequest: vi.fn(async (sid: string, op: string, payload: any) => {
@@ -161,6 +169,9 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
         return scripted ? scripted() : { state: "running" };
       }
       if (op === "get_session_status") return { engine: "codex", running: false };
+      if (op === "list_pending_approvals") return approvals.items.map((item) => ({ ...item }));
+      if (op === "answer_approval") return approvals.answer(payload);
+      if (op === "cancel_turn") return approvals.cancel();
       return undefined;
     }),
   };
@@ -169,6 +180,7 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
     userData: dir,
     config: { workspaces: [], port: 0, discoveryFile },
     isSessionExposed: (sid: string) => exposed.has(sid),
+    isExternalApprovalEnabled: (sid: string) => approvalsOn.has(sid),
     handleOf: (sid: string) => handles[sid],
     pollMs: 10,
   } as any);
@@ -184,6 +196,7 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
   };
   const lib = await loadExample("service.mjs");
   const bridge = lib.createBridge({
+    approvalLoop: false,
     env: Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined)),
     now: () => tg.clock.t,
     sleep: (ms: number) => {
@@ -219,6 +232,7 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
     run: undefined,
     apiCalls,
     send,
+    approvals,
     close: async () => {
       await bridge.stop();
     },
@@ -853,3 +867,207 @@ const children: ChildProcess[] = [];
 afterEach(() => {
   for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
 });
+
+// ── approvals and /stop (Taskana 4763) ──
+
+const OFF_TEXT = "External approvals are off for this session; approve in AnyCode or switch them on in the session menu.";
+const sendsOf = (h: Harness) => h.tg.requests.filter((r) => r.method === "sendMessage");
+const approvalSends = (h: Harness) => sendsOf(h).filter((r) => String(r.body.text).startsWith("Approval needed"));
+const requestsOf = (h: Harness, method: string) => h.tg.requests.filter((r) => r.method === method);
+const tap = (updateId: number, data: string, from: number = USER, chat: Record<string, unknown> = { id: USER, type: "private" }) =>
+  ({ update_id: updateId, callback_query: { id: `cb-${updateId}`, from: { id: from, is_bot: false }, data, message: { message_id: 1, chat } } });
+const item = (approvalId: string, extra: Record<string, unknown> = {}) => ({ approvalId, tool: "Bash", description: "npm test", presented: true, expiresInMs: 100000, answerable: true, ...extra });
+
+/** Selects the build session by handle and sends one turn, so the chat has a pending turn to watch. */
+async function selectAndSend(h: Harness): Promise<void> {
+  h.tg.push(msg(100, "/use build-bot"));
+  await waitFor(() => h.bridge.state().lastUpdateId === 100);
+  h.tg.push(msg(101, "run the tests"));
+  await waitFor(() => h.bridge.state().pending.length === 1);
+}
+
+async function restartBridge(h: Harness): Promise<any> {
+  const lib = await loadExample("service.mjs");
+  const bridge = lib.createBridge({
+    approvalLoop: false,
+    env: { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_ALLOWED_USERS: String(USER), TELEGRAM_API_BASE: h.tg.url, TELEGRAM_REMOTE_STATE_DIR: h.stateDir, ANYCODE_SESSIONS_DISCOVERY: h.discoveryFile },
+    now: () => h.tg.clock.t,
+    sleep: (ms: number) => { h.tg.clock.t += ms; return Promise.resolve(); },
+    random: () => 0.5,
+    paceMs: 0,
+    pollTimeoutSec: 1,
+    waitSliceMs: 30,
+    log: (line: string) => h.lines.push(line),
+  });
+  cleanups.push(() => bridge.stop());
+  void bridge.run();
+  // run() loads state.json first; the selected chat only shows up once that load has landed.
+  await waitFor(() => bridge.state().chats[String(USER)] !== undefined);
+  return bridge;
+}
+
+describe("telegram-remote approvals and /stop (Taskana 4763)", () => {
+  it("T33 /stop calls cancel_turn once and replies Stopped.; idle -> Nothing is running.; no selection -> hint", async () => {
+    const h = await harness();
+    h.tg.push(msg(1, "/stop"));
+    await waitFor(() => h.bridge.state().lastUpdateId === 1);
+    expect(texts(h)).toContain("No session selected. Send /sessions, then /use <name>.");
+    expect(apiCallsOf(h, "cancel_turn")).toHaveLength(0);
+    h.tg.push(msg(2, "/use build-bot"));
+    h.tg.push(msg(3, "/stop"));
+    await waitFor(() => texts(h).includes("Stopped."));
+    expect(apiCallsOf(h, "cancel_turn")).toEqual([expect.objectContaining({ sid: SID_BUILD })]);
+    h.approvals.cancel = () => ({ cancelled: false, reason: "idle" });
+    h.tg.push(msg(4, "/stop"));
+    await waitFor(() => texts(h).includes("Nothing is running."));
+  });
+
+  it("T34 a pending approval produces exactly one message with Allow/Deny; a second sweep does not duplicate it; a restart does not re-send it", async () => {
+    const h = await harness();
+    h.approvals.on.add(SID_BUILD);
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-1")];
+    await h.bridge.sweepApprovals();
+    await h.bridge.sweepApprovals();
+    expect(approvalSends(h)).toHaveLength(1);
+    const sent = approvalSends(h)[0]!;
+    expect(sent.body.text).toBe("Approval needed [build-bot]: Bash — npm test");
+    expect(sent.body.reply_markup.inline_keyboard[0]).toHaveLength(2);
+    await h.close();
+    const restarted = await restartBridge(h);
+    expect(restarted.state().approvals).toHaveLength(1);
+    await restarted.sweepApprovals();
+    expect(approvalSends(h)).toHaveLength(1);
+    await restarted.stop();
+  });
+
+  it("T35 Allow tap calls answer_approval allow once, edits the message to Allowed., removes the keyboard and answers the callback", async () => {
+    const h = await harness();
+    h.approvals.on.add(SID_BUILD);
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-1")];
+    await h.bridge.sweepApprovals();
+    const data = approvalSends(h)[0]!.body.reply_markup.inline_keyboard[0][0].callback_data as string;
+    expect(data).toMatch(/^a:[0-9a-z]{1,8}:y$/);
+    h.tg.push(tap(200, data));
+    await waitFor(() => requestsOf(h, "editMessageText").length === 1);
+    expect(apiCallsOf(h, "answer_approval")).toEqual([expect.objectContaining({ sid: SID_BUILD, payload: { approvalId: "ap-1", decision: "allow" } })]);
+    const edit = requestsOf(h, "editMessageText")[0]!;
+    expect(edit.body.text).toMatch(/Allowed\.$/);
+    expect(edit.body).not.toHaveProperty("reply_markup");
+    expect(requestsOf(h, "answerCallbackQuery")).toHaveLength(1);
+  });
+
+  it("T36 Deny tap calls answer_approval deny and says Denied.", async () => {
+    const h = await harness();
+    h.approvals.on.add(SID_BUILD);
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-2")];
+    await h.bridge.sweepApprovals();
+    const data = approvalSends(h)[0]!.body.reply_markup.inline_keyboard[0][1].callback_data as string;
+    expect(data.endsWith(":n")).toBe(true);
+    h.tg.push(tap(201, data));
+    await waitFor(() => requestsOf(h, "editMessageText").length === 1);
+    expect(apiCallsOf(h, "answer_approval")[0]!.payload).toEqual({ approvalId: "ap-2", decision: "deny" });
+    expect(requestsOf(h, "editMessageText")[0]!.body.text).toMatch(/Denied\.$/);
+  });
+
+  it("T37 a callback from a non-allowlisted user, from a group, or with chat.id !== from.id causes no API call and no reply; the offset advances", async () => {
+    const h = await harness();
+    h.approvals.on.add(SID_BUILD);
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-3")];
+    await h.bridge.sweepApprovals();
+    const data = approvalSends(h)[0]!.body.reply_markup.inline_keyboard[0][0].callback_data as string;
+    const before = { sent: h.tg.sent.length, answers: requestsOf(h, "answerCallbackQuery").length };
+    h.tg.push(tap(300, data, 999, { id: 999, type: "private" }));
+    h.tg.push(tap(301, data, USER, { id: -100, type: "group" }));
+    h.tg.push(tap(302, data, USER, { id: 777, type: "private" }));
+    await waitFor(() => h.bridge.state().offset === 303);
+    expect(requestsOf(h, "answerCallbackQuery")).toHaveLength(before.answers);
+    expect(requestsOf(h, "editMessageText")).toHaveLength(0);
+    expect(apiCallsOf(h, "answer_approval")).toHaveLength(0);
+    expect(h.tg.sent.length).toBe(before.sent);
+    const persisted = JSON.parse(await readFile(join(h.stateDir, "state.json"), "utf8"));
+    expect(persisted.offset).toBe(303);
+  });
+
+  it("T38 forged or foreign callback data makes zero Sessions API answer calls", async () => {
+    const h = await harness();
+    h.approvals.on.add(SID_BUILD);
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-4")];
+    await h.bridge.sweepApprovals();
+    h.tg.push(tap(400, "a:zzzz:y"));
+    h.tg.push(tap(401, "x"));
+    h.tg.push(tap(402, `a:${"b".repeat(70)}:y`));
+    await waitFor(() => h.bridge.state().lastUpdateId === 402);
+    expect(apiCallsOf(h, "answer_approval")).toHaveLength(0);
+    for (const answer of requestsOf(h, "answerCallbackQuery")) expect(answer.body.text === undefined || answer.body.text === "This request expired or was already settled.").toBe(true);
+    expect(requestsOf(h, "editMessageText")).toHaveLength(0);
+  });
+
+  it("T39 UI answered first: the tap reports Already answered (in AnyCode).", async () => {
+    const h = await harness();
+    h.approvals.on.add(SID_BUILD);
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-5")];
+    await h.bridge.sweepApprovals();
+    const data = approvalSends(h)[0]!.body.reply_markup.inline_keyboard[0][0].callback_data as string;
+    h.approvals.answer = () => ({ result: "already_answered", settledBy: "ui" });
+    h.tg.push(tap(500, data));
+    await waitFor(() => requestsOf(h, "editMessageText").length === 1);
+    expect(requestsOf(h, "editMessageText")[0]!.body.text).toMatch(/Already answered \(in AnyCode\)\.$/);
+  });
+
+  it("T40 with the switch off the owner gets the off notice exactly once", async () => {
+    const h = await harness();
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-6")];
+    await h.bridge.sweepApprovals();
+    await h.bridge.sweepApprovals();
+    expect(texts(h).filter((t) => t === OFF_TEXT)).toHaveLength(1);
+    expect(approvalSends(h)).toHaveLength(0);
+  });
+
+  it("T41 an answerable:false approval is sent without buttons and says to answer in AnyCode", async () => {
+    const h = await harness();
+    h.approvals.on.add(SID_BUILD);
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-plan", { tool: "ExitPlanMode", description: "the plan", answerable: false })];
+    await h.bridge.sweepApprovals();
+    const sent = approvalSends(h)[0]!;
+    expect(sent.body.text).toBe("Approval needed [build-bot]: ExitPlanMode — the plan — answer this in AnyCode");
+    expect(sent.body).not.toHaveProperty("reply_markup");
+  });
+
+  it("T42 token hygiene: neither the bot token nor the Sessions API token appears in callback data, logs, state.json or any outgoing body", async () => {
+    const h = await harness();
+    h.approvals.on.add(SID_BUILD);
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-7")];
+    await h.bridge.sweepApprovals();
+    const data = approvalSends(h)[0]!.body.reply_markup.inline_keyboard[0][0].callback_data as string;
+    expect(data).not.toContain(SID_BUILD);
+    h.tg.push(tap(700, data));
+    await waitFor(() => requestsOf(h, "editMessageText").length === 1);
+    const discoveryToken = JSON.parse(await readFile(h.discoveryFile, "utf8")).token as string;
+    const state = await readFile(join(h.stateDir, "state.json"), "utf8");
+    // Outgoing bodies only: the bot token legitimately appears in the request URL path.
+    const everything = JSON.stringify(h.tg.requests.map((r) => r.body)) + state + h.lines.join("\n");
+    expect(everything).not.toContain(TOKEN);
+    expect(everything).not.toContain(discoveryToken);
+  });
+
+  it("T43 a description carrying a Bearer credential reaches Telegram scrubbed", async () => {
+    const h = await harness();
+    h.approvals.on.add(SID_BUILD);
+    await selectAndSend(h);
+    h.approvals.items = [item("ap-8", { description: "curl -H Authorization: Bearer abc123def456ghi789 https://x.test" })];
+    await h.bridge.sweepApprovals();
+    const sent = approvalSends(h)[0]!;
+    expect(sent.body.text).not.toContain("abc123def456ghi789");
+    expect(sent.body.text).toContain("***");
+  });
+});
+
