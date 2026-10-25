@@ -29,6 +29,7 @@ import {
 } from "./codex-engine.js";
 
 import { CodexDynamicToolBridge, ANYCODE_AGENT_TOOL } from "./dynamic-tool-bridge.js";
+import { createEngineBrowserBridge } from "../browser-bridge.js";
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
 const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
@@ -3669,5 +3670,59 @@ describe("TASK.95 — engine-owned collab correlation across parent turns", () =
     await engine.dispose("session-close");
     expect(index.get("spawn-1")).toBeUndefined();
     expect(turn1.events.some((event) => event.type === "subagent_end")).toBe(false);
+  });
+});
+
+
+// Taskana 4764 X2/X3/X14: dynamicTools carry the browser declarations for a
+// root boot WITHOUT any agent profile; thread/resume still sends none; a
+// dynamicToolCall item projects nothing (no double count).
+describe("CodexEngine — Taskana 4764 browser dynamicTools", () => {
+  function browserOnlyBridge(): CodexDynamicToolBridge {
+    const browser = createEngineBrowserBridge({
+      preview: {
+        open: async () => ({ ok: true, value: { previewId: "p1", url: "u" } }),
+        read: async () => ({ ok: true, value: { text: "t" } }),
+        screenshot: async () => ({ ok: true, value: { previewId: "p1", url: "u", mediaType: "image/png", data: "ZA==", width: 1, height: 1 } }),
+        control: async () => ({ ok: true, value: { previewId: "p1", url: "u", text: "ok" } }),
+      } as never,
+      fullAccess: () => false,
+      broker: { requestPermission: async () => ({ behavior: "allow" }) } as never,
+      cwd: "/work",
+    });
+    return new CodexDynamicToolBridge([], undefined, undefined, undefined, browser);
+  }
+
+  it("X2: with NO agent profile the thread/start dynamicTools are the 10 browser decls and initialize negotiates the experimental API", async () => {
+    const bridge = browserOnlyBridge();
+    const server = new FakeAppServer();
+    await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, bridge);
+    expect(server.calls.find((c) => c.method === "initialize")?.params).toMatchObject({ capabilities: { experimentalApi: true } });
+    const start = server.calls.find((c) => c.method === "thread/start")?.params as { dynamicTools?: Array<{ name: string }> } | undefined;
+    expect(start?.dynamicTools).toHaveLength(10);
+    expect(start?.dynamicTools?.map((d) => d.name)).toEqual([
+      "anycode_browser_open", "anycode_browser_read", "anycode_browser_screenshot",
+      "anycode_browser_navigate", "anycode_browser_snapshot", "anycode_browser_click",
+      "anycode_browser_type", "anycode_browser_wait_for", "anycode_browser_console", "anycode_browser_eval",
+    ]);
+  });
+
+  it("X3: thread/resume still carries NO dynamicTools", async () => {
+    const bridge = browserOnlyBridge();
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, shadowLog, bridge);
+    expect(server.calls.find((c) => c.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
+  });
+
+  it("X14: a dynamicToolCall item for anycode_browser_click projects nothing (no double count)", async () => {
+    const server = new FakeAppServer();
+    const engine = new CodexEngine(server, THREAD);
+    const turn = drive(engine, "look", new AbortController().signal);
+    await tick();
+    server.stream.push({ method: "item/completed", params: { threadId: THREAD, turnId: server.turnId, item: { type: "dynamicToolCall", id: "e1", callId: "dc-1", tool: "anycode_browser_click", status: "completed" } } });
+    server.completeTurn("completed");
+    await turn.done;
+    expect(turn.events.filter((e) => e.type === "tool_call" || e.type === "tool_execution_start" || e.type === "tool_result")).toHaveLength(0);
   });
 });

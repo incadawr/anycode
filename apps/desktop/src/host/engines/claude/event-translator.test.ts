@@ -582,3 +582,45 @@ describe("result subtype error_max_turns (TASK.180)", () => {
     expect(loopEnd?.reason).toBe("max_turns");
   });
 });
+
+
+// Taskana 4764 C6: the door's browser tools are canonicalized at the
+// projection seam — the transcript shows BrowserClick, not
+// mcp__anycode__browser_click; every other tool name is untouched.
+describe("ClaudeTurnTranslator — Taskana 4764 browser tool names (C6)", () => {
+  function assistantToolUse(id: string, name: string): ClaudeStreamMessage {
+    return {
+      type: "assistant",
+      message: { id: `msg_${id}`, model: "m", content: [{ type: "tool_use", id, name, input: { ref: "e1" } }] },
+    } as unknown as ClaudeStreamMessage;
+  }
+  function userToolResult(id: string, name: string): ClaudeStreamMessage {
+    return {
+      type: "user",
+      message: { id: `msg_${id}_r`, model: "m", content: [{ type: "tool_result", tool_use_id: id, content: `done ${name}` }] },
+    } as unknown as ClaudeStreamMessage;
+  }
+
+  it("C6: a browser tool_use projects tool_call/tool_execution_start/tool_result all named BrowserClick", () => {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    const events = [
+      ...translator.onMessage(assistantToolUse("toolu_b1", "mcp__anycode__browser_click")),
+      ...translator.onMessage(userToolResult("toolu_b1", "click")),
+    ];
+    const call = ofType(events, "tool_call")[0]!;
+    const start = ofType(events, "tool_execution_start")[0]!;
+    const result = ofType(events, "tool_result")[0]!;
+    expect(call.toolCall.name).toBe("BrowserClick");
+    expect(start.toolName).toBe("BrowserClick");
+    expect(result.outcome.toolName).toBe("BrowserClick");
+  });
+
+  it("C6: Bash and mcp__anycode__agent names are unchanged; a bogus browser name is unchanged", () => {
+    for (const name of ["Bash", "mcp__anycode__agent", "mcp__anycode__browser_bogus"]) {
+      const translator = new ClaudeTurnTranslator({ turn: 1 });
+      const events = translator.onMessage(assistantToolUse(`toolu_${name}`, name));
+      expect(ofType(events, "tool_call")[0]!.toolCall.name).toBe(name);
+      expect(ofType(events, "tool_execution_start")[0]!.toolName).toBe(name);
+    }
+  });
+});

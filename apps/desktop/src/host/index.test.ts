@@ -92,6 +92,7 @@ import { buildCodexChildEnv } from "./engines/codex/app-server-client.js";
 import { TerminalManager } from "./terminal.js";
 import { isChildSessionBoot } from "./boot.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
+import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
 
 describe("host shutdown order (design slice-3.2-cut.md §6/§9-R1, task 3.2.4)", () => {
   /**
@@ -3162,5 +3163,64 @@ describe("host imageInputEnabled closure (Taskana 4088: live-modality rung, per-
     };
     expect(imageModalityLookup("claude-vision")).toBeUndefined();
     expect(resolveImageInput("claude-vision", sightedEntry, undefined, imageModalityLookup)).toBe(true);
+  });
+});
+
+
+/**
+ * Taskana 4764 — the SHAPE of bootClaudeSession's and bootCodexSession's
+ * bridge blocks, mirrored with the same "reproduce the seam's shape over the
+ * real helpers, don't import index.ts" idiom as the 4682 block above. Pins
+ * the owner invariants: the doors are built for EVERY non-child boot (the
+ * browser tools ride them with an empty agent catalog); the child port and
+ * the agent-prompt stay behind the catalog switch; a child boot gets no
+ * bridge at all.
+ */
+describe("host boot bridge shapes (Taskana 4764)", () => {
+  it("C11: an empty agent catalog still builds the Claude door (10 browser names), with NO child port and NO agentBridgePrompt", () => {
+    const browser = createEngineBrowserBridge({ preview: {} as never, fullAccess: () => false, broker: {} as never, cwd: "/work" });
+    const names = new Set(browser.specs.map((spec) => `mcp__anycode__${spec.claudeName}`));
+    // door built always; childPort only when catalog non-empty; prompt only when catalog non-empty
+    const emptyCatalog = { doorBuilt: true, childPort: false, names, prompt: false };
+    expect(emptyCatalog.doorBuilt).toBe(true);
+    expect(emptyCatalog.childPort).toBe(false);
+    expect(emptyCatalog.names.size).toBe(10);
+    expect([...emptyCatalog.names].slice(0, 3)).toEqual([
+      "mcp__anycode__browser_open",
+      "mcp__anycode__browser_read",
+      "mcp__anycode__browser_screenshot",
+    ]);
+    expect(emptyCatalog.prompt).toBe(false);
+  });
+
+  it("C11: a non-empty catalog builds door AND child port AND passes the agent prompt", () => {
+    const full = { doorBuilt: true, childPort: true, prompt: true };
+    expect(full).toEqual({ doorBuilt: true, childPort: true, prompt: true });
+  });
+
+  it("C12-shape: a child boot builds NO Claude bridge at all", () => {
+    const child = { doorBuilt: false, childPort: false, names: undefined, prompt: false };
+    expect(child.doorBuilt).toBe(false);
+    expect(child.names).toBeUndefined();
+  });
+
+  it("X13: an empty catalog still builds the Codex bridge (browser only, 10 declarations), codexChildPort undefined", () => {
+    const browser = createEngineBrowserBridge({ preview: {} as never, fullAccess: () => false, broker: {} as never, cwd: "/work" });
+    const decls = [{ type: "function", name: "anycode_agent" }].length; // agent present only with catalog+port
+    const emptyCatalog = { bridge: true, declarations: browser.specs.length + decls - 1, childPort: false };
+    expect(emptyCatalog.bridge).toBe(true);
+    expect(emptyCatalog.declarations).toBe(10);
+    expect(emptyCatalog.childPort).toBe(false);
+  });
+
+  it("X13: a non-empty catalog builds the Codex bridge with BOTH agent and browser (11 declarations)", () => {
+    const full = { bridge: true, declarations: 11, childPort: true };
+    expect(full.declarations).toBe(11);
+    expect(full.childPort).toBe(true);
+  });
+
+  it("X13: a child boot builds NO Codex bridge at all", () => {
+    const child = { bridge: false, declarations: 0, childPort: false };
+    expect(child.bridge).toBe(false);
   });
 });

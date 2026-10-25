@@ -29,16 +29,28 @@ import type {
   ToolResultPresentation,
 } from "@anycode/core";
 import { buildAgentBridgeToolDecl, decodeAgentBridgeCallInput, runAgentBridgeCall } from "@anycode/core";
+import type { EngineBrowserBridge } from "../browser-bridge.js";
 
 export interface BridgePresentationStampDeps {
   /** The boot catalog snapshot the door announced on `tools/list` (also the fail-soft fallback). */
   catalog: readonly AgentBridgeCatalogEntry[];
   /** Taskana 4101: per-call catalog re-read; may reject, in which case the boot snapshot is used. */
   resolveCallCatalog: () => Promise<readonly AgentBridgeCatalogEntry[]>;
-  /** The session-tier child port (`createChildSessionPort`'s result). */
-  port: SessionSubagentPort;
+  /**
+   * The session-tier child port (`createChildSessionPort`'s result).
+   * Taskana 4764: OPTIONAL — with an empty agent-profile catalog there is no
+   * child port, but the door still serves the browser tools.
+   */
+  port?: SessionSubagentPort;
   /** Live bridge-event tap (`pushBridgeEvent`, host/index.ts) — a no-op until the engine binds. */
   onEvent: (event: SubagentCardEvent) => void;
+  /**
+   * Taskana 4764: the shared browser bridge. When present, `listTools()`
+   * appends the ten browser tool declarations and `callTool()` dispatches
+   * `browser_*` names to it (the real, input-aware approval gate runs inside
+   * the bridge through the same IpcPermissionBroker the native tab uses).
+   */
+  browser?: EngineBrowserBridge;
 }
 
 /** Builds the door's `listTools`/`callTool` pair over one shared presentation map. */
@@ -46,8 +58,16 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
   const bridgePresentations = new Map<string, ToolResultPresentation>();
   return {
     listTools: () => {
-      const decl = buildAgentBridgeToolDecl(deps.catalog, { detach: true, continueSession: true });
-      return decl === null ? [] : [decl];
+      // Taskana 4764: the agent decl rides first (only when a catalog AND a
+      // child port exist, exactly as before), then the browser decls.
+      const decl = deps.port === undefined ? null : buildAgentBridgeToolDecl(deps.catalog, { detach: true, continueSession: true });
+      const agentDecls = decl === null ? [] : [decl];
+      const browserDecls = (deps.browser?.specs ?? []).map((spec) => ({
+        name: spec.claudeName,
+        description: spec.description,
+        inputSchema: spec.inputSchema,
+      }));
+      return [...agentDecls, ...browserDecls];
     },
     callTool: async (
       name: string,
@@ -55,8 +75,31 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
       signal: AbortSignal,
       meta: { toolUseId?: string },
     ): Promise<McpToolCallResult> => {
+      // Taskana 4764: browser tools route to the shared engine browser bridge.
+      // The REAL approval gate lives there (input-aware, through the same
+      // IpcPermissionBroker the native tab uses); the CLI's `can_use_tool`
+      // name-only gate is auto-allowed in approval-bridge.ts, so the user
+      // sees exactly ONE prompt, titled with the canonical tool name.
+      const browserSpec = deps.browser?.byClaudeName(name);
+      if (browserSpec !== undefined) {
+        if (meta.toolUseId === undefined) {
+          return { text: "AnyCode could not correlate this call to a tool_use id", isError: true };
+        }
+        const result = await deps.browser!.call(browserSpec, callArgs, signal, meta.toolUseId);
+        // An aborted call returns normally (the SDK server drops the late
+        // answer, same discipline as `agent`); browser tools stamp no
+        // presentation — the text line is the whole card.
+        return {
+          text: result.text,
+          isError: result.isError,
+          ...(result.images !== undefined ? { images: result.images } : {}),
+        };
+      }
       if (name !== "agent") {
         return { text: `AnyCode's MCP bridge has no tool named "${name}"`, isError: true };
+      }
+      if (deps.port === undefined) {
+        return { text: "AnyCode agent delegation is unavailable in this session", isError: true };
       }
       if (meta.toolUseId === undefined) {
         return { text: "AnyCode could not correlate this call to a tool_use id", isError: true };

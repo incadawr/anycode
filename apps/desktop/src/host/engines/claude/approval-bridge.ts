@@ -159,6 +159,16 @@ export interface ClaudeApprovalBridgeOptions {
    * unprovable writes.
    */
   workspace?: string;
+  /**
+   * Taskana 4764: the full CLI names (`mcp__anycode__browser_*`) of the door's
+   * browser tools. When set (and a door exists), `can_use_tool` for these names
+   * is answered `allow` immediately: the CLI's name-only gate cannot express
+   * "remote only", so the REAL, input-aware approval gate runs in the bridge's
+   * `callTool` (browser-bridge.ts §2.3 step 2) through the same IpcPermissionBroker
+   * — the user sees exactly ONE prompt, titled with the canonical tool name.
+   * Any other `mcp__anycode__*` name keeps the generic ask path below.
+   */
+  browserToolNames?: ReadonlySet<string>;
 }
 
 export class ClaudeApprovalBridge {
@@ -213,6 +223,16 @@ export class ClaudeApprovalBridge {
       // it never contends with a concurrent human-facing approval — probes.md
       // P1 confirmed live that `allow` is not silently downgraded to `deny`
       // for this tool in headless mode.
+      responder.success(allowResponse(approval));
+      return;
+    }
+    if (this.options.bridge !== undefined && this.options.browserToolNames?.has(approval.toolName)) {
+      // Taskana 4764: the door's browser tools. The CLI's `can_use_tool` only
+      // knows a tool NAME and cannot express "remote only"; the real,
+      // input-aware gate runs in the bridge's `callTool` (browser-bridge.ts
+      // §2.3 step 2) through the same broker, so auto-allow here to avoid a
+      // double prompt — and stay ahead of the pending latch so a browser call
+      // never contends with a concurrent human-facing approval.
       responder.success(allowResponse(approval));
       return;
     }

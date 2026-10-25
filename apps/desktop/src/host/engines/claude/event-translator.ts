@@ -12,6 +12,7 @@
  */
 
 import type { AgentEvent, FinishReason, LoopEndReason, ToolCallOutcome, ToolCallStatus, ToolResultPresentation } from "@anycode/core";
+import { canonicalBrowserToolName } from "../browser-bridge.js";
 import type {
   ClaudeAssistantMessage,
   ClaudeRateLimitEventMessage,
@@ -326,12 +327,17 @@ export class ClaudeTurnTranslator {
         const name = text(block.name);
         if (id === undefined || name === undefined) continue;
         const input = block.input ?? {};
-        this.tools.set(id, { toolName: name, input });
+        // Taskana 4764: the door's browser tools are canonicalized at the
+        // projection seam (`mcp__anycode__browser_navigate` -> `BrowserNavigate`)
+        // so the transcript card, permission rules and history all use the
+        // SAME name a native tab shows; every other tool name is untouched.
+        const projectedName = canonicalBrowserToolName(name) ?? name;
+        this.tools.set(id, { toolName: projectedName, input });
         // BOTH forms are mandatory (W17): store.ts creates a tool-call block
         // ONLY on `tool_call`; `tool_execution_start` is patch-only and is a
         // silent no-op without it — a card that never renders at all.
-        events.push({ type: "tool_call", toolCall: { id, name, input } });
-        events.push({ type: "tool_execution_start", toolCallId: id, toolName: name, input });
+        events.push({ type: "tool_call", toolCall: { id, name: projectedName, input } });
+        events.push({ type: "tool_execution_start", toolCallId: id, toolName: projectedName, input });
         continue;
       }
       if (block.type === "text") {

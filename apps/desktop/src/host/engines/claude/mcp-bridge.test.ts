@@ -257,3 +257,46 @@ describe("ClaudeMcpBridge — Taskana 4238: every mcp_message answer carries an 
     expect(result.tools[0]!.name).toBe("agent");
   });
 });
+
+
+// Taskana 4764 C3: a browser screenshot's images ride the MCP CallToolResult
+// end to end — through ClaudeMcpBridge (pure pass-through) and the REAL
+// in-process SDK server (image content block present in the wire response).
+describe("ClaudeMcpBridge — Taskana 4764 image pass-through (C3)", () => {
+  const SCREENSHOT_TOOL: McpToolDecl = {
+    name: "browser_screenshot",
+    description: "Captures a screenshot of the session preview window.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  };
+
+  function browserToolsCall(id: number, name: string): Record<string, unknown> {
+    return { method: "tools/call", params: { name, arguments: {}, _meta: { "claudecode/toolUseId": "toolu_shot", progressToken: id } }, jsonrpc: "2.0", id };
+  }
+
+  async function callThrough(callTool: CallToolFn): Promise<{ content: Array<Record<string, unknown>>; isError: boolean }> {
+    const bridge = new ClaudeMcpBridge({ serverName: "anycode", version: "0.0.1", listTools: () => [SCREENSHOT_TOOL], callTool });
+    const responder = responderSpy();
+    await bridge.handleControlRequest(inbound({ server_name: "anycode", message: browserToolsCall(2, "browser_screenshot") }), responder.responder);
+    expect(responder.error).not.toHaveBeenCalled();
+    const answer = responder.success.mock.calls[0]![0] as { mcp_response: { result: { content: Array<Record<string, unknown>>; isError: boolean } } };
+    return answer.mcp_response.result;
+  }
+
+  it("C3: callTool images become an image content block in the wire CallToolResult", async () => {
+    const result = await callThrough(async () => ({
+      text: "Screenshot of http://localhost:3000/ (800x600) attached.",
+      isError: false,
+      images: [{ mediaType: "image/png", data: "aW1hZ2UtYnl0ZXM=" }],
+    }));
+    expect(result.isError).toBe(false);
+    expect(result.content).toEqual([
+      { type: "text", text: "Screenshot of http://localhost:3000/ (800x600) attached." },
+      { type: "image", data: "aW1hZ2UtYnl0ZXM=", mimeType: "image/png" },
+    ]);
+  });
+
+  it("C3: a result without images still yields exactly one text block (pass-through unchanged)", async () => {
+    const result = await callThrough(async () => ({ text: "navigated", isError: false }));
+    expect(result.content).toEqual([{ type: "text", text: "navigated" }]);
+  });
+});

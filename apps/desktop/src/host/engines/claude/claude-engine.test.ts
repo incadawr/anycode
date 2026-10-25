@@ -1702,7 +1702,7 @@ describe("ClaudeEngine — Taskana 4238: a failed MCP server is visible in the t
     { name: "alpha", status: "connected" },
   ]);
 
-  it("yields exactly one engine_notice warning naming anycode and mcp__anycode__agent, before turn_end", async () => {
+  it("yields exactly one engine_notice warning naming anycode and mcp__anycode__*, before turn_end", async () => {
     const transport = new FakeTransport({ frames: [FAILED_INIT, RESULT] });
     const engine = engineWith(transport);
 
@@ -1712,7 +1712,7 @@ describe("ClaudeEngine — Taskana 4238: a failed MCP server is visible in the t
     expect(mcpNotices).toHaveLength(1);
     const notice = mcpNotices[0] as { level: string; message: string };
     expect(notice.level).toBe("warning");
-    expect(notice.message).toContain("mcp__anycode__agent");
+    expect(notice.message).toContain("mcp__anycode__*");
     // Before turn_end — the warning belongs to the turn that observed it.
     expect(events.findIndex((event) => event.type === "engine_notice" && event === mcpNotices[0])).toBeLessThan(
       events.findIndex((event) => event.type === "turn_end"),

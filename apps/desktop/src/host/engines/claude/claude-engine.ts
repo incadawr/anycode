@@ -260,7 +260,7 @@ export function mcpServerFailureNotices(statuses: readonly ClaudeInitMcpServerSt
     if (status === "failed") {
       notices.push(
         name === "anycode"
-          ? warning(`AnyCode's MCP server "anycode" failed to connect in this Claude session, so AnyCode subagent tools (mcp__anycode__agent) are unavailable.`)
+          ? warning(`AnyCode's MCP server "anycode" failed to connect in this Claude session, so AnyCode tools (mcp__anycode__*) are unavailable.`)
           : warning(`MCP server "${name}" failed to connect in this Claude session; its tools are unavailable.`),
       );
     } else if (status === "needs-auth") {
@@ -478,6 +478,14 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    */
   mcpBridge?: ClaudeMcpBridge;
   /**
+   * Taskana 4764: the full CLI names (`mcp__anycode__browser_*`) of the
+   * browser tools the door announced. Supplied exactly when `mcpBridge`
+   * exists; `ClaudeApprovalBridge` auto-allows `can_use_tool` for these
+   * names (the real, input-aware approval gate runs inside the door's
+   * `callTool` through the same broker — one prompt, canonical title).
+   */
+  browserToolNames?: ReadonlySet<string>;
+  /**
    * Taskana 4056 cross-review M2: `CLAUDE_AGENT_BRIDGE_PROMPT`, re-declared
    * here only to carry the engine-level contract — the host supplies it
    * EXACTLY when it supplies `mcpBridge` (the same non-empty-catalog,
@@ -560,6 +568,7 @@ async function connectClaudeEngine(
     // the workspace root the approval bridge's fact minting anchors against.
     workspace: options.cwd,
     ...(options.mcpBridge !== undefined ? { bridge: options.mcpBridge } : {}),
+    ...(options.browserToolNames !== undefined ? { browserToolNames: options.browserToolNames } : {}),
   });
   // The catalog is not known until after the handshake, so a draft model cannot
   // ride the spawn argv. It is applied right after `initialize` via `set_model`

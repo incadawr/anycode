@@ -113,7 +113,7 @@ describe("mcpServerFailureNotices (Taskana 4238)", () => {
     const [notice] = mcpServerFailureNotices([{ name: "anycode", status: "failed" }]);
     expect(notice).toBeDefined();
     expect((notice as { message: string }).message).toBe(
-      `AnyCode's MCP server "anycode" failed to connect in this Claude session, so AnyCode subagent tools (mcp__anycode__agent) are unavailable.`,
+      `AnyCode's MCP server "anycode" failed to connect in this Claude session, so AnyCode tools (mcp__anycode__*) are unavailable.`,
     );
   });
 

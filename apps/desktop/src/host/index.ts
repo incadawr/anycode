@@ -1,5 +1,6 @@
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
 import { CodexDynamicToolBridge, codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
+import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
 import { assertChildModel, readAllowedChildModels } from "../shared/child-model.js";
 import { resolveModelClassifierBoot } from "./model-classifier-boot.js";
 /**
@@ -1417,16 +1418,28 @@ async function bootCodexSession(
       (await discoverAgentProfiles(new NodeFileSystemAdapter(), profileRoots)).profiles,
     );
     const catalog = await resolveCatalog();
+    // Taskana 4764: `port`/`codexChildPort` stay behind the catalog switch,
+    // but the BRIDGE itself is built for every root Codex boot — the browser
+    // tools (anycode_browser_*) ride dynamicTools even with an empty catalog,
+    // so the experimental API + thread/start dynamicTools are always on for
+    // root boots. Child boots (args.child !== undefined) get no bridge.
+    const codexEngineBrowserBridge = createEngineBrowserBridge({
+      preview: previewPort,
+      fullAccess: () => browserAccess.get(),
+      broker,
+      cwd: workspace,
+    });
+    let port: ChildSessionPort | undefined;
     if (catalog.length) {
-      const port = createChildSessionPort({
+      port = createChildSessionPort({
         parentSessionId: bridgeRowId,
         getPermissionMode: () => codexAgentPermissionMode(codexParentEngine?.snapshot().activePresetId ?? "read-only"),
         send: sendChildSessionMessage, subscribe: subscribeChildRunEvents,
         onDetachedTerminal: deliverDetachedChildReport, onDetachedStall: deliverDetachedChildStall,
       });
       codexChildPort = port;
-      codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog);
     }
+    codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge);
   }
   // taskana 4181: the supervisor idle watchdog for this (non-child) codex
   // boot — one instance, constructed once, mirroring the stall clock's
@@ -2014,6 +2027,10 @@ async function bootClaudeSession(
   // read by the `options` wiring further down — same late-bound-cell shape as
   // `pushBridgeEvent` directly above.
   let stamp: ReturnType<typeof createBridgePresentationStamp> | undefined;
+  // Taskana 4764: hoisted (same cell shape as `stamp`) — set by the non-child
+  // boot block below, read by the `options` wiring further down.
+  let claudeBrowserToolNames: Set<string> | undefined;
+  let agentCatalogNonEmpty = false;
   if (args.child === undefined) {
     const discovered = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []));
     for (const problem of discovered.problems) {
@@ -2028,11 +2045,15 @@ async function bootClaudeSession(
         (await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []))).profiles,
       ));
     // The switch (plan §5 S4 p.7): an empty `tools/list` is never worth
-    // announcing — the door itself is the extra attack/complexity surface,
-    // not just the tool inside it — so NOTHING below this `if` runs at all,
-    // and `mcpBridge` stays `undefined` all the way to `options`.
+    // announcing for the AGENT side — so the child port is created only when
+    // the catalog is non-empty. Taskana 4764 changes the OTHER half: the door
+    // itself is now built ALWAYS (a non-child boot gets the browser tools
+    // even with an empty catalog); only `claudeChildPort`/the agent decl
+    // stay behind the catalog switch, and `agentBridgePrompt` is passed only
+    // when the catalog is non-empty (that prompt names `mcp__anycode__agent`).
+    let childPort: ChildSessionPort | undefined;
     if (catalog.length > 0) {
-      const childPort = createChildSessionPort({
+      childPort = createChildSessionPort({
         parentSessionId: rowId,
         // Taskana 4056 cross-review M1: this seam feeds
         // `ChildSpawnRequest.permissionMode` — the value that gates the
@@ -2059,18 +2080,37 @@ async function bootClaudeSession(
         onDetachedStall: deliverDetachedChildStall,
       });
       claudeChildPort = childPort;
-      // Taskana 4056 review N2: the door's tools/call handler (and the
-      // presentation map it stamps into) lives in bridge-presentation-stamp.ts
-      // now — lifted so its after-abort discipline (an aborted call's LATE
-      // resolve must not stamp past the turn-end sweep) is pinned by a unit
-      // test; index.ts itself is not importable in a test (process.parentPort
-      // at module scope).
-      const door = createBridgePresentationStamp({
-        catalog,
-        resolveCallCatalog: resolveClaudeCatalog,
-        port: childPort,
-        onEvent: (event) => pushBridgeEvent?.(event),
-      });
+    }
+    // Taskana 4764: the door is built ALWAYS for a non-child boot — with an
+    // empty agent catalog it still serves the ten browser tools through the
+    // shared engine browser bridge (same core ToolDefinitions, same broker,
+    // same full-access switch the native tab uses; browser-bridge.ts doc).
+    const engineBrowserBridge = createEngineBrowserBridge({
+      preview: previewPort,
+      fullAccess: () => browserAccess.get(),
+      broker,
+      cwd: workspace,
+    });
+    // Taskana 4764: the CLI names the approval bridge auto-allows (one per
+    // browser spec, `mcp__anycode__<claudeName>`), and the catalog switch
+    // that alone gates `agentBridgePrompt` in the options wiring below.
+    claudeBrowserToolNames = new Set<string>(
+      engineBrowserBridge.specs.map((spec) => `mcp__anycode__${spec.claudeName}`),
+    );
+    agentCatalogNonEmpty = catalog.length > 0;
+    // Taskana 4056 review N2: the door's tools/call handler (and the
+    // presentation map it stamps into) lives in bridge-presentation-stamp.ts
+    // now — lifted so its after-abort discipline (an aborted call's LATE
+    // resolve must not stamp past the turn-end sweep) is pinned by a unit
+    // test; index.ts itself is not importable in a test (process.parentPort
+    // at module scope).
+    const door = createBridgePresentationStamp({
+      catalog,
+      resolveCallCatalog: resolveClaudeCatalog,
+      ...(childPort !== undefined ? { port: childPort } : {}),
+      browser: engineBrowserBridge,
+      onEvent: (event) => pushBridgeEvent?.(event),
+    });
       stamp = door;
       mcpBridge = new ClaudeMcpBridge({
         serverName: "anycode",
@@ -2090,7 +2130,6 @@ async function bootClaudeSession(
         },
         callTool: door.callTool,
       });
-    }
   } else {
     console.log("[host] claude mcp bridge: child boot, no bridge");
   }
@@ -2159,13 +2198,23 @@ async function bootClaudeSession(
           // door teaches the CLI the delegation sentence — the prompt names
           // `mcp__anycode__agent` ONLY in sessions where the tool exists (a
           // bridge-less boot's argv stays byte-identical to pre-4056).
-          agentBridgePrompt: CLAUDE_AGENT_BRIDGE_PROMPT,
+          // Taskana 4764: the door now exists for every non-child boot (the
+          // browser tools ride it even with an empty catalog), but the
+          // PROMPT still names the agent tool — so it is gated on the
+          // catalog switch alone, not on the door's existence.
+          ...(agentCatalogNonEmpty
+            ? { agentBridgePrompt: CLAUDE_AGENT_BRIDGE_PROMPT }
+            : {}),
           takePresentation: stamp.takePresentation,
           // Taskana 4056 cross-review P1: the engine's turn-end sweep for
           // presentations whose consuming tool_result never arrived (a
           // cancelled/dying turn) — without this, one map entry per aborted
           // bridge call would live for the process's lifetime.
           dropPresentations: stamp.dropPresentations,
+          // Taskana 4764: the door's browser tool CLI names, so
+          // ClaudeApprovalBridge can auto-allow the name-only `can_use_tool`
+          // gate (the real input-aware gate runs in the door's callTool).
+          browserToolNames: claudeBrowserToolNames,
         }
       : {}),
   };

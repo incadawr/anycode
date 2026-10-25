@@ -56,7 +56,8 @@ an AnyCode plugin discovery directory and edit only the discovery-file argument;
 the loader uses the plugin directory as the server's working directory, making
 `stdio.mjs` relocatable. No second plugin format or external CLI runtime is
 introduced. AnyCode's plugin MCP tools are loaded into the **Core** tool registry;
-the native Codex bridge currently exposes only `anycode_agent`, and native Claude
+the native Codex bridge exposes `anycode_agent` plus the `anycode_browser_*` tools
+(Taskana 4764), and native Claude
 also bypasses that Core plugin registry. To use this endpoint from an external
 Codex or Claude client, configure the stdio adapter or HTTP endpoint in that
 client's own MCP settings. Loading this AnyCode plugin does not add its tools to

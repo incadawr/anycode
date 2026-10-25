@@ -2,9 +2,26 @@
 
 AnyCode can operate a web page in the built-in preview the way a user would:
 open it, read what is on it, click, fill a form and wait for the result. This
-works in **Native tabs** only, the same as the existing preview tools
-(`BrowserOpen`, `BrowserRead`, `BrowserScreenshot`). Claude and Codex engine
-tabs do not get these tools.
+works in **Native tabs** and in **engine tabs**: Claude and Codex tabs get the
+same tools through AnyCode's tool bridge. Claude shows them as
+`mcp__anycode__browser_*`, Codex as `anycode_browser_*`, and the transcript
+names them `BrowserOpen`, `BrowserNavigate`, ....
+
+## Engine tabs (Claude and Codex)
+
+1. Same tools, same approval rules, same **Full browser access** switch and
+   domain policy as native tabs.
+2. Approvals always apply in these tabs (there is no auto/yolo mode that
+   skips them): a remote navigation, `remote:true` click/type and
+   `BrowserEval` ask first unless Full browser access is on.
+3. `BrowserOpen` of a remote url asks even with Full browser access on, as in
+   native tabs.
+4. A Codex session created before this version keeps its old tool set after
+   resume; start a new Codex session to get the browser tools.
+5. Resumed Codex history shows past browser calls as plain text.
+6. Child sessions have no browser tools.
+7. Screenshots reach the model; the transcript shows only the text line
+   (e.g. "Screenshot of <url> (WxH) attached.").
 
 ## Tools
 

@@ -805,3 +805,22 @@ describe("projectCodexHistory — native command persistence in Codex 0.160", ()
     expect(result.findIndex((item) => item.id.includes("shadow:6:call"))).toBeGreaterThan(afterIndex);
   });
 });
+
+
+// Taskana 4764 X14: a persisted anycode_browser_* dynamicToolCall item uses
+// the existing fallback text (no history-projection change).
+describe("Codex history projection — Taskana 4764 browser items", () => {
+  it("X14: an anycode_browser_click item projects via the existing fallback path, not agent projection", () => {
+    const read: CodexThreadRead = {
+      thread: { id: "t", turns: [{ id: "turn-a", startedAt: 0, items: [
+        { type: "dynamicToolCall", id: "b1", callId: "bc-1", tool: "anycode_browser_click", status: "completed" } as never,
+      ] }] },
+    };
+    const projected = projectCodexHistory(read, [], { maxItems: 10 });
+    // The fallback yields at least one history item for the unknown tool; it
+    // is NEVER projected as an agent (anycode_agent) card.
+    expect(projected.length).toBeGreaterThanOrEqual(1);
+    const text = JSON.stringify(projected);
+    expect(text).not.toContain("anycode_agent");
+  });
+});

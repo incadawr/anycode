@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 import { CLAUDE_NOT_SIGNED_IN, resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import { ClaudeMcpBridge } from "./mcp-bridge.js";
+import { createBridgePresentationStamp } from "./bridge-presentation-stamp.js";
+import { createEngineBrowserBridge } from "../browser-bridge.js";
 
 interface FakeStream extends EventEmitter {
   write(chunk: unknown): boolean;
@@ -592,6 +594,133 @@ describe("agentBridgePrompt rides the argv only when the bridge is announced (Ta
       expect(promptAt(capturedArgs())).not.toContain("mcp__anycode__agent");
     } finally {
       await connected.engine.dispose("session-close");
+    }
+  });
+});
+
+
+// Taskana 4764 C8/C9/C10/C12/C14: end to end through the REAL
+// ClaudeMcpBridge + REAL createEngineBrowserBridge — the door's browser
+// tools/call drives the same approval and preview contract as a live tab;
+// a recording fake broker stands in for the UI side of IpcPermissionBroker.
+describe("Taskana 4764 — browser tools through the engine door (C8/C9/C10/C12/C14)", () => {
+  /** A fake IpcPermissionBroker: records asks, settle-on-demand. */
+  function fakeBroker() {
+    const requests: Array<{ toolName: string; toolCallId: string; input: unknown }> = [];
+    const parked = new Map<string, (decision: { behavior: string; reason?: string }) => void>();
+    const broker = new IpcPermissionBroker(() => {}) as never as InstanceType<typeof IpcPermissionBroker>;
+    (broker as unknown as { requestPermission: unknown }).requestPermission = (request: { toolName: string; toolCallId: string; input: unknown }) => {
+      requests.push(request);
+      return new Promise((resolve) => { parked.set(request.toolCallId, resolve as never); });
+    };
+    return {
+      broker,
+      requests,
+      settle: (toolCallId: string, decision: { behavior: string; reason?: string }) => {
+        parked.get(toolCallId)?.(decision);
+        parked.delete(toolCallId);
+      },
+    };
+  }
+
+  function makeDoor(broker: unknown, previewControl: (req: unknown, opts: unknown) => Promise<unknown>) {
+    const browser = createEngineBrowserBridge({
+      preview: { control: previewControl } as never,
+      fullAccess: () => false,
+      broker: broker as never,
+      cwd: "/work",
+    });
+    const door = createBridgePresentationStamp({ catalog: [], resolveCallCatalog: async () => [], browser, onEvent: () => {} });
+    const bridge = new ClaudeMcpBridge({ serverName: "anycode", version: "0.0.1", listTools: door.listTools, callTool: door.callTool });
+    return { bridge, browser };
+  }
+
+  function toolsCall(id: number, name: string, args: Record<string, unknown>, toolUseId: string): Record<string, unknown> {
+    return { server_name: "anycode", message: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args, _meta: { "claudecode/toolUseId": toolUseId } } } };
+  }
+
+  async function driveCall(bridge: ClaudeMcpBridge, params: Record<string, unknown>): Promise<void> {
+    await bridge.handleControlRequest(
+      { requestId: "r", subtype: "mcp_message", signal: new AbortController().signal, request: params } as never,
+      { success: () => {}, error: (error: string) => { throw new Error(error); } } as never,
+    );
+  }
+
+  it("C8: a remote navigate parks exactly ONE BrowserNavigate ask; deny -> error result, port untouched; allow -> port gets allowRemote:true", async () => {
+    // Deny path
+    const deniedBroker = fakeBroker();
+    const denyPort: Array<unknown> = [];
+    const denied = makeDoor(deniedBroker.broker, async (req, opts) => { denyPort.push({ req, opts }); return { ok: true, value: { previewId: "p1", url: "u", text: "ok" } }; });
+    const denyHandle = driveCall(denied.bridge, toolsCall(1, "browser_navigate", { url: "https://example.com/" }, "toolu_d"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(deniedBroker.requests).toHaveLength(1);
+    expect(deniedBroker.requests[0]?.toolName).toBe("BrowserNavigate");
+    expect(deniedBroker.requests[0]?.input).toMatchObject({ url: "https://example.com/" });
+    expect(denyPort).toHaveLength(0);
+    deniedBroker.settle(deniedBroker.requests[0]!.toolCallId, { behavior: "deny", reason: "not today" });
+    await denyHandle;
+    expect(denyPort).toHaveLength(0);
+
+    // Allow path
+    const allowBroker = fakeBroker();
+    const allowPort: Array<{ opts: unknown }> = [];
+    const allowed = makeDoor(allowBroker.broker, async (req, opts) => { allowPort.push({ opts }); return { ok: true, value: { previewId: "p1", url: "u", text: "ok" } }; });
+    const allowHandle = driveCall(allowed.bridge, toolsCall(2, "browser_navigate", { url: "https://example.com/" }, "toolu_a"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    allowBroker.settle(allowBroker.requests[0]!.toolCallId, { behavior: "allow" });
+    await allowHandle;
+    expect(allowPort).toHaveLength(1);
+    expect((allowPort[0]?.opts as { allowRemote?: boolean }).allowRemote).toBe(true);
+  });
+
+  it("C9: a localhost navigate parks ZERO permission requests", async () => {
+    const broker = fakeBroker();
+    const door = makeDoor(broker.broker, async () => ({ ok: true, value: { previewId: "p1", url: "u", text: "ok" } }));
+    await driveCall(door.bridge, toolsCall(3, "browser_navigate", { url: "http://localhost:3000/" }, "toolu_l"));
+    expect(broker.requests).toHaveLength(0);
+  });
+
+  it("C10: denyAll-style Stop settles a parked browser approval with an error and leaves no pending entry", async () => {
+    const broker = fakeBroker();
+    const port: unknown[] = [];
+    const browser = createEngineBrowserBridge({
+      preview: { control: async () => { port.push(1); return { ok: true, value: { previewId: "p1", url: "u", text: "ok" } }; } } as never,
+      fullAccess: () => false,
+      broker: broker.broker as never,
+      cwd: "/work",
+    });
+    const spec = browser.byClaudeName("browser_navigate")!;
+    const pending = browser.call(spec, { url: "https://example.com/" }, new AbortController().signal, "toolu_stop");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(broker.requests).toHaveLength(1);
+    broker.settle(broker.requests[0]!.toolCallId, { behavior: "deny", reason: "Claude turn was cancelled" });
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(result.status).toBe("denied");
+    expect(result.text).toContain("Claude turn was cancelled");
+    expect(port).toHaveLength(0);
+  });
+
+  it("C12: two sequential browser calls reuse the same preview (previewId pass-through, no bridge state)", async () => {
+    const broker = fakeBroker();
+    const seen: Array<unknown> = [];
+    const door = makeDoor(broker.broker, async (req) => { seen.push((req as { previewId?: string }).previewId); return { ok: true, value: { previewId: "p1", url: "u", text: "ok" } }; });
+    await driveCall(door.bridge, toolsCall(4, "browser_navigate", { url: "http://localhost:3000/a", preview_id: "p1" }, "toolu_a1"));
+    await driveCall(door.bridge, toolsCall(5, "browser_navigate", { url: "http://localhost:3000/b", preview_id: "p1" }, "toolu_b1"));
+    expect(seen).toEqual(["p1", "p1"]);
+  });
+
+  it("C14: hostile tool args are rejected by zod without throwing", async () => {
+    const broker = fakeBroker();
+    const door = makeDoor(broker.broker, async () => ({ ok: true, value: { previewId: "p1", url: "u", text: "ok" } }));
+    const hostile: Array<Record<string, unknown>> = [
+      { url: "http://localhost:3000/", __proto__: {} },
+      { url: "http://localhost:3000/", text: "x".repeat(200_000) },
+    ];
+    for (const [index, args] of hostile.entries()) {
+      // driveCall resolves void on success; hostile args are parsed by zod
+      // (stripped or failed) and NEVER throw out of the door.
+      await driveCall(door.bridge, toolsCall(6 + index, "browser_navigate", args, `toolu_h${index}`));
     }
   });
 });

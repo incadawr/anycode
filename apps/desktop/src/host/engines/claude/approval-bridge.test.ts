@@ -825,3 +825,53 @@ describe("ClaudeApprovalBridge — Taskana 4294 F2: a remembered rule does not u
     }
   });
 });
+
+
+// Taskana 4764 C5: the name-only can_use_tool gate for the door's browser
+// tools is auto-allowed; the real input-aware gate runs in the door's
+// callTool (browser-bridge.ts) through the same broker.
+describe("ClaudeApprovalBridge — Taskana 4764 browser tool auto-allow", () => {
+  const BROWSER_NAMES = new Set([
+    "mcp__anycode__browser_navigate",
+    "mcp__anycode__browser_screenshot",
+  ]);
+
+  function canUseToolRequest(toolName: string): Record<string, unknown> {
+    return { tool_name: toolName, input: {}, tool_use_id: `toolu-${toolName}` };
+  }
+
+  it("C5: a browser name is allowed immediately, without the broker and without the pending latch", async () => {
+    const { broker, requests } = brokerStub({ behavior: "deny", reason: "must not be asked" });
+    const bridge = new ClaudeApprovalBridge({
+      broker,
+      activePresetId: () => "ask",
+      bridge: {} as ClaudeMcpBridge,
+      browserToolNames: BROWSER_NAMES,
+    });
+    const { responder, success, error } = responderSpy();
+    await bridge.handle(inbound(canUseToolRequest("mcp__anycode__browser_navigate")), responder);
+    expect(error).not.toHaveBeenCalled();
+    expect(success).toHaveBeenCalledTimes(1);
+    expect(success.mock.calls[0]![0]).toMatchObject({ behavior: "allow" });
+    expect(requests).toHaveLength(0);
+  });
+
+  it("C5: without browserToolNames the old broker path applies; unknown mcp__anycode__* always asks; agent stays auto-allowed", async () => {
+    const { broker, requests } = brokerStub({ behavior: "allow" });
+    const legacy = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", bridge: {} as ClaudeMcpBridge });
+    const legacyResponder = responderSpy();
+    await legacy.handle(inbound(canUseToolRequest("mcp__anycode__browser_navigate")), legacyResponder.responder);
+    expect(requests).toHaveLength(1);
+
+    const names = new Set(["mcp__anycode__browser_navigate"]);
+    const other = new ClaudeApprovalBridge({ broker, activePresetId: () => "ask", bridge: {} as ClaudeMcpBridge, browserToolNames: names });
+    const otherResponder = responderSpy();
+    await other.handle(inbound(canUseToolRequest("mcp__anycode__other")), otherResponder.responder);
+    expect(requests).toHaveLength(2);
+
+    const agentResponder = responderSpy();
+    await other.handle(inbound(canUseToolRequest("mcp__anycode__agent")), agentResponder.responder);
+    expect(agentResponder.success).toHaveBeenCalledTimes(1);
+    expect(requests).toHaveLength(2);
+  });
+});

@@ -4,6 +4,7 @@ import type { JsonRpcServerRequest } from "./protocol.js";
 import type { ServerRequestResponder } from "./app-server-client.js";
 import type { CodexAgentCardLogPort } from "./agent-card-log.js";
 import type { ActiveCodexTurn } from "./approval-bridge.js";
+import type { EngineBrowserBridge, EngineBrowserSpec } from "../browser-bridge.js";
 
 export const ANYCODE_AGENT_TOOL = "anycode_agent";
 
@@ -20,8 +21,15 @@ export class CodexDynamicToolBridge {
   private readonly work = new Set<Promise<unknown>>();
   private turnKey = "";
   private readonly seenCalls = new Set<string>();
-  constructor(readonly catalog: readonly AgentBridgeCatalogEntry[], private readonly port: SessionSubagentPort, private readonly cardLog?: CodexAgentCardLogPort,
-    private readonly resolveCatalog?: () => Promise<readonly AgentBridgeCatalogEntry[]>) {}
+  /**
+   * Taskana 4764: `port` is OPTIONAL (an empty agent catalog means no child
+   * port, but the browser tools still ride the bridge); `browser` adds the
+   * ten anycode_browser_* tools — same core ToolDefinitions, same serialized
+   * dispatch and the same input-aware approval gate as the Claude door
+   * (browser-bridge.ts). The agent path below is byte-for-byte unchanged.
+   */
+  constructor(readonly catalog: readonly AgentBridgeCatalogEntry[], private readonly port: SessionSubagentPort | undefined, private readonly cardLog?: CodexAgentCardLogPort,
+    private readonly resolveCatalog?: () => Promise<readonly AgentBridgeCatalogEntry[]>, private readonly browser?: EngineBrowserBridge) {}
 
   declarations(): Record<string, unknown>[] {
     // `detach` is safe to offer here: host/index.ts wires this bridge's port
@@ -29,8 +37,16 @@ export class CodexDynamicToolBridge {
     // to this Codex session as a new turn instead of the turn idling on it.
     // `continue_session` rides the same port: main resumes the finished child
     // for a follow-up (defect return) instead of minting a fresh one.
-    const decl = buildAgentBridgeToolDecl(this.catalog, { detach: true, continueSession: true });
-    return decl ? [{ ...decl, name: ANYCODE_AGENT_TOOL, type: "function" }] : [];
+    const decl = this.port === undefined ? null : buildAgentBridgeToolDecl(this.catalog, { detach: true, continueSession: true });
+    const agentDecls = decl ? [{ ...decl, name: ANYCODE_AGENT_TOOL, type: "function" }] : [];
+    // Taskana 4764: the browser tools ride dynamicTools for EVERY root boot.
+    const browserDecls = (this.browser?.specs ?? []).map((spec) => ({
+      type: "function" as const,
+      name: spec.codexName,
+      description: spec.description,
+      inputSchema: spec.inputSchema,
+    }));
+    return [...agentDecls, ...browserDecls];
   }
 
   cancel(): void {
@@ -70,12 +86,72 @@ export class CodexDynamicToolBridge {
     } finally { if (timer !== undefined) clearTimeout(timer); }
   }
 
+  /**
+   * Taskana 4764: one browser tool call. The validations already ran in
+   * `handle()` (active turn, no namespace, unique callId, `seenCalls`); this
+   * branch registers its controller in `pending` (so `cancel()` aborts it and
+   * Stop stays immediate), emits the canonical-named AgentEvents, runs the
+   * shared engine browser bridge, answers with inputText (+ inputImage for a
+   * screenshot) and always joins the call's promise in `work` for drain().
+   */
+  private async handleBrowser(spec: EngineBrowserSpec, p: Record<string, unknown>, respond: ServerRequestResponder,
+    emit: (event: AgentEvent) => void): Promise<void> {
+    const id = p.callId as string;
+    const input = p.arguments !== null && typeof p.arguments === "object" && !Array.isArray(p.arguments) ? p.arguments : {};
+    const controller = new AbortController();
+    this.pending.set(id, controller);
+    this.seenCalls.add(id);
+    emit({ type: "tool_call", toolCall: { id, name: spec.canonical, input } });
+    emit({ type: "tool_execution_start", toolCallId: id, toolName: spec.canonical, input });
+    const startedAt = Date.now();
+    let removeAbort = () => {};
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      const onAbort = () => reject(new Error("Browser call was cancelled"));
+      if (controller.signal.aborted) onAbort();
+      else controller.signal.addEventListener("abort", onAbort, { once: true });
+      removeAbort = () => controller.signal.removeEventListener("abort", onAbort);
+    });
+    let result;
+    try {
+      const execution = this.browser!.call(spec, p.arguments, controller.signal, id);
+      this.work.add(execution);
+      void execution.then(() => this.work.delete(execution), () => this.work.delete(execution));
+      result = await Promise.race([execution, cancelled]);
+    } catch {
+      // Cancelled while waiting on the bridge (Stop): the call settles as
+      // cancelled; the answer is a failure and no image is attached.
+      emit({ type: "tool_result", outcome: {
+        toolCallId: id, toolName: spec.canonical, status: "cancelled",
+        modelText: "Browser call was cancelled", durationMs: Date.now() - startedAt,
+        result: { ok: false, error: "Browser call was cancelled", errorKind: "cancelled" },
+      } });
+      respond.result({ success: false, contentItems: [{ type: "inputText", text: "Browser call was cancelled" }] });
+      return;
+    } finally { removeAbort(); this.pending.delete(id); }
+    emit({ type: "tool_result", outcome: {
+      toolCallId: id, toolName: spec.canonical,
+      status: result.status === "denied" ? "error" : result.status,
+      modelText: result.text, durationMs: Date.now() - startedAt,
+      result: result.isError ? { ok: false, error: result.text } : { ok: true, output: result.text },
+    } });
+    respond.result({
+      success: !result.isError && !controller.signal.aborted,
+      contentItems: [
+        { type: "inputText", text: result.text },
+        ...(result.images ?? []).map((image) => ({ type: "inputImage", imageUrl: `data:${image.mediaType};base64,${image.data}` })),
+      ],
+    });
+  }
+
   async handle(request: JsonRpcServerRequest, respond: ServerRequestResponder,
     active: ActiveCodexTurn | null, emit: (event: AgentEvent) => void): Promise<void> {
     const p = request.params as Record<string, unknown> | undefined;
     const fail = (text: string): void => respond.result({ success: false, contentItems: [{ type: "inputText", text }] });
+    // Taskana 4764: the validations below run for ALL bridge tools (agent and
+    // browser alike); only the tool-name dispatch differs.
+    const browserSpec = typeof p?.tool === "string" ? this.browser?.byCodexName(p.tool) : undefined;
     if (!p || !active || p.threadId !== active.threadId || p.turnId !== active.turnId ||
-      p.tool !== ANYCODE_AGENT_TOOL || (p.namespace !== undefined && p.namespace !== null) ||
+      (p.tool !== ANYCODE_AGENT_TOOL && browserSpec === undefined) || (p.namespace !== undefined && p.namespace !== null) ||
       typeof p.callId !== "string" || !p.callId || this.pending.has(p.callId)) {
       fail("AnyCode rejected an unknown, duplicate or out-of-turn agent call");
       return;
@@ -87,6 +163,10 @@ export class CodexDynamicToolBridge {
     }
     if (this.seenCalls.has(p.callId)) {
       fail("AnyCode rejected a repeated agent call");
+      return;
+    }
+    if (browserSpec !== undefined) {
+      await this.handleBrowser(browserSpec, p, respond, emit);
       return;
     }
     const input = p.arguments !== null && typeof p.arguments === "object" && !Array.isArray(p.arguments)
@@ -111,7 +191,7 @@ export class CodexDynamicToolBridge {
         return runAgentBridgeCall(input, {
           // Native declarations stay fixed for this thread; existing profile bodies/models are live.
           catalog: catalog.filter((entry) => this.catalog.some((declared) => declared.name === entry.name)),
-          port: this.port, spawnToolCallId: id, signal: controller.signal,
+          port: this.port as SessionSubagentPort, spawnToolCallId: id, signal: controller.signal,
           onEvent: (event) => { if (!controller.signal.aborted) emit(event); },
         });
       };

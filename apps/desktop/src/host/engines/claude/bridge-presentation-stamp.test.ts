@@ -116,3 +116,90 @@ describe("bridge door callTool — Taskana 4056 review N2 (no presentation stamp
     expect(seen.length).toBeLessThanOrEqual(1);
   });
 });
+
+
+// Taskana 4764 C1/C2/C4: the door serves the browser tools (with or without
+// an agent catalog) and routes browser_* names to the shared engine bridge.
+describe("bridge door — Taskana 4764 browser tools", () => {
+  function fakeBrowser() {
+    const calls: Array<{ name: string; args: unknown; signal: AbortSignal; toolUseId: string }> = [];
+    const navigate = { canonical: "BrowserNavigate", claudeName: "browser_navigate", codexName: "anycode_browser_navigate", description: "d2", inputSchema: { type: "object" } };
+    const open = { canonical: "BrowserOpen", claudeName: "browser_open", codexName: "anycode_browser_open", description: "d1", inputSchema: { type: "object" } };
+    const browser = {
+      specs: [open, navigate],
+      byClaudeName: (name: string) => (name === "browser_navigate" ? navigate : name === "browser_open" ? open : undefined),
+      byCodexName: () => undefined,
+      call: async (spec: { canonical: string }, args: unknown, signal: AbortSignal, toolUseId: string) => {
+        calls.push({ name: spec.canonical, args, signal, toolUseId });
+        return { text: `ran ${spec.canonical}`, isError: false, status: "success" as const, durationMs: 1 };
+      },
+    } as never as import("../browser-bridge.js").EngineBrowserBridge;
+    return { browser, calls };
+  }
+
+  const dummyPort = {
+    send: async () => ({ ok: false, reason: "unavailable", message: "not exercised" }),
+    run: async () => ({ status: "completed", finalText: "", truncated: false, turns: 0, toolCalls: 0, durationMs: 0, childSessionId: "c", parentSessionId: "p", spawnToolCallId: "" }),
+  } as never as SessionSubagentPort;
+
+  it("C1: empty catalog + no port -> 10 browser decls and NO agent decl; catalog + port -> agent first then browser", () => {
+    const { browser } = fakeBrowser();
+    const full = {
+      ...browser,
+      specs: Array.from({ length: 10 }, (_, i) => ({
+        canonical: `Canonical${i}`, claudeName: `browser_t${i}`, codexName: `anycode_browser_t${i}`, description: `d${i}`, inputSchema: { type: "object" },
+      })),
+    } as never as import("../browser-bridge.js").EngineBrowserBridge;
+    const bare = createBridgePresentationStamp({ catalog: [], resolveCallCatalog: async () => [], browser: full, onEvent: () => {} });
+    const bareTools = bare.listTools();
+    expect(bareTools).toHaveLength(10);
+    expect(bareTools.every((tool) => tool.name.startsWith("browser_t"))).toBe(true);
+    expect(bareTools.some((tool) => tool.name === "agent")).toBe(false);
+
+    const fullDoor = createBridgePresentationStamp({ catalog: CATALOG, resolveCallCatalog: async () => CATALOG, port: dummyPort, browser: full, onEvent: () => {} });
+    const tools = fullDoor.listTools();
+    expect(tools).toHaveLength(11);
+    expect(tools[0]?.name).toBe("agent");
+    expect(tools.slice(1).every((tool) => tool.name.startsWith("browser_t"))).toBe(true);
+  });
+
+  it("C2: browser_navigate routes to the bridge with the toolUseId; missing toolUseId, unknown name and agent-without-port keep their errors", async () => {
+    const { browser, calls } = fakeBrowser();
+    const stamp = createBridgePresentationStamp({ catalog: [], resolveCallCatalog: async () => [], browser, onEvent: () => {} });
+    const signal = new AbortController().signal;
+    const ok = await stamp.callTool("browser_navigate", { url: "http://localhost:3000/" }, signal, { toolUseId: "t1" });
+    expect(ok).toEqual({ text: "ran BrowserNavigate", isError: false });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.toolUseId).toBe("t1");
+
+    const noId = await stamp.callTool("browser_navigate", {}, signal, {});
+    expect(noId.isError).toBe(true);
+    expect(noId.text).toContain("could not correlate");
+
+    const unknown = await stamp.callTool("browser_bogus", {}, signal, { toolUseId: "t2" });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.text).toContain("no tool named");
+
+    const agentless = createBridgePresentationStamp({ catalog: CATALOG, resolveCallCatalog: async () => CATALOG, browser, onEvent: () => {} });
+    const agent = await agentless.callTool("agent", AGENT_ARGS, signal, { toolUseId: "t3" });
+    expect(agent.isError).toBe(true);
+    expect(agent.text).toContain("agent delegation is unavailable");
+  });
+
+  it("C4: an aborted browser call returns normally and stamps no presentation", async () => {
+    const { browser } = fakeBrowser();
+    const controller = new AbortController();
+    let release!: () => void;
+    (browser as unknown as { call: unknown }).call = async () =>
+      new Promise((resolve) => {
+        release = () => resolve({ text: "late", isError: false, status: "success", durationMs: 0 });
+      });
+    const stamp = createBridgePresentationStamp({ catalog: [], resolveCallCatalog: async () => [], browser, onEvent: () => {} });
+    const pending = stamp.callTool("browser_navigate", {}, controller.signal, { toolUseId: "t-abort" });
+    controller.abort();
+    release();
+    const result = await pending;
+    expect(result.isError).toBe(false);
+    expect(stamp.entries().size).toBe(0);
+  });
+});
