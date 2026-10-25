@@ -104,7 +104,7 @@ describe("detectCommand — extras beyond PATH", () => {
 });
 
 describe("detectCommand — project node_modules/.bin (nodeBin entries)", () => {
-  it("finds a devDependency binary only when a workspace is supplied", async () => {
+  it("finds a devDependency binary only when a workspace is supplied, and never reports it as found", async () => {
     const fs = makeFs({ "/proj/node_modules/.bin/typescript-language-server": EXEC_FILE });
     const inputs = {
       pathEnv: "/usr/bin:/bin",
@@ -114,11 +114,39 @@ describe("detectCommand — project node_modules/.bin (nodeBin entries)", () => 
     };
     // Without the workspace (a non-nodeBin entry), not found:
     expect(await detectCommand("typescript-language-server", inputs)).toEqual({ found: false, source: null });
-    // With it (nodeBin), found as project-sourced:
+    // With it (nodeBin): present only in node_modules/.bin is NOT found (the
+    // app spawns by PATH, so it would not start), but the source is named.
     expect(await detectCommand("typescript-language-server", { ...inputs, workspace: "/proj" })).toEqual({
-      found: true,
+      found: false,
       source: "project",
     });
+  });
+
+  it("a node_modules-only binary is found:false source project (the app cannot spawn it by PATH)", async () => {
+    const fs = makeFs({ "/proj/node_modules/.bin/typescript-language-server": EXEC_FILE });
+    const result = await detectCommand("typescript-language-server", {
+      pathEnv: "/usr/bin:/bin",
+      platform: "darwin" as NodeJS.Platform,
+      home: "/home/u",
+      workspace: "/proj",
+      fileExists: fs.fileExists,
+    });
+    expect(result).toEqual({ found: false, source: "project" });
+  });
+
+  it("on both PATH and node_modules, the PATH hit wins: found:true source path", async () => {
+    const fs = makeFs({
+      "/usr/bin/typescript-language-server": EXEC_FILE,
+      "/proj/node_modules/.bin/typescript-language-server": EXEC_FILE,
+    });
+    const result = await detectCommand("typescript-language-server", {
+      pathEnv: "/usr/bin:/bin",
+      platform: "darwin" as NodeJS.Platform,
+      home: "/home/u",
+      workspace: "/proj",
+      fileExists: fs.fileExists,
+    });
+    expect(result).toEqual({ found: true, source: "path" });
   });
 
   it("PATH still wins over node_modules/.bin (checked first)", async () => {

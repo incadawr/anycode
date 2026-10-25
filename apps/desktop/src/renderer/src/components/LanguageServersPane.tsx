@@ -201,6 +201,7 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig }
                         matching server wins for a file.
                       </div>
                     )}
+                    {row.projectOnlyHint !== null && <div className="mcp-row-hint">{row.projectOnlyHint}</div>}
                     {!row.entry.found && (
                       <div className="mcp-row-hint lsp-install-hint">
                         <span className="lsp-install-command">{row.entry.installHint}</span>

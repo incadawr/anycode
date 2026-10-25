@@ -66,7 +66,7 @@ export async function upsertLspServer(
     // same shape a hand-edit would produce.
     const index = list.findIndex((item) => isNamedEntry(item, name));
     if (index >= 0) {
-      list[index] = entry;
+      list[index] = withCarriedInitOptions(entry, list[index]);
     } else {
       list.push(entry);
     }
@@ -103,6 +103,26 @@ export async function deleteLspServer(
     config.lspServers = list;
     await atomicWriteJson(fs, configPath, config);
   });
+}
+
+/**
+ * A replacement entry that omits `initializationOptions` keeps the existing
+ * same-name item's hand-written `initializationOptions` (the custom form never
+ * carries them, so an edit would otherwise silently drop them). An entry that
+ * provides its own value wins. Only a plain-object previous item with that key
+ * is carried over; anything else leaves the new entry as given.
+ */
+function withCarriedInitOptions(entry: LspServerEntry, previous: unknown): LspServerEntry {
+  if (entry.initializationOptions !== undefined) {
+    return entry;
+  }
+  if (typeof previous !== "object" || previous === null || Array.isArray(previous)) {
+    return entry;
+  }
+  if (!Object.prototype.hasOwnProperty.call(previous, "initializationOptions")) {
+    return entry;
+  }
+  return { ...entry, initializationOptions: (previous as { initializationOptions?: unknown }).initializationOptions } as LspServerEntry;
 }
 
 /** Structural `name` check over a possibly-anything array item (never parses it). */

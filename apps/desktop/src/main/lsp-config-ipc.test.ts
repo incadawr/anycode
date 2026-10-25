@@ -128,14 +128,14 @@ describe("handleLspCatalogStatus", () => {
     expect(gopls).toMatchObject({ found: false, foundSource: null });
   });
 
-  it("nodeBin entries also look in <workspace>/node_modules/.bin (foundSource project)", async () => {
+  it("nodeBin entries also look in <workspace>/node_modules/.bin; a project-only hit is found:false (foundSource project)", async () => {
     const { deps } = makeDeps(
       {},
       { executables: { "/proj/node_modules/.bin/typescript-language-server": 0o755 } },
     );
     const status = await handleLspCatalogStatus(deps, { tabId: TAB_ID });
     const ts = status.catalog.find((row) => row.id === "typescript");
-    expect(ts).toMatchObject({ found: true, foundSource: "project" });
+    expect(ts).toMatchObject({ found: false, foundSource: "project" });
   });
 
   it("reads configured entries per scope with presetId mapping and hasInitOptions custody", async () => {
