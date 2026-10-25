@@ -20,6 +20,8 @@ It intentionally differs from local `working-docs/`:
 - [Agent communication](agent-communication.md) — opt-in production MCP, scoped
   session messages and native Codex steering (unreleased).
 - [Release policy](release.md) — versioning, alpha/beta stages, and the changelog.
+- [Authoring plugins](plugins-authoring.md) — the plugin manifest v1 spec, the
+  official index format, and the Ed25519 signing runbook.
 
 ## Basic change cycle
 

@@ -25,6 +25,8 @@ developer-facing material (building, automation, release policy) see
   to subagent profiles, built from the pieces above.
 - [Proxy and network](proxy.md): proxy profiles, the application default,
   per-connection and per-engine proxies, and no-proxy lists.
+- [Plugins](plugins.md): what plugins are, where they live, the trust tiers,
+  two-phase install, MCP-server consent, updates, rollback and pinning.
 - [Troubleshooting](troubleshooting.md): checklists for a missing MCP server,
   orchestration roles, and a missing skill, and where problems are shown.
 
@@ -54,5 +56,6 @@ Tokens reach MCP servers through `${env:NAME}` references.
 | MCP | [mcp.md](mcp.md) |
 | Skills | [skills.md](skills.md) |
 | Subagents | [subagents.md](subagents.md) |
+| Plugins | [plugins.md](plugins.md) |
 | Environment | [configuration.md](configuration.md) (telemetry, repo map) |
 | Appearance, Keyboard shortcuts, About | App-only; no configuration file. |

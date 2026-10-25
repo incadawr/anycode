@@ -126,11 +126,49 @@ export interface McpConfigSnapshot {
   problems: string[];
   /** Whether the request's tab workspace resolved (main-side truth) — the pane's scope default and Project-radio enable derive from this, never from tabId presence. */
   projectAvailable: boolean;
+  /**
+   * Taskana 4732 S1-C (design 4732 §6): plugin-contributed servers, read-only.
+   * Populated from the SAME plugin discovery the host runtime uses (renamed
+   * `plugin_<plugin>_<server>` entries, explicit config always winning a name
+   * collision — the collision case is exactly why these are NOT folded into
+   * `entries`: a config row and a plugin row with the same name are distinct
+   * views there, the config row wins at runtime, and the pane shows both).
+   */
+  pluginServers?: McpPluginServerView[];
 }
 
 export interface McpConfigGetRequest {
   /** Active tab whose workspace resolves the project/compat sources; omit for user-only. */
   tabId?: string;
+}
+
+// ── plugin-contributed servers (Taskana 4732 S1-C, read-only rows) ──
+
+/**
+ * One plugin-contributed MCP server, projected for the MCP pane (design 4732
+ * §6 "Elsewhere"). Read-only: the pane never toggles/edits/deletes it — the
+ * enable/disable lives in the Plugins pane (user-global by plugin name) and
+ * the start/consent gate is `settings.plugins.mcpConsent` (design §4).
+ * `consentGranted` is main-side truth for the CURRENT serversHash; false
+ * renders as "Needs approval" with an Approve affordance that routes through
+ * the Plugins pane's `approve-mcp` channel (this module adds NO new channel:
+ * the rows ride the existing `anycode:mcp-config-get` response).
+ * Custody is unchanged: `commandLine` is pre-joined main-side (command+args
+ * or url — trusted config), env KEY names only, never values.
+ */
+export interface McpPluginServerView {
+  /** Runtime server name — the `plugin_<plugin>_<server>` rename. */
+  name: string;
+  /** Owning plugin's manifest name (tier/version live in the Plugins pane). */
+  pluginName: string;
+  transport: McpTransport;
+  commandLine: string;
+  /** True when the plugin's CURRENT mcpServers hash has consent in settings.json. */
+  consentGranted: boolean;
+  /** True when an explicit project/user config row claims the same name (config wins at runtime). */
+  shadowed: boolean;
+  /** Absolute plugin-root dir — display-only trusted config (tooltip), never a request field. */
+  pluginRoot: string;
 }
 
 // ── mutation (upsert / delete) ──

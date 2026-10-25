@@ -385,6 +385,7 @@ describe("SLASH_COMMANDS registry invariants", () => {
       "Terminal",
       "MCP",
       "Skills",
+      "Plugins",
       "Settings",
     ]);
   });
@@ -518,13 +519,13 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
 
   it("keeps engine-independent common commands visible regardless of engine/shell capabilities", () => {
     const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
-    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Settings"]);
+    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Plugins", "Settings"]);
   });
 
   it("TASK.146/TASK.92: hides Compact on a codex-shaped profile (no compactNow) — the list a codex boot sees stays byte-identical", () => {
     const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
     expect(names).not.toContain("Compact");
-    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Settings"]);
+    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Plugins", "Settings"]);
     // Not even by query: a codex boot cannot reach the row at all.
     expect(filterSlashItems(SLASH_COMMANDS, [], "co", codexShapedCtx)).toEqual([]);
   });
@@ -565,7 +566,7 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
     expect(onlyCorePermissionsOff).not.toContain("Plan mode");
     expect(onlyCorePermissionsOff).not.toContain("Mode");
     expect(onlyCorePermissionsOff).toEqual(
-      expect.arrayContaining(["Model", "New task", "Tasks", "Git changes", "Terminal", "MCP", "Skills", "Settings"]),
+      expect.arrayContaining(["Model", "New task", "Tasks", "Git changes", "Terminal", "MCP", "Skills", "Plugins", "Settings"]),
     );
 
     const onlyGitReadOnlyOff = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ shellGitReadOnly: false })).map(
@@ -609,5 +610,24 @@ describe("openSettingsAddConnection", () => {
 
   it("is a DISTINCT event from the pane-select seam (so the dialog can retain the request)", () => {
     expect(SETTINGS_ADD_CONNECTION_EVENT).not.toBe(SETTINGS_SELECT_PANE_EVENT);
+  });
+});
+
+// ── Taskana 4732 S1-C: /plugins opens Settings → Plugins ──
+
+describe("/plugins command (Taskana 4732 S1-C)", () => {
+  it("exists, is common-gated, and routes to the plugins settings pane", () => {
+    const command = SLASH_COMMANDS.find((c) => c.id === "plugins");
+    expect(command).toBeDefined();
+    expect(command?.name).toBe("Plugins");
+    expect(command?.run).toEqual({ kind: "settings_pane", pane: "plugins" });
+    expect(command?.source).toBe("common");
+    expect(command?.visible(ctx())).toBe(true);
+    expect(command?.enabled(ctx())).toBe(true);
+  });
+
+  it("matches the /plug query", () => {
+    const items = filterSlashItems(SLASH_COMMANDS, [], "plug", ctx());
+    expect(items.map((i) => i.name)).toContain("Plugins");
   });
 });

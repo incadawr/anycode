@@ -42,6 +42,9 @@ the same name in a higher root replaces the one below it, silently:
 5. plugin skill roots
 6. built-in skills shipped with the app
 
+Plugin skill roots come from installed plugins — see [plugins.md](plugins.md)
+for the tiers, install flow, and consent rules.
+
 ### Precedence example
 
 You create `<project>/.anycode/skills/creating-subagents/SKILL.md`. That name

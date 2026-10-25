@@ -26,7 +26,8 @@ roots below the user scope.
 
 Precedence: project, then the main checkout (for worktrees), then user, then
 plugins. A name is claimed by the highest source that defines it, and a lower
-file with the same name is ignored.
+file with the same name is ignored. Plugin-contributed profiles are managed in
+[plugins.md](plugins.md).
 
 The file is YAML frontmatter followed by the child's system prompt. Write the
 frontmatter as flat `key: value` lines. Lists go inline (`tools: [Read, Write]`

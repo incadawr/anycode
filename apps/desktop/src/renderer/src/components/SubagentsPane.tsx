@@ -66,6 +66,7 @@ import { activeProviderView, connectionById } from "../../../shared/settings.js"
 import { useSettingsStore } from "../settings-store.js";
 import { providerModelsFor } from "./ModelPill.js";
 import { Chevron, FileIcon, Folder, Pencil, Plus, Robot, Search, Spinner, Trash, X } from "./icons.js";
+import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 
 // ── bridge (DI, same ethic as SkillsPane.tsx's SkillsBridge) ──
 
@@ -885,7 +886,22 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
                 <span className="mcp-section-count">
                   {plugin.length} item{plugin.length === 1 ? "" : "s"}
                 </span>
-                <span className="mcp-section-note">Registered by a plugin. Edit it in the plugin.</span>
+                <span className="mcp-section-note">
+                  Registered by a plugin.{" "}
+                  <button
+                    type="button"
+                    className="plugins-manage-link"
+                    onClick={() => {
+                      // Same pane-select seam the slash-menu commands use:
+                      // open Settings and land on the Plugins pane, where the
+                      // plugin's tier, version, and actions live (Taskana 4732 S1-C).
+                      window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
+                      window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "plugins" }));
+                    }}
+                  >
+                    Manage in Plugins
+                  </button>
+                </span>
               </div>
               <ul className="skills-row-list mcp-row-list">
                 {sortSubagentRows(plugin).map((row) => (

@@ -9,6 +9,7 @@
  * badges, create validation, plugin rows exposing no mutation affordances)
  * is exercised through the component's exported pure builders.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { SkillImportCandidateView, SkillRowView } from "../../../shared/skills-config.js";
 import {
@@ -370,5 +371,19 @@ describe("skillImportResultText", () => {
     expect(skillImportResultText({ id: "7", name: "e-2", applied: true, suffixed: true, converted: true, notes: [] })).toBe(
       "e-2: imported (renamed to avoid a conflict, converted)",
     );
+  });
+});
+
+// ── Taskana 4732 S1-C: the plugin group's "Manage in Plugins" link ──
+
+describe("plugin group cross-link (Taskana 4732 S1-C, design 4732 §6)", () => {
+  it("the plugin-group header carries a Manage-in-Plugins link wired to the settings.open + plugins-pane seam", () => {
+    const source = readFileSync(new URL("./SkillsPane.tsx", import.meta.url), "utf8");
+    // The group note renders the link, and its dispatch pair is exactly the
+    // slash-menu seam (RUN_ACTION "settings.open" + SETTINGS_SELECT_PANE_EVENT
+    // "plugins") — the same pair Composer.dispatchSlashIntent fires.
+    expect(source).toContain("Manage in Plugins");
+    expect(source).toContain('new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" })');
+    expect(source).toContain('new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "plugins" })');
   });
 });

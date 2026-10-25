@@ -370,6 +370,19 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     visible: () => true,
   },
   {
+    id: "plugins",
+    name: "Plugins",
+    description: () => "Manage plugins",
+    icon: "settings",
+    run: { kind: "settings_pane", pane: "plugins" },
+    enabled: () => true,
+    // Taskana 4732 S1-C: opens Settings → Plugins (engine-independent — the
+    // pane degrades honestly to "service unavailable" when main's plugins
+    // channels are absent, so the row is common-gated like MCP/Skills).
+    source: "common",
+    visible: () => true,
+  },
+  {
     id: "settings",
     name: "Settings",
     description: () => "Open settings",
