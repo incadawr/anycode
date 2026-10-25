@@ -22,6 +22,8 @@ export type ParsedChildReportStatus = (typeof STATUSES)[number] | "unknown";
 export interface ParsedChildReport {
   subagentType: string;
   status: ParsedChildReportStatus;
+  /** `"user"` only when the notification's `<cancelled-by>` field says the USER stopped the child. */
+  cancelledBy?: "user";
   /** Unescaped `<summary>` content when present; otherwise the raw input text (never hides information). */
   summary: string;
 }
@@ -52,10 +54,12 @@ export function parseChildReportText(text: string): ParsedChildReport {
   const rawSubagentType = extractField(text, "subagent-type");
   const rawStatus = extractField(text, "status");
   const rawSummary = extractField(text, "summary");
+  const rawCancelledBy = extractField(text, "cancelled-by");
   return {
     subagentType: rawSubagentType !== undefined ? unescapeXmlText(rawSubagentType) : "subagent",
     status: rawStatus !== undefined && isKnownStatus(rawStatus) ? rawStatus : "unknown",
     summary: rawSummary !== undefined ? unescapeXmlText(rawSummary) : text,
+    ...(rawCancelledBy === "user" ? { cancelledBy: "user" as const } : {}),
   };
 }
 
@@ -68,5 +72,8 @@ const STATUS_LABEL: Record<ParsedChildReportStatus, string> = {
 
 /** The compact card's one-line summary — "Background subagent <type> <status-label>". */
 export function childReportCardLabel(parsed: ParsedChildReport): string {
+  if (parsed.status === "cancelled" && parsed.cancelledBy === "user") {
+    return `Background subagent ${parsed.subagentType} stopped by you`;
+  }
   return `Background subagent ${parsed.subagentType} ${STATUS_LABEL[parsed.status]}`;
 }

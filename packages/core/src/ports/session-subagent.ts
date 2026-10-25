@@ -134,6 +134,12 @@ export interface SessionSubagentOutcome extends SubagentOutcome {
   childSessionId: string;
   parentSessionId: string;
   spawnToolCallId: string;
+  /**
+   * Set by the host only for a detached child the USER stopped from the UI
+   * (status `cancelled`). Lets the parent's notification say so instead of
+   * reading the stop as a failure to retry. Absent for every other cause.
+   */
+  cancelledBy?: "user";
 }
 
 /**

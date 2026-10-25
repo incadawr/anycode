@@ -69,10 +69,13 @@ describe("childBadgeKind (priority: waiting_permission > running > error/done)",
     expect(childBadgeKind(card(undefined, null))).toBe("running");
   });
 
-  it("no waiting + final completed/max_turns/cancelled -> done", () => {
+  it("no waiting + final completed/max_turns -> done", () => {
     expect(childBadgeKind(card(undefined, { status: "completed", durationMs: 1 }))).toBe("done");
     expect(childBadgeKind(card(undefined, { status: "max_turns", durationMs: 1 }))).toBe("done");
-    expect(childBadgeKind(card(undefined, { status: "cancelled", durationMs: 1 }))).toBe("done");
+  });
+
+  it("TASK.240: no waiting + final cancelled -> cancelled (never Done)", () => {
+    expect(childBadgeKind(card(undefined, { status: "cancelled", durationMs: 1 }))).toBe("cancelled");
   });
 
   it("no waiting + final error -> error (NOT lumped into done)", () => {

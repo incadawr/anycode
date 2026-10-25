@@ -91,3 +91,30 @@ describe("childReportCardLabel", () => {
     );
   });
 });
+
+describe("user-initiated stop (cancelledBy) — TASK.240", () => {
+  it("parses <cancelled-by>user</cancelled-by> into cancelledBy", () => {
+    const text = notificationText({ subagentType: "explore", status: "cancelled", summary: "s" }).replace(
+      "  <status>cancelled</status>",
+      "  <status>cancelled</status>\n  <cancelled-by>user</cancelled-by>",
+    );
+    expect(parseChildReportText(text)).toMatchObject({ status: "cancelled", cancelledBy: "user" });
+  });
+
+  it("leaves cancelledBy undefined when the field is absent", () => {
+    const text = notificationText({ subagentType: "explore", status: "cancelled", summary: "s" });
+    expect(parseChildReportText(text).cancelledBy).toBeUndefined();
+  });
+
+  it("card label reads 'Background subagent <type> stopped by you' for a user stop", () => {
+    expect(
+      childReportCardLabel({ subagentType: "explore", status: "cancelled", cancelledBy: "user", summary: "" }),
+    ).toBe("Background subagent explore stopped by you");
+  });
+
+  it("card label keeps 'cancelled' for a cancel without a user cause", () => {
+    expect(childReportCardLabel({ subagentType: "explore", status: "cancelled", summary: "" })).toBe(
+      "Background subagent explore cancelled",
+    );
+  });
+});

@@ -870,6 +870,9 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     agentId: outcome.childSessionId,
     subagentType: req.agentType,
     status: mapChildRunStatusToNotification(outcome.status, outcome.declaredDoneAtCeiling === true),
+    // TASK.240: a child the USER stopped says so, so the parent does not read
+    // the stop as a failure and relaunch it.
+    ...(outcome.cancelledBy === "user" ? { cancelledBy: "user" as const } : {}),
     summary: outcome.finalText,
     ...(fullReportPath !== undefined ? { fullReportPath } : {}),
     ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),

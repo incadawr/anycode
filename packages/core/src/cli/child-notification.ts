@@ -36,6 +36,10 @@
 
 import { CHILD_NOTIFICATION_SUMMARY_MAX_CHARS } from "../types/config.js";
 
+/** Explanation rendered into `<summary>` when the user stopped the child (see `cancelledBy`). */
+const USER_CANCEL_SUMMARY_PREFIX =
+  "[The user stopped this subagent. Do not relaunch it or retry the task unless the user asks; acknowledge and wait.]";
+
 /** Verbatim anti-spoofing header (owner decision 22.08) — do not paraphrase or reformat. */
 const NOTIFICATION_HEADER =
   "[SYSTEM NOTIFICATION - NOT USER INPUT]\n" +
@@ -55,6 +59,14 @@ export interface ChildTaskNotificationInput {
   /** The agent_type the child ran as (e.g. "general-purpose"). */
   subagentType: string;
   status: ChildTaskNotificationStatus;
+  /**
+   * Set only when the USER stopped this child (the desktop UI's explicit stop
+   * of a background subagent) and it ended `cancelled`. Renders an explicit
+   * `<cancelled-by>` field plus a sentence telling the parent not to relaunch
+   * or retry the task. Any other cancel cause (shutdown, parent abort) leaves
+   * this absent and keeps the plain `cancelled` text.
+   */
+  cancelledBy?: "user";
   /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
   finalTurnFinishReason?: "length";
   /** Short digest of what the child did/found — NEVER the raw transcript (file header). Truncated here if oversized. */
@@ -140,9 +152,11 @@ export function formatChildTaskNotification(input: ChildTaskNotificationInput): 
   const lengthCut = input.finalTurnFinishReason === "length";
   const status = lengthCut && input.status === "completed" ? "failed" : input.status;
   const base = capSummary(input.summary, CHILD_NOTIFICATION_SUMMARY_MAX_CHARS, input.fullReportPath);
-  const summary = lengthCut
+  const userCancelled = input.cancelledBy === "user" && status === "cancelled";
+  const withLengthMarker = lengthCut
     ? `[TRUNCATED CHILD REPORT — the child's final turn hit the model's output-token ceiling; the text below is cut mid-stream and its tail is missing.]\n\n${base}`
     : base;
+  const summary = userCancelled ? `${USER_CANCEL_SUMMARY_PREFIX}\n\n${withLengthMarker}` : withLengthMarker;
   const body = [
     "<task-notification>",
     `  <task-id>${escapeXmlText(input.taskId)}</task-id>`,
@@ -151,6 +165,7 @@ export function formatChildTaskNotification(input: ChildTaskNotificationInput): 
     `  <agent-id>${escapeXmlText(input.agentId)}</agent-id>`,
     `  <subagent-type>${escapeXmlText(input.subagentType)}</subagent-type>`,
     `  <status>${escapeXmlText(status)}</status>`,
+    ...(userCancelled ? ["  <cancelled-by>user</cancelled-by>"] : []),
     `  <summary>${escapeXmlText(summary)}</summary>`,
     "</task-notification>",
   ].join("\n");

@@ -156,6 +156,41 @@ describe("formatChildTaskNotification (spec §4bis/§7)", () => {
   });
 });
 
+describe("formatChildTaskNotification: user-initiated stop (cancelledBy)", () => {
+  it("cancelledBy user + status cancelled carries an explicit <cancelled-by>user</cancelled-by> field after <status>", () => {
+    const text = formatChildTaskNotification(input({ status: "cancelled", cancelledBy: "user", summary: "" }));
+    expect(text).toContain("<status>cancelled</status>\n  <cancelled-by>user</cancelled-by>");
+  });
+
+  it("says in the summary that the USER stopped the subagent and must not be relaunched or retried", () => {
+    const text = formatChildTaskNotification(input({ status: "cancelled", cancelledBy: "user", summary: "" }));
+    expect(text).toContain("The user stopped this subagent. Do not relaunch it or retry the task unless the user asks; acknowledge and wait.");
+  });
+
+  it("keeps the closed status enum value cancelled (no new status word)", () => {
+    const text = formatChildTaskNotification(input({ status: "cancelled", cancelledBy: "user" }));
+    expect(text).toContain("<status>cancelled</status>");
+  });
+
+  it("keeps the child's own partial report after the explanation sentence", () => {
+    const text = formatChildTaskNotification(input({ status: "cancelled", cancelledBy: "user", summary: "partial findings" }));
+    expect(text).toContain("partial findings");
+  });
+
+  it("omits the field and the sentence for a cancel with no user cause (shutdown / parent abort keep their current text)", () => {
+    const text = formatChildTaskNotification(input({ status: "cancelled", summary: "" }));
+    expect(text).toContain("<status>cancelled</status>");
+    expect(text).not.toContain("<cancelled-by>");
+    expect(text).not.toContain("The user stopped this subagent");
+  });
+
+  it("ignores cancelledBy for a non-cancelled status (only a cancelled terminal can be a user stop)", () => {
+    const text = formatChildTaskNotification(input({ status: "completed", cancelledBy: "user" }));
+    expect(text).not.toContain("<cancelled-by>");
+    expect(text).not.toContain("The user stopped this subagent");
+  });
+});
+
 describe("mapChildRunStatusToNotification (spec §4bis: 4-way -> 3-way)", () => {
   it("completed -> completed", () => {
     expect(mapChildRunStatusToNotification("completed")).toBe("completed");

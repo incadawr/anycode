@@ -462,6 +462,8 @@ interface BackgroundChildEntry {
   requestId: string;
   snapshot: BackgroundChildSnapshot;
   cancelRequested: boolean;
+  /** Who asked for the cancel (first request wins): the UI stop ("user") or the shutdown sweep ("shutdown"). Read at terminal to attribute the outcome. */
+  cancelCause?: "user" | "shutdown";
 }
 
 /**
@@ -794,6 +796,13 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "terminal": {
+              // TASK.240: the cancel cause lives only in this host's registry
+              // row, which the detached branch below deletes — read it NOW,
+              // while the row still exists, so a user stop reaches the parent.
+              const userCancelled =
+                req.detach === true &&
+                event.status === "cancelled" &&
+                backgroundChildren.get(event.childSessionId)?.cancelCause === "user";
               const outcome: SessionSubagentOutcome = {
                 status: event.status,
                 finalText: event.finalText,
@@ -811,6 +820,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 // so the parent host's respawn classifier never sees the
                 // child's free model text.
                 ...(event.errorDescriptor !== undefined ? { errorDescriptor: event.errorDescriptor } : {}),
+                ...(userCancelled ? { cancelledBy: "user" as const } : {}),
               };
               // TASK.145 срез 1: this run's `run()` promise already settled
               // at admit (above) — this terminal can no longer resolve it.
@@ -992,12 +1002,17 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
 
   /** TASK.145 срез 3, `ChildSessionPort.cancelBackgroundChild` — see that interface's own doc. */
   function cancelBackgroundChild(childSessionId: string): boolean {
+    return requestBackgroundChildCancel(childSessionId, "user");
+  }
+
+  function requestBackgroundChildCancel(childSessionId: string, cause: "user" | "shutdown"): boolean {
     const entry = backgroundChildren.get(childSessionId);
     if (entry === undefined) {
       return false;
     }
     if (!entry.cancelRequested) {
       entry.cancelRequested = true;
+      entry.cancelCause = cause;
       options.send({ type: CHILD_RUN_CANCEL_TYPE, requestId: entry.requestId });
     }
     return true;
@@ -1006,7 +1021,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
   /** TASK.145 срез 3, `ChildSessionPort.cancelAllBackgroundChildren` — see that interface's own doc. */
   function cancelAllBackgroundChildren(): void {
     for (const childSessionId of [...backgroundChildren.keys()]) {
-      cancelBackgroundChild(childSessionId);
+      requestBackgroundChildCancel(childSessionId, "shutdown");
     }
   }
 

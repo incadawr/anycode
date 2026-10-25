@@ -1129,6 +1129,39 @@ describe("createChildSessionPort (TASK.102 CUT-S2 §2.6.1)", () => {
       expect(detachedTerminals[0]!.outcome.status).toBe("cancelled");
     });
 
+    it("TASK.240 user-stop: a cancelBackgroundChild (the UI stop path) marks the terminal outcome cancelledBy=user", async () => {
+      const { port, sent, emit, detachedTerminals } = detachHarness();
+      const pending = port.run(
+        { agentType: "explore", description: "d", prompt: "p", spawnToolCallId: "spawn-user-stop", detach: true },
+        {},
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-user-stop", childTabId: "t1", model: "m" });
+      await pending;
+
+      expect(port.cancelBackgroundChild("child-user-stop")).toBe(true);
+      emit(terminalEvent(requestId, { status: "cancelled", childSessionId: "child-user-stop" }));
+      expect(detachedTerminals).toHaveLength(1);
+      expect(detachedTerminals[0]!.outcome.status).toBe("cancelled");
+      expect(detachedTerminals[0]!.outcome.cancelledBy).toBe("user");
+    });
+
+    it("TASK.240 user-stop: a shutdown sweep (cancelAllBackgroundChildren) is NOT attributed to the user", async () => {
+      const { port, sent, emit, detachedTerminals } = detachHarness();
+      const pending = port.run(
+        { agentType: "explore", description: "d", prompt: "p", spawnToolCallId: "spawn-shutdown-cause", detach: true },
+        {},
+      );
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-shutdown", childTabId: "t1", model: "m" });
+      await pending;
+
+      port.cancelAllBackgroundChildren();
+      emit(terminalEvent(requestId, { status: "cancelled", childSessionId: "child-shutdown" }));
+      expect(detachedTerminals).toHaveLength(1);
+      expect(detachedTerminals[0]!.outcome.cancelledBy).toBeUndefined();
+    });
+
     it("TASK.145 срез 3: cancelBackgroundChild on an unknown/already-finished childSessionId returns false and sends nothing", () => {
       const { port, sent } = detachHarness();
       expect(port.cancelBackgroundChild("no-such-child")).toBe(false);

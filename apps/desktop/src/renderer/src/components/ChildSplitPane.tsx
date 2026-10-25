@@ -49,6 +49,7 @@ const BADGE_GLYPH: Record<ChildBadgeKind, string> = {
   running: "●",
   error: "✕",
   done: "✓",
+  cancelled: "■",
 };
 
 const BADGE_LABEL: Record<ChildBadgeKind, string> = {
@@ -56,6 +57,7 @@ const BADGE_LABEL: Record<ChildBadgeKind, string> = {
   running: "Running",
   error: "Error",
   done: "Done",
+  cancelled: "Cancelled",
 };
 
 function ChildSplitBadge({ badge }: { badge: ChildBadgeKind }) {
