@@ -13,6 +13,7 @@
  * update to the last turn must not recompute earlier turns — counted),
  * excerpt caps during the walk, and the roving-index key handler.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -531,5 +532,33 @@ describe("TranscriptMinimap (SSR component render)", () => {
     const html = renderMinimap({ marks });
     expect(html).not.toContain("minimap-preview");
     expect(html).not.toContain("aria-describedby");
+  });
+
+  it("dots live in a .minimap-marks scroll list inside the non-clipping .minimap shell", () => {
+    const html = renderMinimap({ marks });
+    const open = html.indexOf('<div class="minimap-marks">');
+    expect(open).toBeGreaterThan(-1);
+    // Every dot sits INSIDE the scroll list, none in the outer shell.
+    const close = html.indexOf("</div>", open);
+    const inner = html.slice(open, close);
+    expect((inner.match(/class="minimap-mark(?:\s[^"]*)?"/g) ?? []).length).toBe(2);
+  });
+});
+
+describe("minimap.css clipping contract (hover preview must not be clipped)", () => {
+  const css = readFileSync(new URL("../minimap.css", import.meta.url), "utf8");
+  function ruleBody(selector: string): string {
+    const start = css.indexOf(`${selector} {`);
+    expect(start).toBeGreaterThan(-1);
+    // Strip comments first: the rule's prose may mention "overflow" itself.
+    return css.slice(start, css.indexOf("}", start)).replace(/\/\*[\s\S]*?\*\//g, "");
+  }
+
+  it("the outer .minimap shell declares no overflow (its absolutely-positioned preview would be clipped)", () => {
+    expect(ruleBody(".minimap")).not.toMatch(/overflow/);
+  });
+
+  it("the scrolling moved onto .minimap-marks, which is the only overflow box", () => {
+    expect(ruleBody(".minimap-marks")).toMatch(/overflow-y:\s*auto/);
   });
 });

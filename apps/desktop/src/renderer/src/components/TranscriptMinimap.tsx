@@ -358,6 +358,9 @@ export function TranscriptMinimap({
     return null;
   }
   return (
+    // Two layers on purpose: the outer pill never clips (the hover preview is
+    // an absolutely-positioned child and an overflow box would hide it), and
+    // only the inner dot list scrolls once the pill hits its max-height.
     <div
       className="minimap"
       role="navigation"
@@ -365,6 +368,7 @@ export function TranscriptMinimap({
       ref={listRef}
       onKeyDown={handleMinimapKeys}
     >
+      <div className="minimap-marks">
       {marks.map((mark, i) => (
         <button
           type="button"
@@ -389,6 +393,7 @@ export function TranscriptMinimap({
           <span className="minimap-mark-dot" aria-hidden="true" />
         </button>
       ))}
+      </div>
       {hovered !== null && marks[hovered] !== undefined && (
         <div className="minimap-preview" role="tooltip" id={previewId}>
           <div className="minimap-preview-question">

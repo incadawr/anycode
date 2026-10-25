@@ -21,20 +21,29 @@
 
 /* The scrubber pill itself: one dot per user turn. var usage copied verbatim
    from .todo-panel-card's block. position:relative anchors the hover preview
-   card; the pill scrolls internally past 60dvh so it can never crowd the
-   jump-to-latest chip. */
+   card. */
 .minimap {
   position: relative;
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
   padding: var(--sp-2);
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 999px;
   box-shadow: var(--shadow-menu);
-  max-height: 60dvh;
+  /* No overflow here: the hover preview is an absolutely-positioned child of
+     this box and an overflow clip would hide it entirely. The scrolling lives
+     on .minimap-marks. */
+}
+
+/* The dot list: scrolls internally past 60dvh (budget minus the pill's own
+   padding and border) so the pill never crowds the jump-to-latest chip. */
+.minimap-marks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: calc(60dvh - var(--sp-2) * 2 - 2px);
   overflow-y: auto;
 }
 
