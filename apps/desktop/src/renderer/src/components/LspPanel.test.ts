@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { LspServerStatus } from "@anycode/core";
-import { formatLspExtensions, formatLspState, formatLspSummary } from "./LspPanel.js";
+import type { LspConfigStatus } from "../../../shared/lsp-config.js";
+import {
+  LSP_NOT_INSTALLED_LABEL,
+  buildLspCatalogLookup,
+  formatLspExtensions,
+  formatLspState,
+  formatLspSummary,
+  resolveLspRowState,
+} from "./LspPanel.js";
 
 describe("LspPanel pure helpers", () => {
   it("formats LSP states for compact badges", () => {
@@ -56,6 +64,98 @@ describe("formatLspSummary", () => {
       server({ name: "d", state: "disposed" }),
     ];
     expect(formatLspSummary(servers)).toBe("1 initializing · 1 crashed · 1 disposed · 1 not started");
+  });
+});
+
+// ── "Not installed" vs "Not started" (Taskana 4845) ──
+
+function buildLspLookupSizeForTest(lookup: Map<string, { found: boolean; installHint: string }>): number {
+  return lookup.size;
+}
+
+
+function catalogStatus(entries: { id: string; found: boolean; installHint: string }[]): LspConfigStatus {
+  return {
+    catalog: entries.map((entry) => ({
+      id: entry.id,
+      label: entry.id,
+      languages: entry.id,
+      command: entry.id,
+      args: [],
+      extensions: [`.${entry.id}`],
+      installHint: entry.installHint,
+      found: entry.found,
+      foundSource: entry.found ? "path" : null,
+    })),
+    entries: { project: null, user: [] },
+    issues: [],
+    projectScopeAvailable: false,
+    projectTrusted: null,
+  };
+}
+
+describe("buildLspCatalogLookup", () => {
+  it("indexes catalog entries by id for O(1) row joins", () => {
+    const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: false, installHint: "npm i -g typescript" }]));
+    expect(lookup.get("typescript")?.installHint).toBe("npm i -g typescript");
+    expect(lookup.has("gopls")).toBe(false);
+  });
+
+  it("an empty catalog yields an empty lookup (no detection => keep live states)", () => {
+    expect(buildLspLookupSizeForTest(buildLspCatalogLookup(catalogStatus([])))).toBe(0);
+  });
+});
+
+describe("resolveLspRowState (Taskana 4845: Not installed vs Not started)", () => {
+  it("a lazy not_started server whose binary the catalog reports missing becomes not_installed", () => {
+    const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: false, installHint: "npm i -g typescript" }]));
+    expect(resolveLspRowState(server({ name: "typescript", state: "not_started" }), lookup).state).toBe("not_installed");
+  });
+
+  it("a not_started server with the binary FOUND stays not_started (lazy before first edit)", () => {
+    const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: true, installHint: "npm i -g typescript" }]));
+    expect(resolveLspRowState(server({ name: "typescript", state: "not_started" }), lookup).state).toBe("not_started");
+  });
+
+  it("custom/hand-written entries (no catalog match) never become not_installed", () => {
+    const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: false, installHint: "npm i -g typescript" }]));
+    expect(resolveLspRowState(server({ name: "my-server", state: "not_started" }), lookup).state).toBe("not_started");
+  });
+
+  it("live states other than not_started pass through untouched", () => {
+    const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: false, installHint: "npm i -g typescript" }]));
+    expect(resolveLspRowState(server({ name: "typescript", state: "initializing" }), lookup).state).toBe("initializing");
+    expect(resolveLspRowState(server({ name: "typescript", state: "ready" }), lookup).state).toBe("ready");
+    expect(resolveLspRowState(server({ name: "typescript", state: "disposed" }), lookup).state).toBe("disposed");
+  });
+
+  it("a crashed server whose binary the catalog reports missing also reads not_installed (the ENOENT spawn outcome)", () => {
+    const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: false, installHint: "npm i -g typescript" }]));
+    expect(resolveLspRowState(server({ name: "typescript", state: "crashed" }), lookup).state).toBe("not_installed");
+  });
+
+  it("a crashed server with the binary FOUND stays crashed (a real process died)", () => {
+    const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: true, installHint: "npm i -g typescript" }]));
+    expect(resolveLspRowState(server({ name: "typescript", state: "crashed" }), lookup).state).toBe("crashed");
+  });
+
+  it("carries the catalog entry's install hint alongside the not_installed state", () => {
+    const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: false, installHint: "npm i -g typescript typescript-language-server" }]));
+    expect(resolveLspRowState(server({ name: "typescript", state: "not_started" }), lookup).installHint).toBe(
+      "npm i -g typescript typescript-language-server",
+    );
+  });
+});
+
+describe("formatLspSummary with detection join", () => {
+  it("counts not_installed rows in the fixed order vocabulary (lowercased)", () => {
+    const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: false, installHint: "npm i -g typescript" }]));
+    const servers = [server({ name: "typescript", state: "not_started" }), server({ name: "gopls", state: "ready" })];
+    expect(formatLspSummary(servers, lookup)).toBe("1 ready · 1 not installed");
+  });
+
+  it("without a lookup the summary is unchanged (existing callers/tests stay green)", () => {
+    expect(formatLspSummary([server({ name: "a", state: "not_started" })])).toBe("1 not started");
   });
 });
 

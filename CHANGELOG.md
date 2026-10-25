@@ -11,6 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - `pnpm test` no longer depends on the developer's own `~/.anycode/config.json`: the core CLI e2e suite now runs every `runCli` drive against an isolated home, so user-scope LSP servers (or any other user config) can't leak into the results (Taskana 4850).
 - With language servers configured, the system prompt now says so in one line — which extensions are covered and that their diagnostics arrive attached to Edit/Write results (with a note that intermediate diagnostics during a multi-file change are expected), so the model no longer answers "no LSP tools" and proposes manual `tsc` runs.
+- LSP status panel: a configured server whose binary is missing shows "Not installed" with the catalog's install command instead of a misleading "Not started"/"Crashed" (detection is the Settings pane's existence-only check; nothing is spawned).
 - A markdown preview in the right-side dock fills the panel again; it had collapsed to a thin strip (most visible in Source mode).
 
 ## [0.0.41] — 2026-10-25

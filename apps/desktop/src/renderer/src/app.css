@@ -6651,6 +6651,14 @@ body {
   background: var(--bg-elevated);
 }
 
+/* Taskana 4845: missing-binary display state — a warning the user can act on
+   (the row carries the catalog's install command), distinct from "Not started". */
+.lsp-state-not_installed {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
 .lsp-stderr {
   color: var(--text-2);
   font-size: var(--fs-xs);

@@ -1,5 +1,6 @@
-import { useContext, useEffect } from "react";
+import { useContext, useEffect, useState } from "react";
 import type { LspServerState, LspServerStatus } from "@anycode/core";
+import type { LspConfigStatus } from "../../../shared/lsp-config.js";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
@@ -15,7 +16,14 @@ const STATE_LABELS: Record<LspServerState, string> = {
 
 // Fixed display order for the header summary line, independent of server
 // array order (which reflects config/spawn order, not a useful read order).
-const STATE_SUMMARY_ORDER: readonly LspServerState[] = ["ready", "initializing", "crashed", "disposed", "not_started"];
+const STATE_SUMMARY_ORDER: readonly LspRowDisplayState[] = [
+  "ready",
+  "initializing",
+  "crashed",
+  "disposed",
+  "not_started",
+  "not_installed",
+];
 
 export function formatLspState(state: LspServerState): string {
   return STATE_LABELS[state];
@@ -25,16 +33,78 @@ export function formatLspExtensions(extensions: readonly string[]): string {
   return extensions.length > 0 ? extensions.join(", ") : "-";
 }
 
-export function formatLspSummary(servers: readonly LspServerStatus[]): string {
+// ── "Not installed" vs "Not started" (Taskana 4845) ──
+//
+// A lazy `not_started` server whose binary is missing looks broken in the
+// panel ("enabled but never starts"). The Settings pane's existence-only
+// detection (main/lsp-detect.ts via the lspConfig.status invoke channel —
+// nothing is ever spawned) already knows the binary is absent, so the panel
+// joins that answer by server NAME (the catalog id IS the written entry name)
+// and displays a separate "Not installed" state with the catalog's install
+// command. The lazy "Not started" stays reserved for an INSTALLED server
+// before its first edit; custom entries (no catalog match) keep their live
+// state — the catalog cannot speak for binaries it does not know.
+
+/** Badge text for the missing-binary display state (distinct from Not started). */
+export const LSP_NOT_INSTALLED_LABEL = "Not installed";
+
+/** One catalog row's detection answer, indexed for the per-row join. */
+export interface LspCatalogLookupEntry {
+  found: boolean;
+  installHint: string;
+}
+
+export type LspCatalogLookup = Map<string, LspCatalogLookupEntry>;
+
+const EMPTY_LOOKUP: LspCatalogLookup = new Map();
+
+/** Indexes a `lspConfig.status` snapshot's catalog by entry id (= server name). */
+export function buildLspCatalogLookup(status: LspConfigStatus): LspCatalogLookup {
+  const lookup: LspCatalogLookup = new Map();
+  for (const entry of status.catalog) {
+    lookup.set(entry.id, { found: entry.found, installHint: entry.installHint });
+  }
+  return lookup;
+}
+
+/** A server state as the panel DISPLAYS it: a live LspServerState, or the "Not installed" join result. */
+export type LspRowDisplayState = LspServerState | "not_installed";
+
+export function formatLspRowState(state: LspRowDisplayState): string {
+  return state === "not_installed" ? LSP_NOT_INSTALLED_LABEL : formatLspState(state);
+}
+
+/**
+ * Resolves one server's display state. When the catalog says the binary is
+ * missing, both idle states a missing binary can present — `not_started`
+ * (never touched) and `crashed` (the ENOENT spawn outcome, which carries no
+ * pid/stderr of its own) — display as `not_installed` with the install hint.
+ * Everything else passes through untouched: custom entries (no catalog
+ * match), and every live outcome of a server whose binary WAS found.
+ */
+export function resolveLspRowState(
+  server: LspServerStatus,
+  lookup: LspCatalogLookup,
+): { state: LspRowDisplayState; installHint: string | null } {
+  const entry = lookup.get(server.name);
+  if (entry !== undefined && !entry.found && (server.state === "not_started" || server.state === "crashed")) {
+    return { state: "not_installed", installHint: entry.installHint };
+  }
+  return { state: server.state, installHint: null };
+}
+
+export function formatLspSummary(servers: readonly LspServerStatus[], lookup?: LspCatalogLookup): string {
   if (servers.length === 0) {
     return "";
   }
-  const counts = new Map<LspServerState, number>();
+  const joined = lookup ?? EMPTY_LOOKUP;
+  const counts = new Map<LspRowDisplayState, number>();
   for (const server of servers) {
-    counts.set(server.state, (counts.get(server.state) ?? 0) + 1);
+    const state = resolveLspRowState(server, joined).state;
+    counts.set(state, (counts.get(state) ?? 0) + 1);
   }
   return STATE_SUMMARY_ORDER.filter((state) => (counts.get(state) ?? 0) > 0)
-    .map((state) => `${counts.get(state)} ${formatLspState(state).toLowerCase()}`)
+    .map((state) => `${counts.get(state)} ${formatLspRowState(state).toLowerCase()}`)
     .join(" · ");
 }
 
@@ -70,8 +140,15 @@ function LspSetupHint() {
   );
 }
 
-function LspServerRow({ server }: { server: LspServerStatus }) {
+function LspServerRow({ server, lookup, onCopyInstallHint, copiedInstallName }: {
+  server: LspServerStatus;
+  lookup: LspCatalogLookup;
+  onCopyInstallHint: (name: string, hint: string) => void;
+  copiedInstallName: string | null;
+}) {
   const hasStderr = server.stderrTail.trim().length > 0;
+  const row = resolveLspRowState(server, lookup);
+  const installHintCopied = row.state === "not_installed" && copiedInstallName === server.name;
 
   return (
     <div className="lsp-server-row">
@@ -79,12 +156,25 @@ function LspServerRow({ server }: { server: LspServerStatus }) {
         <span className="lsp-server-name" title={server.name}>
           {server.name}
         </span>
-        <span className={`lsp-state lsp-state-${server.state}`}>{formatLspState(server.state)}</span>
+        <span className={`lsp-state lsp-state-${row.state}`}>{formatLspRowState(row.state)}</span>
       </div>
       <div className="lsp-server-meta">
         <span title={formatLspExtensions(server.extensions)}>{formatLspExtensions(server.extensions)}</span>
         <span>pid {server.pid ?? "-"}</span>
       </div>
+      {row.state === "not_installed" && row.installHint !== null && (
+        <div className="lsp-install-hint">
+          <span className="lsp-install-command">{row.installHint}</span>
+          <button
+            type="button"
+            className="git-btn"
+            aria-label={`Copy install command for ${server.name}`}
+            onClick={() => onCopyInstallHint(server.name, row.installHint ?? "")}
+          >
+            {installHintCopied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      )}
       {hasStderr && (
         <details className="lsp-stderr">
           <summary>stderr</summary>
@@ -109,11 +199,44 @@ export function LspPanel() {
   // right-side drawer is up.
   useOverlayFlag(open);
 
+  // Taskana 4845: existence-only binary detection for the "Not installed"
+  // display state. Fetched while the drawer is open and on Refresh; a missing
+  // bridge (tests/partial preload) or a failed invoke degrades to an empty
+  // lookup — every row then keeps its live state (the pre-4845 behavior).
+  const [lookup, setLookup] = useState<LspCatalogLookup>(() => new Map());
+  const [copiedInstallName, setCopiedInstallName] = useState<string | null>(null);
+
+  function refreshDetection(): void {
+    const bridge = window.anycode?.lspConfig;
+    if (!bridge) return;
+    bridge
+      .status({ tabId })
+      .then((snapshot) => {
+        setLookup(buildLspCatalogLookup(snapshot));
+      })
+      .catch(() => {
+        // Fail-soft: no detection answer => keep live states.
+      });
+  }
+
   useEffect(() => {
     if (open) {
       send({ type: "lsp_status_request" });
+      refreshDetection();
     }
-  }, [open, send]);
+  }, [open, send, tabId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function copyInstallHint(name: string, hint: string): void {
+    const write = navigator.clipboard?.writeText(hint);
+    if (!write) return;
+    void write.then(
+      () => {
+        setCopiedInstallName(name);
+        window.setTimeout(() => setCopiedInstallName(null), 1500);
+      },
+      () => {},
+    );
+  }
 
   if (!open) {
     return null;
@@ -121,13 +244,14 @@ export function LspPanel() {
 
   function refresh(): void {
     send({ type: "lsp_status_request" });
+    refreshDetection();
   }
 
   function close(): void {
     useTabsStore.getState().setLspPanelOpen(tabId, false);
   }
 
-  const summary = formatLspSummary(servers);
+  const summary = formatLspSummary(servers, lookup);
 
   return (
     <aside className="lsp-panel" aria-label="LSP status">
@@ -148,7 +272,15 @@ export function LspPanel() {
         {servers.length === 0 ? (
           <LspSetupHint />
         ) : (
-          servers.map((server) => <LspServerRow key={server.name} server={server} />)
+          servers.map((server) => (
+            <LspServerRow
+              key={server.name}
+              server={server}
+              lookup={lookup}
+              onCopyInstallHint={copyInstallHint}
+              copiedInstallName={copiedInstallName}
+            />
+          ))
         )}
       </div>
     </aside>
