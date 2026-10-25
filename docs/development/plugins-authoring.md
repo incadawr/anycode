@@ -19,6 +19,7 @@ For the user-facing story (tiers, install flow, consent), see
   "description": "Marketplace helpers: skills, an agent profile, and an MCP server.",
   "skills": ["skills"],
   "agents": ["agents"],
+  "workflows": ["workflows"],
   "mcpServers": {
     "api": {
       "command": "node",
@@ -38,6 +39,7 @@ For the user-facing story (tiers, install flow, consent), see
 | `agents` | string[] | `["agents"]` | Directories contributing `*.md` subagent profiles, same containment rule. |
 | `mcpServers` | record | — | Same entry shape as explicit config (`command`+`args` xor `url`, `env`/`headers` as `${env:VAR}` references, `inheritEnv`, `enabled`). Keys share the name alphabet. At runtime a server is renamed `plugin_<plugin>_<server>`; an explicit config row with that name always wins. |
 | `engines` | string | — | Optional semver range of AnyCode versions this plugin supports (index-mediated; incompatible versions are not offered). |
+| `workflows` | string[] | `["workflows"]` | Directories contributing `*.json` workflow presets (same schema as `.anycode/workflows`). Plugin presets sit between your own workflows and the bundled ones. Same containment rule. |
 
 Unknown top-level keys are ignored — a richer future manifest never breaks an
 older app. Any schema violation fails the whole manifest fail-soft: the plugin

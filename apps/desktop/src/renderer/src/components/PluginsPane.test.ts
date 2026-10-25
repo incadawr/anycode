@@ -84,7 +84,7 @@ function snapshot(overrides: Partial<PluginsSnapshot> = {}): PluginsSnapshot {
     plugins: [],
     available: [],
     index: { status: "ok", checkedAt: "2026-10-24T10:00:00Z", serial: 42 },
-    settings: { autoUpdateOfficial: true },
+    settings: { autoUpdateOfficial: true, indexConfigured: true },
     ...overrides,
   };
 }
@@ -95,10 +95,10 @@ function preview(overrides: Partial<PluginInstallPreview> = {}): PluginInstallPr
     displayName: "Acme Tools",
     description: "Marketplace helpers.",
     version: "0.3.1",
-    tier: "third-party",
     source: { kind: "url", url: "https://example.com/acme-tools-0.3.1.tgz" },
     capabilities: ["skills"],
     mcpServers: [],
+    hasHooks: false,
     ...overrides,
   };
 }
@@ -110,13 +110,12 @@ function installedRow(overrides: Partial<PluginRowView> = {}): PluginRowView {
     description: "Deep-research workflow and an agent profile.",
     version: "1.0.0",
     tier: "official",
+    status: "active",
     source: { kind: "official" },
-    enabled: true,
-    active: true,
-    pinned: false,
-    capabilities: ["skills", "workflows"],
-    mcpServers: [],
-    mcpNeedsApproval: false,
+    managed: { enabled: true, pinned: false, active: "1.0.0" },
+    capabilities: { skills: 1, agents: 0, workflows: 1, mcp: [], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0 },
+    mcpServerNames: [],
+    mcpConsentGranted: false,
     problems: [],
     ...overrides,
   };
@@ -165,7 +164,7 @@ describe("PluginsPaneBody", () => {
     const snap = snapshot({
       plugins: [
         installedRow(),
-        installedRow({ name: "acme-tools", displayName: "Acme Tools", tier: "third-party", source: { kind: "url", url: "https://x/y.tgz" }, mcpNeedsApproval: true }),
+        installedRow({ name: "acme-tools", displayName: "Acme Tools", tier: "third-party", source: { kind: "url", url: "https://x/y.tgz" }, mcpServerNames: ["plugin_acme-tools_api"], mcpConsentGranted: false }),
       ],
     });
     const html = call(() => PluginsPaneBody(bodyPropsFor(snap)));
@@ -193,23 +192,23 @@ describe("PluginsPaneBody", () => {
           description: "d",
           version: "1.0.0",
           capabilities: ["skills"],
-          defaultInstall: false,
+          default: false,
         },
         {
           name: "future-tools",
           displayName: "Future Tools",
           description: "d",
           version: undefined,
-          incompatibleRange: ">=0.0.40",
+          incompatibleReason: "no version compatible with AnyCode 0.0.35 (needs >=0.0.40)",
           capabilities: ["skills"],
-          defaultInstall: false,
+          default: false,
         },
       ],
     });
     const html = call(() => PluginsPaneBody(bodyPropsFor(snap)));
     expect(html).toContain("Available from AnyCode");
     expect(html).toContain("Install");
-    expect(html).toContain("Needs AnyCode >=0.0.40");
+    expect(html).toContain("no version compatible with AnyCode 0.0.35 (needs >=0.0.40)");
   });
 
   it("renders the empty state for a plugin-free snapshot", () => {
@@ -224,7 +223,7 @@ describe("PluginsPaneBody", () => {
   });
 
   it("renders disabled rows as disabled (data flag for the row state)", () => {
-    const snap = snapshot({ plugins: [installedRow({ enabled: false })] });
+    const snap = snapshot({ plugins: [installedRow({ managed: { enabled: false, pinned: false, active: "1.0.0" } })] });
     expect(call(() => PluginsPaneBody(bodyPropsFor(snap)))).toContain("data-plugin-enabled=false");
   });
 });
@@ -263,7 +262,7 @@ describe("InstallDialogBody (element-level)", () => {
           phase: "confirm",
           source: { kind: "url", url: "https://x/y.tgz" },
           preview: preview({
-            mcpServers: [{ name: "plugin_acme-tools_api", commandLine: "node api.js --flag", consented: false }],
+            mcpServers: [{ name: "plugin_acme-tools_api", command: "node", args: ["api.js", "--flag"] }],
           }),
           token: "tok-1",
         },
@@ -282,7 +281,7 @@ describe("InstallDialogBody (element-level)", () => {
         stage: {
           phase: "confirm",
           source: { kind: "official", name: "x" },
-          preview: preview({ sha256Prefix: "abc123def456", enginesRange: ">=0.0.35", tier: "official", source: { kind: "official" } }),
+          preview: preview({ sha256Prefix: "abc123def456", engines: ">=0.0.35", source: { kind: "url", url: "https://x/y.tgz" } }),
           token: "tok-1",
         },
       }),
@@ -329,7 +328,7 @@ describe("describeSourceForSheet", () => {
     expect(
       describeSourceForSheet({ kind: "url", url: "u" }, preview({ source: { kind: "url", url: "https://x/y.tgz" } })),
     ).toBe("https://x/y.tgz");
-    expect(describeSourceForSheet({ kind: "file" }, preview({ source: { kind: "file", fileName: "y.tgz" } }))).toBe("y.tgz");
-    expect(describeSourceForSheet({ kind: "folder" }, preview({ source: { kind: "local", path: "/abs" } }))).toBe("/abs");
+    expect(describeSourceForSheet({ kind: "file" }, preview({ source: { kind: "file" } }))).toBe("local archive file");
+    expect(describeSourceForSheet({ kind: "folder" }, preview({ source: { kind: "folder" } }))).toBe("linked folder (dev)");
   });
 });

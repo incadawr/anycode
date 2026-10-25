@@ -169,3 +169,37 @@ export type PluginInstallPrepareResult =
 export type PluginInstallCommitResult =
   | { ok: true; snapshot: PluginsSnapshot }
   | { ok: false; reason: PluginsRefusalReason; detail?: string };
+
+// ═══════════════════════════════════════════════════════════════════
+// S1-C renderer additions (merged from the renderer brief's version,
+// ADDITIVE ONLY — wire semantics above are S1-B main's, unchanged).
+// Aliases carry no wire meaning: they exist so the renderer keeps one
+// spelling per concept (PluginInstallSourceRequest = what a request
+// carries; PluginsCheckUpdatesResult = what check-updates resolves with).
+// ═══════════════════════════════════════════════════════════════════
+
+/** Alias of `PluginInstallSource` — S1-C renderer spelling for request payloads. */
+export type PluginInstallSourceRequest = PluginInstallSource;
+
+/** Alias of `PluginsIndexInfo` — S1-C renderer spelling. */
+export type PluginsIndexView = PluginsIndexInfo;
+
+/** `plugins-changed` push payload shape (`{reason}`) — S1-C renderer spelling. */
+export interface PluginsChangedPayload {
+  reason: PluginsChangedReason;
+}
+
+/** Alias of `PluginInstallPrepareResult` — S1-C renderer spelling. */
+export type PluginsInstallPrepareResult = PluginInstallPrepareResult;
+
+/** Alias of `PluginInstallCommitResult` — S1-C renderer spelling. */
+export type PluginsInstallCommitResult = PluginInstallCommitResult;
+
+/** check-updates resolves with a fresh snapshot (main's S1-B semantics: a
+ *  network failure is reported through `index.status:"offline"`, so the
+ *  ok-branch carries the snapshot and the refusal union is reserved for
+ *  request-level errors). */
+export type PluginsCheckUpdatesResult = PluginsSnapshot;
+
+/** Reveal has no catalog effect on success — ok/refusal only (S1-C spelling). */
+export type PluginsRevealResult = PluginsMutationResult;

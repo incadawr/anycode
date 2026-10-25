@@ -9,6 +9,15 @@ source.
 Plugins are **additive-optional**: an AnyCode with zero plugins behaves
 exactly as before, and hand-placed plugin directories (below) keep working.
 
+Open the pane from Settings → **Plugins** or by typing `/plugins` in a task.
+The Skills and Subagents panes link to it from their plugin rows, and
+plugin-contributed MCP servers appear as read-only rows in the MCP pane.
+
+> The official channel is **not configured** until production signing keys
+> are published: the pane header says "Official index not configured in this
+> build", the *Available from AnyCode* list stays empty, and nothing
+> auto-installs. File, URL and folder installs work regardless.
+
 ## Where plugins live
 
 | Location | What it is |
@@ -97,6 +106,9 @@ installed but contributes nothing.
   collision with your own config means your config wins at runtime.
 - **Index offline / signature failed** — the pane header says so; installs and
   updates pause until the index refreshes (Check for updates retries).
+- **"Official index not configured in this build"** — this build carries no
+  production signing key yet, so the official channel is disabled by design.
+  Third-party installs (file/URL/folder) still work.
 - **The pane says "Plugins service unavailable"** — this build's main process
   does not expose the plugins channels. Hand-placed directories keep working
   as before.
