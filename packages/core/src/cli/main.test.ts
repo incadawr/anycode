@@ -4613,6 +4613,7 @@ describe("buildCliEndpointConfig ( endpoint-builder)", () => {
       model: "gpt-oss-120b",
       retry: { maxRetries: 2 },
       includeUsage: true,
+      networkWaiter: expect.objectContaining({ probe: expect.any(Function) }),
     });
   });
 

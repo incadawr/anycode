@@ -30,6 +30,8 @@ export { createMediaProjectionPort, projectMessagesForMedia } from "./media-proj
 export { OPENAI_TOOL_RESULT_IMAGE_OMITTED_NOTE, toSdkMessages, toSdkTools } from "./sdk-mapping.js";
 export { DEFAULT_RETRY_POLICY, isRetryableStreamError, retryDelayMs } from "./retry.js";
 export type { RetryPolicy } from "./retry.js";
+export { createProbeOnlyNetworkWaiter, tcpReachable } from "./network-waiter.js";
+export type { NetworkWaiter, TcpConnector, TcpReachableOptions } from "./network-waiter.js";
 export {
   DEFAULT_BASE_URL,
   ENV_API_KEY,
