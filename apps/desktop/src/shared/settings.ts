@@ -492,6 +492,12 @@ export interface AnycodeSettings {
     maxRetries?: number;
     networkRetryBudgetMs?: number;
     /**
+     * Taskana 4772: mirror of ANYCODE_NETWORK_WAIT_MAX_MS (env > settings) — the
+     * monotonic bound on waiting for the network before a turn fails. Absent =
+     * the core default (30 min); 0 disables waiting.
+     */
+    networkWaitMaxMs?: number;
+    /**
      * Grep backend selector (Taskana 4160): "rg" (default) or "tgrep"
      * (microsoft/tgrep trigram index; user must run `tgrep serve` themselves —
      * AnyCode never manages the daemon). Mirror of ANYCODE_GREP_BACKEND

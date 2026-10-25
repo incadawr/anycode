@@ -2,6 +2,7 @@ import { applyInputFromBlock, createCommunicationController, type CommunicationC
 import { createSessionAccessStore, defaultSessionAccessFromSettingsFile, type SessionAccessStore } from "./communication-sessions.js";
 import { registerCommunicationIpc } from "./communication-ipc.js";
 import { createBrowserAccessStore, defaultBrowserFullAccessFromSettingsFile, type BrowserAccessStore } from "./browser-access.js";
+import { attachNetworkHintForwarders, type NetHintSource } from "./network-hints.js";
 import {
   createBrowserAccessNotifier,
   effectiveTabState,
@@ -56,6 +57,7 @@ import {
   dialog,
   nativeImage,
   net,
+  powerMonitor,
   safeStorage,
   session,
   shell,
@@ -2263,6 +2265,29 @@ void app.whenReady().then(async () => {
       }
     },
   });
+  // Taskana 4772: OS connectivity hints (net online, resume, unlock-screen) reach
+  // every tab host, where a turn parked waiting for the network re-probes at once.
+  // Persistent `.on` listeners registered once here (never `once`: a hint can fire
+  // many times over the app's life).
+  // Best-effort: the hints only shorten a wait, so a missing OS source must never block boot.
+  try {
+    attachNetworkHintForwarders({
+      // Electron's typings omit the net module's `online` event (see NetHintSource).
+      net: net as unknown as NetHintSource,
+      powerMonitor,
+      postAll: (message) => {
+        for (const tab of manager?.listTabs() ?? []) {
+          try {
+            manager?.getTab(tab.tabId)?.proc?.postMessage(message);
+          } catch (error) {
+            console.warn(`[main] failed to post network hint to tab ${tab.tabId}`, error);
+          }
+        }
+      },
+    });
+  } catch (error) {
+    console.warn("[main] network hint forwarders not attached", error);
+  }
   communicationController = createCommunicationController({
     manager: () => manager,
     userData: app.getPath("userData"),

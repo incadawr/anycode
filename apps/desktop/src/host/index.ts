@@ -350,6 +350,7 @@ import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "..
 import { PREVIEW_ARTIFACTS_TYPE } from "../shared/preview.js";
 import type { PreviewEventMessage, PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
 import type { RetryPolicy } from "@anycode/core";
+import { desktopNetworkWaiter, wakeNetworkWaiters } from "./network-wait.js";
 import type { McpSecretResolver } from "@anycode/core";
 import { takeMcpSecretsEnv } from "./mcp-secrets.js";
 import {
@@ -369,6 +370,7 @@ import {
   resolveEngineDraftPresetId,
   repairDanglingToolCalls,
   resolveBootSession,
+  routeNetworkHint,
   routePreviewMessage,
   scrubSecretEnv,
   seedAlwaysAllowRules,
@@ -2906,9 +2908,12 @@ async function boot(): Promise<void> {
     let childRetryBoot = args.child !== undefined;
     // Taskana 4705: main sessions honor ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS
     // (filled from settings.tools by host-env); children keep the Taskana 4226 budget policy.
+    // Taskana 4772: every port this host builds carries the desktop waiter, so a
+    // transient outage parks the turn ("waiting for network") instead of failing it.
     const envRetry: Partial<RetryPolicy> = {
       ...(envConfig.maxRetries !== undefined ? { maxRetries: envConfig.maxRetries } : {}),
       ...(envConfig.networkRetryBudgetMs !== undefined ? { networkRetryBudgetMs: envConfig.networkRetryBudgetMs } : {}),
+      ...(envConfig.networkWaitMaxMs !== undefined ? { networkWaitMaxMs: envConfig.networkWaitMaxMs } : {}),
     };
     const modelPortFactory = (m: string): ModelPort =>
       new AiSdkModelPort(
@@ -2929,6 +2934,7 @@ async function boot(): Promise<void> {
           // wrapped fetch; the port itself captures the update and yields it
           // as a `provider_quota` event, so the host needs no state of its own.
           onQuotaHeaders: () => {},
+          networkWaiter: desktopNetworkWaiter,
         },
         hostDiagnosticSink,
       );
@@ -5069,6 +5075,12 @@ process.parentPort.on("message", (event) => {
   const childStart = parseChildStart(data);
   if (childStart) {
     session?.startProgrammaticTurn(childStart.prompt);
+    return;
+  }
+  // Taskana 4772: an OS connectivity hint (forwarded by main) wakes every turn parked
+  // waiting for the network; the probe decides whether it resumes.
+  if (routeNetworkHint(data)) {
+    wakeNetworkWaiters();
     return;
   }
   // Preview control-plane messages (night-track wave-1 cut §2.3/§2.4): routed

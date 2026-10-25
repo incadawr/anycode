@@ -423,6 +423,7 @@ export type UiToHostMessage =
     } // starts a turn
   | { type: "steer_message"; requestId: string; text: string }
   | { type: "cancel_turn" } // abort the in-flight turn
+  | { type: "network_retry_now" } // Taskana 4772: stop waiting for the network and probe now
   | { type: "exit_worktree"; cleanup: "auto" | "keep" }
   | {
       type: "permission_response";
@@ -1059,6 +1060,13 @@ export const cancelTurnSchema = z
   })
   .strict();
 
+/** Taskana 4772: the "Retry now" control on a turn parked in "waiting for network". */
+export const networkRetryNowSchema = z
+  .object({
+    type: z.literal("network_retry_now"),
+  })
+  .strict();
+
 export const exitWorktreeSchema = z
   .object({
     type: z.literal("exit_worktree"),
@@ -1320,6 +1328,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   userMessageSchema,
   z.object({ type: z.literal("steer_message"), requestId: z.string(), text: z.string().min(1).max(32000) }).strict(),
   cancelTurnSchema,
+  networkRetryNowSchema,
   exitWorktreeSchema,
   permissionResponseSchema,
   setModeSchema,

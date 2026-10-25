@@ -66,6 +66,7 @@ import type {
   SessionMeta,
 } from "@anycode/core";
 import { BROWSER_ACCESS_HOST_MESSAGE_TYPE } from "../shared/browser-access.js";
+import { NETWORK_HINT_HOST_MESSAGE_TYPE } from "../shared/network-hints.js";
 import { SECRET_ENV_KEYS, connectionById, type ModelCapabilitiesDto } from "../shared/settings.js";
 import { defaultSettingsPath, loadSettings } from "../settings/files.js";
 import { CREDENTIAL_REQUEST_TYPE, type CredentialRequest, type CredentialResponse } from "../shared/credentials.js";
@@ -918,6 +919,11 @@ export interface PreviewMessageConsumers {
  * literal message object — the same testability rationale as every other
  * export in this file (see the file header).
  */
+export function routeNetworkHint(data: unknown): boolean {
+  const message = data as { type?: unknown } | null | undefined;
+  return !!message && typeof message === "object" && message.type === NETWORK_HINT_HOST_MESSAGE_TYPE;
+}
+
 export function routePreviewMessage(data: unknown, consumers: PreviewMessageConsumers): boolean {
   const message = data as { type?: unknown } | null | undefined;
   if (!message || typeof message.type !== "string") {

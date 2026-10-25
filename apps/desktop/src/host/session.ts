@@ -106,6 +106,7 @@ import { describeError, sanitizeAgentEvent } from "./serialize.js";
 import { recordErrorDiagnostic } from "./error-diagnostics.js";
 import { toWireToolMeta } from "./permission-broker.js";
 import type { SessionEngine } from "./engines/session-engine.js";
+import { wakeNetworkWaiters } from "./network-wait.js";
 import { ENGINE_SWITCH_TURN_ID, planEngineSwitchImport, renderImportPrompt } from "./engine-switch.js";
 import type { EngineId } from "./engines/session-engine.js";
 
@@ -2281,6 +2282,10 @@ export class Session {
         break;
       case "cancel_turn":
         this.onCancel();
+        break;
+      case "network_retry_now":
+        // Taskana 4772: the Retry-now control wakes every parked network probe of this host.
+        wakeNetworkWaiters();
         break;
       case "exit_worktree":
         if (this.relocating) {

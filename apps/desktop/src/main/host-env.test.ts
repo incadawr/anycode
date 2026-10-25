@@ -144,6 +144,25 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(env.ANYCODE_MAX_TURNS).toBe("100");
   });
 
+  it("projects tools.networkWaitMaxMs into ANYCODE_NETWORK_WAIT_MAX_MS (Taskana 4772; env > settings)", async () => {
+    const fromSettings = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ tools: { networkWaitMaxMs: 600000 } }),
+      getSecret: noSecret,
+    });
+    expect(fromSettings.ANYCODE_NETWORK_WAIT_MAX_MS).toBe("600000");
+
+    const fromEnv = await buildHostEnv({
+      bootEnv: { ANYCODE_NETWORK_WAIT_MAX_MS: "0" },
+      settings: settings({ tools: { networkWaitMaxMs: 600000 } }),
+      getSecret: noSecret,
+    });
+    expect(fromEnv.ANYCODE_NETWORK_WAIT_MAX_MS).toBe("0");
+
+    const unset = await buildHostEnv({ bootEnv: {}, settings: settings({ tools: {} }), getSecret: noSecret });
+    expect(unset.ANYCODE_NETWORK_WAIT_MAX_MS).toBeUndefined();
+  });
+
   it("projects tools.maxRetries / tools.networkRetryBudgetMs into ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (Taskana 4705; env > settings)", async () => {
     // settings fill when the boot env is blank
     const fromSettings = await buildHostEnv({

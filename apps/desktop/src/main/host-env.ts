@@ -58,6 +58,11 @@ export const ENV_MAX_RETRIES = "ANYCODE_MAX_RETRIES";
  * NETWORK failures may retry past ANYCODE_MAX_RETRIES while inside it.
  */
 export const ENV_NETWORK_RETRY_BUDGET_MS = "ANYCODE_NETWORK_RETRY_BUDGET_MS";
+/**
+ * Waiting-for-network bound in ms (Taskana 4772); literal mirror of core's
+ * `provider/env.ts` ENV_NETWORK_WAIT_MAX_MS.
+ */
+export const ENV_NETWORK_WAIT_MAX_MS = "ANYCODE_NETWORK_WAIT_MAX_MS";
 /** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
@@ -441,6 +446,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_MAX_TURNS,
   ENV_MAX_RETRIES,
   ENV_NETWORK_RETRY_BUDGET_MS,
+  ENV_NETWORK_WAIT_MAX_MS,
   ENV_SUBAGENT_MAX_TURNS,
   ENV_ADAPTIVE_TURN_BUDGET,
   ENV_SUBAGENT_STALL_MS,
@@ -1195,6 +1201,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // Taskana 4705: provider retry knobs (env > settings, same convention).
   fillFromSettings(env, ENV_MAX_RETRIES, numToStr(settings.tools.maxRetries));
   fillFromSettings(env, ENV_NETWORK_RETRY_BUDGET_MS, numToStr(settings.tools.networkRetryBudgetMs));
+  fillFromSettings(env, ENV_NETWORK_WAIT_MAX_MS, numToStr(settings.tools.networkWaitMaxMs));
   fillFromSettings(env, ENV_SUBAGENT_MAX_TURNS, numToStr(settings.tools.subagentMaxTurns));
   // TASK.4721: adaptive turn budget, boolean mirror (absent stays absent => OFF).
   fillFromSettings(

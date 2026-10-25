@@ -63,6 +63,15 @@ describe("frozen contract surface (shared/settings.ts)", () => {
   });
 });
 
+describe("settingsSchema — tools.networkWaitMaxMs (Taskana 4772)", () => {
+  it("keeps a supplied networkWaitMaxMs and leaves it absent when not supplied", () => {
+    const defaults = cloneDefaults();
+    const withWait = settingsSchema.parse({ ...defaults, tools: { ...defaults.tools, networkWaitMaxMs: 600000 } });
+    expect(withWait.tools.networkWaitMaxMs).toBe(600000);
+    expect(settingsSchema.parse(defaults).tools.networkWaitMaxMs).toBeUndefined();
+  });
+});
+
 describe("settingsSchema (v2)", () => {
   it("accepts the defaults and round-trips through JSON", () => {
     const parsed = settingsSchema.safeParse(cloneDefaults());

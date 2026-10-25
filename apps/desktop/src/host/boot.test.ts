@@ -48,6 +48,7 @@ import {
   resolveChildMaxTurns,
   resolveEngineDraftPresetId,
   resolveBootSession,
+  routeNetworkHint,
   routePreviewMessage,
   scrubSecretEnv,
   seedAlwaysAllowRules,
@@ -860,6 +861,20 @@ describe("createPreviewRpcClient (night-track wave-1 cut §2.3)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("routeNetworkHint (Taskana 4772: OS network hints from the main process)", () => {
+  it("recognizes the network-hint message and reports it handled", () => {
+    expect(routeNetworkHint({ type: "anycode:network-hint" })).toBe(true);
+  });
+
+  it("ignores malformed and unrelated messages", () => {
+    expect(routeNetworkHint(undefined)).toBe(false);
+    expect(routeNetworkHint(null)).toBe(false);
+    expect(routeNetworkHint("anycode:network-hint")).toBe(false);
+    expect(routeNetworkHint({ type: "shutdown" })).toBe(false);
+    expect(routeNetworkHint({ type: "anycode:network-hint-ish" })).toBe(false);
   });
 });
 

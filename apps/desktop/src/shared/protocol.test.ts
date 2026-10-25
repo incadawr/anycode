@@ -22,6 +22,9 @@ import type { GitCommandOutcome, HostToUiMessage, WireEnvStatus, WireGitStatus }
 describe("set_model protocol (slice P7.15 · F14)", () => {
   it("accepts a non-empty model id and fails closed on junk", () => {
     expect(uiToHostMessageSchema.safeParse({ type: "set_model", model: "glm-4.6" }).success).toBe(true);
+    // Taskana 4772: the Retry-now control of a turn parked on the network.
+    expect(uiToHostMessageSchema.safeParse({ type: "network_retry_now" }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "network_retry_now", extra: 1 }).success).toBe(false);
     // empty / missing / wrong-type / over-length / extra keys all fail closed
     expect(uiToHostMessageSchema.safeParse({ type: "set_model", model: "" }).success).toBe(false);
     expect(uiToHostMessageSchema.safeParse({ type: "set_model" }).success).toBe(false);
