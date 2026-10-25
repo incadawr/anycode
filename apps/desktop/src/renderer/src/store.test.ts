@@ -492,6 +492,40 @@ describe("desktop store — respawn-hydration reset (task 2.1.6, design F2)", ()
   });
 });
 
+describe("desktop store — waiting for network (Taskana 4772)", () => {
+  function runningStore() {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
+    return store;
+  }
+  const event = (store: ReturnType<typeof runningStore>, e: Record<string, unknown>) =>
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: e as never });
+
+  it("waiting_for_network sets the flag; a recovery stream_retry clears it", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network" });
+    expect(store.getState().waitingForNetwork).toBe(true);
+    event(store, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 15000, reason: "connect timeout" });
+    expect(store.getState().waitingForNetwork).toBe(false);
+  });
+
+  it("turn_end clears the flag", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network" });
+    event(store, { type: "turn_end", turn: 1, finishReason: "error" });
+    expect(store.getState().waitingForNetwork).toBe(false);
+  });
+
+  it("a waiting episode adds no transcript block and no error notice", () => {
+    const store = runningStore();
+    const before = store.getState().transcript.length;
+    event(store, { type: "waiting_for_network" });
+    expect(store.getState().transcript.length).toBe(before);
+    expect(store.getState().notice).toBeNull();
+  });
+});
+
 describe("desktop store — agent_event transcript accumulation", () => {
   it("surfaces finishReason=length as an output_truncated block", () => {
     const store = createDesktopStore();

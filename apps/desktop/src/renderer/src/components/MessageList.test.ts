@@ -455,15 +455,21 @@ describe("formatErrorRetrySuffix (TASK.33 W8 — mirrors cli/render.ts wording)"
   });
 });
 
-describe("formatStreamRetryLine (TASK.33 W8 — mirrors cli/render.ts's '[retry N/M in Xms: reason]')", () => {
-  it("formats attempt/limit/delay/reason", () => {
-    expect(formatStreamRetryLine(1, 3, 500, "connect refused")).toBe("Retry 1/3 in 500ms: connect refused");
-    expect(formatStreamRetryLine(2, 3, 1000, "ECONNRESET")).toBe("Retry 2/3 in 1000ms: ECONNRESET");
+describe("formatStreamRetryLine (TASK.33 W8 — mirrors cli/render.ts's '[retry N/M in X s: reason]')", () => {
+  it("formats attempt/limit/delay/reason, with the delay in seconds (Taskana 4772)", () => {
+    expect(formatStreamRetryLine(1, 3, 500, "connect refused")).toBe("Retry 1/3 in 0.5 s: connect refused");
+    expect(formatStreamRetryLine(2, 3, 1000, "ECONNRESET")).toBe("Retry 2/3 in 1.0 s: ECONNRESET");
+  });
+
+  it("shows a raw float delay as one decimal of seconds, never ms noise (Taskana 4772)", () => {
+    expect(formatStreamRetryLine(1, 8, 791.1655902966864, "connect timeout")).toBe(
+      "Retry 1/8 in 0.8 s: connect timeout",
+    );
   });
 
   it("drops the total once the network budget runs past maxRetries (Taskana 4705 review: no 9/8)", () => {
-    expect(formatStreamRetryLine(8, 8, 500, "network")).toBe("Retry 8/8 in 500ms: network");
-    expect(formatStreamRetryLine(9, 8, 500, "network")).toBe("Retry 9 in 500ms: network");
+    expect(formatStreamRetryLine(8, 8, 500, "network")).toBe("Retry 8/8 in 0.5 s: network");
+    expect(formatStreamRetryLine(9, 8, 500, "network")).toBe("Retry 9 in 0.5 s: network");
   });
 });
 

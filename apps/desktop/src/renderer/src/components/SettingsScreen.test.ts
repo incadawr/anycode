@@ -242,6 +242,12 @@ describe("buildToolsPatch", () => {
     });
   });
 
+  it("includes networkWaitMaxMs when supplied, and omits it when blank (Taskana 4772)", () => {
+    expect(buildToolsPatch("", "", "", "", "", "", undefined, "600000")).toEqual({ tools: { networkWaitMaxMs: 600000 } });
+    expect(buildToolsPatch("", "", "", "", "", "", undefined, "")).toEqual({ tools: {} });
+    expect(buildToolsPatch("", "", "", "", "", "")).toEqual({ tools: {} });
+  });
+
   it("blank retry fields omit them entirely (Taskana 4705)", () => {
     expect(buildToolsPatch("4", "30000", "100", "", "", "")).toEqual({
       tools: { concurrency: 4, stallTimeoutMs: 30000, maxTurns: 100 },

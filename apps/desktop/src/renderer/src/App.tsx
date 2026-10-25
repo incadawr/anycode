@@ -374,6 +374,10 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
   const sendToHost = useTabSend();
   const handleTryAgain = useCallback(() => dispatchTryAgain(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
   const handleContinue = useCallback(() => dispatchContinue(tabStoreApi, sendToHost), [tabStoreApi, sendToHost]);
+  // Taskana 4772: a turn parked on a transient network failure. Stop is the
+  // composer's own cancel (the turn is still `running`); Retry now asks the host to probe at once.
+  const waitingForNetwork = useTabStore((state) => state.waitingForNetwork);
+  const handleRetryNow = useCallback(() => sendToHost({ type: "network_retry_now" }), [sendToHost]);
   // Taskana 4742 §2.5: rewind plumbing for the tick rail's popover action.
   // `supportsRewind` gates the prop (absent -> no Rewind buttons at all,
   // same expression the old TimelinePanel mount used); `onRewind` sends the
@@ -457,6 +461,14 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
           {...(rewindProp !== undefined ? { rewind: rewindProp } : {})}
         />
 
+        {waitingForNetwork && turn.status === "running" && (
+          <div className="banner banner-info network-wait-line" role="status">
+            <span>Waiting for network…</span>{" "}
+            <button type="button" className="network-wait-retry" onClick={handleRetryNow}>
+              Retry now
+            </button>
+          </div>
+        )}
         <Composer />
       </div>
 

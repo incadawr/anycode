@@ -1088,6 +1088,12 @@ export interface DesktopState {
   waitingSubagents: ReadonlySet<string>;
   /** Transient toast-channel notice; null when nothing is pending. Fed by the reducer, rendered by MVP.5. */
   notice: Notice | null;
+  /**
+   * Taskana 4772: the running turn is parked waiting for the network (a
+   * `waiting_for_network` event). Cleared by the recovery `stream_retry`, and
+   * by the turn's end. Drives the "Waiting for network…" status line only.
+   */
+  waitingForNetwork: boolean;
   /** Last `context_usage` reading (design §2.12); null before the first one arrives in a session. */
   contextUsage: ContextUsage | null;
   /** Last fatal message from the host (e.g. sanitizer failure); null once nothing has fired yet. */
@@ -1462,6 +1468,8 @@ interface SessionSlice {
   /** TASK.115 S1: see `DesktopState.waitingSubagents`'s own doc comment. */
   waitingSubagents: ReadonlySet<string>;
   notice: Notice | null;
+  /** Taskana 4772: see DesktopState.waitingForNetwork. */
+  waitingForNetwork: boolean;
   contextUsage: ContextUsage | null;
   mcpServers: McpServerStatus[];
   lspServers: LspServerStatus[];
@@ -1526,6 +1534,7 @@ function initialSessionSlice(): SessionSlice {
     permission: null,
     waitingSubagents: new Set<string>(),
     notice: null,
+    waitingForNetwork: false,
     contextUsage: null,
     mcpServers: [],
     lspServers: [],
@@ -3465,6 +3474,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
         // ── loop end: footer block + turn goes idle again (immediate) ──
         case "loop_end": {
+          set({ waitingForNetwork: false });
           // TASK.117: the footer appends ONCE per outer turn — a replayed
           // loop_end (ring duplicate of an already-terminated turn) must not
           // stack a second footer. The idle flip below stays unconditional
@@ -3577,7 +3587,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // the frozen TranscriptBlock union (design §5 enumerates exactly:
         // user_text, assistant_text, reasoning, tool_call, loop_end) ──
         case "turn_end":
-          set((state) => ({ modelTurns: state.modelTurns + 1 }));
+          set((state) => ({ modelTurns: state.modelTurns + 1, waitingForNetwork: false }));
           if (event.finishReason === "length") {
             appendBlock({ kind: "output_truncated", id: `output_truncated:${turnId}:${event.turn}` });
           }
@@ -3658,12 +3668,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             reason: event.reason,
           });
           // Past the announced total (network-budget retry) the label drops it.
+          // Taskana 4772: a retry announced here ends any network wait (recovered).
           set({
+            waitingForNetwork: false,
             notice: {
               kind: "stream_retry",
               text: `Retrying… (attempt ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`}: ${event.reason})`,
             },
           });
+          return;
+        // Taskana 4772: the adapter parked a transient network failure and is
+        // probing. No transcript block and no notice: the status line says it.
+        case "waiting_for_network":
+          set({ waitingForNetwork: true });
           return;
         case "compaction_start":
           // TASK.146: a compaction observed while the turn is IDLE is the
@@ -3786,6 +3803,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // `loop_end` handler above to decide whether to arm the Try-again offer.
         case "error":
           {
+            set({ waitingForNetwork: false });
             // The usage_limit notice is parsed host-side (sanitizeAgentEvent) and
             // rides the wire event, because the redacted `error.message` the
             // renderer now receives no longer carries the parseable z.ai text

@@ -346,6 +346,7 @@ export function buildToolsPatch(
   maxRetriesText = "",
   networkRetryBudgetText = "",
   adaptiveTurnBudget?: boolean,
+  networkWaitText = "",
 ): SettingsPatch {
   const tools: {
     concurrency?: number;
@@ -354,6 +355,7 @@ export function buildToolsPatch(
     subagentMaxTurns?: number;
     maxRetries?: number;
     networkRetryBudgetMs?: number;
+    networkWaitMaxMs?: number;
     adaptiveTurnBudget?: boolean;
   } = {};
   const concurrency = parseOptionalInt(concurrencyText);
@@ -374,6 +376,9 @@ export function buildToolsPatch(
   if (subagentMaxTurns !== undefined) tools.subagentMaxTurns = subagentMaxTurns;
   if (maxRetries !== undefined) tools.maxRetries = maxRetries;
   if (networkRetryBudgetMs !== undefined) tools.networkRetryBudgetMs = networkRetryBudgetMs;
+  // Taskana 4772: ANYCODE_NETWORK_WAIT_MAX_MS mirror (blank = default).
+  const networkWaitMaxMs = parseOptionalInt(networkWaitText);
+  if (networkWaitMaxMs !== undefined) tools.networkWaitMaxMs = networkWaitMaxMs;
   // TASK.4721: undefined = the user never touched the toggle and the setting is
   // absent, so nothing is written (absent stays absent).
   if (adaptiveTurnBudget !== undefined) tools.adaptiveTurnBudget = adaptiveTurnBudget;
@@ -1359,6 +1364,8 @@ export function SettingsScreen({
   // ANYCODE_NETWORK_RETRY_BUDGET_MS mirrors; blank = default).
   const [maxRetries, setMaxRetries] = useState("");
   const [networkRetryBudget, setNetworkRetryBudget] = useState("");
+  // Taskana 4772: how long a turn waits for the network before it fails (blank = default 30 min).
+  const [networkWait, setNetworkWait] = useState("");
   // TASK.119 / TASK.147 slice 2: live session-capacity limit fields.
   const [sessionMaxTabs, setSessionMaxTabs] = useState("");
   const [sessionPerParent, setSessionPerParent] = useState("");
@@ -1529,6 +1536,7 @@ export function SettingsScreen({
       setAdaptiveTurnBudget(snapshot.settings.tools.adaptiveTurnBudget);
       setMaxRetries(snapshot.settings.tools.maxRetries?.toString() ?? "");
       setNetworkRetryBudget(snapshot.settings.tools.networkRetryBudgetMs?.toString() ?? "");
+      setNetworkWait(snapshot.settings.tools.networkWaitMaxMs?.toString() ?? "");
       setSessionMaxTabs(snapshot.settings.sessionLimits?.maxTabs?.toString() ?? "");
       setSessionPerParent(snapshot.settings.sessionLimits?.childSessionsPerParentMax?.toString() ?? "");
       setSessionGlobal(snapshot.settings.sessionLimits?.childSessionsGlobalMax?.toString() ?? "");
@@ -1573,7 +1581,7 @@ export function SettingsScreen({
       return;
     }
     setSessionLimitsError(null);
-    const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns, maxRetries, networkRetryBudget, adaptiveTurnBudget);
+    const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns, maxRetries, networkRetryBudget, adaptiveTurnBudget, networkWait);
     const hasLimits = limits.patch.sessionLimits !== undefined
       && Object.keys(limits.patch.sessionLimits).length > 0;
     await store.getState().setPatch(
@@ -1835,6 +1843,18 @@ export function SettingsScreen({
                     disabled={readOnly}
                     placeholder="(default)"
                     onChange={(e) => setNetworkRetryBudget(e.target.value)}
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field-label">Wait for network (ms)</span>
+                  <input
+                    className="settings-field-input"
+                    type="text"
+                    inputMode="numeric"
+                    value={networkWait}
+                    disabled={readOnly}
+                    placeholder="(default 1800000)"
+                    onChange={(e) => setNetworkWait(e.target.value)}
                   />
                 </label>
                 <label className="settings-field">

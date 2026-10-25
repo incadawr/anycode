@@ -362,7 +362,12 @@ export function formatErrorRetrySuffix(retry: ErrorRetryMeta | undefined): strin
  * testing.
  */
 export function formatStreamRetryLine(attempt: number, maxAttempts: number, delayMs: number, reason: string): string {
-  return `Retry ${formatRetryAttempt(attempt, maxAttempts)} in ${delayMs}ms: ${reason}`;
+  return `Retry ${formatRetryAttempt(attempt, maxAttempts)} in ${formatDelaySeconds(delayMs)}: ${reason}`;
+}
+
+/** Taskana 4772: a retry delay in seconds, one decimal (`0.8 s`), mirroring cli/render.ts. */
+export function formatDelaySeconds(delayMs: number): string {
+  return `${(delayMs / 1000).toFixed(1)} s`;
 }
 
 /**
