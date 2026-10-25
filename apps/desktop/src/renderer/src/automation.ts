@@ -2772,6 +2772,33 @@ export interface ComposerQueueState {
   draining: boolean;
 }
 
+/**
+ * Taskana 4758: the Settings scope dropdown's read-only probe (`scopeState()`),
+ * read off the trigger's `data-scope-value` (the selected id or "user") and the
+ * count chip. Dedicated probe: `settingsState()` stays byte-untouched.
+ */
+export interface ScopeStateResult {
+  selection: string | null;
+  label: string | null;
+  count: string | null;
+}
+export interface ScopeDom {
+  state(): ScopeStateResult;
+}
+function realScopeDom(): ScopeDom {
+  return {
+    state() {
+      const trigger = document.querySelector<HTMLElement>("[data-scope-trigger]");
+      if (!trigger) return { selection: null, label: null, count: null };
+      return {
+        selection: trigger.getAttribute("data-scope-value"),
+        label: trigger.textContent?.trim() || null,
+        count: document.querySelector<HTMLElement>("[data-scope-count]")?.textContent?.trim() || null,
+      };
+    },
+  };
+}
+
 /** Frozen contract (design §3.2) that `window.__anycodeAutomation` exposes to the main-process HTTP server (S3). */
 export interface AutomationFacade {
   snapshot(transcriptTail?: number): SnapshotJson;
@@ -2975,6 +3002,8 @@ export interface AutomationFacade {
   settingsSelectPane(paneId: string): Promise<FacadeResult>;
   settingsPermissionAdd(args: { toolName: string; pattern?: string }): Promise<FacadeResult>;
   settingsPermissionRemove(args: { toolName: string; pattern?: string }): Promise<FacadeResult>;
+  // ── Settings scope dropdown probe (Taskana 4758) — read-only, dedicated route. ──
+  scopeState(): ScopeStateResult;
   // ── MCP Servers pane probe/driver (design/slice-P7.19-cut.md §4 W4) — a
   // DEDICATED probe, `snapshot()`/`settingsState()` stay byte-untouched (§3
   // byte-lock). Same "no mirrored state" discipline as the settings probe
@@ -6755,6 +6784,8 @@ export function createAutomationFacade(
   modeMenuDom: ModeMenuDom = realModeMenuDom(),
   // Taskana 4704 §3.9 (part B): appended at the END for the same reason.
   rolePickerDom: RolePickerDom = realRolePickerDom(),
+  // Taskana 4758: appended at the END (positional DI call sites, see above).
+  scopeDom: ScopeDom = realScopeDom(),
 ): AutomationFacade {
   /**
    * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
@@ -8540,6 +8571,9 @@ export function createAutomationFacade(
       return removed ? { ok: true } : { ok: false, reason: "remove_failed" };
     },
 
+    scopeState(): ScopeStateResult {
+      return scopeDom.state();
+    },
     mcpPaneState(): McpPaneState {
       if (!mcpPaneDom.mounted()) {
         // A valid reading, not an error (SettingsStateResult precedent): the

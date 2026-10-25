@@ -110,6 +110,7 @@ import {
   codexImportSetModel,
   codexImportApply,
   mcpPaneState,
+  scopeState,
   mcpToggle,
   mcpImportOpen,
   mcpImportApply,
@@ -671,6 +672,12 @@ describe("generic focus probe forwards method + args (TASK.45 W12-smoke)", () =>
 });
 
 describe("MCP pane thin facade commands forward method + args (design/slice-P7.19-cut.md §4 W4)", () => {
+  it("scopeState -> callFacade('scopeState', []) (Taskana 4758)", async () => {
+    const deps = fakeDeps();
+    await scopeState(deps);
+    expect(deps.callFacade).toHaveBeenCalledWith("scopeState", []);
+  });
+
   it("mcpPaneState -> callFacade('mcpPaneState', [])", async () => {
     const deps = fakeDeps();
     await mcpPaneState(deps);

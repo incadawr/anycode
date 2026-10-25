@@ -2823,6 +2823,16 @@ describe("MCP pane routes (design/slice-P7.19-cut.md §4 W4)", () => {
     }
   });
 
+  it("GET /settings/scope -> scopeState (dedicated read-only route, Taskana 4758)", async () => {
+    const facadeResult = { selection: "ws_0123456789abcdef", label: "app", count: "Skills 18" };
+    const { window, calls } = fakeWindowCapture(facadeResult);
+    const h = await boot({ getWindow: () => window });
+    const res = await fetch(url(h, "/settings/scope"), { headers: auth() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(facadeResult);
+    expect(calls[0]).toContain('"scopeState"');
+  });
+
   it("GET /settings/mcp -> mcpPaneState (dedicated route, distinct from GET /settings)", async () => {
     const facadeResult = {
       rows: [{ name: "srv-a", source: "project", enabled: true, dotKind: "completed", toolsBadge: "3 tools", commandLine: "node fixture.mjs" }],

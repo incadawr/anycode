@@ -1322,6 +1322,11 @@ export function mcpPaneState(deps: HandlerDeps): Promise<unknown> {
   return deps.callFacade("mcpPaneState", []);
 }
 
+/** Taskana 4758: `GET /settings/scope` -> the Settings scope dropdown's read-only state (selection, label, count). */
+export function scopeState(deps: HandlerDeps): Promise<unknown> {
+  return deps.callFacade("scopeState", []);
+}
+
 export function mcpToggle(deps: HandlerDeps, name: string): Promise<unknown> {
   return deps.callFacade("mcpToggle", [name]);
 }

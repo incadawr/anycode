@@ -148,6 +148,7 @@ import {
   skillsImportOpen,
   skillsImportApply,
   subagentsPaneState,
+  scopeState,
   subagentsOpenEditor,
   subagentsEditorSet,
   subagentsEditorPreview,
@@ -1002,6 +1003,11 @@ async function route(
   // as the Skills pane probe.
   if (method === "GET" && pathname === "/settings/subagents") {
     return subagentsPaneState(deps);
+  }
+  // Taskana 4758: the Settings scope dropdown probe — a DEDICATED read-only route;
+  // `GET /settings` and the pane probes above stay byte-untouched.
+  if (method === "GET" && pathname === "/settings/scope") {
+    return scopeState(deps);
   }
   // Profile pane probe (slice-P7.22-cut.md §4 W4): a DEDICATED route —
   // `GET /settings`, `GET /settings/mcp`, `GET /settings/skills`, and `GET
