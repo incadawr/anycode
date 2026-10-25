@@ -75,11 +75,13 @@ export {
   childNotificationSummaryOverflows,
   formatChildReportCapNotice,
   formatChildStallNotice,
+  formatChildApprovalNotice,
   formatSupervisorIdleReminder,
   mapChildRunStatusToNotification,
 } from "./cli/child-notification.js";
 export type {
   ChildStallNoticeInput,
+  ChildApprovalNoticeInput,
   ChildTaskNotificationInput,
   ChildTaskNotificationStatus,
   SupervisorIdleReminderInput,
