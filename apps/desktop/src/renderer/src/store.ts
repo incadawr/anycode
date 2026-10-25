@@ -1560,6 +1560,7 @@ function initialSessionSlice(): SessionSlice {
  * UI answer produces no notice — the user just clicked the button.
  */
 const PERMISSION_SETTLE_TEXT: Record<Exclude<Extract<HostToUiMessage, { type: "permission_settled" }>["origin"], "ui">, string> = {
+  external: "Answered from the Sessions API.",
   timeout: "Permission request timed out — denied.",
   turn_cancelled: "Turn cancelled — pending permission denied.",
   disconnect: "UI disconnected — pending permission denied.",

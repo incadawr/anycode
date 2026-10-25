@@ -32,6 +32,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Sessions API: `cancel_turn`, `list_pending_approvals`, `answer_approval` and a per-session External approvals switch (off by default).
 - Native agents can read the browser console and run JavaScript in the built-in preview (always asks).
 - A per-session "Full browser access" switch lets the agent use any website in the preview without asking; off by default, with a default setting in Settings → Permissions.
 - Plugins can declare background services (`services` in the manifest): AnyCode

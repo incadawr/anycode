@@ -795,7 +795,7 @@ export type HostToUiMessage =
       type: "permission_settled";
       requestId: string;
       behavior: "allow" | "deny";
-      origin: "ui" | "timeout" | "turn_cancelled" | "disconnect" | "shutdown";
+      origin: "ui" | "external" | "timeout" | "turn_cancelled" | "disconnect" | "shutdown";
     }
   | {
       type: "file_snapshot";

@@ -232,6 +232,37 @@ Response: the same delivery record as `send_message`, with the current `state`.
 For a message to a shared session the server asks the host for the latest state
 first. Use `wait_for_result` when you need the answer.
 
+### `cancel_turn`
+
+Request: `{ "sessionId": "sess-7f3a" }`. It stops the running turn exactly like the
+Stop button: queued agent messages are rejected ("Cancelled by Stop before queued
+delivery") and parked approvals are denied. The result is
+`{ "sessionId", "cancelled": true, "turnId" }` when a turn was stopped, or
+`{ "cancelled": false, "reason": "idle" | "closing" | "relocating" }` when there
+was nothing to stop. Idle is not an error. Needs only the Sessions API switch.
+A `wait_for_result` on the stopped message then returns `done` with
+`latestResult.terminalReason: "cancelled"`.
+
+### `list_pending_approvals` and `answer_approval`
+
+These need the session's **External approvals** switch (off by default, in the
+tab's environment menu, shown only while the session is shared). Without it both
+fail with `External approval is off for this session`.
+
+`list_pending_approvals` (optional `sessionId`; omit it to list every approving
+session) returns `{ "approvals": [...], "truncated": false }`. Each item is
+`{ sessionId, approvalId, tool, description, presented, expiresInMs, answerable, childOf? }`.
+`description` is a short, scrubbed, one-line summary (a command, a path, a URL
+without its query, or a tool's argument names). It never includes file contents
+or raw input. `presented` is true for the ask the user sees now. `answerable` is
+false for `ExitPlanMode` and `AskUserQuestion`, which must be answered in AnyCode.
+
+`answer_approval` takes `{ sessionId, approvalId, decision: "allow" | "deny" }`.
+Its `status` is `answered`, `already_answered` (with `settledBy`: `ui`, `external`,
+`timeout`, `turn_cancelled`, `disconnect` or `shutdown`), `not_found`, or
+`not_answerable`. These are normal results, not errors. The first answer wins,
+from the UI or from here. There is no "always allow" from outside AnyCode.
+
 ### `wait_for_result`
 
 Request:
@@ -315,6 +346,7 @@ Tool errors come back with `"isError": true` and this text:
 | Text | Meaning and what the bridge should do |
 |---|---|
 | `Session unavailable or outside authorized workspace` | The session is unknown, not shared, or outside the allowed folders. The three cases give the same text on purpose. Treat the handle as gone; tell the user. |
+| `External approval is off for this session` | `list_pending_approvals` or `answer_approval` on a session whose External approvals switch is off. Tell the user to switch it on in AnyCode (session menu), or to answer in AnyCode. Nothing was called on the host. |
 | `Message unavailable` | No such message, or it belongs to another session. |
 | `Message outside authorized workspace` | `get_message_status` for a message whose folder is no longer allowed. |
 | `Idempotency key reused with different input` | Same key, different content. Use a new key for new content. |
