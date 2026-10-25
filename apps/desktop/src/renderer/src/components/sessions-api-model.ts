@@ -121,7 +121,9 @@ export function sessionApprovalsLabel(enabled: boolean): string {
 }
 
 export const SESSION_HANDLE_LABEL = "Handle (optional)";
-export const SESSION_HANDLE_PLACEHOLDER = "e.g. build-bot";
+export const SESSION_HANDLE_PLACEHOLDER = "Name for agents (optional)";
+/** Tooltip on the handle field: what the name is for. */
+export const SESSION_HANDLE_HINT = "A short name external agents see in list_sessions to find this session, e.g. build-bot. Leave empty to show only the session id.";
 
 /** The inline error under the handle field (plain text). `null` = nothing to show. */
 export function handleErrorText(reason: Extract<CommunicationHandleResult, { ok: false }>["reason"] | undefined): string | null {
