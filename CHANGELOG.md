@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - The release self-check now opens every Settings pane in the packaged app and fails if one blanks the window, shows its error fallback or leaves a modal over the window.
+- Settings → MCP, Language servers, Skills and Subagents: one scope dropdown (`User · This computer` or a recent folder, with a count chip) replaces the Global/Project switcher. Folders come from your recent sessions and open tabs; folders without an open tab can be edited, and a folder that no longer exists is shown disabled.
 - The empty Timeline side panel is gone: the conversation now has a slim
   tick rail on the left edge — one tick per message (from two messages on),
   the current position highlighted — with a hover preview of the query,

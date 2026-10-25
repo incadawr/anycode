@@ -98,9 +98,7 @@ any same-name filesystem skill.
 
 ## How to verify it applied
 
-The Skills pane has a scope bar at the top: **Global (user)** edits the user
-files, and **Project** edits the open workspace's files (its picker lists open
-project tabs). Skills are discovered when a session starts. Start a **new
+The Skills pane has a scope dropdown at the top. The scope dropdown at the top picks **User · This computer** (your user files) or a recent folder. The folder list is built from your recent sessions and open tabs; a folder with no open tab can still be edited, and its changes apply when a session starts there. A folder that no longer exists is shown as "folder not found" and cannot be selected. The chip next to the dropdown shows how many entries the pane lists. Skills are discovered when a session starts. Start a **new
 session** after adding or editing a skill. Then open **Settings → Skills**: filesystem skills are listed
 with their source, and a strip shows any skill that failed to load. If the skill
 is missing, see [troubleshooting.md](troubleshooting.md).
