@@ -46,13 +46,13 @@ separate task or research item._
 
 ### Extensibility
 
-- **anyPlugin.** Grow the existing plugin runtime (a plugin directory already
-  contributes skills, agent profiles, and MCP servers) into a public
-  ecosystem: a documented manifest spec, installation from a git URL or
-  archive, a management UI (list / enable / disable / diagnose), and more
-  contribution types such as slash commands and hooks. Importing skills and
-  MCP servers from Claude Code, Codex and zcode configurations is available
-  now; the public plugin spec, installer and management UI are still ahead.
+- **anyPlugin.** _Mostly available now:_ the documented manifest spec, a signed
+  official index, two-phase install from file / URL / folder (git ahead), and
+  the Settings → Plugins management UI (list / enable / disable / update /
+  rollback / pin / diagnose), with MCP-server consent gates at install and
+  after any command change. Importing skills and MCP servers from Claude Code,
+  Codex and zcode configurations is available now. Still ahead: git install
+  sources and more contribution types such as slash commands and hooks.
 - **MCP, first-class.** _Mostly available now:_ per-server connection status
   and tool counts, enable/disable toggles, and remote (streamable HTTP)
   servers. Still ahead: remote-server OAuth and on-demand tool loading so
