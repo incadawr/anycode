@@ -129,6 +129,23 @@ describe("public result retrieval", () => {
       expect(f.h.session.communicationResult().latestResult?.publicAnswer).toBe("UNFINISHED_TEXT");
     } finally { f.h.close(); }
   });
+  it("get_session_status and get_session_result report the same state at one moment", async () => {
+    const f = fixture();
+    f.engine.runTurn = async function* () {
+      yield { type: "text_start", id: "answer" }; yield { type: "text_delta", id: "answer", text: "DONE_TEXT" };
+      await new Promise<void>((resolve) => { f.finishes.push(resolve); });
+      yield { type: "text_end", id: "answer" }; yield { type: "loop_end", reason: "completed", turns: 1 };
+    };
+    try {
+      await f.h.session.receiveAgentMessage(f.make("state-agree"));
+      await f.h.waitUntil(() => f.finishes.length > 0);
+      expect(f.h.session.communicationStatus().state).toBe("running");
+      expect(f.h.session.communicationResult()).toMatchObject({ state: "running", availability: "pending" });
+      f.finishes.shift()!(); await f.h.waitUntil(() => f.h.session.communicationResult().latestResult !== null); await f.h.flush();
+      expect(f.h.session.communicationStatus().state).toBe("idle");
+      expect(f.h.session.communicationResult()).toMatchObject({ state: "idle", availability: "available" });
+    } finally { f.h.close(); }
+  });
   it("keeps the prior result while another turn runs and carries live native identity without private data", async () => {
     const f = fixture();
     f.engine.steeringStatus = () => ({ supported: true, ready: true, nativeTurnId: "native-observed" });
