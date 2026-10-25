@@ -3707,11 +3707,29 @@ describe("CodexEngine — Taskana 4764 browser dynamicTools", () => {
     ]);
   });
 
-  it("X3: thread/resume still carries NO dynamicTools", async () => {
+  it("X3: thread/resume carries the same dynamicTools declarations as thread/start (review F17)", async () => {
     const bridge = browserOnlyBridge();
     const server = new FakeAppServer();
     const shadowLog = new RecordingShadowLog();
     await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, shadowLog, bridge);
+    const resume = server.calls.find((c) => c.method === "thread/resume")?.params as { dynamicTools?: Array<{ name: string }> } | undefined;
+    expect(resume?.dynamicTools).toHaveLength(10);
+    expect(resume?.dynamicTools?.map((d) => d.name)).toEqual([
+      "anycode_browser_open", "anycode_browser_read", "anycode_browser_screenshot",
+      "anycode_browser_navigate", "anycode_browser_snapshot", "anycode_browser_click",
+      "anycode_browser_type", "anycode_browser_wait_for", "anycode_browser_console", "anycode_browser_eval",
+    ]);
+    // The shape matches thread/start's declarations byte-for-byte (same bridge).
+    const startBridge = browserOnlyBridge();
+    const startServer = new FakeAppServer();
+    await createNativeCodexSession(startServer, "/work", undefined, undefined, undefined, undefined, startBridge);
+    expect(resume?.dynamicTools).toEqual((startServer.calls.find((c) => c.method === "thread/start")?.params as { dynamicTools?: unknown }).dynamicTools);
+  });
+
+  it("X3b: thread/resume with NO bridge still sends no dynamicTools key", async () => {
+    const server = new FakeAppServer();
+    const shadowLog = new RecordingShadowLog();
+    await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, shadowLog, undefined);
     expect(server.calls.find((c) => c.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
   });
 

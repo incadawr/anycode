@@ -16,9 +16,12 @@ names them `BrowserOpen`, `BrowserNavigate`, ....
    `BrowserEval` ask first unless Full browser access is on.
 3. `BrowserOpen` of a remote url asks even with Full browser access on, as in
    native tabs.
-4. A Codex session created before this version keeps its old tool set after
-   resume; start a new Codex session to get the browser tools.
-5. Resumed Codex history shows past browser calls as plain text.
+4. A Codex session resumed after an app restart gets the browser tools back
+   (the declarations ride `thread/resume`); a Codex session created before
+   this version keeps its old tool set — start a new Codex session to get the
+   browser tools.
+5. Resumed Codex history shows past browser calls as cards (tool name,
+   arguments, result text; screenshots show only a text placeholder).
 6. Child sessions have no browser tools.
 7. Screenshots reach the model; the transcript shows only the text line
    (e.g. "Screenshot of <url> (WxH) attached.").

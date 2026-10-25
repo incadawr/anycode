@@ -661,6 +661,14 @@ export async function resumeNativeCodexSession(
   const resumed = await client.request<ThreadResult>("thread/resume", {
     threadId: externalSessionRef,
     cwd: workspace,
+    // 4764 review F17: the fresh app-server of THIS boot has no memory of the
+    // previous launch's dynamic tools either — exactly like config.mcp_servers
+    // above (TASK.182), the declarations must ride the resume or a resumed
+    // session silently loses every anycode_agent/anycode_browser_* tool while
+    // the bridge handler stays wired (the model just never sees the tools).
+    // dynamicTools lives in the experimental API (initialize capabilities),
+    // which agentBridge !== undefined already negotiated above.
+    ...(agentBridge ? { dynamicTools: agentBridge.declarations() } : {}),
     // TASK.182: the fresh app-server of THIS boot has no memory of a previous
     // forward — config.mcp_servers must ride the resume too, or a resumed
     // session silently loses every forwarded MCP server (cross-process resume
