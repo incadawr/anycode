@@ -1425,11 +1425,19 @@ async function bootCodexSession(
     // tools (anycode_browser_*) ride dynamicTools even with an empty catalog,
     // so the experimental API + thread/start dynamicTools are always on for
     // root boots. Child boots (args.child !== undefined) get no bridge.
+    // 4764 review F4: the image gate closes over the LATE-BOUND engine cell
+    // (the engine exists only after connect below, same shape as
+    // `getPermissionMode`'s `codexParentEngine` read): before it binds the
+    // verdict is fail-closed false, and from the first bound read it is the
+    // engine's live `model/list` per-model verdict — a text-only Codex model
+    // gets the screenshot refused with the same media-gate error the native
+    // tab produces instead of an image block it cannot use.
     const codexEngineBrowserBridge = createEngineBrowserBridge({
       preview: previewPort,
       fullAccess: () => browserAccess.get(),
       broker,
       cwd: workspace,
+      imageInputEnabled: () => codexParentEngine?.imageInputEnabled() ?? false,
     });
     let port: ChildSessionPort | undefined;
     if (catalog.length) {
@@ -2087,6 +2095,11 @@ async function bootClaudeSession(
     // empty agent catalog it still serves the ten browser tools through the
     // shared engine browser bridge (same core ToolDefinitions, same broker,
     // same full-access switch the native tab uses; browser-bridge.ts doc).
+    // 4764 review F4: NO imageInputEnabled is wired here on purpose — the
+    // Claude CLI's initialize.models[] carries no per-model modality field
+    // (claude-engine.ts's supportsImages comment), so the capability is NOT
+    // knowable for this engine and the bridge's documented default (gate
+    // open) applies. Codex's door wires the live model/list verdict.
     const engineBrowserBridge = createEngineBrowserBridge({
       preview: previewPort,
       fullAccess: () => browserAccess.get(),
