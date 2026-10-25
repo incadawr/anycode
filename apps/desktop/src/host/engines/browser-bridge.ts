@@ -65,7 +65,12 @@ export interface EngineBrowserSpec {
   codexName: string;
   /** The tool's own metadata.description. */
   description: string;
-  /** `z.toJSONSchema(tool.inputSchema)` — refinements are not representable and are dropped; the host re-validates with the zod schema anyway. */
+  /**
+   * `z.toJSONSchema(tool.inputSchema)` with the cross-field refinements
+   * re-declared by hand (F15) — `z.toJSONSchema` drops `.refine()`, so the
+   * four exclusivity constraints ride a stamped `allOf`/`anyOf` fragment. The
+   * host re-validates with the zod schema anyway (fail-closed).
+   */
   inputSchema: Record<string, unknown>;
 }
 
@@ -131,6 +136,64 @@ interface BrowserToolEntry {
   tool: ToolDefinition<never, never>;
 }
 
+/**
+ * 4764 review F15: `z.toJSONSchema` cannot represent `.refine()` cross-field
+ * constraints, so the schemas the Claude CLI and Codex validate against were
+ * LOOSER than the zod schemas the bridge re-validates with — the model could
+ * send `browser_wait_for{gone:true}` (no text/selector), the CLI accepted it
+ * schema-side, and the call burned a round-trip on the bridge's zod error.
+ * These hand-written JSON Schema fragments re-declare EXACTLY the four
+ * refinements of browser-control.ts (same fields, same exclusivity), keyed by
+ * canonical name; the bridge stamps the fragment onto the generated schema.
+ * Fail-closed is unchanged (the zod re-validation in dispatch is the gate);
+ * this only makes the declared contract honest so the model is told up front.
+ */
+const SCHEMA_CROSS_FIELD_CONSTRAINTS: Readonly<Record<string, Record<string, unknown>>> = {
+  // "exactly one of url or history is required"
+  BrowserNavigate: {
+    allOf: [
+      {
+        oneOf: [
+          { required: ["url"], not: { required: ["history"] } },
+          { required: ["history"], not: { required: ["url"] } },
+        ],
+      },
+    ],
+  },
+  // "exactly one of ref or selector is required" (click and type share it)
+  BrowserClick: {
+    allOf: [
+      {
+        oneOf: [
+          { required: ["ref"], not: { required: ["selector"] } },
+          { required: ["selector"], not: { required: ["ref"] } },
+        ],
+      },
+    ],
+  },
+  BrowserType: {
+    allOf: [
+      {
+        oneOf: [
+          { required: ["ref"], not: { required: ["selector"] } },
+          { required: ["selector"], not: { required: ["ref"] } },
+        ],
+      },
+    ],
+  },
+  // "at least one of text or selector is required"
+  BrowserWaitFor: {
+    anyOf: [{ required: ["text"] }, { required: ["selector"] }],
+  },
+};
+
+/** The generated JSON Schema with the tool's cross-field refinement stamped on (F15). */
+function toDeclaredInputSchema(tool: ToolDefinition<never, never>, canonical: string): Record<string, unknown> {
+  const generated = z.toJSONSchema(tool.inputSchema as z.ZodType) as Record<string, unknown>;
+  const constraint = SCHEMA_CROSS_FIELD_CONSTRAINTS[canonical];
+  return constraint === undefined ? generated : { ...generated, ...constraint };
+}
+
 /** The fixed 10-tool order (§2.2), built once from the same core objects the native boot registers. */
 function buildEntries(fullAccess: () => boolean): BrowserToolEntry[] {
   const control = createBrowserControlTools({ fullAccess });
@@ -161,7 +224,7 @@ function buildEntries(fullAccess: () => boolean): BrowserToolEntry[] {
         claudeName: names.claudeName,
         codexName: names.codexName,
         description: tool.metadata.description,
-        inputSchema: z.toJSONSchema(tool.inputSchema as z.ZodType) as Record<string, unknown>,
+        inputSchema: toDeclaredInputSchema(tool, names.canonical),
       },
     };
   });
