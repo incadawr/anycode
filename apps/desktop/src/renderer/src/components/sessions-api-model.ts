@@ -27,6 +27,11 @@ export const SESSIONS_API_FOLDER_HINT = "Empty = any folder; only sessions you s
 export const SESSIONS_API_FOLDER_NOTE =
   "Optional. When empty, only the sessions you switch on are shared. When set, a session must also be inside one of these exact folders (subfolders are not included; symlinks are resolved).";
 
+/** Taskana 4768: the Advanced row that lists projects where agents may open tasks (view and Off only; turning one on is the sidebar project menu). */
+export const SESSIONS_API_AGENT_PROJECTS_LABEL = "Agents may open tasks here";
+export const SESSIONS_API_AGENT_PROJECTS_EMPTY = "No project allows agents to open tasks yet. Use the project ⋯ menu in the sidebar.";
+export const SESSIONS_API_AGENT_PROJECTS_HINT = "Off by default. Turn one on in the sidebar project ⋯ menu; trusted folders only.";
+
 export type SessionsApiTone = "ok" | "danger" | "muted";
 
 /**

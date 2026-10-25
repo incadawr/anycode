@@ -136,6 +136,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   const tasksPanelOpen = tab?.tasksPanelOpen ?? false;
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
   const worktree = tab?.worktree;
+  const openedByAgent = tab?.openedByAgent === true;
   const externalEngine = engine !== null;
   // TASK.91: core-only drawer gate — `engine` is null before host_ready ⇒
   // default true; claude/codex advertise supportsTasks:false so the toggle
@@ -248,6 +249,8 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       )}
 
       <span className="session-header-title" title={title}>{title}</span>
+
+      {openedByAgent && <span className="session-header-agent" title="Opened by an agent">agent</span>}
 
       {worktree && (
         <span className="session-header-worktree" title={worktree.path} aria-label={`Worktree: ${worktree.branch}`}>

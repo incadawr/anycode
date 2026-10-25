@@ -1102,6 +1102,22 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
     expect("providerId" in payload).toBe(false);
   });
 
+  it("deliverTabPort stamps openedByAgent only for sessions the dep names (Taskana 4768)", () => {
+    const { window, posted } = windowRig();
+    const manager = new TabHostManager({
+      fork: liveForkRig().fork, hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => window, env: () => ({}), logger: silentLogger,
+      isAgentOpenedSession: (sessionId) => sessionId === "s-agent",
+    });
+    for (const sessionId of ["s-agent", "s-human"]) {
+      const created = manager.createTab({ workspace: "/ws", sessionId, resume: false });
+      manager.deliverTabPort(manager.getTab(created.ok ? created.tab.tabId : "")!);
+    }
+    const payloads = posted.filter((p) => p.channel === PORT_ENVELOPE_TYPE).map((p) => p.payload as Record<string, unknown>);
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]!.openedByAgent).toBe(true);
+    expect("openedByAgent" in payloads[1]!).toBe(false);
+  });
+
   it("resolveCredential receives the tab's pinned connectionId (per-tab oauth routing)", async () => {
     const seen: (string | undefined)[] = [];
     const { fork, hosts } = liveForkRig();

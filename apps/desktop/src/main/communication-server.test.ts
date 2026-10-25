@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createServer as createNetServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport, StdioClientTransport } from "@anycode/core/communication-mcp";
-import { startCommunicationServer } from "./communication-server.js";
+import { startCommunicationServer, type CreateSessionOutcome, type CreateSessionRequest } from "./communication-server.js";
 import type { AgentEnvelope } from "../shared/communication.js";
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
@@ -570,8 +570,7 @@ describe("External approvals on the Sessions API (Taskana 4763)", () => {
 
 
 describe("Sessions API create_session (Taskana 4768)", () => {
-  type Created = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: "not_allowed" | "not_trusted" | "folder_not_found" | "too_many" | "not_ready" };
-  async function createFixture(options: { creator?: (request: { workspace: string; engine?: string; model?: string; handle?: string }) => Promise<Created>; ready?: boolean; clock?: { now: number } } = {}) {
+  async function createFixture(options: { creator?: (request: CreateSessionRequest) => Promise<CreateSessionOutcome>; ready?: boolean; clock?: { now: number } } = {}) {
     const dir = await mkdtemp(join(tmpdir(), "anycode-create-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const discoveryFile = join(dir, "communication.json");
     const tabs: Array<{ sessionId: string; workspace: string; state: string; pid: number }> = [];

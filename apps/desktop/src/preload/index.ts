@@ -32,6 +32,10 @@ import {
 // main/lsp-config-ipc.ts).
 import {
   COMMUNICATION_ADD_WORKSPACE_CHANNEL,
+  COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL,
+  COMMUNICATION_AGENT_PROJECTS_LIST_CHANNEL,
+  COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL,
+  COMMUNICATION_AGENT_PROJECTS_SET_CHANNEL,
   COMMUNICATION_COPY_CONFIG_CHANNEL,
   COMMUNICATION_GET_CHANNEL,
   COMMUNICATION_REGENERATE_TOKEN_CHANNEL,
@@ -44,6 +48,8 @@ import {
   COMMUNICATION_SET_SESSION_HANDLE_CHANNEL,
   type CommunicationCopyClient,
   type CommunicationCopyConfigResult,
+  type AgentProjectsGetResult,
+  type AgentProjectsListResult,
   type CommunicationGetResult,
   type CommunicationHandleResult,
   type CommunicationMutationResult,
@@ -655,6 +661,8 @@ ipcRenderer.on(
       // module does not decide root vs. child, it only relays what main
       // stamped (`classifyPortEnvelope`, child-sessions.ts, decides that).
       child?: PortEnvelope["child"];
+      // Taskana 4768: relayed untouched (root tabs a Sessions API agent opened).
+      openedByAgent?: PortEnvelope["openedByAgent"];
     },
   ) => {
     // TASK.45 W10-FIX F2: forward the additive pin metadata (connectionId/providerId)
@@ -674,6 +682,7 @@ ipcRenderer.on(
         // every child registered as an ordinary visible tab, the exact
         // facade §5.3/§0.4 forbid.
         ...(payload.child !== undefined ? { child: payload.child } : {}),
+        ...(payload.openedByAgent === true ? { openedByAgent: true as const } : {}),
       },
       "*",
       event.ports,
@@ -1124,6 +1133,15 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, { tabId, handle }) as Promise<CommunicationHandleResult>,
     setSessionApprovals: (tabId: string, enabled: boolean): Promise<CommunicationMutationResult> =>
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL, { tabId, enabled }) as Promise<CommunicationMutationResult>,
+    // Taskana 4768: per-project "Allow agents to open tasks here". The sidebar sends its workspace identity (main canonicalises); Settings sends only main-listed exact keys.
+    agentProjectsGet: (workspace: string): Promise<AgentProjectsGetResult> =>
+      ipcRenderer.invoke(COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL, { workspace }) as Promise<AgentProjectsGetResult>,
+    agentProjectsSet: (workspace: string, enabled: boolean): Promise<CommunicationMutationResult> =>
+      ipcRenderer.invoke(COMMUNICATION_AGENT_PROJECTS_SET_CHANNEL, { workspace, enabled }) as Promise<CommunicationMutationResult>,
+    agentProjectsList: (): Promise<AgentProjectsListResult> =>
+      ipcRenderer.invoke(COMMUNICATION_AGENT_PROJECTS_LIST_CHANNEL, {}) as Promise<AgentProjectsListResult>,
+    agentProjectsOff: (key: string): Promise<CommunicationMutationResult> =>
+      ipcRenderer.invoke(COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL, { key }) as Promise<CommunicationMutationResult>,
   },
   // Taskana 4758: the Settings scope dropdown's folder list. Opaque ids and
   // display fields only; no path is ever sent back through this bridge.

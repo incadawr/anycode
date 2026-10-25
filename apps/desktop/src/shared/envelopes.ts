@@ -64,6 +64,8 @@ export interface PortEnvelope {
    * contract). Absent on every root-tab envelope, unchanged from today.
    */
   child?: { parentTabId: string; parentSessionId: string; spawnToolCallId: string; childSessionId: string };
+  /** Taskana 4768: present (true) only for a root tab a Sessions API agent opened; drives the "agent" marker. */
+  openedByAgent?: true;
 }
 
 /** Page envelope for the host-exited notification (no ports attached). */

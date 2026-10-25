@@ -134,6 +134,8 @@ export interface TabRegistry {
     port: MessagePort,
     pinnedConnection?: { connectionId: string; providerId: string },
     child?: PortEnvelope["child"],
+    /** Taskana 4768: the envelope's `openedByAgent` marker; root tabs only. */
+    openedByAgent?: boolean,
   ): boolean;
   /**
    * Flips the tab's own store into `host_exited` and mirrors that onto the
@@ -562,7 +564,7 @@ export function createTabRegistry(
   }
 
   return {
-    registerPort(tabId, workspace, port, pinnedConnection, child): boolean {
+    registerPort(tabId, workspace, port, pinnedConnection, child, openedByAgent): boolean {
       if (!tabId || closedTabIds.has(tabId)) {
         return false;
       }
@@ -596,7 +598,7 @@ export function createTabRegistry(
           // (undrained, for a child) renderer prompt queue.
           entry.store.getState().setChildSurface();
         } else {
-          tabsStore.getState().addTab({ tabId, workspace });
+          tabsStore.getState().addTab({ tabId, workspace, ...(openedByAgent === true ? { openedByAgent: true as const } : {}) });
           // R10 status mirror (slice-R10-cut §2.2): ONE store-lifetime
           // subscription per tabId, wired at store birth. The storm guard lives
           // in applyCoarse (no mirror write unless the coarse tuple flips);

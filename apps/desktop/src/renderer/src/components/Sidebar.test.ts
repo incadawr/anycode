@@ -7,6 +7,7 @@
  * dedupe / ordering / label logic, so they are covered directly instead of
  * DOM-rendering the component.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { TabInfo } from "../tabs-store.js";
@@ -22,6 +23,8 @@ import {
   isRowDeletable,
   limitGroupRows,
   parseOlderThanDays,
+  agentProjectMenuItem,
+  PROJECT_MENU_ITEM_COUNT,
   sidebarConfirmCopy,
   singleDeleteConfirm,
   SIDEBAR_GROUP_ROW_LIMIT,
@@ -767,5 +770,26 @@ describe("renderer native-dialog guard (TASK.114 review 15.08, TASK.126)", () =>
     expect(banned.test("prompted(")).toBe(false);
     // UI copy such as "System prompt (body)" is prose, not a call.
     expect(banned.test("System prompt (body)")).toBe(false);
+  });
+});
+
+describe("agent-open project switch (Taskana 4768)", () => {
+  it("project menu renders the fourth checkable item reflecting the bridge state and flipping it", () => {
+    expect(PROJECT_MENU_ITEM_COUNT).toBe(4);
+    expect(agentProjectMenuItem(false)).toEqual({ role: "menuitemcheckbox", checked: false, label: "Allow agents to open tasks here", next: true });
+    expect(agentProjectMenuItem(true)).toEqual({ role: "menuitemcheckbox", checked: true, label: "Allow agents to open tasks here", next: false });
+    const source = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/agentProjectsGet\(menuFor\.workspace\)|agentProjectsGet\(workspace\)/);
+    expect(source).toMatch(/agentProjectsSet\(/);
+    expect(source).toMatch(/menuItemRefs\.current\[3\]/);
+  });
+
+  it("an agent-opened row shows the marker", () => {
+    const groups = buildSidebarGroups([tab({ tabId: "t-agent", workspace: "/w", openedByAgent: true }), tab({ tabId: "t-human", workspace: "/w" })], []);
+    const rows = groups[0]!.rows;
+    expect(rows.find((r) => r.tabId === "t-agent")?.openedByAgent).toBe(true);
+    expect("openedByAgent" in rows.find((r) => r.tabId === "t-human")!).toBe(false);
+    const source = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/sidebar-row-agent/);
   });
 });

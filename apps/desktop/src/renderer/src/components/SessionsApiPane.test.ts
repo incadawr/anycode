@@ -19,6 +19,7 @@ const base = (over: Partial<CommunicationView> = {}): CommunicationView => ({
   defaultSessionAccess: "off",
   status: { state: "off", workspaces: 0, sessions: 0 },
   tabs: [],
+  agentProjects: [],
   ...over,
 });
 const listeningStatus = (sessions = 0) => ({ state: "listening" as const, url: "http://127.0.0.1:4310/mcp", port: 4310, workspaces: 0, sessions });
@@ -33,7 +34,7 @@ function props(over: Partial<SessionsApiPaneViewProps> & { view?: CommunicationV
     copied: null,
     confirmingRegenerate: false,
     onToggle: noop, onAddFolder: noop, onRemoveFolder: noop, onPortText: noop, onApplyPort: noop,
-    onDefaultAccess: noop, onCopyClient: noop, onCopy: noop, onRegenerateAsk: noop, onRegenerateConfirm: noop, onRegenerateCancel: noop,
+    onAgentProjectOff: noop, onDefaultAccess: noop, onCopyClient: noop, onCopy: noop, onRegenerateAsk: noop, onRegenerateConfirm: noop, onRegenerateCancel: noop,
     ...over,
   };
 }
@@ -174,5 +175,21 @@ describe("SessionsApiPane wiring (Taskana 4747)", () => {
     expect(source).toMatch(/bridge\.addWorkspace\(\)/);
     expect(source).not.toMatch(/addWorkspace\([^)]/);
     expect(source).not.toMatch(/\bpath\b\s*:/);
+  });
+});
+
+describe("SessionsApiPaneView agent projects (Taskana 4768)", () => {
+  it("Advanced lists agent-allowed projects with working Off buttons", () => {
+    const empty = render(props());
+    expect(empty).toContain("No project allows agents to open tasks yet");
+    const html = render(props({ view: base({ agentProjects: [{ key: "/Users/me/app", name: "app", displayPath: "~/app" }, { key: "/srv/api", name: "api", displayPath: "/srv/api" }] }) }));
+    expect(html).toContain("Agents may open tasks here");
+    expect(html).toContain("~/app");
+    expect(html).toContain("/srv/api");
+    expect(html).not.toContain("No project allows agents");
+    expect((html.match(/aria-label="Turn off agents opening tasks in [^"]*"/g) ?? [])).toHaveLength(2);
+    expect(render(props({ envControlled: true, view: base({ agentProjects: [{ key: "/srv/api", name: "api", displayPath: "/srv/api" }] }) }))).toMatch(/<button[^>]*aria-label="Turn off agents opening tasks in api"[^>]*disabled=""/);
+    const source = readFileSync(new URL("./SessionsApiPane.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/bridge\.agentProjectsOff\(key\)/);
   });
 });

@@ -787,6 +787,8 @@ export interface TabHostManagerDeps {
   onTabClosed?: (tabId: string) => void;
   /** Taskana 4750a: fires after a tab is registered (the service supervisor reconciles on it). Absent = no-op. */
   onTabOpened?: (tabId: string) => void;
+  /** Taskana 4768: true for a session a Sessions API agent opened; stamps `openedByAgent` on the root tab-port envelope. Absent = never. */
+  isAgentOpenedSession?: (sessionId: string) => boolean;
   now?: () => number;
   genId?: () => string;
   limits?: Partial<BreakerLimits>;
@@ -3058,7 +3060,9 @@ export class TabHostManager {
                 childSessionId: tab.sessionId,
               },
             }
-          : {}),
+          : this.deps.isAgentOpenedSession?.(tab.sessionId) === true
+            ? { openedByAgent: true }
+            : {}),
       },
       [channel.port2],
     );

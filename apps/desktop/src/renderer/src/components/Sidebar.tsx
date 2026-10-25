@@ -113,6 +113,8 @@ export interface SidebarRow {
   worktree?: { id: string; branch: string; path: string };
   /** TASK.119 п.5: "codex"/"claude" for engine-backed rows; absent on core rows. */
   engineId?: string;
+  /** Taskana 4768: open rows only — a Sessions API agent opened this tab. */
+  openedByAgent?: true;
 }
 
 export interface SidebarGroup {
@@ -202,6 +204,7 @@ export function buildSidebarGroups(
         hostExited: t.hostExited,
         tabId: t.tabId,
         ...(t.worktree !== undefined ? { worktree: t.worktree } : {}),
+        ...(t.openedByAgent === true ? { openedByAgent: true as const } : {}),
         ...(engineByOpenTab.has(t.tabId) ? { engineId: engineByOpenTab.get(t.tabId) } : {}),
       }));
 
@@ -541,8 +544,13 @@ export function deleteOlderNotice(deleted: number, skippedActive: number): strin
   return skippedActive > 0 ? `${base} Skipped ${skippedActive} open ${skippedActive === 1 ? "task" : "tasks"}.` : base;
 }
 
-/** The project menu's three items (New task / Remove / Delete old tasks) — the roving-focus modulus. */
-const PROJECT_MENU_ITEM_COUNT = 3;
+/** The project menu's four items (New task / Remove / Delete old tasks / Allow agents) — the roving-focus modulus. */
+export const PROJECT_MENU_ITEM_COUNT = 4;
+
+/** Taskana 4768: the fourth project-menu item, a checkable switch ("Allow agents to open tasks here"). Pure so the contract is testable without a DOM. */
+export function agentProjectMenuItem(enabled: boolean): { role: "menuitemcheckbox"; checked: boolean; label: string; next: boolean } {
+  return { role: "menuitemcheckbox", checked: enabled, label: "Allow agents to open tasks here", next: !enabled };
+}
 
 /** Nominal project-menu width (px) used only for right-edge clamping before the popover measures itself. */
 const PROJECT_MENU_WIDTH = 224;
@@ -643,6 +651,8 @@ export function Sidebar({
   // REVIEW 15.08 DEFECT 1: preset submenu (7/30/90 days) replaces window.prompt.
   const [deleteOlderSubmenuFor, setDeleteOlderSubmenuFor] = useState<string | null>(null);
   const [menuFocusIndex, setMenuFocusIndex] = useState(0);
+  // Taskana 4768: the menu's project is allowed for agents (null = not read yet). Main canonicalises; we only send the workspace identity.
+  const [agentAllowed, setAgentAllowed] = useState<boolean | null>(null);
   // TASK.126: pending destructive-confirm request for the shared ConfirmDialog
   // (replaces the two blocking window.confirm calls below).
   const [confirm, setConfirm] = useState<SidebarConfirm | null>(null);
@@ -718,6 +728,11 @@ export function Sidebar({
     const rect = trigger.getBoundingClientRect();
     menuTriggerRef.current = trigger;
     setMenuFocusIndex(0);
+    setAgentAllowed(null);
+    void window.anycode.communication.agentProjectsGet(workspace).then(
+      (result) => setAgentAllowed(result.ok ? result.enabled : null),
+      () => setAgentAllowed(null),
+    );
     setMenuFor({
       workspace,
       top: rect.bottom + 4,
@@ -1167,6 +1182,7 @@ export function Sidebar({
                           onClick={() => onSelectTab(row.tabId!)}
                         >
                           <span className="sidebar-row-title">{highlight(row.title, ranges)}</span>
+                          {row.openedByAgent === true && <span className="sidebar-row-agent" title="Opened by an agent">agent</span>}
                           {row.engineId !== undefined && <Cube className="sidebar-row-engine" aria-label={`Engine: ${row.engineId}`} />}
                           {row.worktree && (
                             <span
@@ -1391,6 +1407,41 @@ export function Sidebar({
               ))}
             </div>
           )}
+          {(() => {
+            const item = agentProjectMenuItem(agentAllowed === true);
+            return (
+              <button
+                type="button"
+                role={item.role}
+                aria-checked={item.checked}
+                ref={(el) => {
+                  menuItemRefs.current[3] = el;
+                }}
+                tabIndex={menuFocusIndex === 3 ? 0 : -1}
+                className="sidebar-project-menu-item"
+                disabled={agentAllowed === null}
+                onClick={() => {
+                  const workspace = menuFor.workspace;
+                  void window.anycode.communication.agentProjectsSet(workspace, item.next).then(
+                    (result) => {
+                      if (result.ok) {
+                        setAgentAllowed(item.next);
+                      } else {
+                        setNotice("Couldn't change the agent setting for this project.");
+                        setNoticeAction(null);
+                      }
+                    },
+                    () => {
+                      setNotice("Couldn't change the agent setting for this project.");
+                      setNoticeAction(null);
+                    },
+                  );
+                }}
+              >
+                {item.checked ? "✓ " : ""}{item.label}
+              </button>
+            );
+          })()}
         </div>
       )}
 

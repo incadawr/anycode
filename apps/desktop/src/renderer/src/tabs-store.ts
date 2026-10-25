@@ -27,6 +27,8 @@ export interface TabInfo {
   worktree?: WorktreeProjection;
   /** Bound once `host_ready.sessionId` lands for this tab (§3.3); null before the handshake completes. */
   sessionId: string | null;
+  /** Taskana 4768: a Sessions API agent opened this tab (drives the "agent" marker in the sidebar row and header). */
+  openedByAgent?: true;
   /**
    * Session title, if known. Unset in this slice: title derivation lives on
    * the host (design §4.2) and surfacing it to the tab list (e.g. via the
@@ -171,7 +173,7 @@ export interface TabsState {
    * a reconnect that happens to race it). The very first tab registered
    * becomes active automatically; later tabs don't steal focus.
    */
-  addTab(tab: { tabId: string; workspace: string }): void;
+  addTab(tab: { tabId: string; workspace: string; openedByAgent?: true }): void;
   /** Removes a tab entirely. Assumes the caller (tab-registry's disposeTab) has already torn down its store/connection. */
   removeTab(tabId: string): void;
   /** No-op if `tabId` isn't a known tab (defensive — a stale click after the tab closed); activating a real tab also parks (not destroys) any live draft. */
@@ -330,7 +332,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
       set({ availableEngines: engines });
     },
 
-    addTab({ tabId, workspace }): void {
+    addTab({ tabId, workspace, openedByAgent }): void {
       if (get().tabs.some((t) => t.tabId === tabId)) {
         return;
       }
@@ -350,6 +352,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
               tabId,
               workspace,
               sessionId: null,
+              ...(openedByAgent === true ? { openedByAgent: true as const } : {}),
               hostExited: false,
               terminalOpen: false,
               lspPanelOpen: false,

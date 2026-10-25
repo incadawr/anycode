@@ -1148,6 +1148,19 @@ body {
   white-space: nowrap;
 }
 
+/* Taskana 4768: marks a task a Sessions API agent opened. */
+.sidebar-row-agent,
+.session-header-agent {
+  flex-shrink: 0;
+  padding: 1px var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .sidebar-row-worktree {
   flex-shrink: 1;
   min-width: 0;

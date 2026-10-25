@@ -112,6 +112,8 @@ import type {
 // preview-panel/md-preview above).
 import type { RecognizerProbeRequest, RecognizerProbeResult, RecognizerSetRequest } from "../../shared/recognizer";
 import type {
+  AgentProjectsGetResult,
+  AgentProjectsListResult,
   CommunicationCopyClient,
   CommunicationCopyConfigResult,
   CommunicationGetResult,
@@ -626,6 +628,10 @@ declare global {
         setSessionAccess(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
         setSessionHandle(tabId: string, handle: string | null): Promise<CommunicationHandleResult>;
         setSessionApprovals(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
+        agentProjectsGet(workspace: string): Promise<AgentProjectsGetResult>;
+        agentProjectsSet(workspace: string, enabled: boolean): Promise<CommunicationMutationResult>;
+        agentProjectsList(): Promise<AgentProjectsListResult>;
+        agentProjectsOff(key: string): Promise<CommunicationMutationResult>;
       };
       // Taskana 4758: the Settings scope dropdown's folder list (opaque ids only).
       scopeWorkspaces: {

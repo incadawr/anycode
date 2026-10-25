@@ -15,6 +15,7 @@ send them a message. It is a local MCP endpoint that runs while AnyCode is open.
 | `get_message_status` | Delivery state of a message you sent. |
 | `wait_for_result` | Waits (up to 120 s per call) until the turn that took your message finishes, then returns its answer. Returns `pending` on timeout; call it again. |
 | `cancel_turn` | Stops the running turn of a shared session, like the Stop button. Queued messages are rejected and parked approvals are denied. An idle session answers `cancelled: false`, which is not an error. |
+| `create_session` | Opens a new tab in a project where you switched on **Allow agents to open tasks here**. See "Let agents open tasks" below. |
 | `list_pending_approvals` | Lists tool requests waiting for an answer. Only sessions with **External approvals** on. See below. |
 | `answer_approval` | Allows or denies one pending request of a session with **External approvals** on. See below. |
 
@@ -65,6 +66,37 @@ by its handle through `list_sessions`. New tabs start with the default from **Se
 sessions are shared by default**, which is off unless you change it. A child
 session started by a shared session inherits the switch. The switch is saved with
 the session, so it survives a restart and a resume.
+
+## Let agents open tasks
+
+`create_session` lets an external agent open a new tab. It is **off for every
+project** until you switch it on: open the project's **⋯** menu in the sidebar
+and tick **Allow agents to open tasks here**. The switch is saved on this
+computer per project (a symlinked path and its target are one project).
+Settings → Sessions API → Advanced lists the projects that allow it and has an
+**Off** button for each; turning one on is only done in the sidebar.
+
+Input: `workspace` (absolute path, required); optional `engine` (`core`,
+`codex`, `claude`), `model`, `handle` and `firstMessage`. The new session is
+shared immediately. `firstMessage` is delivered like `send_message` with
+`mode: next_turn` and the reply carries its `messageId`, so `wait_for_result`
+works on it. If the new tab's host is not ready within 10 seconds, the reply
+omits `messageId`; the tab exists, so send the message yourself with
+`send_message`.
+
+Rules and limits:
+
+- The folder must be trusted in AnyCode (Settings → Permissions).
+- At most 5 creations per minute, and at most 8 agent-opened tabs alive at once.
+  These counters live in the running Sessions API and reset when it restarts.
+- A refusal is an error whose text starts with a code: `not_allowed` (the
+  project switch is off, or the folders list excludes it), `not_trusted`,
+  `folder_not_found`, `rate_limited`, `too_many`, `not_ready` (the engine is not
+  signed in, or the tab limit is reached).
+- Tabs an agent opened carry an **agent** marker in the sidebar row and in the
+  session header.
+- With `ANYCODE_COMMUNICATION_CONFIG` set, `create_session` always answers
+  `not_allowed`.
 
 ## Connect an external client
 
@@ -138,6 +170,9 @@ Services that bridge an outside channel use the same tools. See the
   the shared sessions. Treat the discovery file as a credential.
 - The folder list is an outer boundary, and the per-session switch is the
   inner one. A session must pass both when folders are set.
+- A token holder can open new tabs only in projects where you switched on
+  **Allow agents to open tasks here**, only in trusted folders, and within the
+  limits above.
 - A token holder can also stop the turns of shared sessions (`cancel_turn`).
 - Only where **External approvals** is on, a token holder can also allow or deny
   that session's tool requests. The switch is set only from AnyCode's own
@@ -162,6 +197,9 @@ Services that bridge an outside channel use the same tools. See the
 | Status reads **Error: a folder in the list is no longer available** | The folder was moved or deleted. Remove it, or re-add it. |
 | Status reads **Error: the server could not start** | Check the AnyCode log. The log names the problem without the token. |
 | `list_sessions` returns no sessions | No session is shared yet. Switch on the session's **Sessions API** row. |
+| `create_session` says `not_allowed` | Tick **Allow agents to open tasks here** in the project's sidebar **⋯** menu. |
+| `create_session` says `not_trusted` | Trust the folder first (Settings → Permissions). |
+| `create_session` says `rate_limited` or `too_many` | At most 5 per minute and 8 agent-opened tabs alive. Wait, or close some. |
 | Copy buttons are disabled | The endpoint is not listening. Fix the status first. |
 | Copied config says the adapter was not found | This build does not include the adapter. Install an official build. |
 | `401` after you regenerate the token | The client still uses the old token. Restart its MCP connection. |

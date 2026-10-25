@@ -277,6 +277,16 @@ describe("tab-registry — routing by tabId", () => {
     expect(registry.getStore("tab-u")?.getState().pinnedConnection).toBeNull();
   });
 
+  it("an anycode:port envelope with openedByAgent threads into the tab store's TabInfo (Taskana 4768)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    registry.registerPort("tab-agent", "/ws/a", asPort(new FakeMessagePort()), undefined, undefined, true);
+    registry.registerPort("tab-human", "/ws/h", asPort(new FakeMessagePort()));
+    const tabs = tabsStore.getState().tabs;
+    expect(tabs.find((t) => t.tabId === "tab-agent")?.openedByAgent).toBe(true);
+    expect("openedByAgent" in tabs.find((t) => t.tabId === "tab-human")!).toBe(false);
+  });
+
   it("auto-registers a tab on the first port for an unknown tabId (reload restoration, design §2.2)", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);

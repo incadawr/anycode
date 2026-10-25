@@ -1,6 +1,7 @@
 import { applyInputFromBlock, createCommunicationController, type CommunicationController } from "./communication-controller.js";
-import { createSessionAccessStore, defaultSessionAccessFromSettingsFile, type SessionAccessStore } from "./communication-sessions.js";
+import { createSessionAccessStore, defaultSessionAccessFromSettingsFile, normalizeHandle, type SessionAccessStore } from "./communication-sessions.js";
 import { registerCommunicationIpc } from "./communication-ipc.js";
+import { createAgentProjectsStore, type AgentProjectsStore } from "./communication-agent-projects.js";
 import { createBrowserAccessStore, defaultBrowserFullAccessFromSettingsFile, type BrowserAccessStore } from "./browser-access.js";
 import { attachNetworkHintForwarders, type NetHintSource } from "./network-hints.js";
 import {
@@ -47,7 +48,7 @@ import {
   registerWorkspaceTrustIpc,
   workspaceTrustOnceFor,
 } from "./workspace-trust-ipc.js";
-import { defaultTrustStorePath, migrateTrustStoreKeys } from "@anycode/core/workspace-trust";
+import { canonicalWorkspaceKey, defaultTrustStorePath, migrateTrustStoreKeys, readTrustStore } from "@anycode/core/workspace-trust";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -530,6 +531,9 @@ let communicationController: CommunicationController | null = null;
 let communicationSessions: SessionAccessStore | null = null;
 /** Taskana 4763: per-session External approvals switch (default OFF, never inherited by a fresh root tab). */
 let communicationApprovals: SessionAccessStore | null = null;
+/** Taskana 4768: per-project "Allow agents to open tasks here" switch (default OFF everywhere) and the sessions an agent opened (drives the "agent" marker). */
+let communicationAgentProjects: AgentProjectsStore | null = null;
+const agentOpenedSessions = new Set<string>();
 // Taskana 4759: the per-session "Full browser access" switch and the notifier that pushes
 // each tab's EFFECTIVE value (renderer + host flag) exactly once per change.
 let browserAccessStore: BrowserAccessStore | null = null;
@@ -2246,6 +2250,10 @@ void app.whenReady().then(async () => {
     file: join(app.getPath("userData"), "communication-approvals.json"),
     defaultOn: () => false,
   });
+  communicationAgentProjects = createAgentProjectsStore({
+    file: join(app.getPath("userData"), "communication-agent-projects.json"),
+    realpathSync,
+  });
   // Taskana 4759: an inherited ANYCODE_BROWSER_FULL_ACCESS must never reach a tab host;
   // the host flag is only ever stamped by main (tabs.ts) from the live switch.
   delete process.env.ANYCODE_BROWSER_FULL_ACCESS;
@@ -2297,9 +2305,55 @@ void app.whenReady().then(async () => {
     handleOf: (sessionId) => communicationSessions?.getHandle(sessionId),
     countExposed: () => communicationSessions?.exposedCount() ?? 0,
     isExternalApprovalEnabled: (sessionId) => communicationApprovals?.isExposed(sessionId) ?? false,
+    createSessionByAgent: (request) => createSessionForAgent(request),
   });
 
+  /**
+   * Taskana 4768: the Sessions API `create_session` hook. Main owns every gate:
+   * the per-project switch, workspace trust ("trusted" decision in the store),
+   * tab capacity and engine readiness. The path is canonicalised here; the new
+   * session is shared immediately (it was created by an authenticated agent).
+   */
+  const createSessionForAgent = async (request: { workspace: string; engine?: "core" | "codex" | "claude"; model?: string; handle?: string }) => {
+    const projects = communicationAgentProjects;
+    const tabs = manager;
+    const sessions = communicationSessions;
+    if (projects === null || tabs === null || sessions === null) return { ok: false as const, reason: "not_ready" as const };
+    const key = canonicalWorkspaceKey(request.workspace, realpathSync);
+    if (!projects.isAllowed(key)) return { ok: false as const, reason: "not_allowed" as const };
+    const trust = await readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(homedir()));
+    if (trust.folders[key]?.decision !== "trusted") return { ok: false as const, reason: "not_trusted" as const };
+    if (tabs.atCapacity()) return { ok: false as const, reason: "too_many" as const };
+    const engine = request.engine ?? "core";
+    try { await mcpSecretCache.prime(key); } catch { return { ok: false as const, reason: "not_ready" as const }; }
+    const connectionId = engine === "core" ? settings?.provider.activeConnectionId : undefined;
+    const created = tabs.createTab({
+      workspace: key,
+      sessionId: randomUUID(),
+      resume: false,
+      engine,
+      ...(request.model !== undefined ? { engineModel: request.model } : {}),
+      ...(connectionId !== undefined ? { connectionId } : {}),
+    });
+    if (!created.ok) return { ok: false as const, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };
+    const sessionId = created.tab.sessionId;
+    agentOpenedSessions.add(sessionId);
+    tabs.deliverTabPort(created.tab);
+    // Registered synchronously by createTab (onSessionRegistered); "shared immediately".
+    sessions.set(sessionId, true);
+    let handle: string | undefined;
+    if (request.handle !== undefined) {
+      const normalized = normalizeHandle(request.handle);
+      if (normalized.ok && normalized.handle !== null) {
+        const isLive = (id: string) => (manager?.listTabs() ?? []).some((tab) => tab.sessionId === id);
+        if (sessions.setHandle(sessionId, normalized.handle, isLive).ok) handle = normalized.handle;
+      }
+    }
+    return { ok: true as const, sessionId, tabId: created.tab.tabId, ...(handle !== undefined ? { handle } : {}) };
+  };
+
   manager = new TabHostManager({
+    isAgentOpenedSession: (sessionId) => agentOpenedSessions.has(sessionId),
     onSessionRegistered: (info) => {
       communicationSessions?.register(info);
       communicationApprovals?.register(info);
@@ -3205,7 +3259,7 @@ void app.whenReady().then(async () => {
   // Taskana 4747: the Sessions API control plane. Folders come only from the native
   // dialog below; the renderer never sends a path. The stdio adapter is copied to
   // userData so an external client config survives app updates.
-  if (communicationController !== null && communicationSessions !== null && communicationApprovals !== null) {
+  if (communicationController !== null && communicationSessions !== null && communicationApprovals !== null && communicationAgentProjects !== null) {
     const commController = communicationController;
     registerCommunicationIpc({
       settingsPath,
@@ -3228,6 +3282,9 @@ void app.whenReady().then(async () => {
       },
       sessions: communicationSessions,
       approvals: communicationApprovals,
+      agentProjects: communicationAgentProjects,
+      realpathSync,
+      homedir: () => homedir(),
       tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId })),
       env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
       pickFolder: async () => {

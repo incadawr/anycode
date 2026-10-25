@@ -111,6 +111,8 @@ export interface HostPortMeta {
    * Absent for every ordinary root-tab envelope, unchanged from today.
    */
   child?: PortEnvelope["child"];
+  /** Taskana 4768: a Sessions API agent opened this root tab (envelope `openedByAgent === true`). */
+  openedByAgent?: true;
 }
 
 /**
@@ -173,6 +175,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         connectionId?: unknown;
         providerId?: unknown;
         child?: unknown;
+        openedByAgent?: unknown;
       };
       const tabId = typeof envelope.tabId === "string" ? envelope.tabId : "";
       const wsFromEnvelope = typeof envelope.workspace === "string" ? envelope.workspace : "";
@@ -191,6 +194,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         workspace: wsFromEnvelope,
         ...(pinnedConnection !== undefined ? { pinnedConnection } : {}),
         ...(child !== undefined ? { child } : {}),
+        ...(envelope.openedByAgent === true ? { openedByAgent: true as const } : {}),
       });
     }
   }
@@ -273,6 +277,7 @@ export interface ConnectionRegistry {
     port: MessagePort,
     pinnedConnection?: { connectionId: string; providerId: string },
     child?: PortEnvelope["child"],
+    openedByAgent?: boolean,
   ): boolean;
   /** Flips the given tab's connection/banner state to host-exited; a no-op for a tab that isn't registered. */
   markHostExited(tabId: string): void;
@@ -304,7 +309,7 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
       console.warn("[port] dropping port envelope with no tabId", meta);
       return;
     }
-    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child);
+    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child, meta.openedByAgent);
     if (!attached) {
       console.warn("[port] dropping port for a closed/unknown tab", meta.tabId);
     }
