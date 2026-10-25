@@ -177,6 +177,18 @@ interface PendingAsk {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+/**
+ * Taskana 4730: the structural subset of the broker the ENGINE approval
+ * bridges consume (denyAll + requestPermission + the two latches). Named so
+ * the engine option types can accept the classifying DECORATOR
+ * (classifying-broker.ts) next to the real IpcPermissionBroker without a
+ * cast — the decorator forwards everything to the wrapped broker.
+ */
+export type EngineBridgeBroker = Pick<
+  IpcPermissionBroker,
+  "requestPermission" | "denyAll" | "isUnattended" | "isAwaitingApproval"
+>;
+
 export class IpcPermissionBroker implements PermissionBroker {
   /** Every parked ask, queued or shown — the single source of truth for denyAll/handleResponse addressing. */
   private readonly pending = new Map<string, PendingAsk>();

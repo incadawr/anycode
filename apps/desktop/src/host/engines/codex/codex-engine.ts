@@ -32,7 +32,7 @@ import {
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../session-engine.js";
-import type { IpcPermissionBroker } from "../../permission-broker.js";
+import type { EngineBridgeBroker } from "../../permission-broker.js";
 import { CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js";
 import type { CodexPatchAutoApprovalPolicy } from "./patch-auto-approval.js";
 import { AppServerClient, type AppServerClientOptions } from "./app-server-client.js";
@@ -402,7 +402,7 @@ export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "
   agentCardLog?: CodexAgentCardLogPort;
   bootstrap: EngineBootstrap;
   workspace: string;
-  broker: IpcPermissionBroker;
+  broker: EngineBridgeBroker;
   /** Taskana 4265: policy for accepting a provably in-workspace file change without asking; absent = always ask. */
   patchAutoApproval?: CodexPatchAutoApprovalPolicy;
   timeouts?: Partial<CodexEngineTimeouts>;

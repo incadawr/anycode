@@ -231,8 +231,12 @@ describe("filterSlashItems", () => {
   });
 
   it("TASK.146: /c ranks Compact (prefix) above Git changes (word boundary) above MCP (substring)", () => {
+    // Taskana 4704 §3.8: "Orchestrate" matches "c" as a SUBSTRING ("Or[c]hestrate")
+    // at the same rank 2 as MCP but sits EARLIER in registry order (index 1 vs
+    // 9), so it now takes the third slot — an intended, pinned consequence of
+    // the row's mandated position right after plan-mode, not a ranking change.
     const items = filterSlashItems(SLASH_COMMANDS, [], "c", ctx());
-    expect(items.map((item) => item.name).slice(0, 3)).toEqual(["Compact", "Git changes", "MCP"]);
+    expect(items.map((item) => item.name).slice(0, 4)).toEqual(["Compact", "Git changes", "Orchestrate", "MCP"]);
   });
 
   it("TASK.146: the new row does not disturb the /mod pins — Compact does not match 'mod' at all", () => {
@@ -376,6 +380,9 @@ describe("SLASH_COMMANDS registry invariants", () => {
   it("has the exact §2 name/order pinned", () => {
     expect(SLASH_COMMANDS.map((c) => c.name)).toEqual([
       "Plan mode",
+      // Taskana 4704 §3.8: /orchestrate sits right after plan-mode (the
+      // orchestration posture's nearest neighbor).
+      "Orchestrate",
       "Mode",
       "Model",
       "Compact",
@@ -385,25 +392,41 @@ describe("SLASH_COMMANDS registry invariants", () => {
       "Terminal",
       "MCP",
       "Skills",
+      // Taskana 4704 §3.9: /roles deep-links to the Roles settings pane.
+      "Roles",
       "Plugins",
       "Settings",
     ]);
   });
 
-  it("TASK.146: the Compact row sits at index 3 — last in the core cluster, before the common one", () => {
+  it("Taskana 4704: the Orchestrate row sits at index 1 — after plan-mode, before Mode", () => {
+    expect(SLASH_COMMANDS[1]!.id).toBe("orchestrate");
+    expect(SLASH_COMMANDS[1]!.run).toEqual({ kind: "orchestrate_submit" });
+    expect(SLASH_COMMANDS[1]!.description(ctx())).toBe("Delegate <task> to child agents in the background");
+    // Same not-ready gate as plan-mode (TASK.37 posture: the host silently
+    // drops a busy/absent toggle; ready is the sole renderer gate).
+    expect(SLASH_COMMANDS[1]!.enabled(ctx({ ready: false }))).toBe(false);
+    expect(SLASH_COMMANDS[1]!.enabled(ctx({ ready: true }))).toBe(true);
+    // Core-only: set_orchestrate is rejected without supportsCorePermissions.
+    expect(SLASH_COMMANDS[1]!.visible(ctx({ supportsCorePermissions: true }))).toBe(true);
+    expect(SLASH_COMMANDS[1]!.visible(ctx({ supportsCorePermissions: false }))).toBe(false);
+  });
+
+  it("TASK.146: the Compact row sits at index 4 — last in the core cluster, before the common one", () => {
     // The module doc declares this array's order LAW ("rank ties among
     // commands break by this array's order"), so the index is the pin.
-    expect(SLASH_COMMANDS[3]!.id).toBe("compact");
-    expect(SLASH_COMMANDS[3]!.name).toBe("Compact");
+    // Taskana 4704 §3.8 moved it one slot down (Orchestrate inserted at 1).
+    expect(SLASH_COMMANDS[4]!.id).toBe("compact");
+    expect(SLASH_COMMANDS[4]!.name).toBe("Compact");
     // TASK.92: routed through the engine's own native compactNow (Claude has
     // one now — the allowlisted /compact passthrough), not a core-only control.
-    expect(SLASH_COMMANDS[3]!.source).toBe("engine");
-    expect(SLASH_COMMANDS[3]!.run).toEqual({ kind: "compact_now" });
-    expect(SLASH_COMMANDS[3]!.icon).toBe("compact");
-    expect(SLASH_COMMANDS[3]!.description(ctx())).toBe("Summarize the conversation to free context");
+    expect(SLASH_COMMANDS[4]!.source).toBe("engine");
+    expect(SLASH_COMMANDS[4]!.run).toEqual({ kind: "compact_now" });
+    expect(SLASH_COMMANDS[4]!.icon).toBe("compact");
+    expect(SLASH_COMMANDS[4]!.description(ctx())).toBe("Summarize the conversation to free context");
     // Its neighbours are what make it "last in the core cluster".
-    expect(SLASH_COMMANDS[2]!.id).toBe("model");
-    expect(SLASH_COMMANDS[4]!.id).toBe("new-task");
+    expect(SLASH_COMMANDS[3]!.id).toBe("model");
+    expect(SLASH_COMMANDS[5]!.id).toBe("new-task");
   });
 
   it("TASK.92: the Compact row is visible iff supportsManualCompact (Claude yes, codex no), enabled still keyed to modelDisabled", () => {
@@ -457,6 +480,8 @@ describe("SLASH_COMMANDS registry invariants", () => {
           return "store_git_panel";
         case "compact_now":
           return "compact_now";
+        case "orchestrate_submit":
+          return "orchestrate_submit";
         case "settings_pane":
           return `settings_pane:${intent.pane}`;
         case "insert":
@@ -471,7 +496,7 @@ describe("SLASH_COMMANDS registry invariants", () => {
       { kind: "insert", text: "$example " },
     ];
     const seenKinds = new Set(sampleIntents.map((intent) => intent.kind));
-    // all 7 SlashRunIntent kinds are represented across the registry + the
+    // all 8 SlashRunIntent kinds are represented across the registry + the
     // manually-constructed "insert" sample (skills produce it dynamically).
     expect(seenKinds).toEqual(
       new Set([
@@ -482,6 +507,7 @@ describe("SLASH_COMMANDS registry invariants", () => {
         "settings_pane",
         "insert",
         "compact_now",
+        "orchestrate_submit",
       ])
     );
     for (const intent of sampleIntents) {
@@ -519,13 +545,13 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
 
   it("keeps engine-independent common commands visible regardless of engine/shell capabilities", () => {
     const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
-    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Plugins", "Settings"]);
+    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Roles", "Plugins", "Settings"]);
   });
 
   it("TASK.146/TASK.92: hides Compact on a codex-shaped profile (no compactNow) — the list a codex boot sees stays byte-identical", () => {
     const names = filterSlashItems(SLASH_COMMANDS, [], "", codexShapedCtx).map((item) => item.name);
     expect(names).not.toContain("Compact");
-    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Plugins", "Settings"]);
+    expect(names).toEqual(["New task", "Tasks", "MCP", "Skills", "Roles", "Plugins", "Settings"]);
     // Not even by query: a codex boot cannot reach the row at all.
     expect(filterSlashItems(SLASH_COMMANDS, [], "co", codexShapedCtx)).toEqual([]);
   });
@@ -566,7 +592,7 @@ describe("SLASH_COMMANDS capability gating — no dead actions (design TASK.40 �
     expect(onlyCorePermissionsOff).not.toContain("Plan mode");
     expect(onlyCorePermissionsOff).not.toContain("Mode");
     expect(onlyCorePermissionsOff).toEqual(
-      expect.arrayContaining(["Model", "New task", "Tasks", "Git changes", "Terminal", "MCP", "Skills", "Plugins", "Settings"]),
+      expect.arrayContaining(["Model", "New task", "Tasks", "Git changes", "Terminal", "MCP", "Skills", "Roles", "Plugins", "Settings"]),
     );
 
     const onlyGitReadOnlyOff = filterSlashItems(SLASH_COMMANDS, [], "", ctx({ shellGitReadOnly: false })).map(

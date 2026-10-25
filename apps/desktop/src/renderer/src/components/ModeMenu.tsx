@@ -105,13 +105,36 @@ export function modeChangeDisabled(_turnStatus: TurnState["status"], ready: bool
   return !ready;
 }
 
+/**
+ * Taskana 4704 §3.7 (part B): the Orchestrate row's description, exported for
+ * ModeMenu.test.ts's copy pin. Kept next to MODE_DESCRIPTIONS so the two
+ * description tables stay physically together.
+ */
+export const ORCHESTRATE_ROW_DESCRIPTION = "Delegate work to child agents";
+
 export interface ModeMenuProps {
   mode: PermissionMode;
   disabled: boolean;
   onChange(next: PermissionMode): void;
+  /**
+   * Taskana 4704 §3.7 (part B): tab-scoped orchestrate flag (the store's
+   * `orchestrateActive`, kept from the host's `orchestrate_changed` acks).
+   * Absent/undefined hides the Orchestrate row entirely (a legacy host that
+   * never acks — the same honest-hide posture as the slash row below), the
+   * same way `supportsCorePermissions` hides the whole chip.
+   */
+  orchestrateActive?: boolean;
+  /**
+   * The Orchestrate row's commit path — deliberately NOT `onChange`: that
+   * callback takes a PermissionMode and drives `set_mode`; orchestrate is a
+   * TAB-level flag with its own `set_orchestrate` wire message (§2.2: NOT a
+   * 7th PermissionMode). Undefined hides the row too (a caller passing state
+   * without a handler would render a dead row — "no dead actions").
+   */
+  onToggleOrchestrate?: (next: boolean) => void;
 }
 
-export function ModeMenu({ mode, disabled, onChange }: ModeMenuProps) {
+export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, onToggleOrchestrate }: ModeMenuProps) {
   const [open, setOpen] = useState(false);
   // D8 overlay wiring: the preview WebContentsView must hide while this
   // composer dropdown is up.
@@ -171,12 +194,19 @@ export function ModeMenu({ mode, disabled, onChange }: ModeMenuProps) {
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, [open]);
 
-  // On open, seed roving focus at the current mode.
+  // On open, seed roving focus at the current mode. `Math.max(0, …)` keeps
+  // the impossible `mode === null` fallback ("plan") at index 0.
   useEffect(() => {
     if (open) {
       setFocusIndex(Math.max(0, PERMISSION_MODE_OPTIONS.indexOf(mode)));
     }
   }, [open, mode]);
+
+  // Taskana 4704 §3.7 (part B): the Orchestrate row renders after the five
+  // modes iff BOTH the state and the handler were passed. Keyboard math below
+  // reads this count, never `PERMISSION_MODE_OPTIONS.length` directly.
+  const showOrchestrateRow = orchestrateActive !== undefined && onToggleOrchestrate !== undefined;
+  const itemCount = PERMISSION_MODE_OPTIONS.length + (showOrchestrateRow ? 1 : 0);
 
   // If the chip becomes disabled while the popover is open (e.g. host_exited
   // drops connection off "ready" mid-menu), close it — it must not float over
@@ -217,6 +247,17 @@ export function ModeMenu({ mode, disabled, onChange }: ModeMenuProps) {
     close(true);
   }
 
+  /**
+   * Taskana 4704 §3.7 (part B): the Orchestrate row's commit — toggles the
+   * tab-level flag through the dedicated handler (set_orchestrate), never
+   * through `onChange`/`set_mode` (§2.2: orchestrate is not a permission
+   * mode; enabling it MOVES the session to plan host-side, §3.7).
+   */
+  function toggleOrchestrate(): void {
+    onToggleOrchestrate?.(!orchestrateActive);
+    close(true);
+  }
+
   function onChipKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
     if (disabled) {
       return;
@@ -233,11 +274,11 @@ export function ModeMenu({ mode, disabled, onChange }: ModeMenuProps) {
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
-        setFocusIndex((i) => nextRovingIndex(i, 1, PERMISSION_MODE_OPTIONS.length));
+        setFocusIndex((i) => nextRovingIndex(i, 1, itemCount));
         break;
       case "ArrowUp":
         event.preventDefault();
-        setFocusIndex((i) => nextRovingIndex(i, -1, PERMISSION_MODE_OPTIONS.length));
+        setFocusIndex((i) => nextRovingIndex(i, -1, itemCount));
         break;
       case "Home":
         event.preventDefault();
@@ -245,13 +286,20 @@ export function ModeMenu({ mode, disabled, onChange }: ModeMenuProps) {
         break;
       case "End":
         event.preventDefault();
-        setFocusIndex(PERMISSION_MODE_OPTIONS.length - 1);
+        setFocusIndex(itemCount - 1);
         break;
       case "Enter":
-      case " ":
+      case " ": {
         event.preventDefault();
+        // Taskana 4704 §3.7 (part B): the last row (when the Orchestrate row
+        // renders) toggles orchestrate instead of selecting a mode.
+        if (showOrchestrateRow && focusIndex === PERMISSION_MODE_OPTIONS.length) {
+          toggleOrchestrate();
+          break;
+        }
         select(PERMISSION_MODE_OPTIONS[focusIndex]!);
         break;
+      }
       case "Escape":
         event.preventDefault();
         close(true);
@@ -265,10 +313,15 @@ export function ModeMenu({ mode, disabled, onChange }: ModeMenuProps) {
         // digits fall through so the global keymap's ⌘1..9 tab.activate is never
         // shadowed (the popover is not a <dialog>, so window combos still fire);
         // Shift is excluded to match keymap.ts's digit convention. Digits past
-        // the option count (6–9) are silently ignored, no preventDefault.
+        // the option count are silently ignored, no preventDefault.
         if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
           break;
         }
+        // Taskana 4704 §3.7 (part B): digit selection stays over the FIVE
+        // permission modes only (`modeIndexForDigit(code, 5)`) — the
+        // Orchestrate row is a separator-below toggle, not mode #6, so Digit6
+        // never reaches it. This is the "does not enter
+        // PERMISSION_MODE_OPTIONS" pin's keyboard half.
         const index = modeIndexForDigit(event.code, PERMISSION_MODE_OPTIONS.length);
         if (index !== null) {
           event.preventDefault();
@@ -284,9 +337,10 @@ export function ModeMenu({ mode, disabled, onChange }: ModeMenuProps) {
       <button
         ref={chipRef}
         type="button"
-        className={`mode-chip mode-chip-${mode}`}
+        className={`mode-chip mode-chip-${mode}${showOrchestrateRow && orchestrateActive ? " mode-chip-orchestrate" : ""}`}
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-pressed={showOrchestrateRow ? orchestrateActive : undefined}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onChipKeyDown}
@@ -328,6 +382,36 @@ export function ModeMenu({ mode, disabled, onChange }: ModeMenuProps) {
               </button>
             );
           })}
+          {/* Taskana 4704 §3.7 (part B): the Orchestrate toggle sits AFTER the
+              five permission modes, behind a divider — it is a tab-level state,
+              not a 6th mode (§2.2). `aria-checked` on a `menuitemcheckbox`
+              mirrors the active row's Check glyph; the click goes through
+              `onToggleOrchestrate` (set_orchestrate), never `onChange`. */}
+          {showOrchestrateRow && (
+            <>
+              <div className="mode-menu-divider" role="separator" />
+              <button
+                ref={(el) => {
+                  itemRefs.current[PERMISSION_MODE_OPTIONS.length] = el;
+                }}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={orchestrateActive}
+                tabIndex={focusIndex === PERMISSION_MODE_OPTIONS.length ? 0 : -1}
+                className={`mode-menu-item${orchestrateActive ? " mode-menu-item-current" : ""}`}
+                data-testid="mode-menu-orchestrate"
+                onClick={toggleOrchestrate}
+              >
+                <span className="mode-menu-item-check" aria-hidden="true">
+                  {orchestrateActive ? <Check /> : null}
+                </span>
+                <span className="mode-menu-item-body">
+                  <span className="mode-menu-item-name">Orchestrate</span>
+                  <span className="mode-menu-item-desc">{ORCHESTRATE_ROW_DESCRIPTION}</span>
+                </span>
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

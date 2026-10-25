@@ -28,7 +28,7 @@
 import { classifyBashCommandLine, isProvablyInsideWorkspace, NodeFileSystemAdapter, resolveWorkspaceWriteFacts } from "@anycode/core";
 import type { PermissionRequest, ToolMetadata } from "@anycode/core";
 import type { SettleOrigin } from "../../permission-broker.js";
-import type { IpcPermissionBroker } from "../../permission-broker.js";
+import type { EngineBridgeBroker } from "../../permission-broker.js";
 import {
   OBSERVED_COMMAND_APPROVAL_METHOD,
   OBSERVED_FILE_CHANGE_APPROVAL_METHOD,
@@ -53,7 +53,7 @@ export interface ActiveCodexTurn {
 }
 
 export interface CodexApprovalBridgeOptions {
-  broker: IpcPermissionBroker;
+  broker: EngineBridgeBroker;
   activeTurn(): ActiveCodexTurn | null;
   /**
    * Taskana 4294 (cross-review F1): the session's workspace root (the host

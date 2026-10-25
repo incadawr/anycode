@@ -102,9 +102,11 @@ import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connect
 import { ConsentDialog } from "./ConsentDialog.js";
 import { PermissionsEditor } from "./PermissionsEditor.js";
 import { TrustedBinariesSection } from "./TrustedBinariesSection.js";
+import { TrustedFoldersSection } from "./TrustedFoldersSection.js";
 import { McpServersPane } from "./McpServersPane.js";
 import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane, workspaceRootSegment } from "./SubagentsPane.js";
+import { RolesPane } from "./RolesPane.js";
 import { PluginsPane } from "./PluginsPane.js";
 import { ScopeSwitcher, resolvePaneScope, type PaneScopeChoice } from "./ScopeSwitcher.js";
 import { ProfilePane } from "./ProfilePane.js";
@@ -122,7 +124,7 @@ const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 /** TASK.159: the output-ceiling env rung — same local-literal convention as `API_KEY_ENV_VAR` above (renderer modules don't import main). */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
-export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "skills" | "subagents" | "plugins" | "environment" | "appearance" | "shortcuts" | "about";
+export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "skills" | "subagents" | "roles" | "plugins" | "environment" | "appearance" | "shortcuts" | "about";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -175,6 +177,14 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
     icon: Robot,
   },
   {
+    // Taskana 4704 §3.9 (part B): orchestration roles (planner/executor/
+    // reviewer/explore/orchestrator route chains + parallel-children cap).
+    id: "roles",
+    label: "Roles",
+    description: "Which engine or connection each orchestration role runs on, with fallbacks.",
+    icon: Robot,
+  },
+  {
     id: "plugins",
     label: "Plugins",
     description: "Install, update, and manage plugins — skills, agents, workflows, and MCP servers shipped as packages.",
@@ -204,6 +214,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   mcp: ["mcp", "server", "status"],
   skills: ["skill", "skills", "import", "enable"],
   subagents: ["agent", "agents", "subagent", "subagents", "persona", "agent_type", "built-in"],
+  roles: ["role", "roles", "orchestrate", "orchestration", "planner", "executor", "reviewer", "fallback", "children"],
   plugins: ["plugin", "plugins", "extension", "update", "install", "marketplace", "official", "third-party"],
   environment: ["telemetry", "repo map", "environment"],
   appearance: ["theme", "density", "notifications", "dark", "light", "compact"],
@@ -1734,6 +1745,12 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
 
             {activePane === "permissions" && <TrustedBinariesSection store={store} />}
 
+            {/* Taskana 4739: remembered workspace-trust decisions — a SIBLING
+                section after TrustedBinariesSection (same rationale: a trust
+                decision is neither a permission rule nor a binary consent).
+                Reads through the workspace-trust IPC, not the settings store. */}
+            {activePane === "permissions" && <TrustedFoldersSection />}
+
             {activePane === "tools" && (
               <section className="settings-section">
                 <div className="settings-section-title">Tools</div>
@@ -1851,6 +1868,9 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
 
           {activePane === "subagents" && <SubagentsPane tabId={scopeTabId ?? undefined} workspace={scopeWorkspace ?? activeTabWorkspace ?? undefined} />}
 
+          {/* Taskana 4704 §3.9 (part B): orchestration roles — sits right after
+              Subagents (the persona/profile registry this builds on). */}
+          {activePane === "roles" && <RolesPane />}
           {/* Taskana 4732 S1-C: the Plugins pane — NOT scope-bar-dependent (it
               shows every tier at once: managed installs + project plugins of
               the active workspace + legacy dirs); main resolves the workspace

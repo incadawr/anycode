@@ -13,6 +13,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "smoke:subagent-feed-layout": "node ./scripts/subagent-activity-feed-layout-smoke.mjs",
+    "smoke:orchestrate-mode": "node ./scripts/orchestrate-mode-smoke.mjs",
     "smoke:workflow-map": "node ./scripts/workflow-map-smoke.mjs",
     "package": "electron-vite build && electron-builder --config electron-builder.yml",
     "package:dir": "electron-vite build && electron-builder --dir --config electron-builder.yml",

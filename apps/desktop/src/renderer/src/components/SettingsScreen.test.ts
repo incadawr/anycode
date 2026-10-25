@@ -561,8 +561,8 @@ describe("describeRepoMapRow (slice P7.8, design slice-P7.8-cut.md §3.5)", () =
   });
 });
 
-describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tools & Permissions, icon+description added; P7.20/F23 W3: Skills inserted after MCP; P7.21/F21 W3: Subagents inserted after Skills; P7.22/F19 W3: Profile inserted FIRST; P7.24/F20 W3: Keyboard shortcuts inserted between Appearance and About; TASK.41 W2: Codex inserted between Provider and Permissions; SLICE-CC A4: Claude inserted between Codex and Permissions; TASK.141: Network inserted after Tools; TASK.198 срез E2a: Vision inserted between Tools and Network; Taskana 4732 S1-C: Plugins inserted after Subagents)", () => {
-  it("grew to sixteen panes, Profile leads the rail, Codex+Claude inserted between Provider and Permissions, Vision inserted between Tools and Network, Skills+Subagents inserted after MCP, Plugins inserted after Subagents, shortcuts inserted between Appearance and About", () => {
+describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tools & Permissions, icon+description added; P7.20/F23 W3: Skills inserted after MCP; P7.21/F21 W3: Subagents inserted after Skills; P7.22/F19 W3: Profile inserted FIRST; P7.24/F20 W3: Keyboard shortcuts inserted between Appearance and About; TASK.41 W2: Codex inserted between Provider and Permissions; SLICE-CC A4: Claude inserted between Codex and Permissions; TASK.141: Network inserted after Tools; TASK.198 срез E2a: Vision inserted between Tools and Network; Taskana 4732 S1-C: Roles then Plugins inserted after Subagents)", () => {
+  it("grew to seventeen panes, Profile leads the rail, Codex+Claude inserted between Provider and Permissions, Vision inserted between Tools and Network, Skills+Subagents inserted after MCP, Roles+Plugins inserted after Subagents, shortcuts inserted between Appearance and About", () => {
     expect(SETTINGS_PANES.map((p) => p.id)).toEqual([
       "profile",
       "provider",
@@ -575,13 +575,15 @@ describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tool
       "mcp",
       "skills",
       "subagents",
+      // Taskana 4704 §3.9: orchestration roles, right after Subagents.
+      "roles",
       "plugins",
       "environment",
       "appearance",
       "shortcuts",
       "about",
     ]);
-    expect(SETTINGS_PANES).toHaveLength(16);
+    expect(SETTINGS_PANES).toHaveLength(17);
   });
 
   it("every pane carries a non-empty label, description, and icon component", () => {

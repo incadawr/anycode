@@ -237,10 +237,15 @@ export interface AgentLoopConfig {
   permissionBroker: PermissionBroker;
   /**
    * Taskana 4702 Stage 1: optional ask-zone classifier (default off). Threaded
-   * to the dispatcher only; subagent children do NOT inherit it (buildChildConfig
-   * copies an explicit field list), so a child's ask still goes to the broker.
+   * to the dispatcher only. Taskana 4730: INLINE subagent children now inherit
+   * it via buildChildConfig — but with the ROOT's human-derived `userContext`
+   * thunk when the wiring supplied one: a child's OWN history is model-authored
+   * (its "user" messages are the parent model's prompts — an injection
+   * channel), so a child must never feed its own turns to the classifier.
+   * Absent thunk => the loop derives from its own history (pre-4730 shape,
+   * used by the root loop itself).
    */
-  askClassifier?: { classifier: AskClassifier; timeoutMs?: number };
+  askClassifier?: { classifier: AskClassifier; timeoutMs?: number; userContext?: () => string[] };
   mode: PermissionMode;
   ports: CorePorts;
   cwd: string;
@@ -673,6 +678,13 @@ export class AgentLoop {
 
   /** Vision-fallback overview-caption cache (plan §7); shared when the wiring supplies one, private to this loop otherwise. */
   private readonly askCache: AskCache;
+  /**
+   * Taskana 4730: this loop's OWN human-context thunk for the ask-zone
+   * classifier (recentUserTurns over the live history), memoized on first use
+   * so `humanUserContext()` below hands children the SAME function the root's
+   * dispatch context uses — without mutating the shared AgentLoopConfig.
+   */
+  private rootUserContext: (() => string[]) | undefined;
 
   constructor(private readonly config: AgentLoopConfig) {
     const tokenizer = config.tokenizer ?? new HeuristicTokenizer();
@@ -697,6 +709,28 @@ export class AgentLoop {
     // Taskana 4665: resolved once here; `null` means the reminder is off.
     const every = resolveTodoReminderEvery(config.todoReminder);
     this.todoReminder = every === null ? null : new TodoReminderTracker(every);
+    // Taskana 4730: hand this loop's human-context thunk to the subagent port
+    // so inline children classify asks against the HUMAN's turns. Runs only
+    // when a classifier is configured; without one humanUserContext() is
+    // undefined and nothing changes (byte-identical pre-4730).
+    if (config.askClassifier !== undefined) {
+      config.subagents?.registerHumanUserContext?.(this.humanUserContext()!);
+    }
+  }
+
+  /**
+   * Taskana 4730: the ROOT human-context thunk for the ask-zone classifier —
+   * recentUserTurns over THIS loop's live history, memoized so every consumer
+   * (this loop's dispatch context, and the inline children spawned from it via
+   * the runner's child-config copy) shares ONE function. Returns undefined
+   * when no classifier is configured, so callers keep the field absent and the
+   * behavior stays byte-identical to pre-4730.
+   */
+  humanUserContext(): (() => string[]) | undefined {
+    if (this.config.askClassifier === undefined) return undefined;
+    this.rootUserContext ??= () =>
+      recentUserTurns(this.history.items, ASK_CLASSIFIER_USER_TURNS, ASK_CLASSIFIER_USER_TURN_MAX_CHARS);
+    return this.rootUserContext;
   }
 
   /**
@@ -1127,14 +1161,21 @@ export class AgentLoop {
     // Taskana 4702: the optional ask-zone classifier rides the dispatch context
     // as a plain assignment (the prologue guard forbids spreads in this stretch).
     // The user context is a thunk over the live history, read at ask time, and
-    // carries human turns only (recentUserTurns). Absent config = no assignment.
+    // carries human turns only (recentUserTurns). Taskana 4730: a config-supplied
+    // thunk (a child's inherited ROOT thunk) wins over deriving from this loop's
+    // own history — a child's "user" messages are the parent model's prompts.
     const askClassifierConfig = this.config.askClassifier;
     if (askClassifierConfig !== undefined) {
+      // Memoized on the loop (plain field reads only — the prologue guard
+      // forbids calls in this stretch).
+      const inheritedUserContext = askClassifierConfig.userContext ?? this.rootUserContext;
       dispatchCtx.askClassifier = {
         classifier: askClassifierConfig.classifier,
         timeoutMs: askClassifierConfig.timeoutMs,
-        userContext: () =>
-          recentUserTurns(this.history.items, ASK_CLASSIFIER_USER_TURNS, ASK_CLASSIFIER_USER_TURN_MAX_CHARS),
+        userContext:
+          inheritedUserContext ??
+          (this.rootUserContext = () =>
+            recentUserTurns(this.history.items, ASK_CLASSIFIER_USER_TURNS, ASK_CLASSIFIER_USER_TURN_MAX_CHARS)),
       };
     }
 

@@ -95,16 +95,29 @@ export interface AlwaysAllowRule {
 }
 
 /**
- * Taskana 4702 Stage 1: the ask-zone classifier record (default off). Absent =
- * off. `kind` is closed to `command` (an external program that receives each
- * ask-zone Bash command line on stdin). Carried to the host as one JSON env var.
+ * Taskana 4702 Stage 1 / Taskana 4730: the ask-zone classifier record (default
+ * off). Absent = off. Discriminated on `kind`:
+ *   - `command` (Stage 1): an external program receiving each ask-zone Bash
+ *     command line on stdin;
+ *   - `model` (4730, implementation B): a model from the user's connections —
+ *     `connectionId`/`model` both optional, absent meaning "the session's own
+ *     connection/model".
+ * Carried to the host as one JSON env var.
  */
-export interface PermissionClassifierSettings {
-  enabled: boolean;
-  kind: "command";
-  command: string;
-  timeoutMs?: number;
-}
+export type PermissionClassifierSettings =
+  | {
+      enabled: boolean;
+      kind: "command";
+      command: string;
+      timeoutMs?: number;
+    }
+  | {
+      enabled: boolean;
+      kind: "model";
+      connectionId?: string;
+      model?: string;
+      timeoutMs?: number;
+    };
 
 /**
  * One per-path binary-trust consent (TASK.103), as persisted in

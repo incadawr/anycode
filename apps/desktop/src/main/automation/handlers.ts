@@ -571,6 +571,54 @@ export function setMode(deps: HandlerDeps, tabId: string, mode: string): Promise
   return deps.callFacade("setMode", [tabId, mode]);
 }
 
+/**
+ * `POST /tabs/:tabId/orchestrate` (Taskana 4704 §3.7 part B): thin forward to
+ * the facade's `setOrchestrate` — one wire message (`set_orchestrate`), the
+ * exact send ModeMenu's Orchestrate row click makes.
+ */
+export function setOrchestrate(deps: HandlerDeps, tabId: string, enabled: boolean): Promise<unknown> {
+  return deps.callFacade("setOrchestrate", [tabId, enabled]);
+}
+
+/**
+ * `POST /tabs/:tabId/mode-menu` (Taskana 4704 §3.7 part B): thin forward to
+ * the facade's read-only `modeMenuState` probe (rendered rows + checked
+ * state), same GET-like/no-mutation discipline as `childLayoutState`.
+ */
+export function modeMenuState(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("modeMenuState", [tabId]);
+}
+
+/** `POST /tabs/:tabId/mode-menu/click-chip` (Taskana 4704 §3.7 part B): real chip click. */
+export function modeMenuClickChip(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("modeMenuClickChip", [tabId]);
+}
+
+/** `POST /tabs/:tabId/mode-menu/click-row` (Taskana 4704 §3.7 part B): real named-row click. */
+export function modeMenuClickRow(deps: HandlerDeps, tabId: string, name: string): Promise<unknown> {
+  return deps.callFacade("modeMenuClickRow", [tabId, name]);
+}
+
+/** `POST /tabs/:tabId/role-picker/state` (Taskana 4704 §3.9 part B): read-only dialog probe. */
+export function rolePickerState(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("rolePickerState", [tabId]);
+}
+
+/** `POST /tabs/:tabId/role-picker/preset` (Taskana 4704 §3.9 part B): real preset chip click. */
+export function rolePickerClickPreset(deps: HandlerDeps, tabId: string, presetId: string): Promise<unknown> {
+  return deps.callFacade("rolePickerClickPreset", [tabId, presetId]);
+}
+
+/** `POST /tabs/:tabId/role-picker/save` (Taskana 4704 §3.9 part B): real Save click. */
+export function rolePickerClickSave(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("rolePickerClickSave", [tabId]);
+}
+
+/** `POST /tabs/:tabId/role-picker/skip` (Taskana 4704 §3.9 part B): real Skip click. */
+export function rolePickerClickSkip(deps: HandlerDeps, tabId: string): Promise<unknown> {
+  return deps.callFacade("rolePickerClickSkip", [tabId]);
+}
+
 export function stop(deps: HandlerDeps, tabId: string): Promise<unknown> {
   return deps.callFacade("stop", [tabId]);
 }

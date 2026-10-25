@@ -9,21 +9,97 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Plugin store and a Settings → Plugins pane (Taskana 4732, stage 1).
-  AnyCode can now install plugins from a signed official channel — the
-  index is ed25519-verified with serial anti-rollback and expiry, artifacts
-  are pinned by sha256+size, and archives pass hardened extraction before
-  landing atomically with one-click rollback+pin and boot-time cleanup.
-  The new pane manages them: two-phase install (staged preview listing the
-  MCP servers a plugin would start, then confirm with or without allowing
-  them), tier badges, per-plugin enable/pin/rollback/remove, the official
-  index's available list, and `/plugins` to open it. Plugin-declared MCP
-  servers appear as read-only rows with consent gates; plugin workflows and
-  `engines.anycode` compatibility ship in discovery. Existing hand-dropped
-  plugin folders keep working unchanged. Until production signing keys are
-  minted, the official channel reports "not configured" in packaged builds
-  and never auto-installs. See `docs/user/plugins.md` and the authoring
-  reference in `docs/development/plugins-authoring.md`.
+- Settings → Permissions now lists remembered trusted/denied project folders
+  with a "Forget" button — forgetting a folder asks again the next time a tab
+  opens it. Symlinked and real paths of a folder now share one trust entry,
+  and older entries are migrated automatically.
+
+- Orchestrate UI: the permission-mode menu has an Orchestrate row (a tab-level
+  toggle, not a sixth mode), and `/orchestrate <task>` submits a task under
+  orchestrate. The first run without configured roles opens a role picker with
+  presets built from your ready engines and connections ("Claude leads, Codex
+  builds", "All Claude", "This connection"); you can edit them or skip. The same
+  editor lives in Settings → Roles (`/roles`), with the parallel-children cap.
+- Plugin store and Settings → Plugins (`/plugins`): install plugins from the
+  signed official channel, an https URL, a file or a folder. Each install shows
+  a preview listing the MCP servers the plugin would start, then asks you to
+  confirm. Plugins can be enabled, pinned, rolled back or removed, and get
+  update checks. Official index signatures, archive hashes and safe extraction
+  are verified before anything lands. Until the production signing key exists,
+  the official channel shows "not configured". See `docs/user/plugins.md`.
+- Plugin manifest v1 groundwork (Taskana 4732, stage 1 core): plugins can
+  declare `displayName`, `publisher`, `author`, `homepage`, `license`, an
+  `engines.anycode` compatibility range (a plugin needing a newer AnyCode
+  stays installed but inactive, with the reason visible), and a `workflows`
+  contribution — plugin workflow presets now sit between your own workflows
+  and the bundled ones. A managed plugin store (`state.json` under
+  `~/.anycode/plugins`) is discovered alongside hand-dropped plugin folders
+  with a tier order (project > official > third-party > local > legacy), and
+  plugin-declared MCP servers start only after you approve them, keyed by a
+  hash of the servers so any command change needs fresh approval. Existing
+  hand-dropped plugins and older manifests keep working unchanged; a boot
+  with no plugins is byte-identical.
+- Publishing a release now announces it in the Telegram channel — version,
+  release notes, and link — when the repo secrets `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_CHAT_ID` are configured; otherwise the announcement step is
+  skipped without failing the release.
+- The permission classifier (default off) can now use a model from your
+  connections (`permissions.classifier` with `kind:"model"`), extends to
+  inline subagents (which classify against your recent messages, never the
+  agent's own prompts), and covers Codex/Claude session approval prompts.
+
+### Fixed
+
+- Switching conversation tabs no longer flashes the previous tab's side-panel
+  tabs (previews/subagents/git) in the dock for one frame — the dock's tab
+  set is now owned by the active conversation tab and re-derived on switch.
+- The "provider reported" model note on a subagent card now appears as soon as
+  the first response arrives, not only after the run ends, so a mismatched
+  model is visible during a long run.
+- Workflow steps that use an engine role (claude/codex) now follow the role's
+  fallback chain like Agent calls do: a cooling primary hands the step to the
+  next healthy entry, or to the parent's model, with a visible notice. Engine
+  roles in orchestrate mode also run in the background by default.
+
+### Security
+
+- A project folder's own process declarations no longer start on open: project
+  MCP servers, hooks, LSP servers and project-plugin MCP servers wait until you
+  trust the folder. The desktop app shows a dialog listing the commands (Trust,
+  Trust once, Don't trust); the CLI asks at startup. Non-interactive runs skip
+  them with a warning; `ANYCODE_TRUST_WORKSPACE=1` trusts one run only. Your
+  user-level config is unaffected. This is a behaviour change for existing
+  projects: each one asks once, and asks again if its commands change.
+
+## [0.0.36] — 2026-10-25
+
+### Added
+
+- Built-in `planner`, `executor` and `reviewer` roles for orchestration, each
+  with its own turn budget. A same-named profile in `.anycode/agents/` replaces
+  the built-in role, and a role claimed by such a profile ignores the `roles`
+  settings.
+- Orchestrate mode (`/orchestrate <task>`): the tab plans read-only and hands
+  work to background child sessions, whose reports arrive as new turns.
+  Children run in the permission mode you had before orchestrate (never plan).
+  Leaving plan mode, including an approved plan, turns orchestrate off.
+- `roles` settings: per role, an ordered fallback chain of engine, connection,
+  model and effort. Infrastructure failures (quota, auth, unreachable, unknown
+  model) put an entry on cooldown and the next healthy one is used; when the
+  whole chain is down, the child runs on the parent's model with a notice. A
+  cap on parallel role children (`roles.maxParallelChildren`, default 4) refuses
+  extra spawns instead of queueing them.
+- Adaptive turn budget, off by default: turn on `tools.adaptiveTurnBudget` in
+  Settings (or `ANYCODE_ADAPTIVE_TURN_BUDGET=1`). Subagents then get extra turns
+  while their work makes real progress, and the base subagent budget is learned
+  from finished tasks that were accepted (completed, or declared done at the
+  limit). Your explicit turn limits still win, and the learned value stays within
+  fixed bounds.
+- Optional permission classifier, off by default (`permissions.classifier`
+  in settings). It is consulted only on a Bash call that would otherwise ask
+  you, and it can only turn that ask into allow. Its first form runs an
+  external command that gets the command line on stdin. Any failure, timeout
+  or unclear answer still asks you, and every decision is journaled.
 - User documentation in `docs/user/`: configuration files, engines, subagents,
   skills, MCP servers, permissions, proxy, orchestration and troubleshooting. The
   app ships a copy, and `docs/user/README.md` indexes it.

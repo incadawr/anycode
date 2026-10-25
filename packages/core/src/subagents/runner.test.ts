@@ -29,6 +29,7 @@ import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
 import { agentTool } from "../tools/agent.js";
 import type { AgentEvent, ModelStreamEvent, TokenUsage } from "../types/events.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
+import type { AskClassifier, AskClassifierInput } from "../permissions/ask-classifier.js";
 import type { CorePorts, ExecutionPort, FileSystemPort, HttpPort } from "../ports/index.js";
 import type {
   PermissionBroker,
@@ -53,7 +54,7 @@ import {
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
 } from "../types/config.js";
 import { SUBAGENT_WRAPUP_PROMPT } from "../prompts/subagent.js";
-import type { EngineChildSpec, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
+import type { EngineChildSpec, SubagentOutcome, SubagentProgress, SubagentPort } from "../ports/subagent.js";
 import type { ToolContext } from "../types/tools.js";
 import { SUBAGENT_MAX_OUTPUT_TOKENS, clampSubagentMaxOutputTokens } from "../types/config.js";
 import {
@@ -5517,5 +5518,150 @@ describe("TASK.4721 adaptive turn budget — history recording", () => {
     const runner = createSubagentRunner(makeParent({ modelPort: model, subagentBudget: port, mode: "yolo" }));
     await runner.run(REQ, {});
     expect(records).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4730: inline children inherit the ask-zone classifier with the ROOT
+// human-derived userContext thunk — never the child's own (model-authored)
+// history. A classifier absent on the parent stays absent on the child.
+// ---------------------------------------------------------------------------
+
+describe("buildChildConfig — askClassifier inheritance (Taskana 4730)", () => {
+  const classifier: AskClassifier = {
+    id: "command:da",
+    classify: async () => ({ decision: "ask", reason: "test" }),
+  };
+
+  it("absent on the parent => absent on the child (byte-identical pre-4730)", () => {
+    const parent = makeParent();
+    const child = buildChildConfig(parent, getPersona("general-purpose"), REQ);
+    expect(child.askClassifier).toBeUndefined();
+  });
+
+  it("present on the parent => the child carries classifier + timeoutMs + the ROOT thunk", () => {
+    const rootThunk = (): string[] => ["human asked for a build"];
+    const parent = makeParent({
+      askClassifier: { classifier, timeoutMs: 2500, userContext: rootThunk },
+    });
+    const child = buildChildConfig(parent, getPersona("general-purpose"), REQ);
+    expect(child.askClassifier).toBeDefined();
+    expect(child.askClassifier?.classifier).toBe(classifier);
+    expect(child.askClassifier?.timeoutMs).toBe(2500);
+    expect(child.askClassifier?.userContext).toBe(rootThunk);
+  });
+
+  it("an extras.humanUserContext thunk (from the live root loop) wins over the config's own", () => {
+    const configThunk = (): string[] => ["config"];
+    const loopThunk = (): string[] => ["loop"];
+    const parent = makeParent({ askClassifier: { classifier, userContext: configThunk } });
+    const child = buildChildConfig(parent, getPersona("general-purpose"), REQ, { humanUserContext: loopThunk });
+    expect(child.askClassifier?.userContext).toBe(loopThunk);
+  });
+
+  it("without any thunk the child carries classifier+timeout only (the child loop derives from its own history only if the wiring allows)", () => {
+    const parent = makeParent({ askClassifier: { classifier, timeoutMs: 900 } });
+    const child = buildChildConfig(parent, getPersona("general-purpose"), REQ);
+    expect(child.askClassifier?.classifier).toBe(classifier);
+    expect(child.askClassifier?.timeoutMs).toBe(900);
+    expect(child.askClassifier?.userContext).toBeUndefined();
+  });
+
+  it("children of children keep the ROOT thunk (grandchild copies the child's inherited field)", () => {
+    const rootThunk = (): string[] => ["root"];
+    const parent = makeParent({ askClassifier: { classifier, userContext: rootThunk } });
+    const child = buildChildConfig(parent, getPersona("general-purpose"), REQ);
+    // The child's config is a legal parent for a grandchild (same derivation).
+    const grandchild = buildChildConfig(child, getPersona("general-purpose"), REQ);
+    expect(grandchild.askClassifier?.userContext).toBe(rootThunk);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4730: end-to-end inline-child inheritance — the AgentLoop registers
+// its human-context thunk on the subagent port; a child spawned through that
+// port classifies its Bash asks against the HUMAN's turns, never its own
+// (model-authored) history, and still reaches the broker on ask.
+// ---------------------------------------------------------------------------
+
+describe("inline child ask classification (Taskana 4730)", () => {
+  it("the AgentLoop registers its human-context thunk on the port when a classifier is configured", async () => {
+    let registered: (() => string[]) | undefined;
+    const config = withSubagents(makeParent({ askClassifier: { classifier: { id: "x", classify: async () => ({ decision: "ask", reason: "r" }) } } }));
+    (config.subagents as { registerHumanUserContext?: (t: () => string[]) => void }).registerHumanUserContext = (t) => {
+      registered = t;
+    };
+    void new AgentLoop(config);
+    expect(registered).toBeTypeOf("function");
+  });
+
+  it("a parent's own Bash ask is classified with the loop's HUMAN turn and still reaches the broker on ask", async () => {
+    const brokerSpy = vi.fn(async () => ({ behavior: "deny" as const, reason: "human said no" }));
+    const broker = { requestPermission: brokerSpy } as unknown as PermissionBroker;
+    const seen: AskClassifierInput[] = [];
+    const classifier: AskClassifier = {
+      id: "command:da",
+      classify: async (input) => {
+        seen.push(input);
+        return { decision: "ask", reason: "unsure" };
+      },
+    };
+    const scripted = new ScriptedModelPort((req) =>
+      lastRole(req) === "user"
+        ? toolStep("c1", "Bash", { command: "npm run build" })
+        : textStep("ok, denied"),
+    );
+    const loop = new AgentLoop(
+      withSubagents(
+        makeParent({ permissionBroker: broker, modelPort: scripted, mode: "build", askClassifier: { classifier } }),
+      ),
+    );
+    const events = await collect(loop.runTurn("please run the build"));
+    expect(seen.length).toBe(1);
+    expect(seen[0]!).toMatchObject({ toolName: "Bash", command: "npm run build" });
+    expect(seen[0]!.userContext).toEqual(["please run the build"]);
+    expect(brokerSpy).toHaveBeenCalledOnce();
+    const denied = events.find((e) => e.type === "tool_result" && e.outcome.toolName === "Bash");
+    expect(denied?.type === "tool_result" && denied.outcome.status).toBe("denied");
+  });
+
+  it("a real inline child spawned by the runner receives the ROOT thunk: its own model-authored prompt is NEVER the classifier context", async () => {
+    const brokerSpy = vi.fn(async () => ({ behavior: "deny" as const, reason: "no" }));
+    const broker = { requestPermission: brokerSpy } as unknown as PermissionBroker;
+    const seen: AskClassifierInput[] = [];
+    const classifier: AskClassifier = {
+      id: "command:da",
+      classify: async (input) => {
+        seen.push(input);
+        return { decision: "ask", reason: "unsure" };
+      },
+    };
+    // Child model: propose a Bash call, then (after the denial) answer in text.
+    let childCalls = 0;
+    const childPort = new ScriptedModelPort(() => {
+      childCalls += 1;
+      return childCalls === 1
+        ? toolStep("cc1", "Bash", { command: "echo hi" })
+        : textStep("done");
+    });
+    const parent = makeParent({
+      permissionBroker: broker,
+      modelPort: childPort,
+      mode: "build",
+      askClassifier: { classifier },
+    });
+    // Production shape: withSubagents attaches the port, then the AgentLoop
+    // constructor registers its thunk on that port (Taskana 4730).
+    const wired = withSubagents(parent);
+    const loop = new AgentLoop(wired);
+    const runner: SubagentPort = wired.subagents!;
+    const outcome = await runner.run(REQ, {});
+    expect(outcome.status).toBe("completed");
+    expect(seen.length).toBe(1);
+    expect(seen[0]!).toMatchObject({ command: "echo hi" });
+    // The child's prompt ("do the work") must NOT be the classifier context;
+    // the ROOT thunk reads the ROOT loop's (empty here) history.
+    expect(seen[0]!.userContext).toEqual([]);
+    expect(brokerSpy).toHaveBeenCalledOnce();
   });
 });

@@ -101,3 +101,18 @@ so a web preview in the secondary pane would have no place to render. Only the
 primary body publishes preview bounds (the D9 channel has one owner). A new
 preview that arrives while the user reads git or subagents lands in the strip
 without taking focus; an explicit open still focuses its tab.
+
+## Conversation-tab ownership (Taskana 4738)
+
+The dock store is a singleton across conversation tabs, so the tab set needs
+an owner: `ownerTabId` marks the conversation tab whose items `tabs`/
+`activeTabId`/`splitTabId` currently describe. `ActiveTabBody` calls
+`adopt(tabId)` in a `useLayoutEffect` (before its derivation effects and
+before paint): a new owner synchronously resets the owned triple (same id is
+a no-op); `width` and `hidden` stay global. Every render-time read in
+App.tsx/DockPanel.tsx goes through `selectDockView(state, tabId)` — a
+non-owner gets a frozen empty view, so a freshly switched tab can never
+render the previous tab's dock items, even in the frame before its `adopt`
+runs. The per-tab sources of truth (preview store, child layout, git panel)
+are untouched by `adopt`; the derivation effects re-open that tab's own tabs
+on the clean store.

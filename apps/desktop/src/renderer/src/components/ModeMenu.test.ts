@@ -5,7 +5,13 @@
  * directly rather than DOM-rendering the popover.
  */
 import { describe, expect, it } from "vitest";
-import { modeChangeDisabled, modeIndexForDigit, MODE_DESCRIPTIONS, nextRovingIndex } from "./ModeMenu.js";
+import {
+  modeChangeDisabled,
+  modeIndexForDigit,
+  MODE_DESCRIPTIONS,
+  nextRovingIndex,
+  ORCHESTRATE_ROW_DESCRIPTION,
+} from "./ModeMenu.js";
 
 describe("nextRovingIndex", () => {
   it("advances by +1 (ArrowDown)", () => {
@@ -83,5 +89,33 @@ describe("modeChangeDisabled (TASK.37)", () => {
 
   it("MR3: idle + ready is enabled", () => {
     expect(modeChangeDisabled("idle", true)).toBe(false);
+  });
+});
+
+/**
+ * Taskana 4704 §3.7 (part B): the Orchestrate row pins. The row renders
+ * AFTER the five modes behind a divider and toggles through
+ * `onToggleOrchestrate` (set_orchestrate), never through
+ * `onChange`/PERMISSION_MODE_OPTIONS — the digit-selection guard below is the
+ * keyboard half of that pin (Digit6 must not reach the toggle), and the
+ * description pin keeps the copy honest.
+ */
+describe("Orchestrate row (Taskana 4704)", () => {
+  it("O1: digit selection stays over the five permission modes — Digit6+ never reach the Orchestrate row", () => {
+    expect(modeIndexForDigit("Digit5", 5)).toBe(4);
+    expect(modeIndexForDigit("Digit6", 5)).toBeNull();
+    expect(modeIndexForDigit("Digit7", 5)).toBeNull();
+  });
+
+  it("O2: the Orchestrate description names delegation, not a permission level", () => {
+    expect(ORCHESTRATE_ROW_DESCRIPTION).toBe("Delegate work to child agents");
+  });
+
+  it("O3: roving focus wraps over six items when the row is present (5 modes + Orchestrate)", () => {
+    // The component computes itemCount = 5 + 1 when the row shows; the wrap
+    // math itself is the same nextRovingIndex, pinned here so adding the row
+    // cannot silently break the End->ArrowDown wrap onto the toggle.
+    expect(nextRovingIndex(5, 1, 6)).toBe(0);
+    expect(nextRovingIndex(0, -1, 6)).toBe(5);
   });
 });

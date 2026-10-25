@@ -284,6 +284,16 @@ export interface SubagentPort {
   /** Resolves an md-profile's `connection:`/`provider:` frontmatter; null for built-ins, engine profiles, and unrouted profiles. */
   profileRouting?(agentType: string): { provider?: string; connection?: string } | null;
   /**
+   * Taskana 4730: the owning AgentLoop registers its human-derived
+   * user-context thunk (for the ask-zone classifier) here right after
+   * construction, so inline children spawned through this port classify
+   * against the HUMAN's recent turns — never the child's own model-authored
+   * history. Optional: a port without it keeps today's behavior (children
+   * inherit the classifier without a thunk and the child loop derives from
+   * its own history only if its wiring supplied one).
+   */
+  registerHumanUserContext?(thunk: () => string[]): void;
+  /**
    * Taskana 4704 §3.6: resolves the HOST-side role route chain for a ROLE
    * persona (planner/executor/reviewer/explore) from settings `roles` + the
    * process-local health cache. Returns `null` for everything else (no roles

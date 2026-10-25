@@ -58,3 +58,54 @@ describe("permissions.classifier (Taskana 4702)", () => {
     expect(parsed.settings.permissions.alwaysAllow).toEqual([{ toolName: "Grep" }]);
   });
 });
+
+describe("permissions.classifier kind:model (Taskana 4730)", () => {
+  it("a valid model record parses and keeps every field", () => {
+    const parsed = parseSettings(
+      docWith({
+        alwaysAllow: [],
+        classifier: { enabled: true, kind: "model", connectionId: "conn-1", model: "glm-4.7-flash", timeoutMs: 8000 },
+      }),
+    );
+    expect(parsed.status).toBe("ok");
+    expect(parsed.settings.permissions.classifier).toEqual({
+      enabled: true,
+      kind: "model",
+      connectionId: "conn-1",
+      model: "glm-4.7-flash",
+      timeoutMs: 8000,
+    });
+  });
+
+  it("a model record with both connectionId and model absent parses (session's own)", () => {
+    const parsed = parseSettings(docWith({ alwaysAllow: [], classifier: { enabled: true, kind: "model" } }));
+    expect(parsed.status).toBe("ok");
+    expect(parsed.settings.permissions.classifier).toEqual({ enabled: true, kind: "model" });
+  });
+
+  it("a model record round-trips through the parse->persist shape (no extra keys)", () => {
+    const record = { enabled: true, kind: "model" as const, model: "haiku-low" };
+    const parsed = parseSettings(docWith({ alwaysAllow: [], classifier: record }));
+    expect(parsed.settings.permissions.classifier).toEqual(record);
+  });
+
+  it("a stray command key on a model kind is STRIPPED (zod default), record stays valid", () => {
+    const parsed = parseSettings(
+      docWith({ alwaysAllow: [], classifier: { enabled: true, kind: "model", command: "da" } }),
+    );
+    expect(parsed.status).toBe("ok");
+    expect(parsed.settings.permissions.classifier).toEqual({ enabled: true, kind: "model" });
+  });
+
+  it.each([
+    ["blank connectionId", { enabled: true, kind: "model", connectionId: "   " }],
+    ["blank model", { enabled: true, kind: "model", model: "" }],
+    ["non-integer timeout", { enabled: true, kind: "model", timeoutMs: 2.5 }],
+    ["negative timeout", { enabled: true, kind: "model", timeoutMs: -1 }],
+  ])("an invalid model record (%s) is dropped alone: classifier off, alwaysAllow intact", (_label, bad) => {
+    const parsed = parseSettings(docWith({ alwaysAllow: [{ toolName: "Grep" }], classifier: bad }));
+    expect(parsed.status).toBe("ok");
+    expect(parsed.settings.permissions.classifier).toBeUndefined();
+    expect(parsed.settings.permissions.alwaysAllow).toEqual([{ toolName: "Grep" }]);
+  });
+});

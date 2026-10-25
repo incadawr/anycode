@@ -8,6 +8,10 @@ import type { FileSystemPort } from "../ports/file-system.js";
 import { collectProjectSpawnConfig } from "./project-spawn-config.js";
 import {
   canonicalWorkspacePath,
+  canonicalWorkspaceKey,
+  emptyTrustStore,
+  forgetTrustDecision,
+  migrateTrustStoreKeys,
   readTrustStore,
   writeTrustDecision,
   defaultTrustStorePath,
@@ -297,5 +301,307 @@ describe("resolveWorkspaceTrust", () => {
     });
     expect(r.state).toBe("none");
     expect(r.projectTrusted).toBe(true);
+  });
+});
+
+// Taskana 4739: symlinked workspaces and their targets must share ONE trust
+// key. The canonical key is realpath(resolve(workspace)) when realpath is
+// injected and succeeds; resolve(workspace) otherwise (S7: fallback never
+// weakens trust — a looser/parent key is never used).
+describe("canonicalWorkspaceKey (Taskana 4739)", () => {
+  const REAL = "/work/real-project";
+  const LINK = "/work/link-project";
+
+  it("a symlink path and its target give the same key via the injected realpath", () => {
+    const realpathSync = (p: string) => (p === LINK ? REAL : p);
+    expect(canonicalWorkspaceKey(LINK, realpathSync)).toBe(canonicalWorkspaceKey(REAL, realpathSync));
+    expect(canonicalWorkspaceKey(REAL, realpathSync)).toBe(REAL);
+  });
+
+  it("falls back to resolve() when realpath throws (missing dir, EACCES)", () => {
+    const realpathSync = () => {
+      throw new Error("ENOENT");
+    };
+    expect(canonicalWorkspaceKey(LINK, realpathSync)).toBe(canonicalWorkspacePath(LINK));
+  });
+
+  it("without an injector the key is exactly today's resolve()-based key", () => {
+    expect(canonicalWorkspaceKey(LINK)).toBe(canonicalWorkspacePath(LINK));
+    expect(canonicalWorkspaceKey("/proj/./sub/..")).toBe(canonicalWorkspacePath("/proj"));
+  });
+});
+
+describe("resolveWorkspaceTrust with realpathSync (Taskana 4739)", () => {
+  const storePath = STORE;
+  const LINK_WS = "/work/link-project";
+  const REAL_WS = "/work/real-project";
+  // The fake fs is not symlink-aware, so the project config is visible under
+  // BOTH names — the raw workspace path is what collectProjectSpawnConfig reads.
+  const LINK_CONFIG = "/work/link-project/.anycode/config.json";
+  const REAL_CONFIG = "/work/real-project/.anycode/config.json";
+
+  /** realpath that maps the link to the real dir and passes everything else through. */
+  const linkToReal = (p: string) => (p === LINK_WS ? REAL_WS : p);
+
+  /** Fake fs carrying the project config under both the link and the real name. */
+  function linkedFs(files: Record<string, string> = {}) {
+    return makeFs({ [LINK_CONFIG]: MCP_CONFIG, [REAL_CONFIG]: MCP_CONFIG, ...files });
+  }
+
+  it("trust written under the target resolves trusted when opened via the symlink", async () => {
+    const fs = linkedFs();
+    // Hash is over the item set incl. its `source` path, so compute it via the
+    // SAME name the resolve call will read — the symlinked workspace.
+    const { hash } = await collectProjectSpawnConfig(fs, LINK_WS, HOME);
+    // The record sits under the real key (as main writes it since 4739).
+    const store = emptyTrustStore();
+    store.folders[REAL_WS] = { decision: "trusted", hash, decidedAt: "t" };
+    fs.files.set(storePath, `${JSON.stringify(store)}\n`);
+    const r = await resolveWorkspaceTrust(fs, {
+      workspace: LINK_WS,
+      home: HOME,
+      storePath,
+      realpathSync: linkToReal,
+    });
+    expect(r.state).toBe("trusted");
+    expect(r.projectTrusted).toBe(true);
+    expect(r.folder).toBe(REAL_WS);
+  });
+
+  it("trust written via the symlink (real key) resolves when opened via the target", async () => {
+    const fs = linkedFs();
+    const { hash } = await collectProjectSpawnConfig(fs, REAL_WS, HOME);
+    // Simulate a decision already stored under the real key (as main writes it now).
+    await writeTrustDecision(fs, storePath, REAL_WS, "trusted", hash, "t");
+    const r = await resolveWorkspaceTrust(fs, {
+      workspace: REAL_WS,
+      home: HOME,
+      storePath,
+      realpathSync: linkToReal,
+    });
+    expect(r.state).toBe("trusted");
+  });
+
+  it("a LEGACY (symlink-name) key still resolves: trusted with a matching hash, changed with another", async () => {
+    const fs = linkedFs();
+    const { hash } = await collectProjectSpawnConfig(fs, LINK_WS, HOME);
+    // Legacy store: the record sits under the resolved symlink name, not the real key.
+    const store = emptyTrustStore();
+    store.folders[LINK_WS] = { decision: "trusted", hash, decidedAt: "t" };
+    fs.files.set(storePath, `${JSON.stringify(store)}\n`);
+
+    const trusted = await resolveWorkspaceTrust(fs, {
+      workspace: LINK_WS,
+      home: HOME,
+      storePath,
+      realpathSync: linkToReal,
+    });
+    expect(trusted.state).toBe("trusted");
+
+    // Same legacy record but a stale hash -> 'changed' (the fallback record is
+    // subject to the SAME hash check, never a blanket accept).
+    const stale = emptyTrustStore();
+    stale.folders[LINK_WS] = { decision: "trusted", hash: "stale", decidedAt: "t" };
+    fs.files.set(storePath, `${JSON.stringify(stale)}\n`);
+    const changed = await resolveWorkspaceTrust(fs, {
+      workspace: LINK_WS,
+      home: HOME,
+      storePath,
+      realpathSync: linkToReal,
+    });
+    expect(changed.state).toBe("changed");
+    expect(changed.projectTrusted).toBe(false);
+  });
+
+  it("a legacy denial is honoured too (not only trust)", async () => {
+    const fs = linkedFs();
+    const { hash } = await collectProjectSpawnConfig(fs, LINK_WS, HOME);
+    const store = emptyTrustStore();
+    store.folders[LINK_WS] = { decision: "denied", hash, decidedAt: "t" };
+    fs.files.set(storePath, `${JSON.stringify(store)}\n`);
+    const r = await resolveWorkspaceTrust(fs, {
+      workspace: LINK_WS,
+      home: HOME,
+      storePath,
+      realpathSync: linkToReal,
+    });
+    expect(r.state).toBe("denied");
+    expect(r.projectTrusted).toBe(false);
+  });
+
+  it("after forgetTrustDecision the folder resolves 'unknown' again (S8)", async () => {
+    const fs = linkedFs();
+    const { hash } = await collectProjectSpawnConfig(fs, REAL_WS, HOME);
+    await writeTrustDecision(fs, storePath, REAL_WS, "trusted", hash, "t");
+    expect(
+      await forgetTrustDecision(fs, storePath, canonicalWorkspaceKey(REAL_WS, linkToReal)),
+    ).toBe(true);
+    const r = await resolveWorkspaceTrust(fs, {
+      workspace: LINK_WS,
+      home: HOME,
+      storePath,
+      realpathSync: linkToReal,
+    });
+    expect(r.state).toBe("unknown");
+    expect(r.projectTrusted).toBe(false);
+  });
+});
+
+describe("forgetTrustDecision (Taskana 4739, S5/S8)", () => {
+  it("removes only the named key, keeps other records and version", async () => {
+    const fs = makeFs({});
+    await writeTrustDecision(fs, STORE, "/proj/a", "trusted", "h1", "2026-10-25T00:00:00.000Z");
+    await writeTrustDecision(fs, STORE, "/proj/b", "denied", "h2", "2026-10-25T01:00:00.000Z");
+    expect(await forgetTrustDecision(fs, STORE, "/proj/a")).toBe(true);
+    const store = await readTrustStore(fs, STORE);
+    expect(store.version).toBe(1);
+    expect(store.folders).toEqual({
+      "/proj/b": { decision: "denied", hash: "h2", decidedAt: "2026-10-25T01:00:00.000Z" },
+    });
+  });
+
+  it("writes tmp + rename with mode 0600 (same discipline as writeTrustDecision)", async () => {
+    const fs = makeFs({});
+    await writeTrustDecision(fs, STORE, "/proj/a", "trusted", "h1", "t");
+    fs.writes.length = 0;
+    fs.renames.length = 0;
+    await forgetTrustDecision(fs, STORE, "/proj/a");
+    expect(fs.writes).toHaveLength(1);
+    expect(fs.writes[0]!.path).not.toBe(STORE);
+    expect(fs.writes[0]!.path.startsWith(`${STORE}.tmp-`)).toBe(true);
+    expect(fs.writes[0]!.mode).toBe(0o600);
+    expect(fs.renames.map((r) => r.to)).toEqual([STORE]);
+  });
+
+  it("a missing key returns false and writes NOTHING", async () => {
+    const fs = makeFs({});
+    await writeTrustDecision(fs, STORE, "/proj/a", "trusted", "h1", "t");
+    fs.writes.length = 0;
+    fs.renames.length = 0;
+    expect(await forgetTrustDecision(fs, STORE, "/proj/other")).toBe(false);
+    expect(fs.writes).toEqual([]);
+    expect(fs.renames).toEqual([]);
+  });
+
+  it("a missing store file returns false and writes NOTHING (never creates an empty store)", async () => {
+    const fs = makeFs({});
+    expect(await forgetTrustDecision(fs, STORE, "/proj/a")).toBe(false);
+    expect(fs.writes).toEqual([]);
+    expect(fs.files.has(STORE)).toBe(false);
+  });
+
+  it("a corrupt store returns false and writes NOTHING (never overwrites a corrupt file)", async () => {
+    const fs = makeFs({ [STORE]: "{not json" });
+    expect(await forgetTrustDecision(fs, STORE, "/proj/a")).toBe(false);
+    expect(fs.writes).toEqual([]);
+    expect(fs.files.get(STORE)).toBe("{not json");
+  });
+
+  it("'__proto__' and 'constructor' keys are never own properties: false, no write", async () => {
+    const fs = makeFs({});
+    await writeTrustDecision(fs, STORE, "/proj/a", "trusted", "h1", "t");
+    fs.writes.length = 0;
+    expect(await forgetTrustDecision(fs, STORE, "__proto__")).toBe(false);
+    expect(await forgetTrustDecision(fs, STORE, "constructor")).toBe(false);
+    expect(fs.writes).toEqual([]);
+    const store = await readTrustStore(fs, STORE);
+    expect(Object.keys(store.folders)).toEqual(["/proj/a"]);
+    expect(Object.prototype.hasOwnProperty.call(store.folders, "__proto__")).toBe(false);
+  });
+});
+
+describe("migrateTrustStoreKeys (Taskana 4739, decision 4)", () => {
+  it("moves a legacy symlink key to the real key", async () => {
+    const fs = makeFs({});
+    const realpathSync = (p: string) => (p === "/work/link" ? "/work/real" : p);
+    await writeTrustDecision(fs, STORE, "/work/link", "trusted", "h1", "2026-10-25T00:00:00.000Z");
+    const { migrated } = await migrateTrustStoreKeys(fs, STORE, realpathSync);
+    expect(migrated).toBe(1);
+    const store = await readTrustStore(fs, STORE);
+    expect(Object.keys(store.folders)).toEqual(["/work/real"]);
+    expect(store.folders["/work/real"]).toEqual({
+      decision: "trusted",
+      hash: "h1",
+      decidedAt: "2026-10-25T00:00:00.000Z",
+    });
+  });
+
+  it("on collision the record with the LATER decidedAt wins and the legacy one is dropped", async () => {
+    const fs = makeFs({});
+    const realpathSync = (p: string) => (p === "/work/link" ? "/work/real" : p);
+    await writeTrustDecision(fs, STORE, "/work/real", "denied", "h-real", "2026-10-25T02:00:00.000Z");
+    await writeTrustDecision(fs, STORE, "/work/link", "trusted", "h-link", "2026-10-25T01:00:00.000Z");
+    const { migrated } = await migrateTrustStoreKeys(fs, STORE, realpathSync);
+    expect(migrated).toBe(1);
+    const store = await readTrustStore(fs, STORE);
+    expect(Object.keys(store.folders)).toEqual(["/work/real"]);
+    expect(store.folders["/work/real"]).toEqual({
+      decision: "denied",
+      hash: "h-real",
+      decidedAt: "2026-10-25T02:00:00.000Z",
+    });
+  });
+
+  it("on collision the legacy record with the LATER decidedAt takes over the real key", async () => {
+    const fs = makeFs({});
+    const realpathSync = (p: string) => (p === "/work/link" ? "/work/real" : p);
+    await writeTrustDecision(fs, STORE, "/work/real", "denied", "h-real", "2026-10-25T01:00:00.000Z");
+    await writeTrustDecision(fs, STORE, "/work/link", "trusted", "h-link", "2026-10-25T03:00:00.000Z");
+    const { migrated } = await migrateTrustStoreKeys(fs, STORE, realpathSync);
+    expect(migrated).toBe(1);
+    const store = await readTrustStore(fs, STORE);
+    expect(store.folders["/work/real"]).toEqual({
+      decision: "trusted",
+      hash: "h-link",
+      decidedAt: "2026-10-25T03:00:00.000Z",
+    });
+  });
+
+  it("keys whose realpath throws are left untouched", async () => {
+    const fs = makeFs({});
+    const realpathSync = (p: string) => {
+      if (p === "/work/link") return "/work/real";
+      throw new Error("ENOENT");
+    };
+    await writeTrustDecision(fs, STORE, "/work/link", "trusted", "h1", "t");
+    await writeTrustDecision(fs, STORE, "/gone/project", "denied", "h2", "t");
+    const { migrated } = await migrateTrustStoreKeys(fs, STORE, realpathSync);
+    expect(migrated).toBe(1);
+    const store = await readTrustStore(fs, STORE);
+    expect(Object.keys(store.folders).sort()).toEqual(["/gone/project", "/work/real"]);
+  });
+
+  it("writes NOTHING when every key already equals its realpath (no churn, mode preserved)", async () => {
+    const fs = makeFs({});
+    await writeTrustDecision(fs, STORE, "/work/real", "trusted", "h1", "t");
+    fs.writes.length = 0;
+    fs.renames.length = 0;
+    const { migrated } = await migrateTrustStoreKeys(fs, STORE, (p) => p);
+    expect(migrated).toBe(0);
+    expect(fs.writes).toEqual([]);
+    expect(fs.renames).toEqual([]);
+  });
+
+  it("writes atomically with mode 0600 when it does move a key", async () => {
+    const fs = makeFs({});
+    const realpathSync = (p: string) => (p === "/work/link" ? "/work/real" : p);
+    await writeTrustDecision(fs, STORE, "/work/link", "trusted", "h1", "t");
+    fs.writes.length = 0;
+    fs.renames.length = 0;
+    await migrateTrustStoreKeys(fs, STORE, realpathSync);
+    expect(fs.writes).toHaveLength(1);
+    expect(fs.writes[0]!.mode).toBe(0o600);
+    expect(fs.writes[0]!.path.startsWith(`${STORE}.tmp-`)).toBe(true);
+    expect(fs.renames.map((r) => r.to)).toEqual([STORE]);
+  });
+
+  it("a missing or corrupt store migrates nothing and writes nothing (fail-soft)", async () => {
+    const missing = makeFs({});
+    expect((await migrateTrustStoreKeys(missing, STORE, (p) => p)).migrated).toBe(0);
+    expect(missing.writes).toEqual([]);
+    const corrupt = makeFs({ [STORE]: "{not json" });
+    expect((await migrateTrustStoreKeys(corrupt, STORE, (p) => p)).migrated).toBe(0);
+    expect(corrupt.writes).toEqual([]);
+    expect(corrupt.files.get(STORE)).toBe("{not json");
   });
 });

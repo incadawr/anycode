@@ -33,7 +33,8 @@ export type SlashIconId =
   | "mcp"
   | "skills"
   | "settings"
-  | "skill";
+  | "skill"
+  | "robot";
 
 /**
  * Serializable dispatch intent for a slash-menu row. Each variant names an
@@ -44,6 +45,8 @@ export type SlashRunIntent =
   | { kind: "set_mode_toggle" }
   /** TASK.146: a single payload-less wire-send (`compact_request`); Composer's exhaustive `dispatchSlashIntent` owns it, exactly like `set_mode_toggle`. */
   | { kind: "compact_now" }
+  /** Taskana 4704 §3.8 (part B): submit the draft text after the `/orchestrate` token as a task under orchestrate mode (enabling it first if needed, possibly through the first-run RolePickerDialog). */
+  | { kind: "orchestrate_submit" }
   | { kind: "window_event"; event: string }
   | { kind: "run_action"; action: string }
   | { kind: "store_git_panel" }
@@ -259,6 +262,23 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     visible: (ctx) => ctx.supportsCorePermissions,
   },
   {
+    // Taskana 4704 §3.8 (part B): `/orchestrate <task>` — enable orchestrate
+    // (via the first-run RolePickerDialog when no roles are configured) and
+    // submit the text after the token as a normal user message. Sits right
+    // after plan-mode in the registry (the orchestration posture's nearest
+    // neighbor); same supportsCorePermissions structural gate — orchestrate
+    // drives set_orchestrate + the plan-mode permission posture, both
+    // core-only (an engine session has no ModeMenu either).
+    id: "orchestrate",
+    name: "Orchestrate",
+    description: () => "Delegate <task> to child agents in the background",
+    icon: "plan",
+    run: { kind: "orchestrate_submit" },
+    enabled: (ctx) => ctx.ready,
+    source: "core",
+    visible: (ctx) => ctx.supportsCorePermissions,
+  },
+  {
     id: "mode",
     name: "Mode",
     description: () => "Change permission mode…",
@@ -366,6 +386,19 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     // Opens project/personal skill FILE management, independent of which
     // engine is running (unlike the live skill-insert rows below, which
     // Composer gates separately — see its skillsSupported comment).
+    source: "common",
+    visible: () => true,
+  },
+  {
+    // Taskana 4704 §3.9 (part B): deep-link to the Roles settings pane —
+    // the /orchestrate first-run dialog's "later edits go through Settings"
+    // escape hatch. Sits next to Skills, common like every settings_pane row.
+    id: "roles",
+    name: "Roles",
+    description: () => "Orchestration roles & fallbacks",
+    icon: "robot",
+    run: { kind: "settings_pane", pane: "roles" },
+    enabled: () => true,
     source: "common",
     visible: () => true,
   },

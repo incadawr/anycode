@@ -122,3 +122,75 @@ describe("establishHostWorkspaceTrust", () => {
     expect(result.pending).toBeUndefined();
   });
 });
+
+// Taskana 4739: the host canonicalises the workspace with realpath, so a
+// symlinked workspace shares one trust record with its target. The fake fs is
+// not symlink-aware: the project config is visible under BOTH names (what a
+// real symlink does) and the injected realpath maps link -> real.
+describe("establishHostWorkspaceTrust with a symlinked workspace (Taskana 4739)", () => {
+  const LINK_WS = "/work/link-project";
+  const REAL_WS = "/work/real-project";
+  const LINK_CONFIG = "/work/link-project/.anycode/config.json";
+  const REAL_CONFIG = "/work/real-project/.anycode/config.json";
+
+  const realpathSync = (p: string) => (p === LINK_WS ? REAL_WS : p);
+
+  function linkedFs(files: Record<string, string> = {}) {
+    return makeFs({ [LINK_CONFIG]: CONFIG, [REAL_CONFIG]: CONFIG, ...files });
+  }
+
+  it("a stored trusted record for the TARGET boots the symlink-opened workspace trusted", async () => {
+    const fs = linkedFs();
+    const { hash } = await collectProjectSpawnConfig(fs, LINK_WS, HOME);
+    // The record sits under the real key, as main writes it since 4739.
+    fs.files.set(
+      STORE,
+      `${JSON.stringify({ version: 1, folders: { [REAL_WS]: { decision: "trusted", hash, decidedAt: "t" } } })}\n`,
+    );
+    const result = await establishHostWorkspaceTrust(fs, {
+      workspace: LINK_WS,
+      home: HOME,
+      env: {},
+      realpathSync,
+    });
+    expect(result.projectTrusted).toBe(true);
+    expect(result.pending).toBeUndefined();
+  });
+
+  it("a LEGACY symlink-name record still boots trusted (read fallback for pre-4739 stores)", async () => {
+    const fs = linkedFs();
+    const { hash } = await collectProjectSpawnConfig(fs, LINK_WS, HOME);
+    fs.files.set(
+      STORE,
+      `${JSON.stringify({ version: 1, folders: { [LINK_WS]: { decision: "trusted", hash, decidedAt: "t" } } })}\n`,
+    );
+    const result = await establishHostWorkspaceTrust(fs, {
+      workspace: LINK_WS,
+      home: HOME,
+      env: {},
+      realpathSync,
+    });
+    expect(result.projectTrusted).toBe(true);
+    expect(result.pending).toBeUndefined();
+  });
+
+  it("revoke -> asked again: after the record is removed the pending 'unknown' prompt is produced again", async () => {
+    const fs = linkedFs();
+    const { hash } = await collectProjectSpawnConfig(fs, LINK_WS, HOME);
+    fs.files.set(
+      STORE,
+      `${JSON.stringify({ version: 1, folders: { [REAL_WS]: { decision: "trusted", hash, decidedAt: "t" } } })}\n`,
+    );
+    // The user forgets the folder (Settings → Permissions): the record is gone.
+    fs.files.delete(STORE);
+    const result = await establishHostWorkspaceTrust(fs, {
+      workspace: LINK_WS,
+      home: HOME,
+      env: {},
+      realpathSync,
+    });
+    expect(result.projectTrusted).toBe(false);
+    expect(result.pending?.state).toBe("unknown");
+    expect(result.pending?.message.workspace).toBe(LINK_WS);
+  });
+});

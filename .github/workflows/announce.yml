@@ -1,0 +1,101 @@
+# Announce release in the Telegram channel (Taskana 4094, TASK.87).
+#
+# The release pipeline (release.yml) ends at a DRAFT release; a human presses
+# Publish. This workflow is what happens at that exact moment: it posts the
+# version + the release notes + the release link to the Telegram channel.
+# It triggers on `release: published` ONLY — a draft, a prerelease edited in
+# place, or a release.yml dry-run never fires it, and there is no
+# workflow_dispatch (an accidental manual run would post to the channel).
+#
+# Secret-gating contract (same as release.yml §7 step 6): the send is switched
+# on ONLY by the presence of TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID. Missing
+# secrets must never turn the run red — they just mean no announcement, with a
+# `::notice::` line saying so. The same applies to a Telegram-side failure
+# (non-2xx, network): a `::warning::` is emitted and the run stays green. An
+# announcement is publicity, not a release gate.
+#
+# Script-injection safety: `github.event.release.*` is attacker-shaped text
+# (anyone who can edit a release can put `$(...)` in its body). It reaches the
+# shell ONLY through `env:` and is used ONLY as a double-quoted variable —
+# never `${{ ... }}` inside a `run:` block, never `set -x`.
+#
+# Secrets referenced (user-gated, none required for a green run):
+#   TELEGRAM_BOT_TOKEN — bot token from @BotFather
+#   TELEGRAM_CHAT_ID   — target chat; a `@channel_name` works
+
+name: Announce release
+
+on:
+  release:
+    types: [published]
+
+# The job only checks out the repo to run the message builder and talks to
+# Telegram with the bot token — no GitHub API use at all. `contents: read` is
+# what a checkout of a private repo needs; on a public repo it is simply the
+# minimal explicit grant (an empty `permissions: {}` would also work there,
+# but then the same file breaks the day the repo goes private).
+permissions:
+  contents: read
+
+jobs:
+  telegram:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Pinned the same way release.yml pins it. The job never touches the
+          # GitHub API, so the checkout token is not left in .git/config.
+          persist-credentials: false
+
+      # House pattern (release.yml "compute gates"): secrets are read into a
+      # plain boolean ONCE, here, and every later step keys off the boolean.
+      # This step never sees the secrets' VALUES — only whether they are set.
+      - name: Compute Telegram gate
+        id: gate
+        env:
+          HAS_TELEGRAM: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
+        run: |
+          echo "enabled=$HAS_TELEGRAM" >> "$GITHUB_OUTPUT"
+
+      - name: Announce in the Telegram channel
+        # `continue-on-error` is belt and braces: the run block below already
+        # ends in exit 0 on every failure path.
+        continue-on-error: true
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          # The bot token: used in the URL only, never echoed. curl output is
+          # redirected to a temp file because the Telegram response echoes
+          # chat info.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Release event fields — attacker-shaped text, env-only (see header).
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          message_file="$RUNNER_TEMP/announcement.txt"
+          if ! node scripts/release/build-announcement.mjs > "$message_file"; then
+            echo "::warning::Telegram announcement failed (message could not be built)"
+            exit 0
+          fi
+          response_file="$RUNNER_TEMP/telegram-response.json"
+          http_code=$(curl --silent --show-error --max-time 20 --retry 2 \
+            -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text@${message_file}" \
+            --data-urlencode "disable_web_page_preview=true" \
+            -o "$response_file" \
+            -w '%{http_code}') || http_code="000"
+          if [ "$http_code" = "200" ]; then
+            echo "Announced ${RELEASE_TAG} in the channel."
+          else
+            echo "::warning::Telegram announcement failed (HTTP ${http_code})"
+          fi
+          exit 0
+
+      - name: Note the skipped announcement
+        if: steps.gate.outputs.enabled != 'true'
+        run: |
+          echo "::notice::Telegram announcement skipped — TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID secrets are not configured (see docs/development/release.md)."

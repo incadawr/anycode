@@ -42,6 +42,24 @@ export interface DockStoreState {
    * longer afford; `splitRight` itself refuses when !canSplit(available).
    */
   splitTabId: string | null;
+  /**
+   * Taskana 4738: the conversation tab that OWNS `tabs`/`activeTabId`/
+   * `splitTabId` right now. The store is a singleton across conversation
+   * tabs, so without an owner marker a tab switch would render the previous
+   * tab's dock items for one frame (ActiveTabBody's derivation effects run
+   * only after the first commit). `adopt` re-owns; render-time reads go
+   * through `selectDockView(state, tabId)` which gates on this field.
+   * `width`/`hidden` stay global (one persisted width, one hide toggle).
+   */
+  ownerTabId: string | null;
+  /**
+   * Taskana 4738: become the owner (ActiveTabBody's layout effect, BEFORE
+   * its derivation effects and before paint). Same id → no-op (the same
+   * state object, no re-render); new id → synchronously reset the owned
+   * triple. Renderer state ONLY — the per-tab sources of truth
+   * (previewPanel/childLayoutStore/git panel) are untouched and re-derive.
+   */
+  adopt(tabId: string): void;
   open(tab: DockTab): void;
   /** Appends a tab WITHOUT moving focus (cross-review D3). */
   openBackground(tab: DockTab): void;
@@ -70,6 +88,15 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
     width: readDockWidth(storage),
     hidden: false,
     splitTabId: null,
+    ownerTabId: null,
+
+    adopt(tabId): void {
+      set((state) =>
+        state.ownerTabId === tabId
+          ? state // same owner — no-op, same object, no re-render
+          : { ownerTabId: tabId, tabs: [], activeTabId: null, splitTabId: null },
+      );
+    },
 
     open(tab): void {
       set((state) => {
@@ -121,6 +148,35 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
 }
 
 export const useDockStore = createDockStore();
+
+/**
+ * Taskana 4738: the owner-gated view of the dock for one conversation tab.
+ * Frozen module singleton for every NON-owner (zustand selectors must not
+ * allocate per call — callers compare by reference); the live triple for the
+ * owner. This is the ONLY render-time read path for `tabs`/`activeTabId`/
+ * `splitTabId` in App.tsx/DockPanel.tsx, so a freshly switched tab renders
+ * an empty dock even in the frame BEFORE its `adopt` layout effect runs.
+ */
+export const EMPTY_DOCK_VIEW: Readonly<{ tabs: readonly DockTab[]; activeTabId: string | null; splitTabId: string | null }> = Object.freeze({
+  tabs: Object.freeze([] as readonly DockTab[]),
+  activeTabId: null,
+  splitTabId: null,
+});
+
+/** The owner-gated triple App.tsx/DockPanel.tsx render from (Taskana 4738). */
+export function selectDockView(
+  state: DockStoreState,
+  tabId: string,
+): { tabs: readonly DockTab[]; activeTabId: string | null; splitTabId: string | null } {
+  return state.ownerTabId === tabId
+    ? { tabs: state.tabs, activeTabId: state.activeTabId, splitTabId: state.splitTabId }
+    : EMPTY_DOCK_VIEW;
+}
+
+/** `selectDockOpen`, owner-scoped (Taskana 4738): the mount gate per tab. */
+export function selectDockOpenFor(state: DockStoreState, tabId: string): boolean {
+  return selectDockView(state, tabId).tabs.length > 0 && !state.hidden;
+}
 
 /** Whether the dock region renders at all (App.tsx's mount gate). */
 export function selectDockOpen(state: DockStoreState): boolean {

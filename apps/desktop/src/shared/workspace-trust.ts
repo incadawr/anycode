@@ -42,3 +42,39 @@ export type WorkspaceTrustDecision = WorkspaceTrustDecideRequest["decision"];
 export type WorkspaceTrustDecideResult =
   | { ok: true }
   | { ok: false; reason: "invalid" | "unknown_tab" | "no_pending" | "write_failed" };
+
+// Taskana 4739: Settings → Permissions lists the remembered trusted/denied
+// folders and can forget ONE record. The renderer is untrusted: list carries
+// NO payload, forget carries ONLY a `key` string it previously received from
+// main's list — never a decision, hash, tab id, or arbitrary path. The key is
+// an opaque lookup handle for main; it is never resolved or used as a path.
+
+/** Renderer -> main invoke channel for listing remembered trust decisions. */
+export const WORKSPACE_TRUST_LIST_CHANNEL = "anycode:workspace-trust-list";
+
+/** Renderer -> main invoke channel for forgetting ONE remembered decision. */
+export const WORKSPACE_TRUST_FORGET_CHANNEL = "anycode:workspace-trust-forget";
+
+export const workspaceTrustForgetSchema = z
+  .object({
+    key: z.string().min(1).max(4096),
+  })
+  .strict();
+
+export type WorkspaceTrustForgetRequest = z.infer<typeof workspaceTrustForgetSchema>;
+
+/** Display-only row: the folder key, its decision, and when it was decided. No hash. */
+export interface WorkspaceTrustListedFolder {
+  key: string;
+  /** The STORED decision ("trusted"/"denied"), not the decide-request verb. */
+  decision: "trusted" | "denied";
+  decidedAt: string;
+}
+
+export type WorkspaceTrustListResult =
+  | { ok: true; folders: WorkspaceTrustListedFolder[] }
+  | { ok: false; reason: "read_failed" };
+
+export type WorkspaceTrustForgetResult =
+  | { ok: true }
+  | { ok: false; reason: "invalid" | "not_found" | "write_failed" };
