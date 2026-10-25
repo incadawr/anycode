@@ -529,13 +529,22 @@ export function renderEvent(
           : `\n[stopped: turn limit reached (${event.turns} turns) — send a message to continue with the same history]\n`
         : `\n[loop_end: ${event.reason}, turns=${event.turns}]\n`);
       break;
-    case "stream_retry":
+    case "stream_retry": {
       // Past the announced total (a network-budget retry) the total is dropped.
       // Taskana 4772: the delay is shown in seconds, one decimal (no float ms).
+      // Review F5: a retry after a recovered network wait fires at once — the
+      // wait duration rides waitedMs, never as a pending "in N s" delay.
+      if (event.waitedMs !== undefined) {
+        write(
+          `\n[retry ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`} now (network back after ${(event.waitedMs / 1000).toFixed(1)} s): ${event.reason}]\n`,
+        );
+        break;
+      }
       write(
         `\n[retry ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`} in ${(event.delayMs / 1000).toFixed(1)} s: ${event.reason}]\n`,
       );
       break;
+    }
     case "waiting_for_network":
       write("\n[waiting for network…]\n");
       break;

@@ -1266,4 +1266,13 @@ describe("stream_retry delay and waiting_for_network (Taskana 4772)", () => {
   it("renders a waiting_for_network line", () => {
     expect(collect([{ type: "waiting_for_network" }], NOCOLOR)).toContain("[waiting for network…]");
   });
+
+  // Review F5/F8(c): a retry after a recovered network wait must not present
+  // the wait duration as a pending delay — it fires at once, the duration
+  // reads as "network back after N s".
+  it("renders a recovered wait as retry-now with the wait duration, not a pending delay", () => {
+    expect(
+      collect([{ type: "stream_retry", attempt: 2, maxAttempts: 8, delayMs: 0, waitedMs: 812_400, reason: "connect timeout" }], NOCOLOR),
+    ).toContain("[retry 2/8 now (network back after 812.4 s): connect timeout]");
+  });
 });

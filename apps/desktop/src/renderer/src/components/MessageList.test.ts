@@ -471,6 +471,15 @@ describe("formatStreamRetryLine (TASK.33 W8 — mirrors cli/render.ts's '[retry 
     expect(formatStreamRetryLine(8, 8, 500, "network")).toBe("Retry 8/8 in 0.5 s: network");
     expect(formatStreamRetryLine(9, 8, 500, "network")).toBe("Retry 9 in 0.5 s: network");
   });
+
+  // Review F5/F8(c): a retry after a recovered network wait fires at once —
+  // the wait duration reads as "network back after N s", never as a pending
+  // delay ("Retry 3 in 812.4 s" was the reported defect).
+  it("renders a recovered wait as retry-now with the wait duration (4772 review F5)", () => {
+    expect(formatStreamRetryLine(3, 8, 0, "connect timeout", 812_400)).toBe(
+      "Retry 3/8 now (network back after 812.4 s): connect timeout",
+    );
+  });
 });
 
 describe("showTryAgainButton (TASK.33 W8 button-visibility truth-table)", () => {

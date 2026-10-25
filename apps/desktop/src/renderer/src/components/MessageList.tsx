@@ -360,8 +360,21 @@ export function formatErrorRetrySuffix(retry: ErrorRetryMeta | undefined): strin
  * One `stream_retry` transcript line's text (TASK.33 W8) — mirrors
  * `cli/render.ts`'s `[retry N/M in Xms: reason]` wording. Exported for unit
  * testing.
+ *
+ * Taskana 4772 review F5: `waitedMs` (a retry after a recovered network
+ * wait) renders as "now (network back after N s)" — the wait duration was
+ * already spent, never a pending delay.
  */
-export function formatStreamRetryLine(attempt: number, maxAttempts: number, delayMs: number, reason: string): string {
+export function formatStreamRetryLine(
+  attempt: number,
+  maxAttempts: number,
+  delayMs: number,
+  reason: string,
+  waitedMs?: number,
+): string {
+  if (waitedMs !== undefined) {
+    return `Retry ${formatRetryAttempt(attempt, maxAttempts)} now (network back after ${formatDelaySeconds(waitedMs)}): ${reason}`;
+  }
   return `Retry ${formatRetryAttempt(attempt, maxAttempts)} in ${formatDelaySeconds(delayMs)}: ${reason}`;
 }
 
@@ -1039,7 +1052,7 @@ export function MessageList({
             case "stream_retry":
               return (
                 <div key={block.id} className={`message message-retry${enterClass(block.id)}`}>
-                  {formatStreamRetryLine(block.attempt, block.maxAttempts, block.delayMs, block.reason)}
+                  {formatStreamRetryLine(block.attempt, block.maxAttempts, block.delayMs, block.reason, block.waitedMs)}
                 </div>
               );
             case "loop_end": {
