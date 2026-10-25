@@ -59,6 +59,7 @@ export function RolesPane(): React.JSX.Element {
 
       <RolePickerDialog
         open
+        inline
         skippable={false}
         saveLabel="Save roles"
         connections={connections}

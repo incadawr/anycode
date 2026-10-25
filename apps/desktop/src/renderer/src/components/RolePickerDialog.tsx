@@ -52,6 +52,11 @@ export interface RolePickerDialogProps {
   saveLabel?: string;
   /** Whether a Skip button renders (first run only; Settings edits do not). */
   skippable?: boolean;
+  /**
+   * Render in the page flow instead of as a modal (the Settings Roles pane).
+   * A modal there made the whole window inert with no way out.
+   */
+  inline?: boolean;
   onSave(roles: Partial<Record<PresetRole, RoleConfig>>): void;
   onSkip?(): void;
 }
@@ -64,13 +69,14 @@ export function RolePickerDialog({
   initialRoles,
   saveLabel = "Save",
   skippable = true,
+  inline = false,
   onSave,
   onSkip,
 }: RolePickerDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   // D8 overlay wiring: the preview WebContentsView must hide while this
   // dialog is up.
-  useOverlayFlag(open);
+  useOverlayFlag(open && !inline);
 
   const presets = deriveRolePresets(engines, activeConnectionId ?? "");
   const [draft, setDraft] = useState<RolesDraft>(() =>
@@ -86,7 +92,7 @@ export function RolePickerDialog({
       setPresetId(autoSelectPreset(engines, activeConnectionId ?? "").id);
     }
     const dialog = dialogRef.current;
-    if (dialog && open && !dialog.open) {
+    if (dialog && open && !inline && !dialog.open) {
       dialog.showModal();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -110,92 +116,102 @@ export function RolePickerDialog({
     return null;
   }
 
-  return (
-    <dialog ref={dialogRef} className="role-picker-dialog" aria-label="Choose orchestration roles">
-      <div className="role-picker-header">
-        <span className="role-picker-title">Orchestration roles</span>
-        <p className="role-picker-subtitle">
-          Pick which engine or connection each role runs on. You can change this later in Settings → Roles.
-        </p>
-      </div>
-
-      <div className="role-picker-presets" role="radiogroup" aria-label="Presets">
-        {presets.map((preset) => {
-          const applicable = presetApplicable(preset, engines);
-          return (
-            <button
-              key={preset.id}
-              type="button"
-              role="radio"
-              aria-checked={presetId === preset.id}
-              className={`role-picker-preset-chip${presetId === preset.id ? " role-picker-preset-chip-active" : ""}`}
-              disabled={!applicable}
-              title={applicable ? undefined : "Requires an engine that is not ready"
-              }
-              data-testid={`role-preset-${preset.id}`}
-              onClick={() => applyPreset(preset)}
-            >
-              {preset.label}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="role-picker-roles">
-        {ROLE_PRESET_ROLES.map((role) => (
-          <section key={role} className="role-picker-role" data-testid={`role-picker-role-${role}`}>
-            <div className="role-picker-role-name">{role}</div>
-            <EntryRow
-              label="Primary"
-              entry={draft[role].primary}
-              connections={connections}
-              onChange={(patch) => setDraft((d) => patchEntry(d, role, null, patch))}
-            />
-            {draft[role].fallbacks.map((entry, index) => (
-              <EntryRow
-                key={index}
-                label={`Fallback ${index + 1}`}
-                entry={entry}
-                connections={connections}
-                onChange={(patch) => setDraft((d) => patchEntry(d, role, index, patch))}
-                onRemove={() => setDraft((d) => removeFallback(d, role, index))}
-                onMove={(delta) => setDraft((d) => moveFallback(d, role, index, delta))}
-              />
-            ))}
-            <button
-              type="button"
-              className="role-picker-add-fallback"
-              data-testid={`role-add-fallback-${role}`}
-              onClick={() => setDraft((d) => addFallback(d, role))}
-            >
-              <Plus /> Add fallback
-            </button>
-          </section>
-        ))}
-      </div>
-
-      {!valid && (
-        <div className="role-picker-error" role="alert">
-          An entry cannot select both an engine and a connection — pick one.
+  const content = (
+    <>
+        <div className="role-picker-header">
+          <span className="role-picker-title">Orchestration roles</span>
+          <p className="role-picker-subtitle">
+            Pick which engine or connection each role runs on. You can change this later in Settings → Roles.
+          </p>
         </div>
-      )}
 
-      <div className="role-picker-actions">
-        {skippable && (
-          <button type="button" className="role-picker-skip" data-testid="role-picker-skip" onClick={() => onSkip?.()}>
-            Skip
-          </button>
+        <div className="role-picker-presets" role="radiogroup" aria-label="Presets">
+          {presets.map((preset) => {
+            const applicable = presetApplicable(preset, engines);
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                role="radio"
+                aria-checked={presetId === preset.id}
+                className={`role-picker-preset-chip${presetId === preset.id ? " role-picker-preset-chip-active" : ""}`}
+                disabled={!applicable}
+                title={applicable ? undefined : "Requires an engine that is not ready"
+                }
+                data-testid={`role-preset-${preset.id}`}
+                onClick={() => applyPreset(preset)}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="role-picker-roles">
+          {ROLE_PRESET_ROLES.map((role) => (
+            <section key={role} className="role-picker-role" data-testid={`role-picker-role-${role}`}>
+              <div className="role-picker-role-name">{role}</div>
+              <EntryRow
+                label="Primary"
+                entry={draft[role].primary}
+                connections={connections}
+                onChange={(patch) => setDraft((d) => patchEntry(d, role, null, patch))}
+              />
+              {draft[role].fallbacks.map((entry, index) => (
+                <EntryRow
+                  key={index}
+                  label={`Fallback ${index + 1}`}
+                  entry={entry}
+                  connections={connections}
+                  onChange={(patch) => setDraft((d) => patchEntry(d, role, index, patch))}
+                  onRemove={() => setDraft((d) => removeFallback(d, role, index))}
+                  onMove={(delta) => setDraft((d) => moveFallback(d, role, index, delta))}
+                />
+              ))}
+              <button
+                type="button"
+                className="role-picker-add-fallback"
+                data-testid={`role-add-fallback-${role}`}
+                onClick={() => setDraft((d) => addFallback(d, role))}
+              >
+                <Plus /> Add fallback
+              </button>
+            </section>
+          ))}
+        </div>
+
+        {!valid && (
+          <div className="role-picker-error" role="alert">
+            An entry cannot select both an engine and a connection — pick one.
+          </div>
         )}
-        <button
-          type="button"
-          className="role-picker-save"
-          data-testid="role-picker-save"
-          disabled={!valid}
-          onClick={handleSave}
-        >
-          {saveLabel}
-        </button>
-      </div>
+
+        <div className="role-picker-actions">
+          {skippable && (
+            <button type="button" className="role-picker-skip" data-testid="role-picker-skip" onClick={() => onSkip?.()}>
+              Skip
+            </button>
+          )}
+          <button
+            type="button"
+            className="role-picker-save"
+            data-testid="role-picker-save"
+            disabled={!valid}
+            onClick={handleSave}
+          >
+            {saveLabel}
+          </button>
+        </div>
+    </>
+  );
+
+  return inline ? (
+    <section className="role-picker-dialog role-picker-inline" aria-label="Choose orchestration roles">
+      {content}
+    </section>
+  ) : (
+    <dialog ref={dialogRef} className="role-picker-dialog" aria-label="Choose orchestration roles">
+      {content}
     </dialog>
   );
 }

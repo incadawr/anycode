@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Settings → Roles no longer locks the whole window: the role editor sits in the page instead of opening as a modal that could not be closed.
 - The transcript minimap (the dot rail on the right of the chat) shows the hover preview of each message again; it was clipped by the rail itself.
 
 ## [0.0.39] — 2026-10-25

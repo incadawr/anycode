@@ -8074,3 +8074,14 @@ body {
 .sessions-api-footer {
   margin-top: var(--sp-2);
 }
+
+/* Settings → Roles renders the editor in the page flow (inline), not as a
+   modal: no fixed width cap, no entrance animation. */
+.role-picker-dialog.role-picker-inline {
+  width: auto;
+  max-width: 40rem;
+  max-height: none;
+  box-shadow: none;
+  background: var(--bg-card);
+  margin-bottom: var(--sp-4);
+}
