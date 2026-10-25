@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A background subagent you stop from the UI is reported to the parent as stopped by the user (`<cancelled-by>user</cancelled-by>`), so the parent no longer relaunches it as a failure. The report card reads "stopped by you" and the Agent card shows "Cancelled" instead of "Done".
+
 ## [0.0.40] — 2026-10-25
 
 ### Fixed

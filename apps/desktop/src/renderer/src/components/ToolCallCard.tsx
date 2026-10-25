@@ -125,6 +125,7 @@ const CHILD_BADGE_LABELS: Record<ChildBadgeKind, string> = {
   running: "Running",
   error: "Error",
   done: "Done",
+  cancelled: "Cancelled",
 };
 
 /**

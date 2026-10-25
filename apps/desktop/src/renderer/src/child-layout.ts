@@ -232,7 +232,7 @@ export function expandRow(view: ChildLayoutView, spawnToolCallId: string): Child
 // ── badge priority ──
 
 /** The one badge kind an Agent tool_call card shows for its child, collapsed from `waiting`/`final` by `childBadgeKind`'s frozen priority. */
-export type ChildBadgeKind = "waiting_permission" | "running" | "error" | "done";
+export type ChildBadgeKind = "waiting_permission" | "running" | "error" | "done" | "cancelled";
 
 /**
  * Collapses a subagent card's live `waiting`/`final` fields into the single
@@ -247,6 +247,9 @@ export function childBadgeKind(subagent: Pick<SubagentSubStatus, "waiting" | "fi
   }
   if (subagent.final === null) {
     return "running";
+  }
+  if (subagent.final.status === "cancelled") {
+    return "cancelled";
   }
   return subagent.final.status === "error" || subagent.final.finalTurnFinishReason === "length" ? "error" : "done";
 }

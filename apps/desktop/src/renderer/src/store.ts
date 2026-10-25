@@ -4955,7 +4955,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             // /4055 cross-review F2: the ceiling summary is patched by
             // the same branch (it is the detached child's only terminal channel).
             const childTerminal = message.childTerminal;
-            if (childTerminal !== undefined && (childTerminal.finalTurnFinishReason === "length" || childTerminal.ceiling !== undefined)) {
+            // : a cancelled terminal patches too — the card must read
+            // Cancelled, not the admit turn's "Done".
+            if (
+              childTerminal !== undefined &&
+              (childTerminal.finalTurnFinishReason === "length" || childTerminal.ceiling !== undefined || childTerminal.status === "cancelled")
+            ) {
               const term: {
                 status: "completed" | "max_turns" | "cancelled" | "error";
                 durationMs: number;
