@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.40] — 2026-10-25
+
 ### Fixed
 
 - Settings → Roles no longer locks the whole window: the role editor sits in the page instead of opening as a modal that could not be closed.
