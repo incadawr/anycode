@@ -102,6 +102,7 @@ import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connect
 import { ConsentDialog } from "./ConsentDialog.js";
 import { PermissionsEditor } from "./PermissionsEditor.js";
 import { TrustedBinariesSection } from "./TrustedBinariesSection.js";
+import { TrustedFoldersSection } from "./TrustedFoldersSection.js";
 import { McpServersPane } from "./McpServersPane.js";
 import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane, workspaceRootSegment } from "./SubagentsPane.js";
@@ -1735,6 +1736,12 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
             {activePane === "permissions" && <PermissionsEditor store={store} />}
 
             {activePane === "permissions" && <TrustedBinariesSection store={store} />}
+
+            {/* Taskana 4739: remembered workspace-trust decisions — a SIBLING
+                section after TrustedBinariesSection (same rationale: a trust
+                decision is neither a permission rule nor a binary consent).
+                Reads through the workspace-trust IPC, not the settings store. */}
+            {activePane === "permissions" && <TrustedFoldersSection />}
 
             {activePane === "tools" && (
               <section className="settings-section">

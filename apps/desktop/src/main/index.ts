@@ -30,9 +30,11 @@ import { access, realpath as fsRealpath, stat as fsStat } from "node:fs/promises
 import { homedir, tmpdir } from "node:os";
 import {
   nodeTrustStoreFs,
+  queueStoreMutation,
   registerWorkspaceTrustIpc,
   workspaceTrustOnceFor,
 } from "./workspace-trust-ipc.js";
+import { defaultTrustStorePath, migrateTrustStoreKeys } from "@anycode/core/workspace-trust";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -2140,7 +2142,7 @@ void app.whenReady().then(async () => {
 
   manager = new TabHostManager({
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),
-    workspaceTrustOnce: (workspace) => workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace),
+    workspaceTrustOnce: (workspace) => workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
     hostEntry: resolveHostEntry(),
     createChannel: () => new MessageChannelMain(),
     getWindow: () => win,
@@ -2559,6 +2561,9 @@ void app.whenReady().then(async () => {
   registerSettingsIpc(settingsIpcDeps);
   // Taskana 4736: the per-tab workspace-trust answer. Main resolves folder + hash
   // from the tab's own record; the renderer sends a tab id and a decision only.
+  // Taskana 4739: folder keys are realpath-canonical (symlink and target share
+  // one record) and the store mutators (decide/forget/migrate) are serialised
+  // through one queue inside the module.
   registerWorkspaceTrustIpc({
     fs: nodeTrustStoreFs,
     home: homedir(),
@@ -2569,7 +2574,25 @@ void app.whenReady().then(async () => {
     },
     onceApprovals: workspaceTrustOnceApprovals,
     logger: { error: (message) => console.error(message) },
+    realpathSync,
   });
+  // Taskana 4739: one-shot migration of legacy non-realpath keys to real
+  // keys. Best-effort and inside the module's serialisation queue: errors are
+  // logged and ignored, and the read-side legacy fallback keeps old keys
+  // working either way.
+  queueStoreMutation(() =>
+    migrateTrustStoreKeys(nodeTrustStoreFs, defaultTrustStorePath(homedir()), realpathSync),
+  )
+    .then(({ migrated }) => {
+      if (migrated > 0) {
+        console.log(`[main] workspace trust: migrated ${migrated} legacy folder key(s) to realpath keys`);
+      }
+    })
+    .catch((error) => {
+      console.error(
+        `[main] workspace trust key migration skipped: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
 
   // TASK.141 §6: "Check connection" for a proxy profile. The probe is a SPAWNED
   // child (`process.execPath` + ELECTRON_RUN_AS_NODE=1), never a fetch from

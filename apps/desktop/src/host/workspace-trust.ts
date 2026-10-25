@@ -41,6 +41,12 @@ export interface EstablishHostWorkspaceTrustOptions {
   workspace: string;
   home: string;
   env: NodeJS.ProcessEnv;
+  /**
+   * Taskana 4739: injected realpath for key canonicalisation (symlink and
+   * target share one trust record). Production callers pass `node:fs`'s
+   * realpathSync; absent = legacy resolve-only behaviour.
+   */
+  realpathSync?: (path: string) => string;
 }
 
 export async function establishHostWorkspaceTrust(
@@ -53,6 +59,7 @@ export async function establishHostWorkspaceTrust(
       home: opts.home,
       storePath: defaultTrustStorePath(opts.home),
       onceHash: opts.env[WORKSPACE_TRUST_ONCE_ENV] || undefined,
+      realpathSync: opts.realpathSync,
     });
     return toHostTrust(opts.workspace, trust);
   } catch (error) {

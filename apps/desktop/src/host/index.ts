@@ -326,7 +326,7 @@ import { attachChildReportDurability, attachEngineChildReportDurability } from "
 import { createSpawnModeCell } from "./spawn-mode-cell.js";
 import { RoleHealthCache, decideRoutedTerminal, entryLabel, pickEntry, resolveRoleRouteChain, respawnReportId, toCoreEntry } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
@@ -2613,6 +2613,8 @@ async function boot(): Promise<void> {
       workspace,
       home: homedir(),
       env: process.env,
+      // Taskana 4739: symlink and target share one trust record.
+      realpathSync,
     });
     if (hostWorkspaceTrust.pending !== undefined) {
       process.parentPort?.postMessage({

@@ -17,6 +17,7 @@
  */
 
 import { createInterface } from "node:readline";
+import { realpathSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -61,6 +62,7 @@ import { AgentLoop, type AgentLoopConfig } from "../loop/index.js";
 import { LspManager, loadLspServerSpecs } from "../lsp/index.js";
 import { McpManager, loadMcpServerSpecs } from "../mcp/index.js";
 import {
+  canonicalWorkspaceKey,
   defaultTrustStorePath,
   promptWorkspaceTrust,
   resolveWorkspaceTrust,
@@ -347,13 +349,23 @@ export async function resolveCliProjectTrust(deps: {
   interactive: boolean;
   io: { input: Readable; output: Writable };
   warn: (text: string) => void;
+  /**
+   * Taskana 4739: injected realpath for key canonicalisation (symlink and
+   * target share one trust record). Defaults to `node:fs`'s realpathSync.
+   */
+  realpathSync?: (path: string) => string;
 }): Promise<boolean> {
   const storePath = defaultTrustStorePath(deps.home);
+  // Taskana 4739: canonicalise once; persist under the same real key the
+  // resolver looks up (writeTrustDecision's own resolve() is idempotent on an
+  // already-real path).
+  const key = canonicalWorkspaceKey(deps.cwd, deps.realpathSync ?? realpathSync);
   try {
     let trust = await resolveWorkspaceTrust(deps.fs, {
       workspace: deps.cwd,
       home: deps.home,
       storePath,
+      realpathSync: deps.realpathSync ?? realpathSync,
     });
     if (trust.projectTrusted) {
       return true;
@@ -364,6 +376,7 @@ export async function resolveCliProjectTrust(deps: {
         home: deps.home,
         storePath,
         onceHash: trust.hash,
+        realpathSync: deps.realpathSync ?? realpathSync,
       });
       return trust.projectTrusted;
     }
@@ -376,13 +389,13 @@ export async function resolveCliProjectTrust(deps: {
         trust,
       );
       if (answer === "trust") {
-        await writeTrustDecision(deps.fs, storePath, deps.cwd, "trusted", trust.hash);
+        await writeTrustDecision(deps.fs, storePath, key, "trusted", trust.hash);
         return true;
       }
       if (answer === "once") {
         return true;
       }
-      await writeTrustDecision(deps.fs, storePath, deps.cwd, "denied", trust.hash);
+      await writeTrustDecision(deps.fs, storePath, key, "denied", trust.hash);
       return false;
     }
     deps.warn(describeUntrustedSkip(trust));

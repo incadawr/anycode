@@ -121,8 +121,13 @@ import type {
 import { RECOGNIZER_PROBE_CHANNEL, RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
 import {
   WORKSPACE_TRUST_DECIDE_CHANNEL,
+  WORKSPACE_TRUST_FORGET_CHANNEL,
+  WORKSPACE_TRUST_LIST_CHANNEL,
   type WorkspaceTrustDecideRequest,
   type WorkspaceTrustDecideResult,
+  type WorkspaceTrustForgetRequest,
+  type WorkspaceTrustForgetResult,
+  type WorkspaceTrustListResult,
 } from "../shared/workspace-trust.js";
 import type { RecognizerProbeRequest, RecognizerProbeResult, RecognizerSetRequest } from "../shared/recognizer.js";
 import {
@@ -624,9 +629,15 @@ ipcRenderer.on(TERMINAL_PORT_ENVELOPE_TYPE, (event, payload: { tabId: string }) 
 contextBridge.exposeInMainWorld("anycode", {
   // Taskana 4736: the answer to a folder's project-trust question. The payload is a
   // tab id and a decision ONLY; main resolves the folder and the hash itself.
+  // Taskana 4739: list/forget for Settings → Permissions. The renderer can only
+  // send a key main itself listed (S1); main never resolves it as a path.
   workspaceTrust: {
     decide: (request: WorkspaceTrustDecideRequest): Promise<WorkspaceTrustDecideResult> =>
       ipcRenderer.invoke(WORKSPACE_TRUST_DECIDE_CHANNEL, request) as Promise<WorkspaceTrustDecideResult>,
+    list: (): Promise<WorkspaceTrustListResult> =>
+      ipcRenderer.invoke(WORKSPACE_TRUST_LIST_CHANNEL) as Promise<WorkspaceTrustListResult>,
+    forget: (request: WorkspaceTrustForgetRequest): Promise<WorkspaceTrustForgetResult> =>
+      ipcRenderer.invoke(WORKSPACE_TRUST_FORGET_CHANNEL, request) as Promise<WorkspaceTrustForgetResult>,
   },
   createTab: (req: CreateTabRequest): Promise<CreateTabResult> =>
     ipcRenderer.invoke(TAB_CREATE_CHANNEL, req) as Promise<CreateTabResult>,
