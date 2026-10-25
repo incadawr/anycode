@@ -349,7 +349,7 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
               <input
                 type="text"
                 className="settings-field-input settings-mcp-name"
-                placeholder="Connection (optional — default: this session's)"
+                placeholder="Connection (optional — the model must live on it; other connections: classifier off)"
                 aria-label="Classifier connection"
                 value={classifierConnectionId}
                 disabled={readOnly}
