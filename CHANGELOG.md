@@ -15,6 +15,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- A transient network outage no longer fails the turn at once: the turn waits in "Waiting for network… · Retry now" (probing the provider every 5 s, backing off to 60 s, and re-probing at once when the OS reports the network back or after sleep) for up to 30 minutes (Settings → Wait for network, `ANYCODE_NETWORK_WAIT_MAX_MS`), and then resumes the same step; Stop still cancels at once. Retry delays show as `0.8 s` instead of `791.1655ms`, and an unreachable-network error (`ENETUNREACH`) counts as transient.
 - Settings → Language servers: each catalog server has one Turn on / Turn off button that follows the scope dropdown (User = all projects, a folder = that project) instead of separate "this project" and "all projects" buttons.
 - The release self-check now opens every Settings pane in the packaged app and fails if one blanks the window, shows its error fallback or leaves a modal over the window.
 - Settings → MCP, Language servers, Skills and Subagents: one scope dropdown (`User · This computer` or a recent folder, with a count chip) replaces the Global/Project switcher. Folders come from your recent sessions and open tabs; folders without an open tab can be edited, and a folder that no longer exists is shown disabled.
