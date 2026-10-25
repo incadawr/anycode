@@ -5385,6 +5385,13 @@ function realProviderPaneDom(): ProviderPaneDom {
     );
     return label?.querySelector<HTMLInputElement | HTMLSelectElement>("input, select") ?? null;
   }
+  /** Max output tokens segments: the driver's contract names presets by their old chip labels (Default/8192/16384/32768/Custom). */
+  function maxOutputSegmentLabel(segment: string): string {
+    if (segment === "default") {
+      return "Default";
+    }
+    return segment === "custom" ? "Custom" : segment;
+  }
   function primaryTopButton(body: HTMLElement): HTMLButtonElement | null {
     // The one `.settings-field-row` that is a DIRECT child of the form body
     // (the credential section's own Clear-key row is nested inside
@@ -5496,8 +5503,9 @@ function realProviderPaneDom(): ProviderPaneDom {
       const modelInput = fieldControl(body, "Model") as HTMLInputElement | null;
       const transportSelect = fieldControl(body, "Transport") as HTMLSelectElement | null;
       const baseUrlInput = fieldControl(body, "Base URL") as HTMLInputElement | null;
-      const maxOutputTokensInput = fieldControl(body, "Max output tokens") as HTMLInputElement | null;
-      const maxOutputPresetChips = Array.from(body.querySelectorAll<HTMLButtonElement>(".connection-drawer-preset-chip"));
+      // The input exists only while the Custom segment is shown (see the drawer's MaxOutputSegmented).
+      const maxOutputTokensInput = body.querySelector<HTMLInputElement>('input[aria-label="Max output tokens"]');
+      const maxOutputPresetChips = Array.from(body.querySelectorAll<HTMLButtonElement>(".connection-drawer-segmented-btn"));
       const secretInput = credentialInput(body);
       const authKind: "api_key" | "oauth" = sec?.querySelector(".settings-oauth-block") ? "oauth" : "api_key";
       const credentialStatusEl = sec?.querySelector<HTMLElement>('[class*="settings-secret-status"]') ?? null;
@@ -5524,8 +5532,8 @@ function realProviderPaneDom(): ProviderPaneDom {
         baseUrl: baseUrlInput?.value ?? "",
         maxOutputTokens: maxOutputTokensInput?.value ?? "",
         maxOutputTokensPresets: maxOutputPresetChips.map((chip) => ({
-          label: chip.textContent ?? "",
-          selected: chip.classList.contains("connection-drawer-preset-chip-selected"),
+          label: maxOutputSegmentLabel(chip.dataset.segment ?? ""),
+          selected: chip.getAttribute("aria-pressed") === "true",
         })),
         authKind,
         apiKeyEntered: (secretInput?.value ?? "") !== "",
@@ -5584,7 +5592,8 @@ function realProviderPaneDom(): ProviderPaneDom {
     },
     setDrawerMaxOutputTokens(value: string): boolean {
       const body = drawerBody();
-      const input = body && (fieldControl(body, "Max output tokens") as HTMLInputElement | null);
+      // Only mounted while Custom is selected: click the Custom segment first.
+      const input = body && body.querySelector<HTMLInputElement>('input[aria-label="Max output tokens"]');
       if (!input || input.disabled) {
         return false;
       }
@@ -5596,8 +5605,8 @@ function realProviderPaneDom(): ProviderPaneDom {
       if (!body) {
         return false;
       }
-      const chip = Array.from(body.querySelectorAll<HTMLButtonElement>(".connection-drawer-preset-chip")).find(
-        (candidate) => (candidate.textContent ?? "").trim() === label,
+      const chip = Array.from(body.querySelectorAll<HTMLButtonElement>(".connection-drawer-segmented-btn")).find(
+        (candidate) => maxOutputSegmentLabel(candidate.dataset.segment ?? "") === label,
       );
       if (!chip || chip.disabled) {
         return false;
