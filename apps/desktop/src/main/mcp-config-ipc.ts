@@ -30,6 +30,7 @@ import { ipcMain } from "electron";
 import * as fsp from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
+import { discoverPlugins } from "@anycode/core/plugins";
 import {
   applyMcpImport,
   deleteMcpServer,
@@ -59,6 +60,7 @@ import type {
   McpImportApplyResultItem,
   McpImportCandidateView,
   McpImportScanResult,
+  McpPluginServerView,
   McpServerEntryInput,
   McpTransport,
 } from "../shared/mcp-config.js";
@@ -362,7 +364,77 @@ async function buildSnapshot(deps: McpConfigIpcDeps, tabId: string | undefined):
     }
   }
 
-  return { entries, problems, projectAvailable: workspace !== undefined };
+  // Config-claimed names drive the `shadowed` flag. Core's resolver MUTATES
+  // the claimed set as it accepts plugin names (mcp/config.ts
+  // `resolveMcpServerEntries` adds each accepted name), so keep TWO sets: a
+  // frozen copy for membership checks, a throwaway copy for discovery to
+  // mutate — otherwise every plugin row would flag shadowed-by-itself.
+  const configClaimedNames = new Set(claimed);
+  const discoveryClaimed = new Set(claimed);
+  return {
+    entries,
+    problems,
+    projectAvailable: workspace !== undefined,
+    pluginServers: await collectPluginServers(deps, workspace, home, discoveryClaimed, configClaimedNames, problems),
+  };
+}
+
+// ── plugin-contributed rows (Taskana 4732 S1-C, design 4732 §6 "Elsewhere") ──
+
+/**
+ * Projects the plugin-contributed MCP servers into READ-ONLY pane rows. This
+ * rides the SAME discovery the host runtime uses (`discoverPlugins` over
+ * `<ws>/.anycode/plugins` then `~/.anycode/plugins`, renames
+ * `plugin_<plugin>_<server>`, explicit config always winning a collision), so
+ * what the pane shows is exactly what the runtime would start — minus the
+ * consent gate, which is NOT re-derived here (stage 1: `consentGranted` reads
+ * false until S1-B's settings mirror lands; the Plugins pane owns the true
+ * consent state). `shadowed` mirrors the runtime rule against this snapshot's
+ * `claimed` set. Fail-soft throughout: discovery problems append to the
+ * shared problems[] and the rows degrade to [].
+ */
+async function collectPluginServers(
+  deps: McpConfigIpcDeps,
+  workspace: string | undefined,
+  home: string,
+  discoveryClaimed: Set<string>,
+  configClaimedNames: ReadonlySet<string>,
+  problems: string[],
+): Promise<McpPluginServerView[]> {
+  try {
+    const discovery = await discoverPlugins(deps.fs, {
+      workspace: workspace ?? home,
+      home,
+      claimedMcpNames: discoveryClaimed,
+    });
+    problems.push(...discovery.problems);
+    const rows: McpPluginServerView[] = [];
+    for (const spec of discovery.mcpServerSpecs) {
+      // Runtime name is `plugin_<plugin>_<server>`; the owner plugin is the
+      // segment between the fixed prefix and the final server segment.
+      const pluginName = spec.name.startsWith("plugin_")
+        ? spec.name.slice("plugin_".length, spec.name.lastIndexOf("_"))
+        : spec.name;
+      rows.push({
+        name: spec.name,
+        pluginName,
+        transport: spec.kind === "http" ? "http" : "stdio",
+        commandLine:
+          spec.kind === "http"
+            ? spec.url
+            : [spec.command, ...spec.args].filter((part) => part !== "").join(" "),
+        // Stage 1 honest default: consent state is the Plugins pane's truth
+        // (settings mirror lands with S1-B); the row never blocks anything here.
+        consentGranted: false,
+        shadowed: configClaimedNames.has(spec.name),
+        pluginRoot: spec.kind === "stdio" ? spec.cwd ?? "" : "",
+      });
+    }
+    return rows;
+  } catch {
+    // Fail-soft: plugin rows are additive context, never a pane failure.
+    return [];
+  }
 }
 
 // ── handlers (exported for unit tests) ──

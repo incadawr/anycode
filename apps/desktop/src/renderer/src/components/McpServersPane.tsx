@@ -65,10 +65,12 @@ import type {
   McpImportScanResult,
   McpServerEntryInput,
   McpConfigUpsertRequest,
+  McpPluginServerView,
   McpTransport,
 } from "../../../shared/mcp-config.js";
 import { describeMcpServer, type McpRowKind } from "./SettingsScreen.js";
 import { Pencil, Search, Trash, X } from "./icons.js";
+import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 
 // ── bridge (DI, same ethic as SettingsScreen.tsx's SettingsBridge) ──
 
@@ -701,6 +703,36 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
               </ul>
             </div>
           )}
+
+          {/* Taskana 4732 S1-C (design 4732 §6 "Elsewhere"): plugin-contributed
+              servers, READ-ONLY rows — no toggle/edit/delete here. Enable and
+              consent live in Settings → Plugins (per plugin, user-global), so
+              the section's only affordance is the pane-select cross-link. */}
+          {(snapshot.pluginServers ?? []).length > 0 && (
+            <div className="mcp-section">
+              <div className="mcp-section-title">
+                From plugins <span className="mcp-section-count">{(snapshot.pluginServers ?? []).length} item{(snapshot.pluginServers ?? []).length === 1 ? "" : "s"}</span>
+                <span className="mcp-section-note">
+                  Read-only ·{" "}
+                  <button
+                    type="button"
+                    className="plugins-manage-link"
+                    onClick={() => {
+                      window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
+                      window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "plugins" }));
+                    }}
+                  >
+                    Manage in Plugins
+                  </button>
+                </span>
+              </div>
+              <ul className="mcp-row-list">
+                {(snapshot.pluginServers ?? []).map((server) => (
+                  <McpPluginRowItem key={server.name} server={server} />
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       )}
 
@@ -1185,5 +1217,48 @@ function McpImportDialog({
         </button>
       </div>
     </dialog>
+  );
+}
+
+// ── Taskana 4732 S1-C: read-only plugin-contributed row (design 4732 §6) ──
+
+/**
+ * One plugin-contributed MCP server: name, owning plugin badge, transport
+ * command/url, and — until consent is granted — a "Needs approval" note that
+ * points at the Plugins pane. READ-ONLY by construction: no toggle, no edit,
+ * no delete (enable/consent are plugin-scoped, user-global, and live in
+ * Settings → Plugins; a `shadowed` row adds "overridden by your config").
+ */
+export function McpPluginRowItem({ server }: { server: McpPluginServerView }) {
+  return (
+    <li className="mcp-row mcp-row-plugin" data-mcp-plugin-server={server.name}>
+      <div className="mcp-row-main">
+        <div className="mcp-row-lines">
+          <div className="mcp-row-line1">
+            <span className="mcp-row-name settings-mcp-name">{server.name}</span>
+            <span className="mcp-badge mcp-badge-tools">plugin: {server.pluginName}</span>
+            {server.shadowed && <span className="mcp-badge mcp-badge-user">overridden by your config</span>}
+          </div>
+          <div className="mcp-row-line2" title={server.pluginRoot !== "" ? server.pluginRoot : undefined}>
+            {server.commandLine}
+          </div>
+          {!server.consentGranted && (
+            <div className="mcp-row-hint plugins-mcp-approve">
+              Needs approval —{" "}
+              <button
+                type="button"
+                className="plugins-manage-link"
+                onClick={() => {
+                  window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
+                  window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "plugins" }));
+                }}
+              >
+                approve in Plugins
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </li>
   );
 }

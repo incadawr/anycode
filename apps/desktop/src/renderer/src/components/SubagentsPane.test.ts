@@ -8,6 +8,7 @@
  * validation surfacing, preview request shape, delete/reveal/save request
  * custody) is exercised through the component's exported pure builders.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { EngineModelChoice } from "../../../shared/protocol.js";
 import type { CatalogSummary, SettingsSnapshot } from "../../../shared/settings.js";
@@ -628,5 +629,16 @@ describe("resolveSubagentModelOptions with the parent connection's own model ids
   it("an explicit subagent model already saved on the manual id is retained, not dropped", () => {
     const options = buildModelSelectOptions([{ id: "manual-parent" }], "manual-parent", "Same as parent");
     expect(options.filter((option) => option.value === "manual-parent")).toHaveLength(1);
+  });
+});
+
+// ── Taskana 4732 S1-C: the plugin group's "Manage in Plugins" link ──
+
+describe("plugin group cross-link (Taskana 4732 S1-C, design 4732 §6)", () => {
+  it("the plugin-group header carries a Manage-in-Plugins link wired to the settings.open + plugins-pane seam", () => {
+    const source = readFileSync(new URL("./SubagentsPane.tsx", import.meta.url), "utf8");
+    expect(source).toContain("Manage in Plugins");
+    expect(source).toContain('new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" })');
+    expect(source).toContain('new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "plugins" })');
   });
 });

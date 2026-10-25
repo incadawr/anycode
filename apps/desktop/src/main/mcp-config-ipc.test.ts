@@ -26,8 +26,8 @@ const WORKSPACE = "/proj";
 const TAB_ID = "tab-1";
 const SENTINEL = "SENTINEL_MCP_SECRET_93F1";
 
-/** In-memory fs honouring the McpConfigFs surface — mirrors core's test fakes. */
-function makeFs(files: Record<string, string> = {}): { fs: McpConfigFs; files: Record<string, string> } {
+/** In-memory fs honouring the McpConfigFs surface — mirrors core's test fakes. `dirs` feeds readdir so plugin discovery can walk `<root>/.anycode/plugins`. */
+function makeFs(files: Record<string, string> = {}, dirs: Record<string, string[]> = {}): { fs: McpConfigFs; files: Record<string, string> } {
   const store: Record<string, string> = { ...files };
   const fs: McpConfigFs = {
     readFile: async (path) => {
@@ -40,10 +40,10 @@ function makeFs(files: Record<string, string> = {}): { fs: McpConfigFs; files: R
     writeFile: async (path, content) => {
       store[path] = content;
     },
-    exists: async (path) => path in store,
+    exists: async (path) => path in store || path in dirs,
     stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }),
     mkdir: async () => {},
-    readdir: async () => [],
+    readdir: async (path) => [...(dirs[path] ?? [])],
     rename: async (from, to) => {
       const content = store[from];
       if (content === undefined) {
@@ -56,11 +56,11 @@ function makeFs(files: Record<string, string> = {}): { fs: McpConfigFs; files: R
   return { fs, files: store };
 }
 
-function makeDeps(files: Record<string, string> = {}, opts?: { noTab?: boolean }): {
+function makeDeps(files: Record<string, string> = {}, opts?: { noTab?: boolean }, dirs: Record<string, string[]> = {}): {
   deps: McpConfigIpcDeps;
   files: Record<string, string>;
 } {
-  const { fs, files: store } = makeFs(files);
+  const { fs, files: store } = makeFs(files, dirs);
   const deps: McpConfigIpcDeps = {
     home: () => HOME,
     workspaceForTab: (tabId) => (opts?.noTab || tabId !== TAB_ID ? undefined : WORKSPACE),
@@ -524,5 +524,97 @@ describe("W5-FIX finding 7 — reserved prototype-key names", () => {
     expect(snapshot.entries.map((e) => e.name)).toEqual(["ok"]);
     expect(snapshot.problems.some((pr) => /reserved unsafe name/.test(pr))).toBe(true);
     expect(({} as Record<string, unknown>).command).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4732 S1-C (design 4732 §6 "Elsewhere"): plugin-contributed rows.
+// The snapshot's `pluginServers` ride the SAME discovery the runtime uses —
+// renames `plugin_<plugin>_<server>`, explicit config wins a name collision,
+// read-only rows only (no new channel, no consent re-derivation in stage 1:
+// consentGranted stays an honest false until the Plugins pane owns it).
+
+const USER_PLUGINS_ROOT = "/home/u/.anycode/plugins";
+
+function pluginManifestJson(mcpServers?: Record<string, unknown>): string {
+  return JSON.stringify({
+    name: "ozon-tools",
+    version: "0.3.1",
+    ...(mcpServers !== undefined ? { mcpServers } : {}),
+  });
+}
+
+describe("handleMcpConfigGet pluginServers (Taskana 4732 S1-C)", () => {
+  function pluginWorld(manifest: string): { deps: McpConfigIpcDeps } {
+    const { deps } = makeDeps(
+      { [`${USER_PLUGINS_ROOT}/ozon-tools/.anycode-plugin/plugin.json`]: manifest },
+      undefined,
+      { [USER_PLUGINS_ROOT]: ["ozon-tools"], [`${USER_PLUGINS_ROOT}/ozon-tools`]: [".anycode-plugin"] },
+    );
+    return { deps };
+  }
+
+  it("projects a plugin's stdio server as a read-only row with the plugin_<name>_<server> rename", async () => {
+    const { deps } = pluginWorld(pluginManifestJson({ api: { command: "node", args: ["api.js"], cwd: "." } }));
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.pluginServers).toEqual([
+      {
+        name: "plugin_ozon-tools_api",
+        pluginName: "ozon-tools",
+        transport: "stdio",
+        commandLine: "node api.js",
+        consentGranted: false,
+        shadowed: false,
+        pluginRoot: expect.stringContaining("ozon-tools"),
+      },
+    ]);
+    // Read-only rows never enter `entries` (config rows and plugin rows are
+    // distinct views even when a name collides — config wins at runtime).
+    expect(snapshot.entries.map((e) => e.name)).not.toContain("plugin_ozon-tools_api");
+  });
+
+  it("projects an http server's url as its command line", async () => {
+    const { deps } = pluginWorld(pluginManifestJson({ web: { url: "https://example.com/mcp" } }));
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.pluginServers?.[0]).toMatchObject({
+      name: "plugin_ozon-tools_web",
+      transport: "http",
+      commandLine: "https://example.com/mcp",
+    });
+  });
+
+  it("drops a plugin row whose runtime name an explicit config row claims (config wins at runtime — nothing to shadow)", async () => {
+    const { deps } = makeDeps(
+      {
+        [`${USER_PLUGINS_ROOT}/ozon-tools/.anycode-plugin/plugin.json`]: pluginManifestJson({ api: { command: "node", args: ["api.js"] } }),
+        [USER_CONFIG]: JSON.stringify({ mcpServers: { "plugin_ozon-tools_api": { command: "mine", args: [] } } }),
+      },
+      undefined,
+      { [USER_PLUGINS_ROOT]: ["ozon-tools"], [`${USER_PLUGINS_ROOT}/ozon-tools`]: [".anycode-plugin"] },
+    );
+    const snapshot = await handleMcpConfigGet(deps, {});
+    // Core's resolver drops plugin servers whose renamed name is already
+    // claimed by explicit config, so the pane shows exactly the config row —
+    // the runtime precedence, mirrored read-only.
+    expect(snapshot.pluginServers).toEqual([]);
+    expect(snapshot.entries.map((e) => e.name)).toContain("plugin_ozon-tools_api");
+  });
+
+  it("yields no plugin rows (and no problems) when no plugins directory exists — the no-plugin boot is unchanged", async () => {
+    const { deps } = makeDeps({ [USER_CONFIG]: JSON.stringify({ mcpServers: {} }) });
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.pluginServers).toEqual([]);
+    expect(snapshot.problems).toEqual([]);
+  });
+
+  it("collects discovery problems fail-soft instead of failing the snapshot", async () => {
+    const { deps } = makeDeps(
+      { [`${USER_PLUGINS_ROOT}/broken/.anycode-plugin/plugin.json`]: "{ not json" },
+      undefined,
+      { [USER_PLUGINS_ROOT]: ["broken"], [`${USER_PLUGINS_ROOT}/broken`]: [".anycode-plugin"] },
+    );
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.pluginServers).toEqual([]);
+    expect(snapshot.problems.length).toBeGreaterThan(0);
   });
 });

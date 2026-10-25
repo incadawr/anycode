@@ -46,6 +46,8 @@ Work down this list:
    Skills** and expand the "N skill(s) failed to load" strip.
 2. **Shadowed.** A same-name skill exists in a higher root (project, then user,
    then plugins, then built-ins). Your file may be the one doing the shadowing.
+   Plugin contributions are listed per plugin in Settings → Plugins — see
+   [plugins.md](plugins.md) for the tiers and consent rules.
 3. **Disabled.** The name is in `skills.disabled` in the shared config, or was
    switched off in Settings → Skills.
 4. **Too many skills.** At most 64 skills load per session after deduplication,

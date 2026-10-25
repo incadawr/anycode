@@ -45,6 +45,21 @@ import {
   SUBAGENTS_REVEAL_CHANNEL,
   SUBAGENTS_SAVE_CHANNEL,
 } from "../shared/subagents-config.js";
+import {
+  PLUGINS_APPROVE_MCP_CHANNEL,
+  PLUGINS_CHANGED_CHANNEL,
+  PLUGINS_CHECK_UPDATES_CHANNEL,
+  PLUGINS_INSTALL_COMMIT_CHANNEL,
+  PLUGINS_INSTALL_PREPARE_CHANNEL,
+  PLUGINS_LIST_CHANNEL,
+  PLUGINS_REMOVE_CHANNEL,
+  PLUGINS_REVEAL_CHANNEL,
+  PLUGINS_ROLLBACK_CHANNEL,
+  PLUGINS_SET_AUTO_UPDATE_CHANNEL,
+  PLUGINS_SET_ENABLED_CHANNEL,
+  PLUGINS_SET_PINNED_CHANNEL,
+  PLUGINS_UPDATE_CHANNEL,
+} from "../shared/plugins-config.js";
 import type {
   McpConfigDeleteRequest,
   McpConfigGetRequest,
@@ -89,6 +104,28 @@ import type {
   SubagentsSaveRequest,
   SubagentsSnapshot,
 } from "../shared/subagents-config.js";
+import type {
+  PluginInstallSourceRequest,
+  PluginsApproveMcpRequest,
+  PluginsChangedPayload,
+  PluginsCheckUpdatesRequest,
+  PluginsCheckUpdatesResult,
+  PluginsInstallCommitRequest,
+  PluginsInstallCommitResult,
+  PluginsInstallPrepareRequest,
+  PluginsInstallPrepareResult,
+  PluginsListRequest,
+  PluginsMutationResult,
+  PluginsRemoveRequest,
+  PluginsRevealRequest,
+  PluginsRevealResult,
+  PluginsRollbackRequest,
+  PluginsSetAutoUpdateRequest,
+  PluginsSetEnabledRequest,
+  PluginsSetPinnedRequest,
+  PluginsSnapshot,
+  PluginsUpdateRequest,
+} from "../shared/plugins-config.js";
 import {
   PROFILE_REVEAL_DIR_CHANNEL,
   PROFILE_STATS_CACHED_CHANNEL,
@@ -1036,6 +1073,48 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(SUBAGENTS_REVEAL_CHANNEL, req) as Promise<SubagentsRevealResult>,
     preview: (req: SubagentsPreviewRequest): Promise<SubagentsPreviewResult> =>
       ipcRenderer.invoke(SUBAGENTS_PREVIEW_CHANNEL, req) as Promise<SubagentsPreviewResult>,
+  },
+  // Taskana 4732 S1-C (design 4732 §6/§7): `plugins.*` — twelve thin invoke
+  // wrappers over the plugins management channels plus one push subscription.
+  // Main (S1-B, main/plugins-ipc.ts) owns zod validation, the store layout,
+  // the two-phase install token, and ALL path custody — the renderer never
+  // sends a filesystem path (file/folder sources are argument-less; main
+  // opens its own pickers) and every per-plugin action identifies by `name`.
+  // `onPluginsChanged` is the standard secure push pattern (never expose raw
+  // ipcRenderer.on): an unsubscribe-returning wrapper, same shape as
+  // `updates.onUpdateStatus`.
+  plugins: {
+    list: (req: PluginsListRequest = {}): Promise<PluginsSnapshot> =>
+      ipcRenderer.invoke(PLUGINS_LIST_CHANNEL, req) as Promise<PluginsSnapshot>,
+    checkUpdates: (req: PluginsCheckUpdatesRequest = {}): Promise<PluginsCheckUpdatesResult> =>
+      ipcRenderer.invoke(PLUGINS_CHECK_UPDATES_CHANNEL, req) as Promise<PluginsCheckUpdatesResult>,
+    installPrepare: (req: PluginsInstallPrepareRequest): Promise<PluginsInstallPrepareResult> =>
+      ipcRenderer.invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, req) as Promise<PluginsInstallPrepareResult>,
+    installCommit: (req: PluginsInstallCommitRequest): Promise<PluginsInstallCommitResult> =>
+      ipcRenderer.invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, req) as Promise<PluginsInstallCommitResult>,
+    update: (req: PluginsUpdateRequest): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_UPDATE_CHANNEL, req) as Promise<PluginsMutationResult>,
+    rollback: (req: PluginsRollbackRequest): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_ROLLBACK_CHANNEL, req) as Promise<PluginsMutationResult>,
+    setPinned: (req: PluginsSetPinnedRequest): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_SET_PINNED_CHANNEL, req) as Promise<PluginsMutationResult>,
+    setEnabled: (req: PluginsSetEnabledRequest): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_SET_ENABLED_CHANNEL, req) as Promise<PluginsMutationResult>,
+    remove: (req: PluginsRemoveRequest): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_REMOVE_CHANNEL, req) as Promise<PluginsMutationResult>,
+    approveMcp: (req: PluginsApproveMcpRequest): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_APPROVE_MCP_CHANNEL, req) as Promise<PluginsMutationResult>,
+    reveal: (req: PluginsRevealRequest): Promise<PluginsRevealResult> =>
+      ipcRenderer.invoke(PLUGINS_REVEAL_CHANNEL, req) as Promise<PluginsRevealResult>,
+    setAutoUpdate: (req: PluginsSetAutoUpdateRequest): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_SET_AUTO_UPDATE_CHANNEL, req) as Promise<PluginsMutationResult>,
+    onPluginsChanged: (callback: (payload: PluginsChangedPayload) => void): (() => void) => {
+      function listener(_event: unknown, payload: PluginsChangedPayload): void {
+        callback(payload);
+      }
+      ipcRenderer.on(PLUGINS_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(PLUGINS_CHANGED_CHANNEL, listener);
+    },
   },
   // P7.22/F19 W2 (design/slice-P7.22-cut.md §2-D5): `profile.*` — three thin
   // invoke wrappers over the Profile-stats channels (main owns zod validation

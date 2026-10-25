@@ -9,86 +9,21 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Plugin store, signed official index, updates and rollback (Taskana 4732,
-  stage 1 main). AnyCode can now install plugins from a signed official
-  channel: the index is ed25519-verified over its exact bytes (with
-  serial anti-rollback and expiry), artifacts are pinned by sha256+size,
-  and archives pass a hardened extraction (regular files only, contained
-  paths, size/entry caps, gzip-bomb refusal) before landing atomically in
-  `~/.anycode/plugins/.store/<name>/<version>`. Official plugins update in
-  the background on a ~24h jittered schedule — only when the capability
-  set did not grow (any new MCP server or hook needs your explicit OK) —
-  with one-click rollback+pin and boot-time cleanup of stale versions.
-  Existing hand-dropped plugin folders keep working unchanged and get a
-  one-time MCP consent carried over; a boot with no plugins is
-  byte-identical. Settings gain an optional `plugins` block
-  (`autoUpdateOfficial`, `mcpConsent`); the app passes its version into
-  plugin `engines` checks via `ANYCODE_APP_VERSION`. Packaging scripts for
-  the channel live in `scripts/plugins/` (`keygen`, `sign-index`,
-  `verify-index`); until production keys are minted the official channel
-  reports "not configured" in packaged builds and never auto-installs.
-- Plugin manifest v1 groundwork (Taskana 4732, stage 1 core): plugins can
-  declare `displayName`, `publisher`, `author`, `homepage`, `license`, an
-  `engines.anycode` compatibility range (a plugin needing a newer AnyCode
-  stays installed but inactive, with the reason visible), and a `workflows`
-  contribution — plugin workflow presets now sit between your own workflows
-  and the bundled ones. A managed plugin store (`state.json` under
-  `~/.anycode/plugins`) is discovered alongside hand-dropped plugin folders
-  with a tier order (project > official > third-party > local > legacy), and
-  plugin-declared MCP servers start only after you approve them, keyed by a
-  hash of the servers so any command change needs fresh approval. Existing
-  hand-dropped plugins and older manifests keep working unchanged; a boot
-  with no plugins is byte-identical.
-
-### Fixed
-
-- The "provider reported" model note on a subagent card now appears as soon as
-  the first response arrives, not only after the run ends, so a mismatched
-  model is visible during a long run.
-- Workflow steps that use an engine role (claude/codex) now follow the role's
-  fallback chain like Agent calls do: a cooling primary hands the step to the
-  next healthy entry, or to the parent's model, with a visible notice. Engine
-  roles in orchestrate mode also run in the background by default.
-
-### Security
-
-- A project folder's own process declarations no longer start on open: project
-  MCP servers, hooks, LSP servers and project-plugin MCP servers wait until you
-  trust the folder. The desktop app shows a dialog listing the commands (Trust,
-  Trust once, Don't trust); the CLI asks at startup. Non-interactive runs skip
-  them with a warning; `ANYCODE_TRUST_WORKSPACE=1` trusts one run only. Your
-  user-level config is unaffected. This is a behaviour change for existing
-  projects: each one asks once, and asks again if its commands change.
-
-## [0.0.36] — 2026-10-25
-
-### Added
-
-- Built-in `planner`, `executor` and `reviewer` roles for orchestration, each
-  with its own turn budget. A same-named profile in `.anycode/agents/` replaces
-  the built-in role, and a role claimed by such a profile ignores the `roles`
-  settings.
-- Orchestrate mode (`/orchestrate <task>`): the tab plans read-only and hands
-  work to background child sessions, whose reports arrive as new turns.
-  Children run in the permission mode you had before orchestrate (never plan).
-  Leaving plan mode, including an approved plan, turns orchestrate off.
-- `roles` settings: per role, an ordered fallback chain of engine, connection,
-  model and effort. Infrastructure failures (quota, auth, unreachable, unknown
-  model) put an entry on cooldown and the next healthy one is used; when the
-  whole chain is down, the child runs on the parent's model with a notice. A
-  cap on parallel role children (`roles.maxParallelChildren`, default 4) refuses
-  extra spawns instead of queueing them.
-- Adaptive turn budget, off by default: turn on `tools.adaptiveTurnBudget` in
-  Settings (or `ANYCODE_ADAPTIVE_TURN_BUDGET=1`). Subagents then get extra turns
-  while their work makes real progress, and the base subagent budget is learned
-  from finished tasks that were accepted (completed, or declared done at the
-  limit). Your explicit turn limits still win, and the learned value stays within
-  fixed bounds.
-- Optional permission classifier, off by default (`permissions.classifier`
-  in settings). It is consulted only on a Bash call that would otherwise ask
-  you, and it can only turn that ask into allow. Its first form runs an
-  external command that gets the command line on stdin. Any failure, timeout
-  or unclear answer still asks you, and every decision is journaled.
+- Plugin store and a Settings → Plugins pane (Taskana 4732, stage 1).
+  AnyCode can now install plugins from a signed official channel — the
+  index is ed25519-verified with serial anti-rollback and expiry, artifacts
+  are pinned by sha256+size, and archives pass hardened extraction before
+  landing atomically with one-click rollback+pin and boot-time cleanup.
+  The new pane manages them: two-phase install (staged preview listing the
+  MCP servers a plugin would start, then confirm with or without allowing
+  them), tier badges, per-plugin enable/pin/rollback/remove, the official
+  index's available list, and `/plugins` to open it. Plugin-declared MCP
+  servers appear as read-only rows with consent gates; plugin workflows and
+  `engines.anycode` compatibility ship in discovery. Existing hand-dropped
+  plugin folders keep working unchanged. Until production signing keys are
+  minted, the official channel reports "not configured" in packaged builds
+  and never auto-installs. See `docs/user/plugins.md` and the authoring
+  reference in `docs/development/plugins-authoring.md`.
 - User documentation in `docs/user/`: configuration files, engines, subagents,
   skills, MCP servers, permissions, proxy, orchestration and troubleshooting. The
   app ships a copy, and `docs/user/README.md` indexes it.

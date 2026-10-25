@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { McpServerStatus } from "@anycode/core";
-import type { McpConfigEntryView, McpImportCandidateView } from "../../../shared/mcp-config.js";
+import type { McpConfigEntryView, McpImportCandidateView, McpPluginServerView } from "../../../shared/mcp-config.js";
 import {
   blankMcpFormFields,
   buildEnvRecord,
@@ -41,6 +41,7 @@ import {
   sourceBadgeLabel,
   splitArgsText,
   toolsBadgeText,
+  McpPluginRowItem,
 } from "./McpServersPane.js";
 
 const SENTINEL_VALUE = "SENTINEL_MCP_SECRET_93F1_do_not_render";
@@ -542,5 +543,55 @@ describe("Global mode degradation (Taskana 4706)", () => {
       expect(row.dotKind).toBe("neutral");
       expect(row.detail).toBe("applies to newly started tasks");
     }
+  });
+});
+
+// ── Taskana 4732 S1-C: read-only plugin-contributed rows (design 4732 §6) ──
+
+/** Renders a plugin row's element tree to flat text+classes (direct-call idiom, no jsdom). */
+function pluginRowText(server: Partial<McpPluginServerView>): string {
+  const full: McpPluginServerView = {
+    name: "plugin_ozon-tools_api",
+    pluginName: "ozon-tools",
+    transport: "stdio",
+    commandLine: "node api.js",
+    consentGranted: false,
+    shadowed: false,
+    pluginRoot: "/home/u/.anycode/plugins/ozon-tools",
+    ...server,
+  };
+  const parts: string[] = [];
+  function visit(node: unknown): void {
+    if (Array.isArray(node)) { for (const c of node) visit(c); return; }
+    if (typeof node === "string") { parts.push(node); return; }
+    if (typeof node !== "object" || node === null) return;
+    const el = node as { type: unknown; props: Record<string, unknown> };
+    if (!("props" in el)) return;
+    if (typeof el.props.className === "string") parts.push(el.props.className);
+    if (typeof el.type === "function") { visit((el.type as (p: unknown) => unknown)(el.props)); return; }
+    visit(el.props.children);
+  }
+  visit(McpPluginRowItem({ server: full }));
+  return parts.join(" ");
+}
+
+describe("McpPluginRowItem (read-only plugin row, Taskana 4732 S1-C)", () => {
+  it("renders the runtime name, plugin badge, and command line — with NO toggle/edit/delete controls", () => {
+    const text = pluginRowText({});
+    expect(text).toContain("plugin_ozon-tools_api");
+    expect(text.replace(/  +/g, " ")).toContain("plugin: ozon-tools");
+    expect(text).toContain("node api.js");
+    expect(text).not.toContain("mcp-row-controls");
+  });
+
+  it("points an unconsented server at the Plugins pane", () => {
+    expect(pluginRowText({})).toContain("Needs approval");
+    expect(pluginRowText({})).toContain("approve in Plugins");
+    expect(pluginRowText({ consentGranted: true })).not.toContain("Needs approval");
+  });
+
+  it("badges a shadowed row when config overrides it", () => {
+    expect(pluginRowText({ shadowed: true })).toContain("overridden by your config");
+    expect(pluginRowText({})).not.toContain("overridden by your config");
   });
 });

@@ -2927,3 +2927,69 @@
 /* Taskana 4706: explicit global-vs-project scope bar for Skills/MCP/Subagents panes. */
 .settings-scope-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .settings-scope-bar .settings-field-select { max-width: 260px; }
+
+/* ── Taskana 4732 S1-C: Plugins pane + install sheet (design 4732 §6) ── */
+
+.plugins-pane-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.plugins-index-status { font-size: var(--fs-xs); color: var(--text-3); }
+.plugins-index-ok       { color: var(--success); }
+.plugins-index-warn     { color: var(--warning); }
+.plugins-index-muted    { color: var(--text-dim); }
+
+.plugins-auto-update { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+
+.plugins-tier-official    { color: var(--success); }
+.plugins-tier-third-party { color: var(--warning); }
+.plugins-tier-local       { color: var(--text-2); }
+.plugins-tier-project     { color: var(--accent); }
+.plugins-tier-legacy      { color: var(--text-dim); }
+
+.plugins-row-disabled .mcp-row-name { color: var(--text-dim); }
+.plugins-chip-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.plugins-problem { color: var(--warning); }
+.plugins-install-hint { font-size: var(--fs-xs); color: var(--text-dim); }
+
+.plugins-install-menu { display: flex; flex-direction: column; gap: 8px; }
+.plugins-install-option { text-align: left; }
+.plugins-url-row { display: flex; gap: 8px; align-items: center; }
+
+.plugins-confirm-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.plugins-confirm-row { display: flex; gap: 10px; margin: 4px 0; font-size: var(--fs-sm); }
+.plugins-confirm-row .settings-field-label { min-width: 8.5rem; }
+
+.plugins-mcp-consent {
+  border: 1px solid var(--warning);
+  border-radius: var(--r-md);
+  padding: 8px 10px;
+  margin: 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.plugins-mcp-server-row { display: flex; flex-direction: column; gap: 2px; }
+.plugins-mcp-server-row .settings-mcp-name { color: var(--warning); }
+
+.plugins-install-error { display: flex; align-items: center; gap: 8px; color: var(--warning); }
+
+/* The "Manage in Plugins" link on Skills/Subagents plugin-group headers. */
+.plugins-manage-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.plugins-manage-link:hover { opacity: 0.8; }
+
+/* Taskana 4732 S1-C: plugin MCP rows in the MCP pane (read-only, consent-gated). */
+.mcp-row-plugin .mcp-row-name { color: var(--text-2); }
+.plugins-mcp-approve { color: var(--warning); }

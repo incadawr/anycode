@@ -155,6 +155,28 @@ import type {
   SubagentsSnapshot,
 } from "../../shared/subagents-config";
 import type {
+  PluginInstallSourceRequest,
+  PluginsApproveMcpRequest,
+  PluginsChangedPayload,
+  PluginsCheckUpdatesRequest,
+  PluginsCheckUpdatesResult,
+  PluginsInstallCommitRequest,
+  PluginsInstallCommitResult,
+  PluginsInstallPrepareRequest,
+  PluginsInstallPrepareResult,
+  PluginsListRequest,
+  PluginsMutationResult,
+  PluginsRemoveRequest,
+  PluginsRevealRequest,
+  PluginsRevealResult,
+  PluginsRollbackRequest,
+  PluginsSetAutoUpdateRequest,
+  PluginsSetEnabledRequest,
+  PluginsSetPinnedRequest,
+  PluginsSnapshot,
+  PluginsUpdateRequest,
+} from "../../shared/plugins-config";
+import type {
   ProfileRevealDirResult,
   ProfileStatsCachedResult,
   ProfileStatsResult,
@@ -573,6 +595,30 @@ declare global {
         delete(req: SubagentsDeleteRequest): Promise<SubagentsMutationResult>;
         reveal(req: SubagentsRevealRequest): Promise<SubagentsRevealResult>;
         preview(req: SubagentsPreviewRequest): Promise<SubagentsPreviewResult>;
+      };
+      // Taskana 4732 S1-C (design 4732 §6/§7): plugins management invoke-API.
+      // `list` returns the joined installed/available view; install is
+      // two-phase (prepare returns a single-use token + consent preview,
+      // commit applies it, optionally allowing MCP servers). A filesystem
+      // PATH never crosses in a request — file/folder sources take no
+      // argument (main opens its own picker) and every per-plugin action
+      // identifies by `name` alone (path custody, design §4).
+      // `onPluginsChanged` returns an unsubscribe, same shape as
+      // `updates.onUpdateStatus`.
+      plugins: {
+        list(req?: PluginsListRequest): Promise<PluginsSnapshot>;
+        checkUpdates(req?: PluginsCheckUpdatesRequest): Promise<PluginsCheckUpdatesResult>;
+        installPrepare(req: PluginsInstallPrepareRequest): Promise<PluginsInstallPrepareResult>;
+        installCommit(req: PluginsInstallCommitRequest): Promise<PluginsInstallCommitResult>;
+        update(req: PluginsUpdateRequest): Promise<PluginsMutationResult>;
+        rollback(req: PluginsRollbackRequest): Promise<PluginsMutationResult>;
+        setPinned(req: PluginsSetPinnedRequest): Promise<PluginsMutationResult>;
+        setEnabled(req: PluginsSetEnabledRequest): Promise<PluginsMutationResult>;
+        remove(req: PluginsRemoveRequest): Promise<PluginsMutationResult>;
+        approveMcp(req: PluginsApproveMcpRequest): Promise<PluginsMutationResult>;
+        reveal(req: PluginsRevealRequest): Promise<PluginsRevealResult>;
+        setAutoUpdate(req: PluginsSetAutoUpdateRequest): Promise<PluginsMutationResult>;
+        onPluginsChanged(callback: (payload: PluginsChangedPayload) => void): () => void;
       };
       // P7.22/F19 (design/slice-P7.22-cut.md §2-D5 W2-W3): Profile-stats
       // invoke-API. `getStats`/`revealDir` take no argument at all — main
