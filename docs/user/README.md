@@ -35,6 +35,8 @@ developer-facing material (building, automation, release policy) see
   and the token and folder rules.
 - [Plugins](plugins.md): what plugins are, where they live, the trust tiers,
   two-phase install, MCP-server consent, updates, rollback and pinning.
+- [Remote control from a chat app](remote-control.md): the example plugin that lets you
+  reach your shared sessions from a private Telegram chat.
 - [Troubleshooting](troubleshooting.md): checklists for a missing MCP server,
   orchestration roles, and a missing skill, and where problems are shown.
 

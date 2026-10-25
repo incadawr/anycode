@@ -19,6 +19,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Plugin services can read secrets from Settings → MCP → Secrets with
   `${secret:NAME}` in their `env`. A service whose secret is not set does not
   start and shows the missing name.
+- Telegram remote-control example plugin (`examples/telegram-remote`): reach your
+  shared sessions from a private Telegram chat. Only an allowlisted user reaches
+  a session; tokens are never sent or logged. See `docs/user/remote-control.md`.
 - Settings → Sessions API: enable the local MCP for external agents without
   environment variables, choose allowed folders, share sessions one tab at a
   time, copy the Claude Code / Codex config, and regenerate the token. The
