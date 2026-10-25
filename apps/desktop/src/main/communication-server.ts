@@ -390,6 +390,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       case "create_session": {
         const input = parseOr(createSessionSchema, raw, "create_session expects workspace (absolute path); optional: engine (core|codex|claude), model, handle, firstMessage (1..32000 chars)");
         if (!options.createSessionByAgent) throw createRefusal("not_allowed");
+        const createByAgent = options.createSessionByAgent;
         if (!isAbsolute(input.workspace)) throw createRefusal("folder_not_found");
         let resolved: string;
         try { resolved = await realpath(input.workspace); } catch { throw createRefusal("folder_not_found"); }
@@ -401,7 +402,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           if (aliveAgentOpened() >= MAX_AGENT_OPENED_TABS) throw createRefusal("too_many");
           let created: CreateSessionOutcome;
           try {
-            created = await options.createSessionByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
+            created = await createByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
           } catch { throw createRefusal("not_ready"); }
           if (!created.ok) throw createRefusal(created.reason);
           // Taskana 4808 (review F2): only a successful creation consumes the rate budget — refused
