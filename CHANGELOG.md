@@ -43,6 +43,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   files in an inbox folder into messages for a handle and writes the answers to an
   outbox folder. The author guide is `docs/development/channel-plugins.md`.
 
+### Fixed
+
+- Opening Settings → Language servers no longer blanks the whole window; a pane that fails to render now shows an inline error instead of taking down the app.
+
 ## [0.0.38] — 2026-10-25
 
 ### Added

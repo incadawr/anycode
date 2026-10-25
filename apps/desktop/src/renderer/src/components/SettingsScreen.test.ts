@@ -25,6 +25,7 @@ import type { WireRepoMapStatus } from "../../../shared/protocol.js";
 import type { SettingsStoreApi } from "../settings-store.js";
 import { SETTINGS_ADD_CONNECTION_EVENT } from "../slash-menu.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
+import { SettingsPaneBoundary } from "./SettingsPaneBoundary.js";
 import {
   applyAddConnectionRequest,
   buildCustomProviderCreateRequest,
@@ -1042,7 +1043,8 @@ function walk(node: unknown, visit: (element: AnyElement) => void): void {
     return;
   }
   visit(node);
-  if (node.type === Fragment || typeof node.type === "string") {
+  // SettingsPaneBoundary is a transparent error boundary around the pane body.
+  if (node.type === Fragment || typeof node.type === "string" || node.type === SettingsPaneBoundary) {
     walk(node.props.children, visit);
   }
 }
