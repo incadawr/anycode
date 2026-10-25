@@ -63,6 +63,33 @@ export async function runSelfCheck(win: CheckWindow, root: string): Promise<void
   // The preload must be packaged too; exercise real settings IPC and migration.
   const snapshot = await evaluate("window.anycode.settings.get()");
   if (!(snapshot && typeof snapshot === "object" && JSON.stringify(snapshot).includes('"connections":[]'))) throw new Error("Settings IPC did not return the isolated empty provider profile");
+  await checkSettingsPanes(evaluate, (ms) => new Promise(resolve => setTimeout(resolve, ms)));
+}
+
+/** Panes the rail must at least offer; a shorter list means the rail itself broke. */
+export const SELF_CHECK_MIN_SETTINGS_PANES = 10;
+
+/**
+ * Opens every Settings pane in turn. Each must render its tabpanel without
+ * the pane error fallback, keep the Settings dialog open (a render crash
+ * blanked the window in v0.0.38) and leave no second open modal that makes
+ * the window inert (Roles in v0.0.39). Then "Back to app" must close Settings.
+ */
+export async function checkSettingsPanes(evaluate: (expression: string) => Promise<unknown>, sleep: (ms: number) => Promise<void>): Promise<void> {
+  const ids = await evaluate("[...document.querySelectorAll('.settings-dialog [role=tab][id^=\"settings-tab-\"]')].map(b => b.id.slice(13))");
+  if (!Array.isArray(ids) || ids.length < SELF_CHECK_MIN_SETTINGS_PANES) throw new Error("Settings rail lists too few panes");
+  for (const id of ids as string[]) {
+    await evaluate(`document.getElementById(${JSON.stringify(`settings-tab-${id}`)}).click()`);
+    await sleep(300);
+    const state = await evaluate(`({ open: !!document.querySelector('.settings-dialog')?.open, panel: !!document.getElementById(${JSON.stringify(`settings-pane-${id}`)}), failed: !!document.querySelector('[data-settings-pane-error]'), extraModal: [...document.querySelectorAll('dialog[open]')].some(d => !d.classList.contains('settings-dialog')) })`) as { open?: boolean; panel?: boolean; failed?: boolean; extraModal?: boolean } | null;
+    if (!state?.open) throw new Error(`Settings pane "${id}" took the Settings window down`);
+    if (!state.panel) throw new Error(`Settings pane "${id}" did not render`);
+    if (state.failed) throw new Error(`Settings pane "${id}" failed to render`);
+    if (state.extraModal) throw new Error(`Settings pane "${id}" left a modal open over the window`);
+  }
+  await evaluate("[...document.querySelectorAll('button')].find(b => b.textContent.trim().endsWith('Back to app')).click()");
+  await sleep(300);
+  if (await evaluate("!!document.querySelector('.settings-dialog')?.open")) throw new Error("Back to app did not close Settings");
 }
 
 
