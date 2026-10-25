@@ -347,6 +347,16 @@ function projectDynamicToolCall(
   createdAt: number,
   agentPresentations?: ReadonlyMap<string, ToolResultPresentation>,
 ): HistoryItem[] {
+  // 4764 review F7: the anycode_browser_* tools ride the same dynamicToolCall
+  // item type (dynamic-tool-bridge.ts). Project them like the agent tool, minus
+  // the presentation machinery: canonical tool name straight from the item's
+  // own `tool` string, args as-is, inputText joined, an image output as an
+  // honest placeholder (the base64 never enters the transcript). Without this,
+  // EVERY resumed Codex transcript degraded its browser calls to the
+  // "[not represented]" stub — the live transcript showed a proper card.
+  if (typeof item.tool === "string" && item.tool.startsWith("anycode_browser_")) {
+    return projectBrowserDynamicToolCall(turnId, item, createdAt);
+  }
   if (item.tool !== "anycode_agent") return [projectFallback(turnId, item, createdAt)];
 
   const inputRecord = record(item.arguments);
@@ -393,6 +403,29 @@ function projectDynamicToolCall(
   if (modelText.length === 0 && status !== "success") modelText = "AnyCode agent call returned no retained text output.";
 
   return toolPair(`${turnId}:${item.id}`, createdAt, item.id, "Agent", input, status, modelText, presentation);
+}
+
+/**
+ * 4764 review F7: the browser twin of the agent projection above. The wire
+ * name IS the discriminator ("anycode_browser_click" etc. — the frozen §2.2
+ * table in browser-bridge.ts), so the canonical transcript name is derived by
+ * slicing the prefix; an unknown suffix would mean a drifted table, and the
+ * pair still renders honestly under whatever name the item carried.
+ */
+function projectBrowserDynamicToolCall(turnId: string, item: CodexThreadReadItem, createdAt: number): HistoryItem[] {
+  const wireName = item.tool as string;
+  const canonical = `Browser${wireName.slice("anycode_browser_".length).replace(/(^|_)([a-z])/g, (_m, p1: string, p2: string) => (p1 === "_" ? p2.toUpperCase() : p2.toUpperCase()))}`;
+  const input = record(item.arguments) ?? {};
+  const outputs = Array.isArray(item.contentItems) ? item.contentItems : [];
+  const text = outputs.map((output) => {
+    const value = record(output);
+    if (value === null) return "";
+    if (value.type === "inputText" && typeof value.text === "string") return value.text;
+    if (value.type === "inputImage") return "[image omitted]";
+    return "";
+  }).filter(Boolean).join("");
+  const status: ToolCallStatus = item.status === "inProgress" ? "cancelled" : item.success === true ? "success" : "error";
+  return toolPair(`${turnId}:${item.id}`, createdAt, item.id, canonical, input, status, text);
 }
 
 function textBlock(turnId: string, item: CodexThreadReadItem, createdAt: number, text: string): HistoryItem {

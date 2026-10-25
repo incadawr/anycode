@@ -807,20 +807,66 @@ describe("projectCodexHistory — native command persistence in Codex 0.160", ()
 });
 
 
-// Taskana 4764 X14: a persisted anycode_browser_* dynamicToolCall item uses
-// the existing fallback text (no history-projection change).
+// Taskana 4764 review F17/F7: a persisted anycode_browser_* dynamicToolCall
+// item projects as a canonical-named tool_call/tool_result pair (name, args,
+// result text; image outputs become a text placeholder).
 describe("Codex history projection — Taskana 4764 browser items", () => {
-  it("X14: an anycode_browser_click item projects via the existing fallback path, not agent projection", () => {
+  it("X14: an anycode_browser_click item projects as a BrowserClick tool pair, not the fallback stub", () => {
     const read: CodexThreadRead = {
       thread: { id: "t", turns: [{ id: "turn-a", startedAt: 0, items: [
-        { type: "dynamicToolCall", id: "b1", callId: "bc-1", tool: "anycode_browser_click", status: "completed" } as never,
+        {
+          type: "dynamicToolCall", id: "b1", callId: "bc-1", tool: "anycode_browser_click",
+          status: "completed", success: true,
+          arguments: { ref: "e12" },
+          contentItems: [{ type: "inputText", text: "Clicked e12" }],
+        } as never,
       ] }] },
     };
     const projected = projectCodexHistory(read, [], { maxItems: 10 });
-    // The fallback yields at least one history item for the unknown tool; it
-    // is NEVER projected as an agent (anycode_agent) card.
-    expect(projected.length).toBeGreaterThanOrEqual(1);
+    const call = projected.find((item) => item.id === "turn-a:b1:call")?.message;
+    expect(call).toMatchObject({
+      role: "assistant",
+      content: [{ type: "tool_call", toolCallId: "b1", toolName: "BrowserClick", input: { ref: "e12" } }],
+    });
+    const result = projected.find((item) => item.id === "turn-a:b1:result")?.message;
+    expect(result).toMatchObject({
+      role: "tool",
+      content: [{ type: "tool_result", toolCallId: "b1", toolName: "BrowserClick", text: "Clicked e12", status: "success" }],
+    });
+    // Never projected as an agent card, never the "[not represented]" stub.
     const text = JSON.stringify(projected);
     expect(text).not.toContain("anycode_agent");
+    expect(text).not.toContain("not represented");
+  });
+
+  it("X14b: a failed browser item with an image output projects error status with an image placeholder", () => {
+    const read: CodexThreadRead = {
+      thread: { id: "t", turns: [{ id: "turn-a", startedAt: 0, items: [
+        {
+          type: "dynamicToolCall", id: "b2", tool: "anycode_browser_screenshot",
+          status: "completed", success: false,
+          arguments: {},
+          contentItems: [{ type: "inputImage", imageUrl: "data:image/png;base64,ZG9lc25vdG1hdHRlcg==" }],
+        } as never,
+      ] }] },
+    };
+    const projected = projectCodexHistory(read, [], { maxItems: 10 });
+    const result = projected.find((item) => item.id === "turn-a:b2:result")?.message as
+      { content: Array<{ type: string; toolName?: string; text?: string; status?: string }> } | undefined;
+    expect(result?.content[0]).toMatchObject({ toolName: "BrowserScreenshot", status: "error" });
+    expect(result?.content[0]?.text).toContain("[image omitted]");
+    // The base64 payload itself never enters the transcript.
+    expect(JSON.stringify(projected)).not.toContain("ZG9lc25vdG1hdHRlcg");
+  });
+
+  it("X14c: an unknown dynamic tool still uses the graceful fallback path", () => {
+    const read: CodexThreadRead = {
+      thread: { id: "t", turns: [{ id: "turn-a", startedAt: 0, items: [
+        { type: "dynamicToolCall", id: "other", tool: "some_future_tool", status: "completed", success: true, arguments: {}, contentItems: [] },
+      ] }] },
+    };
+    const projected = projectCodexHistory(read, [], { maxItems: 10 });
+    expect(projected).toHaveLength(1);
+    expect(projected[0]?.message).toEqual({ role: "assistant", content: [{ type: "text", text: "[Codex dynamicToolCall item — not represented in AnyCode's transcript format]" }] });
   });
 });

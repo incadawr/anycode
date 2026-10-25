@@ -2765,7 +2765,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
   const completed = { status: "completed" as const, finalText: "done", turns: 1, toolCalls: 0, truncated: false, durationMs: 1,
     childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call-1" };
 
-  it("advertises experimental tools only at creation and retains the native resume ref", async () => {
+  it("advertises experimental tools at creation AND resume, retains the native resume ref", async () => {
     const bridge = new CodexDynamicToolBridge(catalog, { run: vi.fn().mockResolvedValue(completed), send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) });
     const server = new FakeAppServer();
     await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, bridge);
@@ -2773,7 +2773,13 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     expect(server.threadStartParams).toMatchObject({ dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL })] });
     server.calls.length = 0;
     await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, undefined, bridge);
-    expect(server.calls.find((c) => c.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
+    // 4764 review F17: the resume carries the same declarations thread/start
+    // did — the fresh app-server has no memory of the previous launch's tools.
+    expect(server.calls.find((c) => c.method === "thread/resume")?.params).toMatchObject({
+      threadId: "persisted-thread",
+      cwd: "/work",
+      dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL })],
+    });
   });
 
   it("streams child events during a parked native turn and isolates trailing events on reuse", async () => {
