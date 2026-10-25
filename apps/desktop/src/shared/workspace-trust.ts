@@ -9,8 +9,12 @@
 
 import { z } from "zod";
 
-/** Renderer -> main invoke channel for the trust answer. */
-export const WORKSPACE_TRUST_DECIDE_CHANNEL = "anycode:workspace-trust-decide";
+export {
+  WORKSPACE_TRUST_DECIDE_CHANNEL,
+  WORKSPACE_TRUST_FORGET_CHANNEL,
+  WORKSPACE_TRUST_LIST_CHANNEL,
+} from "./workspace-trust-channels.js";
+
 
 /** Env var the host reads for an in-process "trust once" approval (set by main at fork). */
 export const WORKSPACE_TRUST_ONCE_ENV = "ANYCODE_WORKSPACE_TRUST_ONCE";
@@ -49,11 +53,7 @@ export type WorkspaceTrustDecideResult =
 // main's list — never a decision, hash, tab id, or arbitrary path. The key is
 // an opaque lookup handle for main; it is never resolved or used as a path.
 
-/** Renderer -> main invoke channel for listing remembered trust decisions. */
-export const WORKSPACE_TRUST_LIST_CHANNEL = "anycode:workspace-trust-list";
 
-/** Renderer -> main invoke channel for forgetting ONE remembered decision. */
-export const WORKSPACE_TRUST_FORGET_CHANNEL = "anycode:workspace-trust-forget";
 
 export const workspaceTrustForgetSchema = z
   .object({
