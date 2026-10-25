@@ -107,5 +107,6 @@ writes or runs a shell command runs, whatever the rules say. For more causes, se
 
 `BrowserNavigate`, `BrowserClick` and `BrowserType` ask for approval when they
 reach a non-localhost origin (a remote url, or a click or type the agent marks
-`remote: true`). Snapshot and wait calls, and anything on a localhost page or a
-local file, do not prompt. See [browser.md](browser.md).
+`remote: true`). `BrowserEval` always asks. Snapshot, wait and console calls,
+and anything on a localhost page or a local file, do not prompt. See
+[browser.md](browser.md).

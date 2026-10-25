@@ -15,6 +15,8 @@ tabs do not get these tools.
 | `BrowserClick` | clicks an element by `ref` (preferred) or CSS `selector` | `remote: true` asks first |
 | `BrowserType` | types text into an input, textarea or contenteditable | `remote: true` asks first |
 | `BrowserWaitFor` | waits until some text or a selector appears (or, with `gone`, disappears) | none |
+| `BrowserConsole` | returns the page's recent console output and uncaught errors (default 50 lines) | none |
+| `BrowserEval` | runs a JavaScript expression in the page and returns its value | always asks |
 
 The existing `BrowserOpen`, `BrowserRead` and `BrowserScreenshot` tools are
 unchanged.
@@ -66,6 +68,9 @@ takes a new snapshot.
 - A non-localhost origin: `BrowserNavigate` to it asks first. Clicking or
   typing on a page from that origin asks again (`remote: true`). If you decline,
   the agent does not retry around the refusal.
+- `BrowserEval` always asks, on every origin. It cannot read cookies, storage,
+  or credentials: those words are refused before the script runs, and the
+  driver never uses the browser's network or storage inspection APIs.
 - Modes `auto` and `yolo` do not escalate approvals, so a `remote: true` call
   runs without a prompt there. This matches how `BrowserOpen` already treats
   remote URLs.

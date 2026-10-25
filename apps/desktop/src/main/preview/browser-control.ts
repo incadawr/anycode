@@ -14,6 +14,7 @@
 
 import type { PreviewCdpLike } from "./preview-host.js";
 import type {
+  PreviewConsoleEntry,
   PreviewControlRequest,
   PreviewControlSuccess,
   PreviewControlTarget,
@@ -40,6 +41,17 @@ const WAIT_POLL_MS = 250;
 const WAIT_DEFAULT_MS = 5_000;
 const WAIT_MAX_MS = 30_000;
 const SELECTOR_MAX_CHARS = 500;
+const CONSOLE_DEFAULT_TAIL = 50;
+const CONSOLE_MAX_TAIL = 200;
+const EVAL_MAX_EXPRESSION_CHARS = 10_000;
+const EVAL_MAX_RESULT_CHARS = 20_000;
+const EVAL_TIMEOUT_MS = 5_000;
+/**
+ * Best-effort defence in depth (case-insensitive substring, checked before anything is
+ * sent). The real boundary: the preview partition is non-persistent and holds only what
+ * the page itself loaded, and the driver never enables Network/Storage CDP domains.
+ */
+const EVAL_BLOCKLIST = ["document.cookie", "localStorage", "sessionStorage", "indexedDB", "cookieStore", "navigator.credentials"];
 
 /** Roles that become a snapshot line (everything else is dropped; its children are still walked). */
 const KEPT_ROLES = new Set([
@@ -93,6 +105,10 @@ export interface BrowserControlContext {
   navigationHistory(): { entries: Array<{ url: string; title: string }>; index: number };
   /** Same policy as the main-frame navigation gate (history targets must pass it). */
   isNavigationAllowed(url: string): Promise<boolean>;
+  /** The record's console ring (already capped per message) and its drop counter. */
+  console(): { entries: PreviewConsoleEntry[]; dropped: number };
+  /** Live "Full browser access": allows typing into password fields (never reads their values). */
+  fullAccess?(): boolean;
   signal: AbortSignal;
 }
 
@@ -265,7 +281,82 @@ export class BrowserController {
         return this.waitFor(request, ctx);
       case "navigate":
         return this.navigateHistory(request.to, ctx);
+      case "console":
+        return this.consoleTail(request, ctx);
+      case "eval":
+        return this.evaluate(request.expression, ctx);
     }
+  }
+
+  // ── console ──
+
+  private consoleTail(
+    request: Extract<PreviewControlRequest, { action: "console" }>,
+    ctx: BrowserControlContext,
+  ): ControlResult {
+    const tail = Math.min(Math.max(request.tail ?? CONSOLE_DEFAULT_TAIL, 1), CONSOLE_MAX_TAIL);
+    const { entries, dropped } = ctx.console();
+    const levels = request.levels;
+    const selected = (levels !== undefined ? entries.filter((entry) => levels.includes(entry.level)) : entries).slice(-tail);
+    let text =
+      selected.length === 0
+        ? "(no console output)"
+        : selected.map((entry) => `[${entry.level}] ${entry.at.slice(11, 19)} ${entry.message}`).join("\n");
+    if (dropped > 0) {
+      text += `\n(${dropped} earlier console ${dropped === 1 ? "entry" : "entries"} dropped)`;
+    }
+    return this.ok(ctx, text, false);
+  }
+
+  // ── eval ──
+
+  /**
+   * Runs a page-side expression. Approval is enforced by checkInteractionPolicy
+   * before this runs; the blocklist is checked here before anything is sent.
+   * A thrown page error is an answer (`error: ...`), not a tool failure.
+   */
+  private async evaluate(expression: string, ctx: BrowserControlContext): Promise<ControlResult> {
+    if (expression.length > EVAL_MAX_EXPRESSION_CHARS) {
+      return failure("invalid_input", `expression is longer than ${EVAL_MAX_EXPRESSION_CHARS} characters`);
+    }
+    const lowered = expression.toLowerCase();
+    if (EVAL_BLOCKLIST.some((token) => lowered.includes(token.toLowerCase()))) {
+      return failure("not_allowed", "reading cookies/storage/credentials is not permitted");
+    }
+    const enableError = await this.ensureDomains(ctx);
+    if (enableError) {
+      return enableError;
+    }
+    let response: { result?: { value?: unknown }; exceptionDetails?: { exception?: { description?: string }; text?: string } };
+    try {
+      response = (await ctx.cdp.send("Runtime.evaluate", {
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+        userGesture: false,
+        timeout: EVAL_TIMEOUT_MS,
+      })) as typeof response;
+    } catch (error) {
+      if (/timed out/i.test(cdpMessage(error))) {
+        return failure("timeout", "the script did not finish in time");
+      }
+      return failure("unavailable", `eval failed: ${cdpMessage(error)}`);
+    }
+    if (response.exceptionDetails !== undefined) {
+      const described = response.exceptionDetails.exception?.description ?? response.exceptionDetails.text ?? "error";
+      return this.ok(ctx, `error: ${clip(described, 2_000)}`, false);
+    }
+    const value = response.result?.value;
+    let rendered: string;
+    try {
+      rendered = value === undefined ? "undefined" : (JSON.stringify(value) ?? String(value));
+    } catch {
+      rendered = String(value);
+    }
+    if (rendered.length > EVAL_MAX_RESULT_CHARS) {
+      rendered = `${rendered.slice(0, EVAL_MAX_RESULT_CHARS)}\n... (result truncated)`;
+    }
+    return this.ok(ctx, rendered, false);
   }
 
   // ── domains ──
@@ -674,7 +765,7 @@ export class BrowserController {
       return failure("unavailable", `type failed: ${cdpMessage(error)}`);
     }
 
-    if (info.type === "password") {
+    if (info.type === "password" && ctx.fullAccess?.() !== true) {
       return failure("not_allowed", "typing into password fields is not permitted");
     }
     if (info.type === "file") {
