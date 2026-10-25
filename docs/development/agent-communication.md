@@ -76,7 +76,9 @@ A supervisor can perform this sequence:
    Codex turn. `kind` can be `agent_message` or `task_result`; optional
    `correlationId` and `replyTo` link work and replies.
 4. Retain the returned `envelope.messageId`; use `get_message_status` to read
-   delivery. Call `get_session_result` with `sessionId` to retrieve the latest
+   delivery. Call `wait_for_result` with `sessionId` and `messageId` (or a
+   `correlationId`) to long-poll until the turn that took the message finishes.
+   Call `get_session_result` with `sessionId` to retrieve the latest
    public assistant answer and terminal/turn identity. The receiving GUI also
    shows the message card and response. This API exports neither private
    reasoning nor the session transcript.

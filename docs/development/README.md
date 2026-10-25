@@ -19,6 +19,9 @@ It intentionally differs from local `working-docs/`:
   developer/diagnostic override.
 - [Agent communication](agent-communication.md) — opt-in production MCP, scoped
   session messages and native Codex steering (unreleased).
+- [Channel plugins](channel-plugins.md) — author guide for plugin services that
+  bridge an outside channel to Sessions API sessions, with the
+  [channel-echo example](../../examples/channel-echo/).
 - [Release policy](release.md) — versioning, alpha/beta stages, and the changelog.
 - [Authoring plugins](plugins-authoring.md) — the plugin manifest v1 spec, the
   official index format, and the Ed25519 signing runbook.

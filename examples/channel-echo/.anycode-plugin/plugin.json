@@ -1,0 +1,13 @@
+{
+  "manifestVersion": 1,
+  "name": "channel-echo",
+  "version": "0.1.0",
+  "displayName": "Channel echo (example)",
+  "description": "Example channel: *.txt files in an inbox folder wake the session with that handle; the answer lands in the outbox folder.",
+  "skills": [],
+  "agents": [],
+  "workflows": [],
+  "services": [
+    { "name": "bridge", "command": "node", "args": ["./service.mjs"] }
+  ]
+}

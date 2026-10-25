@@ -108,6 +108,8 @@ same rules as MCP servers:
   to enable it in **Settings → Sessions API**. Each service gets the path to the
   discovery file in `ANYCODE_SESSIONS_DISCOVERY`, only while the Sessions API
   runs. The token is never placed in its environment, arguments or log.
+- To write a service that bridges an outside channel, see the
+  [channel plugin guide](../development/channel-plugins.md).
 
 ## Updates, rollback, pin
 

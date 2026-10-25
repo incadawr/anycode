@@ -16,6 +16,7 @@ export const COMMUNICATION_REGENERATE_TOKEN_CHANNEL = "anycode:communication-reg
 export const COMMUNICATION_COPY_CONFIG_CHANNEL = "anycode:communication-copy-config";
 export const COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL = "anycode:communication-set-default-access";
 export const COMMUNICATION_SET_SESSION_ACCESS_CHANNEL = "anycode:communication-set-session-access";
+export const COMMUNICATION_SET_SESSION_HANDLE_CHANNEL = "anycode:communication-set-session-handle";
 
 /** Hard cap on the optional outer folder boundary. */
 export const COMMUNICATION_MAX_WORKSPACES = 20;
@@ -33,14 +34,14 @@ export interface CommunicationStatus {
   detail?: "port in use" | "folder not found" | "could not start" | "host not ready";
 }
 
-/** The Settings → Sessions API view. `tabs` lists root tabs by tabId only (no session ids, no paths). */
+/** The Settings → Sessions API view. `tabs` lists root tabs by tabId only (no session ids, no paths); `handle` appears only when one is set. */
 export interface CommunicationView {
   enabled: boolean;
   workspaces: string[];
   port: number | null;
   defaultSessionAccess: "off" | "on";
   status: CommunicationStatus;
-  tabs: Array<{ tabId: string; enabled: boolean }>;
+  tabs: Array<{ tabId: string; enabled: boolean; handle?: string }>;
 }
 
 export type CommunicationMutationReason =
@@ -58,6 +59,8 @@ export type CommunicationMutationReason =
 export type CommunicationGetResult = { ok: true; view: CommunicationView; envControlled: boolean } | { ok: false; reason: "invalid" };
 export type CommunicationMutationResult = { ok: true; view: CommunicationView } | { ok: false; reason: CommunicationMutationReason };
 export type CommunicationRegenerateResult = { ok: true; view: CommunicationView } | { ok: false; reason: CommunicationMutationReason };
+/** Session handle write (EnvironmentMenu). `unknown_tab` = no live tab with that id. */
+export type CommunicationHandleResult = { ok: true; view: CommunicationView } | { ok: false; reason: "invalid" | "duplicate" | "unknown_tab" | "io_error" };
 
 /** The copy-config clients. `generic` is the bare mcpServers JSON. */
 export type CommunicationCopyClient = "claude-code" | "codex" | "generic";
