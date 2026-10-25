@@ -419,6 +419,107 @@ export function maxOutputPresetSelection(raw: string): string {
   return MAX_OUTPUT_TOKEN_PRESETS.find((preset) => preset.value === trimmed)?.id ?? "custom";
 }
 
+/**
+ * Display labels for the Max output tokens segmented control. The preset
+ * `label` values above stay as they are (tests and the automation contract pin
+ * them); the control shows the compact forms and `custom` has no preset entry.
+ */
+export const MAX_OUTPUT_SEGMENT_LABEL: Record<string, string> = {
+  default: "Default",
+  "8192": "8K",
+  "16384": "16K",
+  "32768": "32K",
+  custom: "Custom",
+};
+
+/**
+ * Which segment of the Max output tokens control is pressed. `custom` is a UI
+ * state of its own (a click on Custom with a preset-valued field still shows
+ * the input), so it wins over the value; otherwise the preset matcher decides,
+ * and a value no preset spells reads as `custom` too.
+ */
+export function maxOutputSegmentSelection(raw: string, custom: boolean): string {
+  return custom ? "custom" : maxOutputPresetSelection(raw);
+}
+
+/** Thousands-grouped token count with a no-break space: `131072` -> `131 072`. */
+export function formatTokenCount(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, "\u00A0");
+}
+
+/** Placeholder for the Max output tokens input/segment: the number a blank field resolves to. */
+export function maxOutputPlaceholder(hint: string | null): string {
+  const match = hint === null ? null : /^(?:catalog|provider default): (\d+)$/.exec(hint);
+  return match ? `Default · ${formatTokenCount(Number(match[1]))}` : "Default";
+}
+
+/** Placeholder for the Context window input: the catalog window, or the assumed fallback marked as such. */
+export function contextWindowPlaceholder(hint: string | null): string {
+  if (hint === null) {
+    return "Default";
+  }
+  const catalog = /^catalog: (\d+)$/.exec(hint);
+  if (catalog) {
+    return `Default · ${formatTokenCount(Number(catalog[1]))}`;
+  }
+  const assumed = /^assumed fallback: (\d+) \(/.exec(hint);
+  if (assumed) {
+    return `Default · ${formatTokenCount(Number(assumed[1]))} (assumed)`;
+  }
+  return "Default";
+}
+
+/** Text of the Image input select's `auto` option, naming what Auto resolves to for the shown model. */
+export function imageInputAutoLabel(hint: string | null): string {
+  if (hint === "catalog: vision") {
+    return "Auto · vision (catalog)";
+  }
+  if (hint === "live /v1/models: vision") {
+    return "Auto · vision (live)";
+  }
+  return "Auto";
+}
+
+/** One-line visible helper under each tuning field; the full text lives in the `?` tooltip. */
+export const MAX_OUTPUT_ONELINER = "Blank = provider default.";
+export const CONTEXT_WINDOW_ONELINER = "Blank = catalog window.";
+export const IMAGE_INPUT_ONELINER = "Auto uses the catalog or the provider's model list.";
+
+/** Full helper text, shown as the `?` tooltip. */
+export const MAX_OUTPUT_HELP =
+  "Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if output keeps cutting off.";
+export const CONTEXT_WINDOW_HELP =
+  "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved for the model above only — switching this connection to another model ignores it.";
+export const IMAGE_INPUT_HELP =
+  "Auto uses the catalog's vision mark or the image-capable list fetched from the provider's /v1/models. On / Off override it for the model above only — switching this connection to another model ignores it. A running session picks a change up when it next starts.";
+
+/** Title of the "this model only" badge (scope of the saved per-model value). */
+export const MODEL_ONLY_BADGE_TITLE = "Saved for the model above only — switching this connection to another model ignores it.";
+
+/**
+ * Whether the Advanced disclosure opens by itself: true when any tuning value
+ * is already set (so a saved non-default value is visible on open). `label` is
+ * passed ONLY in the first-run (simplified) flow, where Label lives inside
+ * Advanced; the dialog shows Label at the top, so it does not count there.
+ */
+export function advancedHasValues(v: {
+  transport: string;
+  maxOutputTokens: string;
+  contextWindowRaw: string;
+  imageInput: "auto" | "on" | "off";
+  proxyRef: string;
+  label?: string;
+}): boolean {
+  return (
+    v.transport !== "" ||
+    v.maxOutputTokens.trim() !== "" ||
+    v.contextWindowRaw.trim() !== "" ||
+    v.imageInput !== "auto" ||
+    v.proxyRef !== PROXY_REF_INHERIT ||
+    (v.label !== undefined && v.label.trim() !== "")
+  );
+}
+
 /** Local literal (TASK.159), same convention as host-env.ts's `ENV_MAX_OUTPUT_TOKENS` — renderer modules don't import main, let alone core. */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
@@ -879,6 +980,61 @@ export function providerOptionGroups(catalog: readonly CatalogSummaryEntry[]): P
   return groups;
 }
 
+/**
+ * The `?` affordance next to a field label: a native `title` tooltip carries
+ * the full helper text (no tooltip library), and the span is keyboard-focusable
+ * so the text is reachable without a pointer. Exported for direct rendering tests.
+ */
+export function FieldHelp({ text }: { text: string }) {
+  return (
+    <span className="connection-drawer-help" tabIndex={0} role="img" aria-label={text} title={text}>
+      ?
+    </span>
+  );
+}
+
+export interface MaxOutputSegmentedProps {
+  /** The raw Max output tokens string (what the field would save). */
+  value: string;
+  /** UI-only: the user chose Custom, so the input stays open even on a preset value. */
+  custom: boolean;
+  disabled: boolean;
+  /** Native tooltip for the group: what a blank value resolves to. */
+  title?: string;
+  /** Called with the preset's value ("" for Default, "8192", "16384", "32768"). */
+  onSelect: (value: string) => void;
+  onCustom: () => void;
+}
+
+/**
+ * Max output tokens as ONE segmented control (Default / 8K / 16K / 32K /
+ * Custom) in place of a number input plus a chip row. Presets write the same
+ * values the chips did; Custom only reveals the number input (rendered by the
+ * caller). Exported so the segment set and pressed state are renderable.
+ */
+export function MaxOutputSegmented({ value, custom, disabled, title, onSelect, onCustom }: MaxOutputSegmentedProps) {
+  const selected = maxOutputSegmentSelection(value, custom);
+  const segment = (id: string, onPress: () => void) => (
+    <button
+      key={id}
+      type="button"
+      data-segment={id}
+      className={`connection-drawer-segmented-btn${selected === id ? " connection-drawer-segmented-btn-selected" : ""}`}
+      aria-pressed={selected === id}
+      disabled={disabled}
+      onClick={onPress}
+    >
+      {MAX_OUTPUT_SEGMENT_LABEL[id]}
+    </button>
+  );
+  return (
+    <div className="connection-drawer-segmented" role="group" aria-label="Max output tokens" title={title}>
+      {MAX_OUTPUT_TOKEN_PRESETS.map((preset) => segment(preset.id, () => onSelect(preset.value)))}
+      {segment("custom", onCustom)}
+    </div>
+  );
+}
+
 export interface ConnectionDrawerFieldsProps {
   mode: "add" | "edit";
   /** The connection being edited; required for `mode: "edit"`. */
@@ -972,6 +1128,19 @@ export function ConnectionDrawerFields({
   const [imageInput, setImageInput] = useState<ImageInputSelection>(() =>
     editConnection === undefined ? "auto" : imageInputInitialValue(editConnection),
   );
+  // UI-only (never saved): the user picked the Custom segment of Max output tokens.
+  const [maxOutputCustom, setMaxOutputCustom] = useState(false);
+  // The Advanced disclosure is controlled: open from the start only when a
+  // tuning value is already set (evaluated once, from the initial state), and
+  // forced open by a rejected Advanced field on save/create.
+  const [advancedOpen, setAdvancedOpen] = useState(() => advancedHasValues({
+    transport,
+    maxOutputTokens,
+    contextWindowRaw: contextWindow.raw,
+    imageInput,
+    proxyRef,
+    ...(simplified ? { label } : {}),
+  }));
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
   const [customName, setCustomName] = useState("");
@@ -985,7 +1154,6 @@ export function ConnectionDrawerFields({
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const AdvancedFields = simplified ? "details" : "div";
 
   useEffect(() => {
     if (initialFocus === "credential") {
@@ -1025,7 +1193,6 @@ export function ConnectionDrawerFields({
   // The connection-level base URL (vLLM/legacy templates) — NOT the new-custom
   // endpoint's own record baseUrl, which has its own field below.
   const showBaseUrl = shouldShowBaseUrlField(selectedEntry) && !isNewCustomEndpoint;
-  const maxOutputPreset = maxOutputPresetSelection(maxOutputTokens);
   const transportChoices = transportOptions(selectedEntry);
   const authKind = selectedEntry?.authKind ?? "api_key";
   // A custom:<id> connection's credential lives on the custom provider's OWN
@@ -1215,6 +1382,8 @@ export function ConnectionDrawerFields({
     // connection whose ceiling the user believes they set.
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
+      // A refused Advanced field must not stay hidden behind a closed disclosure.
+      setAdvancedOpen(true);
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
@@ -1227,6 +1396,8 @@ export function ConnectionDrawerFields({
     // so say which field to fix instead of letting main reject it opaquely.
     const cw = contextWindowTokensField(contextWindow.raw);
     if (!cw.ok) {
+      // A refused Advanced field must not stay hidden behind a closed disclosure.
+      setAdvancedOpen(true);
       setError(CONTEXT_WINDOW_ERROR);
       return;
     }
@@ -1344,6 +1515,8 @@ export function ConnectionDrawerFields({
     // `modelSaveBlocked` guard just above).
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
+      // A refused Advanced field must not stay hidden behind a closed disclosure.
+      setAdvancedOpen(true);
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
@@ -1352,6 +1525,8 @@ export function ConnectionDrawerFields({
     // from the model this update sends.
     const cw = contextWindowTokensField(contextWindow.raw);
     if (!cw.ok) {
+      // A refused Advanced field must not stay hidden behind a closed disclosure.
+      setAdvancedOpen(true);
       setError(CONTEXT_WINDOW_ERROR);
       return;
     }
@@ -1507,6 +1682,181 @@ export function ConnectionDrawerFields({
     }
   }
 
+  const labelField = (
+    <label className="settings-field">
+      <span className="settings-field-label">Label (optional)</span>
+      <input
+        ref={labelInputRef}
+        className="settings-field-input"
+        type="text"
+        value={label}
+        disabled={readOnly}
+        placeholder="e.g. Work, Personal"
+        onChange={(e) => setLabel(e.target.value)}
+      />
+    </label>
+  );
+
+  const maxOutputInputShown = maxOutputSegmentSelection(maxOutputTokens, maxOutputCustom) === "custom";
+
+  // Everything tuning-related lives in ONE disclosure, rendered once and placed
+  // before the primary button in both branches (pre-create and created).
+  const advancedBlock = (
+    <details
+      className="connection-drawer-advanced"
+      open={advancedOpen}
+      onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+    >
+      <summary>{simplified ? "Advanced settings (optional)" : "Advanced"}</summary>
+      {simplified && labelField}
+
+      <label className="settings-field">
+        <span className="settings-field-label">Transport</span>
+        <select
+          className="settings-field-select"
+          value={transport}
+          disabled={readOnly}
+          onChange={(e) => setTransport(e.target.value as ProviderTransportId | "")}
+        >
+          <option value="">(provider default)</option>
+          {transportChoices.map((t) => (
+            <option key={t} value={t}>
+              {TRANSPORT_LABEL[t]}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {/* TASK.150 / TASK.159: one segmented control. Default writes "" (the
+          provider default), the presets write the same values the chips did,
+          Custom reveals the number input. `step={1}` on the input on purpose:
+          every whole number in [min, max] is accepted, and a coarser step would
+          make the browser paint the peers' own 32000 as `:invalid`. */}
+      <div className="settings-field">
+        <span className="settings-field-label">
+          Max output tokens <FieldHelp text={MAX_OUTPUT_HELP} />
+        </span>
+        <MaxOutputSegmented
+          value={maxOutputTokens}
+          custom={maxOutputCustom}
+          disabled={readOnly}
+          title={maxOutputPlaceholder(motDefaultHint)}
+          onSelect={(value) => {
+            setMaxOutputTokens(value);
+            setMaxOutputCustom(false);
+          }}
+          onCustom={() => {
+            setMaxOutputCustom(true);
+            requestAnimationFrame(() => maxOutputTokensInputRef.current?.focus());
+          }}
+        />
+        {maxOutputInputShown && (
+          <input
+            ref={maxOutputTokensInputRef}
+            className="settings-field-input"
+            aria-label="Max output tokens"
+            type="number"
+            min={1024}
+            max={1000000}
+            step={1}
+            value={maxOutputTokens}
+            disabled={readOnly}
+            placeholder={maxOutputPlaceholder(motDefaultHint)}
+            onChange={(e) => setMaxOutputTokens(e.target.value)}
+          />
+        )}
+        <div className="settings-field-hint">{MAX_OUTPUT_ONELINER}</div>
+        {/* TASK.159: shown only while ANYCODE_MAX_OUTPUT_TOKENS overrides the rung — editing this field then does nothing. */}
+        {motEnvHint !== null && (
+          <div className="settings-field-hint" role="note">
+            {motEnvHint}
+          </div>
+        )}
+      </div>
+
+      {/* TASK.142: per-model context window. Same field shape as "Max output
+          tokens" above (whole number in [1024, 1000000], blank = catalog/
+          assumed window); the value is saved for ONE model (the binding is
+          derived server-side), so a Model edit clears it. */}
+      <label className="settings-field">
+        <span className="settings-field-label">
+          Context window (tokens) <FieldHelp text={CONTEXT_WINDOW_HELP} />{" "}
+          <span className="connection-drawer-badge" title={MODEL_ONLY_BADGE_TITLE}>
+            this model only
+          </span>
+        </span>
+        <input
+          ref={contextWindowTokensInputRef}
+          className="settings-field-input"
+          type="number"
+          min={1024}
+          max={1000000}
+          step={1}
+          value={contextWindow.raw}
+          disabled={readOnly}
+          placeholder={contextWindowPlaceholder(cwDefaultHint)}
+          onChange={(e) =>
+            // TASK.142: editing the WINDOW binds the value to whichever model
+            // is effective right now — this is the route that must never reset
+            // on its own keystrokes.
+            setContextWindow((field) => contextWindowAfterRawInput(field, e.target.value, effectiveFormModel))
+          }
+        />
+      </label>
+      <div className="settings-field-hint">{CONTEXT_WINDOW_ONELINER}</div>
+      {/* TASK.142: shown only while ANYCODE_CONTEXT_WINDOW overrides the rung — editing this field then does nothing. */}
+      {cwEnvHint !== null && (
+        <div className="settings-field-hint" role="note">
+          {cwEnvHint}
+        </div>
+      )}
+
+      {/* Taskana 4088 (TASK.69): per-model image input. Three states: Auto
+          (catalog mark, then the connection's live-fetched modality set —
+          whichever vouches first), On/Off (a per-model override pair saved
+          like the context-window pair above, binding derived server-side).
+          Never a connection-wide switch: a blanket "on" would un-gate every
+          blind sibling (the glm-5.2 hazard) the moment the user switches. */}
+      <label className="settings-field">
+        <span className="settings-field-label">
+          Image input <FieldHelp text={IMAGE_INPUT_HELP} />{" "}
+          <span className="connection-drawer-badge" title={MODEL_ONLY_BADGE_TITLE}>
+            this model only
+          </span>
+        </span>
+        <select
+          className="settings-field-input"
+          value={imageInput}
+          disabled={readOnly}
+          onChange={(e) => setImageInput(e.target.value as ImageInputSelection)}
+        >
+          <option value="auto">{imageInputAutoLabel(imageInputHint)}</option>
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+      <div className="settings-field-hint">{IMAGE_INPUT_ONELINER}</div>
+      {/* Taskana 4088: shown while the live-modality feed rides the env. */}
+      {imageInputFeedHint !== null && (
+        <div className="settings-field-hint" role="note">
+          {imageInputFeedHint}
+        </div>
+      )}
+
+      {/* TASK.141: one instance of the same picker the engine panes and the
+          Network pane render — CONTROLLED here, because a connection's ref
+          rides this drawer's own create/update payload rather than a channel of
+          its own. That is what removes the two-phase "create the connection,
+          then bind its proxy" dance. */}
+      <ProxyRefPicker
+        scope={{ kind: "connection", connectionId: createdConnectionId ?? "" }}
+        store={store}
+        value={proxyRef}
+        onChange={setProxyRef}
+      />
+    </details>
+  );
+
   return (
     <div className="connection-drawer-body">
       <label className="settings-field">
@@ -1583,6 +1933,23 @@ export function ConnectionDrawerFields({
         </div>
       )}
 
+      {/* Label: top of the dialog; in the first-run flow it stays inside Advanced. */}
+      {!simplified && labelField}
+
+      {showBaseUrl && (
+        <label className="settings-field">
+          <span className="settings-field-label">Base URL</span>
+          <input
+            className="settings-field-input"
+            type="text"
+            value={baseUrl}
+            disabled={readOnly}
+            placeholder="(provider default)"
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+        </label>
+      )}
+
       {createdConnectionId === null && selectedEntry && (
         <label className="settings-field">
           <span className="settings-field-label">Model</span>
@@ -1622,217 +1989,6 @@ export function ConnectionDrawerFields({
             } />
         </label>
       )}
-
-      {showBaseUrl && (
-        <label className="settings-field">
-          <span className="settings-field-label">Base URL</span>
-          <input
-            className="settings-field-input"
-            type="text"
-            value={baseUrl}
-            disabled={readOnly}
-            placeholder="(provider default)"
-            onChange={(e) => setBaseUrl(e.target.value)}
-          />
-        </label>
-      )}
-
-      <AdvancedFields className="connection-drawer-advanced">
-        {simplified && <summary>Advanced settings (optional)</summary>}
-        <label className="settings-field">
-          <span className="settings-field-label">Label (optional)</span>
-          <input
-            ref={labelInputRef}
-            className="settings-field-input"
-            type="text"
-            value={label}
-            disabled={readOnly}
-            placeholder="e.g. Work, Personal"
-            onChange={(e) => setLabel(e.target.value)}
-          />
-        </label>
-
-
-        <label className="settings-field">
-          <span className="settings-field-label">Transport</span>
-          <select
-            className="settings-field-select"
-            value={transport}
-            disabled={readOnly}
-            onChange={(e) => setTransport(e.target.value as ProviderTransportId | "")}
-          >
-            <option value="">(provider default)</option>
-            {transportChoices.map((t) => (
-              <option key={t} value={t}>
-                {TRANSPORT_LABEL[t]}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="settings-field">
-          <span className="settings-field-label">Max output tokens</span>
-          {/* `step={1}` on purpose: every whole number in [min, max] is accepted,
-              and a coarser step would make the browser paint the peers' own 32000
-              as `:invalid`. */}
-          <input
-            ref={maxOutputTokensInputRef}
-            className="settings-field-input"
-            type="number"
-            min={1024}
-            max={1000000}
-            step={1}
-            value={maxOutputTokens}
-            disabled={readOnly}
-            placeholder="(provider default)"
-            onChange={(e) => setMaxOutputTokens(e.target.value)}
-          />
-        </label>
-        {/* TASK.159: one line naming the number a blank field resolves to
-              (catalog ceiling vs the projected core default); claude-* and a
-              non-blank field show none — pure logic above, claude still gets no
-              number today. Outside the <label>, same reason the chips are. */}
-        {motDefaultHint !== null && <div className="settings-field-hint">{motDefaultHint}</div>}
-        {/* Click-to-fill presets (TASK.150 slice 3): the same chip affordance
-            the Model field above already offers, for the one field whose
-            sensible values cannot be looked up anywhere — a self-hosted
-            endpoint has no curated model list in the catalog, so a bare number
-            input asks the user to recall the round numbers unaided. Buttons sit
-            OUTSIDE the <label> above: nested in it, a click would also be a
-            click on the input it labels. */}
-        <div className="connection-drawer-preset-chips" role="group" aria-label="Max output token presets">
-          {MAX_OUTPUT_TOKEN_PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              className={`connection-drawer-preset-chip${
-                maxOutputPreset === preset.id ? " connection-drawer-preset-chip-selected" : ""
-              }`}
-              disabled={readOnly}
-              onClick={() => setMaxOutputTokens(preset.value)}
-            >
-              {preset.label}
-            </button>
-          ))}
-          {/* "Custom" reports as much as it acts: it lights up on its own
-              whenever the field holds something no preset spells, and clicking
-              it hands focus to that field rather than writing a value. */}
-          <button
-            type="button"
-            className={`connection-drawer-preset-chip${
-              maxOutputPreset === "custom" ? " connection-drawer-preset-chip-selected" : ""
-            }`}
-            disabled={readOnly}
-            onClick={() => maxOutputTokensInputRef.current?.focus()}
-          >
-            Custom
-          </button>
-        </div>
-        {/* TASK.150: on-prem/custom endpoints (vllm/custom/openrouter) carry no
-            curated model list in the catalog, so every such connection falls
-            back to the same DEFAULT_MAX_OUTPUT_TOKENS — this field is the only
-            user-facing knob for it. Called out explicitly because a reasoning
-            model spends part of that budget on its own hidden thinking before
-            it writes anything, so the default that's plenty for a plain chat
-            model can cut a self-hosted reasoning model off mid-write. */}
-        <div className="settings-field-hint" role="note">
-          Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they
-          write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if
-          output keeps cutting off.
-        </div>
-
-
-        {/* TASK.159: shown only while ANYCODE_MAX_OUTPUT_TOKENS overrides the rung — editing this field then does nothing. */}
-        {motEnvHint !== null && (
-          <div className="settings-field-hint" role="note">
-            {motEnvHint}
-          </div>
-        )}
-
-        {/* TASK.142: per-model context window. Same field shape as "Max output
-            tokens" above (whole number in [1024, 1000000], blank = catalog/
-            assumed window); the value is saved for ONE model (the binding is
-            derived server-side), so a Model edit clears it. */}
-        <label className="settings-field">
-          <span className="settings-field-label">Context window (tokens)</span>
-          <input
-            ref={contextWindowTokensInputRef}
-            className="settings-field-input"
-            type="number"
-            min={1024}
-            max={1000000}
-            step={1}
-            value={contextWindow.raw}
-            disabled={readOnly}
-            placeholder="(catalog window)"
-            onChange={(e) =>
-              // TASK.142: editing the WINDOW binds the value to whichever model
-              // is effective right now — this is the route that must never reset
-              // on its own keystrokes.
-              setContextWindow((field) => contextWindowAfterRawInput(field, e.target.value, effectiveFormModel))
-            }
-          />
-        </label>
-        {/* One line naming what a blank field resolves to: the catalog window
-            (usable-min) or the ASSUMED 8192 fallback for an unknown model —
-            never "provider default", which core cannot know for an unknown id. */}
-        {cwDefaultHint !== null && <div className="settings-field-hint">{cwDefaultHint}</div>}
-        <div className="settings-field-hint" role="note">
-          Saved for the model above only — switching this connection to another model ignores it. Leave empty to use the
-          catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions
-          compact early instead of overstuffing the prompt.
-        </div>
-        {/* TASK.142: shown only while ANYCODE_CONTEXT_WINDOW overrides the rung — editing this field then does nothing. */}
-        {cwEnvHint !== null && (
-          <div className="settings-field-hint" role="note">
-            {cwEnvHint}
-          </div>
-        )}
-        {/* Taskana 4088 (TASK.69): per-model image input. Three states: Auto
-            (catalog mark, then the connection's live-fetched modality set —
-            whichever vouches first), On/Off (a per-model override pair saved
-            like the context-window pair above, binding derived server-side).
-            Never a connection-wide switch: a blanket "on" would un-gate every
-            blind sibling (the glm-5.2 hazard) the moment the user switches. */}
-        <label className="settings-field">
-          <span className="settings-field-label">Image input</span>
-          <select
-            className="settings-field-input"
-            value={imageInput}
-            disabled={readOnly}
-            onChange={(e) => setImageInput(e.target.value as ImageInputSelection)}
-          >
-            <option value="auto">Auto (catalog / live fetch)</option>
-            <option value="on">On (this model accepts images)</option>
-            <option value="off">Off (this model rejects images)</option>
-          </select>
-        </label>
-        {/* One line naming what Auto resolves to for the shown model: the
-            catalog's vision mark, or the live /v1/models modality fact. */}
-        {imageInputHint !== null && <div className="settings-field-hint">{imageInputHint}</div>}
-        <div className="settings-field-hint" role="note">
-          Saved for the model above only — switching this connection to another model ignores it. Auto uses the catalog's
-          vision mark or the image-capable list fetched from the provider's /v1/models; a running session picks a change
-          up when it next starts.
-        </div>
-        {/* Taskana 4088: shown while the live-modality feed rides the env. */}
-        {imageInputFeedHint !== null && (
-          <div className="settings-field-hint" role="note">
-            {imageInputFeedHint}
-          </div>
-        )}
-        {/* TASK.141: one instance of the same picker the engine panes and the
-            Network pane render — CONTROLLED here, because a connection's ref
-            rides this drawer's own create/update payload rather than a channel of
-            its own. That is what removes the two-phase "create the connection,
-            then bind its proxy" dance. */}
-        <ProxyRefPicker
-          scope={{ kind: "connection", connectionId: createdConnectionId ?? "" }}
-          store={store}
-          value={proxyRef}
-          onChange={setProxyRef}
-        />
-      </AdvancedFields>
 
       {isNewCustomEndpoint && (
         <label className="settings-field-checkbox">
@@ -1883,6 +2039,7 @@ export function ConnectionDrawerFields({
               />
             </label>
           )}
+          {advancedBlock}
           <div className="settings-field-row">
             <button
               type="button"
@@ -2051,6 +2208,8 @@ export function ConnectionDrawerFields({
               </>
             )}
           </section>
+
+          {advancedBlock}
 
           {/* ONE Save (item 3): metadata + (if typed) the key, together. */}
           <div className="settings-field-row">

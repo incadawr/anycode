@@ -42,7 +42,26 @@ import {
   imageInputEffectiveHint,
   imageInputEnvHint,
   imageInputModelPreflightError,
+  advancedHasValues,
+  formatTokenCount,
+  maxOutputPlaceholder,
+  contextWindowPlaceholder,
+  imageInputAutoLabel,
+  maxOutputSegmentSelection,
+  MAX_OUTPUT_SEGMENT_LABEL,
+  MAX_OUTPUT_ONELINER,
+  CONTEXT_WINDOW_ONELINER,
+  IMAGE_INPUT_ONELINER,
+  MAX_OUTPUT_HELP,
+  CONTEXT_WINDOW_HELP,
+  IMAGE_INPUT_HELP,
+  FieldHelp,
+  MaxOutputSegmented,
+  type MaxOutputSegmentedProps,
 } from "./ConnectionDrawer.js";
+import { PROXY_REF_INHERIT } from "./ProxyRefPicker.js";
+import { createElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { providerModelsFor, modelMenuItems } from "./ModelPill.js";
 import { buildStartModelGroups } from "./start-model-picker.js";
 import { importModelOptionsFor } from "./CodexRolloutImportDialog.js";
@@ -1515,5 +1534,274 @@ describe("imageInputModelPreflightError (Taskana 4088 cross-review: an explicit 
     expect(imageInputModelPreflightError("auto", "")).toBeNull();
     expect(imageInputModelPreflightError("on", "glm-5.3v")).toBeNull();
     expect(imageInputModelPreflightError("off", "glm-5.2")).toBeNull();
+  });
+});
+
+// ── Taskana 4749: main fields on top, tuning under a collapsed "Advanced" ──
+
+// No-break space between digit groups, as formatTokenCount writes it.
+const NBSP = "\u00A0";
+
+describe("advancedHasValues (Taskana 4749: Advanced opens by itself only for a non-default value)", () => {
+  const base = {
+    transport: "",
+    maxOutputTokens: "",
+    contextWindowRaw: "",
+    imageInput: "auto" as const,
+    proxyRef: PROXY_REF_INHERIT,
+  };
+
+  it("is collapsed when every tuning value is at its default", () => {
+    expect(advancedHasValues(base)).toBe(false);
+  });
+
+  it("opens for each non-default tuning value", () => {
+    expect(advancedHasValues({ ...base, transport: "anthropic-messages" })).toBe(true);
+    expect(advancedHasValues({ ...base, maxOutputTokens: "8192" })).toBe(true);
+    expect(advancedHasValues({ ...base, contextWindowRaw: "200000" })).toBe(true);
+    expect(advancedHasValues({ ...base, imageInput: "on" })).toBe(true);
+    expect(advancedHasValues({ ...base, imageInput: "off" })).toBe(true);
+    expect(advancedHasValues({ ...base, proxyRef: "proxy-1" })).toBe(true);
+  });
+
+  it("treats whitespace-only text as empty", () => {
+    expect(advancedHasValues({ ...base, maxOutputTokens: "   " })).toBe(false);
+    expect(advancedHasValues({ ...base, contextWindowRaw: "  " })).toBe(false);
+  });
+
+  it("counts Label only when the caller passes it (first-run flow), and not when blank", () => {
+    expect(advancedHasValues({ ...base, label: "Work" })).toBe(true);
+    expect(advancedHasValues({ ...base, label: "   " })).toBe(false);
+    expect(advancedHasValues(base)).toBe(false);
+  });
+});
+
+describe("placeholder helpers (Taskana 4749: catalog numbers show as placeholders, not a separate line)", () => {
+
+  it("formatTokenCount groups thousands with a no-break space and leaves < 1000 alone", () => {
+    expect(formatTokenCount(999)).toBe("999");
+    expect(formatTokenCount(1000)).toBe(`1${NBSP}000`);
+    expect(formatTokenCount(131072)).toBe(`131${NBSP}072`);
+    expect(formatTokenCount(1000000)).toBe(`1${NBSP}000${NBSP}000`);
+  });
+
+  it("maxOutputPlaceholder names the catalog or provider-default number, or Default alone", () => {
+    expect(maxOutputPlaceholder("catalog: 131072")).toBe(`Default · 131${NBSP}072`);
+    expect(maxOutputPlaceholder("provider default: 32768")).toBe(`Default · 32${NBSP}768`);
+    expect(maxOutputPlaceholder(null)).toBe("Default");
+    expect(maxOutputPlaceholder("something else")).toBe("Default");
+  });
+
+  it("contextWindowPlaceholder marks the assumed fallback as assumed", () => {
+    expect(contextWindowPlaceholder("catalog: 200000")).toBe(`Default · 200${NBSP}000`);
+    expect(
+      contextWindowPlaceholder("assumed fallback: 8192 (unknown model — set a value to override)"),
+    ).toBe(`Default · 8${NBSP}192 (assumed)`);
+    expect(contextWindowPlaceholder(null)).toBe("Default");
+    expect(contextWindowPlaceholder("catalog: lots")).toBe("Default");
+  });
+
+  it("imageInputAutoLabel names the vision source, or stays plain Auto", () => {
+    expect(imageInputAutoLabel("catalog: vision")).toBe("Auto · vision (catalog)");
+    expect(imageInputAutoLabel("live /v1/models: vision")).toBe("Auto · vision (live)");
+    expect(imageInputAutoLabel(null)).toBe("Auto");
+  });
+});
+
+describe("Max output tokens segmented control (Taskana 4749: one control, input only for Custom)", () => {
+  const noop = () => {};
+
+  function render(props: Partial<MaxOutputSegmentedProps> & { value: string }): string {
+    return renderToStaticMarkup(
+      createElement(MaxOutputSegmented, { custom: false, disabled: false, onSelect: noop, onCustom: noop, ...props }),
+    );
+  }
+
+  // The pressed segment is the button whose data-segment is followed by aria-pressed="true".
+  function pressedSegments(html: string): string[] {
+    return [...html.matchAll(/data-segment="([^"]+)"[^>]*aria-pressed="true"/g)].map((m) => m[1]!);
+  }
+
+  // Walk the rendered element tree and collect the segment buttons (their props, incl. onClick).
+  function segmentButtons(el: ReactElement<{ children?: unknown }>): ReactElement<{ "data-segment"?: string; onClick?: () => void }>[] {
+    const out: ReactElement<{ "data-segment"?: string; onClick?: () => void }>[] = [];
+    const visit = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(visit);
+        return;
+      }
+      if (node && typeof node === "object" && "props" in node) {
+        const element = node as ReactElement<{ children?: unknown; "data-segment"?: string }>;
+        if (element.props["data-segment"] !== undefined) {
+          out.push(element);
+        }
+        visit(element.props.children);
+      }
+    };
+    visit(el.props.children);
+    return out;
+  }
+
+  it("renders Default, 8K, 16K, 32K and Custom, with Default pressed for a blank value", () => {
+    const html = render({ value: "" });
+    for (const label of ["Default", "8K", "16K", "32K", "Custom"]) {
+      expect(html).toContain(`>${label}</button>`);
+    }
+    expect(html).toContain('role="group"');
+    expect(html).toContain('aria-label="Max output tokens"');
+    expect(pressedSegments(html)).toEqual(["default"]);
+    expect(html).not.toContain("<input");
+  });
+
+  it("a saved non-preset value opens with Custom pressed", () => {
+    expect(pressedSegments(render({ value: "50000" }))).toEqual(["custom"]);
+  });
+
+  it("a preset value presses its own segment, and Custom when the UI state says so", () => {
+    expect(pressedSegments(render({ value: "8192" }))).toEqual(["8192"]);
+    expect(pressedSegments(render({ value: "8192", custom: true }))).toEqual(["custom"]);
+  });
+
+  it("the group carries the catalog-derived tooltip when given", () => {
+    expect(render({ value: "", title: `Default · 131${NBSP}072` })).toContain(
+      `title="Default · 131${NBSP}072"`,
+    );
+  });
+
+  it("preset segments hand their own values to onSelect, Default writes the blank sentinel", () => {
+    const onSelect = vi.fn();
+    const onCustom = vi.fn();
+    const el = MaxOutputSegmented({ value: "", custom: false, disabled: false, onSelect, onCustom });
+    const buttons = segmentButtons(el as ReactElement<{ children?: unknown }>);
+    const byId = (id: string) => buttons.find((b) => b.props["data-segment"] === id)!;
+    byId("default").props.onClick?.();
+    byId("8192").props.onClick?.();
+    byId("16384").props.onClick?.();
+    byId("32768").props.onClick?.();
+    byId("custom").props.onClick?.();
+    expect(onSelect.mock.calls).toEqual([[""], ["8192"], ["16384"], ["32768"]]);
+    expect(onCustom).toHaveBeenCalledTimes(1);
+  });
+
+  it("the preset segment values are the unchanged MAX_OUTPUT_TOKEN_PRESETS values, and the display labels map to them", () => {
+    expect(MAX_OUTPUT_TOKEN_PRESETS.map((p) => p.label)).toEqual(["Default", "8192", "16384", "32768"]);
+    expect(MAX_OUTPUT_SEGMENT_LABEL).toEqual({
+      default: "Default",
+      "8192": "8K",
+      "16384": "16K",
+      "32768": "32K",
+      custom: "Custom",
+    });
+  });
+
+  it("maxOutputSegmentSelection: UI Custom wins; otherwise the preset matcher decides", () => {
+    expect(maxOutputSegmentSelection("50000", false)).toBe("custom");
+    expect(maxOutputSegmentSelection("8192", true)).toBe("custom");
+    expect(maxOutputSegmentSelection("8192", false)).toBe("8192");
+    expect(maxOutputSegmentSelection("", false)).toBe("default");
+  });
+});
+
+
+describe("helper text (Taskana 4749: one visible line, the full text in a ? tooltip)", () => {
+  it("the visible one-liners are exactly the agreed short copy", () => {
+    expect(MAX_OUTPUT_ONELINER).toBe("Blank = provider default.");
+    expect(CONTEXT_WINDOW_ONELINER).toBe("Blank = catalog window.");
+    expect(IMAGE_INPUT_ONELINER).toBe("Auto uses the catalog or the provider's model list.");
+  });
+
+  it("the tooltip texts keep the full original meaning, verbatim", () => {
+    expect(MAX_OUTPUT_HELP).toBe(
+      "Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if output keeps cutting off.",
+    );
+    expect(CONTEXT_WINDOW_HELP).toBe(
+      "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved for the model above only — switching this connection to another model ignores it.",
+    );
+    expect(IMAGE_INPUT_HELP).toBe(
+      "Auto uses the catalog's vision mark or the image-capable list fetched from the provider's /v1/models. On / Off override it for the model above only — switching this connection to another model ignores it. A running session picks a change up when it next starts.",
+    );
+  });
+
+  it("FieldHelp renders a focusable ? whose native tooltip is the given text", () => {
+    const html = renderToStaticMarkup(createElement(FieldHelp, { text: "x" }));
+    expect(html).toContain('title="x"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain(">?<");
+  });
+});
+
+describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
+  const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+
+  it("the disclosure is a controlled <details> in BOTH modes, closed unless a value is set", () => {
+    expect(source).toMatch(/<details\s+className="connection-drawer-advanced"/);
+    expect(source).toMatch(/open=\{advancedOpen\}/);
+    expect(source).toMatch(/onToggle=\{\(e\) => setAdvancedOpen\(e\.currentTarget\.open\)\}/);
+    expect(source).toMatch(/useState\(\(\) => advancedHasValues\(/);
+    expect(source).not.toMatch(/AdvancedFields/);
+  });
+
+  it("only the first-run flow keeps the 'Advanced settings (optional)' summary; the dialog says 'Advanced'", () => {
+    expect(source).toMatch(/\{simplified \? "Advanced settings \(optional\)" : "Advanced"\}/);
+  });
+
+  it("both {ok:false} validation paths reopen Advanced in createConnection AND save", () => {
+    const createBlock = source.slice(source.indexOf("async function createConnection"), source.indexOf("async function save"));
+    const saveBlock = source.slice(source.indexOf("async function save"), source.indexOf("async function doFetchModels"));
+    for (const block of [createBlock, saveBlock]) {
+      // one for the max-output field, one for the context window
+      expect(block.match(/setAdvancedOpen\(true\);/g)).toHaveLength(2);
+      expect(block).toMatch(/if \(!mot\.ok\) \{\s*\/\/[^\n]*\n\s*setAdvancedOpen\(true\);\s*setError\(MAX_OUTPUT_TOKENS_ERROR\);/);
+      expect(block).toMatch(/if \(!cw\.ok\) \{\s*\/\/[^\n]*\n\s*setAdvancedOpen\(true\);\s*setError\(CONTEXT_WINDOW_ERROR\);/);
+    }
+  });
+
+  it("the Advanced block is defined once and rendered in exactly the two branches, after Model and credentials", () => {
+    expect(source.match(/const advancedBlock = \(/g)).toHaveLength(1);
+    const renders = [...source.matchAll(/\{advancedBlock\}/g)].map((m) => m.index!);
+    expect(renders).toHaveLength(2);
+    const [preCreate, created] = renders as [number, number];
+    // pre-create: after the API key input, before the Create button
+    expect(preCreate).toBeLessThan(source.indexOf("onClick={() => void createConnection()}"));
+    expect(preCreate).toBeGreaterThan(source.indexOf('placeholder="sk-…"'));
+    // created: after the Model input and the credential section, before Save
+    expect(created).toBeGreaterThan(source.indexOf('className="settings-section connection-drawer-credential"'));
+    expect(created).toBeLessThan(source.indexOf("onClick={() => void save()}"));
+    expect(source.indexOf('list="connection-drawer-model-suggestions"')).toBeLessThan(created);
+  });
+
+  it("Label is at the top in the dialog (not simplified), and inside Advanced only for the first-run flow", () => {
+    const top = source.indexOf("{!simplified && labelField}");
+    expect(top).toBeGreaterThan(source.indexOf("<span className=\"settings-field-label\">Provider</span>"));
+    expect(top).toBeLessThan(source.indexOf("{showBaseUrl && ("));
+    expect(source.indexOf("{simplified && labelField}")).toBeGreaterThan(source.indexOf("const advancedBlock = ("));
+  });
+
+  it("the standalone catalog hint lines are gone and the inputs carry the catalog number as placeholder", () => {
+    expect(source).not.toMatch(/\{motDefaultHint !== null &&/);
+    expect(source).not.toMatch(/\{cwDefaultHint !== null &&/);
+    expect(source).not.toMatch(/\{imageInputHint !== null &&/);
+    expect(source).toMatch(/placeholder=\{maxOutputPlaceholder\(motDefaultHint\)\}/);
+    expect(source).toMatch(/placeholder=\{contextWindowPlaceholder\(cwDefaultHint\)\}/);
+    expect(source).toMatch(/imageInputAutoLabel\(imageInputHint\)/);
+  });
+
+  it("the long paragraphs became tooltips: no role=note paragraph still carries the old helper text", () => {
+    expect(source).not.toMatch(/role="note">[^<]*Saved for the model above only/);
+    expect(source).not.toMatch(/role="note">[^<]*Leave empty to use the/);
+    expect(source).not.toMatch(/role="note">[^<]*Auto uses the catalog/);
+  });
+
+  it("the per-model scope is a 'this model only' badge on Context window and Image input", () => {
+    // JSX badges only (the doc comment on the title constant also names it).
+    expect(source.match(/>\s*this model only\s*</g)).toHaveLength(2);
+    expect(source).toMatch(/Context window \(tokens\) <FieldHelp text=\{CONTEXT_WINDOW_HELP\} \/>/);
+    expect(source).toMatch(/Image input <FieldHelp text=\{IMAGE_INPUT_HELP\} \/>/);
+  });
+
+  it("the Max output control is the segmented group, and the input is rendered only while Custom is shown", () => {
+    expect(source).toMatch(/\{maxOutputInputShown && \(/);
+    expect(source).toMatch(/<MaxOutputSegmented/);
+    expect(source).not.toMatch(/connection-drawer-preset-chip/);
   });
 });

@@ -56,6 +56,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   inline subagents (which classify against your recent messages, never the
   agent's own prompts), and covers Codex/Claude session approval prompts.
 
+### Changed
+
+- Connection drawer: Provider, Label, credentials and Model stay on top; Transport, Max output tokens, Context window, Image input and Proxy move under a collapsed "Advanced" section that opens by itself when a value is set; catalog values show as placeholders, Max output is one Default/8K/16K/32K/Custom control, and long helper text moved into "?" tooltips.
+
 ### Fixed
 
 - Switching conversation tabs no longer flashes the previous tab's side-panel
