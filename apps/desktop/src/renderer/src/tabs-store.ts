@@ -132,6 +132,14 @@ export interface SessionDraft {
    * declare is dropped rather than translated (`carryDraftEffort`).
    */
   engineEffort?: string;
+  /**
+   * The draft's Orchestrate toggle (core drafts only; the ModeMenu row on the
+   * start screen). Absent/false = off. Applied to the new tab before the first
+   * message (tab-registry.ts's `queueInitialPrompt`), exactly as the in-tab
+   * `set_orchestrate` is. A `/orchestrate <task>` send turns it on for that
+   * send without persisting it here (orchestrate-start.ts).
+   */
+  orchestrate?: boolean;
 }
 
 export interface TabsState {
@@ -182,6 +190,8 @@ export interface TabsState {
   setCodexModels(models: readonly EngineModelChoice[]): void;
   /** No-op while `draft === null`. The selected mode is applied before the first message. */
   setDraftMode(mode: PermissionMode): void;
+  /** No-op while `draft === null`. Core-only toggle (the start screen's Orchestrate row); full replace. */
+  setDraftOrchestrate(orchestrate: boolean): void;
   /** No-op while `draft === null`. Codex-only; a Core draft never calls this. */
   setDraftEnginePreset(presetId: string): void;
   /**
@@ -385,6 +395,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
           ...(state.draft?.connectionId !== undefined ? { connectionId: state.draft.connectionId } : {}),
           ...(state.draft?.images !== undefined ? { images: state.draft.images } : {}),
           ...(state.draft?.engineEffort !== undefined ? { engineEffort: state.draft.engineEffort } : {}),
+          ...(state.draft?.orchestrate !== undefined ? { orchestrate: state.draft.orchestrate } : {}),
         },
         draftActive: true,
       }));
@@ -423,6 +434,10 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
 
     setDraftMode(mode): void {
       set((state) => (state.draft === null ? state : { draft: { ...state.draft, mode } }));
+    },
+
+    setDraftOrchestrate(orchestrate): void {
+      set((state) => (state.draft === null ? state : { draft: { ...state.draft, orchestrate } }));
     },
 
     setDraftEnginePreset(presetId): void {

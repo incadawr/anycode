@@ -234,6 +234,10 @@ export interface TabRegistry {
    * cannot accept them (`host_ready.imageInput === false`) drops them and
    * raises an `image_attach_rejected` notice instead of silently sending
    * them or losing the whole turn (the text half still goes out).
+   * `orchestrate` (start-screen Orchestrate, core only) rides the same
+   * before-the-first-turn recipe as the last pick: `set_orchestrate` is sent
+   * after mode/model/effort, so the host's own plan-mode flip (onSetOrchestrate)
+   * lands before the first `user_message` — the in-tab order exactly.
    */
   queueInitialPrompt(
     tabId: string,
@@ -243,6 +247,7 @@ export interface TabRegistry {
     effort?: string,
     images?: readonly QueuedPromptImage[],
     reasoningEffort?: string,
+    orchestrate?: boolean,
   ): void;
 }
 
@@ -283,6 +288,7 @@ export function createTabRegistry(
       effort?: string;
       images?: readonly QueuedPromptImage[];
       reasoningEffort?: string;
+      orchestrate?: boolean;
     }
   >();
 
@@ -315,6 +321,7 @@ export function createTabRegistry(
       reasoningEffort: ReasoningEffort | undefined;
     },
     reasoningEffort?: string,
+    orchestrate?: boolean,
   ): void {
     if (mode !== undefined && mode !== current.mode) {
       entry.connection?.send({ type: "set_mode", mode });
@@ -339,6 +346,13 @@ export function createTabRegistry(
     const level = reasoningEffort === undefined ? undefined : asReasoningEffort(reasoningEffort);
     if (level !== undefined && level !== current.reasoningEffort) {
       entry.connection?.send({ type: "set_reasoning_effort", effort: level });
+    }
+    // Start-screen Orchestrate (core only): LAST of the picks, so the host's
+    // plan-mode flip happens after any set_mode above and before the first
+    // user_message on the same port. Enabling an already-enabled flag just
+    // acks (onSetOrchestrate), so no current-state comparison is needed.
+    if (orchestrate === true) {
+      entry.connection?.send({ type: "set_orchestrate", enabled: true });
     }
   }
 
@@ -503,6 +517,7 @@ export function createTabRegistry(
               reasoningEffort: message.reasoningEffort ?? "off",
             },
             pending.reasoningEffort,
+            pending.orchestrate,
           );
           dispatchInitialPrompt(entry, pending.text, pending.images ?? [], message.imageInput, message.imageFallback);
         }
@@ -801,7 +816,7 @@ export function createTabRegistry(
       statusStore.getState().reset();
     },
 
-    queueInitialPrompt(tabId, text, model, mode, effort, images, reasoningEffort): void {
+    queueInitialPrompt(tabId, text, model, mode, effort, images, reasoningEffort, orchestrate): void {
       if (!tabId || closedTabIds.has(tabId)) {
         return;
       }
@@ -824,11 +839,12 @@ export function createTabRegistry(
             reasoningEffort: state.reasoningEffort,
           },
           reasoningEffort,
+          orchestrate,
         );
         dispatchInitialPrompt(entry, text, images ?? [], state.imageInput, state.imageFallback);
         return;
       }
-      pendingInitialPrompts.set(tabId, { text, model, mode, effort, images, reasoningEffort });
+      pendingInitialPrompts.set(tabId, { text, model, mode, effort, images, reasoningEffort, orchestrate });
     },
   };
 }

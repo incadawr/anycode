@@ -40,6 +40,7 @@ import { BackgroundAgents } from "./BackgroundAgents.js";
 import { PromptQueue } from "./PromptQueue.js";
 import { SlashMenu } from "./SlashMenu.js";
 import { RolePickerDialog } from "./RolePickerDialog.js";
+import { needsRolePicker } from "../orchestrate-start.js";
 import { ArrowUp, ImageIcon, Stop, X } from "./icons.js";
 // Reuse, not re-derive (R1 anti-clip lesson): the same fixed-position
 // viewport-clamp ModelPill's own popover uses to escape `.composer-footer-*`'s
@@ -1239,8 +1240,8 @@ export function Composer() {
       return;
     }
     setPendingOrchestrateTask(task);
-    const roles = useSettingsStore.getState().snapshot?.settings.roles;
-    if (roles === undefined) {
+    // The shared first-run gate (orchestrate-start.ts) — the start screen uses the same one.
+    if (needsRolePicker(useSettingsStore.getState().snapshot?.settings.roles)) {
       setRolePickerOpen(true);
       return;
     }
