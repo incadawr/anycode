@@ -7,6 +7,7 @@
  */
 
 import { connect as netConnect } from "node:net";
+import { effectiveProxyUrl } from "./network-failure.js";
 
 export interface NetworkWaiter {
   /** Is the endpoint's origin reachable right now? Must never throw; a failure answers `false`. */
@@ -28,6 +29,12 @@ export interface TcpConnector {
 export interface TcpReachableOptions {
   signal?: AbortSignal;
   connect?: TcpConnector;
+  /**
+   * Taskana 4772 review F1: environment the proxy-aware target is resolved
+   * against (NODE_USE_ENV_PROXY + scheme proxies + NO_PROXY). Defaults to
+   * `process.env`; an explicitly empty record keeps the origin probe.
+   */
+  env?: Record<string, string | undefined>;
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 3_000;
@@ -45,6 +52,25 @@ export function tcpTargetOf(baseUrl: string): { host: string; port: number } | u
   return { host: url.hostname.replace(/^\[|\]$/g, ""), port };
 }
 
+/**
+ * Taskana 4772 review F1: the host:port a probe of `baseUrl` should TARGET,
+ * honoring the configured proxy. Model traffic rides Node's env-proxy path
+ * only when `NODE_USE_ENV_PROXY=1`; then a scheme proxy (HTTPS_PROXY et al,
+ * minus NO_PROXY) receives every request, so the probe must connect to the
+ * PROXY — a raw origin probe can answer "online" while every model request
+ * is offline (the origin firewalled, proxy up) or the inverse. Without the
+ * env-proxy path the request goes direct and the origin remains the target.
+ */
+export function probeTargetOf(
+  baseUrl: string,
+  env: Record<string, string | undefined> = process.env,
+): { host: string; port: number } | undefined {
+  const proxy = effectiveProxyUrl(env, baseUrl);
+  if (proxy === undefined) return tcpTargetOf(baseUrl);
+  const port = proxy.port !== "" ? Number(proxy.port) : proxy.protocol === "https:" ? 443 : 80;
+  return { host: proxy.hostname.replace(/^\[|\]$/g, ""), port };
+}
+
 const defaultConnector: TcpConnector = (host, port, done) => {
   const socket = netConnect({ host, port });
   socket.once("connect", () => done(true));
@@ -53,16 +79,17 @@ const defaultConnector: TcpConnector = (host, port, done) => {
 };
 
 /**
- * TCP-level reachability of `baseUrl`'s origin. Resolves `true` on connect,
- * `false` on error, timeout, abort, or an unusable URL. Never rejects, never
- * sends an HTTP request.
+ * TCP-level reachability of the hop `baseUrl`'s traffic actually takes — the
+ * configured proxy's host:port when Node's env-proxy path is enabled (F1),
+ * else the origin. Resolves `true` on connect, `false` on error, timeout,
+ * abort, or an unusable URL. Never rejects, never sends an HTTP request.
  */
 export function tcpReachable(
   baseUrl: string,
   timeoutMs: number = DEFAULT_PROBE_TIMEOUT_MS,
   options: TcpReachableOptions = {},
 ): Promise<boolean> {
-  const target = tcpTargetOf(baseUrl);
+  const target = options.env === undefined ? probeTargetOf(baseUrl) : probeTargetOf(baseUrl, options.env);
   if (target === undefined) return Promise.resolve(false);
   const connect = options.connect ?? defaultConnector;
   const signal = options.signal;

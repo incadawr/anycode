@@ -26,6 +26,17 @@ function effectiveProxy(env: Record<string, string | undefined>, targetUrl: stri
     return raw ? new URL(raw) : undefined;
   } catch { return undefined; }
 }
+
+/**
+ * Taskana 4772 review F1: the proxy URL Node's env-proxy path would route
+ * `targetUrl` through, or undefined when the request goes direct. Shared by
+ * the network-failure classifier (via `effectiveProxy` above) and the
+ * network waiter's probe-target resolution, so the probe measures the SAME
+ * hop the model traffic actually takes.
+ */
+export function effectiveProxyUrl(env: Record<string, string | undefined>, targetUrl: string): URL | undefined {
+  return effectiveProxy(env, targetUrl);
+}
 export class NetworkConfigurationError extends Error {
   constructor(readonly configurationCode: NetworkConfigurationFailure, cause: unknown) {
     super("Proxy unavailable. Check the selected connection proxy settings.", { cause });
