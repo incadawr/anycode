@@ -34,6 +34,7 @@ import {
 } from "../settings/files.js";
 import type { SecretKey, SecretSource, SecretStatus, SecretTier } from "../shared/settings.js";
 import { isProxyProfileSecretKey } from "../shared/proxy.js";
+import { mcpSecretKey, parseMcpSecretKey } from "../shared/mcp-secrets.js";
 import { isKnownSecretKey, secretEnvFor } from "./host-env.js";
 
 /**
@@ -191,6 +192,33 @@ export class Vault {
     }
     const value = this.decrypt(entry);
     return value === undefined ? { state: "unreadable" } : { state: "value", value };
+  }
+
+  /** Names (sorted) of the stored MCP secrets. Name-only: reads the file, never decrypts. */
+  async listMcpSecretNames(): Promise<string[]> {
+    const file = await this.load();
+    const names: string[] = [];
+    for (const key of Object.keys(file.entries)) {
+      const name = parseMcpSecretKey(key);
+      if (name !== undefined) names.push(name);
+    }
+    return names.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  }
+
+  /**
+   * Decrypts ONLY the requested MCP secrets (the host hand-off). A name that is
+   * unset or cannot be decrypted is omitted. Never called for the whole store, and
+   * the result never leaves main except as the fork env var.
+   */
+  async getMcpSecretValues(names: readonly string[]): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    if (names.length === 0) return out;
+    const file = await this.load();
+    for (const name of names) {
+      const value = this.decrypt(file.entries[mcpSecretKey(name)]);
+      if (value !== undefined) out[name] = value;
+    }
+    return out;
   }
 
   /**

@@ -695,6 +695,7 @@ export function createHarness(options: HarnessOptions): Harness {
             { kind: "skills" as const, text: options.skills.promptSection },
             { kind: "workflows" as const, text: "" },
             { kind: "profiles" as const, text: "" },
+            { kind: "mcp" as const, text: "" },
             { kind: "repoMap" as const, text: "" },
           ],
           systemPrompt: options.skills.promptSection,

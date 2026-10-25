@@ -14,6 +14,25 @@ import {
   sanitizeChildEnv,
 } from "./child-env.js";
 
+//  part A (A-4): the session-identity pair is ordinary (not a proxy
+// carrier) and survives the non-engine scrub, while the proxy-scrub still runs.
+describe("buildChildEnv keeps the session tool env", () => {
+  it("keeps ANYCODE_SESSION_ID and ANYCODE_SESSION_WORKSPACE, drops a carrier and a credentialed proxy", () => {
+    const out = buildChildEnv({
+      PATH: "/bin",
+      ANYCODE_SESSION_ID: "sess-child-env",
+      ANYCODE_SESSION_WORKSPACE: "/work/repo",
+      ANYCODE_CODEX_PROXY_URL: '{"url":"http://u:p@h:1"}',
+      HTTPS_PROXY: "http://u:p@h:2",
+    });
+    expect(out.ANYCODE_SESSION_ID).toBe("sess-child-env");
+    expect(out.ANYCODE_SESSION_WORKSPACE).toBe("/work/repo");
+    expect(out.ANYCODE_CODEX_PROXY_URL).toBeUndefined();
+    expect(out.HTTPS_PROXY).toBeUndefined();
+    expect(out.PATH).toBe("/bin");
+  });
+});
+
 describe("sanitizeChildEnv", () => {
   it("drops HTTPS_PROXY/HTTP_PROXY with user:pass userinfo", () => {
     const out = sanitizeChildEnv({

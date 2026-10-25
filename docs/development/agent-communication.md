@@ -155,3 +155,6 @@ resumes its model when work completes. This slice provides explicit status
 queries and GUI delivery; automatic client wake-up, result subscriptions,
 `start_agent`, remote access and shared GUI/headless service ownership are later
 work. It never executes arbitrary shell commands or exports credentials.
+
+Inside a session's own tools, `ANYCODE_SESSION_ID` holds the same value as the
+`sessionId` field here (see [Environment of tools](../user/configuration.md#environment-of-tools)).
