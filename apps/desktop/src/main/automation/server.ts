@@ -46,6 +46,14 @@ import {
   sendPrompt,
   tryAgain,
   setMode,
+  setOrchestrate,
+  modeMenuState,
+  modeMenuClickChip,
+  modeMenuClickRow,
+  rolePickerState,
+  rolePickerClickPreset,
+  rolePickerClickSave,
+  rolePickerClickSkip,
   stop,
   respondPermission,
   waitFor,
@@ -264,6 +272,12 @@ const permissionBody = z.object({
   requestId: z.string().min(1).optional(),
 });
 const modeBody = z.object({ mode: z.string() });
+// Taskana 4704 §3.7 (part B): the Orchestrate toggle's body.
+const orchestrateBody = z.object({ enabled: z.boolean() });
+// Taskana 4704 §3.7 (part B): the named-row click driver's body.
+const modeMenuRowBody = z.object({ name: z.string() });
+// Taskana 4704 §3.9 (part B): the RolePickerDialog preset click body.
+const rolePickerPresetBody = z.object({ presetId: z.string() });
 const emptyBody = z.object({}).passthrough();
 const createTabBody = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("new"), workspace: z.string().min(1) }),
@@ -1497,6 +1511,19 @@ async function route(
       }
       case "mode":
         return setMode(deps, tabId, parseBody(rawBody, modeBody).mode);
+      // Taskana 4704 §3.7 (part B): the Orchestrate row's driver — same
+      // `{tabId,…}` body discipline as "mode" above, through the facade's
+      // `setOrchestrate` (one wire message: set_orchestrate).
+      case "orchestrate": {
+        const body = parseBody(rawBody, orchestrateBody);
+        return setOrchestrate(deps, tabId, body.enabled);
+      }
+      // Taskana 4704 §3.7 (part B): read-only ModeMenu popover probe (the
+      // smoke asserts the rendered rows — five modes + Orchestrate — and
+      // their checked state).
+      case "mode-menu":
+        parseBody(rawBody, emptyBody);
+        return modeMenuState(deps, tabId);
       case "stop":
         parseBody(rawBody, emptyBody);
         return stop(deps, tabId);
@@ -1609,6 +1636,41 @@ async function route(
     const tabId = decodeURIComponent(parts[1]!);
     const body = parseBody(rawBody, composerKeyBody);
     return composerKey(deps, tabId, body.key);
+  }
+  // Taskana 4704 §3.7 (part B): ModeMenu popover DOM click drivers — same
+  // `parts.length === 4` shape as the slash-menu routes above; the smoke's
+  // Orchestrate toggle goes through the REAL rendered row, not a store poke.
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "mode-menu" && parts[3] === "click-chip") {
+    const tabId = decodeURIComponent(parts[1]!);
+    parseBody(rawBody, emptyBody);
+    return modeMenuClickChip(deps, tabId);
+  }
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "mode-menu" && parts[3] === "click-row") {
+    const tabId = decodeURIComponent(parts[1]!);
+    const body = parseBody(rawBody, modeMenuRowBody);
+    return modeMenuClickRow(deps, tabId, body.name);
+  }
+  // Taskana 4704 §3.9 (part B): RolePickerDialog probe + drivers — same
+  // shape as the mode-menu routes above.
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "role-picker" && parts[3] === "state") {
+    const tabId = decodeURIComponent(parts[1]!);
+    parseBody(rawBody, emptyBody);
+    return rolePickerState(deps, tabId);
+  }
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "role-picker" && parts[3] === "preset") {
+    const tabId = decodeURIComponent(parts[1]!);
+    const body = parseBody(rawBody, rolePickerPresetBody);
+    return rolePickerClickPreset(deps, tabId, body.presetId);
+  }
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "role-picker" && parts[3] === "save") {
+    const tabId = decodeURIComponent(parts[1]!);
+    parseBody(rawBody, emptyBody);
+    return rolePickerClickSave(deps, tabId);
+  }
+  if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "role-picker" && parts[3] === "skip") {
+    const tabId = decodeURIComponent(parts[1]!);
+    parseBody(rawBody, emptyBody);
+    return rolePickerClickSkip(deps, tabId);
   }
   // TASK.102 S2d D1 (CUT-S2 §4.2 п.5): `/tabs/:tabId/child/open` — same
   // `parts.length === 4` shape as the slash-menu routes above, just with

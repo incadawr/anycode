@@ -21,6 +21,8 @@ import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeybo
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { isSessionBusy, type ContextUsage, type DesktopState, type SessionTokens, type TurnState } from "../store.js";
+import { useSettingsStore } from "../settings-store.js";
+import { useTabsStore } from "../tabs-store.js";
 import type { WireContextBreakdown, WireUsageAuditStep, WireUsageAuditTotals } from "../../../shared/protocol.js";
 import {
   makePasteMarker,
@@ -37,6 +39,7 @@ import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { BackgroundAgents } from "./BackgroundAgents.js";
 import { PromptQueue } from "./PromptQueue.js";
 import { SlashMenu } from "./SlashMenu.js";
+import { RolePickerDialog } from "./RolePickerDialog.js";
 import { ArrowUp, ImageIcon, Stop, X } from "./icons.js";
 // Reuse, not re-derive (R1 anti-clip lesson): the same fixed-position
 // viewport-clamp ModelPill's own popover uses to escape `.composer-footer-*`'s
@@ -1026,6 +1029,13 @@ export function Composer() {
   const lastSlashQueryRef = useRef<string | null>(null);
   const lastSlashItemsKeyRef = useRef("");
   const slashTabId = useContext(TabContext)?.tabId;
+  // Taskana 4704 §3.8 (part B): first-run /orchestrate state — the task text
+  // parked while the RolePickerDialog is up, and the dialog's visibility.
+  // Local to Composer: the pending text belongs to THIS tab's composer draft
+  // lifecycle, not the store. `pendingOrchestrateTask === null` means "no
+  // /orchestrate submit in flight".
+  const [rolePickerOpen, setRolePickerOpen] = useState(false);
+  const [pendingOrchestrateTask, setPendingOrchestrateTask] = useState<string | null>(null);
 
   useLayoutEffect(() => {
     if (pendingCaretRef.current !== null) {
@@ -1083,6 +1093,10 @@ export function Composer() {
   // a send while running becomes a mid-turn steer instead of a queued prompt.
   const steerSupported = useTabStore((s) => s.steering?.supported === true);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
+  // Taskana 4704 §3.7 (part B): tab-scoped orchestrate flag (part A keeps it
+  // from `orchestrate_changed` acks). Read here for the ModeMenu row and the
+  // `/orchestrate` submit path below.
+  const orchestrateActive = useTabStore((state) => state.orchestrateActive);
 
   // Core keeps its exact legacy presentation when `engine` is null. External
   // engines declare only the controls their adapter can honour.
@@ -1205,14 +1219,68 @@ export function Composer() {
   }
 
   /**
+   * Taskana 4704 §3.8 (part B): `/orchestrate <task>` submit flow. If the tab
+   * is already orchestrate, the task submits immediately as a normal user
+   * message. Otherwise, when NO roles are configured (settings.roles absent),
+   * the first-run RolePickerDialog opens with the task stashed; Save writes
+   * roles then proceeds, Skip proceeds with built-in defaults. Either way the
+   * proceed step enables orchestrate (set_orchestrate true) and submits the
+   * stashed task. The enable and the submit are separate wire messages: the
+   * host applies set_orchestrate between turns (silent-drop discipline), and
+   * the prompt queue carries the task exactly like any other send.
+   */
+  function beginOrchestrateSubmit(taskText: string): void {
+    const task = taskText.trim();
+    if (!ready) {
+      return;
+    }
+    if (orchestrateActive) {
+      submitOrchestrateTask(task);
+      return;
+    }
+    setPendingOrchestrateTask(task);
+    const roles = useSettingsStore.getState().snapshot?.settings.roles;
+    if (roles === undefined) {
+      setRolePickerOpen(true);
+      return;
+    }
+    proceedOrchestrateSubmit();
+  }
+
+  /** Enable orchestrate, then submit the stashed task as a normal user message. */
+  function proceedOrchestrateSubmit(): void {
+    sendToHost({ type: "set_orchestrate", enabled: true });
+    const task = pendingOrchestrateTask;
+    setPendingOrchestrateTask(null);
+    setRolePickerOpen(false);
+    if (task !== null && task.length > 0) {
+      submitOrchestrateTask(task);
+    }
+  }
+
+  /** Send one text as a user message through the same wire path handleSend's idle branch uses. */
+  function submitOrchestrateTask(task: string): void {
+    if (task.length === 0) {
+      return;
+    }
+    const requestId = crypto.randomUUID();
+    tabStore.getState().appendUserText(requestId, task);
+    tabStore.getState().recordSentMessage(task, []);
+    sendToHost({ type: "user_message", requestId, text: task });
+  }
+
+  /**
    * Single exhaustive dispatch point for a selected row's intent (cut §4.1:
    * "the registry itself stays pure/testable; Composer owns the single
    * exhaustive dispatchSlashIntent switch"). `insert` is a no-op here — its
    * text replacement already happened uniformly for every intent kind in
    * `selectSlashItem` below (the token-removal and the skill-text-insert are
    * the SAME operation: replace the slash token with `intent.text` or `""`).
+   * `postStripText` (Taskana 4704 §3.8) carries the draft AFTER the token
+   * strip for the one intent that consumes it: `/orchestrate <task>`'s task
+   * text is "whatever the slash-token removal left behind".
    */
-  function dispatchSlashIntent(intent: SlashRunIntent): void {
+  function dispatchSlashIntent(intent: SlashRunIntent, postStripText: string): void {
     switch (intent.kind) {
       case "set_mode_toggle":
         handleModeChange((mode ?? "plan") === "plan" ? "build" : "plan");
@@ -1236,6 +1304,11 @@ export function Composer() {
       case "settings_pane":
         window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
         window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: intent.pane }));
+        break;
+      case "orchestrate_submit":
+        // Taskana 4704 §3.8: the task text is what remains of the draft after
+        // selectSlashItem stripped the `/orchestrate` token.
+        beginOrchestrateSubmit(postStripText);
         break;
       case "insert":
         break;
@@ -1271,7 +1344,7 @@ export function Composer() {
     if (isInsert) {
       textareaRef.current?.focus();
     }
-    dispatchSlashIntent(item.intent);
+    dispatchSlashIntent(item.intent, nextText);
   }
 
   /** Thin wrapper: `readComposerImageFile` owns validation, this only mints the renderer-local list-key `id`. */
@@ -1417,6 +1490,20 @@ export function Composer() {
     sendToHost({ type: "set_mode", mode: next });
   }
 
+  /**
+   * Taskana 4704 §3.7 (part B): the Orchestrate row's commit —
+   * `set_orchestrate`, NOT set_mode (§2.2: orchestrate is a tab-level flag;
+   * the host moves the session to plan itself). Same ready-only guard as
+   * handleModeChange (the host silently drops a busy toggle — the
+   * between-turns discipline; ready means there is no host to send to).
+   */
+  function handleToggleOrchestrate(next: boolean): void {
+    if (!ready || next === orchestrateActive) {
+      return;
+    }
+    sendToHost({ type: "set_orchestrate", enabled: next });
+  }
+
   // TASK.39 (cut §3.3): the engine picks reuse the SAME between-turns
   // guard as ModelPill/ModeMenu (engineControlDisabled mirrors
   // modelPickDisabled) — the host's own busy-check is the real backstop,
@@ -1549,6 +1636,27 @@ export function Composer() {
     >
       <BackgroundAgents />
       <PromptQueue />
+      <RolePickerDialog
+        open={rolePickerOpen}
+        connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
+        activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
+        engines={{
+          claudeReady: useTabsStore.getState().availableEngines.includes("claude"),
+          codexReady: useTabsStore.getState().availableEngines.includes("codex"),
+        }}
+        onSave={(roles) => {
+          // §3.9: Save writes roles, then the stashed task proceeds under
+          // orchestrate (the enable + submit are the same proceed step as
+          // Skip — only the settings write differs).
+          void useSettingsStore.getState().setPatch({ roles });
+          proceedOrchestrateSubmit();
+        }}
+        onSkip={() => {
+          // §3.9: Skip writes nothing; built-in defaults apply.
+          setRolePickerOpen(false);
+          proceedOrchestrateSubmit();
+        }}
+      />
       {isNewSession && <EnvironmentMenu placement="composer" />}
       {(pills.length > 0 || attachedImages.length > 0) && (
         <div className="composer-pills">
@@ -1662,7 +1770,7 @@ export function Composer() {
               presentation-driven control — core's ModeMenu/permission
               vocabulary is never used for it (`supportsCorePermissions`
               stays false for Codex, so the two are mutually exclusive). */}
-          {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={modeChangeDisabled(turn.status, ready)} onChange={handleModeChange} />}
+          {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={modeChangeDisabled(turn.status, ready)} onChange={handleModeChange} orchestrateActive={orchestrateActive} onToggleOrchestrate={handleToggleOrchestrate} />}
           {engine?.permissions && (
             <EnginePresetMenu
               permissions={engine.permissions}

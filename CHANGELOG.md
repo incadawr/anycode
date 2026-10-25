@@ -9,6 +9,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Orchestrate UI: the permission-mode menu has an Orchestrate row (a tab-level
+  toggle, not a sixth mode), and `/orchestrate <task>` submits a task under
+  orchestrate. The first run without configured roles opens a role picker with
+  presets built from your ready engines and connections ("Claude leads, Codex
+  builds", "All Claude", "This connection"); you can edit them or skip. The same
+  editor lives in Settings → Roles (`/roles`), with the parallel-children cap.
 - Plugin manifest v1 groundwork (Taskana 4732, stage 1 core): plugins can
   declare `displayName`, `publisher`, `author`, `homepage`, `license`, an
   `engines.anycode` compatibility range (a plugin needing a newer AnyCode

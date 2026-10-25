@@ -205,6 +205,8 @@ describe("automation facade — snapshot", () => {
       workspace: state.workspace,
       model: state.model,
       mode: state.mode,
+      // Taskana 4704 §3.7 (part B): the tab-level orchestrate flag.
+      orchestrateActive: state.orchestrateActive,
       turn: state.turn,
       transcript: state.transcript,
       permission: state.permission,
@@ -756,6 +758,60 @@ describe("automation facade — setMode", () => {
     const sentMessages = port.sent.filter((m) => (m as { type: string }).type !== "ui_ready");
     expect(sentMessages).toEqual([{ type: "set_mode", mode: "plan" }]);
     expect(uiToHostMessageSchema.safeParse(sentMessages[0]).success).toBe(true);
+  });
+});
+
+/**
+ * Taskana 4704 §3.7 (part B): the Orchestrate row's facade pair.
+ * `setOrchestrate` sends exactly one wire message — `set_orchestrate` — with
+ * the same ready-only guard as setMode (the host applies it between turns);
+ * `modeMenuState` is a read-only DOM probe (closed chip -> open:false, no
+ * error), structurally refusing only a non-active tab like slashMenuState.
+ */
+describe("automation facade — setOrchestrate / modeMenuState (Taskana 4704)", () => {
+  it("OR1: sends set_orchestrate when ready, valid against uiToHostMessageSchema", () => {
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const result = facade.setOrchestrate(tabId, true);
+
+    expect(result).toEqual({ ok: true });
+    const sentMessages = port.sent.filter((m) => (m as { type: string }).type !== "ui_ready");
+    expect(sentMessages).toEqual([{ type: "set_orchestrate", enabled: true }]);
+    expect(uiToHostMessageSchema.safeParse(sentMessages[0]).success).toBe(true);
+  });
+
+  it("OR2: unknown tab / not ready refuse without sending", () => {
+    const { registry, tabsStore, tabId } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    expect(facade.setOrchestrate("nope", true)).toEqual({ ok: false, reason: "unknown_tab" });
+
+    const tabsStore2 = createTabsStore();
+    const registry2 = createTabRegistry(tabsStore2);
+    const port2 = new FakeMessagePort();
+    registry2.registerPort("tab-b", "/ws/b", asPort(port2)); // never ready
+    const facade2 = createAutomationFacade(registry2, tabsStore2, stubBridge());
+    expect(facade2.setOrchestrate("tab-b", true)).toEqual({ ok: false, reason: "not_ready" });
+    expect(port2.sent).toEqual([{ type: "ui_ready" }]);
+  });
+
+  it("OR3: modeMenuState reads open:false (closed chip) for an active tab — a normal reading, not an error", () => {
+    const { registry, tabsStore, tabId } = setupReadyTab();
+    // Node env (no jsdom): the fake DOM accessor reports no chip/popover —
+    // exactly the closed-chip reading the real accessor returns when the
+    // popover is closed.
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+
+    const result = facade.modeMenuState(tabId) as { ok: boolean; open: boolean; rows: unknown[] };
+    expect(result.ok).toBe(true);
+    expect(result.open).toBe(false);
+    expect(result.rows).toEqual([]);
+  });
+
+  it("OR4: modeMenuState refuses a non-active tab (slashMenuState posture)", () => {
+    const { registry, tabsStore } = setupReadyTab();
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge());
+    expect(facade.modeMenuState("some-other-tab")).toEqual({ ok: false, reason: "tab_not_active" });
   });
 });
 

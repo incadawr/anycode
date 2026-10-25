@@ -22,7 +22,7 @@ import { Fragment } from "react";
 import type { ComponentType, ReactNode, SVGProps } from "react";
 import type { SlashIconId, SlashMenuItem } from "../slash-menu.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Clipboard, Collapse, Cube, FileIcon, Gear, GitBranch, Plus, ServerStack, Sliders, Stack, Terminal } from "./icons.js";
+import { Clipboard, Collapse, Cube, FileIcon, Gear, GitBranch, Plus, Robot, ServerStack, Sliders, Stack, Terminal } from "./icons.js";
 
 const SLASH_ICONS: Record<SlashIconId, ComponentType<SVGProps<SVGSVGElement>>> = {
   plan: Clipboard,
@@ -37,6 +37,7 @@ const SLASH_ICONS: Record<SlashIconId, ComponentType<SVGProps<SVGSVGElement>>> =
   skills: FileIcon,
   settings: Gear,
   skill: FileIcon,
+  robot: Robot,
 };
 
 /**

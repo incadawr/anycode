@@ -195,6 +195,13 @@ export interface TabStateSnapshot {
   workspace: string | null;
   model: string | null;
   mode: PermissionMode | null;
+  /**
+   * Taskana 4704 §3.7 (part B): the tab-level orchestrate flag (the store's
+   * copy, kept from the host's `orchestrate_changed` acks). Additive field —
+   * the smoke asserts it flips after the ack, same read-only discipline as
+   * `mode`.
+   */
+  orchestrateActive: boolean;
   turn: TurnState;
   transcript: SnapshotTranscriptBlock[];
   permission: PermissionUiRequest | null;
@@ -1877,6 +1884,144 @@ export interface SlashMenuState {
 }
 
 /**
+ * Taskana 4704 §3.7 (part B): read-only projection of the ModeMenu popover.
+ * `open:false` (with `rows:[]`) is a normal reading — the chip is closed.
+ * `rows` reads the RENDERED `.mode-menu-item` nodes in DOM order; each row's
+ * `checked` mirrors its `aria-checked` (the five modes are `menuitemradio`,
+ * the Orchestrate toggle a `menuitemcheckbox` — both carry `aria-checked`).
+ * Same structural `tab_not_active` refusal as `slashMenuState`.
+ */
+export interface ModeMenuRowState {
+  name: string;
+  checked: boolean;
+}
+
+export interface ModeMenuState {
+  ok: true;
+  open: boolean;
+  chipLabel: string;
+  rows: ModeMenuRowState[];
+}
+
+/** Taskana 4704 §3.9 (part B): read-only RolePickerDialog projection. */
+export interface RolePickerState {
+  ok: true;
+  mounted: boolean;
+  selectedPreset: string | null;
+  saveDisabled: boolean;
+}
+
+/**
+ * DOM accessor DI for the RolePickerDialog probe/drivers (Taskana 4704 §3.9
+ * part B), same discipline as `ModeMenuDom`.
+ */
+export interface RolePickerDom {
+  dialog(): HTMLElement | null;
+  selectedPreset(): string | null;
+  saveDisabled(): boolean;
+  clickPreset(presetId: string): boolean;
+  clickSave(): boolean;
+  clickSkip(): boolean;
+}
+
+function realRolePickerDom(): RolePickerDom {
+  const doc = (): Document | null => (typeof document === "undefined" ? null : document);
+  const dialog = (): HTMLElement | null => doc()?.querySelector<HTMLElement>(".role-picker-dialog") ?? null;
+  return {
+    dialog,
+    selectedPreset: () =>
+      dialog()?.querySelector<HTMLElement>(".role-picker-preset-chip-active")?.getAttribute("data-testid") ?? null,
+    saveDisabled: () => dialog()?.querySelector<HTMLButtonElement>("[data-testid=\"role-picker-save\"]")?.disabled ?? true,
+    clickPreset: (presetId: string) => {
+      const chip = dialog()?.querySelector<HTMLButtonElement>(`[data-testid="role-preset-${presetId}"]`);
+      if (!chip) {
+        return false;
+      }
+      chip.click();
+      return true;
+    },
+    clickSave: () => {
+      const save = dialog()?.querySelector<HTMLButtonElement>("[data-testid=\"role-picker-save\"]");
+      if (!save) {
+        return false;
+      }
+      save.click();
+      return true;
+    },
+    clickSkip: () => {
+      const skip = dialog()?.querySelector<HTMLButtonElement>("[data-testid=\"role-picker-skip\"]");
+      if (!skip) {
+        return false;
+      }
+      skip.click();
+      return true;
+    },
+  };
+}
+
+/**
+ * DOM accessor DI for the ModeMenu probe/drivers (Taskana 4704 §3.7 part B),
+ * same injectable-for-tests discipline as `ComposerSlashDom` — the node-env
+ * vitest passes a fake and never touches `document`. The click drivers run
+ * REAL `.click()` calls on the rendered nodes so the popover's open/close and
+ * the row's handler go through React exactly as a user's click does.
+ */
+export interface ModeMenuDom {
+  chip(): HTMLButtonElement | null;
+  popover(): HTMLElement | null;
+  rows(): ModeMenuRowState[];
+  /** Real click on the mode chip — opens/closes the popover. */
+  clickChip(): boolean;
+  /**
+   * Real click on the rendered row with this name (`.mode-menu-item-name`
+   * text). Returns false when the popover or the row is absent.
+   */
+  clickRow(name: string): boolean;
+}
+
+function realModeMenuDom(): ModeMenuDom {
+  // The node-env vitest has no `document`; the closures below are only ever
+  // CALLED in a browser, but the DI default itself is evaluated eagerly at
+  // createAutomationFacade call time in tests too — so guard the accessor,
+  // not the call sites (same net posture as realComposerSlashDom: probing an
+  // absent DOM reads as "nothing mounted").
+  const doc = (): Document | null => (typeof document === "undefined" ? null : document);
+  const rowButton = (name: string): HTMLButtonElement | null => {
+    for (const item of Array.from(doc()?.querySelectorAll<HTMLButtonElement>(".mode-menu-popover .mode-menu-item") ?? [])) {
+      if (item.querySelector(".mode-menu-item-name")?.textContent?.trim() === name) {
+        return item;
+      }
+    }
+    return null;
+  };
+  return {
+    chip: () => doc()?.querySelector<HTMLButtonElement>(".mode-chip") ?? null,
+    popover: () => doc()?.querySelector<HTMLElement>(".mode-menu-popover") ?? null,
+    rows: () =>
+      Array.from(doc()?.querySelectorAll<HTMLButtonElement>(".mode-menu-popover .mode-menu-item") ?? []).map((item) => ({
+        name: item.querySelector(".mode-menu-item-name")?.textContent?.trim() ?? "",
+        checked: item.getAttribute("aria-checked") === "true",
+      })),
+    clickChip: () => {
+      const chip = doc()?.querySelector<HTMLButtonElement>(".mode-chip") ?? null;
+      if (chip === null) {
+        return false;
+      }
+      chip.click();
+      return true;
+    },
+    clickRow: (name: string) => {
+      const row = rowButton(name);
+      if (row === null) {
+        return false;
+      }
+      row.click();
+      return true;
+    },
+  };
+}
+
+/**
  * DOM accessor DI for the slash-menu probe/driver (design §7 W4), same
  * injectable-for-tests discipline as `ModelPillDom`/`CtxPopoverDom`.
  * `textarea()` is also the DRIVE surface `composerType`/`composerKey` act on
@@ -2700,6 +2845,42 @@ export interface AutomationFacade {
   agentCardCollapse(tabId: string, toolCallId: string): Promise<FacadeResult>;
   respondPermission(tabId: string, behavior: "allow" | "deny", requestId?: string): FacadeResult;
   setMode(tabId: string, mode: string): FacadeResult;
+  /**
+   * Taskana 4704 §3.7 (part B): the Orchestrate row's driver — sends
+   * `set_orchestrate` (the exact wire message ModeMenu's row click sends via
+   * Composer's handleToggleOrchestrate). The smoke asserts the UI row itself
+   * through `modeMenuState` below and drives the toggle through the SAME
+   * guard the component applies (ready-only; the host silently drops a busy
+   * toggle).
+   */
+  setOrchestrate(tabId: string, enabled: boolean): FacadeResult;
+  /**
+   * Taskana 4704 §3.7 (part B): read-only probe of the mode menu popover —
+   * `open`, the rendered row names (five modes + the Orchestrate row when
+   * the tab wires it), and which row is checked. Same read-only posture as
+   * `slashMenuState`: the smoke's transitions are real DOM clicks; this only
+   * reads the result.
+   */
+  modeMenuState(tabId: string): ModeMenuState | FacadeErr;
+  /**
+   * Taskana 4704 §3.7 (part B): real DOM click drivers for the popover —
+   * `modeMenuClickChip` opens/closes, `modeMenuClickRow` clicks the rendered
+   * row with the given name (e.g. "Orchestrate"). Real `.click()` so React's
+   * own handlers run, exactly like `agentCardDom.clickToggle`.
+   */
+  modeMenuClickChip(tabId: string): FacadeResult;
+  modeMenuClickRow(tabId: string, name: string): FacadeResult;
+  /**
+   * Taskana 4704 §3.9 (part B): read-only probe of the RolePickerDialog (is
+   * the first-run modal up, which preset chip is selected) + real DOM click
+   * drivers for a preset chip and the Save/Skip buttons. The dialog is
+   * tab-scoped UI mounted by the active tab's Composer, so same
+   * `tab_not_active` structural refusal as the mode menu probes.
+   */
+  rolePickerState(tabId: string): RolePickerState | FacadeErr;
+  rolePickerClickPreset(tabId: string, presetId: string): FacadeResult;
+  rolePickerClickSave(tabId: string): FacadeResult;
+  rolePickerClickSkip(tabId: string): FacadeResult;
   stop(tabId: string): FacadeResult;
   selectTab(tabId: string): FacadeResult;
   /**
@@ -6614,6 +6795,10 @@ export function createAutomationFacade(
   // above it — every existing positional call site would shift otherwise.
   workflowMapDom: WorkflowMapDom = realWorkflowMapDom(),
   workflowTicksDom: WorkflowTicksDom = realWorkflowTicksDom(),
+  // Taskana 4704 §3.7 (part B): appended at the END for the same reason.
+  modeMenuDom: ModeMenuDom = realModeMenuDom(),
+  // Taskana 4704 §3.9 (part B): appended at the END for the same reason.
+  rolePickerDom: RolePickerDom = realRolePickerDom(),
 ): AutomationFacade {
   /**
    * The pill's provider catalog, computed the EXACT way ModelPill.tsx itself
@@ -6961,6 +7146,9 @@ export function createAutomationFacade(
           workspace: state.workspace,
           model: state.model,
           mode: state.mode,
+          // Taskana 4704 §3.7 (part B): the tab-level orchestrate flag — the
+          // smoke asserts it flips after the host's orchestrate_changed ack.
+          orchestrateActive: state.orchestrateActive,
           turn: state.turn,
           transcript,
           permission: state.permission,
@@ -7373,6 +7561,117 @@ export function createAutomationFacade(
       const message: UiToHostMessage = { type: "set_mode", mode };
       registry.sendToTab(tabId, message);
       return { ok: true };
+    },
+
+    /**
+     * Taskana 4704 §3.7 (part B): the Orchestrate toggle's wire send — the
+     * exact message Composer.handleToggleOrchestrate sends for the ModeMenu
+     * row's click, with the same ready-only guard (the host applies
+     * set_orchestrate between turns and acks with orchestrate_changed, which
+     * the store keeps into `orchestrateActive`).
+     */
+    setOrchestrate(tabId: string, enabled: boolean): FacadeResult {
+      const store = registry.getStore(tabId);
+      if (!store) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      if (store.getState().connection !== "ready") {
+        return { ok: false, reason: "not_ready" };
+      }
+      const message: UiToHostMessage = { type: "set_orchestrate", enabled };
+      registry.sendToTab(tabId, message);
+      return { ok: true };
+    },
+
+    /**
+     * Taskana 4704 §3.7 (part B): read-only ModeMenu popover projection.
+     * Reads the rendered DOM only (through the `modeMenuDom` DI accessor) —
+     * never re-derives the row list — so it cannot disagree with what is on
+     * screen.
+     */
+    modeMenuState(tabId: string): ModeMenuState | FacadeErr {
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      if (modeMenuDom.popover() === null) {
+        // Closed chip is a normal reading, not an error (slashMenuState's
+        // open:false posture).
+        return { ok: true, open: false, chipLabel: modeMenuDom.chip()?.textContent?.trim() ?? "", rows: [] };
+      }
+      return { ok: true, open: true, chipLabel: modeMenuDom.chip()?.textContent?.trim() ?? "", rows: modeMenuDom.rows() };
+    },
+
+    /** Taskana 4704 §3.7 (part B): real click on the mode chip (popover open/close). */
+    modeMenuClickChip(tabId: string): FacadeResult {
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      return modeMenuDom.clickChip() ? { ok: true } : { ok: false, reason: "not_present" };
+    },
+
+    /** Taskana 4704 §3.7 (part B): real click on the named rendered row. */
+    modeMenuClickRow(tabId: string, name: string): FacadeResult {
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      return modeMenuDom.clickRow(name) ? { ok: true } : { ok: false, reason: "row_not_found" };
+    },
+
+    /** Taskana 4704 §3.9 (part B): RolePickerDialog read-only probe. */
+    rolePickerState(tabId: string): RolePickerState | FacadeErr {
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      const dialog = rolePickerDom.dialog();
+      if (dialog === null) {
+        return { ok: true, mounted: false, selectedPreset: null, saveDisabled: true };
+      }
+      return { ok: true, mounted: true, selectedPreset: rolePickerDom.selectedPreset(), saveDisabled: rolePickerDom.saveDisabled() };
+    },
+
+    /** Taskana 4704 §3.9 (part B): real click on a preset chip. */
+    rolePickerClickPreset(tabId: string, presetId: string): FacadeResult {
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      return rolePickerDom.clickPreset(presetId) ? { ok: true } : { ok: false, reason: "not_present" };
+    },
+
+    /** Taskana 4704 §3.9 (part B): real click on Save. */
+    rolePickerClickSave(tabId: string): FacadeResult {
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      return rolePickerDom.clickSave() ? { ok: true } : { ok: false, reason: "not_present" };
+    },
+
+    /** Taskana 4704 §3.9 (part B): real click on Skip. */
+    rolePickerClickSkip(tabId: string): FacadeResult {
+      if (tabsStore.getState().activeTabId !== tabId) {
+        return { ok: false, reason: "tab_not_active" };
+      }
+      if (!registry.getStore(tabId)) {
+        return { ok: false, reason: "unknown_tab" };
+      }
+      return rolePickerDom.clickSkip() ? { ok: true } : { ok: false, reason: "not_present" };
     },
 
     stop(tabId: string): FacadeResult {

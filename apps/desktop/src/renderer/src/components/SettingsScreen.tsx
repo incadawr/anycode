@@ -105,6 +105,7 @@ import { TrustedBinariesSection } from "./TrustedBinariesSection.js";
 import { McpServersPane } from "./McpServersPane.js";
 import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane, workspaceRootSegment } from "./SubagentsPane.js";
+import { RolesPane } from "./RolesPane.js";
 import { ScopeSwitcher, resolvePaneScope, type PaneScopeChoice } from "./ScopeSwitcher.js";
 import { ProfilePane } from "./ProfilePane.js";
 import { VisionPane } from "./VisionPane.js";
@@ -121,7 +122,7 @@ const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 /** TASK.159: the output-ceiling env rung — same local-literal convention as `API_KEY_ENV_VAR` above (renderer modules don't import main). */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
-export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "skills" | "subagents" | "environment" | "appearance" | "shortcuts" | "about";
+export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "skills" | "subagents" | "roles" | "environment" | "appearance" | "shortcuts" | "about";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -173,6 +174,14 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
     description: "Manage built-in, workspace, and user subagent profiles used by the Agent tool.",
     icon: Robot,
   },
+  {
+    // Taskana 4704 §3.9 (part B): orchestration roles (planner/executor/
+    // reviewer/explore/orchestrator route chains + parallel-children cap).
+    id: "roles",
+    label: "Roles",
+    description: "Which engine or connection each orchestration role runs on, with fallbacks.",
+    icon: Robot,
+  },
   { id: "environment", label: "Environment", description: "Telemetry and repo-map status for this workspace.", icon: Info },
   { id: "appearance", label: "Appearance", description: "Theme, density, and notification preferences.", icon: Sliders },
   { id: "shortcuts", label: "Keyboard shortcuts", description: "View and customize keyboard shortcuts.", icon: Keyboard },
@@ -197,6 +206,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   mcp: ["mcp", "server", "status"],
   skills: ["skill", "skills", "import", "enable"],
   subagents: ["agent", "agents", "subagent", "subagents", "persona", "agent_type", "built-in"],
+  roles: ["role", "roles", "orchestrate", "orchestration", "planner", "executor", "reviewer", "fallback", "children"],
   environment: ["telemetry", "repo map", "environment"],
   appearance: ["theme", "density", "notifications", "dark", "light", "compact"],
   shortcuts: ["shortcut", "shortcuts", "keyboard", "keybinding", "hotkey", "combo", "record"],
@@ -1842,6 +1852,10 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
           {activePane === "skills" && <SkillsPane tabId={scopeTabId ?? undefined} />}
 
           {activePane === "subagents" && <SubagentsPane tabId={scopeTabId ?? undefined} workspace={scopeWorkspace ?? activeTabWorkspace ?? undefined} />}
+
+          {/* Taskana 4704 §3.9 (part B): orchestration roles — sits right after
+              Subagents (the persona/profile registry this builds on). */}
+          {activePane === "roles" && <RolesPane />}
 
           {activePane === "environment" && (
             <>
