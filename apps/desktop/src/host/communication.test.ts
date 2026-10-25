@@ -216,3 +216,66 @@ describe("public result retrieval", () => {
     } finally { h.close(); }
   });
 });
+
+describe("Sessions API cancel_turn (Taskana 4763)", () => {
+  it("T1 cancel_turn while a turn runs aborts it, rejects queued inbox messages, and the running message ends done/cancelled", async () => {
+    const { h, engine, signals, finishes, make } = fixture();
+    engine.runTurn = async function* (_input, options) {
+      signals.push(options.signal);
+      yield { type: "turn_start", turn: 1 };
+      await new Promise<void>((resolve) => { finishes.push(resolve); });
+      yield { type: "loop_end", reason: options.signal.aborted ? "cancelled" : "completed", turns: 1 };
+    };
+    try {
+      await h.session.receiveAgentMessage(make("one"));
+      await h.session.receiveAgentMessage(make("queued"));
+      expect(h.session.communicationCancelTurn()).toEqual({ cancelled: true, turnId: expect.any(String) });
+      expect(signals[0]?.aborted).toBe(true);
+      expect(h.session.agentMessageStatus("queued")).toMatchObject({ state: "rejected", detail: "Cancelled by Stop before queued delivery" });
+      (await nextFinish(h, finishes))(); await settle(h);
+      expect(h.session.communicationMessageResult("one")).toMatchObject({ state: "done", latestResult: { terminalReason: "cancelled" } });
+    } finally { h.close(); }
+  });
+  it("T2 cancel_turn on an idle session reports idle, and a repeated call during one turn never throws", async () => {
+    const { h, finishes, make } = fixture();
+    try {
+      expect(h.session.communicationCancelTurn()).toEqual({ cancelled: false, reason: "idle" });
+      await h.session.receiveAgentMessage(make("one"));
+      expect(h.session.communicationCancelTurn()).toMatchObject({ cancelled: true });
+      let second: ReturnType<typeof h.session.communicationCancelTurn> | undefined;
+      expect(() => { second = h.session.communicationCancelTurn(); }).not.toThrow();
+      expect(second?.cancelled === true || second?.reason === "idle").toBe(true);
+      (await nextFinish(h, finishes))(); await settle(h);
+      expect(h.session.communicationCancelTurn()).toEqual({ cancelled: false, reason: "idle" });
+    } finally { h.close(); }
+  });
+  it("T3 cancel_turn while shutting down reports closing, and while relocating reports relocating", async () => {
+    const { h, make } = fixture();
+    try {
+      await h.session.receiveAgentMessage(make("one"));
+      (h.session as unknown as { relocating: boolean }).relocating = true;
+      expect(h.session.communicationCancelTurn()).toEqual({ cancelled: false, reason: "relocating" });
+      (h.session as unknown as { relocating: boolean }).relocating = false;
+      h.session.closeAdmissions();
+      expect(h.session.communicationCancelTurn()).toEqual({ cancelled: false, reason: "closing" });
+    } finally { h.close(); }
+  });
+  it("T4 cancel_turn denies a parked approval with origin turn_cancelled", async () => {
+    const { h, finishes, make } = fixture();
+    try {
+      await h.session.receiveAgentMessage(make("one"));
+      const decision = h.broker.requestPermission({
+        toolName: "Bash", input: { command: "ls" }, mode: "build",
+        metadata: { name: "Bash", description: "", readOnly: false, destructive: false, riskLevel: "high", sideEffectScope: "workspace" },
+      } as unknown as Parameters<typeof h.broker.requestPermission>[0]);
+      await settle(h);
+      expect(h.received.some((m) => m.type === "permission_request")).toBe(true);
+      h.session.communicationCancelTurn();
+      await expect(decision).resolves.toMatchObject({ behavior: "deny" });
+      await settle(h);
+      expect(h.received).toContainEqual(expect.objectContaining({ type: "permission_settled", behavior: "deny", origin: "turn_cancelled" }));
+      (await nextFinish(h, finishes))(); await settle(h);
+    } finally { h.close(); }
+  });
+});
+

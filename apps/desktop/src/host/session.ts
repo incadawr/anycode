@@ -1745,6 +1745,20 @@ export class Session {
     return { sessionId: this.sessionId, engine: this.engine.id, state: this.shuttingDown ? "closing" : this.busy ? "running" : "idle", steering: this.engine.steeringStatus?.() ?? { supported: false, ready: false } };
   }
 
+  /**
+   * Taskana 4763: Sessions API `cancel_turn`. The Stop button's own path
+   * (onCancel) with an explicit answer for the states where there is nothing
+   * to stop. Idle is not an error, and a second call during one turn is safe.
+   */
+  communicationCancelTurn(): { cancelled: boolean; reason?: "idle" | "closing" | "relocating"; turnId?: string } {
+    if (this.shuttingDown) return { cancelled: false, reason: "closing" };
+    if (this.relocating) return { cancelled: false, reason: "relocating" };
+    if (!this.busy) return { cancelled: false, reason: "idle" };
+    const turnId = this.turnId ?? undefined;
+    this.onCancel();
+    return turnId === undefined ? { cancelled: true } : { cancelled: true, turnId };
+  }
+
   private agentDeliveryObserver?: (delivery: AgentDelivery) => void;
   observeAgentDeliveries(observer: (delivery: AgentDelivery) => void): void { this.agentDeliveryObserver = observer; }
 

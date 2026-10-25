@@ -17,6 +17,7 @@ async function fixture() {
     if (op === "send_message") return { envelope: payload, state: "queued" };
     if (op === "get_session_status") return { engine: "codex", state: "idle" };
     if (op === "get_session_result") return { availability: "available", latestResult: { publicAnswer: "PUBLIC_ANSWER", terminalReason: "completed", turnId: "host-turn" } };
+    if (op === "cancel_turn") return { cancelled: false, reason: "idle" };
     return undefined;
   });
   const manager = { listTabs: () => [{ sessionId: "allowed", workspace: dir, state: "running", pid: 10 }, { sessionId: "forbidden", workspace: tmpdir(), state: "running", pid: 11 }], communicationRequest: request };
@@ -34,12 +35,12 @@ describe("production communication MCP over real SDK HTTP", () => {
     const client = new Client({ name: "portable-supervisor", version: "1" });
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url)), f.discoveryFile] }));
     cleanups.push(() => client.close());
-    expect((await client.listTools()).tools).toHaveLength(6);
+    expect((await client.listTools()).tools).toHaveLength(7);
     expect(value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).engine).toBe("codex");
   });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {
     const f = await fixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "cancel_turn"]);
     expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["allowed"]);
     expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).state).toBe("idle");
     expect((await f.client.callTool({ name: "send_message", arguments: { sessionId: "forbidden", payload: "no", mode: "next_turn" } })).isError).toBe(true);
@@ -227,9 +228,9 @@ describe("session handles and wait_for_result (Taskana 4750b)", () => {
     expect(sessions.every((s) => !("handle" in s))).toBe(true);
   });
 
-  it("tools list now has 6 tools in order", async () => {
+  it("tools list now has 7 tools in order (cancel_turn appended, Taskana 4763)", async () => {
     const f = await waitFixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "cancel_turn"]);
   });
 
   it("wait_for_result resolves done for messageId", async () => {
@@ -380,3 +381,32 @@ describe("session handles and wait_for_result (Taskana 4750b)", () => {
     expect(b.latestResult.publicAnswer).toBe(`FOR ${second.envelope.messageId}`);
   });
 });
+
+describe("Sessions API cancel_turn (Taskana 4763)", () => {
+  it("T15 cancel_turn is listed with a strict sessionId-only schema", async () => {
+    const f = await fixture();
+    const tool = (await f.client.listTools()).tools.find((t) => t.name === "cancel_turn");
+    expect(tool?.inputSchema).toMatchObject({ type: "object", required: ["sessionId"], additionalProperties: false });
+    expect((await f.client.callTool({ name: "cancel_turn", arguments: { sessionId: "allowed", extra: true } })).isError).toBe(true);
+    expect((await f.client.callTool({ name: "cancel_turn", arguments: {} })).isError).toBe(true);
+    expect(f.request.mock.calls.filter((c) => c[1] === "cancel_turn")).toHaveLength(0);
+  });
+  it("T16 cancel_turn forwards to the host pinned to the tab workspace and passes idle through", async () => {
+    const f = await fixture();
+    f.request.mockImplementation(async (_session, op) => (op === "cancel_turn" ? { cancelled: true, turnId: "host-turn-7" } : undefined) as never);
+    expect(value(await f.client.callTool({ name: "cancel_turn", arguments: { sessionId: "allowed" } }))).toEqual({ sessionId: "allowed", cancelled: true, turnId: "host-turn-7" });
+    expect(f.request).toHaveBeenLastCalledWith("allowed", "cancel_turn", undefined, f.dir);
+    f.request.mockImplementation((async () => ({ cancelled: false, reason: "idle" })) as never);
+    expect(value(await f.client.callTool({ name: "cancel_turn", arguments: { sessionId: "allowed" } }))).toEqual({ sessionId: "allowed", cancelled: false, reason: "idle" });
+  });
+  it("T17 cancel_turn on an unshared, unknown or outside-folder session is refused before the host is called", async () => {
+    const f = await fixture();
+    for (const sessionId of ["forbidden", "nope"]) {
+      const result = await f.client.callTool({ name: "cancel_turn", arguments: { sessionId } });
+      expect(result.isError).toBe(true);
+      expect((result.content as Array<{ text: string }>)[0]!.text).toBe("Session unavailable or outside authorized workspace");
+    }
+    expect(f.request.mock.calls.filter((c) => c[1] === "cancel_turn")).toHaveLength(0);
+  });
+});
+
