@@ -64,6 +64,7 @@ describe("anycode-setup docs sync", () => {
       "mcp.md",
       "orchestration.md",
       "permissions.md",
+      "plugins.md",
       "proxy.md",
       "skills.md",
       "subagents.md",

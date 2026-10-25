@@ -9,6 +9,15 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Settings → Plugins: a management pane for plugins with a two-phase install
+  (staged preview with the MCP servers it would start, then confirm — with or
+  without allowing them), tier badges, per-plugin enable/pin/rollback/remove,
+  and the official index's available list. Skills, Subagents and MCP panes
+  cross-link to it, plugin-contributed MCP servers appear as read-only rows
+  with consent gates, and `/plugins` opens the pane. Plugins without the new
+  service render an honest "Plugins service unavailable" state; hand-placed
+  plugin directories keep working unchanged. See `docs/user/plugins.md` and
+  the authoring reference in `docs/development/plugins-authoring.md`.
 - User documentation in `docs/user/`: configuration files, engines, subagents,
   skills, MCP servers, permissions, proxy, orchestration and troubleshooting. The
   app ships a copy, and `docs/user/README.md` indexes it.

@@ -208,6 +208,7 @@ Topic files are named \`docs/user/<topic>.md\` relative to the docs location.
 | docs/user/engines.md | The Native, Codex and Claude engines: binary discovery and trust, sign-in, per-engine proxy, how engine tabs see profiles and delegate. |
 | docs/user/subagents.md | Built-in personas and \`.anycode/agents/*.md\` profiles: frontmatter reference, hard rules, connection routing, examples per engine kind. |
 | docs/user/skills.md | Skill folders and roots, precedence, the \`Skill\` tool and \`$name\` references, disabling, the built-in skills. |
+| docs/user/plugins.md | Plugins: what they are, where they live, trust tiers, the two-phase install, MCP-server consent, updates, rollback and pinning. |
 | docs/user/mcp.md | MCP servers across the config files, stdio and HTTP entries, \`\${env:VAR}\` secret references, failure behaviour, how to verify. |
 | docs/user/permissions.md | The mode ladder (plan, build, edit, auto, yolo), always-allow rules and patterns, workspace confinement, trusted binaries, the approval prompt. |
 | docs/user/orchestration.md | Supervisor, lead and builder setups built from profiles and engine tabs. |
