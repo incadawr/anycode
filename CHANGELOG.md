@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A markdown preview in the right-side dock fills the panel again; it had collapsed to a thin strip (most visible in Source mode).
+
 ## [0.0.41] — 2026-10-25
 
 ### Added
