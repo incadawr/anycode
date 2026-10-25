@@ -32,6 +32,14 @@ const messageSchema = z.object({
   correlationId: z.string().max(200).optional(), replyTo: z.string().max(200).optional(),
   idempotencyKey: z.string().min(1).max(200).optional(),
 }).strict();
+/** Taskana 4768: `create_session` input. `firstMessage` rides the same next_turn path as `send_message`. */
+const createSessionSchema = z.object({
+  workspace: z.string().min(1).max(4096),
+  engine: z.enum(["core", "codex", "claude"]).optional(),
+  model: z.string().min(1).max(128).optional(),
+  handle: z.string().max(200).optional(),
+  firstMessage: z.string().min(1).max(32000).optional(),
+}).strict();
 const statusSchema = z.object({ messageId: z.string().min(1) }).strict();
 /** Long-poll input: exactly one of messageId / correlationId; the wait is capped at 120 s (clients keep a longer request timeout or loop on `pending`). */
 const waitSchema = z.object({
@@ -42,6 +50,24 @@ const waitSchema = z.object({
 }).strict().refine((v) => (v.messageId !== undefined) !== (v.correlationId !== undefined), { message: "Provide messageId or correlationId" });
 /** Concurrent wait_for_result calls across all clients; the 33rd is refused. */
 const MAX_WAITERS = 32;
+/** Taskana 4768: at most this many `create_session` calls per window (per server instance; a restart resets it). */
+export const CREATE_SESSION_RATE_LIMIT = 5;
+export const CREATE_SESSION_RATE_WINDOW_MS = 60_000;
+/** Taskana 4768: most agent-opened tabs alive at once. */
+export const MAX_AGENT_OPENED_TABS = 8;
+/** Taskana 4768: the fixed `create_session` refusal vocabulary. The code is the error text's prefix; clients match on it. */
+export type CreateSessionRefusal = "not_allowed" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready";
+export type CreateSessionRequest = { workspace: string; engine?: "core" | "codex" | "claude"; model?: string; handle?: string };
+export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: Exclude<CreateSessionRefusal, "rate_limited" | "folder_not_found"> };
+const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
+  not_allowed: "the project does not allow agents to open tasks (sidebar project menu, off by default)",
+  not_trusted: "the folder is not trusted in AnyCode",
+  folder_not_found: "the workspace folder does not exist",
+  rate_limited: `at most ${CREATE_SESSION_RATE_LIMIT} sessions per minute`,
+  too_many: `at most ${MAX_AGENT_OPENED_TABS} agent-opened sessions alive at once`,
+  not_ready: "AnyCode could not open the tab right now (engine not signed in or tab limit reached)",
+};
+const createRefusal = (code: CreateSessionRefusal) => new Error(`create_session ${code}: ${CREATE_REFUSAL_TEXT[code]}`);
 /** Taskana 4763: the one message the approval tools use when the per-session switch is off. Clients match on it. */
 export const EXTERNAL_APPROVAL_OFF = "External approval is off for this session";
 /** Taskana 4763: most approvals one `list_pending_approvals` call returns. */
@@ -62,6 +88,7 @@ const tools = [
   { name: "list_pending_approvals", description: "List tool requests waiting for an answer, for sessions whose External approvals switch is on. Shows tool and a short scrubbed description, never file contents or raw input. Omit sessionId to list every approving session. Asks that need a human reading or typing (ExitPlanMode, AskUserQuestion) are listed with answerable:false.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, additionalProperties: false } },
   { name: "answer_approval", description: "Allow or deny one pending tool request of a session whose External approvals switch is on. First answer wins (UI or this tool); a later answer reports already_answered. No 'always allow' from outside AnyCode.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, approvalId: { type: "string", minLength: 1, maxLength: 100 }, decision: { enum: ["allow", "deny"] } }, required: ["sessionId", "approvalId", "decision"], additionalProperties: false } },
   { name: "cancel_turn", description: "Stop the running turn of an allowed session, like the Stop button: queued agent messages are rejected and parked approvals are denied. Idle is not an error (cancelled:false, reason:idle). Needs only the Sessions API switch.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
+  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive). The new session is shared immediately. Optional firstMessage is delivered like send_message next_turn and returns messageId (omitted if the host was not ready within 10 s; then use send_message). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
 ];
 
 async function writePrivateFile(path: string, text: string): Promise<void> {
@@ -87,6 +114,17 @@ export interface CommunicationServerOptions {
    * isSessionExposed). The legacy env-file mode passes none, so it never allows approvals.
    */
   isExternalApprovalEnabled?: (sessionId: string) => boolean;
+  /**
+   * Taskana 4768: opens a tab for `create_session`. Main owns the per-project
+   * switch, the trust check and tab creation. FAIL CLOSED: absent (the legacy
+   * env-file mode) means `create_session` always answers not_allowed.
+   */
+  createSessionByAgent?: (request: CreateSessionRequest) => Promise<CreateSessionOutcome>;
+  /** Clock for the creation rate window (tests inject it). */
+  now?: () => number;
+  /** How long `create_session` waits for the new host before it returns without messageId, and the poll step (tests shorten both). */
+  readyTimeoutMs?: number;
+  readyPollMs?: number;
 }
 
 /** Exactly one source: an env config FILE (legacy) or a live config OBJECT (Settings). */
@@ -167,6 +205,40 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       };
     });
     return { items, truncated: hostItems.length > limit };
+  };
+  const now = options.now ?? Date.now;
+  const creationTimes: number[] = [];
+  const agentOpenedSessions = new Set<string>();
+  const aliveAgentOpened = (): number => {
+    const live = new Set(options.manager.listTabs().map((t) => t.sessionId));
+    for (const id of agentOpenedSessions) if (!live.has(id)) agentOpenedSessions.delete(id);
+    return agentOpenedSessions.size;
+  };
+  const parseOr = <T>(schema: z.ZodType<T>, raw: unknown, hint: string): T => {
+    try { return schema.parse(raw); } catch (error) { if (error instanceof z.ZodError) throw new Error(hint); throw error; }
+  };
+  /** Shared by `send_message` and `create_session`'s firstMessage: idempotency -> ledger -> persist -> deliver -> persist. */
+  const sendMessage = async (input: z.infer<typeof messageSchema>): Promise<Record> => {
+    const recipient = await requireSession(input.sessionId);
+    const workspace = await realpath(recipient.workspace);
+    if (input.idempotencyKey) {
+      const existing = [...messages.values()].find((m) => m.idempotencyKey === input.idempotencyKey);
+      if (existing) {
+        const e = existing.envelope;
+        if (e.recipientSessionId !== input.sessionId || e.payload !== input.payload || e.mode !== input.mode || e.kind !== input.kind || e.correlationId !== input.correlationId || e.replyTo !== input.replyTo) throw new Error("Idempotency key reused with different input");
+        return existing;
+      }
+    }
+    if (messages.size >= 10000) throw new Error("Message ledger full; restart with a new discovery file after archiving ledger");
+    const envelope: AgentEnvelope = { messageId: randomUUID(), sender, recipientSessionId: input.sessionId, payload: input.payload, mode: input.mode, kind: input.kind, correlationId: input.correlationId, replyTo: input.replyTo, createdAt: new Date().toISOString() };
+    const record: Record = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, hostPid: recipient.pid };
+    messages.set(envelope.messageId, record);
+    await persist(); // Durable acceptance BEFORE any delivery side effect.
+    try {
+      const response = await options.manager.communicationRequest(input.sessionId, "send_message", envelope, recipient.workspace) as AgentDelivery;
+      record.state = response.state; record.detail = response.detail;
+    } catch { record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; }
+    await persist(); return record;
   };
   // Every in-flight wait, so close() can abort them all (no leaked timers or hosts polled after close).
   const waiters = new Set<AbortController>();
@@ -300,26 +372,42 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         return { ...tab, ...(status as object) };
       }
       case "send_message": {
-        const input = messageSchema.parse(raw); const recipient = await requireSession(input.sessionId);
-        const workspace = await realpath(recipient.workspace);
-        if (input.idempotencyKey) {
-          const existing = [...messages.values()].find((m) => m.idempotencyKey === input.idempotencyKey);
-          if (existing) {
-            const e = existing.envelope;
-            if (e.recipientSessionId !== input.sessionId || e.payload !== input.payload || e.mode !== input.mode || e.kind !== input.kind || e.correlationId !== input.correlationId || e.replyTo !== input.replyTo) throw new Error("Idempotency key reused with different input");
-            return existing;
+        return sendMessage(parseOr(messageSchema, raw, 'send_message expects sessionId, payload (1..32000 chars) and mode ("next_turn" or "steer"); optional: kind, correlationId, replyTo, idempotencyKey'));
+      }
+      case "create_session": {
+        const input = parseOr(createSessionSchema, raw, "create_session expects workspace (absolute path); optional: engine (core|codex|claude), model, handle, firstMessage (1..32000 chars)");
+        if (!options.createSessionByAgent) throw createRefusal("not_allowed");
+        if (!isAbsolute(input.workspace)) throw createRefusal("folder_not_found");
+        let resolved: string;
+        try { resolved = await realpath(input.workspace); } catch { throw createRefusal("folder_not_found"); }
+        if (restricted && !allowed.has(resolved)) throw createRefusal("not_allowed");
+        const at = now();
+        while (creationTimes.length > 0 && creationTimes[0]! <= at - CREATE_SESSION_RATE_WINDOW_MS) creationTimes.shift();
+        if (creationTimes.length >= CREATE_SESSION_RATE_LIMIT) throw createRefusal("rate_limited");
+        if (aliveAgentOpened() >= MAX_AGENT_OPENED_TABS) throw createRefusal("too_many");
+        creationTimes.push(at);
+        let outcome: CreateSessionOutcome;
+        try {
+          outcome = await options.createSessionByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
+        } catch { throw createRefusal("not_ready"); }
+        if (!outcome.ok) throw createRefusal(outcome.reason);
+        agentOpenedSessions.add(outcome.sessionId);
+        let messageId: string | undefined;
+        if (input.firstMessage !== undefined) {
+          const deadline = Date.now() + (options.readyTimeoutMs ?? 10_000);
+          const step = options.readyPollMs ?? 250;
+          for (;;) {
+            if (closing || signal.aborted) break;
+            try {
+              await options.manager.communicationRequest(outcome.sessionId, "get_session_status", undefined, resolved);
+              messageId = (await sendMessage({ sessionId: outcome.sessionId, payload: input.firstMessage, mode: "next_turn", kind: "agent_message" })).envelope.messageId;
+              break;
+            } catch { /* host still booting, or the tab is not visible yet: poll */ }
+            if (Date.now() >= deadline) break;
+            await sleep(step, signal).catch(() => {});
           }
         }
-        if (messages.size >= 10000) throw new Error("Message ledger full; restart with a new discovery file after archiving ledger");
-        const envelope: AgentEnvelope = { messageId: randomUUID(), sender, recipientSessionId: input.sessionId, payload: input.payload, mode: input.mode, kind: input.kind, correlationId: input.correlationId, replyTo: input.replyTo, createdAt: new Date().toISOString() };
-        const record: Record = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, hostPid: recipient.pid };
-        messages.set(envelope.messageId, record);
-        await persist(); // Durable acceptance BEFORE any delivery side effect.
-        try {
-          const response = await options.manager.communicationRequest(input.sessionId, name, envelope, recipient.workspace) as AgentDelivery;
-          record.state = response.state; record.detail = response.detail;
-        } catch { record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; }
-        await persist(); return record;
+        return { sessionId: outcome.sessionId, tabId: outcome.tabId, ...(outcome.handle !== undefined ? { handle: outcome.handle } : {}), ...(messageId !== undefined ? { messageId } : {}) };
       }
       case "get_message_status": {
         const { messageId } = statusSchema.parse(raw); const record = messages.get(messageId);

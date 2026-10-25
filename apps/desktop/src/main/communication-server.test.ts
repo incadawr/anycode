@@ -35,12 +35,12 @@ describe("production communication MCP over real SDK HTTP", () => {
     const client = new Client({ name: "portable-supervisor", version: "1" });
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url)), f.discoveryFile] }));
     cleanups.push(() => client.close());
-    expect((await client.listTools()).tools).toHaveLength(9);
+    expect((await client.listTools()).tools).toHaveLength(10);
     expect(value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).engine).toBe("codex");
   });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {
     const f = await fixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session"]);
     expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["allowed"]);
     expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).state).toBe("idle");
     expect((await f.client.callTool({ name: "send_message", arguments: { sessionId: "forbidden", payload: "no", mode: "next_turn" } })).isError).toBe(true);
@@ -228,9 +228,9 @@ describe("session handles and wait_for_result (Taskana 4750b)", () => {
     expect(sessions.every((s) => !("handle" in s))).toBe(true);
   });
 
-  it("tools list now has 9 tools in order (approval tools before cancel_turn, Taskana 4763)", async () => {
+  it("tools list has 10 tools in order (approval tools before cancel_turn, create_session last; Taskana 4763/4768)", async () => {
     const f = await waitFixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session"]);
   });
 
   it("wait_for_result resolves done for messageId", async () => {
@@ -568,3 +568,111 @@ describe("External approvals on the Sessions API (Taskana 4763)", () => {
   });
 });
 
+
+describe("Sessions API create_session (Taskana 4768)", () => {
+  type Created = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: "not_allowed" | "not_trusted" | "folder_not_found" | "too_many" | "not_ready" };
+  async function createFixture(options: { creator?: (request: { workspace: string; engine?: string; model?: string; handle?: string }) => Promise<Created>; ready?: boolean; clock?: { now: number } } = {}) {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-create-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const discoveryFile = join(dir, "communication.json");
+    const tabs: Array<{ sessionId: string; workspace: string; state: string; pid: number }> = [];
+    const request = vi.fn(async (_session: string, op: string, payload?: unknown) => {
+      if (op === "get_session_status") { if (options.ready === false) throw new Error("host not ready"); return { engine: "core", state: "idle" }; }
+      if (op === "send_message") return { envelope: payload, state: "queued" };
+      return undefined;
+    });
+    let counter = 0;
+    const creator = options.creator ?? (async (input) => {
+      const sessionId = `agent-${++counter}`;
+      tabs.push({ sessionId, workspace: input.workspace, state: "running", pid: 100 + counter });
+      return { ok: true, sessionId, tabId: `tab-${counter}`, ...(input.handle ? { handle: input.handle } : {}) };
+    });
+    const clock = options.clock;
+    const service = await startCommunicationServer({
+      manager: { listTabs: () => tabs, communicationRequest: request }, userData: dir, config: { workspaces: [], discoveryFile },
+      createSessionByAgent: creator, ...(clock ? { now: () => clock.now } : {}), readyTimeoutMs: 120, readyPollMs: 10,
+    });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "create-test", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    return { dir, client, request, tabs };
+  }
+  const errorText = (result: unknown) => (result as { isError?: boolean; content: Array<{ text: string }> }).content[0]!.text;
+
+  it("create_session: lists in tools and refuses not_allowed when no creator hook is wired (env-file mode)", async () => {
+    const f = await fixture();
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toContain("create_session");
+    const result = await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(errorText(result)).toMatch(/^create_session not_allowed/);
+  });
+
+  it("create_session: folder_not_found for a vanished path", async () => {
+    const f = await createFixture();
+    const result = await f.client.callTool({ name: "create_session", arguments: { workspace: join(f.dir, "gone") } });
+    expect(errorText(result)).toMatch(/^create_session folder_not_found/);
+    expect(f.tabs).toHaveLength(0);
+  });
+
+  it("create_session: not_trusted when the creator reports an untrusted folder", async () => {
+    const f = await createFixture({ creator: async () => ({ ok: false, reason: "not_trusted" }) });
+    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_trusted/);
+  });
+
+  it("create_session: not_ready is mapped to its own code", async () => {
+    const f = await createFixture({ creator: async () => ({ ok: false, reason: "not_ready" }) });
+    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_ready/);
+  });
+
+  it("create_session: rate_limited on the 6th creation within one minute", async () => {
+    const f = await createFixture();
+    for (let i = 0; i < 5; i++) expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } })).sessionId).toBe(`agent-${i + 1}`);
+    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session rate_limited/);
+    expect(f.tabs).toHaveLength(5);
+  });
+
+  it("create_session: too_many at 9 alive agent-opened tabs", async () => {
+    const clock = { now: 1_000_000 };
+    const f = await createFixture({ clock });
+    for (let i = 0; i < 8; i++) {
+      expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } })).sessionId).toBe(`agent-${i + 1}`);
+      clock.now += 20_000;
+    }
+    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session too_many/);
+    // Closing one frees a slot.
+    f.tabs.shift();
+    clock.now += 60_000;
+    expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } })).sessionId).toBe("agent-9");
+  });
+
+  it("create_session: creates a shared session, returns ids+handle, and delivers firstMessage through the next_turn ledger", async () => {
+    const f = await createFixture();
+    const created = value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, handle: "worker-1", firstMessage: "do the thing" } }));
+    expect(created).toMatchObject({ sessionId: "agent-1", tabId: "tab-1", handle: "worker-1" });
+    expect(typeof created.messageId).toBe("string");
+    const sent = f.request.mock.calls.find((c) => c[1] === "send_message")!;
+    expect(sent[2]).toMatchObject({ recipientSessionId: "agent-1", payload: "do the thing", mode: "next_turn" });
+    const status = value(await f.client.callTool({ name: "get_message_status", arguments: { messageId: created.messageId } }));
+    expect(status.envelope.recipientSessionId).toBe("agent-1");
+    expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["agent-1"]);
+  });
+
+  it("create_session: returns without messageId when the host never becomes ready", async () => {
+    const f = await createFixture({ ready: false });
+    const created = value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, firstMessage: "hello" } }));
+    expect(created.sessionId).toBe("agent-1");
+    expect(created).not.toHaveProperty("messageId");
+    expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(0);
+  });
+
+  it("send_message schema errors name sessionId, payload and mode instead of a zod issue list", async () => {
+    const f = await fixture();
+    const result = await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed" } });
+    const text = errorText(result);
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(text).toMatch(/payload/);
+    expect(text).toMatch(/next_turn/);
+    expect(text.startsWith("[")).toBe(false);
+  });
+});
