@@ -317,7 +317,7 @@ async function waitForFacade(ctx, step, timeoutMs = 45_000) {
   }
 }
 
-/** `GET /tabs/:tabId/checkpoints` -- opens/refreshes the timeline panel and returns its rows (README.md). */
+/** `GET /tabs/:tabId/checkpoints` -- requests a fresh checkpoint list (no timeline panel anymore) and returns its rows (README.md). */
 async function getCheckpoints(ctx, step) {
   return apiOk(ctx, step, "GET", `/tabs/${ctx.tabId}/checkpoints`);
 }

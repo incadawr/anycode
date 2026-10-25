@@ -7,6 +7,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The empty Timeline side panel is gone: the conversation now has a slim
+  tick rail on the left edge — one tick per message (from two messages on),
+  the current position highlighted — with a hover preview of the query,
+  click-to-scroll to that message, and a "Rewind to before this message"
+  action wherever a checkpoint exists for that turn.
+
 ### Fixed
 
 - A background subagent you stop from the UI is reported to the parent as stopped by the user (`<cancelled-by>user</cancelled-by>`), so the parent no longer relaunches it as a failure. The report card reads "stopped by you" and the Agent card shows "Cancelled" instead of "Done".
