@@ -107,16 +107,43 @@ export type ModelStreamEvent =
        */
       safe?: { code: string; message: string; statusCode?: number };
     }
-  /** Emitted by the provider adapter before each retry of a not-yet-started stream (design §2.9). */
-  | { type: "stream_retry"; attempt: number; maxAttempts: number; delayMs: number; reason: string }
+  | {
+      type: "stream_retry";
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      /**
+       * Taskana 4772 review F5: present only on a retry that follows a
+       * recovered network wait — the episode's duration (the retry fired at
+       * once; `delayMs` is 0). Rendered as "now (network back after N s)",
+       * never as a pending delay. Absent on every ordinary retry.
+       */
+      waitedMs?: number;
+      /**
+       * Taskana 4772 review F2: on a RECOVERY retry (waitedMs present), which
+       * waiting source recovered — mirrors `waiting_for_network.waitSource`,
+       * so a tab-level banner counting episodes per source decrements the
+       * right one. Absent otherwise and on legacy replays.
+       */
+      waitSource?: "parent" | "subagent";
+      reason: string;
+    }
   /**
    * Taskana 4772: the adapter parked a pre-content transient network failure and
    * is probing until the endpoint is reachable again (or the wait bound is hit,
    * which ends the turn with the original error). Emitted once per waiting
    * episode, before the probing begins; a recovery is announced by the usual
-   * `stream_retry`. Status only: it is not model output.
+   * `stream_retry` (which carries the same `waitSource`). Status only: it is
+   * not model output.
+   *
+   * Review F2: `waitSource` identifies WHO is waiting — the parent's own model
+   * port or an inline-subagent child sharing that port. A tab-level banner
+   * keyed on the flag alone flickers when parent and child park at once (the
+   * first recovery clears the other's banner); consumers that show ONE banner
+   * count episodes per source instead (set on +1, cleared on 0). Absent on
+   * replays from before the field existed; treat absence as the parent.
    */
-  | { type: "waiting_for_network" }
+  | { type: "waiting_for_network"; waitSource?: "parent" | "subagent" }
   /**
    * Provider-reported quota from response headers (Taskana 4090 / TASK.71).
    * Emitted after a model attempt completes, at most once per attempt;

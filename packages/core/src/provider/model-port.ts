@@ -671,11 +671,11 @@ export class AiSdkModelPort implements ModelPort {
 
   /**
    * Taskana 4772: parks a pre-content transient network failure. Yields
-   * `waiting_for_network` once, then probes on a 5 s -> 60 s tick (or at once
-   * when the waiter reports a hint) until the endpoint answers. Returns the
-   * episode's monotonic duration on recovery. Throws `error` (the last
-   * transient failure, unchanged) once the cumulative wait reaches
-   * `maxWaitMs`. Stop (`signal`) rejects at once.
+   * `waiting_for_network` once, probes at once, then probes on a 5 s -> 60 s
+   * tick (or immediately again when the waiter reports a hint) until the
+   * endpoint answers. Returns the episode's monotonic duration on recovery.
+   * Throws `error` (the last transient failure, unchanged) once the
+   * cumulative wait reaches `maxWaitMs`. Stop (`signal`) rejects at once.
    */
   async *#awaitNetworkRecovery(
     waiter: NetworkWaiter,
@@ -692,13 +692,23 @@ export class AiSdkModelPort implements ModelPort {
       box.wake?.();
     });
     try {
-      yield { type: "waiting_for_network" };
+      // Review F2: label the episode with WHO is waiting, so a tab-level
+      // banner can count per-source episodes instead of flickering when a
+      // parent and an inline-subagent child park on the same outage. Absent
+      // config ⇒ no label (consumers treat it as the parent).
+      yield this.config.networkWaiter !== undefined && this.config.networkWaitSource !== undefined
+        ? { type: "waiting_for_network", waitSource: this.config.networkWaitSource }
+        : { type: "waiting_for_network" };
       let tickMs = NETWORK_WAIT_FIRST_TICK_MS;
+      // F4: probe once at t=0 before arming the first tick — with the count
+      // budget exhausted (the only path that reaches the wait without the
+      // gate probe) and the network already back, recovery must not wait out
+      // an arbitrary 5 s tick to notice.
+      let fromHint = true;
       for (;;) {
         if (signal?.aborted) throw abortReason(signal);
         const remainingMs = maxWaitMs - spentBeforeMs - elapsedMs();
         if (remainingMs <= 0) throw error;
-        let fromHint = box.hinted;
         if (!fromHint) {
           await waitTickOrHint(Math.min(tickMs, remainingMs), box, signal);
           fromHint = box.hinted;
@@ -709,6 +719,7 @@ export class AiSdkModelPort implements ModelPort {
         }
         // Only a timer-driven miss backs the tick off; a hint-driven probe keeps the schedule.
         if (!fromHint) tickMs = Math.min(tickMs * 2, NETWORK_WAIT_MAX_TICK_MS);
+        fromHint = false;
       }
     } finally {
       unsubscribe?.();
@@ -1077,16 +1088,23 @@ export class AiSdkModelPort implements ModelPort {
       }
 
       // A recovered wait already was the backoff: the replay follows at once.
-      const delayMs =
-        recoveredAfterMs !== undefined
-          ? Math.round(recoveredAfterMs)
-          : retryDelayMs(attempt, pendingRetryError, policy);
+      // F5: `delayMs` is the PENDING delay before the replay fires, so a
+      // recovery carries 0 — the episode's duration rides `waitedMs` instead,
+      // for renderers that want to say "network back after N s; retrying now".
+      const delayMs = recoveredAfterMs !== undefined ? 0 : retryDelayMs(attempt, pendingRetryError, policy);
+      const waitedMs = recoveredAfterMs !== undefined ? Math.round(recoveredAfterMs) : undefined;
       attempt += 1;
       yield {
         type: "stream_retry",
         attempt,
         maxAttempts: policy.maxRetries,
         delayMs,
+        ...(waitedMs !== undefined ? { waitedMs } : {}),
+        // Review F2: on a recovery, name the source that just woke so a
+        // per-source banner count decrements the right one.
+        ...(waitedMs !== undefined && this.config.networkWaitSource !== undefined
+          ? { waitSource: this.config.networkWaitSource }
+          : {}),
         reason: describeRetryReason(pendingRetryError),
       };
       if (recoveredAfterMs === undefined) {

@@ -1409,6 +1409,22 @@ describe("AiSdkModelPort — networkWaitMaxMs (Taskana 4772: wait for the networ
     return waiter;
   }
 
+  /**
+   * Forces the first `answers.length` probes (by call order) to the scripted
+   * verdicts; later probes fall back to `waiter.online`. The gate probe and
+   * the wait's own t=0 probe run inside one microtask cascade, so a test
+   * cannot flip `online` between them — it must script by call index.
+   */
+  function scriptProbes(waiter: ReturnType<typeof makeWaiter>, answers: boolean[]): void {
+    let n = 0;
+    waiter.probe.mockImplementation(async () => {
+      const answer = n < answers.length ? answers[n]! : waiter.online;
+      n += 1;
+      waiter.probes += 1;
+      return answer;
+    });
+  }
+
   function failThenSucceed(failures: number, makeError: () => unknown): void {
     let calls = 0;
     mockStreamText.mockImplementation(() => {
@@ -1426,6 +1442,11 @@ describe("AiSdkModelPort — networkWaitMaxMs (Taskana 4772: wait for the networ
     );
     await vi.advanceTimersByTimeAsync(ms);
     return outcome;
+  }
+
+  /** Type of the run's last event ("" before any event lands). */
+  function typesEnd(run: { events: Array<{ type: string }> }): string {
+    return run.events.at(-1)?.type ?? "";
   }
 
   /** Pumps an event stream in the background so the test can drive fake time between events. */
@@ -1485,7 +1506,7 @@ describe("AiSdkModelPort — networkWaitMaxMs (Taskana 4772: wait for the networ
     const types = run.events.map((e) => e.type);
     expect(types.indexOf("waiting_for_network")).toBeGreaterThanOrEqual(0);
     expect(types.indexOf("waiting_for_network")).toBeLessThan(types.indexOf("stream_retry"));
-    expect(run.events.find((e) => e.type === "stream_retry")).toMatchObject({ attempt: 1, maxAttempts: 1, delayMs: 15_000 });
+    expect(run.events.find((e) => e.type === "stream_retry")).toMatchObject({ attempt: 1, maxAttempts: 1, delayMs: 0, waitedMs: 15_000 });
     expect(types.at(-1)).toBe("finish");
     expect(mockStreamText).toHaveBeenCalledTimes(2);
     await run.pump;
@@ -1508,6 +1529,112 @@ describe("AiSdkModelPort — networkWaitMaxMs (Taskana 4772: wait for the networ
     await vi.advanceTimersByTimeAsync(0);
     await run.pump;
     expect(waiter.listenerCount()).toBe(0);
+  });
+
+  // Review F4: the first probe fires at t=0, before the first 5 s tick — with
+  // the network already back the moment the wait starts, recovery must not
+  // sit out an arbitrary tick to notice.
+  it("probes at once on entering the wait: an already-back network recovers without a tick", async () => {
+    failThenSucceed(1, connectTimeout);
+    const waiter = makeWaiter(false);
+    // Probe #1 is the GATE probe (attempt 0 < maxRetries): offline, so the
+    // wait starts. Probe #2 is the wait's own t=0 probe: online — recovered.
+    scriptProbes(waiter, [false, true]);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 60_000 }), networkWaiter: waiter });
+    const run = pumpEvents(port.streamText(baseRequest));
+
+    // Zero time advanced: the gate probe parked the turn and the wait's own
+    // t=0 probe recovered it — no 5 s tick was ever waited out.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run.events.map((e) => e.type)).toContain("waiting_for_network");
+    const retry = run.events.find((e) => e.type === "stream_retry");
+    expect(retry).toMatchObject({ delayMs: 0 });
+    expect(retry).not.toHaveProperty("waitedMs", 5_000);
+    await run.pump;
+    expect(typesEnd(run)).toBe("finish");
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(waiter.probes).toBe(2);
+  });
+
+  // Review F8(a): the `attempt < policy.maxRetries` short-circuit on the gate
+  // probe — a transient failure with the count budget exhausted must SKIP the
+  // gate probe, go straight into waiting_for_network, and replay via the
+  // wait's own first probe (which passes).
+  it("count budget exhausted skips the gate probe and waits; the first wait probe recovers (delayMs 0, waitedMs set)", async () => {
+    // call 1: transient failure (episode 1); call 2: transient failure again
+    // (episode 2, count budget spent); call 3: success.
+    failThenSucceed(2, connectTimeout);
+    const waiter = makeWaiter(false);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 60_000 }), networkWaiter: waiter });
+    const run = pumpEvents(port.streamText(baseRequest));
+
+    // Park: the gate probe (attempt 0 < maxRetries) answers offline and the
+    // wait starts; episode 1's own t=0 probe also answers offline.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(waiter.probes).toBe(2); // gate probe + the wait's t=0 probe
+    expect(run.events.map((e) => e.type)).toContain("waiting_for_network");
+    expect(run.state.done).toBe(false);
+
+    // Network returns: episode 1 recovers on the first tick probe (~5 s),
+    // the replay (call 2) fails transiently with attempt == maxRetries — the
+    // gate probe is SKIPPED, so the ONLY probe that fires for episode 2 is
+    // its own t=0 probe. Both episodes resolve inside this one cascade.
+    waiter.online = true;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(run.events.filter((e) => e.type === "stream_retry")).toHaveLength(2);
+    expect(mockStreamText).toHaveBeenCalledTimes(3);
+    // Park probes: gate(1) + episode-1 t=0(1) + episode-1 first tick(1) +
+    // episode-2 t=0(1) = 4 — a gate probe for episode 2 would have made it 5.
+    expect(waiter.probes).toBe(4);
+    expect(run.events.filter((e) => e.type === "waiting_for_network")).toHaveLength(2);
+
+    const retries = run.events.filter((e) => e.type === "stream_retry");
+    expect(retries[1]).toMatchObject({ attempt: 2, maxAttempts: 1, delayMs: 0 });
+    expect(typeof (retries[1] as { waitedMs?: number }).waitedMs).toBe("number");
+    await run.pump;
+    expect(typesEnd(run)).toBe("finish");
+  });
+
+  // Review F8(b): TWO waiting episodes in one step — the second episode's
+  // deadline must subtract episode 1 through networkWaitSpentMs.
+  it("a second waiting episode's deadline subtracts the first episode (networkWaitSpentMs accumulation)", async () => {
+    // call 1: transient failure (episode 1); call 2: transient failure again
+    // (episode 2, count budget spent — no gate probe); call 3 never runs.
+    failThenSucceed(2, connectTimeout);
+    const waiter = makeWaiter(false);
+    // probe #1: gate (offline — parks episode 1).
+    // probe #2: episode-1 t=0 (offline — stays parked).
+    // probe #3: episode-1 first tick (ONLINE at ~5 s — episode 1 recovers,
+    //   waitedMs ≈ 5 s lands in networkWaitSpentMs).
+    // probe #4: episode-2 t=0 (offline — parks episode 2 for good; a gate
+    //   probe would have consumed this slot and answered online differently).
+    scriptProbes(waiter, [false, false, true, false]);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 40_000 }), networkWaiter: waiter });
+    const run = pumpEvents(port.streamText(baseRequest));
+
+    // Drive past the first recovery: episode 1 recovered at ~5 s, the replay
+    // failed transiently, episode 2 parked offline.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(run.events.filter((e) => e.type === "waiting_for_network")).toHaveLength(2);
+    expect(run.events.filter((e) => e.type === "stream_retry")).toHaveLength(1);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(run.state.done).toBe(false);
+
+    // Episode 1 spent ~5 s of the 40 s bound; the second episode must exhaust
+    // the REMAINING ~35 s, not a fresh 40 s. At 25 s more (~30 s total) the
+    // bounded run is still parked...
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(run.state.done).toBe(false);
+    // ...and the next ticks (up to +45 s, past even a full fresh episode's
+    // 40 s) see the cumulative bound crossed: the turn rejects with the
+    // ORIGINAL error. The rejection itself is the pin — the timer ladder
+    // never goes silent before it fires.
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(run.state.done).toBe(true);
+    expect((run.state.error as Error).message).toBe("fetch failed");
+    expect(run.events.filter((e) => e.type === "waiting_for_network")).toHaveLength(2);
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    await run.pump;
   });
 
   it("an abort during waiting rejects at once with the abort reason and stops probing", async () => {

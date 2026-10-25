@@ -61,6 +61,16 @@ export interface EndpointConfig {
    */
   networkWaiter?: NetworkWaiter;
   /**
+   * Taskana 4772 review F2: labels this port's `waiting_for_network` and
+   * recovery `stream_retry` events with WHO is waiting — the parent loop's
+   * own port ("parent") or an inline-subagent child's ("subagent"). A host
+   * where both can park at once (they share one network) uses the label so
+   * a tab-level banner counts episodes per source instead of flickering to
+   * the loudest stream. Unset ⇒ events carry no `waitSource` (consumers
+   * treat it as the parent), byte-identical to the pre-F2 wire.
+   */
+  networkWaitSource?: "parent" | "subagent";
+  /**
    * Catalog provider name (e.g. "Z.AI (GLM)", "Anthropic") used by the model port
    * to branch reasoning-effort mapping WITHIN a transport: GLM expects an effort
    * enum alongside the thinking budget, real Anthropic only the budget. The
