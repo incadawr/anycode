@@ -35,7 +35,7 @@ import { CLAUDE_POST_INTERRUPT_SETTLE_MS } from "../../../shared/claude-timeouts
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../session-engine.js";
-import type { IpcPermissionBroker } from "../../permission-broker.js";
+import type { EngineBridgeBroker } from "../../permission-broker.js";
 import { classifyEngineFailure } from "../../safe-failure.js";
 import { ClaudeApprovalBridge } from "./approval-bridge.js";
 import { ClaudeClient, ClaudeClientError, type ClaudeClientOptions } from "./claude-client.js";
@@ -464,7 +464,7 @@ function deadline(ms: number): SettleDeadline {
 
 export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bootstrap" | "onControlRequest" | "permissionModeFlag" | "model" | "effort" | "sessionId" | "resume"> {
   bootstrap: EngineBootstrap;
-  broker: IpcPermissionBroker;
+  broker: EngineBridgeBroker;
   selection?: ClaudeSessionSelection;
   timeouts?: Partial<ClaudeEngineTimeouts>;
   /**

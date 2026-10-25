@@ -95,16 +95,29 @@ export interface AlwaysAllowRule {
 }
 
 /**
- *  Stage 1: the ask-zone classifier record (default off). Absent =
- * off. `kind` is closed to `command` (an external program that receives each
- * ask-zone Bash command line on stdin). Carried to the host as one JSON env var.
+ *  Stage 1 / : the ask-zone classifier record (default
+ * off). Absent = off. Discriminated on `kind`:
+ *   - `command` (Stage 1): an external program receiving each ask-zone Bash
+ *     command line on stdin;
+ *   - `model` (4730, implementation B): a model from the user's connections —
+ *     `connectionId`/`model` both optional, absent meaning "the session's own
+ *     connection/model".
+ * Carried to the host as one JSON env var.
  */
-export interface PermissionClassifierSettings {
-  enabled: boolean;
-  kind: "command";
-  command: string;
-  timeoutMs?: number;
-}
+export type PermissionClassifierSettings =
+  | {
+      enabled: boolean;
+      kind: "command";
+      command: string;
+      timeoutMs?: number;
+    }
+  | {
+      enabled: boolean;
+      kind: "model";
+      connectionId?: string;
+      model?: string;
+      timeoutMs?: number;
+    };
 
 /**
  * One per-path binary-trust consent, as persisted in

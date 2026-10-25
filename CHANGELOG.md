@@ -31,6 +31,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   release notes, and link — when the repo secrets `TELEGRAM_BOT_TOKEN` and
   `TELEGRAM_CHAT_ID` are configured; otherwise the announcement step is
   skipped without failing the release.
+- The permission classifier (default off) can now use a model from your
+  connections (`permissions.classifier` with `kind:"model"`), extends to
+  inline subagents (which classify against your recent messages, never the
+  agent's own prompts), and covers Codex/Claude session approval prompts.
 
 ### Fixed
 
