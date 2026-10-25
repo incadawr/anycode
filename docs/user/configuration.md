@@ -137,6 +137,7 @@ telemetry and repo map.
 | Add a subagent profile | `<project>/.anycode/agents/<name>.md`, not a JSON file |
 | Stop being asked about a command | Settings → Permissions (always-allow rule) |
 | Route traffic through a proxy | Settings → Network |
+| Let an external agent message a live session | Settings → Sessions API (the `communication` block) |
 | Change tool concurrency or turn limits | Settings → Tools |
 | Turn on telemetry or the repo map | `telemetry` or `repoMap` in the shared config |
 
@@ -144,6 +145,8 @@ telemetry and repo map.
 
 - [engines.md](engines.md): the three engines and how they differ from providers.
 - [mcp.md](mcp.md): the MCP walkthrough.
+- [sessions-api.md](sessions-api.md): the `communication` block in
+  `settings.json` is owned by Settings → Sessions API.
 - [lsp.md](lsp.md): the language-server walkthrough.
 - [skills.md](skills.md) and [subagents.md](subagents.md): extensibility surfaces.
 - [permissions.md](permissions.md): the approval model.

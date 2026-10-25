@@ -2,6 +2,7 @@ import { mkdtemp, writeFile, readFile, stat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer as createNetServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport, StdioClientTransport } from "@anycode/core/communication-mcp";
 import { startCommunicationServer } from "./communication-server.js";
@@ -90,5 +91,89 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(record.state).toBe("unknown");
     expect(value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "clarification", mode: "steer", idempotencyKey: "uncertain" } })).envelope.messageId).toBe(record.envelope.messageId);
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+  });
+});
+
+describe("live config option and session exposure (Taskana 4747)", () => {
+  async function liveFixture(options: { workspaces: string[]; port?: number; exposed?: (sessionId: string) => boolean; tabs?: Array<{ sessionId: string; workspace: string; state: string; pid: number }> }) {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-live-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const discoveryFile = join(dir, "communication.json");
+    const request = vi.fn(async (..._args: unknown[]) => undefined);
+    const tabs = options.tabs ?? [{ sessionId: "a", workspace: dir, state: "running", pid: 1 }, { sessionId: "b", workspace: tmpdir(), state: "running", pid: 2 }];
+    const manager = { listTabs: () => tabs, communicationRequest: request };
+    const service = await startCommunicationServer({ manager, userData: dir, config: { workspaces: options.workspaces, port: options.port ?? 0, discoveryFile }, isSessionExposed: options.exposed });
+    cleanups.push(() => service.close());
+    return { dir, discoveryFile, service, request, manager };
+  }
+  async function connect(discoveryFile: string) {
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "live-test", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    return client;
+  }
+
+  it("starts from an object config with the same tools and folder scope as the file form", async () => {
+    const f = await liveFixture({ workspaces: [tmpdir()] });
+    const client = await connect(f.discoveryFile);
+    expect(value(await client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["b"]);
+  });
+
+  it("with an empty folder list, lists only sessions the exposure predicate allows", async () => {
+    const f = await liveFixture({ workspaces: [], exposed: (id) => id === "b" });
+    const client = await connect(f.discoveryFile);
+    expect(value(await client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["b"]);
+  });
+
+  it("refuses a not-exposed session as unavailable, with the same message as an unknown one (no existence leak)", async () => {
+    const f = await liveFixture({ workspaces: [], exposed: () => false });
+    const client = await connect(f.discoveryFile);
+    const unknown = await client.callTool({ name: "get_session_status", arguments: { sessionId: "missing" } });
+    const hidden = await client.callTool({ name: "get_session_status", arguments: { sessionId: "a" } });
+    expect(hidden.isError).toBe(true);
+    expect(hidden.content).toEqual(unknown.content);
+    expect(f.request.mock.calls.filter((c) => c[1] === "get_session_status")).toHaveLength(0);
+  });
+
+  it("flips exposure live without restarting the server", async () => {
+    let on = false;
+    const f = await liveFixture({ workspaces: [], exposed: () => on });
+    const client = await connect(f.discoveryFile);
+    expect(value(await client.callTool({ name: "list_sessions", arguments: {} })).sessions).toEqual([]);
+    on = true;
+    expect(value(await client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["a", "b"]);
+  });
+
+  it("writes the discovery file with mode 0600 and removes it on close", async () => {
+    const f = await liveFixture({ workspaces: [] });
+    expect(await stat(f.discoveryFile).then((s) => s.mode & 0o777)).toBe(0o600);
+    await f.service.close();
+    await expect(stat(f.discoveryFile)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a relative folder in the object config with a rejected promise", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-live-rel-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    await expect(startCommunicationServer({ manager: { listTabs: () => [], communicationRequest: vi.fn() }, userData: dir, config: { workspaces: ["relative/dir"], port: 0, discoveryFile: join(dir, "d.json") } })).rejects.toThrow(/absolute/);
+  });
+
+  it("refuses an invalid object config (port out of range) with a rejected promise", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-live-port-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    await expect(startCommunicationServer({ manager: { listTabs: () => [], communicationRequest: vi.fn() }, userData: dir, config: { workspaces: [], port: 70000 } as never })).rejects.toThrow();
+  });
+
+  it("still refuses an empty folder list in the env config FILE (backward-compatible contract)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-file-empty-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const configFile = join(dir, "config.json"); await writeFile(configFile, JSON.stringify({ workspaces: [], discoveryFile: join(dir, "d.json") }));
+    await expect(startCommunicationServer({ manager: { listTabs: () => [], communicationRequest: vi.fn() }, userData: dir, configFile })).rejects.toThrow();
+  });
+
+  it("starts, closes and restarts on the same fixed port", async () => {
+    const probe = createNetServer(); await new Promise<void>((r) => probe.listen(0, "127.0.0.1", () => r()));
+    const port = (probe.address() as { port: number }).port; await new Promise<void>((r) => probe.close(() => r()));
+    const first = await liveFixture({ workspaces: [], port });
+    await first.service.close();
+    const again = await startCommunicationServer({ manager: first.manager, userData: first.dir, config: { workspaces: [], port, discoveryFile: first.discoveryFile } });
+    expect(again.url).toBe(`http://127.0.0.1:${port}/mcp`);
+    await again.close();
   });
 });

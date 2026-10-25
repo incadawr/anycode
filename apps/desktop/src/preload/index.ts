@@ -31,6 +31,22 @@ import {
 // as mcpConfig above; main owns zod validation + path custody in
 // main/lsp-config-ipc.ts).
 import {
+  COMMUNICATION_ADD_WORKSPACE_CHANNEL,
+  COMMUNICATION_COPY_CONFIG_CHANNEL,
+  COMMUNICATION_GET_CHANNEL,
+  COMMUNICATION_REGENERATE_TOKEN_CHANNEL,
+  COMMUNICATION_REMOVE_WORKSPACE_CHANNEL,
+  COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL,
+  COMMUNICATION_SET_ENABLED_CHANNEL,
+  COMMUNICATION_SET_PORT_CHANNEL,
+  COMMUNICATION_SET_SESSION_ACCESS_CHANNEL,
+  type CommunicationCopyClient,
+  type CommunicationCopyConfigResult,
+  type CommunicationGetResult,
+  type CommunicationMutationResult,
+  type CommunicationRegenerateResult,
+} from "../shared/communication-config.js";
+import {
   LSP_CATALOG_STATUS_CHANNEL,
   LSP_CUSTOM_UPSERT_CHANNEL,
   LSP_DISABLE_CHANNEL,
@@ -1035,6 +1051,30 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(LSP_DISABLE_CHANNEL, req) as Promise<LspMutationResult>,
     customUpsert: (req: LspCustomUpsertRequest): Promise<LspMutationResult> =>
       ipcRenderer.invoke(LSP_CUSTOM_UPSERT_CHANNEL, req) as Promise<LspMutationResult>,
+  },
+  // Taskana 4747: `communication.*` — the Sessions API (local MCP for external
+  // agents) control plane. The renderer names folders only by asking for the
+  // native dialog (`addWorkspace` takes NO arguments) and sends a tabId for the
+  // per-session switch; no path and no token ever cross this bridge.
+  communication: {
+    get: (): Promise<CommunicationGetResult> =>
+      ipcRenderer.invoke(COMMUNICATION_GET_CHANNEL, {}) as Promise<CommunicationGetResult>,
+    setEnabled: (enabled: boolean): Promise<CommunicationMutationResult> =>
+      ipcRenderer.invoke(COMMUNICATION_SET_ENABLED_CHANNEL, { enabled }) as Promise<CommunicationMutationResult>,
+    setPort: (port: number | null): Promise<CommunicationMutationResult> =>
+      ipcRenderer.invoke(COMMUNICATION_SET_PORT_CHANNEL, { port }) as Promise<CommunicationMutationResult>,
+    addWorkspace: (): Promise<CommunicationMutationResult> =>
+      ipcRenderer.invoke(COMMUNICATION_ADD_WORKSPACE_CHANNEL, {}) as Promise<CommunicationMutationResult>,
+    removeWorkspace: (workspace: string): Promise<CommunicationMutationResult> =>
+      ipcRenderer.invoke(COMMUNICATION_REMOVE_WORKSPACE_CHANNEL, { workspace }) as Promise<CommunicationMutationResult>,
+    regenerateToken: (): Promise<CommunicationRegenerateResult> =>
+      ipcRenderer.invoke(COMMUNICATION_REGENERATE_TOKEN_CHANNEL, {}) as Promise<CommunicationRegenerateResult>,
+    copyConfig: (client: CommunicationCopyClient): Promise<CommunicationCopyConfigResult> =>
+      ipcRenderer.invoke(COMMUNICATION_COPY_CONFIG_CHANNEL, { client }) as Promise<CommunicationCopyConfigResult>,
+    setDefaultAccess: (access: "off" | "on"): Promise<CommunicationMutationResult> =>
+      ipcRenderer.invoke(COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL, { access }) as Promise<CommunicationMutationResult>,
+    setSessionAccess: (tabId: string, enabled: boolean): Promise<CommunicationMutationResult> =>
+      ipcRenderer.invoke(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, { tabId, enabled }) as Promise<CommunicationMutationResult>,
   },
   // P7.20/F23 W2 (design/slice-P7.20-cut.md §5): `skills.*` — seven thin invoke
   // wrappers over the skills management channels (main owns zod validation +

@@ -618,6 +618,12 @@ export interface TabLogger {
 }
 
 export interface TabHostManagerDeps {
+  /**
+   * Taskana 4747: called once a tab (root or child) is registered, so main can
+   * ensure its per-session Sessions API switch exists (a child inherits its
+   * parent's). Absent in legacy tests.
+   */
+  onSessionRegistered?: (info: { sessionId: string; parentSessionId?: string }) => void;
   /** utilityProcess.fork (or a fake). */
   fork: HostForkFn;
   /**
@@ -1169,6 +1175,7 @@ export class TabHostManager {
     };
     this.tabs.set(tab.tabId, tab);
     this.bindings.set(params.sessionId, tab.tabId);
+    this.deps.onSessionRegistered?.({ sessionId: params.sessionId });
     this.spawnTabHost(tab, { firstSpawn: true });
     return { ok: true, tab };
   }
@@ -1934,6 +1941,8 @@ export class TabHostManager {
       }
 
       this.tabs.set(childTabId, childTab);
+      // Taskana 4747: a child session registers with its parent's Sessions API switch.
+      this.deps.onSessionRegistered?.({ sessionId: childSessionId, parentSessionId: parentTab.sessionId });
       if (resumable !== undefined) {
         this.followUpAliases.set(spawnKey, childSessionId);
         while (this.followUpAliases.size > FOLLOW_UP_ALIASES_MAX) {

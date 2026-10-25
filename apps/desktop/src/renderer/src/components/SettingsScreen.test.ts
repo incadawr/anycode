@@ -580,12 +580,20 @@ describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tool
       // Taskana 4704 §3.9: orchestration roles, right after Subagents.
       "roles",
       "plugins",
+      // Taskana 4747: the Sessions API, right after Plugins.
+      "sessions-api",
       "environment",
       "appearance",
       "shortcuts",
       "about",
     ]);
-    expect(SETTINGS_PANES).toHaveLength(18);
+    expect(SETTINGS_PANES).toHaveLength(19);
+  });
+
+  it("the Sessions API pane is found by its search keywords (Taskana 4747)", () => {
+    expect(filterSettingsPanes("sessions api")).toContain("sessions-api");
+    expect(filterSettingsPanes("claude code")).toContain("sessions-api");
+    expect(filterSettingsPanes("external agent")).toContain("sessions-api");
   });
 
   it("every pane carries a non-empty label, description, and icon component", () => {

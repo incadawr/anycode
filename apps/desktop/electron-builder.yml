@@ -33,6 +33,9 @@ files:
 extraResources:
   - from: ../../docs/user
     to: docs/user
+  # Taskana 4747: the stdio adapter the Sessions API copies to userData (main/communication-adapter.ts).
+  - from: ../../examples/agent-communication/stdio.mjs
+    to: agent-communication/stdio.mjs
 
 # Native binaries that must live on the real filesystem, not inside app.asar
 # (they are exec'd/dlopen'd, which the asar virtual FS cannot serve). The

@@ -12,11 +12,19 @@ export interface CommunicationManager {
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
   communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string): Promise<unknown>;
 }
+/**
+ * One schema for both config sources. The env file (`configFile`) additionally
+ * requires at least one folder (its contract predates the Settings UI); the live
+ * `config` object may carry an EMPTY folder list, meaning "no folder restriction":
+ * the per-session switch alone gates exposure (Taskana 4747 owner amendment).
+ */
 const configSchema = z.object({
-  workspaces: z.array(z.string()).min(1),
+  workspaces: z.array(z.string()),
   port: z.number().int().min(0).max(65535).default(0),
   discoveryFile: z.string().optional(),
 }).strict();
+/** Live (settings-driven) communication config, validated by the same schema. */
+export type LiveCommunicationConfig = z.input<typeof configSchema>;
 const sessionSchema = z.object({ sessionId: z.string().min(1) }).strict();
 const messageSchema = z.object({
   sessionId: z.string().min(1), payload: z.string().min(1).max(32000),
@@ -41,9 +49,23 @@ async function writePrivateFile(path: string, text: string): Promise<void> {
   } finally { await rm(temporary, { force: true }); }
 }
 
-export async function startCommunicationServer(options: { manager: CommunicationManager; configFile: string; userData: string }): Promise<{ close(): Promise<void>; url: string; discoveryFile: string }> {
-  const config = configSchema.parse(JSON.parse(await readFile(options.configFile, "utf8")));
+export interface CommunicationServerOptions {
+  manager: CommunicationManager;
+  userData: string;
+  /** Per-session exposure gate, read on every request (live switch changes need no restart). Absent = every session. */
+  isSessionExposed?: (sessionId: string) => boolean;
+}
+
+/** Exactly one source: an env config FILE (legacy) or a live config OBJECT (Settings). */
+export type CommunicationServerSource = { configFile: string } | { config: LiveCommunicationConfig };
+
+export async function startCommunicationServer(options: CommunicationServerOptions & CommunicationServerSource): Promise<{ close(): Promise<void>; url: string; discoveryFile: string }> {
+  const hasFile = "configFile" in options;
+  if (hasFile === ("config" in options)) throw new Error("Communication server needs exactly one of configFile or config");
+  const config = configSchema.parse("configFile" in options ? JSON.parse(await readFile(options.configFile, "utf8")) : options.config);
+  if (hasFile && config.workspaces.length === 0) throw new Error("Communication workspaces must not be empty");
   if (config.workspaces.some((path) => !isAbsolute(path))) throw new Error("Communication workspaces must be absolute");
+  const restricted = config.workspaces.length > 0;
   const allowed = new Set(await Promise.all(config.workspaces.map((path) => realpath(path))));
   const discoveryFile = config.discoveryFile ?? `${options.userData}/communication.json`;
   if (!isAbsolute(discoveryFile)) throw new Error("Communication discoveryFile must be absolute");
@@ -74,6 +96,8 @@ export async function startCommunicationServer(options: { manager: Communication
   const tabs = async () => {
     const result = [];
     for (const tab of options.manager.listTabs()) {
+      if (options.isSessionExposed && !options.isSessionExposed(tab.sessionId)) continue;
+      if (!restricted) { result.push(tab); continue; }
       let path: string;
       try { path = await realpath(tab.workspace); } catch { continue; }
       if (allowed.has(path)) result.push(tab);
@@ -119,7 +143,8 @@ export async function startCommunicationServer(options: { manager: Communication
       case "get_message_status": {
         const { messageId } = statusSchema.parse(raw); const record = messages.get(messageId);
         if (!record) throw new Error("Message unavailable");
-        if (record.workspace) { if (!allowed.has(record.workspace)) throw new Error("Message outside authorized workspace"); }
+        if (options.isSessionExposed && !options.isSessionExposed(record.envelope.recipientSessionId)) throw new Error("Message unavailable");
+        if (record.workspace) { if (restricted && !allowed.has(record.workspace)) throw new Error("Message outside authorized workspace"); }
         else await requireSession(record.envelope.recipientSessionId);
         try {
           const tab = await requireSession(record.envelope.recipientSessionId);

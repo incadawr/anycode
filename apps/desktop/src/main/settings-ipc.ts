@@ -950,6 +950,12 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   if ("recognizer" in rawPatch) {
     return { ok: false, reason: "invalid" };
   }
+  // Taskana 4747: `settings.communication` (the Sessions API block) is owned by
+  // the dedicated `anycode:communication-*` channels (main/communication-ipc.ts),
+  // which own the per-session switch, the folder boundary and the server lifecycle.
+  if ("communication" in rawPatch) {
+    return { ok: false, reason: "invalid" };
+  }
 
   // TASK.119/TASK.147-с2: `sessionLimits` rides the generic patch channel, but a
   // wrong-shaped or out-of-range section is refused loudly, never persisted (a

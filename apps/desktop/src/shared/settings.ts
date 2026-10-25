@@ -757,6 +757,21 @@ export interface AnycodeSettings {
     officialIndexUrl?: string;
     mcpConsent?: { plugin: string; serversHash: string; grantedAt: string }[];
   };
+  /**
+   * Sessions API (Taskana 4747; additive-optional, version NOT bumped). Owned
+   * by Settings → Sessions API and written ONLY through the dedicated
+   * `anycode:communication-*` channels, never via generic settings-set.
+   * `enabled`: the local MCP runs. `workspaces`: optional outer folder
+   * boundary (empty = no folder restriction; sessions still gate on their own
+   * switch). `port`: absent/undefined = random free port. `defaultSessionAccess`:
+   * initial per-tab switch for new tabs (absent = "off").
+   */
+  communication?: {
+    enabled: boolean;
+    workspaces: string[];
+    port?: number;
+    defaultSessionAccess: "off" | "on";
+  };
 }
 
 /**

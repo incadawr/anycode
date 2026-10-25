@@ -1,0 +1,122 @@
+# Sessions API
+
+The Sessions API lets an external agent, such as Claude Code or Codex, list the
+live AnyCode sessions you share with it, read their status and last answer, and
+send them a message. It is a local MCP endpoint that runs while AnyCode is open.
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `list_sessions` | Lists the shared sessions. No transcript or credentials. |
+| `get_session_status` | Engine and running/idle state of a shared session. |
+| `get_session_result` | Latest completed public answer and its turn identity. No reasoning. |
+| `send_message` | Sends a message. `mode: next_turn` queues it for the next turn; `mode: steer` steers an active Codex turn. |
+| `get_message_status` | Delivery state of a message you sent. |
+
+A session that is not shared is answered as unavailable, exactly like a session
+that does not exist.
+
+## Enable it in Settings
+
+1. Open **Settings → Sessions API** and turn on **Enable local Sessions API**.
+2. Optional: **Add folder…** to limit sharing to exact folders. The picker is the
+   only way to add one. Subfolders are not included, and symlinks are resolved.
+   With no folder, only the sessions you switch on are shared.
+3. Optional: set a **Port**. Leave it empty for a random free port.
+4. Check the status line. It reads `Listening on 127.0.0.1:PORT` when the
+   endpoint is up.
+
+Changes apply immediately. Open client connections are dropped when you change
+the toggle, the port, the folders or the token.
+
+## Share a session
+
+Every tab has a **Sessions API** row in its environment menu. Switch it on to
+share that session. New tabs start with the default from **Sessions API → New
+sessions are shared by default**, which is off unless you change it. A child
+session started by a shared session inherits the switch. The switch is saved with
+the session, so it survives a restart and a resume.
+
+## Connect an external client
+
+Click **Copy MCP config** and choose **Claude Code** or **Codex**. The button is
+enabled only while the endpoint is listening.
+
+- Claude Code: run the one-line `claude mcp add` command shown below the buttons,
+  or paste the copied JSON into your Claude Code MCP configuration.
+- Codex: paste the copied `[mcp_servers.anycode-sessions]` table into your Codex
+  configuration.
+- Other clients: use the copied JSON as the `mcpServers` entry.
+
+The copied config runs the bundled stdio adapter with the discovery file as its
+argument. The adapter reads the token from that file itself, so the copied
+config holds no token. The adapter is copied to the AnyCode user-data directory,
+so the config keeps working after an app update. The client needs **Node 22+**.
+
+## Token and discovery file
+
+- The token is generated when the server starts. It is never shown in Settings,
+  never written to `settings.json`, and never logged.
+- The discovery file is `communication.json` under the AnyCode user-data
+  directory. It holds the URL, the token and the folder list, with mode `0600`.
+  Keep it private.
+- **Regenerate token** writes a new token to the discovery file. A running
+  stdio adapter keeps the old token, so restart the external client's MCP
+  connection after you regenerate.
+
+## Environment override
+
+Setting `ANYCODE_COMMUNICATION_CONFIG=/absolute/path/config.json` when you start
+AnyCode takes over the endpoint. It ignores the Settings values, and the Settings
+pane becomes read-only with the note "Controlled by ANYCODE_COMMUNICATION_CONFIG".
+The file has the older shape, `{"workspaces": [...], "port": 0, "discoveryFile": "..."}`,
+and every session in those folders is shared. It needs at least one folder.
+
+## Manual settings
+
+The Settings pane writes this block to `~/.anycode/settings.json`:
+
+```json
+"communication": { "enabled": true, "workspaces": ["/abs/path"], "port": 0, "defaultSessionAccess": "off" }
+```
+
+Hand edits apply at the next launch. Every key is optional. A malformed value
+falls back to its default (for example, a bad `port` means a random port). An
+unknown key, or a block that is not an object, turns the endpoint off, and the
+rest of `settings.json` keeps working.
+
+## Worked example: wake a session
+
+1. In the client, call `list_sessions`. The shared session appears with its
+   `sessionId`.
+2. Call `send_message` with `sessionId`, `payload`, and `mode: "next_turn"`.
+   The message queues for that session's next turn.
+3. Call `get_message_status` with the returned `messageId`. A state of
+   `acknowledged` means the session took the message. It does not prove the
+   model has applied it.
+
+## Security model
+
+- Local only. The server binds `127.0.0.1` and refuses browser origins.
+- Every holder of the token acts as the same local supervisor. It can message
+  the shared sessions. Treat the discovery file as a credential.
+- The folder list is an outer boundary, and the per-session switch is the
+  inner one. A session must pass both when folders are set.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| Status reads **Off** | The toggle is off. Turn it on. |
+| Status reads **Error: the port is already in use** | Another program holds the port. Pick another port, or leave it empty. |
+| Status reads **Error: a folder in the list is no longer available** | The folder was moved or deleted. Remove it, or re-add it. |
+| Status reads **Error: the server could not start** | Check the AnyCode log. The log names the problem without the token. |
+| `list_sessions` returns no sessions | No session is shared yet. Switch on the session's **Sessions API** row. |
+| Copy buttons are disabled | The endpoint is not listening. Fix the status first. |
+| Copied config says the adapter was not found | This build does not include the adapter. Install an official build. |
+| `401` after you regenerate the token | The client still uses the old token. Restart its MCP connection. |
+| Settings pane is read-only | `ANYCODE_COMMUNICATION_CONFIG` is set. Unset it and restart AnyCode to use Settings. |
+
+See also [configuration.md](configuration.md) and
+[troubleshooting.md](troubleshooting.md).

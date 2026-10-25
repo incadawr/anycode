@@ -348,6 +348,20 @@ describe("createPinReservations — in-flight pin refcount (W10-FIX F3, layer a)
   });
 });
 
+describe("TabHostManager — session registration hook (Taskana 4747)", () => {
+  it("reports a new root tab's sessionId, with no parent", () => {
+    const { fork } = dyingForkRig();
+    const { window } = windowRig();
+    const seen: Array<{ sessionId: string; parentSessionId?: string }> = [];
+    const manager = new TabHostManager({
+      fork, hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => window, env: () => ({}), logger: silentLogger, limits: {},
+      onSessionRegistered: (info) => seen.push(info),
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "root-session", resume: false });
+    expect(seen).toEqual([{ sessionId: "root-session" }]);
+  });
+});
+
 describe("TabHostManager — per-tab circuit breaker", () => {
   it("stops respawning a single crash-looping tab after MAX_RAPID_RESPAWNS", async () => {
     const { fork, hosts } = dyingForkRig();

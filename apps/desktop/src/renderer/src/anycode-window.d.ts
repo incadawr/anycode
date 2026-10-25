@@ -112,6 +112,13 @@ import type {
 // preview-panel/md-preview above).
 import type { RecognizerProbeRequest, RecognizerProbeResult, RecognizerSetRequest } from "../../shared/recognizer";
 import type {
+  CommunicationCopyClient,
+  CommunicationCopyConfigResult,
+  CommunicationGetResult,
+  CommunicationMutationResult,
+  CommunicationRegenerateResult,
+} from "../../shared/communication-config";
+import type {
   WorkspaceTrustDecideRequest,
   WorkspaceTrustDecideResult,
   WorkspaceTrustForgetRequest,
@@ -589,6 +596,20 @@ declare global {
       // path); enable writes a catalog preset into a scope's `lspServers`,
       // disable removes one by name, customUpsert adds or replaces a
       // non-catalog entry. Every mutator resolves a fresh status on success.
+      // Taskana 4747: the Sessions API (local MCP for external agents). No path
+      // and no token cross this bridge; copyConfig returns JSON the renderer
+      // writes to the clipboard and never persists.
+      communication: {
+        get(): Promise<CommunicationGetResult>;
+        setEnabled(enabled: boolean): Promise<CommunicationMutationResult>;
+        setPort(port: number | null): Promise<CommunicationMutationResult>;
+        addWorkspace(): Promise<CommunicationMutationResult>;
+        removeWorkspace(workspace: string): Promise<CommunicationMutationResult>;
+        regenerateToken(): Promise<CommunicationRegenerateResult>;
+        copyConfig(client: CommunicationCopyClient): Promise<CommunicationCopyConfigResult>;
+        setDefaultAccess(access: "off" | "on"): Promise<CommunicationMutationResult>;
+        setSessionAccess(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
+      };
       lspConfig: {
         status(req?: LspCatalogStatusRequest): Promise<LspConfigStatus>;
         enable(req: LspEnableRequest): Promise<LspMutationResult>;

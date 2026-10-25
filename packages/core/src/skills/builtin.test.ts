@@ -232,6 +232,7 @@ describe("anycode-setup builtin skill (Taskana 4707)", () => {
         "permissions.md",
         "plugins.md",
         "proxy.md",
+        "sessions-api.md",
         "skills.md",
         "subagents.md",
         "troubleshooting.md",

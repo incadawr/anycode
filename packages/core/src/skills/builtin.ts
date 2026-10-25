@@ -210,6 +210,7 @@ Topic files are named \`docs/user/<topic>.md\` relative to the docs location.
 | docs/user/skills.md | Skill folders and roots, precedence, the \`Skill\` tool and \`$name\` references, disabling, the built-in skills. |
 | docs/user/plugins.md | Plugins: what they are, where they live, trust tiers, the two-phase install, MCP-server consent, updates, rollback and pinning. |
 | docs/user/mcp.md | MCP servers across the config files, stdio and HTTP entries, \`\${env:VAR}\` secret references, failure behaviour, how to verify. |
+| docs/user/sessions-api.md | Settings → Sessions API: enabling the local MCP that lets an external agent (Claude Code, Codex) list and message live sessions, sharing a session per tab, allowed folders, copying the MCP config, token regeneration, the env override, troubleshooting. |
 | docs/user/lsp.md | Language servers: \`lspServers\` entries in the config files, the Settings → Language servers catalog and PATH detection, trust for project entries, when changes apply. |
 | docs/user/permissions.md | The mode ladder (plan, build, edit, auto, yolo), always-allow rules and patterns, workspace confinement, trusted binaries, the approval prompt. |
 | docs/user/orchestration.md | Supervisor, lead and builder setups built from profiles and engine tabs. |

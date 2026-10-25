@@ -34,6 +34,7 @@ import {
   isLoopbackUrl,
   mergeSettings,
   parseSettings,
+  communicationSettingsSchema,
   previewSchema,
   recognizerSchema,
   settingsSchema,
@@ -2022,6 +2023,52 @@ describe("tools.adaptiveTurnBudget (TASK.4721)", () => {
     if (parsed.success) {
       expect(parsed.data.tools.adaptiveTurnBudget).toBeUndefined();
       expect(parsed.data.tools.maxTurns).toBe(40);
+    }
+  });
+});
+
+describe("communication (Taskana 4747, additive-optional) — Sessions API settings block", () => {
+  it("round-trips a file with no communication key byte-identically (v2)", () => {
+    const before = JSON.stringify(cloneDefaults());
+    const result = parseSettings(JSON.parse(before));
+    expect(result.status).toBe("ok");
+    expect(result.settings.communication).toBeUndefined();
+    expect(JSON.stringify(result.settings)).toBe(before);
+  });
+
+  it("validates and keeps a full communication block", () => {
+    const block = { enabled: true, workspaces: ["/abs/one"], port: 4310, defaultSessionAccess: "on" as const };
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), communication: block });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.communication).toEqual(block);
+  });
+
+  it("drops relative, empty and non-string workspaces, keeping absolute ones", () => {
+    const parsed = communicationSettingsSchema.parse({ enabled: true, workspaces: ["relative/x", "", "   ", 7, "/abs/ok"], defaultSessionAccess: "off" });
+    expect(parsed?.workspaces).toEqual(["/abs/ok"]);
+  });
+
+  it("fails closed: a non-boolean enabled reads as disabled", () => {
+    const parsed = communicationSettingsSchema.parse({ enabled: "yes", workspaces: [], defaultSessionAccess: "off" });
+    expect(parsed?.enabled).toBe(false);
+  });
+
+  it("defaults defaultSessionAccess to off when absent or unknown", () => {
+    expect(communicationSettingsSchema.parse({ enabled: true, workspaces: [], defaultSessionAccess: "maybe" })?.defaultSessionAccess).toBe("off");
+  });
+
+  it("degrades a port out of range to undefined without losing the rest of the block", () => {
+    const parsed = communicationSettingsSchema.parse({ enabled: true, workspaces: ["/abs/ok"], port: 70000, defaultSessionAccess: "on" });
+    expect(parsed).toEqual({ enabled: true, workspaces: ["/abs/ok"], port: undefined, defaultSessionAccess: "on" });
+  });
+
+  it("a corrupt communication block degrades alone: siblings survive the document parse", () => {
+    const raw = { ...cloneDefaults(), communication: { enabled: true, unknownKey: 1 } };
+    const parsed = settingsSchema.safeParse(raw);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.communication).toBeUndefined();
+      expect(parsed.data.permissions).toEqual({ alwaysAllow: [] });
     }
   });
 });

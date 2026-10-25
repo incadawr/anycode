@@ -67,6 +67,7 @@ describe("anycode-setup docs sync (Taskana 4707)", () => {
       "permissions.md",
       "plugins.md",
       "proxy.md",
+      "sessions-api.md",
       "skills.md",
       "subagents.md",
       "troubleshooting.md",
@@ -103,6 +104,16 @@ describe("anycode-setup docs sync (Taskana 4707)", () => {
         `${name} must be linked from docs/user/README.md`,
       ).toBe(true);
     }
+  });
+
+  it("the Sessions API topic is in the skill table and documents the connect path (Taskana 4747)", () => {
+    expect(topicTableRows()).toContain("sessions-api.md");
+    const page = readTopic("sessions-api.md");
+    expect(page).toContain("list_sessions");
+    expect(page).toContain("send_message");
+    expect(page).toContain("Settings → Sessions API");
+    expect(page).toContain("Copy MCP config");
+    expect(page).toMatch(/mode: "next_turn"/);
   });
 
   it("docs/user/README.md states the precedence contract and both config file paths", () => {

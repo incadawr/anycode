@@ -14,6 +14,7 @@
  * No secret crypto lives in this module — that is main/vault.ts (2.2.2).
  */
 
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 import type { AnycodeSettings, SettingsPatch } from "../shared/settings.js";
 
@@ -140,6 +141,31 @@ export const recognizerSchema = z
   .optional()
   .catch(undefined);
 
+
+/**
+ * The `communication` settings section (Taskana 4747) — the Sessions API
+ * (local MCP for external agents) owned by Settings → Sessions API.
+ * Additive-optional, version NOT bumped. Fail-closed: any parse trouble at
+ * the whole-object boundary means "disabled", and a corrupt block degrades
+ * alone. `workspaces` keeps only non-empty absolute strings (platform-aware);
+ * an empty list is "no folder restriction" (sessions gate on their own
+ * switch). `defaultSessionAccess` is the initial per-tab switch for NEW tabs.
+ */
+export const communicationSettingsSchema = z
+  .object({
+    enabled: z.boolean().catch(false),
+    workspaces: z
+      .preprocess(
+        (raw) => (Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string" && p.trim().length > 0 && isAbsolute(p)) : []),
+        z.array(z.string()),
+      )
+      .catch([]),
+    port: z.number().int().min(0).max(65535).optional().catch(undefined),
+    defaultSessionAccess: z.enum(["off", "on"]).catch("off"),
+  })
+  .strict()
+  .optional()
+  .catch(undefined);
 
 /**
  * Strict-shape validator for a settings object. `.passthrough()` at the top
@@ -780,6 +806,9 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // `.catch(undefined)` keeps the fail-soft document contract: a corrupt
     // `plugins` value degrades alone, every sibling section survives.
     plugins: pluginsSettingsSchema,
+    // Sessions API (Taskana 4747, additive-optional; version NOT bumped). Declared
+    // explicitly so it validates and survives a read-modify-write cycle.
+    communication: communicationSettingsSchema,
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
 

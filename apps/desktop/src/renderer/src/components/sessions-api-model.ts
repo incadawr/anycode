@@ -1,0 +1,102 @@
+/**
+ * Pure view-model for the Settings → Sessions API pane and the per-tab switch
+ * (Taskana 4747). Labels, the status line, button enablement, port parsing and
+ * the mutation-refusal wording live here so they are unit-testable without a DOM.
+ * Everything rendered is PLAIN TEXT; nothing here carries a token or a path that
+ * the renderer did not already receive from main.
+ */
+import type { CommunicationMutationReason, CommunicationStatus, CommunicationView } from "../../../shared/communication-config.js";
+
+export const SESSIONS_API_PANE_ID = "sessions-api" as const;
+export const SESSIONS_API_LABEL = "Sessions API";
+export const SESSIONS_API_DESCRIPTION = "Let an external agent list and message your live sessions (local, token-protected).";
+export const SESSIONS_API_ENV_NOTE = "Controlled by ANYCODE_COMMUNICATION_CONFIG";
+export const SESSIONS_API_REGENERATE_CONFIRM =
+  "Existing clients keep working only until they next read the discovery file; connected clients are dropped. " +
+  "After regenerating, restart the external client's MCP connection (a running adapter keeps the old token).";
+export const SESSIONS_API_NOTICES: readonly string[] = [
+  "Every holder of the local credential can message the sessions you switch on. Local only (127.0.0.1); the token is never shown here or stored in settings.",
+  "Requires Node 22+ on the machine running the external client.",
+  "Applies immediately; open client connections are dropped on change.",
+];
+export const SESSIONS_API_FOLDER_NOTE =
+  "Optional. When empty, only the sessions you switch on are shared. When set, a session must also be inside one of these exact folders (subfolders are not included; symlinks are resolved).";
+
+/** Renders the status line: `Listening on 127.0.0.1:PORT` / `Off` / `Error: …` / `Controlled by environment`. */
+export function sessionsApiStatusLine(status: CommunicationStatus, envControlled: boolean): string {
+  if (envControlled || status.state === "env") return "Controlled by environment";
+  if (status.state === "listening") return `Listening on 127.0.0.1:${status.port ?? ""}`;
+  if (status.state === "error") return `Error: ${errorDetailText(status.detail)}`;
+  return "Off";
+}
+
+function errorDetailText(detail: CommunicationStatus["detail"]): string {
+  switch (detail) {
+    case "port in use": return "the port is already in use; choose another port.";
+    case "folder not found": return "a folder in the list is no longer available; remove it or re-add it.";
+    case "host not ready": return "the app is still starting; try again in a moment.";
+    default: return "the server could not start. Check the app log.";
+  }
+}
+
+/** Copy buttons are enabled only when the server is actually listening (and not env-controlled). */
+export function copyConfigEnabled(status: CommunicationStatus, envControlled: boolean): boolean {
+  return !envControlled && status.state === "listening";
+}
+
+/** Regenerate needs a running settings-mode server. */
+export function regenerateEnabled(status: CommunicationStatus, envControlled: boolean): boolean {
+  return !envControlled && status.state === "listening";
+}
+
+/** Toggles, folder edits and the port field are read-only under the env override. */
+export function settingsEditable(envControlled: boolean): boolean {
+  return !envControlled;
+}
+
+/** A sessions-API note shown when enabled with no folder restriction (the common case). */
+export function folderScopeHint(view: Pick<CommunicationView, "enabled" | "workspaces">): string | null {
+  if (!view.enabled) return null;
+  return view.workspaces.length === 0 ? "No folder restriction: only sessions you switch on are shared." : null;
+}
+
+/** Parses the port field: blank = random (null); otherwise an integer 0..65535. Returns undefined when invalid. */
+export function parsePortInput(text: string): number | null | undefined {
+  const trimmed = text.trim();
+  if (trimmed === "") return null;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  return value >= 0 && value <= 65535 ? value : undefined;
+}
+
+export function portFieldValue(port: number | null): string {
+  return port === null ? "" : String(port);
+}
+
+/** Maps a refused mutation to the sentence the pane shows. */
+export function mutationRefusalText(reason: CommunicationMutationReason): string {
+  switch (reason) {
+    case "read_only": return "Settings are read-only (saved by a newer AnyCode).";
+    case "invalid": return "That value is not valid.";
+    case "io_error": return "The settings could not be saved or the folder could not be read.";
+    case "env_controlled": return SESSIONS_API_ENV_NOTE + ".";
+    case "cancelled": return "";
+    case "not_a_directory": return "That path is not a folder.";
+    case "duplicate": return "That folder is already in the list.";
+    case "too_many": return "You can add at most 20 folders.";
+    case "not_found": return "That session is no longer open.";
+    case "not_running": return "The Sessions API is not listening.";
+    default: return "The change could not be made.";
+  }
+}
+
+/** Per-tab switch wording: the switch is disabled with a reason under the env override or for an unknown tab. */
+export function sessionSwitchLabel(enabled: boolean): string {
+  return enabled ? "Sessions API: shared with external agents" : "Sessions API: not shared";
+}
+
+export function sessionSwitchDisabledReason(envControlled: boolean, hasTab: boolean): string | null {
+  if (envControlled) return SESSIONS_API_ENV_NOTE;
+  if (!hasTab) return "Open a session to share it.";
+  return null;
+}

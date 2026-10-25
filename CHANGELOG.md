@@ -9,6 +9,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Settings → Sessions API: enable the local MCP for external agents without
+  environment variables, choose allowed folders, share sessions one tab at a
+  time, copy the Claude Code / Codex config, and regenerate the token. The
+  setup skill can walk through it. See `docs/user/sessions-api.md`.
+
 - Settings → Language servers: a catalog of known language servers with
   Found / Not installed detection (existence check only — nothing is
   installed or executed), a copyable install hint, one-click enable per

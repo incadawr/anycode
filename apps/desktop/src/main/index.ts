@@ -1,4 +1,7 @@
-import { startCommunicationServer } from "./communication-server.js";
+import { applyInputFromBlock, createCommunicationController, type CommunicationController } from "./communication-controller.js";
+import { createSessionAccessStore, defaultSessionAccessFromSettingsFile, type SessionAccessStore } from "./communication-sessions.js";
+import { registerCommunicationIpc } from "./communication-ipc.js";
+import { stdioAdapterForHost } from "./communication-adapter.js";
 import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs } from "./self-check.js";
 import { assertChildModel } from "../shared/child-model.js";
 /**
@@ -503,6 +506,9 @@ let win: BrowserWindow | null = null;
 let persistence: SqlitePersistenceAdapter | null = null;
 /** Multi-host lifecycle manager (§2.2); null until boot wires it. */
 let manager: TabHostManager | null = null;
+/** Taskana 4747: the Sessions API live controller and its per-session switch store (boot-wired). */
+let communicationController: CommunicationController | null = null;
+let communicationSessions: SessionAccessStore | null = null;
 // Taskana 4736: "trust once" approvals for this app run only (folder -> hash). Never persisted.
 const workspaceTrustOnceApprovals = new Map<string, string>();
 /**
@@ -2161,7 +2167,23 @@ void app.whenReady().then(async () => {
   };
   registerMdDocIpc(mdDocDeps);
 
+  // Taskana 4747: the per-session Sessions API switch (main-owned, 0600 beside
+  // the user data) and the live controller that owns the one communication server.
+  communicationSessions = createSessionAccessStore({
+    file: join(app.getPath("userData"), "communication-sessions.json"),
+    defaultOn: () => defaultSessionAccessFromSettingsFile(settingsPath),
+  });
+  communicationController = createCommunicationController({
+    manager: () => manager,
+    userData: app.getPath("userData"),
+    logger: { error: (message) => console.error(message) },
+    env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
+    isSessionExposed: (sessionId) => communicationSessions?.isExposed(sessionId) ?? false,
+    countExposed: () => communicationSessions?.exposedCount() ?? 0,
+  });
+
   manager = new TabHostManager({
+    onSessionRegistered: (info) => communicationSessions?.register(info),
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),
     workspaceTrustOnce: (workspace) => workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
     hostEntry: resolveHostEntry(),
@@ -2989,6 +3011,27 @@ void app.whenReady().then(async () => {
   // rides the SAME once-approval map workspace-trust-ipc uses (never a second
   // store); detection reads the live PATH over node:fs — existence only, the
   // app never installs or executes a server binary.
+  // Taskana 4747: the Sessions API control plane. Folders come only from the native
+  // dialog below; the renderer never sends a path. The stdio adapter is copied to
+  // userData so an external client config survives app updates.
+  if (communicationController !== null && communicationSessions !== null) {
+    registerCommunicationIpc({
+      settingsPath,
+      logger: { warn: (message) => console.warn(message), error: (message) => console.error(message) },
+      controller: communicationController,
+      sessions: communicationSessions,
+      tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId })),
+      env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
+      pickFolder: async () => {
+        const result = await dialog.showOpenDialog(win!, { properties: ["openDirectory"] });
+        return result.canceled ? undefined : result.filePaths[0];
+      },
+      stdioScriptPath: () => stdioAdapterForHost(app.getPath("userData")),
+      realpath: (path) => fsRealpath(path),
+      stat: (path) => fsStat(path),
+    });
+  }
+
   registerLspConfigIpc({
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
@@ -3243,13 +3286,14 @@ void app.whenReady().then(async () => {
     console.log("[main] opening window with zero tabs");
   }
 
-  // Production communication is opt-in and independent of developer automation.
-  if (process.env.ANYCODE_COMMUNICATION_CONFIG && manager) {
-    try {
-      const communication = await startCommunicationServer({ manager, configFile: process.env.ANYCODE_COMMUNICATION_CONFIG, userData: app.getPath("userData") });
-      app.once("before-quit", () => { void communication.close(); });
-      console.log(`[main] communication MCP listening at ${communication.url}`);
-    } catch { console.error("[main] communication MCP startup failed; check configuration and file permissions"); }
+  // Taskana 4747: the Sessions API is enabled from Settings (no env var needed).
+  // The live controller applies the saved block now; ANYCODE_COMMUNICATION_CONFIG
+  // still wins inside it. Changes apply immediately through the IPC; a hand edit of
+  // settings.json is picked up at the next launch. A failed start never blocks boot.
+  if (communicationController !== null) {
+    const controller = communicationController;
+    await controller.apply(applyInputFromBlock(settings?.communication));
+    app.once("before-quit", () => { void controller.dispose(); });
   }
 
   // Dev-only automation channel: the compile-time gate is false in a release

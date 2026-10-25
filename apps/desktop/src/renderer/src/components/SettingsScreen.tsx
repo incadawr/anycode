@@ -105,6 +105,8 @@ import { TrustedBinariesSection } from "./TrustedBinariesSection.js";
 import { TrustedFoldersSection } from "./TrustedFoldersSection.js";
 import { McpServersPane } from "./McpServersPane.js";
 import { LanguageServersPane } from "./LanguageServersPane.js";
+import { SessionsApiPane } from "./SessionsApiPane.js";
+import { SESSIONS_API_DESCRIPTION, SESSIONS_API_LABEL } from "./sessions-api-model.js";
 import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane, workspaceRootSegment } from "./SubagentsPane.js";
 import { RolesPane } from "./RolesPane.js";
@@ -125,7 +127,7 @@ const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 /** TASK.159: the output-ceiling env rung — same local-literal convention as `API_KEY_ENV_VAR` above (renderer modules don't import main). */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
-export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "language-servers" | "skills" | "subagents" | "roles" | "plugins" | "environment" | "appearance" | "shortcuts" | "about";
+export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "language-servers" | "skills" | "subagents" | "roles" | "plugins" | "sessions-api" | "environment" | "appearance" | "shortcuts" | "about";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -199,6 +201,14 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
     description: "Install, update, and manage plugins — skills, agents, workflows, and MCP servers shipped as packages.",
     icon: Cube,
   },
+  {
+    // Taskana 4747: the Sessions API (local MCP for external agents) — right after
+    // Plugins, the other "connect something outside the app" surface.
+    id: "sessions-api",
+    label: SESSIONS_API_LABEL,
+    description: SESSIONS_API_DESCRIPTION,
+    icon: Globe,
+  },
   { id: "environment", label: "Environment", description: "Telemetry and repo-map status for this workspace.", icon: Info },
   { id: "appearance", label: "Appearance", description: "Theme, density, and notification preferences.", icon: Sliders },
   { id: "shortcuts", label: "Keyboard shortcuts", description: "View and customize keyboard shortcuts.", icon: Keyboard },
@@ -226,6 +236,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   subagents: ["agent", "agents", "subagent", "subagents", "persona", "agent_type", "built-in"],
   roles: ["role", "roles", "orchestrate", "orchestration", "planner", "executor", "reviewer", "fallback", "children"],
   plugins: ["plugin", "plugins", "extension", "update", "install", "marketplace", "official", "third-party"],
+  "sessions-api": ["sessions api", "communication", "mcp", "external agent", "claude code", "codex", "supervisor", "send message", "token", "local server"],
   environment: ["telemetry", "repo map", "environment"],
   appearance: ["theme", "density", "notifications", "dark", "light", "compact"],
   shortcuts: ["shortcut", "shortcuts", "keyboard", "keybinding", "hotkey", "combo", "record"],
@@ -1893,6 +1904,7 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
               the active workspace + legacy dirs); main resolves the workspace
               itself, so the pane takes no props beyond its bridge. */}
           {activePane === "plugins" && <PluginsPane />}
+          {activePane === "sessions-api" && <SessionsApiPane />}
 
           {activePane === "environment" && (
             <>

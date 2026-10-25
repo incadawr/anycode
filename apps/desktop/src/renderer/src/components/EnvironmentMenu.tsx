@@ -3,6 +3,7 @@
  * it keeps the current workspace/branch quiet in the chrome and funnels the
  * rare, detailed work into the existing Git inspector drawer.
  */
+import { SessionAccessRow } from "./SessionAccessRow.js";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { GitCommand } from "../../../shared/protocol.js";
 import type { CommandHookDeclaration, LspServerStatus } from "@anycode/core";
@@ -321,6 +322,8 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
               </div>
             </>
           )}
+          {/* Taskana 4747: the per-session Sessions API switch (any engine; main owns the state). */}
+          <SessionAccessRow />
           {statusKnown && status === null && <div className="environment-menu-note">Git is not available for this workspace.</div>}
           {!statusKnown && <div className="environment-menu-note">Checking repository…</div>}
         </div>

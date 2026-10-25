@@ -1190,6 +1190,21 @@ describe("handleSet — recognizer refine-reject (TASK.198: settings.recognizer 
   });
 });
 
+describe("handleSet — communication (Taskana 4747: settings.communication is written ONLY by the communication-* channels)", () => {
+  it("refuses a `communication` key sent through the generic settings-set path, writing nothing", async () => {
+    const res = await handleSet(makeDeps(), { communication: { enabled: true, workspaces: [], defaultSessionAccess: "on" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.communication).toBeUndefined();
+  });
+
+  it("refuses the whole call when `communication` rides alongside a valid sibling section", async () => {
+    const res = await handleSet(makeDeps(), { communication: { enabled: true, workspaces: [], defaultSessionAccess: "off" }, ui: { theme: "dark" } });
+    expect(res).toEqual({ ok: false, reason: "invalid" });
+    expect((await loadSettings(settingsPath)).settings.ui.theme).toBe("system");
+  });
+});
+
 describe("handleRecognizerSet (TASK.198): the only writer that can also DELETE settings.recognizer", () => {
   it("sets settings.recognizer for a connectionId that exists in the live graph", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
