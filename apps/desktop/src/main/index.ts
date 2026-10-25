@@ -3337,7 +3337,7 @@ void app.whenReady().then(async () => {
   if (communicationController !== null) {
     const controller = communicationController;
     await controller.apply(applyInputFromBlock(settings?.communication));
-    app.once("before-quit", () => { void controller.dispose(); });
+    app.on("before-quit", () => { void controller.dispose(); }); // dispose is idempotent
   }
 
   // Dev-only automation channel: the compile-time gate is false in a release
