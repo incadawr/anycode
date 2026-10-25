@@ -5,21 +5,29 @@
  * native dialog (`addWorkspace` takes no arguments), the token never reaches
  * this pane, and copied configs point at the stdio adapter + discovery file.
  * All text is rendered as PLAIN TEXT.
+ *
+ * Layout (top to bottom): an enable switch with a status chip; a "Connect an
+ * agent" flow (only while enabled); a collapsed Advanced disclosure; one footer
+ * line. The header title and subtitle come from the Settings shell.
  */
 import { useEffect, useState } from "react";
 import {
-  SESSIONS_API_DESCRIPTION,
+  SESSIONS_API_ENABLE_LABEL,
   SESSIONS_API_ENV_NOTE,
+  SESSIONS_API_FOLDER_HINT,
   SESSIONS_API_FOLDER_NOTE,
-  SESSIONS_API_NOTICES,
+  SESSIONS_API_FOOTER,
+  SESSIONS_API_NODE_HINT,
+  SESSIONS_API_PORT_HINT,
   SESSIONS_API_REGENERATE_CONFIRM,
+  SESSIONS_API_REGENERATE_HINT,
   copyConfigEnabled,
-  folderScopeHint,
   mutationRefusalText,
   parsePortInput,
   portFieldValue,
   regenerateEnabled,
   sessionsApiStatusLine,
+  sessionsApiStatusTone,
   settingsEditable,
 } from "./sessions-api-model.js";
 import type {
@@ -53,11 +61,16 @@ const COPY_CLIENTS: ReadonlyArray<{ client: CommunicationCopyClient; label: stri
   { client: "generic", label: "Generic" },
 ];
 
+function copyClientLabel(client: CommunicationCopyClient): string {
+  return COPY_CLIENTS.find((entry) => entry.client === client)?.label ?? client;
+}
+
 export interface SessionsApiPaneViewProps {
   view: CommunicationView;
   envControlled: boolean;
   error: string | null;
   portText: string;
+  copyClient: CommunicationCopyClient;
   copied: { label: string; note: string } | null;
   confirmingRegenerate: boolean;
   onToggle(enabled: boolean): void;
@@ -66,6 +79,7 @@ export interface SessionsApiPaneViewProps {
   onPortText(text: string): void;
   onApplyPort(): void;
   onDefaultAccess(access: "off" | "on"): void;
+  onCopyClient(client: CommunicationCopyClient): void;
   onCopy(client: CommunicationCopyClient, label: string): void;
   onRegenerateAsk(): void;
   onRegenerateConfirm(): void;
@@ -74,93 +88,183 @@ export interface SessionsApiPaneViewProps {
 
 /** Presentational body: every value arrives as a prop, so the render is testable without state or effects. */
 export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
-  const { view, envControlled, error, portText, copied, confirmingRegenerate } = props;
+  const { view, envControlled, error, portText, copyClient, copied, confirmingRegenerate } = props;
   const status = view.status;
   const editable = settingsEditable(envControlled);
-  const hint = folderScopeHint(view);
+  const shared = status.sessions;
+  const defaultOn = view.defaultSessionAccess === "on";
   return (
     <section className="settings-section sessions-api-pane" aria-label="Sessions API">
-      <p className="sessions-api-description">{SESSIONS_API_DESCRIPTION}</p>
-
       {error && (
         <div className="mcp-problem-strip" role="alert">
           <span>{error}</span>
         </div>
       )}
 
-      <label className="sessions-api-toggle">
-        <input type="checkbox" checked={view.enabled} disabled={!editable} onChange={(event) => props.onToggle(event.target.checked)} />
-        <span>Enable local Sessions API</span>
-      </label>
-      {envControlled && <p className="sessions-api-note">{SESSIONS_API_ENV_NOTE}</p>}
-
-      <p className="sessions-api-status" aria-live="polite">{sessionsApiStatusLine(status, envControlled)}</p>
-
-      <div className="sessions-api-folders">
-        <h4>Allowed folders (optional)</h4>
-        <p className="sessions-api-note">{SESSIONS_API_FOLDER_NOTE}</p>
-        {hint && <p className="sessions-api-note">{hint}</p>}
-        <ul>
-          {view.workspaces.map((workspace) => (
-            <li key={workspace}>
-              <span className="sessions-api-folder-path">{workspace}</span>
-              <button type="button" disabled={!editable} onClick={() => props.onRemoveFolder(workspace)}>Remove</button>
-            </li>
-          ))}
-        </ul>
-        <button type="button" disabled={!editable} onClick={() => props.onAddFolder()}>Add folder…</button>
-      </div>
-
-      <div className="sessions-api-port">
-        <label>
-          Port (empty = random free port)
-          <input type="text" inputMode="numeric" value={portText} disabled={!editable} onChange={(event) => props.onPortText(event.target.value)} />
-        </label>
-        <button type="button" disabled={!editable} onClick={() => props.onApplyPort()}>Apply</button>
-      </div>
-
-      <div className="sessions-api-default">
-        <label>
-          New sessions are shared by default
-          <select value={view.defaultSessionAccess} disabled={!editable} onChange={(event) => props.onDefaultAccess(event.target.value as "off" | "on")}>
-            <option value="off">Off</option>
-            <option value="on">On</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="sessions-api-copy">
-        <h4>Copy MCP config</h4>
-        {COPY_CLIENTS.map(({ client, label }) => (
-          <button key={client} type="button" disabled={!copyConfigEnabled(status, envControlled)} onClick={() => props.onCopy(client, label)}>
-            {label}
+      <div className="settings-field">
+        <div className="settings-field-row sessions-api-enable-row">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={view.enabled}
+            aria-labelledby="sessions-api-enable-caption"
+            className={`settings-switch${view.enabled ? " settings-switch-on" : ""}`}
+            disabled={!editable}
+            onClick={() => props.onToggle(!view.enabled)}
+          >
+            <span className="settings-switch-thumb" />
           </button>
-        ))}
-        {copied && (
-          <div className="sessions-api-copied">
-            <p>Copied the {copied.label} config to the clipboard. It points at the adapter and the discovery file; it holds no token.</p>
-            {copied.note !== "" && <pre>{copied.note}</pre>}
-          </div>
-        )}
+          <span id="sessions-api-enable-caption" className="settings-switch-caption">{SESSIONS_API_ENABLE_LABEL}</span>
+          <span
+            className={`settings-secret-status settings-secret-status-${sessionsApiStatusTone(status, envControlled)} sessions-api-status`}
+            aria-live="polite"
+          >
+            {sessionsApiStatusLine(status, envControlled)}
+          </span>
+        </div>
+        {envControlled && <p className="settings-field-hint">{SESSIONS_API_ENV_NOTE}</p>}
       </div>
 
-      <div className="sessions-api-regenerate">
-        {!confirmingRegenerate ? (
-          <button type="button" disabled={!regenerateEnabled(status, envControlled)} onClick={() => props.onRegenerateAsk()}>Regenerate token</button>
-        ) : (
-          <div role="group" aria-label="Confirm token regeneration">
-            <p>{SESSIONS_API_REGENERATE_CONFIRM}</p>
-            <button type="button" onClick={() => props.onRegenerateConfirm()}>Regenerate now</button>
-            <button type="button" onClick={() => props.onRegenerateCancel()}>Cancel</button>
-          </div>
-        )}
-      </div>
+      {view.enabled && (
+        <section className="sessions-api-connect" aria-label="Connect an agent">
+          <div className="settings-section-title">Connect an agent</div>
+          <ol className="sessions-api-steps">
+            <li className="sessions-api-step">
+              <div className="sessions-api-step-title">Choose which sessions to share</div>
+              <p className="settings-field-hint">{`Open a session's ⋯ environment menu and turn on Sessions API. Currently shared: ${shared}.`}</p>
+            </li>
+            <li className="sessions-api-step">
+              <div className="sessions-api-step-title">Copy the config for your agent</div>
+              <div className="sessions-api-copy-row">
+                <div className="connection-drawer-segmented" role="group" aria-label="Agent">
+                  {COPY_CLIENTS.map(({ client, label }) => (
+                    <button
+                      key={client}
+                      type="button"
+                      className={`connection-drawer-segmented-btn${copyClient === client ? " connection-drawer-segmented-btn-selected" : ""}`}
+                      aria-pressed={copyClient === client}
+                      onClick={() => props.onCopyClient(client)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="settings-button settings-button-primary"
+                  disabled={!copyConfigEnabled(status, envControlled)}
+                  onClick={() => props.onCopy(copyClient, copyClientLabel(copyClient))}
+                >
+                  Copy config
+                </button>
+              </div>
+              <p className="settings-field-hint">{SESSIONS_API_NODE_HINT}</p>
+              {copied && (
+                <div className="settings-notice-ok sessions-api-copied">
+                  <p>{`Copied the ${copied.label} config to the clipboard. It points at the adapter and the discovery file; it holds no token.`}</p>
+                  {copied.note !== "" && <pre>{copied.note}</pre>}
+                </div>
+              )}
+            </li>
+            <li className="sessions-api-step">
+              <div className="sessions-api-step-title">Paste it into your agent's MCP settings and restart the agent.</div>
+            </li>
+          </ol>
+        </section>
+      )}
 
-      <div className="sessions-api-notices">
-        {SESSIONS_API_NOTICES.map((notice) => (
-          <p key={notice}>{notice}</p>
-        ))}
-      </div>
+      <details className="connection-drawer-advanced sessions-api-advanced">
+        <summary>Advanced</summary>
+
+        <div className="sessions-api-row sessions-api-folders">
+          <div className="sessions-api-row-main">
+            <span className="settings-field-label">Allowed folders (optional)</span>
+            <div className="sessions-api-row-control">
+              <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onAddFolder()}>Add folder…</button>
+            </div>
+          </div>
+          {view.workspaces.length > 0 && (
+            <ul className="sessions-api-folder-list">
+              {view.workspaces.map((workspace) => (
+                <li key={workspace}>
+                  <span className="sessions-api-folder-path">{workspace}</span>
+                  <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onRemoveFolder(workspace)}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="settings-field-hint" title={SESSIONS_API_FOLDER_NOTE}>{SESSIONS_API_FOLDER_HINT}</p>
+        </div>
+
+        <div className="sessions-api-row">
+          <div className="sessions-api-row-main">
+            <label className="settings-field-label" htmlFor="sessions-api-port">Port</label>
+            <div className="sessions-api-row-control">
+              <input
+                id="sessions-api-port"
+                className="settings-field-input sessions-api-port-input"
+                type="text"
+                inputMode="numeric"
+                value={portText}
+                disabled={!editable}
+                onChange={(event) => props.onPortText(event.target.value)}
+              />
+              <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onApplyPort()}>Apply</button>
+            </div>
+          </div>
+          <p className="settings-field-hint">{SESSIONS_API_PORT_HINT}</p>
+        </div>
+
+        <div className="sessions-api-row">
+          <div className="sessions-api-row-main">
+            <span id="sessions-api-default-caption" className="settings-field-label">New sessions shared by default</span>
+            <div className="sessions-api-row-control">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={defaultOn}
+                aria-labelledby="sessions-api-default-caption"
+                className={`settings-switch${defaultOn ? " settings-switch-on" : ""}`}
+                disabled={!editable}
+                onClick={() => props.onDefaultAccess(defaultOn ? "off" : "on")}
+              >
+                <span className="settings-switch-thumb" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="sessions-api-row">
+          {!confirmingRegenerate ? (
+            <>
+              <div className="sessions-api-row-main">
+                <span className="settings-field-label">Regenerate token</span>
+                <div className="sessions-api-row-control">
+                  <button
+                    type="button"
+                    className="settings-button settings-button-danger"
+                    disabled={!regenerateEnabled(status, envControlled)}
+                    onClick={() => props.onRegenerateAsk()}
+                  >
+                    Regenerate token
+                  </button>
+                </div>
+              </div>
+              <p className="settings-field-hint">{SESSIONS_API_REGENERATE_HINT}</p>
+            </>
+          ) : (
+            <div role="group" aria-label="Confirm token regeneration" className="sessions-api-confirm">
+              <p className="settings-field-hint">{SESSIONS_API_REGENERATE_CONFIRM}</p>
+              <div className="sessions-api-row-control">
+                <button type="button" className="settings-button settings-button-danger" onClick={() => props.onRegenerateConfirm()}>Regenerate now</button>
+                <button type="button" className="settings-button" onClick={() => props.onRegenerateCancel()}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </details>
+
+      <p className="settings-field-hint sessions-api-footer">{SESSIONS_API_FOOTER}</p>
     </section>
   );
 }
@@ -170,6 +274,7 @@ export function SessionsApiPane({ bridge = window.anycode.communication }: Sessi
   const [envControlled, setEnvControlled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [portText, setPortText] = useState("");
+  const [copyClient, setCopyClient] = useState<CommunicationCopyClient>("claude-code");
   const [copied, setCopied] = useState<{ label: string; note: string } | null>(null);
   const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
 
@@ -206,6 +311,7 @@ export function SessionsApiPane({ bridge = window.anycode.communication }: Sessi
       envControlled={envControlled}
       error={error}
       portText={portText}
+      copyClient={copyClient}
       copied={copied}
       confirmingRegenerate={confirmingRegenerate}
       onToggle={(enabled) => void bridge.setEnabled(enabled).then(take)}
@@ -221,6 +327,7 @@ export function SessionsApiPane({ bridge = window.anycode.communication }: Sessi
         void bridge.setPort(parsed).then(take);
       }}
       onDefaultAccess={(access) => void bridge.setDefaultAccess(access).then(take)}
+      onCopyClient={setCopyClient}
       onCopy={(client, label) => {
         void bridge.copyConfig(client).then((result) => {
           if (!result.ok) {
