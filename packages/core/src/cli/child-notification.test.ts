@@ -411,7 +411,7 @@ describe("formatChildApprovalNotice (Taskana 4821)", () => {
     expect(text).toContain("<tool>Write</tool>");
     expect(text).toContain("<subject>/tmp/report.md</subject>");
     expect(text).toContain("open the child's tab");
-    expect(text).toContain("not be retried through another tool");
+    expect(text).toContain("If nobody answers in time it is denied");
     expect(text).not.toContain("<task-notification>");
   });
 
@@ -419,5 +419,26 @@ describe("formatChildApprovalNotice (Taskana 4821)", () => {
     const text = formatChildApprovalNotice({ ...base, subject: "", toolName: "A<B" });
     expect(text).not.toContain("<subject>");
     expect(text).toContain("<tool>A&lt;B</tool>");
+  });
+
+  it("states the ask deadline as a duration from the raise, never a wall clock (review F1b)", () => {
+    const text = formatChildApprovalNotice({ ...base, askTimeoutMs: 120_000 });
+    expect(text).toContain("denied if nobody answers within about 120s of the request being raised");
+    // duration, not an invented wall-clock timestamp
+    expect(text).not.toMatch(/\d{1,2}:\d{2}/);
+  });
+
+  it("omits the deadline sentence when no ask timeout is available rather than inventing one", () => {
+    const text = formatChildApprovalNotice(base);
+    expect(text).not.toContain("deadline");
+    expect(text).not.toMatch(/\d+s\b/);
+  });
+
+  it("carries the expired-case recovery line: further asks auto-denied until someone interacts with the child (review F1c)", () => {
+    const text = formatChildApprovalNotice({ ...base, askTimeoutMs: 120_000 });
+    expect(text).toContain("If that deadline has already passed");
+    expect(text).toContain("the request was denied and further requests from this child are auto-denied");
+    expect(text).toContain("until a human interacts with the child session");
+    expect(text).toContain("open or answer the child session");
   });
 });

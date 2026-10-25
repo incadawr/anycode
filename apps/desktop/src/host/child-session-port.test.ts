@@ -2224,6 +2224,7 @@ describe("detached approval notice delivery (Taskana 4821)", () => {
     const sent: SentMessage[] = [];
     let listener: ((event: ChildRunEvent) => void) | undefined;
     const asks: Array<{ ask: { toolName: string; subject: string }; req: SessionSubagentRequest; childSessionId: string }> = [];
+    const settled: Array<{ req: SessionSubagentRequest; childSessionId: string }> = [];
     const port = createChildSessionPort({
       parentSessionId: PARENT_SESSION_ID,
       getPermissionMode: () => "build",
@@ -2236,8 +2237,11 @@ describe("detached approval notice delivery (Taskana 4821)", () => {
       onDetachedApproval: (ask, req, childSessionId) => {
         asks.push({ ask, req, childSessionId });
       },
+      onDetachedApprovalSettled: (req, childSessionId) => {
+        settled.push({ req, childSessionId });
+      },
     });
-    return { port, sent, emit: (event: ChildRunEvent) => listener?.(event), asks };
+    return { port, sent, emit: (event: ChildRunEvent) => listener?.(event), asks, settled };
   }
 
   it("a detached child's attention(waiting=true) with an ask identity reaches onDetachedApproval; waiting=false and identity-less events do not", async () => {
@@ -2259,5 +2263,47 @@ describe("detached approval notice delivery (Taskana 4821)", () => {
     expect(asks[0]!.ask).toEqual({ toolName: "Write", subject: "/tmp/r.md" });
     expect(asks[0]!.childSessionId).toBe("child-appr-1");
     expect(asks[0]!.req.spawnToolCallId).toBe("spawn-appr-1");
+  });
+
+  it("the settling attention(waiting=false) of a detached child's ask invokes onDetachedApprovalSettled with the same child identity; identity-less and non-settling events do not (review F1)", async () => {
+    const { port, sent, emit, asks, settled } = approvalHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "triage", prompt: "p", spawnToolCallId: "spawn-appr-2", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-appr-2", childTabId: "t1", model: "m" });
+    await pending;
+
+    // A settle with no ask ever raised is not an ask settling — no callback.
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false });
+    expect(settled).toHaveLength(0);
+
+    // Ask raised, then settles (answered or expired) — the pending parent-side
+    // notice must be retractable, so the port reports the settle.
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: true, toolName: "Bash", subject: "npm test" });
+    expect(asks).toHaveLength(1);
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false });
+    expect(settled).toEqual([{ req: expect.objectContaining({ spawnToolCallId: "spawn-appr-2" }), childSessionId: "child-appr-2" }]);
+
+    // A SECOND ask cycle fires it again (ask -> settle -> ask -> settle): the
+    // ack/retract key is per child, so every settle must be reported.
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: true, toolName: "Write", subject: "/tmp/x" });
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false });
+    expect(settled).toHaveLength(2);
+  });
+
+  it("a detached child's ask settling BEFORE its \"accepted\" event still reports the settle with childSessionId \"\" (best-effort retract)", async () => {
+    const { port, sent, emit, settled } = approvalHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "triage", prompt: "p", spawnToolCallId: "spawn-appr-3", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: true, toolName: "Write", subject: "/tmp/y" });
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "attention", waiting: false });
+    expect(settled).toEqual([{ req: expect.objectContaining({ spawnToolCallId: "spawn-appr-3" }), childSessionId: "" }]);
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-appr-3", childTabId: "t1", model: "m" });
+    await pending;
   });
 });

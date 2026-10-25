@@ -469,7 +469,7 @@ import { createEngineChildRunner } from "./engine-children.js";
 // (main is the sole writer, host/boot.ts:239-245) — this is the sanctioned
 // fail-soft read, same standing custody as seedAlwaysAllowRules above.
 import { defaultSettingsPath, readTrustedBinaryConsentsSync } from "../settings/files.js";
-import { IpcPermissionBroker } from "./permission-broker.js";
+import { IpcPermissionBroker, PERMISSION_ASK_TIMEOUT_MS, resolveAskTimeoutMs } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
 import { Outbound, Session, summarizeProviderUsage, tapChildPermissions, type ChildSessionOptions } from "./session.js";
 // TASK.102 CUT-S2 §2.6.2/§2.6.3 (slice S2b B4) built the CHILD side of this
@@ -944,6 +944,12 @@ function deliverDetachedChildStall(
  * tool/subject is blocked and how to answer, instead of the child silently
  * waiting. `upsert` under `approval:<spawnToolCallId>` coalesces repeats to one
  * pending slot per child (same bound as the stall notice).
+ *
+ * Review F1b: the notice states the ask DEADLINE as a duration from the raise
+ * (`askTimeoutMs`), resolved with the same per-tool rule the child's own broker
+ * uses (resolveAskTimeoutMs — only ExitPlanMode differs, a floor). A pure
+ * duration, never an invented wall clock: this text may be (re)delivered long
+ * after the raise, so a timestamp would be stale on arrival by construction.
  */
 function deliverDetachedChildApproval(
   ask: { toolName: string; subject: string },
@@ -958,8 +964,26 @@ function deliverDetachedChildApproval(
     description: req.description,
     toolName: ask.toolName,
     subject: ask.subject,
+    askTimeoutMs: resolveAskTimeoutMs(ask.toolName, PERMISSION_ASK_TIMEOUT_MS),
   });
   childReportQueue.upsert(`approval:${req.spawnToolCallId}`, text);
+}
+
+/**
+ * Review F1a (Taskana 4821): a detached child's approval ask — one this host
+ * already surfaced through `deliverDetachedChildApproval` above — has SETTLED
+ * (answered in the child's tab, expired, or force-denied). The pending notice
+ * is now stale (it tells the parent to go answer a request that no longer
+ * exists), so it is retracted here: `ack` removes the queue row before the
+ * next `resendAll`/`upsert` could re-deliver it. Best-effort by design — ack
+ * of an already-acked/unknown id is a no-op, and a settle that races the
+ * renderer's enqueue-ack loses harmlessly (the notice was durably enqueued;
+ * the worst case is one redundant prompt turn that says the child "was"
+ * blocked). If the child raises a NEW ask, `upsert` under the same id
+ * re-creates the row with fresh text.
+ */
+function retractDetachedChildApprovalNotice(req: SessionSubagentRequest, _childSessionId: string): void {
+  childReportQueue.ack(`approval:${req.spawnToolCallId}`);
 }
 
 /**
@@ -1471,7 +1495,8 @@ async function bootCodexSession(
         parentSessionId: bridgeRowId,
         getPermissionMode: () => codexAgentPermissionMode(codexParentEngine?.snapshot().activePresetId ?? "read-only"),
         send: sendChildSessionMessage, subscribe: subscribeChildRunEvents,
-        onDetachedTerminal: deliverDetachedChildReport, onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
+        onDetachedTerminal: deliverDetachedChildReport, onDetachedStall: deliverDetachedChildStall,
+        onDetachedApproval: deliverDetachedChildApproval, onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
       });
       codexChildPort = port;
     }
@@ -2114,6 +2139,7 @@ async function bootClaudeSession(
         subscribe: subscribeChildRunEvents,
         onDetachedTerminal: deliverDetachedChildReport,
         onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
+        onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
       });
       claudeChildPort = childPort;
     }
@@ -4163,6 +4189,7 @@ async function boot(): Promise<void> {
         // above. See deliverDetachedChildStall's own comment for the full
         // picture (queue coalescing, id namespacing).
         onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
+        onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
         // TASK.148 slice 1/2: same knob as the inline tier just above
         // (config.subagentStallTimeoutMs) so both tiers share one resolved
         // value; the port's own default (SUBAGENT_STALL_TIMEOUT_MS) applies

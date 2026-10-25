@@ -390,6 +390,19 @@ export interface CreateChildSessionPortOptions {
    */
   onDetachedApproval?: (ask: { toolName: string; subject: string }, req: SessionSubagentRequest, childSessionId: string) => void;
   /**
+   * Review F1 (Taskana 4821): a detached child's approval ask — one this port
+   * reported through `onDetachedApproval` — has SETTLED (attention
+   * waiting=false after waiting=true: answered in the child's tab, expired,
+   * or force-denied by turn cancel/disconnect/shutdown). The host uses this
+   * to retract the now-stale pending notice (childReportQueue.ack of
+   * `approval:<spawnToolCallId>`) so the parent is not told to go answer a
+   * request that no longer exists. Best-effort by design: `ack` of an
+   * already-removed id is a no-op, and a settle racing the renderer's ack
+   * loses harmlessly (the notice was already durably enqueued, at most one
+   * redundant prompt turn). Absent => notices are never retracted.
+   */
+  onDetachedApprovalSettled?: (req: SessionSubagentRequest, childSessionId: string) => void;
+  /**
    * Silence threshold for this port's stall clock (TASK.148 slice 1/2).
    * SUBAGENT_STALL_TIMEOUT_MS when omitted — same resolution precedence as
    * the inline tier's `parent.subagentStallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS`
@@ -597,6 +610,11 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // clock and the promise executor, so the same mutable binding is visible
     // to whichever of the two assigns/reads it first.
     let detachedChildSessionId: string | undefined;
+    // Review F1a: true between a detached run's attention(waiting=true) with
+    // an ask identity and its settling attention(waiting=false) — gates
+    // onDetachedApprovalSettled so only an ask this port actually RAISED is
+    // ever reported as settled.
+    let detachedAskPending = false;
 
     // TASK.148 slice 1/2: constructed for BOTH tiers now. A non-detached
     // run's notice still bridges to opts.onProgress (unchanged from slice
@@ -796,11 +814,22 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               }
               if (req.detach === true) {
                 if (event.waiting && event.toolName !== undefined) {
+                  detachedAskPending = true;
                   options.onDetachedApproval?.(
                     { toolName: event.toolName, subject: event.subject ?? "" },
                     req,
                     detachedChildSessionId ?? "",
                   );
+                } else if (!event.waiting && detachedAskPending) {
+                  // Review F1a: an ask this port reported to the parent has
+                  // settled (answered, expired, or force-denied). The
+                  // parent-side notice is now STALE — nobody needs to open the
+                  // child's tab for it — so the host retracts the pending
+                  // queue row (host/index.ts acks `approval:<spawnToolCallId>`).
+                  // Idempotent on the host side (ack of an unknown id is a
+                  // no-op), fires once per ask->settle cycle.
+                  detachedAskPending = false;
+                  options.onDetachedApprovalSettled?.(req, detachedChildSessionId ?? "");
                 }
                 return;
               }
