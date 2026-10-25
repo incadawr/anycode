@@ -38,8 +38,9 @@
  * window behavior is byte-identical to before this refactor.
  */
 
-import { BrowserWindow, type NativeImage, type WebContents } from "electron";
+import { BrowserWindow, Menu, type NativeImage, type WebContents } from "electron";
 import type { PreviewConsoleEntry } from "../../shared/preview.js";
+import { isReturnShortcut, popoutTitle, returnMenuTemplate } from "./popout.js";
 import {
   RING_MAX_MSG_CHARS,
   type CreateWindowOpts,
@@ -297,6 +298,39 @@ export function createElectronPreviewWindow(opts: CreateWindowOpts): PreviewWind
       partition: `preview-${opts.previewId}`,
     },
   });
+
+  // Taskana 4778: the window shows the page title (or host), never the app name,
+  // and offers "Return to AnyCode" (menu bar on Windows/Linux, right-click menu and
+  // Cmd/Ctrl+Shift+D everywhere) which re-docks the preview into the pane.
+  const wc = win.webContents;
+  const refreshTitle = (pageTitle?: string): void => {
+    if (win.isDestroyed()) {
+      return;
+    }
+    win.setTitle(popoutTitle(pageTitle ?? wc.getTitle(), wc.getURL()));
+  };
+  win.on("page-title-updated", (event, title) => {
+    event.preventDefault();
+    refreshTitle(title);
+  });
+  wc.on("did-navigate", () => refreshTitle());
+  wc.on("did-finish-load", () => refreshTitle());
+  const onRedock = opts.onRedock;
+  if (onRedock !== undefined) {
+    const template = returnMenuTemplate(onRedock);
+    if (process.platform !== "darwin") {
+      win.setMenu(Menu.buildFromTemplate(template));
+    }
+    wc.on("context-menu", () => {
+      Menu.buildFromTemplate(template).popup({ window: win });
+    });
+    wc.on("before-input-event", (event, input) => {
+      if (isReturnShortcut(input)) {
+        event.preventDefault();
+        onRedock();
+      }
+    });
+  }
 
   return {
     webContents: wrapWebContents(win.webContents, (fn) => win.once("closed", fn)),

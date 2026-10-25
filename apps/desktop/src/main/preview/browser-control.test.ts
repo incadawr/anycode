@@ -757,3 +757,50 @@ describe("BrowserController hard limits while Full browser access is on (Taskana
     expect(cdp.methods()).not.toContain("Runtime.evaluate");
   });
 });
+
+// Taskana 4778: a CDP await that never resolves (input to a view that is not painting)
+// must become a clear tool error, never a forever-"Running" card.
+describe("BrowserController hung CDP and hidden view (Taskana 4778)", () => {
+  const tree = () => axTree([
+    { nodeId: "1", role: "RootWebArea", childIds: ["2"] },
+    { nodeId: "2", role: "button", name: "Go", backendDOMNodeId: 11 },
+  ]);
+
+  it("a mouse command that never resolves ends in a bounded failure that names the not-visible cause", async () => {
+    const { cdp, ctx } = setup();
+    const controller = new BrowserController({ clickSettleMs: 1, actionDeadlineMs: 30 });
+    cdp.respond("Accessibility.getFullAXTree", tree());
+    cdp.respond("DOM.getBoxModel", { model: { content: quad(0, 0, 10, 10) } });
+    await controller.run({ action: "snapshot" }, ctx);
+    cdp.respond("Input.dispatchMouseEvent", () => new Promise(() => {}));
+
+    const result = await controller.run({ action: "click", target: { ref: "e1" }, doubleClick: false, button: "left" }, ctx);
+
+    expect(result).toMatchObject({ ok: false, errorKind: "timeout" });
+    expect(result.ok ? "" : result.error).toMatch(/not visible.*open it in the pane or window and retry/);
+  });
+
+  it("a timed-out input command from the adapter reports the not-visible hint", async () => {
+    const { cdp, run } = setup();
+    cdp.respond("Accessibility.getFullAXTree", tree());
+    cdp.respond("DOM.getBoxModel", { model: { content: quad(0, 0, 10, 10) } });
+    await run({ action: "snapshot" });
+    cdp.respond("Input.dispatchMouseEvent", new Error("CDP command timed out"));
+
+    const result = await run({ action: "click", target: { ref: "e1" }, doubleClick: false, button: "left" });
+
+    expect(result.ok ? "" : result.error).toMatch(/click failed: CDP command timed out; the preview is not visible/);
+  });
+
+  it("click and type refuse up front when the view is known to be hidden, sending nothing", async () => {
+    const { cdp, ctx, controller } = setup();
+    ctx.isVisible = () => false;
+
+    const click = await controller.run({ action: "click", target: { ref: "e1" }, doubleClick: false, button: "left" }, ctx);
+    const type = await controller.run({ action: "type", target: { ref: "e1" }, text: "x", clear: true, submit: false }, ctx);
+
+    expect(click).toMatchObject({ ok: false, errorKind: "unavailable" });
+    expect(type).toMatchObject({ ok: false, errorKind: "unavailable" });
+    expect(cdp.calls).toEqual([]);
+  });
+});

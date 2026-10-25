@@ -329,6 +329,8 @@ interface Rig {
   /** TASK.99 M3: md-preview windows, parallel to `windows`/`panelViews` for `createMdWindow`. */
   mdWindows: FakeMdWindow[];
   posted: Array<{ tabId: string; message: PreviewResponseMessage | PreviewEventMessage }>;
+  /** Taskana 4778: the opts every `createWindow` call received (pop-out title/re-dock wiring). */
+  windowOpts: CreateWindowOpts[];
   /** Every `onPreviewsChanged` push, in order (D7's main -> renderer CHANGED contract). */
   changed: PreviewChangedPayload[];
   clock: { time: number };
@@ -396,6 +398,7 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
   const rig: Rig = {
     host: undefined as unknown as PreviewHostHandle,
     windows,
+    windowOpts: [],
     panelViews,
     mdWindows,
     posted,
@@ -415,6 +418,7 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
     createWindow: (opts: CreateWindowOpts) => {
       const win = new FakeWindow(opts.previewId);
       windows.push(win);
+      rig.windowOpts.push(opts);
       rig.onWindowCreated?.(win);
       return win;
     },
@@ -4060,5 +4064,67 @@ describe("PreviewHost — Full browser access, live limits and forged access ops
     const forgedControl = await call(rig, { kind: "control", request: { action: "setAccess", previewId, enabled: true } as unknown as PreviewControlRequest });
     expect(forgedControl.ok).toBe(false);
     expect(on.value).toBe(false);
+  });
+});
+
+// Taskana 4778: a pane preview whose view is not painting must fail fast, and the
+// pop-out window must be able to return the preview to the pane.
+describe("PreviewHost — hidden pane preview and pop-out re-dock (Taskana 4778)", () => {
+  async function call(rig: Rig, op: PreviewOp): Promise<PreviewResult<PreviewControlSuccess>> {
+    await rig.host.handleRequest(TAB, { type: PREVIEW_REQUEST_TYPE, requestId: `x-${Math.random()}`, op });
+    const posted = rig.posted.at(-1)!;
+    if (posted.message.type !== PREVIEW_RESPONSE_TYPE) throw new Error("no response");
+    return posted.message.result as PreviewResult<PreviewControlSuccess>;
+  }
+
+  it("a click on a pane preview that is not shown fails with a clear error and sends no mouse event", async () => {
+    const rig = makeRig({ fullAccess: () => true });
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(TAB, { url: "https://example.org/" });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+
+    const click = await call(rig, { kind: "control", request: { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" } });
+    expect(click).toMatchObject({ ok: false, errorKind: "unavailable" });
+    expect(click.ok ? "" : click.error).toMatch(/not visible.*open it in the pane or window/);
+    expect(rig.panelViews[0]!.webContents.cdp.methods()).not.toContain("Input.dispatchMouseEvent");
+  });
+
+  it("the pop-out window is created with a re-dock handler that moves the preview back into the pane", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "window";
+    const opened = rig.host.openForTab(TAB, { url: "http://localhost:3000/" });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+    expect(rig.windowOpts[0]!.onRedock).toBeTypeOf("function");
+
+    rig.windowOpts[0]!.onRedock!();
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    await flush();
+
+    expect(rig.panelViews).toHaveLength(1);
+    expect(rig.host.listForPanel(TAB).previews[0]).toMatchObject({ previewId, container: "panel" });
+    expect(rig.windows[0]!.destroyed).toBe(true);
+  });
+
+  it("a window opened by 'Open in window' (panel -> window transfer) also carries the re-dock handler", async () => {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const opened = rig.host.openForTab(TAB, { url: "http://localhost:3000/" });
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    const previewId = result.ok ? result.value.previewId : "";
+    rig.onWindowCreated = (win) => queueMicrotask(() => win.webContents.fireDidFinishLoad());
+
+    const moved = await rig.host.setContainer(TAB, previewId, "window");
+
+    expect(moved.ok).toBe(true);
+    expect(rig.windowOpts[0]!.onRedock).toBeTypeOf("function");
   });
 });

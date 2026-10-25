@@ -115,6 +115,15 @@ class FakeWebContents extends EventEmitter {
   };
   debugger = fakeDebugger();
   destroyedFlag = false;
+  /** Taskana 4778: what the page reports as its title / URL. */
+  pageTitle = "";
+  pageUrl = "";
+  getTitle(): string {
+    return this.pageTitle;
+  }
+  getURL(): string {
+    return this.pageUrl;
+  }
   /** D14 (96-P3): mock `Electron.WebContents.navigationHistory`. */
   navigationHistory = {
     entries: [] as Array<{ url: string; title: string }>,
@@ -175,6 +184,14 @@ class FakeBrowserWindow extends EventEmitter {
   destroyed = false;
   shown = false;
   shownInactive = false;
+  title = "@anycode/desktop";
+  menu: unknown = undefined;
+  setTitle(title: string): void {
+    this.title = title;
+  }
+  setMenu(menu: unknown): void {
+    this.menu = menu;
+  }
 
   constructor(public readonly opts: BrowserWindowConstructorOptions) {
     super();
@@ -243,7 +260,17 @@ class FakeMainWindow {
   }
 }
 
+const { popups } = vi.hoisted(() => ({ popups: [] as Array<Array<{ label: string; click: () => void }>> }));
+
 vi.mock("electron", () => ({
+  Menu: {
+    buildFromTemplate: (template: Array<{ label: string; click: () => void }>) => ({
+      template,
+      popup: () => {
+        popups.push(template);
+      },
+    }),
+  },
   BrowserWindow: FakeBrowserWindow,
   WebContentsView: FakeWebContentsView,
 }));
@@ -804,5 +831,46 @@ describe("createElectronPreviewWindow — browser-control CDP access (Taskana 47
     (fake.webContents.navigationHistory as unknown as { goToOffset: (n: number) => void }).goToOffset = (n) => calls.push(n);
     await win.webContents.goToOffset(-1);
     expect(calls).toEqual([-1]);
+  });
+});
+
+describe("createElectronPreviewWindow — pop-out title and Return to AnyCode (Taskana 4778)", () => {
+  it("titles the window with the page title, falling back to the host, never the app name", () => {
+    createElectronPreviewWindow({ previewId: "t1" });
+    const fake = latestWindow();
+
+    fake.webContents.pageUrl = "https://myriad-dev.incadawr.dev/online/reward-fx-lab.html";
+    fake.webContents.emit("did-finish-load");
+    expect(fake.title).toBe("myriad-dev.incadawr.dev");
+
+    const event = { preventDefault: vi.fn() };
+    fake.emit("page-title-updated", event, "Reward FX Lab");
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(fake.title).toBe("Reward FX Lab");
+  });
+
+  it("offers Return to AnyCode through the right-click menu and the shortcut, both calling onRedock", () => {
+    const onRedock = vi.fn();
+    createElectronPreviewWindow({ previewId: "t2", onRedock });
+    const fake = latestWindow();
+
+    fake.webContents.emit("context-menu", {}, {});
+    expect(popups.at(-1)!.map((item) => item.label)).toEqual(["Return to AnyCode"]);
+    popups.at(-1)![0]!.click();
+    expect(onRedock).toHaveBeenCalledTimes(1);
+
+    const key = { preventDefault: vi.fn() };
+    fake.webContents.emit("before-input-event", key, { type: "keyDown", key: "D", shift: true, meta: true, control: false });
+    expect(key.preventDefault).toHaveBeenCalled();
+    expect(onRedock).toHaveBeenCalledTimes(2);
+
+    const other = { preventDefault: vi.fn() };
+    fake.webContents.emit("before-input-event", other, { type: "keyDown", key: "d", shift: false, meta: true, control: false });
+    expect(onRedock).toHaveBeenCalledTimes(2);
+  });
+
+  it("adds no Return affordances when the host passes no onRedock", () => {
+    createElectronPreviewWindow({ previewId: "t3" });
+    expect(latestWindow().webContents.listenerCount("context-menu")).toBe(0);
   });
 });

@@ -246,6 +246,8 @@ export interface MdPreviewWindowLike {
 
 export interface CreateWindowOpts {
   previewId: string;
+  /** Pop-out "Return to AnyCode": re-docks this preview into the pane (host wires it to `setContainer(.., "panel")`). */
+  onRedock?: () => void;
   /** Cascade position (undefined for the first window of the batch — the adapter picks its own default placement). */
   x?: number;
   y?: number;
@@ -561,6 +563,8 @@ interface WebPreviewRecord {
   controller?: BrowserController;
   /** Taskana 4759: serializes control actions on this record (no interleaved clicks). */
   controlQueue: Promise<unknown>;
+  /** Panel records only: what the last `applyPanel()` decided (view shown with real bounds). Window records are always "shown". */
+  panelShown: boolean;
 }
 
 /**
@@ -887,7 +891,7 @@ class PreviewHost implements PreviewHostHandle {
       } else {
         // Cascade position is windows-only (D4) — a panel has no free-floating position to cascade.
         const cascade = this.cascadePosition();
-        window = this.deps.createWindow({ previewId, x: cascade.x, y: cascade.y });
+        window = this.deps.createWindow({ previewId, x: cascade.x, y: cascade.y, onRedock: this.redockHandler(tabId, previewId) });
       }
       record = this.newWebRecord(tabId, previewId, window, containerKind, panelView);
       this.previews.set(previewId, record);
@@ -950,6 +954,10 @@ class PreviewHost implements PreviewHostHandle {
     // artifact watcher (no-op for localhost/remote: no file to watch). Reuse-
     // navigate is covered here too: armWatcher re-arms on the NEW realpath.
     this.armWatcher(record);
+    if (record.containerKind === "panel") {
+      // Re-run the reconciler after the (possibly cross-process) load: bounds + visibility are re-sent to the settled view.
+      this.applyPanel();
+    }
     return {
       ok: true,
       value: {
@@ -1731,6 +1739,7 @@ class PreviewHost implements PreviewHostHandle {
       isNavigationAllowed: async (url) => (await this.evaluateNavigation(record, url)).allow,
       console: () => ({ entries: record.consoleRing.slice(), dropped: record.consoleDropped }),
       fullAccess: () => this.fullAccessFor(record.tabId),
+      isVisible: () => record.containerKind !== "panel" || record.panelShown,
       signal: new AbortController().signal,
     };
     return record.controller.run(request, ctx);
@@ -2061,7 +2070,7 @@ class PreviewHost implements PreviewHostHandle {
     } else {
       // Cascade position is windows-only (D4) — mirrors openForTab's own new-window path.
       const cascade = this.cascadePosition();
-      newWindow = this.deps.createWindow({ previewId, x: cascade.x, y: cascade.y });
+      newWindow = this.deps.createWindow({ previewId, x: cascade.x, y: cascade.y, onRedock: this.redockHandler(tabId, previewId) });
     }
 
     // Swap BEFORE re-wiring: `wireWindow` captures its own epoch off
@@ -2316,6 +2325,15 @@ class PreviewHost implements PreviewHostHandle {
     this.deps.onPreviewsChanged?.(this.listForPanel(tabId));
   }
 
+  /** The pop-out window's "Return to AnyCode": moves the preview back into the pane (same transfer as the pane's own button, reversed). */
+  private redockHandler(tabId: string, previewId: string): () => void {
+    return () => {
+      void this.setContainer(tabId, previewId, "panel").catch((error: unknown) => {
+        this.deps.logger.warn(`[preview] re-dock failed for ${previewId}`, error);
+      });
+    };
+  }
+
   /**
    * D6 — the single main-side reconciler for panel visibility, run after
    * every mutation that could affect it (setPanelState, setPanelBounds,
@@ -2348,8 +2366,10 @@ class PreviewHost implements PreviewHostHandle {
       if (visible) {
         record.panelView.setBounds(this.panelBounds!);
         record.panelView.setVisible(true);
+        record.panelShown = true;
       } else {
         record.panelView.setVisible(false);
+        record.panelShown = false;
       }
     }
   }
@@ -2406,6 +2426,7 @@ class PreviewHost implements PreviewHostHandle {
       watch: undefined,
       navEpoch: 0,
       controlQueue: Promise.resolve(),
+      panelShown: false,
     };
   }
 

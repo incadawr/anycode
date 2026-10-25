@@ -46,6 +46,9 @@ const CONSOLE_MAX_TAIL = 200;
 const EVAL_MAX_EXPRESSION_CHARS = 10_000;
 const EVAL_MAX_RESULT_CHARS = 20_000;
 const EVAL_TIMEOUT_MS = 5_000;
+const ACTION_DEADLINE_MS = 25_000;
+export const NOT_VISIBLE_MESSAGE =
+  "the preview is not visible (nothing is painting, so input cannot be delivered); open it in the pane or window and retry";
 /**
  * Best-effort defence in depth (case-insensitive substring, checked before anything is
  * sent). The real boundary: the preview partition is non-persistent and holds only what
@@ -109,10 +112,17 @@ export interface BrowserControlContext {
   console(): { entries: PreviewConsoleEntry[]; dropped: number };
   /** Live "Full browser access": allows typing into password fields (never reads their values). */
   fullAccess?(): boolean;
+  /**
+   * False when the preview's view is known to be hidden (a pane preview that is not the visible
+   * slot, or has no bounds): Chromium does not answer input commands for it. Absent = assume visible.
+   */
+  isVisible?(): boolean;
   signal: AbortSignal;
 }
 
 export interface BrowserControllerOptions {
+  /** Hard cap for one action (below the tool's own 30s wall); a hang becomes a clear error. */
+  actionDeadlineMs?: number;
   clickSettleMs?: number;
   navigationWaitMs?: number;
   waitPollMs?: number;
@@ -180,6 +190,11 @@ function failure(errorKind: ControlErrorKind, error: string): ControlFailure {
 
 function cdpMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** A timed-out input command almost always means the view is not painting. */
+function hungHint(error: unknown): string {
+  return /timed out/i.test(cdpMessage(error)) ? `; ${NOT_VISIBLE_MESSAGE}` : "";
 }
 
 function isStaleNodeError(error: unknown): boolean {
@@ -256,11 +271,13 @@ export class BrowserController {
   private readonly clickSettleMs: number;
   private readonly navigationWaitMs: number;
   private readonly waitPollMs: number;
+  private readonly actionDeadlineMs: number;
 
   constructor(options: BrowserControllerOptions = {}) {
     this.clickSettleMs = options.clickSettleMs ?? CLICK_SETTLE_MS;
     this.navigationWaitMs = options.navigationWaitMs ?? NAVIGATION_WAIT_MS;
     this.waitPollMs = options.waitPollMs ?? WAIT_POLL_MS;
+    this.actionDeadlineMs = options.actionDeadlineMs ?? ACTION_DEADLINE_MS;
   }
 
   /** Drops every ref and the enabled-domain state (navigation, detach, or close). */
@@ -269,7 +286,33 @@ export class BrowserController {
     this.domainsEnabled = false;
   }
 
+  /**
+   * Runs one action under a hard deadline: whatever CDP/settle await hangs (typically input
+   * commands to a view that is not painting), the caller gets a clear tool error, never a
+   * forever-"Running" card. `waitFor` keeps its own, caller-chosen deadline.
+   */
   async run(request: PreviewControlRequest, ctx: BrowserControlContext): Promise<ControlResult> {
+    if ((request.action === "click" || request.action === "type") && ctx.isVisible?.() === false) {
+      return failure("unavailable", NOT_VISIBLE_MESSAGE);
+    }
+    if (request.action === "waitFor") {
+      return this.runAction(request, ctx);
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<ControlResult>((resolve) => {
+      timer = setTimeout(() => {
+        const hint = request.action === "click" || request.action === "type" ? `: ${NOT_VISIBLE_MESSAGE}` : "";
+        resolve(failure("timeout", `${request.action} did not finish within ${Math.round(this.actionDeadlineMs / 1000)}s${hint}`));
+      }, this.actionDeadlineMs);
+    });
+    try {
+      return await Promise.race([this.runAction(request, ctx), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async runAction(request: PreviewControlRequest, ctx: BrowserControlContext): Promise<ControlResult> {
     switch (request.action) {
       case "snapshot":
         return this.snapshot(request.maxChars, ctx);
@@ -702,7 +745,7 @@ export class BrowserController {
         clickCount,
       });
     } catch (error) {
-      return failure("unavailable", `click failed: ${cdpMessage(error)}`);
+      return failure("unavailable", `click failed: ${cdpMessage(error)}${hungHint(error)}`);
     }
 
     const where = "ref" in target ? `[${target.ref}]` : "selector";
@@ -762,7 +805,7 @@ export class BrowserController {
       if (isStaleNodeError(error)) {
         return this.staleFor(target);
       }
-      return failure("unavailable", `type failed: ${cdpMessage(error)}`);
+      return failure("unavailable", `type failed: ${cdpMessage(error)}${hungHint(error)}`);
     }
 
     if (info.type === "password" && ctx.fullAccess?.() !== true) {
