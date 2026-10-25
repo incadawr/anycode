@@ -879,23 +879,25 @@ function CustomProvidersSection({ providers, readOnly, onChanged, bridge }: Cust
   return (
     <section className="settings-section">
       <div className="settings-section-title">Custom providers</div>
-      <ul className="connection-grid" role="list" aria-label="Custom providers">
+      <ul className="custom-provider-list" role="list" aria-label="Custom providers">
         {providers.map((p) => (
-          <li role="listitem" key={p.id}>
-            <div className="settings-field-row">
-              <span>
+          <li role="listitem" key={p.id} className="custom-provider-row">
+            <div className="custom-provider-text">
+              <span className="custom-provider-name">
                 {p.name} — {customProviderKindLabel(p.kind)}
               </span>
-              <span>{describeCustomProvider(p)}</span>
-              <button
-                type="button"
-                className="settings-button settings-button-danger"
-                disabled={readOnly || busy}
-                onClick={() => void remove(p.id)}
-              >
-                Delete
-              </button>
+              <span className="custom-provider-detail" title={describeCustomProvider(p)}>
+                {describeCustomProvider(p)}
+              </span>
             </div>
+            <button
+              type="button"
+              className="settings-button settings-button-danger"
+              disabled={readOnly || busy}
+              onClick={() => void remove(p.id)}
+            >
+              Delete
+            </button>
           </li>
         ))}
       </ul>
