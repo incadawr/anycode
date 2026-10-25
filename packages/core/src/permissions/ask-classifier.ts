@@ -50,6 +50,18 @@ export const SHELL_PIPE_TARGETS: ReadonlySet<string> = new Set([
   "ksh",
   "fish",
   "eval",
+  // Taskana 4730 xfix D2: script RUNTIMES are the same "download and run"
+  // shape as a shell — a pipe into node/python/perl/ruby/env/deno/bun
+  // executes attacker-controlled code exactly like `curl | sh`, so it is
+  // never classifiable no matter what the context says.
+  "node",
+  "python",
+  "python3",
+  "perl",
+  "ruby",
+  "env",
+  "deno",
+  "bun",
 ]);
 
 /** The classifier's input. Deliberately closed: no registry, ports, history or tool objects. */

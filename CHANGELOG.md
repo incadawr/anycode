@@ -63,6 +63,18 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- The permission classifier's human context is now strictly human: a child
+  session's inputs (the parent agent's spawn prompt and its follow-ups) are
+  never treated as your instructions when classifying an ask — an engine child
+  classifies with no human context and stays fail-closed, and download-and-run
+  pipes (`curl … | node`, `| python`, `| perl`, `| ruby`, `| env`, `| deno`,
+  `| bun`) are never auto-decided. Codex command approvals now reach the
+  classifier (normalized to the same Bash-shaped check; approvals for input to
+  an already-running command are never classified), the classifier stays off
+  when an unattended run would fast-deny anyway, and a classifier record that
+  pins a connection the session is not running on turns the classifier off
+  with a visible notice instead of silently using the session's own
+  connection.
 - A project folder's own process declarations no longer start on open: project
   MCP servers, hooks, LSP servers and project-plugin MCP servers wait until you
   trust the folder. The desktop app shows a dialog listing the commands (Trust,

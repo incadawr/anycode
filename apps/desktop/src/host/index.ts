@@ -1,6 +1,7 @@
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
 import { CodexDynamicToolBridge, codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
 import { assertChildModel, readAllowedChildModels } from "../shared/child-model.js";
+import { resolveModelClassifierBoot } from "./model-classifier-boot.js";
 /**
  * Host utilityProcess entry point (design §2/§6, MVP.3; persistence/hooks
  * wiring per §2.12, task 1.9).
@@ -482,7 +483,7 @@ import {
 } from "../shared/child-sessions.js";
 import { parseAskClassifierEnvKind, type AskClassifierBoot } from "./ask-classifier-env.js";
 // Taskana 4730: engine-session approval coverage via a broker decorator.
-import { withAskClassifier } from "./classifying-broker.js";
+import { CLASSIFYING_BROKER_MODEL_TIMEOUT_MS, withAskClassifier } from "./classifying-broker.js";
 import { decorateEngineBroker, type EngineClassifierBoot } from "./engine-classifier-boot.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
 import { TerminalManager } from "./terminal.js";
@@ -1269,6 +1270,10 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   // Taskana 4730: ask-zone classifier coverage for the Codex approval bridge.
   // Command kind only (see engine-classifier-boot.ts); the bridges take the
   // DECORATED broker via `options` below, Session keeps the raw one.
+  // 4730 xfix D4 honesty note: a model-kind record with a connectionId this
+  // session is not running on is exactly the case the CORE boot reports via
+  // engine_notice — here it is already OFF for engine sessions (model kind is
+  // core-only), so the log line below is the honest "off, and why".
   const engineClassifierBoot: EngineClassifierBoot | undefined = (() => {
     const parsed = parseAskClassifierEnvKind(process.env[ENV_PERMISSION_CLASSIFIER]);
     if (parsed === undefined || parsed.kind !== "command") {
@@ -1281,7 +1286,16 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     return parsed.boot;
   })();
   const classifierBroker = decorateEngineBroker(broker, engineClassifierBoot, {
-    userContext: () => classifierSessionRef?.recentHumanUserTurns() ?? [],
+    // 4730 xfix D2: an engine CHILD session's every input is model-authored
+    // (the parent agent's spawn prompt / send follow-ups), so the
+    // classifier's human context is [] for a child — never the parent's
+    // turns, never a polluted ring. The origin threading in session.ts keeps
+    // the ring clean on its own; this is the belt-and-braces guarantee at
+    // the consumer.
+    userContext: () => (args.child !== undefined ? [] : classifierSessionRef?.recentHumanUserTurns() ?? []),
+    // 4730 xfix D5: the Session binds after this decoration (the bridges
+    // capture the broker at construction); until then nothing is consulted.
+    isBound: () => classifierSessionRef !== null,
     cwd: workspace,
     emit: (event) => classifierSessionRef?.emitAgentEvent(event),
   });
@@ -1889,7 +1903,11 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     return parsed.boot;
   })();
   const claudeClassifierBroker = decorateEngineBroker(broker, claudeClassifierBoot, {
-    userContext: () => classifierSessionRef?.recentHumanUserTurns() ?? [],
+    // 4730 xfix D2: same child rule as the codex boot above — a child's
+    // human context is [] (model-authored inputs only), never a ring read.
+    userContext: () => (args.child !== undefined ? [] : classifierSessionRef?.recentHumanUserTurns() ?? []),
+    // 4730 xfix D5: same fail-closed unbound gate as the codex boot above.
+    isBound: () => classifierSessionRef !== null,
     cwd: workspace,
     emit: (event) => classifierSessionRef?.emitAgentEvent(event),
   });
@@ -2828,42 +2846,48 @@ async function boot(): Promise<void> {
     // (the switchable one, WITHOUT the media-projection wrap — a classifier
     // call carries no images) and the session's current model id. An explicit
     // `model` reuses the SAME modelPortFactory an Agent(model:) override uses
-    // (validated against ANYCODE_CHILD_MODELS exactly like a child override);
-    // an explicit `connectionId` is NOT resolvable in this fork (the fork env
-    // carries only the ACTIVE connection's endpoint — main resolves
-    // connections when forking, not the host), so it degrades to the session's
-    // own port with one log line. Every failure path = classifier OFF, never a
-    // crash. Default timeout for the model kind: 8000 ms (a model call is
-    // slower than a local command) unless the record set one.
+    // (validated against ANYCODE_CHILD_MODELS exactly like a child override).
+    // 4730 xfix D4: an explicit `connectionId` is HONEST about what this fork
+    // can resolve — the fork env carries only the ACTIVE connection's
+    // endpoint (main resolves connections when forking, not the host). A pin
+    // on the ACTIVE connection resolves normally; a pin on ANY other
+    // connection turns the classifier OFF with a user-visible notice
+    // (engine_notice on the first turn), NEVER a silent fallback to the
+    // session's own connection and NEVER a `model` resolved against a
+    // different connection than the one named. The decision table lives in
+    // model-classifier-boot.ts (pure, unit-tested). Every failure path =
+    // classifier OFF, never a crash. Default timeout for the model kind:
+    // 8000 ms (a model call is slower than a local command) unless the
+    // record set one.
     let modelKindClassifierBoot: AskClassifierBoot | undefined;
+    let modelClassifierOffNotice: string | undefined;
     if (askClassifierKindBoot?.kind === "model") {
       const record = askClassifierKindBoot;
-      const wantedModel = record.model ?? envConfig.model;
-      let port: ModelPort | undefined;
-      try {
-        if (record.model !== undefined) {
-          assertChildModel(record.model, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model));
-          port = modelPortFactory(record.model);
-        } else {
-          port = switchableModelPort;
-        }
-      } catch (error) {
-        port = undefined;
-        console.log(
-          `[host] ${ENV_PERMISSION_CLASSIFIER}: model classifier OFF — model resolution failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      if (record.connectionId !== undefined && record.model === undefined) {
-        console.log(
-          `[host] ${ENV_PERMISSION_CLASSIFIER}: classifier connectionId is not resolvable in this fork; using the session's own connection`,
-        );
-      }
-      if (port !== undefined) {
+      const allowedChildModels = readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model);
+      const boot = resolveModelClassifierBoot(
+        record,
+        {
+          source: {
+            allowedModels: () => allowedChildModels,
+            portFor: (m: string): ModelPort => modelPortFactory(m),
+          },
+          sessionModel: envConfig.model,
+          activeConnectionId: process.env[ENV_CONNECTION_ID],
+        },
+      );
+      if (boot.ok) {
         modelKindClassifierBoot = {
-          classifier: createModelAskClassifier({ modelPort: port, model: wantedModel }),
-          timeoutMs: record.timeoutMs ?? 8000,
+          classifier: createModelAskClassifier({
+            modelPort: boot.usesSessionPort ? switchableModelPort : modelPortFactory(boot.model),
+            model: boot.model,
+          }),
+          // 4730 xfix (report P3): the ONE model-kind default, not a duplicated literal.
+          timeoutMs: record.timeoutMs ?? CLASSIFYING_BROKER_MODEL_TIMEOUT_MS,
         };
         console.log(`[host] ${ENV_PERMISSION_CLASSIFIER}: ask-zone classifier ${modelKindClassifierBoot.classifier.id} enabled (model kind)`);
+      } else {
+        modelClassifierOffNotice = boot.notice;
+        console.log(`[host] ${ENV_PERMISSION_CLASSIFIER}: model classifier OFF — ${boot.notice}`);
       }
     }
     const effectiveAskClassifierBoot: AskClassifierBoot | undefined =
@@ -4658,6 +4682,13 @@ async function boot(): Promise<void> {
     // (port -> Session.childSpawnMode() -> cell -> port ...) recursed
     // forever on the first spawn of a session-tier child.
 
+    // Taskana 4730 xfix D4: the model-kind classifier is pinned to a
+    // connection this session is not running on — the classifier is OFF and
+    // the user SEES that (engine_notice renders like every other config
+    // warning), never a silent fallback to the session's own connection.
+    if (modelClassifierOffNotice !== undefined) {
+      session.emitAgentEvent({ type: "engine_notice", level: "warning", message: modelClassifierOffNotice });
+    }
     console.log(
       `[host] initialized. workspace=${workspace} model=${envConfig.model} session=${sessionId}` +
         ` mode=${mode} resumed=${initialHistory.length > 0} db=${dbPath}`,

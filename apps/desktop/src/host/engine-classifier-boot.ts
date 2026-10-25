@@ -24,7 +24,10 @@ export interface EngineClassifierBoot {
 /**
  * Wraps `broker` with the classifying decorator when a boot exists. `emit` is
  * late-bound (the Session's agent_event channel) for the same reason: the
- * broker is decorated before the Session is constructed.
+ * broker is decorated before the Session is constructed. `isBound` (4730 xfix
+ * D5) is likewise late-bound: while the Session ref is unbound, the decorator
+ * consults nothing and delegates — no classification can ever run against an
+ * empty human context.
  */
 export function decorateEngineBroker(
   broker: EngineBridgeBroker,
@@ -33,6 +36,8 @@ export function decorateEngineBroker(
     userContext(): string[];
     cwd: string;
     emit(event: AgentEvent): void;
+    /** True once the wiring's Session reference has bound (D5 fail-closed gate). */
+    isBound?(): boolean;
   },
 ): EngineBridgeBroker {
   if (boot === undefined) return broker;
@@ -40,6 +45,7 @@ export function decorateEngineBroker(
     classifier: boot.classifier,
     ...(boot.timeoutMs !== undefined ? { timeoutMs: boot.timeoutMs } : {}),
     userContext: opts.userContext,
+    ...(opts.isBound !== undefined ? { isBound: opts.isBound } : {}),
     cwd: opts.cwd,
     emit: opts.emit,
   });

@@ -1431,9 +1431,20 @@ export class Session {
    * (Codex/Claude) asks are classified against the human's turns. Never
    * assistant text, tool output, or injected frames — same discipline as
    * core's recentUserTurns.
+   *
+   * Taskana 4730 xfix D2: model-authored text never enters, on any session.
+   * The parent agent's spawn prompt (startProgrammaticTurn), a
+   * SessionSubagentPort.send follow-up the renderer drains, and an
+   * agent-inbox delivery all arrive with origin "system" and are never
+   * recorded — that is the exact injection channel this fix closes (the
+   * same discipline core's agent-loop.ts:1171 applies to inline children).
+   * A human-typed steer on a live child's own surface IS recorded; the
+   * engine-session broker wiring (host/index.ts) additionally answers
+   * userContext [] for an engine child regardless, so even a polluted child
+   * ring can never reach a classifier.
    */
   private readonly humanTurnRing: string[] = [];
-  private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[] }> = [];
+  private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[]; origin?: "system" }> = [];
   /** Final-text accumulator over the WHOLE child session's turn chain (packages/core/src/subagents/final-text.ts — the same reset/append/fixate semantics runner.ts applies to an inline subagent). */
   private childFinalText: FinalTextAccumulator = createFinalTextAccumulator();
   /** Cumulative turn count across every runTurn() call this child session has made (summed from each call's own loop_end.turns). */
@@ -3234,9 +3245,11 @@ export class Session {
       // TASK.102 CUT-S2 §1.1/§2.6.3: a child session queues a busy-time
       // user_message (steer) instead of rejecting it — the composer of a live
       // child's own surface docks new instructions onto the running turn
-      // chain rather than losing them.
+      // chain rather than losing them. 4730 xfix D3: the entry carries its
+      // `origin` so a system-origin message (agent-inbox delivery, detached
+      // report) drained later is still not recorded as human context.
       if (this.child !== undefined) {
-        this.enqueueSteerMessage(requestId, text, images);
+        this.enqueueSteerMessage(requestId, text, images, origin);
         return;
       }
       // Protocol guard (the UI also blocks the composer): one turn at a time.
@@ -3261,10 +3274,12 @@ export class Session {
 
   /**
    * Taskana 4730: emits ONE agent event to the renderer exactly the way the
-   * session's own agent_event path does. Sole caller today: the classifying
-   * broker decorator's `permission_auto_decided` journal event (the decorator
-   * is wired in host/index.ts BEFORE the Session exists, so it receives this
-   * method as a late-bound thunk).
+   * session's own agent_event path does. Callers: the classifying broker
+   * decorator's `permission_auto_decided` journal event (the decorator is
+   * wired in host/index.ts BEFORE the Session exists, so it receives this
+   * method as a late-bound thunk) and the host boot's classifier-config
+   * notices (4730 xfix D4's engine_notice when a pinned connection cannot
+   * be resolved).
    */
   emitAgentEvent(event: AgentEvent): void {
     // The live turn id when one is open, else the engine-switch sentinel:
@@ -3302,7 +3317,7 @@ export class Session {
    * `CHILD_STEER_QUEUE_MAX`) or when the attachment isn't supported —
    * neither consumes a queue slot.
    */
-  private enqueueSteerMessage(requestId: string, text: string, images?: ImageAttachment[]): void {
+  private enqueueSteerMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): void {
     const attachments = images?.length ? [...images] : undefined;
     if (attachments !== undefined && (!this.engine.capabilities.supportsImages || !this.imagesAccepted())) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
@@ -3312,7 +3327,10 @@ export class Session {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "busy" });
       return;
     }
-    this.steerQueue.push(attachments !== undefined ? { requestId, text, images: attachments } : { requestId, text });
+    const entry: { requestId: string; text: string; images?: ImageAttachment[]; origin?: "system" } =
+      attachments !== undefined ? { requestId, text, images: attachments } : { requestId, text };
+    if (origin !== undefined) entry.origin = origin;
+    this.steerQueue.push(entry);
   }
 
   /**
@@ -3352,9 +3370,16 @@ export class Session {
   private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): boolean {
     // Taskana 4730: record the RAW human turn for the ask-zone classifier's
     // engine-session coverage (classifying-broker.ts). Only genuinely human
-    // turns: origin "system" injections never enter. Recorded at admission,
-    // BEFORE any plan-reminder/notice augmentation, so the classifier sees
-    // what the user typed. Bounded: keep the last 3, 500 chars each.
+    // turns: origin "system" never enters — that is the parent agent's spawn
+    // text (startProgrammaticTurn), a SessionSubagentPort.send follow-up, or
+    // an agent-inbox delivery, all model-authored (4730 xfix D2/D3). A
+    // human-typed steer on the child's own surface keeps origin undefined
+    // and IS recorded. Recorded at admission, BEFORE any
+    // plan-reminder/notice augmentation, so the classifier sees what the
+    // user typed. Bounded: keep the last 3, 500 chars each. Belt-and-braces:
+    // the engine-session broker wiring answers userContext [] for a child
+    // session regardless (host/index.ts), so even a polluted child ring can
+    // never reach a classifier.
     if (origin !== "system") {
       this.noteHumanUserTurn(text);
     }
@@ -3600,7 +3625,12 @@ export class Session {
     }
     this.programmaticTurnStarted = true;
     this.childStartedAt = Date.now();
-    this.acceptUserMessage(randomUUID(), prompt);
+    // 4730 xfix D2: the parent agent's spawn text is model-authored — it is
+    // the exact injection channel this fix closes, so it enters the turn
+    // machinery with origin "system" semantics for the ring (acceptUserMessage
+    // records nothing for a child anyway; this is belt-and-braces and keeps
+    // system semantics if the child suppression is ever relaxed).
+    this.acceptUserMessage(randomUUID(), prompt, undefined, "system");
     return { ok: true };
   }
 
@@ -3632,7 +3662,12 @@ export class Session {
     }
     let next = this.steerQueue.shift();
     while (next !== undefined) {
-      if (this.acceptUserMessage(next.requestId, next.text, next.images)) {
+      // 4730 xfix D3: the queued entry's `origin` survives into the turn it
+      // becomes — a "system" entry (an agent-inbox delivery the renderer
+      // drained, a detached-report delivery) keeps its system semantics here
+      // exactly as a direct delivery would, and `acceptUserMessage` will not
+      // record it in the human-turn ring.
+      if (this.acceptUserMessage(next.requestId, next.text, next.images, next.origin)) {
         this.childCeilingLastRefusal = undefined;
         return true;
       }

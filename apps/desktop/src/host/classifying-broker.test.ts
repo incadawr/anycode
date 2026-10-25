@@ -184,15 +184,120 @@ describe("withAskClassifier (Taskana 4730)", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("CodexExec delegates today: the plaque gate admits it but core's shared eligibility gate is Bash-only — the ask stands (fail-closed)", async () => {
+  // Taskana 4730 xfix D1: a CodexExec command approval (the Codex approval
+  // bridge's name for a commandExecution ask) IS classified — normalized to
+  // the same Bash-shaped input the broker's own TASK.184 rule retry uses —
+  // so engine sessions get the classifier coverage the card promised.
+  it("CodexExec with a string command IS consulted: allow resolves without the wrapped broker", async () => {
     const { broker, spy } = makeBroker();
-    const { classifier, calls } = makeClassifier(async () => ({ decision: "allow", reason: "ok" }));
+    const { classifier, calls } = makeClassifier(async () => ({ decision: "allow", reason: "routine test" }));
     const events: AgentEvent[] = [];
     const decision = await wrap(broker, classifier, events).requestPermission(bashRequest("npm test", "CodexExec"));
+    expect(decision).toEqual({ behavior: "allow" });
+    expect(calls).toHaveLength(1);
+    // The classifier saw the Bash-shaped subject: same command, plain "Bash".
+    expect(calls[0]).toMatchObject({ toolName: "Bash", command: "npm test" });
+    expect(spy).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+  });
+
+  it("CodexExec with an ineligible command (sudo) still delegates, no classifier call", async () => {
+    const { broker, spy } = makeBroker();
+    const { classifier, calls } = makeClassifier(async () => ({ decision: "allow", reason: "no" }));
+    const events: AgentEvent[] = [];
+    const decision = await wrap(broker, classifier, events).requestPermission(bashRequest("sudo rm -rf /tmp/x", "CodexExec"));
     expect(calls).toHaveLength(0);
     expect(spy).toHaveBeenCalledOnce();
     expect(events).toHaveLength(0);
     expect(decision.behavior).toBe("deny");
+  });
+
+  // Taskana 4730 xfix D6: input destined for an ALREADY-RUNNING command
+  // (kind:"writeStdin") must never be classified on the stale command line —
+  // the same exclusion the broker's rule matching and the plaque layer apply.
+  it("CodexExec writeStdin is never classifiable: delegates untouched even with a string command", async () => {
+    const { broker, spy } = makeBroker();
+    const { classifier, calls } = makeClassifier(async () => ({ decision: "allow", reason: "no" }));
+    const events: AgentEvent[] = [];
+    const request: PermissionRequest = {
+      toolName: "CodexExec",
+      input: { command: "npm test", kind: "writeStdin" },
+      metadata: { ...META, name: "CodexExec" },
+      mode: "build",
+    };
+    const decision = await wrap(broker, classifier, events).requestPermission(request);
+    expect(calls).toHaveLength(0);
+    expect(spy).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(0);
+    expect(decision.behavior).toBe("deny");
+  });
+
+  it("CodexExec without a string command delegates untouched (no command to classify)", async () => {
+    const { broker, spy } = makeBroker();
+    const { classifier, calls } = makeClassifier(async () => ({ decision: "allow", reason: "no" }));
+    const events: AgentEvent[] = [];
+    const request: PermissionRequest = {
+      toolName: "CodexExec",
+      input: { reason: "command completed" },
+      metadata: { ...META, name: "CodexExec" },
+      mode: "build",
+    };
+    await wrap(broker, classifier, events).requestPermission(request);
+    expect(calls).toHaveLength(0);
+    expect(spy).toHaveBeenCalledOnce();
+  });
+
+  // Taskana 4730 xfix D5: while the Session reference is UNBOUND (the broker
+  // is decorated before the Session exists; a handshake-time or racing
+  // approval can reach it first), the classifier must NOT run on an empty
+  // human context — "(no user messages)" makes "consistent with what the
+  // human asked" vacuous. Fail-closed: delegate straight to the wrapped
+  // broker, which asks.
+  it("an UNBOUND session source never consults the classifier: delegates untouched (D5)", async () => {
+    const { broker, spy } = makeBroker();
+    const { classifier, calls } = makeClassifier(async () => ({ decision: "allow", reason: "routine" }));
+    const events: AgentEvent[] = [];
+    const decorated = withAskClassifier(broker, {
+      classifier,
+      userContext: () => null as unknown as string[], // the wiring's unbound shape never gets here
+      isBound: () => false,
+      cwd: "/work",
+      emit: (event) => events.push(event),
+    });
+    const decision = await decorated.requestPermission(bashRequest("npm run build"));
+    expect(calls).toHaveLength(0);
+    expect(spy).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(0);
+    expect(decision.behavior).toBe("deny");
+  });
+
+  // Taskana 4730 xfix D8: the unattended latch (TASK.138) denies asks fast.
+  // Consulting the classifier FIRST would burn a model call (up to the full
+  // 8s timeout) before that fast deny on every ask of an unattended run.
+  // The latch is checked BEFORE the consultation.
+  it("an UNATTENDED broker skips the classifier entirely and delegates to the fast deny (D8)", async () => {
+    let unattended = true;
+    const broker: EngineBridgeBroker = {
+      requestPermission: async () => ({ behavior: "deny" as const, reason: "unattended fast deny" }),
+      denyAll: vi.fn(),
+      get isUnattended(): boolean {
+        return unattended;
+      },
+      isAwaitingApproval: false,
+    };
+    const { classifier, calls } = makeClassifier(async () => ({ decision: "allow", reason: "routine" }));
+    const events: AgentEvent[] = [];
+    const decorated = wrap(broker, classifier, events);
+    const decision = await decorated.requestPermission(bashRequest("npm run build"));
+    expect(calls).toHaveLength(0); // no model call was spent
+    expect(decision).toEqual({ behavior: "deny", reason: "unattended fast deny" });
+    expect(events).toHaveLength(0);
+
+    // Once a human returns, the classifier is consulted again.
+    unattended = false;
+    const decision2 = await decorated.requestPermission(bashRequest("npm run build"));
+    expect(calls).toHaveLength(1);
+    expect(decision2).toEqual({ behavior: "allow" });
   });
 
   it("the latches read through to the wrapped broker LIVE", async () => {
