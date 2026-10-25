@@ -13,6 +13,9 @@ import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Ellipsis, Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
 import { groupHooksByEvent } from "./HooksPanel.js";
+// Taskana 4743: "Set up" routes through the same settings-open + pane-select
+// seam SkillsPane uses (slash-menu.ts owns both event names).
+import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 
 type EnvironmentPlacement = "header" | "composer";
 
@@ -162,6 +165,15 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     openPanel((id) => useTabsStore.getState().setLspPanelOpen(id, true));
   }
 
+  // Taskana 4743: "Set up" (zero servers) lands on the Language servers
+  // SETTINGS pane now — the same settings.open + select-pane pair SkillsPane
+  // uses — instead of the drawer; "Details" above keeps opening the drawer.
+  function openLspSetup(): void {
+    window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
+    window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "language-servers" }));
+    setOpen(false);
+  }
+
   function openHooksDetails(): void {
     openPanel((id) => useTabsStore.getState().setHooksPanelOpen(id, true));
   }
@@ -293,7 +305,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   {lspServers.length > 0 ? (
                     <button type="button" className="environment-menu-open" data-environment-action="lsp-details" onClick={openLspDetails}>Details</button>
                   ) : (
-                    <button type="button" className="environment-menu-open" data-environment-action="lsp-setup" onClick={openLspDetails}>Set up</button>
+                    <button type="button" className="environment-menu-open" data-environment-action="lsp-setup" onClick={openLspSetup}>Set up</button>
                   )}
                 </span>
               </div>

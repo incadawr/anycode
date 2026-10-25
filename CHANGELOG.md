@@ -9,6 +9,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Settings → Language servers: a catalog of known language servers with
+  Found / Not installed detection (existence check only — nothing is
+  installed or executed), a copyable install hint, one-click enable per
+  project or for all projects, custom server entries, and the active tab's
+  live server status. The Environment menu's "Set up" now opens this pane.
+  Changes apply to new sessions; project entries start only after you trust
+  the folder. See `docs/user/lsp.md`.
+
 - Settings → Permissions now lists remembered trusted/denied project folders
   with a "Forget" button — forgetting a folder asks again the next time a tab
   opens it. Symlinked and real paths of a folder now share one trust entry,

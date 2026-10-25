@@ -27,6 +27,23 @@ import {
   MCP_IMPORT_APPLY_CHANNEL,
   MCP_IMPORT_SCAN_CHANNEL,
 } from "../shared/mcp-config.js";
+// Taskana 4743: Settings → Language servers channels (same thin-wrapper rule
+// as mcpConfig above; main owns zod validation + path custody in
+// main/lsp-config-ipc.ts).
+import {
+  LSP_CATALOG_STATUS_CHANNEL,
+  LSP_CUSTOM_UPSERT_CHANNEL,
+  LSP_DISABLE_CHANNEL,
+  LSP_ENABLE_CHANNEL,
+} from "../shared/lsp-config.js";
+import type {
+  LspCatalogStatusRequest,
+  LspConfigStatus,
+  LspCustomUpsertRequest,
+  LspDisableRequest,
+  LspEnableRequest,
+  LspMutationResult,
+} from "../shared/lsp-config.js";
 import {
   SKILLS_CREATE_CHANNEL,
   SKILLS_DELETE_CHANNEL,
@@ -1003,6 +1020,21 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(MCP_IMPORT_SCAN_CHANNEL, req) as Promise<McpImportScanResult>,
     importApply: (req: McpImportApplyRequest): Promise<McpImportApplyResult> =>
       ipcRenderer.invoke(MCP_IMPORT_APPLY_CHANNEL, req) as Promise<McpImportApplyResult>,
+  },
+  // Taskana 4743: `lspConfig.*` — four thin invoke wrappers over the
+  // language-server management channels (catalog+detection+config status,
+  // preset enable, disable, custom upsert). The renderer sends only
+  // tabId/presetId/name/entry — never a path; detection answers carry only
+  // booleans and a coarse source, never a resolved binary path.
+  lspConfig: {
+    status: (req: LspCatalogStatusRequest = {}): Promise<LspConfigStatus> =>
+      ipcRenderer.invoke(LSP_CATALOG_STATUS_CHANNEL, req) as Promise<LspConfigStatus>,
+    enable: (req: LspEnableRequest): Promise<LspMutationResult> =>
+      ipcRenderer.invoke(LSP_ENABLE_CHANNEL, req) as Promise<LspMutationResult>,
+    disable: (req: LspDisableRequest): Promise<LspMutationResult> =>
+      ipcRenderer.invoke(LSP_DISABLE_CHANNEL, req) as Promise<LspMutationResult>,
+    customUpsert: (req: LspCustomUpsertRequest): Promise<LspMutationResult> =>
+      ipcRenderer.invoke(LSP_CUSTOM_UPSERT_CHANNEL, req) as Promise<LspMutationResult>,
   },
   // P7.20/F23 W2 (design/slice-P7.20-cut.md §5): `skills.*` — seven thin invoke
   // wrappers over the skills management channels (main owns zod validation +

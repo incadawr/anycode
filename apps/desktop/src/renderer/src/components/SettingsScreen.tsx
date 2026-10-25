@@ -104,6 +104,7 @@ import { PermissionsEditor } from "./PermissionsEditor.js";
 import { TrustedBinariesSection } from "./TrustedBinariesSection.js";
 import { TrustedFoldersSection } from "./TrustedFoldersSection.js";
 import { McpServersPane } from "./McpServersPane.js";
+import { LanguageServersPane } from "./LanguageServersPane.js";
 import { SkillsPane } from "./SkillsPane.js";
 import { SubagentsPane, workspaceRootSegment } from "./SubagentsPane.js";
 import { RolesPane } from "./RolesPane.js";
@@ -124,7 +125,7 @@ const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 /** TASK.159: the output-ceiling env rung — same local-literal convention as `API_KEY_ENV_VAR` above (renderer modules don't import main). */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
-export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "skills" | "subagents" | "roles" | "plugins" | "environment" | "appearance" | "shortcuts" | "about";
+export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "language-servers" | "skills" | "subagents" | "roles" | "plugins" | "environment" | "appearance" | "shortcuts" | "about";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -164,6 +165,14 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
     icon: Globe,
   },
   { id: "mcp", label: "MCP", description: "Manage MCP servers for this project and your user profile.", icon: ServerStack },
+  {
+    // Taskana 4743: language servers (catalog, PATH detection, one-click
+    // enable, custom entries) — right after MCP, the other server kind.
+    id: "language-servers",
+    label: "Language servers",
+    description: "Language servers for completions, diagnostics, and go-to-definition.",
+    icon: ServerStack,
+  },
   {
     id: "skills",
     label: "Skills",
@@ -212,6 +221,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   vision: ["image", "images", "vision", "recognizer", "screenshot", "picture", "attachment", "inspect", "blind model"],
   network: ["proxy", "network", "system proxy", "no proxy", "authentication", "check connection"],
   mcp: ["mcp", "server", "status"],
+  "language-servers": ["lsp", "language server", "completion", "diagnostics", "gopls", "pyright", "typescript", "clangd", "rust-analyzer"],
   skills: ["skill", "skills", "import", "enable"],
   subagents: ["agent", "agents", "subagent", "subagents", "persona", "agent_type", "built-in"],
   roles: ["role", "roles", "orchestrate", "orchestration", "planner", "executor", "reviewer", "fallback", "children"],
@@ -1865,6 +1875,11 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
               the MCP join gets no runtime statuses (neutral details, never
               another tab's live dots); Project mode passes the chosen tab. */}
           {activePane === "mcp" && <McpServersPane servers={scopeMcpServers} tabId={scopeTabId ?? undefined} />}
+
+          {/* Taskana 4743: language servers — like MCP above, the pane takes
+              the scope bar's tab (project mode) or none (Global = user-only
+              snapshot); detection and trust state resolve main-side. */}
+          {activePane === "language-servers" && <LanguageServersPane tabId={scopeTabId ?? undefined} />}
 
           {activePane === "skills" && <SkillsPane tabId={scopeTabId ?? undefined} />}
 

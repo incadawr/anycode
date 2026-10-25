@@ -133,6 +133,9 @@ import { createSystemProxyResolver, type SystemProxyCache } from "./system-proxy
 import { migrateLegacyProxyUrls, type LegacyProxyImportDeps } from "./proxy-scopes.js";
 import { sendToMainWindow } from "./main-window-send.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
+// Taskana 4743: Settings → Language servers control plane (same deps-bag shape
+// as the MCP registration above; detection is existence-only, nothing spawns).
+import { NodeLspConfigFs, registerLspConfigIpc } from "./lsp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 // Taskana 4109 (old TASK.122): telemetry-directory retention sweep.
 import { startTelemetryRetention, type TelemetryRetentionHandle } from "./telemetry-retention.js";
@@ -2979,6 +2982,22 @@ void app.whenReady().then(async () => {
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
     fs: new NodeMcpConfigFs(),
+  });
+
+  // Language-server config management control plane (Taskana 4743): same
+  // home/workspace wiring as the MCP registration above. `projectTrusted`
+  // rides the SAME once-approval map workspace-trust-ipc uses (never a second
+  // store); detection reads the live PATH over node:fs — existence only, the
+  // app never installs or executes a server binary.
+  registerLspConfigIpc({
+    home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
+    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
+    fs: new NodeLspConfigFs(),
+    pathEnv: () => process.env.PATH,
+    platform: () => process.platform,
+    trust: {
+      onceHash: (workspace) => workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
+    },
   });
 
   // Skills management control plane (design/slice-P7.20-cut.md §5 W2): mirrors

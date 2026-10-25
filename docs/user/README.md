@@ -18,6 +18,9 @@ developer-facing material (building, automation, release policy) see
   disabling, and the built-in skills the app ships.
 - [MCP servers](mcp.md): declaring stdio and HTTP servers, the `${env:NAME}`
   secret pattern, failure behaviour, and how to verify a server came up.
+- [Language servers](lsp.md): the `lspServers` entries that give the agent
+  go-to-definition and diagnostics, the Settings pane's catalog and PATH
+  detection, and when changes apply.
 - [Permissions](permissions.md): the mode ladder (`plan`, `build`, `edit`,
   `auto`, `yolo`), always-allow rules and patterns, workspace confinement,
   trusted binaries, and the approval prompt.
@@ -54,6 +57,7 @@ Tokens reach MCP servers through `${env:NAME}` references.
 | Vision | [configuration.md](configuration.md) |
 | Network | [proxy.md](proxy.md) |
 | MCP | [mcp.md](mcp.md) |
+| Language servers | [lsp.md](lsp.md) |
 | Skills | [skills.md](skills.md) |
 | Subagents | [subagents.md](subagents.md) |
 | Plugins | [plugins.md](plugins.md) |

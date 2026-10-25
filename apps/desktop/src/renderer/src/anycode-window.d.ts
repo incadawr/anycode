@@ -132,6 +132,16 @@ import type {
   McpImportScanRequest,
   McpImportScanResult,
 } from "../../shared/mcp-config";
+// Taskana 4743: Settings → Language servers invoke-API (mirror of preload's
+// `lspConfig.*` wrappers over shared/lsp-config.ts).
+import type {
+  LspCatalogStatusRequest,
+  LspConfigStatus,
+  LspCustomUpsertRequest,
+  LspDisableRequest,
+  LspEnableRequest,
+  LspMutationResult,
+} from "../../shared/lsp-config";
 import type {
   SkillsCreateRequest,
   SkillsDeleteRequest,
@@ -572,6 +582,18 @@ declare global {
         promoteCompat(req: McpConfigPromoteCompatRequest): Promise<McpConfigMutationResult>;
         importScan(req?: McpImportScanRequest): Promise<McpImportScanResult>;
         importApply(req: McpImportApplyRequest): Promise<McpImportApplyResult>;
+      };
+      // Taskana 4743: language-server management invoke-API. `status` returns
+      // the joined catalog/detection/config/trust view (detection answers
+      // carry only booleans + a coarse source — never a resolved binary
+      // path); enable writes a catalog preset into a scope's `lspServers`,
+      // disable removes one by name, customUpsert adds or replaces a
+      // non-catalog entry. Every mutator resolves a fresh status on success.
+      lspConfig: {
+        status(req?: LspCatalogStatusRequest): Promise<LspConfigStatus>;
+        enable(req: LspEnableRequest): Promise<LspMutationResult>;
+        disable(req: LspDisableRequest): Promise<LspMutationResult>;
+        customUpsert(req: LspCustomUpsertRequest): Promise<LspMutationResult>;
       };
       // P7.20/F23 (design/slice-P7.20-cut.md §5 W2-W3): skills management
       // invoke-API. `list` returns the joined project/user/plugin view (a

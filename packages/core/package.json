@@ -17,6 +17,7 @@
     "./proxy-relay": "./src/adapters/node/proxy-relay.ts",
     "./communication-mcp": "./src/mcp/communication-server.ts",
     "./mcp-admin": "./src/mcp/admin.ts",
+    "./lsp-admin": "./src/lsp/admin.ts",
     "./skills-admin": "./src/skills/admin.ts",
     "./workspace-trust": "./src/trust/index.ts",
     "./subagents-admin": "./src/subagents/admin.ts",

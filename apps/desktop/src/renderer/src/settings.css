@@ -3040,3 +3040,52 @@
 /* Taskana 4732 S1-C: plugin MCP rows in the MCP pane (read-only, consent-gated). */
 .mcp-row-plugin .mcp-row-name { color: var(--text-2); }
 .plugins-mcp-approve { color: var(--warning); }
+
+/* Taskana 4743: Settings → Language servers pane. Reuses the MCP pane's row
+   grammar (.mcp-row/.mcp-badge/.mcp-row-hint) plus a few LSP-specific bits. */
+.lsp-pane-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.lsp-pane-notices p { margin: 0; }
+
+.lsp-catalog-row .mcp-row-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.lsp-install-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lsp-install-command {
+  font-family: var(--mono-font, monospace);
+  font-size: 11px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.lsp-scope-block { margin-top: 10px; }
+.lsp-scope-title { font-size: 12px; }
+
+.lsp-custom-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
