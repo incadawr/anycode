@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.37] — 2026-10-25
+
 ### Added
 
 - Settings → Sessions API: enable the local MCP for external agents without
@@ -86,6 +88,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Settings → Language servers no longer reports a server as found when it exists only in the project's node_modules (it would not start), and editing a custom server keeps its hand-written initializationOptions.
 
 ### Security
+
+- Plugins: an MCP server a plugin brings stays off until you allow it (also
+  when settings are missing), and a changed server asks again; a URL install
+  installs exactly the bytes that were checked; plugin skills and agents can no
+  longer take the names of built-in ones; plugin index rollback is refused
+  across restarts.
 
 - The permission classifier's human context is now strictly human: a child
   session's inputs (the parent agent's spawn prompt and its follow-ups) are
