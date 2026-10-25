@@ -82,13 +82,17 @@ shared immediately. `firstMessage` is delivered like `send_message` with
 `mode: next_turn` and the reply carries its `messageId`, so `wait_for_result`
 works on it. If the new tab's host is not ready within 10 seconds, the reply
 omits `messageId`; the tab exists, so send the message yourself with
-`send_message`.
+`send_message`. If the new tab ends up outside the folders list (the list
+changed while the tab was opening), `firstMessage` is refused with
+`not_allowed` naming the tab's ids instead of being silently dropped.
 
 Rules and limits:
 
 - The folder must be trusted in AnyCode (Settings → Permissions).
 - At most 5 creations per minute, and at most 8 agent-opened tabs alive at once.
   These counters live in the running Sessions API and reset when it restarts.
+  Only creations that succeed count towards the 5-per-minute limit; refused
+  attempts never consume it.
 - A refusal is an error whose text starts with a code: `not_allowed` (the
   project switch is off, or the folders list excludes it), `not_trusted`,
   `folder_not_found`, `rate_limited`, `too_many`, `not_ready` (the engine is not
