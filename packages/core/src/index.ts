@@ -136,6 +136,14 @@ export type {
   McpToolCallResult,
   McpToolDecl,
 } from "./mcp/in-process-server.js";
+// Taskana 4764 review F5: the engine browser bridge (desktop host) calls the
+// core tool handlers directly and so bypasses the dispatcher — the component
+// that owns the model-visible result budget. Re-export the SAME clamp (and
+// the default budget it falls back to) so the bridge applies byte-identical
+// semantics instead of re-implementing a cap. Additive, root-only: the host
+// never imports a core subpath.
+export { applyResultBudget } from "./util/result-budget.js";
+export type { ResultPreviewDirection } from "./util/result-budget.js";
 export * from "./skills/index.js";
 export * from "./workflow/index.js";
 export * from "./plugins/index.js";

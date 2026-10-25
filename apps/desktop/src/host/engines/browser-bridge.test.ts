@@ -236,6 +236,49 @@ describe("engine browser bridge — approvals (B6..B13)", () => {
   });
 });
 
+describe("engine browser bridge — result budget (4764 review F5)", () => {
+  it("F5a: BrowserRead text over the 60 KB resultBudget is clamped with the truncation notice; under-budget text passes through byte-identical", async () => {
+    // Over budget: 200_000 chars rides the preview-host cap (READ_RESULT_MAX_CHARS)
+    // into formatResultForModel — the native tab's dispatcher would cut it to the
+    // 60 KB resultBudget; the bridge must apply the SAME clamp.
+    const big = rig();
+    big.preview.setResult("read", () => ({ ok: true, value: { text: "x".repeat(200_000) } as never }));
+    const read = big.bridge.byClaudeName("browser_read")!;
+    const over = await big.bridge.call(read, {}, signal(), "t-f5a1");
+    expect(over.isError).toBe(false);
+    expect(Buffer.byteLength(over.text, "utf8")).toBeLessThanOrEqual(60_000);
+    expect(over.text).toContain("[tool output truncated: 200000 bytes total, budget 60000 bytes, kept the head]");
+
+    // Under budget: byte-identical, no notice.
+    const small = rig();
+    small.preview.setResult("read", () => ({ ok: true, value: { text: "page text" } as never }));
+    const under = await small.bridge.call(small.bridge.byClaudeName("browser_read")!, {}, signal(), "t-f5a2");
+    expect(under.text).toBe("page text");
+  });
+
+  it("F5b: BrowserSnapshot/BrowserConsole (60 KB head budget) and BrowserEval clamp too; a tool with NO declared budget falls back to the 100 KB default", async () => {
+    const huge = "y".repeat(150_000);
+    const snap = rig();
+    snap.preview.setResult("snapshot", () => ({ ok: true, value: { previewId: "p1", url: "u", text: huge } as never }));
+    const snapResult = await snap.bridge.call(snap.bridge.byClaudeName("browser_snapshot")!, {}, signal(), "t-f5b1");
+    expect(Buffer.byteLength(snapResult.text, "utf8")).toBeLessThanOrEqual(60_000);
+
+    const cons = rig();
+    cons.preview.setResult("console", () => ({ ok: true, value: { previewId: "p1", url: "u", text: huge } as never }));
+    const consResult = await cons.bridge.call(cons.bridge.byClaudeName("browser_console")!, {}, signal(), "t-f5b2");
+    expect(Buffer.byteLength(consResult.text, "utf8")).toBeLessThanOrEqual(60_000);
+
+    // BrowserNavigate declares NO resultBudget -> the dispatcher's default
+    // (DEFAULT_TOOL_RESULT_BUDGET, 100_000 bytes head) is what the native tab
+    // enforces; the bridge must land on the same number, not on "unbounded".
+    const nav = rig();
+    nav.preview.setResult("navigate", () => ({ ok: true, value: { previewId: "p1", url: "u", text: huge } as never }));
+    const navResult = await nav.bridge.call(nav.bridge.byClaudeName("browser_navigate")!, { url: "http://localhost:3000/" }, signal(), "t-f5b3");
+    expect(Buffer.byteLength(navResult.text, "utf8")).toBeLessThanOrEqual(100_000);
+    expect(navResult.text).toContain("budget 100000 bytes");
+  });
+});
+
 describe("engine browser bridge — malformed input and failures (B14..B16)", () => {
   it("B14: non-object args are malformed; zod failures list path+message without the rejected value; broker and port untouched", async () => {
     const r = rig();
