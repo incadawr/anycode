@@ -1,0 +1,21 @@
+{
+  "manifestVersion": 1,
+  "name": "telegram-remote",
+  "version": "0.1.0",
+  "displayName": "Telegram remote control",
+  "description": "Talk to your shared AnyCode sessions from Telegram.",
+  "skills": [],
+  "agents": [],
+  "workflows": [],
+  "services": [
+    {
+      "name": "bridge",
+      "command": "node",
+      "args": ["./service.mjs"],
+      "env": {
+        "TELEGRAM_BOT_TOKEN": "${secret:TELEGRAM_BOT_TOKEN}",
+        "TELEGRAM_ALLOWED_USERS": "${secret:TELEGRAM_ALLOWED_USERS}"
+      }
+    }
+  ]
+}

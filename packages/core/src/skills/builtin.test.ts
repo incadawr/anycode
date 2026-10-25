@@ -238,6 +238,7 @@ describe("anycode-setup builtin skill (Taskana 4707)", () => {
         "sessions-api.md",
         "skills.md",
         "subagents.md",
+        "remote-control.md",
         "troubleshooting.md",
       ].sort(),
     );

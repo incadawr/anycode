@@ -251,6 +251,7 @@ Topic files are named \`docs/user/<topic>.md\` relative to the docs location.
 | docs/user/plugins.md | Plugins: what they are, where they live, trust tiers, the two-phase install, MCP-server consent, updates, rollback and pinning. |
 | docs/user/mcp.md | MCP servers across the config files, stdio and HTTP entries, \`\${env:VAR}\` secret references, failure behaviour, how to verify. |
 | docs/user/sessions-api.md | Settings → Sessions API: enabling the local MCP that lets an external agent (Claude Code, Codex) list and message live sessions, sharing a session per tab, allowed folders, copying the MCP config, token regeneration, the env override, troubleshooting. |
+| docs/user/remote-control.md | Remote control from a chat app: the example plugin that reaches shared sessions from a private chat; status states and the secrets it needs. Setup details live in the example plugin's README under examples/. |
 | docs/user/lsp.md | Language servers: \`lspServers\` entries in the config files, the Settings → Language servers catalog and PATH detection, trust for project entries, when changes apply. |
 | docs/user/browser.md | Browser control in the built-in preview (BrowserNavigate, BrowserSnapshot, BrowserClick, BrowserType, BrowserWaitFor): the snapshot and ref workflow, limits, approval for remote origins, troubleshooting. |
 | docs/user/permissions.md | The mode ladder (plan, build, edit, auto, yolo), always-allow rules and patterns, workspace confinement, trusted binaries, the approval prompt. |

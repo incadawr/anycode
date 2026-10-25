@@ -111,6 +111,13 @@ same rules as MCP servers:
 - To write a service that bridges an outside channel, see the
   [channel plugin guide](../development/channel-plugins.md).
 
+## Example: Telegram remote control
+
+[`examples/telegram-remote`](../../examples/telegram-remote/) is a service plugin
+that reaches your shared sessions from Telegram. Its secrets are saved in
+Settings → MCP → Secrets, and the install sheet lists them. See
+[Remote control from a chat app](remote-control.md).
+
 ## Updates, rollback, pin
 
 - **Update** — moves to the newest version compatible with your AnyCode.

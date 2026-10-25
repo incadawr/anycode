@@ -71,6 +71,7 @@ describe("anycode-setup docs sync (Taskana 4707)", () => {
       "sessions-api.md",
       "skills.md",
       "subagents.md",
+      "remote-control.md",
       "troubleshooting.md",
     ];
     expect([...listed].sort()).toEqual([...expected].sort());

@@ -378,5 +378,12 @@ become messages, and the answers land in `outbox/`. Copy it and replace the thre
 marked points (SOURCE, MAP, SINK). It installs from its folder through Settings →
 Plugins → Install from folder.
 
+A second reference, [`examples/telegram-remote/`](../../examples/telegram-remote/),
+adds the secret store to the picture: its service reads `${secret:NAME}` from
+Settings → MCP → Secrets and waits for a long poll, not a folder. It is named for
+Telegram because it is one product, not a generic channel. A multi-machine hub
+(one poller that routes to several bridges) is a possible future option only; it is
+not designed here.
+
 See also [Sessions API](../user/sessions-api.md) for the user's view and
 [Agent communication](agent-communication.md) for the protocol details.
