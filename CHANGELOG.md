@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Sessions API: `create_session` — an external agent can open a new tab in a project where the sidebar ⋯ switch "Allow agents to open tasks here" is on (off by default, trusted folders only, at most 5 per minute and 8 alive). New tabs are shared immediately and marked "agent". `send_message` schema errors now name the expected fields; `get_session_status` and `get_session_result` now agree on `state`.
 - Sessions API: `cancel_turn`, `list_pending_approvals`, `answer_approval` and a per-session External approvals switch (off by default).
 - Telegram example: `/stop` and inline Allow/Deny buttons for approvals (needs the session's External approvals switch).
 - Claude and Codex tabs get the browser tools (BrowserOpen/Read/Screenshot/Navigate/Snapshot/Click/Type/WaitFor/Console/Eval) through AnyCode's tool bridge, with the same approvals, domain policy and Full browser access switch.

@@ -12,6 +12,9 @@
  */
 import { useEffect, useState } from "react";
 import {
+  SESSIONS_API_AGENT_PROJECTS_EMPTY,
+  SESSIONS_API_AGENT_PROJECTS_HINT,
+  SESSIONS_API_AGENT_PROJECTS_LABEL,
   SESSIONS_API_ENABLE_LABEL,
   SESSIONS_API_ENV_NOTE,
   SESSIONS_API_FOLDER_HINT,
@@ -49,6 +52,7 @@ export interface CommunicationBridge {
   regenerateToken(): Promise<CommunicationRegenerateResult>;
   copyConfig(client: CommunicationCopyClient): Promise<CommunicationCopyConfigResult>;
   setDefaultAccess(access: "off" | "on"): Promise<CommunicationMutationResult>;
+  agentProjectsOff(key: string): Promise<CommunicationMutationResult>;
 }
 
 export interface SessionsApiPaneProps {
@@ -78,6 +82,7 @@ export interface SessionsApiPaneViewProps {
   onRemoveFolder(workspace: string): void;
   onPortText(text: string): void;
   onApplyPort(): void;
+  onAgentProjectOff(key: string): void;
   onDefaultAccess(access: "off" | "on"): void;
   onCopyClient(client: CommunicationCopyClient): void;
   onCopy(client: CommunicationCopyClient, label: string): void;
@@ -194,6 +199,33 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
             </ul>
           )}
           <p className="settings-field-hint" title={SESSIONS_API_FOLDER_NOTE}>{SESSIONS_API_FOLDER_HINT}</p>
+        </div>
+
+        <div className="sessions-api-row sessions-api-agent-projects">
+          <div className="sessions-api-row-main">
+            <span className="settings-field-label">{SESSIONS_API_AGENT_PROJECTS_LABEL}</span>
+          </div>
+          {view.agentProjects.length > 0 ? (
+            <ul className="sessions-api-folder-list">
+              {view.agentProjects.map((project) => (
+                <li key={project.key}>
+                  <span className="sessions-api-folder-path" title={project.displayPath}>{project.name} · {project.displayPath}</span>
+                  <button
+                    type="button"
+                    className="settings-button"
+                    aria-label={`Turn off agents opening tasks in ${project.name}`}
+                    disabled={!editable}
+                    onClick={() => props.onAgentProjectOff(project.key)}
+                  >
+                    Off
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="settings-field-hint">{SESSIONS_API_AGENT_PROJECTS_EMPTY}</p>
+          )}
+          <p className="settings-field-hint">{SESSIONS_API_AGENT_PROJECTS_HINT}</p>
         </div>
 
         <div className="sessions-api-row">
@@ -326,6 +358,7 @@ export function SessionsApiPane({ bridge = window.anycode.communication }: Sessi
         }
         void bridge.setPort(parsed).then(take);
       }}
+      onAgentProjectOff={(key) => void bridge.agentProjectsOff(key).then(take)}
       onDefaultAccess={(access) => void bridge.setDefaultAccess(access).then(take)}
       onCopyClient={setCopyClient}
       onCopy={(client, label) => {
