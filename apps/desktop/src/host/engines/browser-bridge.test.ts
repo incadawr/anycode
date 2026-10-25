@@ -64,7 +64,7 @@ function fakeBroker(decision: PermissionDecision | Promise<PermissionDecision> =
   return { broker: broker as unknown as Pick<IpcPermissionBroker, "requestPermission">, requests };
 }
 
-function rig(options: { fullAccess?: () => boolean; decision?: PermissionDecision | Promise<PermissionDecision> } = {}) {
+function rig(options: { fullAccess?: () => boolean; decision?: PermissionDecision | Promise<PermissionDecision>; imageInputEnabled?: () => boolean } = {}) {
   const preview = fakePreview();
   const broker = fakeBroker(options.decision);
   let fullAccessValue = false;
@@ -73,6 +73,7 @@ function rig(options: { fullAccess?: () => boolean; decision?: PermissionDecisio
     fullAccess: options.fullAccess ?? (() => fullAccessValue),
     broker: broker.broker,
     cwd: "/work",
+    ...(options.imageInputEnabled !== undefined ? { imageInputEnabled: options.imageInputEnabled } : {}),
   });
   return {
     bridge,
@@ -257,6 +258,46 @@ describe("engine browser bridge — declarations (B3..B5)", () => {
     const result = await bridge.call(spec, { gone: true }, signal(), "t-b4c");
     expect(result.isError).toBe(true);
     expect(result.text).toContain("at least one of text or selector is required");
+  });
+
+  it("F4a: with imageInputEnabled wired and OFF, BrowserScreenshot fails closed with the media-gate error and no image is attached; ON returns the image", async () => {
+    // OFF: the core BrowserScreenshot handler's own media gate refuses before
+    // the port is ever called (same wording the native tab produces).
+    const off = rig({ imageInputEnabled: () => false });
+    const shot = off.bridge.byClaudeName("browser_screenshot")!;
+    const offResult = await off.bridge.call(shot, {}, signal(), "t-f4a1");
+    expect(offResult.isError).toBe(true);
+    expect(offResult.text).toContain("current model is not marked image-capable");
+    expect(offResult.images).toBeUndefined();
+    expect(off.preview.calls.filter((c) => c.op === "screenshot")).toHaveLength(0);
+
+    // ON: unchanged behaviour (image + text line).
+    const on = rig({ imageInputEnabled: () => true });
+    const onResult = await on.bridge.call(on.bridge.byClaudeName("browser_screenshot")!, {}, signal(), "t-f4a2");
+    expect(onResult.isError).toBe(false);
+    expect(onResult.images).toEqual([{ mediaType: "image/png", data: "aW1hZ2UtYnl0ZXM=" }]);
+
+    // The verdict is read LIVE per call (a model switch mid-session re-gates).
+    let verdict = false;
+    const live = rig({ imageInputEnabled: () => verdict });
+    const liveResult1 = await live.bridge.call(live.bridge.byClaudeName("browser_screenshot")!, {}, signal(), "t-f4a3");
+    expect(liveResult1.isError).toBe(true);
+    verdict = true;
+    const liveResult2 = await live.bridge.call(live.bridge.byClaudeName("browser_screenshot")!, {}, signal(), "t-f4a4");
+    expect(liveResult2.isError).toBe(false);
+    expect(liveResult2.images).toBeDefined();
+
+    // Non-screenshot tools are unaffected by the gate.
+    const read = live.bridge.byClaudeName("browser_read")!;
+    const readResult = await live.bridge.call(read, {}, signal(), "t-f4a5");
+    expect(readResult.isError).toBe(false);
+  });
+
+  it("F4b: default (no imageInputEnabled dep) keeps the gate OPEN — the documented posture for engines with no per-model modality signal", async () => {
+    const r = rig();
+    const result = await r.bridge.call(r.bridge.byClaudeName("browser_screenshot")!, {}, signal(), "t-f4b");
+    expect(result.isError).toBe(false);
+    expect(result.images).toBeDefined();
   });
 
   it("B5: canonicalBrowserToolName maps only mcp__anycode__browser_* names", () => {

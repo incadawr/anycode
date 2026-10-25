@@ -24,7 +24,11 @@ names them `BrowserOpen`, `BrowserNavigate`, ....
    arguments, result text; screenshots show only a text placeholder).
 6. Child sessions have no browser tools.
 7. Screenshots reach the model; the transcript shows only the text line
-   (e.g. "Screenshot of <url> (WxH) attached.").
+   (e.g. "Screenshot of <url> (WxH) attached."). In a Codex tab whose current
+   model is text-only (per Codex's own model catalog), the screenshot is
+   refused with the same "model is not marked image-capable" error a native
+   tab produces; the Claude CLI exposes no per-model image capability, so in
+   Claude tabs the screenshot tool is always allowed.
 
 ## Tools
 

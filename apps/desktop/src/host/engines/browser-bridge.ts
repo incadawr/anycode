@@ -92,6 +92,16 @@ export interface EngineBrowserBridgeDeps {
   /** The session's RAW IpcPermissionBroker (the classifier only handles Bash-like tools). */
   broker: Pick<IpcPermissionBroker, "requestPermission">;
   cwd: string;
+  /**
+   * 4764 review F4: live per-model image verdict, read per call. When wired
+   * and false, BrowserScreenshot fails closed with the same media-gate error
+   * the native tab produces (no port call, no image block into a text-only
+   * model's context). ABSENT means "capability not knowable" — the gate stays
+   * OPEN, the documented posture for an engine whose connection exposes no
+   * per-model modality signal (the Claude CLI's initialize.models[] carries
+   * none). Codex wires the engine's own live `model/list` verdict.
+   */
+  imageInputEnabled?: () => boolean;
 }
 
 export interface EngineBrowserBridge {
@@ -288,14 +298,17 @@ export function createEngineBrowserBridge(deps: EngineBrowserBridgeDeps): Engine
       }
     }
     // The engine model behind a Claude/Codex tab is image-capable for our
-    // purposes: the media gate is open (BrowserScreenshot is its only reader).
+    // purposes UNLESS the boot wired a per-model verdict (F4): Codex's
+    // model/list knows inputModalities, so its door wires the engine's live
+    // `imageInputEnabled()`; the Claude CLI's initialize.models[] carries no
+    // modality field, so that door leaves the gate open (documented).
     const ctx: ToolContext = {
       toolCallId,
       abortSignal: AbortSignal.any([signal, AbortSignal.timeout(meta.timeoutMs ?? DEFAULT_BROWSER_TIMEOUT_MS)]),
       cwd: deps.cwd,
       ports: {} as never,
       preview: deps.preview,
-      media: { imageInputEnabled: () => true } as never,
+      media: { imageInputEnabled: () => deps.imageInputEnabled?.() ?? true } as never,
     };
     let result: ToolResult;
     try {
