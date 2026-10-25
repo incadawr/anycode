@@ -55,6 +55,10 @@ user by accident.
    Record these separately from automated results; an unperformed check is
    pending. On macOS also verify first-open Gatekeeper/signing behavior on the
    downloaded artifact. Self-check does not prove any of these interactions.
+10. Press Publish, then confirm the **Announce release** workflow run is green
+    and the post appeared in the Telegram channel. With the repo secrets
+    absent the run is green and says the announcement was skipped — nothing
+    to fix in that case unless a post was expected.
 
 `CHANGELOG.md` records functional changes, not internal refactor-only noise.
 Detailed implementation notes and private research remain outside Git in
@@ -84,6 +88,27 @@ A tag push therefore never ships anything on its own. The release stays a draft,
 invisible to users, until a human reviews it and presses Publish. Running the
 workflow manually (`workflow_dispatch`) is always a dry run: it builds and
 touches no release.
+
+Publishing is also what announces: `.github/workflows/announce.yml` fires on
+the `published` release event and posts the version, the release notes (the
+same CHANGELOG section that fills the release body, code-point-truncated to
+4000 characters by `scripts/release/build-announcement.mjs`), and the release
+link to the Telegram channel. The send is gated on the presence of the repo
+secrets `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` — absent secrets, a
+Telegram-side error, or an oversized body all leave the run green; an
+announcement is publicity, not a release gate. The message is plain text on
+purpose (no `parse_mode`), so changelog Markdown reaches the channel as-is.
+
+### Telegram announcement setup (one time, owner)
+
+Create a bot with [@BotFather](https://t.me/botfather) (`/newbot`) and copy the
+token. Make the bot an admin of the channel with ONLY the **Post messages**
+permission — it needs nothing else, and the smaller the grant the less a leaked
+token can do. Add two repository secrets (Settings → Secrets and variables →
+Actions): `TELEGRAM_BOT_TOKEN` (the bot token) and `TELEGRAM_CHAT_ID` (the
+target chat; a public channel's `@channel_name` works). With both present, the
+next published release is announced; with either missing, the workflow notes
+the skip and stays green.
 
 Between releases, `.github/workflows/codex-manifest-watch.yml` runs
 `scripts/check-codex-manifest-scheduled.mjs` daily (06:00 UTC). That script
