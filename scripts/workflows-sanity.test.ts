@@ -18,6 +18,7 @@ const WORKFLOWS_DIR = resolve(REPO_ROOT, ".github/workflows");
 
 const RELEASE_YML = readFileSync(resolve(WORKFLOWS_DIR, "release.yml"), "utf8");
 const WATCH_YML = readFileSync(resolve(WORKFLOWS_DIR, "codex-manifest-watch.yml"), "utf8");
+const ANNOUNCE_YML = readFileSync(resolve(WORKFLOWS_DIR, "announce.yml"), "utf8");
 
 /** Counts `{{ … }}` interpolations and `${{ … }}` action-expressions; both must balance. */
 function interpolationsBalanced(text) {
@@ -83,5 +84,64 @@ describe("codex-manifest-watch.yml", () => {
 
   it("interpolations are balanced", () => {
     expect(interpolationsBalanced(WATCH_YML)).toBe(true);
+  });
+});
+
+describe("announce.yml — the Publish-time Telegram announcement", () => {
+  it("triggers on release published ONLY (no draft, no workflow_dispatch)", () => {
+    expect(ANNOUNCE_YML).toMatch(/release:\s*\n\s*types:\s*\[published\]/);
+    // no other trigger key in the `on:` block (comments may mention dispatch)
+    const onBlock = /^on:\n((?:[ \t]+[^\s#][^\n]*\n)+)\n/m.exec(ANNOUNCE_YML)?.[1] ?? "";
+    expect(onBlock).toContain("release:");
+    for (const key of ["workflow_dispatch", "push:", "pull_request", "schedule:"]) {
+      expect(onBlock).not.toContain(key);
+    }
+  });
+
+  it("grants only contents: read (checkout; no GitHub API use)", () => {
+    const permissionsBlock = /permissions:\n((?:\s{2}[^\n]+\n)+)/.exec(ANNOUNCE_YML)?.[1] ?? "";
+    expect(permissionsBlock).toContain("contents: read");
+    expect(permissionsBlock).not.toContain("write");
+  });
+
+  it("checkout does not persist the token (the job never pushes)", () => {
+    expect(ANNOUNCE_YML).toMatch(/persist-credentials:\s*false/);
+  });
+
+  it("gates the send on the secrets' presence and never fails the run", () => {
+    expect(ANNOUNCE_YML).toMatch(/if:\s*steps\.gate\.outputs\.enabled == 'true'/);
+    expect(ANNOUNCE_YML).toMatch(/continue-on-error:\s*true/);
+    expect(ANNOUNCE_YML).toMatch(/::notice::/);
+    expect(ANNOUNCE_YML).toMatch(/::warning::Telegram announcement failed/);
+  });
+
+  it("release event fields reach the shell ONLY through env:", () => {
+    for (const field of ["tag_name", "name", "html_url", "body"]) {
+      expect(ANNOUNCE_YML).toMatch(new RegExp(`RELEASE_[A-Z_]+:\\s*\\$\\{\\{ github\\.event\\.release\\.${field} \\}\\}`));
+    }
+    // and never as an inline expression inside a run: script
+    const runLines = ANNOUNCE_YML.split("\n").filter((line) => /^\s*run:/.test(line));
+    expect(runLines.length).toBeGreaterThan(0);
+    for (const line of runLines) expect(line).not.toContain("${{");
+    // belt: no `${{ github.event` anywhere outside an env: mapping either
+    const nonEnvLines = ANNOUNCE_YML.split("\n").filter((line) => !/^\s+[A-Z_]+:/.test(line));
+    for (const line of nonEnvLines) expect(line).not.toContain("${{ github.event");
+  });
+
+  it("never leaks the token or the Telegram response into the log", () => {
+    expect(ANNOUNCE_YML).not.toMatch(/^\s*set -x/m);
+    // the curl response goes to a temp file, not stdout
+    expect(ANNOUNCE_YML).toMatch(/-o "\$response_file"/);
+    expect(ANNOUNCE_YML).toMatch(/--data-urlencode "text@\$\{?message_file\}?/);
+  });
+
+  it("sends via the message builder with the exact Telegram endpoint shape", () => {
+    expect(ANNOUNCE_YML).toMatch(/node scripts\/release\/build-announcement\.mjs/);
+    expect(ANNOUNCE_YML).toMatch(/api\.telegram\.org\/bot\$\{TELEGRAM_BOT_TOKEN\}\/sendMessage/);
+    expect(ANNOUNCE_YML).toMatch(/--data-urlencode "chat_id=\$\{TELEGRAM_CHAT_ID\}"/);
+  });
+
+  it("interpolations are balanced", () => {
+    expect(interpolationsBalanced(ANNOUNCE_YML)).toBe(true);
   });
 });
