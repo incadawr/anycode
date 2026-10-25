@@ -54,6 +54,7 @@ import {
   SETTINGS_PANES,
   SettingsDialog,
   SettingsScreen,
+  settingsSectionsFor,
   shouldShowBaseUrlField,
   shouldShowAppVersion,
   shouldShowUpdateBanner,
@@ -569,30 +570,33 @@ describe("describeRepoMapRow (slice P7.8, design slice-P7.8-cut.md §3.5)", () =
 });
 
 describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tools & Permissions, icon+description added; P7.20/F23 W3: Skills inserted after MCP; P7.21/F21 W3: Subagents inserted after Skills; P7.22/F19 W3: Profile inserted FIRST; P7.24/F20 W3: Keyboard shortcuts inserted between Appearance and About; TASK.41 W2: Codex inserted between Provider and Permissions; SLICE-CC A4: Claude inserted between Codex and Permissions; TASK.141: Network inserted after Tools; TASK.198 срез E2a: Vision inserted between Tools and Network; Taskana 4732 S1-C: Roles then Plugins inserted after Subagents)", () => {
-  it("grew to eighteen panes, Profile leads the rail, Codex+Claude inserted between Provider and Permissions, Vision inserted between Tools and Network, Language servers inserted after MCP, Skills+Subagents after that, Roles+Plugins inserted after Subagents, shortcuts inserted between Appearance and About", () => {
+  it("Taskana 4767: panes are contiguous by section (General, Models & providers, Agent, Tools & integrations, System); every pane keeps its id", () => {
     expect(SETTINGS_PANES.map((p) => p.id)).toEqual([
+      // General
       "profile",
-      "provider",
-      "codex",
-      "claude",
-      "permissions",
-      "tools",
-      "vision",
-      "network",
-      "mcp",
-      // Taskana 4743: language servers, right after MCP.
-      "language-servers",
-      "skills",
-      "subagents",
-      // Taskana 4704 §3.9: orchestration roles, right after Subagents.
-      "roles",
-      "plugins",
-      // Taskana 4747: the Sessions API, right after Plugins.
-      "sessions-api",
-      "environment",
       "appearance",
       "shortcuts",
       "about",
+      // Models & providers
+      "provider",
+      "codex",
+      "claude",
+      "vision",
+      // Agent
+      "permissions",
+      "tools",
+      "skills",
+      "subagents",
+      "roles",
+      // Tools & integrations
+      "mcp",
+      "language-servers",
+      "plugins",
+      // Taskana 4747: the Sessions API.
+      "sessions-api",
+      // System
+      "network",
+      "environment",
     ]);
     expect(SETTINGS_PANES).toHaveLength(19);
   });
@@ -643,6 +647,88 @@ describe("filterSettingsPanes (slice P7.16 W2, design §3: rail search, v1 hones
     expect(filterSettingsPanes("language server")).toEqual(["language-servers"]);
     expect(filterSettingsPanes("gopls")).toEqual(["language-servers"]);
     expect(filterSettingsPanes("Language servers")).toEqual(["language-servers"]);
+  });
+});
+
+describe("Settings rail sections (Taskana 4767: the flat rail grouped into five sections)", () => {
+  const ALL_IDS = SETTINGS_PANES.map((p) => p.id);
+
+  it("every pane sits under exactly one section: none missing, none duplicated", () => {
+    const grouped = settingsSectionsFor(ALL_IDS).flatMap((section) => section.panes.map((pane) => pane.id));
+    expect([...grouped].sort()).toEqual([...ALL_IDS].sort());
+    expect(new Set(grouped).size).toBe(grouped.length);
+  });
+
+  it("sections come in the pinned order, with the pinned membership", () => {
+    const sections = settingsSectionsFor(ALL_IDS);
+    expect(sections.map((section) => section.id)).toEqual(["general", "models", "agent", "integrations", "system"]);
+    expect(sections.map((section) => section.label)).toEqual([
+      "General",
+      "Models & providers",
+      "Agent",
+      "Tools & integrations",
+      "System",
+    ]);
+    expect(sections.map((section) => section.panes.map((pane) => pane.id))).toEqual([
+      ["profile", "appearance", "shortcuts", "about"],
+      ["provider", "codex", "claude", "vision"],
+      ["permissions", "tools", "skills", "subagents", "roles"],
+      ["mcp", "language-servers", "plugins", "sessions-api"],
+      ["network", "environment"],
+    ]);
+  });
+
+  it("the flat SETTINGS_PANES order is the section order (headers never split a group)", () => {
+    expect(ALL_IDS).toEqual(settingsSectionsFor(ALL_IDS).flatMap((section) => section.panes.map((pane) => pane.id)));
+  });
+
+  it("pane ids, labels and count are unchanged by the grouping", () => {
+    expect([...ALL_IDS].sort()).toEqual(
+      [
+        "about", "appearance", "claude", "codex", "environment", "language-servers", "mcp", "network",
+        "permissions", "plugins", "profile", "provider", "roles", "sessions-api", "shortcuts", "skills",
+        "subagents", "tools", "vision",
+      ].sort(),
+    );
+    expect(SETTINGS_PANES.find((p) => p.id === "shortcuts")!.label).toBe("Keyboard shortcuts");
+  });
+
+  it("a narrowed search drops empty sections and keeps the section order", () => {
+    expect(settingsSectionsFor(["permissions"]).map((section) => section.id)).toEqual(["agent"]);
+    expect(settingsSectionsFor(["permissions"])[0]!.panes.map((pane) => pane.id)).toEqual(["permissions"]);
+    expect(settingsSectionsFor(["environment", "profile"]).map((section) => section.id)).toEqual(["general", "system"]);
+    expect(settingsSectionsFor([])).toEqual([]);
+  });
+
+  it("the rail renders one role=group per section, headed by a non-focusable title; tabs keep their ids and role", () => {
+    const store = makeStore(makeSnapshot());
+    const screen = mountUnit("screen", SettingsScreen, {
+      store,
+      initialPane: "tools",
+      addConnectionRequest: 0,
+      onAddConnectionConsumed: () => {},
+    });
+    const groups: AnyElement[] = [];
+    walk(screen.tree, (element) => {
+      if (element.props.role === "group") groups.push(element);
+    });
+    expect(groups.map((group) => group.props["aria-labelledby"])).toEqual([
+      "settings-section-general",
+      "settings-section-models",
+      "settings-section-agent",
+      "settings-section-integrations",
+      "settings-section-system",
+    ]);
+
+    const header = findByProp(screen.tree, (props) => props.id === "settings-section-general")!;
+    expect(header.type).toBe("div");
+    expect(header.props.role).toBeUndefined();
+    expect(header.props.tabIndex).toBeUndefined();
+    expect(header.props.onClick).toBeUndefined();
+
+    const codexTab = findByProp(screen.tree, (props) => props.id === "settings-tab-codex")!;
+    expect(codexTab.props.role).toBe("tab");
+    expect(codexTab.type).toBe("button");
   });
 });
 

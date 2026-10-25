@@ -424,7 +424,29 @@
   flex-direction: column;
   gap: 2px;
   padding: var(--sp-2);
-  overflow-y: auto;              /* seven items today; never traps on a tiny window */
+  overflow-y: auto;              /* nineteen items in five groups today; never traps on a tiny window */
+}
+
+/* Taskana 4767: one group per rail section — a non-focusable title over its tabs. */
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav-group + .settings-nav-group {
+  margin-top: var(--sp-3);
+}
+
+.settings-nav-section-title {
+  padding: 0 var(--sp-2) var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
 }
 
 .settings-nav-item {

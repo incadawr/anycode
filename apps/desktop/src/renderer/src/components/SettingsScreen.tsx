@@ -14,9 +14,9 @@
  * SHELL (slice R16, design/slice-R16-cut.md §1/§2; sixth pane added by slice
  * P7.8; fullscreen redesign + Permissions split out of Tools, slice P7.16
  * design/slice-P7.16-cut.md §3/§5 W2): a full-window `<dialog>` with a wide
- * rail (Back-to-app + Search settings + a vertical `role="tablist"` of seven
- * sections: Provider · Permissions · Tools · MCP · Environment · Appearance ·
- * About) and a right content pane — a page-title block (`SETTINGS_PANES`'
+ * rail (Back-to-app + Search settings + a vertical `role="tablist"` whose tabs
+ * are grouped under five labelled, non-focusable section headers — Taskana
+ * 4767, `SETTINGS_SECTIONS`/`settingsSectionsFor`) and a right content pane — a page-title block (`SETTINGS_PANES`'
  * label/description) above a single `role="tabpanel"` scroll column that
  * conditionally renders exactly one section's content at a time (never
  * CSS-hidden — see `ProviderSettings`' `<ConsentDialog>` top-layer hazard
@@ -158,42 +158,44 @@ type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
  * fallback-recognizer pane belongs next to the other cross-cutting run-time
  * knobs, not among the per-provider connection panes.
  */
-export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; description: string; icon: SettingsIcon }> = [
-  { id: "profile", label: "Profile", description: "Your usage stats from local telemetry.", icon: Person },
-  { id: "provider", label: "Provider", description: "Choose a provider, model, and credentials.", icon: Gear },
-  { id: "codex", label: "Codex", description: "Discover, verify, and sign in to the Codex agent engine.", icon: Cube },
-  { id: "claude", label: "Claude", description: "Discover and verify the Claude Code agent engine.", icon: Cube },
-  { id: "permissions", label: "Permissions", description: "Rules that let tools run without asking.", icon: Check },
-  { id: "tools", label: "Tools", description: "Concurrency, stall timeout, and turn limits.", icon: Terminal },
+/**
+ * Taskana 4767: the rail groups these panes into five sections (`SETTINGS_SECTIONS`).
+ * Entries are contiguous by section, so the flat array order is the rail order.
+ */
+export type SettingsSectionId = "general" | "models" | "agent" | "integrations" | "system";
+
+export const SETTINGS_SECTIONS: ReadonlyArray<{ id: SettingsSectionId; label: string }> = [
+  { id: "general", label: "General" },
+  { id: "models", label: "Models & providers" },
+  { id: "agent", label: "Agent" },
+  { id: "integrations", label: "Tools & integrations" },
+  { id: "system", label: "System" },
+];
+
+export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: SettingsSectionId; label: string; description: string; icon: SettingsIcon }> = [
+  { id: "profile", section: "general", label: "Profile", description: "Your usage stats from local telemetry.", icon: Person },
+  { id: "appearance", section: "general", label: "Appearance", description: "Theme, density, and notification preferences.", icon: Sliders },
+  { id: "shortcuts", section: "general", label: "Keyboard shortcuts", description: "View and customize keyboard shortcuts.", icon: Keyboard },
+  { id: "about", section: "general", label: "About", description: "App identity, updates, and acknowledgements.", icon: BrandMark },
+  { id: "provider", section: "models", label: "Provider", description: "Choose a provider, model, and credentials.", icon: Gear },
+  { id: "codex", section: "models", label: "Codex", description: "Discover, verify, and sign in to the Codex agent engine.", icon: Cube },
+  { id: "claude", section: "models", label: "Claude", description: "Discover and verify the Claude Code agent engine.", icon: Cube },
   {
-    id: "vision",
+    id: "vision", section: "models",
     label: "Vision",
     description: "The fallback model that answers what an image shows for a model that can't see.",
     icon: ImageIcon,
   },
+  { id: "permissions", section: "agent", label: "Permissions", description: "Rules that let tools run without asking.", icon: Check },
+  { id: "tools", section: "agent", label: "Tools", description: "Concurrency, stall timeout, and turn limits.", icon: Terminal },
   {
-    id: "network",
-    label: "Network",
-    description: "Named proxy profiles, and the proxy this app uses by default.",
-    icon: Globe,
-  },
-  { id: "mcp", label: "MCP", description: "Manage MCP servers for this project and your user profile.", icon: ServerStack },
-  {
-    // Taskana 4743: language servers (catalog, PATH detection, one-click
-    // enable, custom entries) — right after MCP, the other server kind.
-    id: "language-servers",
-    label: "Language servers",
-    description: "Language servers for completions, diagnostics, and go-to-definition.",
-    icon: ServerStack,
-  },
-  {
-    id: "skills",
+    id: "skills", section: "agent",
     label: "Skills",
     description: "Manage workspace and user skills. Enabled skills can be referenced in chat with $skill-name.",
     icon: FileIcon,
   },
   {
-    id: "subagents",
+    id: "subagents", section: "agent",
     label: "Subagents",
     description: "Manage built-in, workspace, and user subagent profiles used by the Agent tool.",
     icon: Robot,
@@ -201,13 +203,22 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
   {
     // Taskana 4704 §3.9 (part B): orchestration roles (planner/executor/
     // reviewer/explore/orchestrator route chains + parallel-children cap).
-    id: "roles",
+    id: "roles", section: "agent",
     label: "Roles",
     description: "Which engine or connection each orchestration role runs on, with fallbacks.",
     icon: Robot,
   },
+  { id: "mcp", section: "integrations", label: "MCP", description: "Manage MCP servers for this project and your user profile.", icon: ServerStack },
   {
-    id: "plugins",
+    // Taskana 4743: language servers (catalog, PATH detection, one-click
+    // enable, custom entries) — right after MCP, the other server kind.
+    id: "language-servers", section: "integrations",
+    label: "Language servers",
+    description: "Language servers for completions, diagnostics, and go-to-definition.",
+    icon: ServerStack,
+  },
+  {
+    id: "plugins", section: "integrations",
     label: "Plugins",
     description: "Install, update, and manage plugins — skills, agents, workflows, and MCP servers shipped as packages.",
     icon: Cube,
@@ -215,16 +226,33 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; label: string; 
   {
     // Taskana 4747: the Sessions API (local MCP for external agents) — right after
     // Plugins, the other "connect something outside the app" surface.
-    id: "sessions-api",
+    id: "sessions-api", section: "integrations",
     label: SESSIONS_API_LABEL,
     description: SESSIONS_API_DESCRIPTION,
     icon: Globe,
   },
-  { id: "environment", label: "Environment", description: "Telemetry and repo-map status for this workspace.", icon: Info },
-  { id: "appearance", label: "Appearance", description: "Theme, density, and notification preferences.", icon: Sliders },
-  { id: "shortcuts", label: "Keyboard shortcuts", description: "View and customize keyboard shortcuts.", icon: Keyboard },
-  { id: "about", label: "About", description: "App identity, updates, and acknowledgements.", icon: BrandMark },
+  {
+    id: "network", section: "system",
+    label: "Network",
+    description: "Named proxy profiles, and the proxy this app uses by default.",
+    icon: Globe,
+  },
+  { id: "environment", section: "system", label: "Environment", description: "Telemetry and repo-map status for this workspace.", icon: Info },
 ];
+
+/**
+ * Taskana 4767: the visible panes grouped under their section, in
+ * `SETTINGS_SECTIONS` order, keeping `SETTINGS_PANES` order inside each group.
+ * Sections with no visible pane are omitted (the search narrows the rail).
+ */
+export function settingsSectionsFor(
+  visiblePaneIds: readonly SettingsPaneId[],
+): Array<{ id: SettingsSectionId; label: string; panes: Array<(typeof SETTINGS_PANES)[number]> }> {
+  return SETTINGS_SECTIONS.map((section) => ({
+    ...section,
+    panes: SETTINGS_PANES.filter((pane) => pane.section === section.id && visiblePaneIds.includes(pane.id)),
+  })).filter((section) => section.panes.length > 0);
+}
 
 /**
  * Static keyword index behind the rail search (design §3 "Search settings,
@@ -1480,7 +1508,10 @@ export function SettingsScreen({
   // NOT synced back into `requestedPane` itself, so clearing the search
   // restores exactly what was selected before.
   const visiblePaneIds = filterSettingsPanes(searchQuery);
-  const visiblePanes = SETTINGS_PANES.filter((pane) => visiblePaneIds.includes(pane.id));
+  // Taskana 4767: the rail's section groups; `visiblePanes` flattens them so the
+  // keyboard walk (`navRefs` index, ArrowUp/Down/Home/End) ignores the headers.
+  const railSections = settingsSectionsFor(visiblePaneIds);
+  const visiblePanes = railSections.flatMap((section) => section.panes);
   const activePane: SettingsPaneId | undefined = visiblePanes.some((pane) => pane.id === requestedPane)
     ? requestedPane
     : visiblePanes[0]?.id;
@@ -1684,27 +1715,40 @@ export function SettingsScreen({
             aria-label="Settings sections"
             onKeyDown={onNavKeyDown}
           >
-            {visiblePanes.map((pane, index) => {
-              const active = pane.id === activePane;
-              const PaneIcon = pane.icon;
-              return (
-                <button
-                  key={pane.id}
-                  ref={(el) => { navRefs.current[index] = el; }}
-                  type="button"
-                  role="tab"
-                  id={`settings-tab-${pane.id}`}
-                  aria-selected={active}
-                  aria-controls={active ? `settings-pane-${pane.id}` : undefined}
-                  tabIndex={active ? 0 : -1}
-                  className="settings-nav-item"
-                  onClick={() => setRequestedPane(pane.id)}
-                >
-                  <PaneIcon />
-                  <span>{pane.label}</span>
-                </button>
-              );
-            })}
+            {railSections.map((section) => (
+              <div
+                key={section.id}
+                className="settings-nav-group"
+                role="group"
+                aria-labelledby={`settings-section-${section.id}`}
+              >
+                <div id={`settings-section-${section.id}`} className="settings-nav-section-title">
+                  {section.label}
+                </div>
+                {section.panes.map((pane) => {
+                  const index = visiblePanes.indexOf(pane);
+                  const active = pane.id === activePane;
+                  const PaneIcon = pane.icon;
+                  return (
+                    <button
+                      key={pane.id}
+                      ref={(el) => { navRefs.current[index] = el; }}
+                      type="button"
+                      role="tab"
+                      id={`settings-tab-${pane.id}`}
+                      aria-selected={active}
+                      aria-controls={active ? `settings-pane-${pane.id}` : undefined}
+                      tabIndex={active ? 0 : -1}
+                      className="settings-nav-item"
+                      onClick={() => setRequestedPane(pane.id)}
+                    >
+                      <PaneIcon />
+                      <span>{pane.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
             {visiblePanes.length === 0 && <div className="settings-nav-empty">No matching settings</div>}
           </div>
         </div>
