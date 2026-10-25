@@ -6,7 +6,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -97,7 +97,11 @@ async function startFakeTelegram(): Promise<FakeTelegram> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const address = server.address();
   tg.url = `http://127.0.0.1:${typeof address === "object" && address !== null ? address.port : 0}`;
-  tg.close = () => new Promise<void>((resolve) => server.close(() => resolve()));
+  tg.close = () =>
+    new Promise<void>((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    });
   return tg;
 }
 
@@ -235,15 +239,17 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
     approvals,
     close: async () => {
       await bridge.stop();
+      await h.run?.catch(() => {});
     },
   };
-  cleanups.push(() => bridge.stop());
+  // Teardown waits for the poll loop to exit, so no late write can race the temp-dir removal.
+  cleanups.push(() => h.close());
   if (opts.autoStart !== false) h.run = bridge.run();
   return h;
 }
 
-async function waitFor(check: () => boolean, timeout = 15000): Promise<void> {
-  await vi.waitFor(() => expect(check()).toBe(true), { timeout, interval: 20 });
+async function waitFor(check: () => boolean, timeout = 6000): Promise<void> {
+  await vi.waitFor(() => expect(check()).toBe(true), { timeout, interval: 10 });
 }
 
 function texts(h: Harness): string[] {
@@ -649,6 +655,8 @@ describe("telegram-remote example (Taskana 4751)", () => {
     await waitFor(() => texts(b).some((text) => text.startsWith("Sent to")));
     b.exposed.delete(SID_BUILD);
     await waitFor(() => texts(b).includes("Session build-bot is no longer shared or was closed."));
+    // The reply goes out before the waiter drops its pending entry; wait for that write rather than racing it.
+    await waitFor(() => b.bridge.state().pending.length === 0);
     expect(b.bridge.state().pending).toHaveLength(0);
 
     // (c) the tab closes mid-turn
@@ -899,8 +907,11 @@ async function restartBridge(h: Harness): Promise<any> {
     waitSliceMs: 30,
     log: (line: string) => h.lines.push(line),
   });
-  cleanups.push(() => bridge.stop());
-  void bridge.run();
+  const runP = bridge.run();
+  cleanups.push(async () => {
+    await bridge.stop();
+    await runP.catch(() => {});
+  });
   // run() loads state.json first; the selected chat only shows up once that load has landed.
   await waitFor(() => bridge.state().chats[String(USER)] !== undefined);
   return bridge;
@@ -1068,6 +1079,58 @@ describe("telegram-remote approvals and /stop (Taskana 4763)", () => {
     const sent = approvalSends(h)[0]!;
     expect(sent.body.text).not.toContain("abc123def456ghi789");
     expect(sent.body.text).toContain("***");
+  });
+});
+
+describe("telegram-remote store and shutdown (Taskana 4785)", () => {
+  it("T44 stop() waits for a state write already in flight: it resolves only after that write lands, and run() resolves instead of rejecting", async () => {
+    const h = await harness({ autoStart: false });
+    const lib = await loadExample("service.mjs");
+    const realStore = lib.fileStore(h.stateDir);
+    let stopping = false;
+    let started = 0;
+    let completed = 0;
+    const bridge = lib.createBridge({
+      env: { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_ALLOWED_USERS: String(USER), TELEGRAM_API_BASE: h.tg.url, TELEGRAM_REMOTE_STATE_DIR: h.stateDir, ANYCODE_SESSIONS_DISCOVERY: h.discoveryFile },
+      now: () => h.tg.clock.t,
+      sleep: () => Promise.resolve(),
+      paceMs: 0,
+      pollTimeoutSec: 1,
+      waitSliceMs: 30,
+      log: (line: string) => h.lines.push(line),
+      store: {
+        load: () => realStore.load(),
+        save: async (state: unknown) => {
+          started += 1;
+          // Writes issued before stop() are slow; the write stop() itself issues is immediate.
+          if (!stopping) await new Promise((resolve) => setTimeout(resolve, 250));
+          await realStore.save(state);
+          completed += 1;
+        },
+      },
+    });
+    cleanups.push(() => bridge.stop());
+    const runP = bridge.run();
+    h.tg.push(msg(100, "/help"));
+    await waitFor(() => bridge.state().lastUpdateId === 100);
+    expect(started).toBeGreaterThan(completed);
+    stopping = true;
+    await bridge.stop();
+    expect(completed).toBe(started);
+    await expect(runP).resolves.toBeUndefined();
+    const persisted = JSON.parse(await readFile(join(h.stateDir, "state.json"), "utf8"));
+    expect(persisted.offset).toBe(101);
+    expect(h.lines.some((line) => line.includes("[err]"))).toBe(false);
+  });
+
+  it("T45 concurrent fileStore saves queue instead of colliding on the temp file: last write wins and no temp file is left behind", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-telegram-store-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const lib = await loadExample("service.mjs");
+    const store = lib.fileStore(dir);
+    await Promise.all([store.save({ a: 1 }), store.save({ a: 2 }), store.save({ a: 3 })]);
+    expect(JSON.parse(await readFile(join(dir, "state.json"), "utf8"))).toEqual({ a: 3 });
+    expect((await readdir(dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 });
 
