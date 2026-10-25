@@ -499,7 +499,21 @@ export type TranscriptBlock =
    * only) — this gives the transcript a full history of every attempt this
    * turn made, not just the last one.
    */
-  | { kind: "stream_retry"; id: string; attempt: number; maxAttempts: number; delayMs: number; reason: string }
+  | {
+      kind: "stream_retry";
+      id: string;
+      attempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      reason: string;
+      /**
+       * Taskana 4772 review F5: present only on a retry that follows a
+       * recovered network wait — the episode's duration (the retry itself
+       * fired at once; `delayMs` is 0). Rendered as "now (network back after
+       * N s)", never as a pending delay.
+       */
+      waitedMs?: number;
+    }
   /**
    * One row per compaction, manual or automatic (TASK.227): the
    * `compaction_start`/`compaction_end` pair rendered as ONE card, appended
@@ -1094,6 +1108,13 @@ export interface DesktopState {
    * by the turn's end. Drives the "Waiting for network…" status line only.
    */
   waitingForNetwork: boolean;
+  /**
+   * Taskana 4772 review F2: open waiting episodes per source — the parent's
+   * own model port and inline-subagent children share one network, so both
+   * can park at once; `waitingForNetwork` is this map's `sum > 0` projection
+   * so the banner survives the FIRST recovery of a simultaneous pair.
+   */
+  networkWaitEpisodes: { parent: number; subagent: number };
   /** Last `context_usage` reading (design §2.12); null before the first one arrives in a session. */
   contextUsage: ContextUsage | null;
   /** Last fatal message from the host (e.g. sanitizer failure); null once nothing has fired yet. */
@@ -1470,6 +1491,8 @@ interface SessionSlice {
   notice: Notice | null;
   /** Taskana 4772: see DesktopState.waitingForNetwork. */
   waitingForNetwork: boolean;
+  /** Taskana 4772 review F2: see DesktopState.networkWaitEpisodes. */
+  networkWaitEpisodes: { parent: number; subagent: number };
   contextUsage: ContextUsage | null;
   mcpServers: McpServerStatus[];
   lspServers: LspServerStatus[];
@@ -1535,6 +1558,10 @@ function initialSessionSlice(): SessionSlice {
     waitingSubagents: new Set<string>(),
     notice: null,
     waitingForNetwork: false,
+    // Taskana 4772 review F2: per-source count of open waiting episodes
+    // (parent + inline-subagent children share one network, so both can park
+    // at once). waitingForNetwork is its `sum > 0` projection.
+    networkWaitEpisodes: { parent: 0, subagent: 0 },
     contextUsage: null,
     mcpServers: [],
     lspServers: [],
@@ -3474,7 +3501,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
 
         // ── loop end: footer block + turn goes idle again (immediate) ──
         case "loop_end": {
-          set({ waitingForNetwork: false });
+          // Taskana 4772 review F2: the loop ended — no stream can still be parked.
+          set({ networkWaitEpisodes: { parent: 0, subagent: 0 }, waitingForNetwork: false });
           // TASK.117: the footer appends ONCE per outer turn — a replayed
           // loop_end (ring duplicate of an already-terminated turn) must not
           // stack a second footer. The idle flip below stays unconditional
@@ -3587,7 +3615,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // the frozen TranscriptBlock union (design §5 enumerates exactly:
         // user_text, assistant_text, reasoning, tool_call, loop_end) ──
         case "turn_end":
-          set((state) => ({ modelTurns: state.modelTurns + 1, waitingForNetwork: false }));
+          set((state) => ({
+            modelTurns: state.modelTurns + 1,
+            // Taskana 4772 review F2: a fresh step starts from zero episodes.
+            networkWaitEpisodes: { parent: 0, subagent: 0 },
+            waitingForNetwork: false,
+          }));
           if (event.finishReason === "length") {
             appendBlock({ kind: "output_truncated", id: `output_truncated:${turnId}:${event.turn}` });
           }
@@ -3665,12 +3698,35 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             attempt: event.attempt,
             maxAttempts: event.maxAttempts,
             delayMs: event.delayMs,
+            // Taskana 4772 review F5: the recovery retry's wait duration rides
+            // the block so the line reads "network back after N s".
+            ...(event.waitedMs !== undefined ? { waitedMs: event.waitedMs } : {}),
             reason: event.reason,
           });
           // Past the announced total (network-budget retry) the label drops it.
           // Taskana 4772: a retry announced here ends any network wait (recovered).
+          // Review F2: a RECOVERY retry (waitedMs present) decrements its own
+          // source's episode count — the banner clears only when every parked
+          // stream (parent + inline-subagent children) has recovered. An
+          // ordinary retry still clears outright: the pre-F2 wire carried no
+          // episode identity, and an ordinary retry means the port was never
+          // parked (no waiting_for_network was emitted for it).
+          if (event.waitedMs !== undefined) {
+            const source = event.waitSource ?? "parent";
+            const current = get().networkWaitEpisodes;
+            const decremented = Math.max(0, (current[source] ?? 0) - 1);
+            const episodes = { ...current, [source]: decremented };
+            set({
+              networkWaitEpisodes: episodes,
+              waitingForNetwork: episodes.parent + episodes.subagent > 0,
+            });
+          } else {
+            set({
+              networkWaitEpisodes: { parent: 0, subagent: 0 },
+              waitingForNetwork: false,
+            });
+          }
           set({
-            waitingForNetwork: false,
             notice: {
               kind: "stream_retry",
               text: `Retrying… (attempt ${event.attempt > event.maxAttempts ? event.attempt : `${event.attempt}/${event.maxAttempts}`}: ${event.reason})`,
@@ -3679,9 +3735,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
           return;
         // Taskana 4772: the adapter parked a transient network failure and is
         // probing. No transcript block and no notice: the status line says it.
-        case "waiting_for_network":
-          set({ waitingForNetwork: true });
+        case "waiting_for_network": {
+          // Taskana 4772 review F2: count episodes per source. The parent's
+          // own port and an inline-subagent child share one network, so both
+          // can park at once — the banner must survive the first recovery.
+          // Absent waitSource (legacy replay / port without the label) reads
+          // as the parent.
+          const source = event.waitSource ?? "parent";
+          const episodes = {
+            ...get().networkWaitEpisodes,
+            [source]: (get().networkWaitEpisodes[source] ?? 0) + 1,
+          };
+          set({ networkWaitEpisodes: episodes, waitingForNetwork: true });
           return;
+        }
         case "compaction_start":
           // TASK.146: a compaction observed while the turn is IDLE is the
           // manual one — it owns the session for its duration, so the status
@@ -3803,7 +3870,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
         // `loop_end` handler above to decide whether to arm the Try-again offer.
         case "error":
           {
-            set({ waitingForNetwork: false });
+            // Taskana 4772 review F2: an error ends every episode at once.
+            set({ networkWaitEpisodes: { parent: 0, subagent: 0 }, waitingForNetwork: false });
             // The usage_limit notice is parsed host-side (sanitizeAgentEvent) and
             // rides the wire event, because the redacted `error.message` the
             // renderer now receives no longer carries the parseable z.ai text
@@ -5149,6 +5217,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler)
             connection: "host_exited",
             queueInFlight: null,
             promptQueue,
+            // Taskana 4772 review F3: the host is gone, so the turn is
+            // definitionally not waiting on the network any more — clear the
+            // flag so the banner never renders over "Host process exited"
+            // and Retry now never posts into a dead port.
+            networkWaitEpisodes: { parent: 0, subagent: 0 },
+            waitingForNetwork: false,
             ...(promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
           };
         });

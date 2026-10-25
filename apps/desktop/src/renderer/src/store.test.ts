@@ -524,6 +524,56 @@ describe("desktop store — waiting for network (Taskana 4772)", () => {
     expect(store.getState().transcript.length).toBe(before);
     expect(store.getState().notice).toBeNull();
   });
+
+  // Review F3: the host dying ends any network wait by definition — the
+  // banner must not render over "Host process exited" and Retry now must
+  // not post network_retry_now into a dead port.
+  it("setHostExited clears the flag (host gone ⇒ not waiting on the network)", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network" });
+    expect(store.getState().waitingForNetwork).toBe(true);
+    store.getState().setHostExited();
+    expect(store.getState().waitingForNetwork).toBe(false);
+    expect(store.getState().connection).toBe("host_exited");
+  });
+
+  // Review F5/F8(c): the recovery retry's wire event carries the wait
+  // duration; the persisted line's data and the store notice must reflect it.
+  it("a recovery stream_retry persists waitedMs on the transcript line (delayMs 0)", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network" });
+    event(store, { type: "stream_retry", attempt: 3, maxAttempts: 8, delayMs: 0, waitedMs: 812_400, reason: "connect timeout" });
+    expect(store.getState().waitingForNetwork).toBe(false);
+    const line = store.getState().transcript.find((b) => b.kind === "stream_retry");
+    expect(line).toMatchObject({ attempt: 3, delayMs: 0, waitedMs: 812_400, reason: "connect timeout" });
+    expect(store.getState().notice?.text).toContain("attempt 3/8");
+  });
+
+  // Review F2: parent and inline-subagent children share one network, so both
+  // can park at once. The banner must survive the FIRST recovery of a
+  // simultaneous pair and clear on the second — not flicker away early.
+  it("a subagent recovery does not clear the parent's banner (episode counting per source)", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network", waitSource: "parent" });
+    event(store, { type: "waiting_for_network", waitSource: "subagent" });
+    expect(store.getState().waitingForNetwork).toBe(true);
+    // The child recovers first: the parent is still parked.
+    event(store, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, waitedMs: 4_000, waitSource: "subagent", reason: "connect timeout" });
+    expect(store.getState().waitingForNetwork).toBe(true);
+    expect(store.getState().networkWaitEpisodes).toEqual({ parent: 1, subagent: 0 });
+    // Then the parent recovers: the banner clears.
+    event(store, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, waitedMs: 6_000, waitSource: "parent", reason: "connect timeout" });
+    expect(store.getState().waitingForNetwork).toBe(false);
+    expect(store.getState().networkWaitEpisodes).toEqual({ parent: 0, subagent: 0 });
+  });
+
+  it("an unlabeled waiting event counts as the parent (legacy wire)", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network" });
+    expect(store.getState().networkWaitEpisodes).toEqual({ parent: 1, subagent: 0 });
+    event(store, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, waitedMs: 1_000, reason: "connect timeout" });
+    expect(store.getState().waitingForNetwork).toBe(false);
+  });
 });
 
 describe("desktop store — agent_event transcript accumulation", () => {
