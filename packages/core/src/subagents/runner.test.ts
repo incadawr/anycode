@@ -647,7 +647,9 @@ describe("createSubagentRunner — parent spawns child", () => {
       { type: "finish", finishReason: "stop", usage: {} },
     ]);
     const port = subagentScopedModelPort(scripted);
-    expect(port.modelId).toBe(scripted.modelId);
+    // modelId forwards to the wrapped port (undefined here — ScriptedModelPort
+    // declares none; the getter delegation is the contract under test).
+    expect(port.modelId).toBeUndefined();
 
     const events: ModelStreamEvent[] = [];
     for await (const event of port.streamText({
