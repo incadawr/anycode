@@ -93,7 +93,6 @@ export type PreviewTarget = { ref: string } | { selector: string };
 /**
  * Browser control (Taskana 4759). One discriminated request for every control
  * action so the port surface, the RPC client and test fakes stay small.
- * Phase B adds `console` and `eval`.
  */
 export type PreviewControlRequest =
   | { action: "navigate"; previewId?: string; to: { url: string } | { history: "back" | "forward" | "reload" } }
@@ -107,7 +106,9 @@ export type PreviewControlRequest =
       clear?: boolean;
       submit?: boolean;
     }
-  | { action: "waitFor"; previewId?: string; text?: string; selector?: string; gone?: boolean; timeoutMs?: number };
+  | { action: "waitFor"; previewId?: string; text?: string; selector?: string; gone?: boolean; timeoutMs?: number }
+  | { action: "console"; previewId?: string; tail?: number; levels?: Array<PreviewConsoleEntry["level"]> }
+  | { action: "eval"; previewId?: string; expression: string };
 
 export interface PreviewControlSuccess {
   previewId: string;

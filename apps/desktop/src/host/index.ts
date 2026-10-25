@@ -3195,7 +3195,7 @@ async function boot(): Promise<void> {
       registry.register(browserOpenTool);
       registry.register(browserReadTool);
       registry.register(browserScreenshotTool);
-      // Taskana 4759 (Phase A): browser control. Built from the factory so
+      // Taskana 4759: browser control. Built from the factory so
       // the "Full browser access" flag (Phase B) can drop the approval escalation.
       const browserControl = createBrowserControlTools({ fullAccess: () => false });
       registry.register(browserControl.navigate);
@@ -3203,6 +3203,8 @@ async function boot(): Promise<void> {
       registry.register(browserControl.click);
       registry.register(browserControl.type);
       registry.register(browserControl.waitFor);
+      registry.register(browserControl.console);
+      registry.register(browserControl.eval);
     }
     // Plan-exit contract (TASK.27, mirror of cli/main.ts): ONE call registers
     // ExitPlanMode AND produces the planExitMode/onModeChange pair spread into

@@ -39,7 +39,7 @@ function axTree(nodes: TestNode[]) {
 
 const quad = (x: number, y: number, w: number, h: number) => [x, y, x + w, y, x + w, y + h, x, y + h];
 
-function setup(options: { url?: string; cdp?: FakeCdp; clickSettleMs?: number } = {}) {
+function setup(options: { url?: string; cdp?: FakeCdp; clickSettleMs?: number; console?: Array<{ level: "log" | "warn" | "error" | "pageerror"; message: string; at: string }>; dropped?: number } = {}) {
   const cdp = options.cdp ?? fakeCdp();
   const state = { epoch: 0, url: options.url ?? "http://localhost:3000/" };
   const controller = new BrowserController({ clickSettleMs: options.clickSettleMs ?? 1, navigationWaitMs: 5, waitPollMs: 1 });
@@ -53,6 +53,7 @@ function setup(options: { url?: string; cdp?: FakeCdp; clickSettleMs?: number } 
     goToOffset: async () => {},
     navigationHistory: () => ({ entries: [], index: 0 }),
     isNavigationAllowed: async () => true,
+    console: () => ({ entries: options.console ?? [], dropped: options.dropped ?? 0 }),
     signal: new AbortController().signal,
   };
   const run = (request: PreviewControlRequest) => controller.run(request, ctx);
@@ -558,6 +559,152 @@ describe("driver source guard", () => {
     const source = readFileSync(join(here, "browser-control.ts"), "utf8");
     for (const forbidden of ["Network.getCookies", "Network.enable", "Storage.", "getAllCookies"]) {
       expect(source).not.toContain(forbidden);
+    }
+  });
+});
+
+describe("BrowserController console (Taskana 4759, Phase B)", () => {
+  const entry = (level: "log" | "warn" | "error" | "pageerror", message: string, index = 0) => ({
+    level,
+    message,
+    at: `2026-10-25T12:34:${String(index % 60).padStart(2, "0")}.000Z`,
+  });
+
+  // Test 24
+  it("default tail 50, max 200, levels filter, includes 'blocked by security policy' entries, empty ring => (no console output)", async () => {
+    const many = Array.from({ length: 300 }, (_, i) => entry("log", `line ${i}`, i));
+    const { run } = setup({ console: many, dropped: 4 });
+    const defaults = await run({ action: "console" });
+    expect(defaults.ok).toBe(true);
+    if (defaults.ok) {
+      const lines = defaults.value.text.split("\n");
+      expect(lines.filter((l) => l.startsWith("[log]"))).toHaveLength(50);
+      expect(lines[0]).toMatch(/^\[log\] 12:34:\d\d line 250$/);
+      expect(defaults.value.text).toContain("(4 earlier console entries dropped)");
+    }
+    const capped = await run({ action: "console", tail: 500 });
+    if (capped.ok) {
+      expect(capped.value.text.split("\n").filter((l) => l.startsWith("[log]"))).toHaveLength(200);
+    }
+
+    const mixed = setup({
+      console: [
+        entry("log", "hello", 0),
+        entry("error", "boom", 1),
+        entry("pageerror", "uncaught", 2),
+        entry("warn", "blocked by security policy: script https://cdn.example/x.js", 3),
+      ],
+    });
+    const onlyErrors = await mixed.run({ action: "console", levels: ["error", "pageerror"] });
+    expect(onlyErrors.ok && onlyErrors.value.text).toBe("[error] 12:34:01 boom\n[pageerror] 12:34:02 uncaught");
+    const blocked = await mixed.run({ action: "console", levels: ["warn"] });
+    expect(blocked.ok && blocked.value.text).toContain("blocked by security policy");
+
+    const empty = setup({});
+    expect(await empty.run({ action: "console" })).toEqual({
+      ok: true,
+      value: { previewId: "preview-1", url: "http://localhost:3000/", text: "(no console output)" },
+    });
+  });
+
+  // Test 25
+  it("eval: result is JSON, capped at 20 000 chars; a page exception is an 'error:' answer; blocklisted tokens are refused before any send; a hung script is a timeout", async () => {
+    const plain = setup();
+    plain.cdp.respond("Runtime.evaluate", { result: { value: { a: 1, b: "two" } } });
+    const json = await plain.run({ action: "eval", expression: "({a:1,b:'two'})" });
+    expect(json.ok && json.value.text).toBe('{"a":1,"b":"two"}');
+    const sent = plain.cdp.calls.find((c) => c.method === "Runtime.evaluate")?.params as Record<string, unknown>;
+    expect(sent).toMatchObject({ returnByValue: true, awaitPromise: true, userGesture: false, timeout: 5000 });
+
+    const big = setup();
+    big.cdp.respond("Runtime.evaluate", { result: { value: "z".repeat(25_000) } });
+    const capped = await big.run({ action: "eval", expression: "'z'.repeat(25000)" });
+    expect(capped.ok).toBe(true);
+    if (capped.ok) {
+      expect(capped.value.text.length).toBeLessThan(20_100);
+      expect(capped.value.text).toContain("(result truncated)");
+    }
+
+    const thrower = setup();
+    thrower.cdp.respond("Runtime.evaluate", {
+      exceptionDetails: { text: "Uncaught", exception: { description: "ReferenceError: nope is not defined" } },
+    });
+    const threw = await thrower.run({ action: "eval", expression: "nope" });
+    expect(threw).toEqual({
+      ok: true,
+      value: {
+        previewId: "preview-1",
+        url: "http://localhost:3000/",
+        text: "error: ReferenceError: nope is not defined",
+      },
+    });
+
+    for (const token of ["document.cookie", "DOCUMENT.COOKIE", "localStorage.getItem('t')", "SESSIONSTORAGE", "indexedDB.open('x')", "cookieStore.getAll()", "navigator.Credentials.get()"]) {
+      const blocked = setup();
+      const result = await blocked.run({ action: "eval", expression: token });
+      expect(result).toMatchObject({ ok: false, errorKind: "not_allowed" });
+      expect(blocked.cdp.methods()).not.toContain("Runtime.evaluate");
+    }
+
+    const hung = setup();
+    hung.cdp.respond("Runtime.evaluate", new Error("CDP command timed out"));
+    expect(await hung.run({ action: "eval", expression: "1+1" })).toMatchObject({ ok: false, errorKind: "timeout" });
+
+    const long = setup();
+    expect(await long.run({ action: "eval", expression: "1+".repeat(6000) })).toMatchObject({ ok: false, errorKind: "invalid_input" });
+  });
+});
+
+describe("BrowserController password typing under Full browser access (Taskana 4759 amendment)", () => {
+  it("refuses a password field when the switch is off and types into it when on; the value is never echoed", async () => {
+    const build = () => {
+      const cdp = fakeCdp();
+      cdp.respond("Accessibility.getFullAXTree", axTree([
+        { nodeId: "1", role: "RootWebArea", childIds: ["2"] },
+        { nodeId: "2", role: "textbox", name: "Password", backendDOMNodeId: 31 },
+      ]));
+      cdp.respond("DOM.getBoxModel", { model: { content: quad(0, 0, 10, 10) } });
+      cdp.respond("DOM.resolveNode", { object: { objectId: "obj-1" } });
+      cdp.respond("Runtime.callFunctionOn", (params?: object) => {
+        const fn = (params as { functionDeclaration?: string } | undefined)?.functionDeclaration ?? "";
+        if (fn.includes("tagName")) {
+          return { result: { value: { tag: "input", type: "password", editable: false, readOnly: false, disabled: false, label: "Password" } } };
+        }
+        return { result: { value: true } };
+      });
+      const controller = new BrowserController({ clickSettleMs: 1, navigationWaitMs: 5, waitPollMs: 1 });
+      const state = { on: false };
+      const ctx: BrowserControlContext = {
+        cdp,
+        previewId: "preview-1",
+        currentUrl: () => "http://localhost:3000/",
+        navEpoch: () => 0,
+        settle: async () => "ready",
+        reload: async () => {},
+        goToOffset: async () => {},
+        navigationHistory: () => ({ entries: [], index: 0 }),
+        isNavigationAllowed: async () => true,
+        console: () => ({ entries: [], dropped: 0 }),
+        fullAccess: () => state.on,
+        signal: new AbortController().signal,
+      };
+      return { cdp, controller, ctx, state };
+    };
+    const off = build();
+    await off.controller.run({ action: "snapshot" }, off.ctx);
+    const refused = await off.controller.run({ action: "type", target: { ref: "e1" }, text: "hunter2", clear: true, submit: false }, off.ctx);
+    expect(refused).toMatchObject({ ok: false, errorKind: "not_allowed" });
+    expect(off.cdp.methods()).not.toContain("Input.insertText");
+
+    const on = build();
+    on.state.on = true;
+    await on.controller.run({ action: "snapshot" }, on.ctx);
+    const typed = await on.controller.run({ action: "type", target: { ref: "e1" }, text: "hunter2", clear: true, submit: false }, on.ctx);
+    expect(typed.ok).toBe(true);
+    expect(on.cdp.calls.find((c) => c.method === "Input.insertText")?.params).toEqual({ text: "hunter2" });
+    if (typed.ok) {
+      expect(typed.value.text).not.toContain("hunter2");
+      expect(typed.value.text).toContain("typed 7 chars");
     }
   });
 });

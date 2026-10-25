@@ -43,8 +43,8 @@ export type PreviewOp =
   | { kind: "control"; request: PreviewControlRequest; allowRemote?: boolean };
 
 // ── browser control request (Taskana 4759; deliberate duplicate of core's
-// PreviewControlRequest in packages/core/src/ports/preview.ts). Phase B adds
-// the `console` and `eval` actions. No set-access action exists here by design.
+// PreviewControlRequest in packages/core/src/ports/preview.ts). No set-access
+// action exists here by design.
 
 export type PreviewControlTarget = { ref: string } | { selector: string };
 
@@ -66,7 +66,9 @@ export type PreviewControlRequest =
       clear?: boolean;
       submit?: boolean;
     }
-  | { action: "waitFor"; previewId?: string; text?: string; selector?: string; gone?: boolean; timeoutMs?: number };
+  | { action: "waitFor"; previewId?: string; text?: string; selector?: string; gone?: boolean; timeoutMs?: number }
+  | { action: "console"; previewId?: string; tail?: number; levels?: Array<PreviewConsoleEntry["level"]> }
+  | { action: "eval"; previewId?: string; expression: string };
 
 // ── result value shapes (main -> host, §2.1 verbatim) ──
 

@@ -903,7 +903,7 @@ class PreviewHost implements PreviewHostHandle {
 
     const target = hasPath
       ? await this.resolveFileTarget(tabId, req.path!)
-      : this.resolveUrlTarget(req.url!, req.allowRemote === true);
+      : this.resolveUrlTarget(req.url!, req.allowRemote === true, this.fullAccessFor(tabId));
 
     if (!target.ok) {
       if (isNewWindow) {
@@ -921,7 +921,10 @@ class PreviewHost implements PreviewHostHandle {
     record.renderedFrom = target.renderedFrom;
     record.title = basename(target.sourcePath ?? target.url);
     record.lastOpenedAt = this.now();
-    if (target.kind === "remote" && target.origin !== undefined) {
+    // Consent is recorded only for an APPROVED remote open. An origin loaded
+    // under "Full browser access" is not approval-consented: once the switch is
+    // off, the gate and navigation rules apply to it again (live read).
+    if (target.kind === "remote" && target.origin !== undefined && req.allowRemote === true) {
       record.consentedOrigins.add(target.origin);
     }
 
@@ -1063,7 +1066,7 @@ class PreviewHost implements PreviewHostHandle {
     };
   }
 
-  private resolveUrlTarget(rawUrl: string, allowRemote: boolean): OpenTarget {
+  private resolveUrlTarget(rawUrl: string, allowRemote: boolean, fullAccess = false): OpenTarget {
     let parsed: URL;
     try {
       parsed = new URL(rawUrl);
@@ -1076,7 +1079,7 @@ class PreviewHost implements PreviewHostHandle {
     if (isLocalHost(parsed.hostname)) {
       return { ok: true, kind: "localhost", url: parsed.toString() };
     }
-    if (!allowRemote) {
+    if (!allowRemote && !fullAccess) {
       return { ok: false, errorKind: "invalid_input", error: "remote URL requires explicit approval (allowRemote)" };
     }
     return { ok: true, kind: "remote", url: parsed.toString(), origin: parsed.origin };
@@ -1669,7 +1672,7 @@ class PreviewHost implements PreviewHostHandle {
         record.kind,
         allowRemote,
         record.url,
-        this.deps.fullAccess?.(tabId) === true,
+        this.fullAccessFor(tabId),
       );
       if (!policy.allow) {
         return this.fail(policy.errorKind, policy.error);
@@ -1685,6 +1688,14 @@ class PreviewHost implements PreviewHostHandle {
       this.deps.logger.error("[preview] browser control failed unexpectedly", error);
       return this.fail("unavailable", "browser control failed unexpectedly");
     }
+  }
+
+  /**
+   * Live "Full browser access" read for a tab (Taskana 4759 amendment). Read at
+   * every decision point, never cached on a record.
+   */
+  private fullAccessFor(tabId: string): boolean {
+    return this.deps.fullAccess?.(tabId) === true;
   }
 
   /** Runs one queued control action against a settled web record. */
@@ -1715,6 +1726,8 @@ class PreviewHost implements PreviewHostHandle {
       },
       navigationHistory: () => wc.getNavigationHistory(),
       isNavigationAllowed: async (url) => (await this.evaluateNavigation(record, url)).allow,
+      console: () => ({ entries: record.consoleRing.slice(), dropped: record.consoleDropped }),
+      fullAccess: () => this.fullAccessFor(record.tabId),
       signal: new AbortController().signal,
     };
     return record.controller.run(request, ctx);
@@ -2736,7 +2749,7 @@ class PreviewHost implements PreviewHostHandle {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return { allow: false };
     }
-    if (isLocalHost(parsed.hostname) || record.consentedOrigins.has(parsed.origin)) {
+    if (isLocalHost(parsed.hostname) || record.consentedOrigins.has(parsed.origin) || this.fullAccessFor(record.tabId)) {
       return { allow: true, loadUrl: parsed.toString() };
     }
     return { allow: false };
@@ -2759,7 +2772,7 @@ class PreviewHost implements PreviewHostHandle {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
-    return isLocalHost(parsed.hostname) || record.consentedOrigins.has(parsed.origin);
+    return isLocalHost(parsed.hostname) || record.consentedOrigins.has(parsed.origin) || this.fullAccessFor(record.tabId);
   }
 
   private gateDedupeKeyForRedirect(url: string): string {
@@ -2831,7 +2844,8 @@ class PreviewHost implements PreviewHostHandle {
         }
         return { allowed: record.kind !== "remote", dedupeKey: origin };
       }
-      return { allowed: record.consentedOrigins.has(origin), dedupeKey: origin };
+      // Full browser access (live) lets any http(s) origin load; loopback rules above are unchanged.
+      return { allowed: record.consentedOrigins.has(origin) || this.fullAccessFor(record.tabId), dedupeKey: origin };
     }
     return { allowed: false, dedupeKey: req.url };
   }

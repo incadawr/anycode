@@ -3897,3 +3897,95 @@ describe("PreviewHost — browser control (Taskana 4759, Phase A)", () => {
     expect(approved.ok).toBe(true);
   });
 });
+
+// ── Taskana 4759 amendment: "Full browser access" is a live read in main ──
+
+describe("PreviewHost — Full browser access (Taskana 4759 amendment, live read)", () => {
+  const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  async function controlRequest(rig: Rig, request: PreviewControlRequest, options: { allowRemote?: boolean } = {}): Promise<PreviewResult<PreviewControlSuccess>> {
+    await rig.host.handleRequest(TAB, {
+      type: PREVIEW_REQUEST_TYPE,
+      requestId: `fa-${Math.random()}`,
+      op: { kind: "control", request, ...(options.allowRemote !== undefined ? { allowRemote: options.allowRemote } : {}) },
+    });
+    const posted = rig.posted.at(-1)!;
+    if (posted.message.type !== PREVIEW_RESPONSE_TYPE) throw new Error("no response");
+    return posted.message.result as PreviewResult<PreviewControlSuccess>;
+  }
+  const quadBox = (x: number, y: number, w: number, h: number) => [x, y, x + w, y, x + w, y + h, x, y + h];
+  const oneButton = () => ({
+    nodes: [
+      { nodeId: "1", ignored: false, role: { value: "RootWebArea" }, name: { value: "" }, childIds: ["2"], properties: [] },
+      { nodeId: "2", ignored: false, role: { value: "button" }, name: { value: "Go" }, backendDOMNodeId: 5, childIds: [], properties: [] },
+    ],
+  });
+
+  async function remoteRig(on: { value: boolean }, openApproved = false) {
+    const rig = makeRig({ fullAccess: () => on.value });
+    const opened = rig.host.openForTab(TAB, { url: "https://example.org/", ...(openApproved ? { allowRemote: true } : {}) });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await opened;
+    rig.windows[0]!.webContents.cdp.respond("Accessibility.getFullAXTree", oneButton());
+    rig.windows[0]!.webContents.cdp.respond("DOM.getBoxModel", { model: { content: quadBox(0, 0, 10, 10) } });
+    return { rig, previewId: result.ok ? result.value.previewId : "", opened: result };
+  }
+
+  // Test 42
+  it("ON: an arbitrary remote origin opens, navigates, loads subresources and is clickable with no approval", async () => {
+    const on = { value: true };
+    const { rig, previewId, opened } = await remoteRig(on);
+    expect(opened.ok).toBe(true);
+    const wc = rig.windows[0]!.webContents;
+    expect(wc.requestGate).toBeDefined();
+    expect(await wc.requestGate!({ url: "https://cdn.other.example/app.js", resourceType: "script" })).toBe(true);
+    expect(await wc.requestGate!({ url: "https://other.example/", resourceType: "mainFrame" })).toBe(true);
+
+    expect(wc.fireWillRedirect("https://redirect.example/landing")).toBe(false);
+
+    const snap = await controlRequest(rig, { action: "snapshot", previewId });
+    expect(snap.ok).toBe(true);
+    const click = await controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" });
+    expect(click.ok).toBe(true);
+  });
+
+  // Test 43
+  it("OFF mid-session: the same remote page loses approval-less click, new origins and subresources; password typing is refused again", async () => {
+    const on = { value: true };
+    const { rig, previewId } = await remoteRig(on);
+    const wc = rig.windows[0]!.webContents;
+    await controlRequest(rig, { action: "snapshot", previewId });
+
+    on.value = false;
+    const click = await controlRequest(rig, { action: "click", previewId, target: { ref: "e1" }, doubleClick: false, button: "left" });
+    expect(click).toMatchObject({ ok: false, errorKind: "not_allowed" });
+
+    expect(await wc.requestGate!({ url: "https://cdn.other.example/app.js", resourceType: "script" })).toBe(false);
+    expect(await wc.requestGate!({ url: "https://other.example/", resourceType: "mainFrame" })).toBe(false);
+
+    wc.fireWillNavigate("https://unconsented.example/");
+    await settle();
+    expect(wc.loadedUrls).not.toContain("https://unconsented.example/");
+  });
+
+  it("ON does not weaken the hard limits: remote page -> loopback subresource and file: outside roots stay denied", async () => {
+    const on = { value: true };
+    const { rig } = await remoteRig(on);
+    const wc = rig.windows[0]!.webContents;
+    expect(await wc.requestGate!({ url: "http://localhost:9999/secret.js", resourceType: "script" })).toBe(false);
+    expect(await wc.requestGate!({ url: "file:///etc/passwd", resourceType: "mainFrame" })).toBe(false);
+  });
+
+  it("the switch is read at decision time: a closed-over flag flip is honoured on the very next request", async () => {
+    const on = { value: false };
+    const rig = makeRig({ fullAccess: () => on.value });
+    const opened = rig.host.openForTab(TAB, { url: "https://example.org/", allowRemote: true });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await opened;
+    const wc = rig.windows[0]!.webContents;
+    expect(await wc.requestGate!({ url: "https://new.example/x.js", resourceType: "script" })).toBe(false);
+    on.value = true;
+    expect(await wc.requestGate!({ url: "https://new.example/x.js", resourceType: "script" })).toBe(true);
+  });
+});

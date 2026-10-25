@@ -43,6 +43,8 @@ export { browserScreenshotInputSchema, browserScreenshotTool } from "./browser-s
 export type { BrowserScreenshotInput } from "./browser-screenshot.js";
 export {
   browserClickInputSchema,
+  browserConsoleInputSchema,
+  browserEvalInputSchema,
   browserNavigateInputSchema,
   browserSnapshotInputSchema,
   browserTypeInputSchema,
@@ -52,6 +54,8 @@ export {
 export type { BrowserControlToolsOptions } from "./browser-control.js";
 export type {
   BrowserClickInput,
+  BrowserConsoleInput,
+  BrowserEvalInput,
   BrowserNavigateInput,
   BrowserSnapshotInput,
   BrowserTypeInput,
