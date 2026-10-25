@@ -18,6 +18,7 @@ import {
   SUBAGENT_WRAPUP_DEGRADED_PREFIX,
   SUBAGENT_WRAPUP_FAILED_NOTICE,
 } from "../prompts/subagent.js";
+import { subagentScopedModelPort } from "./runner.js";
 import { formatResultForModel, outcomeToResult } from "./agent-bridge.js";
 import { ConversationHistory, type HistorySink } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
@@ -626,6 +627,40 @@ describe("createSubagentRunner — parent spawns child", () => {
     const loopEnd = events.at(-1);
     expect(loopEnd?.type === "loop_end" && loopEnd.reason).toBe("completed");
     expect(loop.history.unansweredToolCallIds()).toEqual([]);
+  });
+
+  // Taskana 4772 review F2: when the child inherits the PARENT's port (no
+  // override), the runner wraps it so the child's network-wait events are
+  // labelled `waitSource: "subagent"` — a tab-level banner counting episodes
+  // per source must not clear when only the child of a simultaneously parked
+  // pair recovers. Everything else passes through unchanged. (Tested at the
+  // port boundary: the runner's event pump intentionally swallows the
+  // child's status events, so the label is observable only here.)
+  it("an inherited child port labels waiting_for_network and recovery retries as subagent (4772 review F2)", async () => {
+    const scripted = new ScriptedModelPort(() => [
+      { type: "start" },
+      { type: "waiting_for_network" },
+      { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, waitedMs: 4_000, reason: "connect timeout" },
+      // An ORDINARY retry (no waitedMs) is not a recovery: no label to add.
+      { type: "stream_retry", attempt: 2, maxAttempts: 8, delayMs: 500, reason: "server error" },
+      { type: "text_delta", id: "t", text: "child report" },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]);
+    const port = subagentScopedModelPort(scripted);
+    expect(port.modelId).toBe(scripted.modelId);
+
+    const events: ModelStreamEvent[] = [];
+    for await (const event of port.streamText({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+    })) {
+      events.push(event);
+    }
+
+    expect(events[1]).toMatchObject({ type: "waiting_for_network", waitSource: "subagent" });
+    expect(events[2]).toMatchObject({ type: "stream_retry", waitedMs: 4_000, waitSource: "subagent" });
+    expect(events[3]).not.toHaveProperty("waitSource");
+    expect(events.filter((e) => e.type === "text_delta")).toHaveLength(1);
   });
 });
 

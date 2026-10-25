@@ -29,7 +29,8 @@ import {
   buildSubagentSystemPrompt,
 } from "../prompts/subagent.js";
 import type { SystemPromptEnv } from "../prompts/system.js";
-import type { ModelPort } from "../ports/model.js";
+import type { ModelPort, ModelRequest } from "../ports/model.js";
+import type { ModelStreamEvent } from "../types/events.js";
 import { capUtf8Bytes } from "../util/bytes.js";
 import { linkAbortSignal } from "../util/abort.js";
 import {
@@ -1303,6 +1304,22 @@ export function createSubagentRunner(
         // The config is held in a variable rather than inlined: the wrap-up call
         // below must reach the model through the SAME port/system prompt/output
         // limits the loop used, including the resolveChildModelPort branch.
+        //
+        // Taskana 4772 review F2: when the child inherited the PARENT's port
+        // (no override resolved), wrap it so the port's waiting_for_network /
+        // recovery stream_retry events are labelled `waitSource: "subagent"` —
+        // the parent and the child share one network, so both can park at
+        // once, and a tab-level banner must not clear when only one of them
+        // recovers. A dedicated child port already carries its own label via
+        // the host factory; the parent's own port stays unlabelled (consumers
+        // treat absence as the parent), so only this inherit path needs the
+        // wrapper. Unwraps nothing else: pure delegation.
+        const childLoopPort =
+          childModelPort !== undefined
+            ? childModelPort
+            : parent.modelPort === undefined
+              ? undefined
+              : subagentScopedModelPort(parent.modelPort);
         const childConfig = buildChildConfig(parent, persona, req, {
           env: opts?.env,
           memorySection: opts?.memorySection,
@@ -1319,7 +1336,7 @@ export function createSubagentRunner(
           // Same anchor as the wrap-up window below (run() entry): what the
           // ladder may spend on a decision is what is left of the parent's wait.
           outcomeDeadlineAt: startedAt + SUBAGENT_OUTCOME_DEADLINE_MS,
-          ...(childModelPort !== undefined ? { modelPort: childModelPort } : {}),
+          ...(childLoopPort !== undefined ? { modelPort: childLoopPort } : {}),
           ...(childSettings !== undefined ? { modelSettings: childSettings } : {}),
         });
         const loop = new AgentLoop(childConfig);
@@ -1845,6 +1862,40 @@ export async function runWrapUp(
   } finally {
     clearTimeout(timer);
     dispose();
+  }
+}
+
+/**
+ * Taskana 4772 review F2: labels the inherited parent port's network-wait
+ * events with `waitSource: "subagent"`. Pure delegation otherwise — modelId
+ * and lastResponseModel forward to the wrapped port (the shared-port caveat
+ * in ModelPort.lastResponseModel's doc already covers exactly this shape).
+ * Exported for direct testing: the runner's event pump intentionally
+ * swallows the child's status events, so the label is observable only at
+ * the port boundary.
+ */
+export function subagentScopedModelPort(port: ModelPort): ModelPort {
+  return {
+    streamText: (request) => subagentScopedStream(port, request),
+    get modelId() {
+      return port.modelId;
+    },
+    get lastResponseModel() {
+      return port.lastResponseModel;
+    },
+  };
+}
+
+/** Relabels waiting_for_network / recovery stream_retry; passes everything else through. */
+async function* subagentScopedStream(port: ModelPort, request: ModelRequest): AsyncGenerator<ModelStreamEvent, void, void> {
+  for await (const event of port.streamText(request)) {
+    if (event.type === "waiting_for_network") {
+      yield { ...event, waitSource: "subagent" };
+    } else if (event.type === "stream_retry" && event.waitedMs !== undefined) {
+      yield { ...event, waitSource: "subagent" };
+    } else {
+      yield event;
+    }
   }
 }
 
