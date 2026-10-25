@@ -199,6 +199,7 @@ import type {
   PluginsSetPinnedRequest,
   PluginsSnapshot,
   PluginsUpdateRequest,
+  PluginServiceView,
 } from "../../shared/plugins-config";
 import type {
   ProfileRevealDirResult,
@@ -675,6 +676,13 @@ declare global {
         setEnabled(req: PluginsSetEnabledRequest): Promise<PluginsMutationResult>;
         remove(req: PluginsRemoveRequest): Promise<PluginsMutationResult>;
         approveMcp(req: PluginsApproveMcpRequest): Promise<PluginsMutationResult>;
+        /** a: name only — main computes the current servicesHash itself. */
+        approveServices(name: string): Promise<PluginsMutationResult>;
+        /** a: supervised state per declared service (no argv, env, or paths). */
+        services(): Promise<PluginServiceView[]>;
+        /** a: bounded plain-text log, newest last. */
+        serviceLogs(plugin: string, name: string): Promise<string[]>;
+        serviceRestart(plugin: string, name: string): Promise<PluginsMutationResult>;
         reveal(req: PluginsRevealRequest): Promise<PluginsRevealResult>;
         setAutoUpdate(req: PluginsSetAutoUpdateRequest): Promise<PluginsMutationResult>;
         onPluginsChanged(callback: (payload: PluginsChangedPayload) => void): () => void;

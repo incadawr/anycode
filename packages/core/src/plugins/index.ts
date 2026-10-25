@@ -6,6 +6,7 @@
 
 export {
   pluginManifestSchema,
+  pluginServiceSchema,
   pluginWorkflowsDirs,
   capabilities,
   declaresOfficialOnly,
@@ -13,7 +14,7 @@ export {
   OFFICIAL_ONLY_CONTRIBUTIONS,
   PLUGIN_NAME_RE,
 } from "./manifest.js";
-export type { PluginManifest, PluginCapabilities } from "./manifest.js";
+export type { PluginManifest, PluginCapabilities, PluginServiceSpec } from "./manifest.js";
 export { discoverPlugins } from "./discovery.js";
 export type {
   DiscoverPluginsOptions,
@@ -30,10 +31,14 @@ export {
   pluginTrustSchema,
   readPluginState,
   serversHash,
+  servicesHash,
+  hasServiceConsent,
   writePluginState,
 } from "./state.js";
 export type {
   McpConsentEntry,
+  ServiceConsentEntry,
+  ServiceHashInput,
   PluginStateEntry,
   PluginTrust,
   PluginStateReadResult,
