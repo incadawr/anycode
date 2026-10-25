@@ -123,6 +123,76 @@ describe("establishHostWorkspaceTrust", () => {
   });
 });
 
+// Taskana 4736 xfix D4: a child tab shares the parent's workspace; it never
+// reports a pending trust question (its surface cannot answer one) and boots
+// with the parent's current decision — the record/once-approval decides, so a
+// child of a trusted-once parent boots trusted, an undecided one untrusted.
+describe("establishHostWorkspaceTrust on a child surface (xfix D4)", () => {
+  it("never reports pending for an undecided folder — the child boots with the parent's current decision", async () => {
+    const fs = makeFs({ [PROJECT_CONFIG]: CONFIG });
+    const result = await establishHostWorkspaceTrust(fs, {
+      workspace: WS,
+      home: HOME,
+      env: {},
+      childSurface: true,
+    });
+    expect(result.pending).toBeUndefined();
+    expect(result.projectTrusted).toBe(false);
+  });
+
+  it("a changed config stays silent on a child surface too", async () => {
+    const fs = makeFs({ [PROJECT_CONFIG]: CONFIG });
+    await writeTrustDecision(fs, STORE, WS, "trusted", "old-hash");
+    const result = await establishHostWorkspaceTrust(fs, {
+      workspace: WS,
+      home: HOME,
+      env: {},
+      childSurface: true,
+    });
+    expect(result.pending).toBeUndefined();
+    expect(result.projectTrusted).toBe(false);
+  });
+
+  it("child of a trusted-once parent boots trusted (the once hash rides the child's fork env)", async () => {
+    const fs = makeFs({ [PROJECT_CONFIG]: CONFIG });
+    const parent = await establishHostWorkspaceTrust(fs, { workspace: WS, home: HOME, env: {} });
+    const hash = parent.pending!.hash;
+    const child = await establishHostWorkspaceTrust(fs, {
+      workspace: WS,
+      home: HOME,
+      env: { [WORKSPACE_TRUST_ONCE_ENV]: hash },
+      childSurface: true,
+    });
+    expect(child.projectTrusted).toBe(true);
+    expect(child.pending).toBeUndefined();
+  });
+
+  it("child of a stored-trusted parent boots trusted", async () => {
+    const fs = makeFs({ [PROJECT_CONFIG]: CONFIG });
+    const { hash } = await collectProjectSpawnConfig(fs, WS, HOME);
+    await writeTrustDecision(fs, STORE, WS, "trusted", hash);
+    const child = await establishHostWorkspaceTrust(fs, {
+      workspace: WS,
+      home: HOME,
+      env: {},
+      childSurface: true,
+    });
+    expect(child.projectTrusted).toBe(true);
+    expect(child.pending).toBeUndefined();
+  });
+
+  it("an unrelated once hash does not trust the child (parent's decision is what counts)", async () => {
+    const fs = makeFs({ [PROJECT_CONFIG]: CONFIG });
+    const child = await establishHostWorkspaceTrust(fs, {
+      workspace: WS,
+      home: HOME,
+      env: { [WORKSPACE_TRUST_ONCE_ENV]: "f".repeat(64) },
+      childSurface: true,
+    });
+    expect(child.projectTrusted).toBe(false);
+  });
+});
+
 // Taskana 4739: the host canonicalises the workspace with realpath, so a
 // symlinked workspace shares one trust record with its target. The fake fs is
 // not symlink-aware: the project config is visible under BOTH names (what a

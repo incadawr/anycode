@@ -78,6 +78,16 @@ describe("parseTrustAnswer", () => {
     expect(parseTrustAnswer("n")).toBe("no");
     expect(parseTrustAnswer("yes please")).toBe("no");
   });
+
+  // Taskana 4736 xfix m2: the universal confirmation used to fall into the
+  // DENIED branch — persisted refusal from an intending-to-trust user.
+  it("y/yes trusts and n/no denies (xfix m2)", () => {
+    expect(parseTrustAnswer("y")).toBe("trust");
+    expect(parseTrustAnswer("YES")).toBe("trust");
+    expect(parseTrustAnswer(" Yes ")).toBe("trust");
+    expect(parseTrustAnswer("no")).toBe("no");
+    expect(parseTrustAnswer("N")).toBe("no");
+  });
 });
 
 describe("resolveCliProjectTrust", () => {

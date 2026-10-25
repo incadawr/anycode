@@ -130,6 +130,17 @@ export interface ClaudeSpawnArgsOptions {
    * `mcp__anycode__agent` tool's name).
    */
   agentBridgePrompt?: string;
+  /**
+   * Taskana 4736 xfix D1: when `false`, the spawn's `--setting-sources`
+   * narrows from `project,local` to `user`, so Claude Code's OWN project
+   * settings (`.claude/settings.json` / `.claude/settings.local.json` hooks
+   * and MCP servers — both files live in the untrusted workspace this process
+   * is spawned with as cwd) are never read. `user` alone is verified against
+   * the pinned 2.1.296 binary: `--help` documents "(user, project, local)"
+   * and the parser refuses unknown values. Absent or `true` keeps the
+   * historical `project,local` byte-for-byte.
+   */
+  projectTrusted?: boolean;
 }
 
 /**
@@ -206,7 +217,12 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     "stdio",
     ...(options.enableSlashPassthrough === true ? [] : ["--disable-slash-commands"]),
     "--setting-sources",
-    "project,local",
+    // Taskana 4736 xfix D1: an untrusted workspace's .claude/settings.json
+    // hooks must never reach the CLI's own settings loader. `project` and
+    // `local` are both workspace files, so the untrusted spawn admits `user`
+    // only (value verified against the pinned 2.1.296 binary — see
+    // ClaudeSpawnArgsOptions.projectTrusted).
+    options.projectTrusted === false ? "user" : "project,local",
     ...(options.mcpConfigPath !== undefined ? ["--mcp-config", options.mcpConfigPath] : []),
     "--strict-mcp-config",
     "--append-system-prompt",
@@ -444,6 +460,8 @@ export interface ClaudeClientOptions {
   enableSlashPassthrough?: boolean;
   /** See `ClaudeSpawnArgsOptions.agentBridgePrompt` (Taskana 4056 M2) — rides the spawn argv only when the bridge is announced. */
   agentBridgePrompt?: string;
+  /** See `ClaudeSpawnArgsOptions.projectTrusted` (Taskana 4736 xfix D1) — narrows --setting-sources on the untrusted spawn. */
+  projectTrusted?: boolean;
   binaryArgs?: readonly string[];
   bootstrap?: EngineBootstrap;
   /**
@@ -631,6 +649,10 @@ export class ClaudeClient {
         ...(this.options.mcpConfigPath !== undefined ? { mcpConfigPath: this.options.mcpConfigPath } : {}),
         enableSlashPassthrough: this.options.enableSlashPassthrough === true,
         ...(this.options.agentBridgePrompt !== undefined ? { agentBridgePrompt: this.options.agentBridgePrompt } : {}),
+        // Taskana 4736 xfix D1: narrow --setting-sources when the host's
+        // workspace trust gate is closed. Spread conditionally so an absent
+        // option keeps the historical argv byte-for-byte.
+        ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
       });
       const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], this.spawnOptions(true));
       this.child = child;

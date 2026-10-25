@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
+import { isProjectGated, type ProjectTrustOptions } from "../mcp/config.js";
 import { REPO_MAP_MAX_TOKENS, REPO_MAP_MIN_TOKENS } from "../types/config.js";
 
 export const repoMapConfigSchema = z.object({
@@ -67,23 +68,40 @@ async function loadSource(
   }
 }
 
-/** Loads the project/user repoMap section wholesale. Environment values win before filesystem access. */
+/**
+ * Loads the project/user repoMap section wholesale. Environment values win before filesystem access.
+ *
+ * Taskana 4736 xfix D2: `opts.projectTrusted === false` skips the PROJECT
+ * source only (the section steers how much of the repo's own files ride the
+ * prompt — project-controlled configuration, same trust question as the other
+ * project sections): the user section still loads, and one issue line reports
+ * the skipped file. Absent option keeps the historical behaviour.
+ */
 export async function loadRepoMapConfig(
   fs: FileSystemPort,
   workspace: string,
   home: string,
   env: NodeJS.ProcessEnv,
+  opts?: ProjectTrustOptions,
 ): Promise<LoadedRepoMapConfig> {
   const envValue = env.ANYCODE_REPO_MAP?.toLowerCase();
   if (envValue !== undefined && DISABLE_VALUES.has(envValue)) return { repoMap: null, issues: [] };
   if (envValue !== undefined && ENABLE_VALUES.has(envValue)) return { repoMap: { enabled: true }, issues: [] };
 
+  const gated = isProjectGated(workspace, home, opts);
+  const projectPath = configPath(workspace);
   const issues: string[] = [];
   const seen = new Set<string>();
   for (const baseDir of [workspace, home]) {
     const path = configPath(baseDir);
     if (seen.has(path)) continue;
     seen.add(path);
+    if (gated && path === projectPath) {
+      if (await fs.exists(path)) {
+        issues.push(`Project repo-map config in ${path} skipped: folder not trusted`);
+      }
+      continue;
+    }
     const result = await loadSource(fs, path, issues);
     if (result !== undefined) return { ...result, issues };
   }

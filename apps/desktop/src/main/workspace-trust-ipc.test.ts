@@ -81,7 +81,7 @@ function makeDeps(overrides: Partial<WorkspaceTrustIpcDeps> = {}) {
       cleared.push(tabId);
       pending.delete(tabId);
     },
-    restartTabHost: (tabId) => {
+    restartTabHost: async (tabId) => {
       restarts.push(tabId);
       return { ok: true };
     },
@@ -437,7 +437,7 @@ describe("workspace trust store write serialisation (Taskana 4739, S6)", () => {
       clearWorkspaceTrustPending: (tabId) => {
         pending.delete(tabId);
       },
-      restartTabHost: () => ({ ok: true }),
+      restartTabHost: async () => ({ ok: true }),
     };
     const deps2: WorkspaceTrustIpcDeps = { ...deps, tabs };
     const [r1, r2] = await Promise.all([

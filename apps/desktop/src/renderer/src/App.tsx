@@ -357,6 +357,11 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
   const turn = useTabStore((state) => state.turn);
   const lastFatal = useTabStore((state) => state.lastFatal);
   const workspace = useTabStore((state) => state.workspace);
+  // Taskana 4736 xfix D4: a child surface never shows the workspace-trust
+  // dialog — the child shares the parent's workspace and booted with the
+  // parent's current decision (the host's childSurface boot option already
+  // suppressed the pending report), so any dialog here would be unsatisfiable.
+  const childSurface = useTabStore((state) => state.childSurface);
   // TASK.33 W8: the armed one-shot Try-again offer (null when nothing to
   // offer) — MessageList shows the button only on the loop_end block it names.
   const retry = useTabStore((state) => state.retry);
@@ -424,8 +429,9 @@ export function SessionSurface({ tabId, onToast }: SessionSurfaceProps) {
       <ConnectedPermissionModal />
       {/* R8: store notice slot → App toast queue (render-less bridge). */}
       <TabNoticeCapture tabId={tabId} onNotice={(notice) => onToast(notice.kind, notice.text)} />
-      {/* Taskana 4736: this folder's project declarations wait for the user's decision. */}
-      <WorkspaceTrustPrompt tabId={tabId} />
+      {/* Taskana 4736: this folder's project declarations wait for the user's
+          decision. xfix D4: never on a child surface (see childSurface above). */}
+      {!childSurface && <WorkspaceTrustPrompt tabId={tabId} />}
     </>
   );
 }

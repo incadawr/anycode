@@ -37,6 +37,7 @@
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
+import { isProjectGated, type ProjectTrustOptions } from "../mcp/config.js";
 
 export const telemetryConfigSchema = z.object({
   enabled: z.boolean(),
@@ -197,6 +198,7 @@ export async function loadTelemetryConfig(
   workspace: string,
   home: string,
   env: NodeJS.ProcessEnv,
+  opts?: ProjectTrustOptions,
 ): Promise<LoadedTelemetryConfig> {
   const killSwitch = env.ANYCODE_TELEMETRY;
   if (killSwitch !== undefined && KILL_SWITCH_VALUES.has(killSwitch.toLowerCase())) {
@@ -242,13 +244,33 @@ export async function loadTelemetryConfig(
   // consults that one path via the existing seenPaths dedup below.
   const underTestGate = globalThis.process?.env?.VITEST !== undefined;
 
+  // Taskana 4736 xfix D2: the project telemetry section writes session
+  // content to a project-chosen `dir` — same trust question as project
+  // MCP/hooks, so the untrusted workspace's source is skipped (one issue
+  // line) and only user-level telemetry can claim the section.
+  const gated = isProjectGated(workspace, home, opts);
+  const projectPath = projectOrUserConfigPath(workspace);
+
   const issues: string[] = [];
   const seenPaths = new Set<string>();
-  const baseDirs = underTestGate && workspace !== home ? [workspace] : [workspace, home];
+  // Taskana 4736 xfix D2: the user source must still load when the project
+  // source is trust-skipped, so the underTestGate restriction (project-only
+  // under VITEST, TASK.121/166) yields only when BOTH sources are consulted;
+  // with the gate closed the user source is the only one left, and the test
+  // gate's purpose (no ambient developer config leakage) still holds because
+  // the fake fs in tests supplies exactly the paths named below.
+  const gatedProjectOnly = gated && underTestGate && workspace !== home;
+  const baseDirs = gatedProjectOnly ? [workspace, home] : underTestGate && workspace !== home ? [workspace] : [workspace, home];
   for (const baseDir of baseDirs) {
     const path = projectOrUserConfigPath(baseDir);
     if (seenPaths.has(path)) continue;
     seenPaths.add(path);
+    if (gated && path === projectPath) {
+      if (await fs.exists(path)) {
+        issues.push(`Project telemetry config in ${path} skipped: folder not trusted`);
+      }
+      continue;
+    }
 
     const claimed = await loadSource(fs, path, home, issues, underTestGate, overrideDir);
     if (claimed !== undefined) {

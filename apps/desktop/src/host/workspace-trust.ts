@@ -47,6 +47,19 @@ export interface EstablishHostWorkspaceTrustOptions {
    * realpathSync; absent = legacy resolve-only behaviour.
    */
   realpathSync?: (path: string) => string;
+  /**
+   * Taskana 4736 xfix D4: true for a CHILD tab's boot (args.child present).
+   * A child shares its parent's workspace, so the parent's trust record (and
+   * its once-approval, which main stamps into the child's fork env the same
+   * way) already answers the question; a child surface has no satisfiable
+   * place to ask it (the renderer suppresses the dialog on child surfaces,
+   * and main's pending bookkeeping ignores child tabs by tabId). When this is
+   * set, an "unknown"/"changed" outcome resolves WITHOUT `pending` — the
+   * child boots with the parent's current decision (untrusted unless the
+   * record/once-hash says otherwise) and never reports a dialog that could
+   * not be answered.
+   */
+  childSurface?: boolean;
 }
 
 export async function establishHostWorkspaceTrust(
@@ -61,7 +74,7 @@ export async function establishHostWorkspaceTrust(
       onceHash: opts.env[WORKSPACE_TRUST_ONCE_ENV] || undefined,
       realpathSync: opts.realpathSync,
     });
-    return toHostTrust(opts.workspace, trust);
+    return toHostTrust(opts.workspace, trust, opts.childSurface === true);
   } catch (error) {
     console.error(
       `[host] workspace trust check failed; project declarations stay off: ${error instanceof Error ? error.message : String(error)}`,
@@ -70,9 +83,15 @@ export async function establishHostWorkspaceTrust(
   }
 }
 
-function toHostTrust(workspace: string, trust: WorkspaceTrustResult): HostWorkspaceTrust {
+function toHostTrust(workspace: string, trust: WorkspaceTrustResult, childSurface = false): HostWorkspaceTrust {
   if (trust.state !== "unknown" && trust.state !== "changed") {
     return { projectTrusted: trust.projectTrusted };
+  }
+  // Taskana 4736 xfix D4: a child surface cannot answer the question — the
+  // parent's record/once-approval (same workspace, same fork env stamp)
+  // decides, and no unsatisfiable dialog is reported for the child to show.
+  if (childSurface) {
+    return { projectTrusted: false };
   }
   return {
     projectTrusted: false,

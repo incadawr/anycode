@@ -29,7 +29,10 @@
  * agent, not a supervised child loop. `--disable-slash-commands
  * --setting-sources project,local --strict-mcp-config` (mirrored from
  * claude-client.ts's own spawn args) keep the child's init from pulling in
- * the ambient skill/plugin catalog a subagent never needed.
+ * the ambient skill/plugin catalog a subagent never needed. Taskana 4736
+ * xfix D1: `projectTrusted === false` narrows `--setting-sources` to `user`
+ * on the SAME trust gate claude-client.ts honours, so an untrusted folder's
+ * `.claude/settings.json` hooks cannot load through this path either.
  */
 
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
@@ -77,6 +80,14 @@ export interface EngineChildRunnerDeps {
   env: NodeJS.ProcessEnv;
   /** Injectable for tests; defaults to node:child_process's spawn. */
   spawn?: EngineChildSpawn;
+  /**
+   * Taskana 4736 xfix D1: the host's workspace-trust gate. `false` narrows
+   * the Claude child's `--setting-sources` to `user` (same value
+   * claude-client.ts uses), so the untrusted folder's own
+   * `.claude/settings.json` hooks never load. Absent/true keeps
+   * `project,local` — byte-identical to the pre-xfix argv.
+   */
+  projectTrusted?: boolean;
 }
 
 /** Bound on the accumulated stderr tail kept for an error outcome (not the subagent OUTPUT cap — see SUBAGENT_OUTPUT_MAX_BYTES below). */
@@ -134,7 +145,7 @@ interface EngineAdapter {
 }
 
 /** The one switch on the two known engine ids (module header §"single switch"). */
-function adapterFor(engine: EngineChildSpec["engine"]): EngineAdapter {
+function adapterFor(engine: EngineChildSpec["engine"], projectTrusted?: boolean): EngineAdapter {
   switch (engine) {
     case "claude":
       return {
@@ -149,7 +160,9 @@ function adapterFor(engine: EngineChildSpec["engine"]): EngineAdapter {
           "acceptEdits",
           "--disable-slash-commands",
           "--setting-sources",
-          "project,local",
+          // Taskana 4736 xfix D1: untrusted workspace => user-only settings
+          // (mirrors claude-client.ts's own gate on the same flag).
+          projectTrusted === false ? "user" : "project,local",
           "--strict-mcp-config",
           ...(spec.model !== undefined ? ["--model", spec.model] : []),
           childPrompt(spec, cwd),
@@ -321,7 +334,7 @@ async function runEngineChild(
   const { signal, onProgress } = opts;
   if (signal?.aborted) return cancelledOutcome(startedAt);
 
-  const adapter = adapterFor(spec.engine);
+  const adapter = adapterFor(spec.engine, deps.projectTrusted);
   const binaryPath = deps.env[adapter.binEnvVar];
   if (binaryPath === undefined || binaryPath.length === 0) {
     return errorOutcome(

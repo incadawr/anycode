@@ -6263,6 +6263,8 @@ describe("TabHostManager — workspace trust (Taskana 4736)", () => {
       createChannel: fakeChannel,
       getWindow: () => window,
       env: () => ({}),
+      engineReady: () => true,
+      engineEnv: (engine) => ({ [ENV_ENGINE]: engine }),
       logger: silentLogger,
       now: () => 0,
       limits: (extra.limits ?? {}) as never,
@@ -6294,9 +6296,12 @@ describe("TabHostManager — workspace trust (Taskana 4736)", () => {
   it("restartTabHost re-forks with --resume and does NOT count against the rapid-respawn breaker", async () => {
     // maxRapidRespawns 0: any counted respawn would give up. A deliberate restart must still re-fork.
     const { manager, hosts, forkSpy, tabId } = rig({ limits: { maxRapidRespawns: 0, minHealthyUptimeMs: 1e9 } });
-    expect(manager.restartTabHost(tabId)).toEqual({ ok: true });
-    expect(hosts[0]!.kill).toHaveBeenCalledTimes(1);
+    const restartPromise = manager.restartTabHost(tabId);
+    // xfix D3: the shutdown message is posted BEFORE any kill.
+    expect(hosts[0]!.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
+    expect(hosts[0]!.kill).not.toHaveBeenCalled();
     hosts[0]!.emit("exit", 0);
+    await restartPromise;
     await flush();
     expect(forkSpy).toHaveBeenCalledTimes(2);
     expect(forkSpy.mock.calls[1]?.[1]).toEqual(["--resume", "sess-T"]);
@@ -6304,15 +6309,74 @@ describe("TabHostManager — workspace trust (Taskana 4736)", () => {
     expect(manager.getTab(tabId)?.rapidRespawns).toBe(0);
   });
 
-  it("restartTabHost refuses an unknown tab", () => {
+  // Taskana 4736 xfix D3: restartTabHost must use the graceful shutdown
+  // handshake (HOST_SHUTDOWN posted, exit awaited with the existing
+  // exitDeadlineMs deadline, force-kill only on timeout) — never a bare kill
+  // that could orphan the host's own children mid-turn.
+  it("restartTabHost force-kills only after the exit deadline expires (xfix D3)", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, hosts, tabId } = rig({ limits: { maxRapidRespawns: 0, minHealthyUptimeMs: 1e9, exitDeadlineMs: 1000 } });
+      const restartPromise = manager.restartTabHost(tabId);
+      expect(hosts[0]!.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
+      expect(hosts[0]!.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(hosts[0]!.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await restartPromise;
+      expect(hosts[0]!.kill).toHaveBeenCalledTimes(1);
+      // The force-killed host's late exit still re-forks via the deliberate path.
+      hosts[0]!.emit("exit", 0);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(manager.getTab(tabId)?.state).toBe("running");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restartTabHost posts the shutdown message exactly once per restart", async () => {
+    const { manager, hosts, tabId } = rig({ limits: { maxRapidRespawns: 0, minHealthyUptimeMs: 1e9 } });
+    const restartPromise = manager.restartTabHost(tabId);
+    hosts[0]!.emit("exit", 0);
+    await restartPromise;
+    expect(hosts[0]!.postMessage).toHaveBeenCalledTimes(1);
+    expect(hosts[0]!.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
+  });
+
+  it("restartTabHost refuses an unknown tab", async () => {
     const { manager } = rig();
-    expect(manager.restartTabHost("nope")).toEqual({ ok: false, reason: "unknown_tab" });
+    await expect(manager.restartTabHost("nope")).resolves.toEqual({ ok: false, reason: "unknown_tab" });
   });
 
   it("stamps a main-approved trust-once hash into the fork env for that workspace", () => {
     const { forkSpy } = rig({ workspaceTrustOnce: (ws) => (ws === "/ws" ? HASH : undefined) });
     const env = (forkSpy.mock.calls[0]?.[2] as { env?: Record<string, string> }).env;
     expect(env?.ANYCODE_WORKSPACE_TRUST_ONCE).toBe(HASH);
+  });
+
+  // Taskana 4736 xfix D4: the parent's current decision must ride the CHILD's
+  // fork too — children share the workspace and cannot answer the question
+  // themselves, so the once hash (or the persisted record) is the only way a
+  // child of a trusted-once parent boots trusted.
+  it("a child spawn in a workspace with an approved once hash inherits it in its fork env (xfix D4)", async () => {
+    const { hosts, forkSpy } = rig({ workspaceTrustOnce: (ws) => (ws === "/ws" ? HASH : undefined) });
+    // The parent host spawns a child session (the Agent tool's control-plane
+    // request; main answers with the same once-approved workspace env).
+    hosts[0]!.emit("message", {
+      type: "anycode:child-spawn-request",
+      requestId: "req-1",
+      spawnToolCallId: "call-1",
+      agentType: "explore",
+      description: "look around",
+      prompt: "do the thing",
+      permissionMode: "build",
+      // engine omitted: absent = core (the wire dictionary only knows claude/codex)
+    });
+    await flush();
+    // The child fork (second fork call) carries the SAME once hash.
+    expect(forkSpy).toHaveBeenCalledTimes(2);
+    const childEnv = (forkSpy.mock.calls[1]?.[2] as { env?: Record<string, string> }).env;
+    expect(childEnv?.ANYCODE_WORKSPACE_TRUST_ONCE).toBe(HASH);
   });
 
   it("does not stamp a trust-once env when nothing was approved", () => {

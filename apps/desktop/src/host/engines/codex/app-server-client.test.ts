@@ -250,6 +250,38 @@ describe("AppServerClient", () => {
     }
   });
 
+  // Taskana 4736 xfix D1 (codex side): pin that the app-server spawn reads NO
+  // project configuration. The argv is exactly `app-server --stdio` — no
+  // project config.toml path, no `--cd` into the workspace, no `-c` overrides
+  // sourced from project files — and the env carries CODEX_HOME only from the
+  // profile-owned source (host/index.ts resolves it from argv/profile
+  // resolution, never from the workspace). The thread's workspace binding is
+  // delivered per-RPC by codex-engine.ts, gated upstream by
+  // prepareEngineMcpForward's `projectTrusted`. If a future codex CLI grows a
+  // project-scope config read, this pin is where the analogous restriction
+  // must land.
+  it("spawns the app-server with exactly [app-server, --stdio] — no project config read (xfix D1)", async () => {
+    const spawnSpy = vi.fn((command: string, args: readonly string[], opts: Parameters<typeof spawn>[2]) =>
+      spawn(command, args, opts),
+    );
+    const client = makeClient([], { spawnImpl: spawnSpy });
+    try {
+      await client.start();
+      const appServerSpawn = spawnSpy.mock.calls.find((call) => call[1].includes("app-server"));
+      expect(appServerSpawn).toBeDefined();
+      const args = appServerSpawn![1];
+      // binaryArgs are the test harness's own [childPath]; the client appends
+      // exactly the app-server pair and nothing else.
+      expect(args.slice(-2)).toEqual(["app-server", "--stdio"]);
+      // No project-scope config read: no -c overrides, no --cd, no config flag.
+      for (const forbidden of ["-c", "--cd", "--config", "-f", "--profile"]) {
+        expect(args).not.toContain(forbidden);
+      }
+    } finally {
+      await client.close();
+    }
+  });
+
   // The ONE test in this file that omits the `binaryTrust` seam, so the client's
   // production default — the real on-disk `checkCodexBinaryTrustOnDisk` — is what
   // decides. Without it, every test here injects a trusted stub and nothing pins

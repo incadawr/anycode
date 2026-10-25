@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 import type { FileSystemPort } from "../ports/file-system.js";
+import { isProjectGated, type ProjectTrustOptions } from "../mcp/config.js";
 import { WEBSEARCH_DEFAULT_MAX_RESULTS, WEBSEARCH_MAX_RESULTS } from "../types/config.js";
 
 export const webSearchConfigSchema = z.object({
@@ -173,20 +174,35 @@ async function loadSource(
  * throws: an absent section in both sources yields `{backend: null, issues:
  * []}` silently at zero cost; a present-but-invalid/misconfigured section
  * yields `{backend: null, issues: [...]}` (boot warns, never fails).
+ *
+ * Taskana 4736 xfix D2: `opts.projectTrusted === false` skips the PROJECT
+ * source only (the section carries a network endpoint every query is sent
+ * to — exactly the same trust question as project MCP/hooks): the user
+ * section still loads, and one issue line reports the skipped file. Absent
+ * option keeps the historical behaviour for library callers.
  */
 export async function loadWebSearchConfig(
   fs: FileSystemPort,
   workspace: string,
   home: string,
   env: NodeJS.ProcessEnv,
+  opts?: ProjectTrustOptions,
 ): Promise<LoadedWebSearchConfig> {
   const issues: string[] = [];
+  const gated = isProjectGated(workspace, home, opts);
+  const projectPath = projectOrUserConfigPath(workspace);
 
   const seenPaths = new Set<string>();
   for (const baseDir of [workspace, home]) {
     const path = projectOrUserConfigPath(baseDir);
     if (seenPaths.has(path)) continue;
     seenPaths.add(path);
+    if (gated && path === projectPath) {
+      if (await fs.exists(path)) {
+        issues.push(`Project webSearch config in ${path} skipped: folder not trusted`);
+      }
+      continue;
+    }
 
     const claimed = await loadSource(fs, path, env, issues);
     if (claimed !== undefined) {

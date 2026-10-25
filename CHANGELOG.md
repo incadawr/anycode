@@ -90,6 +90,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   them with a warning; `ANYCODE_TRUST_WORKSPACE=1` trusts one run only. Your
   user-level config is unaffected. This is a behaviour change for existing
   projects: each one asks once, and asks again if its commands change.
+- Untrusted folders also keep Claude Code's own project settings and project
+  web-search/telemetry settings off: the Claude engine boots with user-only
+  setting sources (its `.claude/settings.json`/`.claude/settings.local.json`
+  hooks and MCP servers are neither loaded nor able to start), the project
+  `webSearch`/`telemetry`/`repoMap` sections wait for trust like MCP/hooks do,
+  and `.claude` hook/MCP declarations now appear in the trust dialog so a
+  hooks-only folder asks instead of opening silently.
 
 ## [0.0.36] — 2026-10-25
 

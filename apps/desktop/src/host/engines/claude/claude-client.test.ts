@@ -619,6 +619,39 @@ describe("buildClaudeSpawnArgs — slash passthrough (TASK.92)", () => {
   });
 });
 
+// Taskana 4736 xfix D1: an untrusted folder's .claude/settings.json hooks must
+// never reach Claude Code's own settings loader. `--setting-sources` decides
+// which settings files the CLI reads; `project` and `local` both live in the
+// workspace, so the untrusted spawn admits `user` only. Verified against the
+// pinned 2.1.296 binary: `--help` documents "Comma-separated list of setting
+// sources to load (user, project, local)"; `--setting-sources user` parses
+// cleanly while an unknown value is refused ("Invalid setting source: ...").
+describe("buildClaudeSpawnArgs — workspace-trust setting sources (xfix D1)", () => {
+  it("DEFAULT (no option / trusted) keeps project,local — the argv stays byte-identical to pre-xfix", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("project,local");
+  });
+
+  it("projectTrusted: false narrows --setting-sources to user", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1", projectTrusted: false });
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("user");
+    expect(args).not.toContain("project,local");
+  });
+
+  it("projectTrusted: true keeps project,local", () => {
+    const args = buildClaudeSpawnArgs({ sessionId: "s-1", projectTrusted: true });
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("project,local");
+  });
+
+  it("the gate changes exactly one argv token — resume spawns too", () => {
+    const trusted = buildClaudeSpawnArgs({ resume: "ref-1" });
+    const untrusted = buildClaudeSpawnArgs({ resume: "ref-1", projectTrusted: false });
+    const at = trusted.indexOf("project,local");
+    expect(at).toBeGreaterThan(-1);
+    expect(untrusted).toEqual([...trusted.slice(0, at), "user", ...trusted.slice(at + 1)]);
+  });
+});
+
 describe("buildClaudeChildEnv", () => {
   it("never forwards ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / CLAUDECODE, and sets CLAUDE_CONFIG_DIR to an explicit override", () => {
     const env = buildClaudeChildEnv(

@@ -7,6 +7,14 @@
  *   - every `lspServers` entry of `<ws>/.anycode/config.json`
  *   - the enabled `mcpServers` of each project-tier plugin manifest
  *     (`<ws>/.anycode/plugins/<dir>/.anycode-plugin/plugin.json`)
+ *   - Claude Code's own project settings (Taskana 4736 xfix D1): hook commands
+ *     and MCP server entries of `<ws>/.claude/settings.json` and
+ *     `<ws>/.claude/settings.local.json`, plus `enabledMcpjsonServers` entries.
+ *     The Claude engine is spawned with cwd = workspace, so these files can
+ *     start processes exactly like `.anycode/config.json` hooks/MCP can; a
+ *     folder shipping only them must ask, never resolve `none`. The user's own
+ *     `~/.claude/settings.json` is NEVER read (workspace === home is the user
+ *     file itself).
  * Skills, agents and workflows are NOT part of the set: they spawn nothing.
  *
  * The hash covers command/args/cwd/env (and http url/headers) VALUES so a
@@ -57,6 +65,16 @@ function configPathOf(baseDir: string): string {
 
 function compatPathOf(workspace: string): string {
   return `${workspace.replace(/[/\\]+$/, "")}/.mcp.json`;
+}
+
+/** `<ws>/.claude/settings.json` — Claude Code's own project-scope settings (xfix D1). */
+function claudeSettingsPath(workspace: string): string {
+  return `${workspace.replace(/[/\\]+$/, "")}/.claude/settings.json`;
+}
+
+/** `<ws>/.claude/settings.local.json` — also lives in the repo (xfix D1). */
+function claudeSettingsLocalPath(workspace: string): string {
+  return `${workspace.replace(/[/\\]+$/, "")}/.claude/settings.local.json`;
 }
 
 /** Recursively sorted-key JSON so the hash is independent of JSON key order. */
@@ -196,6 +214,66 @@ async function projectPluginItems(fs: FileSystemPort, workspace: string): Promis
 }
 
 /**
+ * Claude Code's own project settings (Taskana 4736 xfix D1). Claude Code
+ * registers hooks and MCP servers from `.claude/settings.json` /
+ * `.claude/settings.local.json` in its cwd — the workspace we spawn the engine
+ * in. Shapes follow Claude Code's documented settings format:
+ *   - `hooks`: `{ <Event>: [{ hooks: [{ type: "command", command: "..." }] }] }`
+ *     (the nested matchers array is Claude's own; only `type: "command"`
+ *     entries can start a process, so only those are collected)
+ *   - `mcpServers`: the same stdio/http entry shape `.mcp.json` uses
+ *   - `enabledMcpjsonServers`: names of `.mcp.json` servers to enable — the
+ *     named server's definition lives in `.mcp.json` (which the collector
+ *     already hashes separately when present), so the entry itself is
+ *     collected as a name-only mcp item: a changed name re-prompts.
+ * Malformed bodies contribute nothing (fail-soft, like every other source).
+ */
+function claudeSettingsItems(settings: unknown, source: string): CollectedItem[] {
+  if (!settings || typeof settings !== "object") return [];
+  const root = settings as Record<string, unknown>;
+  const out: CollectedItem[] = [];
+
+  const hooks = root.hooks;
+  if (hooks && typeof hooks === "object") {
+    for (const [event, matchers] of Object.entries(hooks as Record<string, unknown>)) {
+      if (!Array.isArray(matchers)) continue;
+      for (const matcher of matchers) {
+        if (!matcher || typeof matcher !== "object") continue;
+        const entries = (matcher as Record<string, unknown>).hooks;
+        if (!Array.isArray(entries)) continue;
+        for (const entry of entries) {
+          if (!entry || typeof entry !== "object") continue;
+          const record = entry as Record<string, unknown>;
+          // Only `type: "command"` entries start a process.
+          if (record.type !== "command" || typeof record.command !== "string" || record.command.length === 0) {
+            continue;
+          }
+          out.push({
+            display: { kind: "hook", name: event, commandLine: record.command, source, envKeys: [] },
+            canonical: { kind: "hook", source, event, type: "command", command: record.command },
+          });
+        }
+      }
+    }
+  }
+
+  out.push(...mcpItems(root.mcpServers, source, "mcp", "", {}));
+
+  const enabled = root.enabledMcpjsonServers;
+  if (Array.isArray(enabled)) {
+    for (const name of enabled) {
+      if (typeof name !== "string" || name.length === 0) continue;
+      out.push({
+        display: { kind: "mcp", name, commandLine: name, source, envKeys: [] },
+        canonical: { kind: "mcp", source, enabledMcpjsonServer: name },
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Collects the project-level spawn declarations of `workspace` and their
  * canonical hash. Never throws; malformed or absent sources contribute nothing.
  */
@@ -227,13 +305,26 @@ export async function collectProjectSpawnConfig(
   }
   collected.push(...(await projectPluginItems(fs, workspace)));
 
+  // Taskana 4736 xfix D1: Claude Code's own project settings are project
+  // files that can start processes (the engine spawns with cwd = workspace).
+  const claudeSettings = await readJsonIfPresent(fs, claudeSettingsPath(workspace));
+  if (claudeSettings !== undefined) {
+    collected.push(...claudeSettingsItems(claudeSettings, claudeSettingsPath(workspace)));
+  }
+  const claudeSettingsLocal = await readJsonIfPresent(fs, claudeSettingsLocalPath(workspace));
+  if (claudeSettingsLocal !== undefined) {
+    collected.push(...claudeSettingsItems(claudeSettingsLocal, claudeSettingsLocalPath(workspace)));
+  }
+
   if (collected.length === 0) {
     return { items: [], hash: "" };
   }
 
-  const sorted = [...collected].sort((a, b) =>
-    canonicalJson(a.canonical).localeCompare(canonicalJson(b.canonical)),
-  );
+  // xfix m3: bytewise `<` compare, not localeCompare — the hash must be
+  // ICU-independent (a decision stored on machine A must reproduce on machine
+  // B); the fail direction of a locale difference was only a re-prompt.
+  const bytewise = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+  const sorted = [...collected].sort((a, b) => bytewise(canonicalJson(a.canonical), canonicalJson(b.canonical)));
   const hash = createHash("sha256")
     .update(canonicalJson({ version: 1, items: sorted.map((c) => c.canonical) }))
     .digest("hex");

@@ -13,10 +13,17 @@ import type { WorkspaceTrustResult } from "./index.js";
 
 export type TrustPromptAnswer = "trust" | "once" | "no";
 
+/**
+ * xfix m2: `y`/`yes` map to "trust" too — a user typing the universal
+ * confirmation was silently persisted as DENIED (unrecognized => No) with no
+ * confirmation. `n`/`no` map to "no" for symmetry; anything else still falls
+ * through to "no" (the documented fail-closed default).
+ */
 export function parseTrustAnswer(line: string): TrustPromptAnswer {
   const answer = line.trim().toLowerCase();
-  if (answer === "t" || answer === "trust") return "trust";
+  if (answer === "t" || answer === "trust" || answer === "y" || answer === "yes") return "trust";
   if (answer === "o" || answer === "once") return "once";
+  if (answer === "n" || answer === "no") return "no";
   return "no";
 }
 
@@ -51,7 +58,7 @@ export async function promptWorkspaceTrust(
         resolve("");
       }
     });
-    rl.question("[t]rust / [o]nce / [N]o: ", (line) => {
+    rl.question("[t]rust / [o]nce / [N]o (y=yes): ", (line) => {
       if (!settled) {
         settled = true;
         resolve(line);

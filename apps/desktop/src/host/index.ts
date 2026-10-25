@@ -1714,7 +1714,12 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
   // own `patch` above, which is the DB-row `mode` COLUMN, an unrelated seam).
   let codexTelemetryConfig: ResolvedTelemetryConfig | null = null;
   try {
-    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env);
+    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env, {
+      // Taskana 4736 xfix D2: the project telemetry section is trust-gated on
+      // the same `hostWorkspaceTrust` as mcp/hooks/lsp (established earlier in
+      // boot()); one warning line, user-level values still load.
+      projectTrusted: hostWorkspaceTrust.projectTrusted,
+    });
     codexTelemetryConfig = loadedTelemetry.telemetry;
     for (const issue of loadedTelemetry.issues) console.warn(`[host] telemetry config: ${issue}`);
   } catch (error) {
@@ -2105,6 +2110,12 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     // only. A child's prompt is model-authored, so its CLI keeps
     // --disable-slash-commands — no model-driven slash injection.
     enableSlashPassthrough: args.child === undefined,
+    // Taskana 4736 xfix D1: the trust gate rides the engine spawn itself —
+    // an untrusted folder's .claude/settings.json hooks must not load through
+    // Claude Code's own settings sources either (the engine runs with
+    // cwd = workspace). `hostWorkspaceTrust` is decided above, before any
+    // engine wiring, so the value here is the same gate every loader sees.
+    projectTrusted: hostWorkspaceTrust.projectTrusted,
     // Ambient by default (owner pivot): no override here, so ClaudeClient
     // sets no `CLAUDE_CONFIG_DIR` at all and the CLI resolves the SAME
     // `~/.claude` main's doctor diagnosed before it let this tab spawn.
@@ -2373,7 +2384,12 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // is per-PROCESS, so it is always 0 at the start of this boot, resume or not.
   let claudeTelemetryConfig: ResolvedTelemetryConfig | null = null;
   try {
-    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env);
+    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env, {
+      // Taskana 4736 xfix D2: the project telemetry section is trust-gated on
+      // the same `hostWorkspaceTrust` as mcp/hooks/lsp (established earlier in
+      // boot()); one warning line, user-level values still load.
+      projectTrusted: hostWorkspaceTrust.projectTrusted,
+    });
     claudeTelemetryConfig = loadedTelemetry.telemetry;
     for (const issue of loadedTelemetry.issues) console.warn(`[host] telemetry config: ${issue}`);
   } catch (error) {
@@ -2653,12 +2669,20 @@ async function boot(): Promise<void> {
     // into the fork env as ANYCODE_APP_VERSION). Read once, fail-soft — absent
     // (bare test harness) leaves discovery byte-identical.
     const hostAppVersion = parseAppVersionEnv(process.env[ENV_APP_VERSION]);
+    // Taskana 4736 xfix D4: parsed here (pure argv read, no I/O) so the trust
+    // gate can see child-mode boots — the same parse the core path repeats
+    // below unchanged (parseHostArgs is pure; the duplicate is harmless).
+    const bootArgs = parseHostArgs(process.argv.slice(2));
     hostWorkspaceTrust = await establishHostWorkspaceTrust(new NodeFileSystemAdapter(), {
       workspace,
       home: homedir(),
       env: process.env,
       // Taskana 4739: symlink and target share one trust record.
       realpathSync,
+      // Taskana 4736 xfix D4: a child tab shares the parent's workspace; the
+      // parent's record/once-approval decides and no pending dialog is
+      // reported for a surface that cannot answer it.
+      childSurface: bootArgs.child !== undefined,
     });
     if (hostWorkspaceTrust.pending !== undefined) {
       process.parentPort?.postMessage({
@@ -3318,7 +3342,10 @@ async function boot(): Promise<void> {
     // no module-scope handle, no shutdown stage.
     let webSearchBackend: ResolvedWebSearchBackend | null = null;
     try {
-      const loadedWebSearch = await loadWebSearchConfig(fsAdapter, workspace, homedir(), process.env);
+      const loadedWebSearch = await loadWebSearchConfig(fsAdapter, workspace, homedir(), process.env, {
+        // Taskana 4736 xfix D2: same trust gate as the section's siblings.
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
+      });
       webSearchBackend = loadedWebSearch.backend;
       for (const issue of loadedWebSearch.issues) console.warn(`[host] websearch config: ${issue}`);
     } catch (error) {
@@ -3336,7 +3363,10 @@ async function boot(): Promise<void> {
 
     let telemetryConfig: ResolvedTelemetryConfig | null = null;
     try {
-      const loadedTelemetry = await loadTelemetryConfig(fsAdapter, workspace, homedir(), process.env);
+      const loadedTelemetry = await loadTelemetryConfig(fsAdapter, workspace, homedir(), process.env, {
+        // Taskana 4736 xfix D2: same trust gate as the section's siblings.
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
+      });
       telemetryConfig = loadedTelemetry.telemetry;
       for (const issue of loadedTelemetry.issues) console.warn(`[host] telemetry config: ${issue}`);
     } catch (error) {
@@ -3344,7 +3374,10 @@ async function boot(): Promise<void> {
     }
     let repoMapConfig: RepoMapConfig | null = null;
     try {
-      const loadedRepoMap = await loadRepoMapConfig(fsAdapter, workspace, homedir(), process.env);
+      const loadedRepoMap = await loadRepoMapConfig(fsAdapter, workspace, homedir(), process.env, {
+        // Taskana 4736 xfix D2: same trust gate as the section's siblings.
+        projectTrusted: hostWorkspaceTrust.projectTrusted,
+      });
       repoMapConfig = loadedRepoMap.repoMap;
       for (const issue of loadedRepoMap.issues) console.warn(`[host] repo-map config: ${issue}`);
     } catch (error) {

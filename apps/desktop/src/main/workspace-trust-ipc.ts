@@ -62,7 +62,12 @@ export interface WorkspaceTrustTabs {
     tabId: string,
   ): { workspace: string; hash: string } | "unknown_tab" | "no_pending";
   clearWorkspaceTrustPending(tabId: string): void;
-  restartTabHost(tabId: string): { ok: true } | { ok: false; reason: string };
+  /**
+   * Taskana 4736 xfix D3: async since the restart now performs the graceful
+   * shutdown handshake (post HOST_SHUTDOWN, await exit, force-kill on
+   * timeout) before returning — never a bare kill.
+   */
+  restartTabHost(tabId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
 export interface WorkspaceTrustIpcDeps {
@@ -152,7 +157,7 @@ export async function handleWorkspaceTrustDecide(
   }
 
   deps.tabs.clearWorkspaceTrustPending(tabId);
-  const restart = deps.tabs.restartTabHost(tabId);
+  const restart = await deps.tabs.restartTabHost(tabId);
   if (!restart.ok) {
     // The decision is recorded; the next boot of this tab applies it.
     deps.logger?.error(`[main] workspace trust decided for tab ${tabId}; host restart skipped (${restart.reason})`);

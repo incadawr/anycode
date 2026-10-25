@@ -2825,7 +2825,11 @@ export class TabHostManager {
       void this.drainChildren(tab);
       this.notifyHostExited(tab.tabId);
       this.spawnTabHost(tab, { firstSpawn: false });
-      this.stormForks -= 1;
+      // xfix m1: spawnTabHost may have refused (deleted connection / engine-env
+      // guard) WITHOUT incrementing, so the compensating decrement is clamped —
+      // a negative counter would hand a genuine crash storm one respawn beyond
+      // globalMaxRapidRespawns until real forks climbed back above zero.
+      this.stormForks = Math.max(0, this.stormForks - 1);
       this.deliverTabPort(tab);
       return;
     }
@@ -3184,8 +3188,16 @@ export class TabHostManager {
    * Taskana 4736: deliberately restarts a root tab's host so the boot re-decides
    * the workspace trust gate after the user answered. Not a crash: the exit is
    * re-forked with the resume path and no rapid-respawn or storm accounting.
+   *
+   * Taskana 4736 xfix D3: the stop is the SAME graceful shutdown handshake
+   * `shutdownTabHost` uses — post HOST_SHUTDOWN (the host aborts its turn and
+   * starts core's SIGTERM->SIGKILL child kill-chain at t=0), await exit within
+   * `exitDeadlineMs`, force-kill on timeout — instead of a bare `child.kill()`
+   * that could orphan the host's own Bash/engine children mid-turn. The tab
+   * stays `running` (NOT `closing`) and rides `deliberateRestarts`, so
+   * `handleChildExit` re-forks with `--resume` and no breaker accounting.
    */
-  restartTabHost(tabId: string): { ok: true } | { ok: false; reason: "unknown_tab" | "not_running" } {
+  async restartTabHost(tabId: string): Promise<{ ok: true } | { ok: false; reason: "unknown_tab" | "not_running" }> {
     const tab = this.tabs.get(tabId);
     if (tab === undefined) {
       return { ok: false, reason: "unknown_tab" };
@@ -3195,7 +3207,34 @@ export class TabHostManager {
       return { ok: false, reason: "not_running" };
     }
     this.deliberateRestarts.add(child);
-    child.kill();
+    // Graceful stop, `shutdownTabHost`'s exact sequence but WITHOUT marking
+    // the tab `closing` (that would suppress the deliberate respawn):
+    // signal, await exit up to exitDeadlineMs, force-kill on timeout. The
+    // exit itself is handled by handleChildExit under the deliberate exemption.
+    const exited = new Promise<void>((resolve) => {
+      child.once("exit", () => resolve());
+    });
+    try {
+      child.postMessage({ type: HOST_SHUTDOWN_MESSAGE_TYPE });
+    } catch (error) {
+      this.logger.error(`[main] tab ${tab.tabId} restart: failed to signal host`, error);
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), this.limits.exitDeadlineMs);
+    });
+    const result = await Promise.race([exited.then(() => "exited" as const), deadline]);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+    if (result === "timeout") {
+      this.logger.error(
+        `[main] tab ${tab.tabId} restart: host did not exit within ${this.limits.exitDeadlineMs}ms; force killing`,
+      );
+      child.kill();
+    } else {
+      this.logger.log(`[main] tab ${tab.tabId} restart: host exited gracefully within deadline`);
+    }
     return { ok: true };
   }
 

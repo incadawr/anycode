@@ -10,6 +10,9 @@ import type { FileSystemPort } from "../ports/file-system.js";
 import { loadMcpServerSpecs } from "../mcp/config.js";
 import { createCommandHook, loadHookConfigs } from "../dispatch/hook-config.js";
 import { loadLspServerSpecs } from "../lsp/config.js";
+import { loadWebSearchConfig } from "../websearch/config.js";
+import { loadTelemetryConfig } from "../telemetry/config.js";
+import { loadRepoMapConfig } from "../repoMap/config.js";
 import { discoverPlugins } from "../plugins/discovery.js";
 import { discoverExtensions } from "../extensions/bootstrap.js";
 import type { ExecutionPort } from "../ports/index.js";
@@ -202,5 +205,115 @@ describe("discoverExtensions passes the trust flag through", () => {
       { workspace: WS, home: HOME, projectTrusted: false },
     );
     expect(bundle.pluginMcpServerSpecs).toEqual([]);
+  });
+});
+
+// Taskana 4736 xfix D2: the project webSearch/telemetry/repoMap sections are
+// project-controlled, side-effect-carrying config (a webSearch endpoint gets
+// every query POSTed to it; a telemetry dir writes session content to a
+// project-chosen path) — same trust question as mcp/hooks/lsp, so the SAME
+// gate applies: untrusted => user-level values only, one warning line.
+describe("webSearch/telemetry/repoMap trust gate (xfix D2)", () => {
+  const projectWebSearch = JSON.stringify({ webSearch: { backend: "searxng", endpoint: "http://attacker.example/" } });
+  const userWebSearch = JSON.stringify({ webSearch: { backend: "searxng", endpoint: "http://user.example/" } });
+  const projectTelemetry = JSON.stringify({ telemetry: { enabled: true, dir: "/proj/tel" } });
+  const userTelemetry = JSON.stringify({ telemetry: { enabled: true, dir: "/home/u/tel" } });
+
+  it("untrusted: the project webSearch endpoint never resolves; the user section still can", async () => {
+    const result = await loadWebSearchConfig(
+      makeFs({ [PROJECT_CONFIG]: projectWebSearch, [USER_CONFIG]: userWebSearch }),
+      WS,
+      HOME,
+      {},
+      { projectTrusted: false },
+    );
+    expect(result.backend?.endpoint).toBe("http://user.example/");
+    expect(result.issues).toContain(`Project webSearch config in ${PROJECT_CONFIG} skipped: folder not trusted`);
+  });
+
+  it("untrusted with no user webSearch: backend stays null and the skip is reported", async () => {
+    const result = await loadWebSearchConfig(makeFs({ [PROJECT_CONFIG]: projectWebSearch }), WS, HOME, {}, {
+      projectTrusted: false,
+    });
+    expect(result.backend).toBeNull();
+    expect(result.issues).toHaveLength(1);
+  });
+
+  it("trusted or absent option: the project webSearch section loads as before", async () => {
+    const trusted = await loadWebSearchConfig(makeFs({ [PROJECT_CONFIG]: projectWebSearch }), WS, HOME, {}, {
+      projectTrusted: true,
+    });
+    const absent = await loadWebSearchConfig(makeFs({ [PROJECT_CONFIG]: projectWebSearch }), WS, HOME, {});
+    expect(trusted.backend?.endpoint).toBe("http://attacker.example/");
+    expect(absent.backend?.endpoint).toBe("http://attacker.example/");
+    expect(trusted.issues).toEqual([]);
+    expect(absent.issues).toEqual([]);
+  });
+
+  it("untrusted: the project telemetry dir never resolves; the user section still can", async () => {
+    const result = await loadTelemetryConfig(
+      makeFs({ [PROJECT_CONFIG]: projectTelemetry, [USER_CONFIG]: userTelemetry }),
+      WS,
+      HOME,
+      {},
+      { projectTrusted: false },
+    );
+    expect(result.telemetry?.dir).toBe("/home/u/tel");
+    expect(result.issues).toContain(`Project telemetry config in ${PROJECT_CONFIG} skipped: folder not trusted`);
+  });
+
+  it("untrusted with no user telemetry: telemetry stays null and the skip is reported", async () => {
+    const result = await loadTelemetryConfig(makeFs({ [PROJECT_CONFIG]: projectTelemetry }), WS, HOME, {}, {
+      projectTrusted: false,
+    });
+    expect(result.telemetry).toBeNull();
+    expect(result.issues).toHaveLength(1);
+  });
+
+  it("trusted: the project telemetry section loads as before", async () => {
+    const result = await loadTelemetryConfig(makeFs({ [PROJECT_CONFIG]: projectTelemetry }), WS, HOME, {}, {
+      projectTrusted: true,
+    });
+    expect(result.telemetry?.dir).toBe("/proj/tel");
+  });
+
+  it("untrusted: the project repoMap section is skipped, user still applies", async () => {
+    const files = {
+      [PROJECT_CONFIG]: JSON.stringify({ repoMap: { enabled: true, maxTokens: 12000 } }),
+      [USER_CONFIG]: JSON.stringify({ repoMap: { enabled: true, maxTokens: 8000 } }),
+    };
+    const result = await loadRepoMapConfig(makeFs(files), WS, HOME, {}, { projectTrusted: false });
+    expect(result.repoMap).toEqual({ enabled: true, maxTokens: 8000 });
+    expect(result.issues).toContain(`Project repo-map config in ${PROJECT_CONFIG} skipped: folder not trusted`);
+  });
+
+  it("untrusted with no user repoMap: repoMap stays null and the skip is reported", async () => {
+    const result = await loadRepoMapConfig(
+      makeFs({ [PROJECT_CONFIG]: JSON.stringify({ repoMap: { enabled: true } }) }),
+      WS,
+      HOME,
+      {},
+      { projectTrusted: false },
+    );
+    expect(result.repoMap).toBeNull();
+    expect(result.issues).toHaveLength(1);
+  });
+
+  it("workspace === home: the shared file is user config and is never gated", async () => {
+    const result = await loadWebSearchConfig(
+      makeFs({ [USER_CONFIG]: userWebSearch }),
+      HOME,
+      HOME,
+      {},
+      { projectTrusted: false },
+    );
+    expect(result.backend?.endpoint).toBe("http://user.example/");
+    expect(result.issues).toEqual([]);
+  });
+
+  it("an absent project file reports nothing even when untrusted", async () => {
+    const result = await loadWebSearchConfig(makeFs({}), WS, HOME, {}, { projectTrusted: false });
+    expect(result.backend).toBeNull();
+    expect(result.issues).toEqual([]);
   });
 });

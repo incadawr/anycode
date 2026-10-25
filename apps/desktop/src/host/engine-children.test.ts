@@ -81,6 +81,55 @@ describe("createEngineChildRunner: argv construction", () => {
     await outcomePromise;
   });
 
+  // Taskana 4736 xfix D1: an untrusted workspace must not let Claude Code read
+  // its own project settings (.claude/settings.json hooks). The default
+  // (trusted / no flag) stays `project,local`; `projectTrusted: false`
+  // narrows the one-shot child to `user`.
+  it("narrows --setting-sources to user when the workspace is not trusted (xfix D1)", async () => {
+    const { spawn, child, calls } = fakeSpawner();
+    const runner = createEngineChildRunner({
+      cwd: "/work/session",
+      env: { ...baseDeps(), [ENV_CLAUDE_BIN]: "/opt/bin/claude" },
+      spawn,
+      projectTrusted: false,
+    });
+
+    const outcomePromise = runner(
+      { engine: "claude", prompt: "do the thing", agentType: "explore", description: "look around" },
+      {},
+    );
+
+    const args = calls[0]?.args ?? [];
+    const at = args.indexOf("--setting-sources");
+    expect(at).toBeGreaterThan(-1);
+    expect(args[at + 1]).toBe("user");
+    expect(args).not.toContain("project,local");
+
+    child.emit("close", 0);
+    await outcomePromise;
+  });
+
+  it("keeps --setting-sources project,local when the workspace is trusted (xfix D1)", async () => {
+    const { spawn, child, calls } = fakeSpawner();
+    const runner = createEngineChildRunner({
+      cwd: "/work/session",
+      env: { ...baseDeps(), [ENV_CLAUDE_BIN]: "/opt/bin/claude" },
+      spawn,
+      projectTrusted: true,
+    });
+
+    const outcomePromise = runner(
+      { engine: "claude", prompt: "do the thing", agentType: "explore", description: "look around" },
+      {},
+    );
+
+    const args = calls[0]?.args ?? [];
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("project,local");
+
+    child.emit("close", 0);
+    await outcomePromise;
+  });
+
   it("inserts --model right before the prompt when spec.model is set", async () => {
     const { spawn, calls, child } = fakeSpawner();
     const runner = createEngineChildRunner({ cwd: "/work/session", env: { ...baseDeps(), [ENV_CLAUDE_BIN]: "/opt/bin/claude" }, spawn });
