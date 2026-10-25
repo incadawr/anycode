@@ -29,6 +29,7 @@ import type {
   PluginInstallPreview,
   PluginInstallSource,
   PluginRowView,
+  PluginServiceView,
   PluginsChangedPayload,
   PluginsMutationResult,
   PluginsSnapshot,
@@ -54,6 +55,10 @@ import {
   pluginTierLabel,
   pluginUpdateVersion,
   rollbackLabel,
+  serviceChip,
+  servicesNeedApproval,
+  sessionsApiHint,
+  type SessionsApiState,
 } from "./plugins-pane-model.js";
 import { PluginInstallDialog, type InstallDialogStage } from "./PluginInstallSheet.js";
 
@@ -67,13 +72,19 @@ export interface PluginsBridge {
   list(): Promise<PluginsSnapshot>;
   checkUpdates(): Promise<PluginsSnapshot>;
   installPrepare(source: PluginInstallSource): Promise<{ ok: true; token: string; preview: PluginInstallPreview } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
-  installCommit(token: string, source: PluginInstallSource, allowMcp?: boolean): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
+  installCommit(token: string, source: PluginInstallSource, allowMcp?: boolean, allowServices?: boolean): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
   update(name: string): Promise<PluginsMutationResult>;
   rollback(name: string): Promise<PluginsMutationResult>;
   setPinned(name: string, value: boolean): Promise<PluginsMutationResult>;
   setEnabled(name: string, value: boolean): Promise<PluginsMutationResult>;
   remove(name: string): Promise<PluginsMutationResult>;
   approveMcp(name: string): Promise<PluginsMutationResult>;
+  /** Taskana 4750a: consent for the plugin's current services definition. */
+  approveServices?(name: string): Promise<PluginsMutationResult>;
+  /** Taskana 4750a: supervised service states (polled while the pane is open). */
+  services?(): Promise<PluginServiceView[]>;
+  serviceLogs?(plugin: string, name: string): Promise<string[]>;
+  serviceRestart?(plugin: string, name: string): Promise<PluginsMutationResult>;
   reveal(name: string): Promise<PluginsMutationResult>;
   setAutoUpdate(value: boolean): Promise<PluginsMutationResult>;
   /** Push subscription: main fires it after any plugin-set change (reason only). */
@@ -82,6 +93,13 @@ export interface PluginsBridge {
 
 /** The pane's load state: `loading` until the first bridge answer, `unavailable` on rejection. */
 export type PluginsLoadState = "loading" | "ready" | "unavailable";
+
+/** Default Sessions-API state read: `communication.get()` (off when the bridge is absent). */
+function defaultSessionsApiState(): Promise<SessionsApiState> {
+  const get = window.anycode?.communication?.get;
+  if (typeof get !== "function") return Promise.resolve("off");
+  return get().then((result) => (result.ok ? result.view.status.state : "off"));
+}
 
 /**
  * Pure guard for the pane's load effect: an EXPLICIT `unavailable` marker
@@ -95,9 +113,14 @@ export function isPluginsServiceUnavailable(state: PluginsLoadState, snapshot: P
 export interface PluginsPaneProps {
   /** Injectable for tests / isolation; defaults to `window.anycode.plugins`. */
   bridge?: PluginsBridge;
+  /** Taskana 4750a: the Sessions-API state for the services hint; defaults to `communication.get()`. */
+  sessionsApiStateOf?: () => Promise<SessionsApiState>;
 }
 
-export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProps) {
+export function PluginsPane({
+  bridge = window.anycode.plugins,
+  sessionsApiStateOf = defaultSessionsApiState,
+}: PluginsPaneProps) {
   const [loadState, setLoadState] = useState<PluginsLoadState>("loading");
   const [snapshot, setSnapshot] = useState<PluginsSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -112,6 +135,12 @@ export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProp
   // another window); our own mutations refetch immediately, so the banner
   // is informational — "applies to newly started tasks" — and self-dismisses.
   const [changedNotice, setChangedNotice] = useState<string | null>(null);
+  // Taskana 4750a: service read model (polled), the Sessions-API state for the hint,
+  // and the one open log (plain text, key = plugin/name).
+  const [services, setServices] = useState<PluginServiceView[]>([]);
+  const [sessionsState, setSessionsState] = useState<SessionsApiState>("off");
+  const [openLogKey, setOpenLogKey] = useState<string | null>(null);
+  const [logLines, setLogLines] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +186,60 @@ export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProp
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge]);
+
+  // Services are polled while the pane is open (2 s); a missing bridge method just leaves the list empty.
+  useEffect(() => {
+    if (typeof bridge.services !== "function") return undefined;
+    let cancelled = false;
+    const poll = () => {
+      bridge
+        .services!()
+        .then((list) => {
+          if (!cancelled) setServices(list);
+        })
+        .catch(() => undefined);
+      const state = sessionsApiStateOf ? sessionsApiStateOf() : undefined;
+      if (state !== undefined) {
+        state
+          .then((value) => {
+            if (!cancelled) setSessionsState(value);
+          })
+          .catch(() => undefined);
+      }
+    };
+    poll();
+    const handle = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(handle);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridge]);
+
+  async function restartService(plugin: string, name: string): Promise<void> {
+    if (typeof bridge.serviceRestart !== "function") return;
+    await bridge.serviceRestart(plugin, name).catch(() => undefined);
+    if (typeof bridge.services === "function") {
+      setServices(await bridge.services().catch(() => []));
+    }
+  }
+
+  async function toggleLog(plugin: string, name: string): Promise<void> {
+    const key = `${plugin}/${name}`;
+    if (openLogKey === key) {
+      setOpenLogKey(null);
+      return;
+    }
+    setOpenLogKey(key);
+    if (typeof bridge.serviceLogs !== "function") return;
+    const lines = await bridge.serviceLogs(plugin, name).catch(() => [] as string[]);
+    setLogLines((current) => ({ ...current, [key]: lines }));
+  }
+
+  function copyLog(key: string): void {
+    const text = (logLines[key] ?? []).join("\n");
+    void navigator.clipboard?.writeText(text).catch(() => undefined);
+  }
 
   const rows = snapshot ? filterPluginRows(snapshot.plugins, searchQuery) : [];
   const emptyKind = pluginsEmptyKind(snapshot?.plugins.length ?? 0, rows.length, searchQuery);
@@ -261,7 +344,7 @@ export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProp
     }
   }
 
-  async function commitInstall(token: string, allowMcp: boolean): Promise<void> {
+  async function commitInstall(token: string, allowMcp: boolean, allowServices: boolean): Promise<void> {
     if (pendingSource === null) {
       return;
     }
@@ -270,7 +353,7 @@ export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProp
       // never a path or hash; `allowMcp` is the consent checkbox (Taskana
       // 4732 xfix H1(b): main records the grant for the previewed command
       // lines when true; unchecked = servers stay off until Approve MCP).
-      const result = await bridge.installCommit(token, pendingSource, allowMcp);
+      const result = await bridge.installCommit(token, pendingSource, allowMcp, allowServices);
       if (result.ok) {
         setSnapshot(result.snapshot);
         setInstallOpen(false);
@@ -386,6 +469,16 @@ export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProp
           onPin={(row) => void runMutation(row.name, () => bridge.setPinned(row.name, !pluginPinned(row)))}
           onRemove={(row) => void runMutation(row.name, () => bridge.remove(row.name))}
           onApproveMcp={(row) => void runMutation(row.name, () => bridge.approveMcp(row.name))}
+          onApproveServices={(row) => {
+            if (typeof bridge.approveServices === "function") void runMutation(row.name, () => bridge.approveServices!(row.name));
+          }}
+          services={services}
+          sessionsState={sessionsState}
+          openLogKey={openLogKey}
+          logLines={logLines}
+          onRestartService={(plugin, name) => void restartService(plugin, name)}
+          onToggleLog={(plugin, name) => void toggleLog(plugin, name)}
+          onCopyLog={copyLog}
           onReveal={(row) => void reveal(row)}
           onInstallAvailable={(name, version) => void prepare({ kind: "official", name, ...(version !== undefined ? { version } : {}) })}
         />
@@ -396,7 +489,7 @@ export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProp
           stage={installStage}
           onPickSource={(source) => void prepare(source)}
           onSubmitUrl={(url) => void prepare({ kind: "url", url })}
-          onCommit={(token, allowMcp) => void commitInstall(token, allowMcp)}
+          onCommit={(token, allowMcp, allowServices) => void commitInstall(token, allowMcp, allowServices)}
           onClose={closeInstall}
         />
       )}
@@ -431,6 +524,15 @@ export interface PluginsPaneBodyProps {
   onPin: (row: PluginRowView) => void;
   onRemove: (row: PluginRowView) => void;
   onApproveMcp: (row: PluginRowView) => void;
+  /** Taskana 4750a: services consent (name-only request). */
+  onApproveServices: (row: PluginRowView) => void;
+  services: readonly PluginServiceView[];
+  sessionsState: SessionsApiState;
+  openLogKey: string | null;
+  logLines: Readonly<Record<string, string[]>>;
+  onRestartService: (plugin: string, name: string) => void;
+  onToggleLog: (plugin: string, name: string) => void;
+  onCopyLog: (key: string) => void;
   onReveal: (row: PluginRowView) => void;
   onInstallAvailable: (name: string, version: string | undefined) => void;
 }
@@ -447,6 +549,14 @@ export function PluginsPaneBody({
   onPin,
   onRemove,
   onApproveMcp,
+  onApproveServices,
+  services,
+  sessionsState,
+  openLogKey,
+  logLines,
+  onRestartService,
+  onToggleLog,
+  onCopyLog,
   onReveal,
   onInstallAvailable,
 }: PluginsPaneBodyProps) {
@@ -473,6 +583,14 @@ export function PluginsPaneBody({
                 onPin={() => onPin(row)}
                 onRemove={() => onRemove(row)}
                 onApproveMcp={() => onApproveMcp(row)}
+                onApproveServices={() => onApproveServices(row)}
+                services={services.filter((view) => view.plugin === row.name)}
+                sessionsState={sessionsState}
+                openLogKey={openLogKey}
+                logLines={logLines}
+                onRestartService={onRestartService}
+                onToggleLog={onToggleLog}
+                onCopyLog={onCopyLog}
                 onReveal={() => onReveal(row)}
               />
             ))}
@@ -548,10 +666,36 @@ interface PluginCardProps {
   onPin: () => void;
   onRemove: () => void;
   onApproveMcp: () => void;
+  onApproveServices: () => void;
+  services: readonly PluginServiceView[];
+  sessionsState: SessionsApiState;
+  openLogKey: string | null;
+  logLines: Readonly<Record<string, string[]>>;
+  onRestartService: (plugin: string, name: string) => void;
+  onToggleLog: (plugin: string, name: string) => void;
+  onCopyLog: (key: string) => void;
   onReveal: () => void;
 }
 
-function PluginCard({ row, busy, onToggle, onUpdate, onRollback, onPin, onRemove, onApproveMcp, onReveal }: PluginCardProps) {
+function PluginCard({
+  row,
+  busy,
+  onToggle,
+  onUpdate,
+  onRollback,
+  onPin,
+  onRemove,
+  onApproveMcp,
+  onApproveServices,
+  services,
+  sessionsState,
+  openLogKey,
+  logLines,
+  onRestartService,
+  onToggleLog,
+  onCopyLog,
+  onReveal,
+}: PluginCardProps) {
   const chips = pluginStatusChips(row);
   const capabilities = pluginCapabilitiesText(row);
   const actions = pluginRowActions(row);
@@ -591,6 +735,38 @@ function PluginCard({ row, busy, onToggle, onUpdate, onRollback, onPin, onRemove
               {problem}
             </div>
           ))}
+          {row.serviceNames.length > 0 && (
+            <div className="plugins-services" data-plugin-services={row.name}>
+              {sessionsApiHint(true, sessionsState) !== undefined && (
+                <p className="mcp-row-hint">{sessionsApiHint(true, sessionsState)}</p>
+              )}
+              {row.serviceNames.map((serviceName) => {
+                const view = services.find((candidate) => candidate.name === serviceName);
+                const chip = view !== undefined ? serviceChip(view) : { text: "Not running", tone: "muted" as const };
+                const key = `${row.name}/${serviceName}`;
+                return (
+                  <div key={key} className="plugins-service-row" data-service-name={serviceName}>
+                    <span className="mcp-row-name">{serviceName}</span>
+                    <span className={`mcp-badge ${chip.tone === "warn" ? "mcp-badge-compat" : "mcp-badge-user"}`}>{chip.text}</span>
+                    <button type="button" className="settings-button" disabled={busy} onClick={() => onRestartService(row.name, serviceName)}>
+                      Restart
+                    </button>
+                    <button type="button" className="settings-button" onClick={() => onToggleLog(row.name, serviceName)}>
+                      {openLogKey === key ? "Hide log" : "View log"}
+                    </button>
+                    {openLogKey === key && (
+                      <div className="plugins-service-log-block">
+                        <pre className="plugins-service-log">{(logLines[key] ?? []).join("\n")}</pre>
+                        <button type="button" className="settings-button" onClick={() => onCopyLog(key)}>
+                          Copy log
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -619,6 +795,11 @@ function PluginCard({ row, busy, onToggle, onUpdate, onRollback, onPin, onRemove
         {pluginMcpNeedsApproval(row) && (
           <button type="button" className="settings-button" disabled={busy} onClick={onApproveMcp}>
             Approve MCP
+          </button>
+        )}
+        {servicesNeedApproval(row) && (
+          <button type="button" className="settings-button" disabled={busy} onClick={onApproveServices}>
+            Approve services
           </button>
         )}
         {(actions.includes("pin") || actions.includes("unpin")) && (

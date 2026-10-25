@@ -29,11 +29,19 @@ import {
   rangeMatches,
   scanPluginsAdmin,
   serversHash,
+  servicesHash,
   type McpConsentEntry,
+  PLUGIN_NAME_RE,
+  type PluginServiceSpec,
+  type ServiceConsentEntry,
 } from "@anycode/core/plugins-admin";
 import type { FileSystemPort } from "@anycode/core";
 import {
   PLUGINS_APPROVE_MCP_CHANNEL,
+  PLUGINS_APPROVE_SERVICES_CHANNEL,
+  PLUGINS_SERVICES_CHANNEL,
+  PLUGINS_SERVICE_LOGS_CHANNEL,
+  PLUGINS_SERVICE_RESTART_CHANNEL,
   PLUGINS_CHECK_UPDATES_CHANNEL,
   PLUGINS_CHANGED_CHANNEL,
   PLUGINS_INSTALL_COMMIT_CHANNEL,
@@ -53,6 +61,7 @@ import {
   type PluginsSnapshot,
   type PluginInstallSource,
   type PluginInstallPreview,
+  type PluginServiceView,
 } from "../shared/plugins-config.js";
 import {
   checkPluginIndex,
@@ -93,9 +102,16 @@ export interface PluginsIpcDeps {
   fs: FileSystemPort & PluginStoreFs;
   /** settings.json access for autoUpdateOfficial + officialIndexUrl + mcpConsent. */
   settings: {
-    getPlugins(): Promise<{ autoUpdateOfficial: boolean; officialIndexUrl?: string; mcpConsent?: McpConsentEntry[] }>;
+    getPlugins(): Promise<{
+      autoUpdateOfficial: boolean;
+      officialIndexUrl?: string;
+      mcpConsent?: McpConsentEntry[];
+      serviceConsent?: ServiceConsentEntry[];
+    }>;
     setAutoUpdateOfficial(value: boolean): Promise<void>;
     setMcpConsent(entries: McpConsentEntry[]): Promise<void>;
+    /** Taskana 4750a: replaces the grant for one plugin (read-modify-write under the settings lock). */
+    setServiceConsent(entry: ServiceConsentEntry): Promise<void>;
   };
   /** OS dialogs (path custody). */
   pickTgzFile(): Promise<string | undefined>;
@@ -121,6 +137,14 @@ export interface PluginsIpcDeps {
   checkIndex?(opts: { serialFloor?: number }): Promise<{ status: string; index?: PluginIndex; detail?: string; expired?: boolean }>;
   now?: () => number;
   logger?: { warn(message: string, ...args: unknown[]): void };
+  /** Taskana 4750a: called after every plugins mutation (the supervisor reconciles on it). */
+  onChanged?(reason: string): void;
+  /** Taskana 4750a: the service supervisor's read model + restart (absent = no services wiring). */
+  services?: {
+    snapshot(): PluginServiceView[];
+    logs(plugin: string, name: string): string[];
+    restart(plugin: string, name: string): Promise<void>;
+  };
 }
 
 interface PendingInstall {
@@ -140,6 +164,13 @@ interface PendingInstall {
   folderPath?: string;
   /** Picked .tgz basename (file installs) — state.json provenance (xfix L3). */
   fileName?: string;
+  /**
+   * Taskana 4750a: servicesHash of the definition the SHEET showed (url/file/
+   * folder). Undefined for official installs (the index carries no service
+   * definitions) and for plugins without services. Commit grants service
+   * consent only when the installed definition matches this hash.
+   */
+  servicesHash?: string;
   expiresAt: number;
 }
 
@@ -163,8 +194,15 @@ const commitSchema = z.object({
   // servers" checkbox — main records the consent grant (hash main-computed)
   // when true. Optional on the wire so stale renderers keep working.
   allowMcp: z.boolean().optional(),
+  // Taskana 4750a: the sheet's "Install and allow services" grant. Optional; absent = withheld.
+  allowServices: z.boolean().optional(),
 });
 const nameSchema = z.object({ name: z.string().min(1) });
+// Taskana 4750a: approve-services is name-only; any extra key (a smuggled hash) is refused.
+const approveServicesSchema = z.object({ name: z.string().min(1) }).strict();
+const serviceRefSchema = z
+  .object({ plugin: z.string().regex(PLUGIN_NAME_RE), name: z.string().regex(PLUGIN_NAME_RE) })
+  .strict();
 const setNameSchema = z.object({ name: z.string().min(1), value: z.boolean() });
 const setAutoUpdateSchema = z.object({ value: z.boolean() });
 
@@ -181,6 +219,16 @@ function refusal(reason: StoreRefusal | "signature", detail?: string): { ok: fal
   return { ok: false, reason: mapped, ...(detail !== undefined ? { detail } : {}) };
 }
 
+/** Taskana 4750a: the sheet's service rows — command, args, env KEY names (never values). */
+function servicePreviewOf(services: readonly PluginServiceSpec[] | undefined): NonNullable<PluginInstallPreview["services"]> {
+  return (services ?? []).map((svc) => ({
+    name: svc.name,
+    command: svc.command,
+    args: [...(svc.args ?? [])],
+    envKeys: Object.keys(svc.env ?? {}).sort(),
+  }));
+}
+
 // ── snapshot builder ──
 
 async function buildSnapshot(deps: PluginsIpcDeps, indexCheck?: { status: string; index?: PluginIndex; detail?: string }): Promise<PluginsSnapshot> {
@@ -191,6 +239,7 @@ async function buildSnapshot(deps: PluginsIpcDeps, indexCheck?: { status: string
     pluginStatePath: statePath(deps.home),
     appVersion: deps.appVersion,
     mcpConsent: settings.mcpConsent ?? [],
+    serviceConsent: settings.serviceConsent ?? [],
   }).catch(() => ({ rows: [] as never[], problems: [] as string[] }));
   const cached = await readCachedPluginIndexSafe(deps);
   const index = indexCheck?.index ?? cached.index;
@@ -367,6 +416,11 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     for (const window of deps.getWindows()) {
       window.webContents.send(PLUGINS_CHANGED_CHANNEL, { reason });
     }
+    try {
+      deps.onChanged?.(reason);
+    } catch {
+      // a broken reconcile trigger must not fail the mutation that already landed
+    }
   }
 
   async function checkIndex(): Promise<{ status: string; index?: PluginIndex; detail?: string }> {
@@ -487,6 +541,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         version: preview.manifest.version!,
         sha256: previewSha,
         bytes: fetched.bytes,
+        ...(preview.manifest.services?.length ? { servicesHash: servicesHash(preview.manifest.services) } : {}),
         expiresAt,
       });
       return {
@@ -501,6 +556,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
           sha256Prefix: preview.sha256Prefix,
           capabilities: preview.capabilities,
           mcpServers: preview.mcpServers,
+          services: servicePreviewOf(preview.manifest.services),
           hasHooks: preview.capabilities.includes("hooks"),
           engines: preview.manifest.engines?.anycode,
           // xfix L4: compute the real compat verdict with rangeMatches — the
@@ -538,6 +594,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         version: preview.manifest.version!,
         bytes,
         fileName: path.split(/[\\/]/).pop() ?? path,
+        ...(preview.manifest.services?.length ? { servicesHash: servicesHash(preview.manifest.services) } : {}),
         expiresAt,
       });
       return {
@@ -552,6 +609,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
           sha256Prefix: preview.sha256Prefix,
           capabilities: preview.capabilities,
           mcpServers: preview.mcpServers,
+          services: servicePreviewOf(preview.manifest.services),
           hasHooks: preview.capabilities.includes("hooks"),
         },
       };
@@ -608,6 +666,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
       // xfix H3: bind the token to the folder main picked HERE — commit
       // reuses it and never re-opens the dialog.
       folderPath: path,
+      ...(manifest.services?.length ? { servicesHash: servicesHash(manifest.services) } : {}),
       expiresAt,
     });
     return {
@@ -621,6 +680,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         source,
         capabilities: capabilityList.sort(),
         mcpServers,
+        services: servicePreviewOf(manifest.services),
         hasHooks: caps.hooks,
         ...(manifest.engines?.anycode !== undefined
           ? {
@@ -630,6 +690,36 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
           : {}),
       },
     };
+  }
+
+  /**
+   * Taskana 4750a: grants service consent for the plugin main just installed,
+   * ONLY when the installed definition hashes to what the sheet previewed
+   * (`previewedHash`). An official install has no previewed definition, so it
+   * grants nothing and the user approves from the pane after reading the row.
+   * Fail-soft like the MCP writer.
+   */
+  async function recordInstallServiceConsent(name: string, previewedHash: string | undefined): Promise<void> {
+    if (previewedHash === undefined) return;
+    try {
+      const scan = await scanPluginsAdmin(deps.fs, {
+        workspace: workspaceOf(deps),
+        home: deps.home,
+        pluginStatePath: statePath(deps.home),
+        appVersion: deps.appVersion,
+      });
+      const row = scan.rows.find((candidate) => candidate.name === name);
+      if (row === undefined || row.servicesHash === undefined || row.servicesHash !== previewedHash) {
+        return; // the installed definition is not the one the user saw
+      }
+      await deps.settings.setServiceConsent({
+        plugin: name,
+        servicesHash: row.servicesHash,
+        grantedAt: new Date(now()).toISOString(),
+      });
+    } catch {
+      // fail-soft: the install stands; the user can Approve services from the row.
+    }
   }
 
   /**
@@ -670,7 +760,11 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     }
   }
 
-  async function handleCommit(token: string, source: PluginInstallSource, allowMcp: boolean): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: PluginsRefusalReason; detail?: string }> {
+  async function handleCommit(
+    token: string,
+    source: PluginInstallSource,
+    allow: { mcp: boolean; services: boolean },
+  ): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: PluginsRefusalReason; detail?: string }> {
     const prepared = pending.get(token);
     if (prepared === undefined || prepared.expiresAt < now() || JSON.stringify(prepared.source) !== JSON.stringify(source)) {
       return refusal("invalid", "unknown, expired or mismatched install token — prepare again");
@@ -695,8 +789,11 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         // Explicit confirmation IS the approval — proceed.
       }
       pending.delete(token);
-      if (allowMcp) {
+      if (allow.mcp) {
         await recordInstallConsent(source.name);
+      }
+      if (allow.services) {
+        await recordInstallServiceConsent(source.name, prepared.servicesHash);
       }
       notifyChanged("install");
       return { ok: true, snapshot: await buildSnapshot(deps, check) };
@@ -717,8 +814,11 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         return refusal(result.reason, result.detail);
       }
       pending.delete(token);
-      if (allowMcp) {
+      if (allow.mcp) {
         await recordInstallConsent(result.value.name);
+      }
+      if (allow.services) {
+        await recordInstallServiceConsent(result.value.name, prepared.servicesHash);
       }
       notifyChanged("install");
       return { ok: true, snapshot: await buildSnapshot(deps) };
@@ -734,8 +834,11 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         return refusal(result.reason, result.detail);
       }
       pending.delete(token);
-      if (allowMcp) {
+      if (allow.mcp) {
         await recordInstallConsent(result.value.name);
+      }
+      if (allow.services) {
+        await recordInstallServiceConsent(result.value.name, prepared.servicesHash);
       }
       notifyChanged("install");
       return { ok: true, snapshot: await buildSnapshot(deps) };
@@ -767,7 +870,10 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     if (!parsed.success) {
       return refusal("invalid", "payload rejected");
     }
-    return handleCommit(parsed.data.token, parsed.data.source, parsed.data.allowMcp ?? false);
+    return handleCommit(parsed.data.token, parsed.data.source, {
+      mcp: parsed.data.allowMcp ?? false,
+      services: parsed.data.allowServices ?? false,
+    });
   });
 
   ipcMain.handle(PLUGINS_UPDATE_CHANNEL, async (_event, payload: unknown) => {
@@ -863,6 +969,46 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     }
     await deps.settings.setMcpConsent(consent);
     notifyChanged("consent");
+    return { ok: true };
+  });
+
+  ipcMain.handle(PLUGINS_APPROVE_SERVICES_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+    const parsed = approveServicesSchema.safeParse(payload);
+    if (!parsed.success) return refusal("invalid");
+    // Consent is keyed by the CURRENT servicesHash main computes from its own scan.
+    const scan = await scanPluginsAdmin(deps.fs, {
+      workspace: workspaceOf(deps),
+      home: deps.home,
+      pluginStatePath: statePath(deps.home),
+      appVersion: deps.appVersion,
+    });
+    const row = scan.rows.find((candidate) => candidate.name === parsed.data.name);
+    if (row === undefined || row.servicesHash === undefined) {
+      return refusal("not_found", `${parsed.data.name} declares no services`);
+    }
+    await deps.settings.setServiceConsent({
+      plugin: parsed.data.name,
+      servicesHash: row.servicesHash,
+      grantedAt: new Date(now()).toISOString(),
+    });
+    notifyChanged("consent");
+    return { ok: true };
+  });
+
+  // Taskana 4750a: the services read model (state only), bounded logs and manual restart.
+  ipcMain.handle(PLUGINS_SERVICES_CHANNEL, (): PluginServiceView[] => deps.services?.snapshot() ?? []);
+
+  ipcMain.handle(PLUGINS_SERVICE_LOGS_CHANNEL, (_event, payload: unknown): string[] | PluginsMutationResult => {
+    const parsed = serviceRefSchema.safeParse(payload);
+    if (!parsed.success) return refusal("invalid");
+    return deps.services?.logs(parsed.data.plugin, parsed.data.name) ?? [];
+  });
+
+  ipcMain.handle(PLUGINS_SERVICE_RESTART_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+    const parsed = serviceRefSchema.safeParse(payload);
+    if (!parsed.success) return refusal("invalid");
+    if (deps.services === undefined) return refusal("not_found", "services are not available");
+    await deps.services.restart(parsed.data.plugin, parsed.data.name);
     return { ok: true };
   });
 

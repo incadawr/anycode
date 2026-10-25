@@ -292,6 +292,7 @@ describe("capabilities() — derived, never self-declared (design §2)", () => {
         docs: false,
         engineSupport: [],
         promptOverlays: 0,
+        services: [],
       });
     }
   });
@@ -322,5 +323,75 @@ describe("declaresOfficialOnly — official-only contributions (design §2/§4)"
 
   it("OFFICIAL_ONLY_CONTRIBUTIONS is the design's fixed set", () => {
     expect([...OFFICIAL_ONLY_CONTRIBUTIONS]).toEqual(["docs", "engineSupport", "promptOverlays"]);
+  });
+});
+
+describe("pluginManifestSchema — services (Taskana 4750a)", () => {
+  const base = { name: "bridge" };
+
+  it("services absent keeps legacy output identical", () => {
+    const parsed = pluginManifestSchema.safeParse(base);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data).not.toHaveProperty("services");
+      expect(capabilities(parsed.data).services).toEqual([]);
+    }
+  });
+
+  it("services parses name command args env", () => {
+    const parsed = pluginManifestSchema.safeParse({
+      ...base,
+      services: [
+        { name: "relay", command: "node", args: ["./dist/relay.js", "--x"], env: { LOG_LEVEL: "debug" } },
+        { name: "helper", command: "./bin/helper" },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.services).toEqual([
+        { name: "relay", command: "node", args: ["./dist/relay.js", "--x"], env: { LOG_LEVEL: "debug" } },
+        { name: "helper", command: "./bin/helper" },
+      ]);
+      expect(capabilities(parsed.data).services).toEqual(["helper", "relay"]);
+    }
+  });
+
+  it("accepts an absolute command path", () => {
+    expect(pluginManifestSchema.safeParse({ ...base, services: [{ name: "s", command: "/usr/bin/env" }] }).success).toBe(true);
+  });
+
+  it("duplicate service name fails the manifest", () => {
+    const parsed = pluginManifestSchema.safeParse({
+      ...base,
+      services: [
+        { name: "s", command: "node" },
+        { name: "s", command: "deno" },
+      ],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("invalid service name fails the manifest", () => {
+    expect(pluginManifestSchema.safeParse({ ...base, services: [{ name: "bad name", command: "node" }] }).success).toBe(false);
+  });
+
+  it("empty command fails the manifest", () => {
+    expect(pluginManifestSchema.safeParse({ ...base, services: [{ name: "s", command: "" }] }).success).toBe(false);
+  });
+
+  it("a relative command without ./ and with a separator fails, and ../ escapes fail", () => {
+    expect(pluginManifestSchema.safeParse({ ...base, services: [{ name: "s", command: "bin/x" }] }).success).toBe(false);
+    expect(pluginManifestSchema.safeParse({ ...base, services: [{ name: "s", command: "../x" }] }).success).toBe(false);
+  });
+
+  it("reserved ANYCODE_ env key fails", () => {
+    expect(
+      pluginManifestSchema.safeParse({ ...base, services: [{ name: "s", command: "node", env: { ANYCODE_SESSIONS_DISCOVERY: "/x" } } ] }).success,
+    ).toBe(false);
+  });
+
+  it("invalid env key fails", () => {
+    expect(pluginManifestSchema.safeParse({ ...base, services: [{ name: "s", command: "node", env: { "1BAD": "x" } }] }).success).toBe(false);
+    expect(pluginManifestSchema.safeParse({ ...base, services: [{ name: "s", command: "node", env: { "A-B": "x" } }] }).success).toBe(false);
   });
 });

@@ -1,0 +1,120 @@
+/**
+ * Candidate source for the service supervisor (Taskana 4750a). Builds the
+ * desired service set from the SAME admin scan the Plugins pane uses:
+ *  - home scan (managed + legacy-user plugins), `enabled = row.status === "active"`;
+ *  - one scan per distinct LIVE root-tab workspace, keeping only `project`-tier
+ *    rows, each gated by that workspace's trust decision.
+ * The service command/args/env VALUES are read here from the manifest and
+ * handed only to the supervisor; no renderer-facing type ever carries them.
+ */
+
+import { pluginManifestSchema, scanPluginsAdmin, type PluginAdminRow, type ServiceConsentEntry } from "@anycode/core/plugins-admin";
+import { defaultTrustStorePath, resolveWorkspaceTrust } from "@anycode/core/workspace-trust";
+import type { FileSystemPort } from "@anycode/core";
+import { statePath } from "./store.js";
+import type { ServiceCandidate } from "./service-supervisor.js";
+
+export interface ServiceCandidatesDeps {
+  fs: FileSystemPort;
+  home: string;
+  appVersion: string;
+  /** Distinct workspaces of the live root tabs (childless). */
+  liveWorkspaces(): readonly string[];
+  serviceConsent(): Promise<readonly ServiceConsentEntry[]>;
+  /** Project-folder trust (once-approval included); false when undecided or unreadable. */
+  isWorkspaceTrusted(workspace: string): Promise<boolean>;
+}
+
+/** Reads the service definition (values included) of one row from its manifest. */
+async function candidatesOf(
+  fs: FileSystemPort,
+  row: PluginAdminRow,
+  trusted: boolean,
+): Promise<ServiceCandidate[]> {
+  if (row.root === undefined || row.serviceNames.length === 0) return [];
+  let parsed: ReturnType<typeof pluginManifestSchema.safeParse>;
+  try {
+    parsed = pluginManifestSchema.safeParse(JSON.parse(await fs.readFile(`${row.root}/.anycode-plugin/plugin.json`)));
+  } catch {
+    return [];
+  }
+  if (!parsed.success) return [];
+  const root = row.root;
+  return (parsed.data.services ?? []).map((svc) => ({
+    plugin: row.name,
+    tier: row.tier,
+    root,
+    service: {
+      name: svc.name,
+      command: svc.command,
+      args: [...(svc.args ?? [])],
+      env: { ...(svc.env ?? {}) },
+    },
+    enabled: row.status === "active",
+    consented: row.servicesConsentGranted === true,
+    trusted,
+  }));
+}
+
+export async function listServiceCandidates(deps: ServiceCandidatesDeps): Promise<ServiceCandidate[]> {
+  const consent = [...(await deps.serviceConsent())];
+  const out: ServiceCandidate[] = [];
+  const seen = new Set<string>();
+  const push = (list: ServiceCandidate[]) => {
+    for (const candidate of list) {
+      const key = `${candidate.plugin}/${candidate.service.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(candidate);
+    }
+  };
+
+  const homeScan = await scanPluginsAdmin(deps.fs, {
+    workspace: deps.home,
+    home: deps.home,
+    pluginStatePath: statePath(deps.home),
+    appVersion: deps.appVersion,
+    serviceConsent: consent,
+  }).catch(() => ({ rows: [] as PluginAdminRow[], problems: [] as string[] }));
+  for (const row of homeScan.rows) {
+    if (row.tier === "project") continue;
+    push(await candidatesOf(deps.fs, row, true));
+  }
+
+  for (const workspace of new Set(deps.liveWorkspaces())) {
+    const scan = await scanPluginsAdmin(deps.fs, {
+      workspace,
+      home: deps.home,
+      pluginStatePath: statePath(deps.home),
+      appVersion: deps.appVersion,
+      serviceConsent: consent,
+    }).catch(() => ({ rows: [] as PluginAdminRow[], problems: [] as string[] }));
+    const projectRows = scan.rows.filter((row) => row.tier === "project");
+    if (projectRows.length === 0) continue;
+    const trusted = await deps.isWorkspaceTrusted(workspace);
+    for (const row of projectRows) {
+      push(await candidatesOf(deps.fs, row, trusted));
+    }
+  }
+  return out;
+}
+
+/** Workspace trust for the project tier: the SAME core resolver the LSP pane and host boot use. */
+export async function isWorkspaceTrustedFor(
+  fs: FileSystemPort,
+  home: string,
+  workspace: string,
+  onceHash: string | undefined,
+): Promise<boolean> {
+  try {
+    const result = await resolveWorkspaceTrust(fs, {
+      workspace,
+      home,
+      storePath: defaultTrustStorePath(home),
+      onceHash,
+    });
+    return result.projectTrusted === true;
+  } catch {
+    return false;
+  }
+}

@@ -20,6 +20,7 @@ import type {
   PluginInstallPreview,
   PluginInstallSource,
   PluginRowView,
+  PluginServiceView,
   PluginTierView,
   PluginsIndexStatus,
   PluginsRefusalReason,
@@ -93,6 +94,57 @@ export function pluginMcpNeedsApproval(row: PluginRowView): boolean {
   return row.mcpServerNames.length > 0 && row.mcpConsentGranted !== true;
 }
 
+/** Whether the plugin declares background services that lack consent for their current definition (Taskana 4750a). */
+export function servicesNeedApproval(row: PluginRowView): boolean {
+  return row.serviceNames.length > 0 && row.servicesConsentGranted !== true;
+}
+
+/** Sessions-API state as the pane reads it (`communication.get().state`). */
+export type SessionsApiState = "off" | "listening" | "env" | "error";
+
+/**
+ * The one-line hint under a plugin's services: only when the plugin declares
+ * services and the Sessions API cannot be reached (off, or failed to start).
+ */
+export function sessionsApiHint(rowHasServices: boolean, communicationState: SessionsApiState): string | undefined {
+  if (!rowHasServices) return undefined;
+  if (communicationState === "off" || communicationState === "error") {
+    return "Sessions API is off — enable it in Settings → Sessions API to let this service reach your sessions.";
+  }
+  return undefined;
+}
+
+/** The chip for one supervised service (Taskana 4750a). Plain display mapping of main's view. */
+export function serviceChip(view: PluginServiceView): PluginChip {
+  switch (view.state) {
+    case "running":
+      return { text: "Running", tone: "muted" };
+    case "starting":
+      return { text: "Starting", tone: "muted" };
+    case "stopped":
+      return { text: "Stopped", tone: "muted" };
+    case "backoff":
+      return { text: `Restarting in ${view.restartInSec ?? 0}s`, tone: "warn" };
+    case "crash_loop":
+      return { text: "Crash loop", tone: "warn" };
+    case "blocked":
+      switch (view.reason) {
+        case "no_consent":
+          return { text: "Needs approval", tone: "warn" };
+        case "untrusted":
+          return { text: "Blocked: untrusted folder", tone: "warn" };
+        case "disabled":
+          return { text: "Disabled", tone: "muted" };
+        case "bad_command":
+          return { text: "Blocked: bad command", tone: "warn" };
+        default:
+          return { text: "Blocked", tone: "warn" };
+      }
+    default:
+      return { text: String((view as { state: string }).state), tone: "muted" };
+  }
+}
+
 /** The engines incompatibility range when status says incompatible, extracted from problems. */
 export function pluginIncompatibleRange(row: PluginRowView): string | undefined {
   if (row.status !== "inactive") return undefined;
@@ -129,6 +181,9 @@ export function pluginStatusChips(row: PluginRowView): PluginChip[] {
   }
   if (pluginMcpNeedsApproval(row)) {
     chips.push({ text: "Needs approval", tone: "warn" });
+  }
+  if (servicesNeedApproval(row)) {
+    chips.push({ text: "Services need approval", tone: "warn" });
   }
   const incompatible = pluginIncompatibleRange(row);
   if (incompatible !== undefined) {
@@ -175,7 +230,8 @@ export type PluginAction =
   | "unpin"
   | "remove"
   | "reveal"
-  | "approve-mcp";
+  | "approve-mcp"
+  | "approve-services";
 
 /**
  * Which action buttons one row offers (design §6). Managed rows (a
@@ -202,6 +258,9 @@ export function pluginRowActions(row: PluginRowView): PluginAction[] {
   }
   if (pluginMcpNeedsApproval(row)) {
     actions.push("approve-mcp");
+  }
+  if (servicesNeedApproval(row)) {
+    actions.push("approve-services");
   }
   if (managed) {
     actions.push("remove");
@@ -314,10 +373,34 @@ export function mcpServerCommandLine(server: PluginInstallPreview["mcpServers"][
   return [server.command, ...server.args].join(" ");
 }
 
-/** Primary button label — "Install and allow MCP servers" only when MCP servers exist. */
-export function sheetPrimaryLabel(preview: PluginInstallPreview, allowMcp: boolean): string {
-  if (sheetHasMcpServers(preview)) {
+/** Whether the sheet shows background services and offers the services consent (Taskana 4750a). */
+export function sheetHasServices(preview: PluginInstallPreview): boolean {
+  return (preview.services?.length ?? 0) > 0;
+}
+
+/** One service row's command line on the sheet (no env values — only the key names are shown). */
+export function serviceCommandLine(service: NonNullable<PluginInstallPreview["services"]>[number]): string {
+  return [service.command, ...service.args].join(" ");
+}
+
+/**
+ * Primary button label. The default (both consents withheld) keeps services
+ * OFF, so the label says so; "allow … and services" only when every offered
+ * consent is ticked.
+ */
+export function sheetPrimaryLabel(preview: PluginInstallPreview, allowMcp: boolean, allowServices = false): string {
+  const hasMcp = sheetHasMcpServers(preview);
+  const hasServices = sheetHasServices(preview);
+  if (hasMcp && hasServices) {
+    if (allowMcp && allowServices) return "Install and allow MCP servers and services";
+    if (!allowMcp && !allowServices) return "Install (MCP servers and services stay off)";
+    return allowMcp ? "Install (services stay off)" : "Install (MCP servers stay off)";
+  }
+  if (hasMcp) {
     return allowMcp ? "Install and allow MCP servers" : "Install (MCP servers stay off)";
+  }
+  if (hasServices) {
+    return allowServices ? "Install and allow services" : "Install (services stay off)";
   }
   return "Install";
 }

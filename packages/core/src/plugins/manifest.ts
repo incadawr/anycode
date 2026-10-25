@@ -33,6 +33,7 @@
  * plugin, never a crash.
  */
 
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { mcpServerEntrySchema } from "../mcp/config.js";
 
@@ -40,6 +41,72 @@ import { mcpServerEntrySchema } from "../mcp/config.js";
 export const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 const NAME_ERROR = "must match ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$";
+
+/** Environment variable NAME alphabet for a service's `env` block. */
+export const SERVICE_ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Prefix reserved for AnyCode-injected variables (never settable by a plugin). */
+export const RESERVED_ENV_PREFIX = "ANYCODE_";
+
+/**
+ * A service `command` is a bare executable name (resolved on PATH), a path
+ * RELATIVE to the plugin root that starts with `./`, or an absolute path. A
+ * `dir/x` or `../x` form is rejected at the schema level (the supervisor
+ * re-checks containment at spawn time as defence in depth).
+ */
+function isValidServiceCommand(command: string): boolean {
+  if (command.length === 0) {
+    return false;
+  }
+  if (command.startsWith("./") || isAbsolute(command) || /^[A-Za-z]:[\\/]/.test(command)) {
+    return true;
+  }
+  return !/[\\/]/.test(command);
+}
+
+/**
+ * One background service a plugin declares (Taskana 4750a). A service is a
+ * long-lived process AnyCode supervises after the plugin is enabled AND the
+ * user consents to its exact definition (`servicesHash`). `env` values are
+ * literal strings; no `${...}` interpolation or secrets live here.
+ */
+export const pluginServiceSchema = z.object({
+  name: z.string().regex(PLUGIN_NAME_RE, NAME_ERROR),
+  command: z
+    .string()
+    .refine(isValidServiceCommand, "must be a bare executable, a ./ path inside the plugin, or an absolute path"),
+  args: z.array(z.string()).optional(),
+  env: z
+    .record(
+      z.string().regex(SERVICE_ENV_KEY_RE, "env key must match ^[A-Za-z_][A-Za-z0-9_]*$"),
+      z.string(),
+    )
+    .refine((env) => !Object.keys(env).some((k) => k.startsWith(RESERVED_ENV_PREFIX)), {
+      message: `env keys starting with ${RESERVED_ENV_PREFIX} are reserved for AnyCode`,
+    })
+    .optional(),
+});
+
+export type PluginServiceSpec = z.output<typeof pluginServiceSchema>;
+
+/** Service names must be unique within one plugin: a duplicate fails the whole manifest. */
+const servicesList = z
+  .array(pluginServiceSchema)
+  .superRefine((services, ctx) => {
+    const seen = new Set<string>();
+    for (const service of services) {
+      if (seen.has(service.name)) {
+        ctx.addIssue({
+          code: "custom",
+          message: `duplicate service name ${JSON.stringify(service.name)}`,
+          path: [],
+        });
+        return;
+      }
+      seen.add(service.name);
+    }
+  })
+  .optional();
 
 /**
  * The manifest version this app understands. A manifest declaring a HIGHER
@@ -99,6 +166,8 @@ export const pluginManifestSchema = z.object({
   workflows: workflowsList,
   /** Server entries reusing the exact explicit-config shape; keys share the name alphabet. */
   mcpServers: z.record(z.string().regex(PLUGIN_NAME_RE, NAME_ERROR), mcpServerEntrySchema).optional(),
+  /** Background services (Taskana 4750a): consent-gated, supervised by main. No default — legacy output stays identical. */
+  services: servicesList,
   // ── Stage 2/3 placeholders: PARSED (shape-known) but NOT contributed by s1 discovery. ──
   commands: z.array(z.string()).optional(),
   hooks: z.string().optional(),
@@ -133,6 +202,8 @@ export interface PluginCapabilities {
   agents: number;
   workflows: number;
   mcp: string[];
+  /** Declared service names (sorted); the command/env live only in the manifest. */
+  services: string[];
   commands: number;
   hooks: boolean;
   docs: boolean;
@@ -159,6 +230,7 @@ export function capabilities(manifest: PluginManifest): PluginCapabilities {
     agents: manifest.agents.length,
     workflows: pluginWorkflowsDirs(manifest).length,
     mcp: manifest.mcpServers ? Object.keys(manifest.mcpServers).sort() : [],
+    services: manifest.services ? manifest.services.map((s) => s.name).sort() : [],
     commands: manifest.commands?.length ?? 0,
     hooks: manifest.hooks !== undefined,
     docs: manifest.docs !== undefined,

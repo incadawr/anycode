@@ -40,6 +40,7 @@ For the user-facing story (tiers, install flow, consent), see
 | `mcpServers` | record | — | Same entry shape as explicit config (`command`+`args` xor `url`, `env`/`headers` as `${env:VAR}` references, `inheritEnv`, `enabled`). Keys share the name alphabet. At runtime a server is renamed `plugin_<plugin>_<server>`; an explicit config row with that name always wins. |
 | `engines` | string | — | Optional semver range of AnyCode versions this plugin supports (index-mediated; incompatible versions are not offered). |
 | `workflows` | string[] | `["workflows"]` | Directories contributing `*.json` workflow presets (same schema as `.anycode/workflows`). Plugin presets sit between your own workflows and the bundled ones. Same containment rule. |
+| `services` | `{name, command, args?, env?}[]` | — | Background processes AnyCode supervises after the user consents to their exact definition. `name` is unique within the plugin; `command` is a bare executable, a `./` path inside the plugin, or an absolute path; `env` keys match `^[A-Za-z_][A-Za-z0-9_]*$` and may not start with `ANYCODE_`. See the user guide's *Services* section. |
 
 Unknown top-level keys are ignored — a richer future manifest never breaks an
 older app. Any schema violation fails the whole manifest fail-soft: the plugin

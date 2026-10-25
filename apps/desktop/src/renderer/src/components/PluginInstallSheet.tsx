@@ -18,7 +18,15 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { PluginInstallPreview, PluginInstallSource } from "../../../shared/plugins-config.js";
-import { installMenuOptions, mcpServerCommandLine, pluginsRefusalMessage, sheetHasMcpServers, sheetPrimaryLabel } from "./plugins-pane-model.js";
+import {
+  installMenuOptions,
+  mcpServerCommandLine,
+  pluginsRefusalMessage,
+  serviceCommandLine,
+  sheetHasMcpServers,
+  sheetHasServices,
+  sheetPrimaryLabel,
+} from "./plugins-pane-model.js";
 import { Warning, X } from "./icons.js";
 
 /** The dialog's stage machine — the pane drives it, this component renders it. */
@@ -33,7 +41,7 @@ export interface PluginInstallDialogProps {
   stage: InstallDialogStage;
   onPickSource: (source: PluginInstallSource) => void;
   onSubmitUrl: (url: string) => void;
-  onCommit: (token: string, allowMcp: boolean) => void;
+  onCommit: (token: string, allowMcp: boolean, allowServices: boolean) => void;
   onClose: () => void;
 }
 
@@ -41,6 +49,7 @@ export function PluginInstallDialog({ stage, onPickSource, onSubmitUrl, onCommit
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [urlValue, setUrlValue] = useState("");
   const [allowMcp, setAllowMcp] = useState(false);
+  const [allowServices, setAllowServices] = useState(false);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -53,6 +62,7 @@ export function PluginInstallDialog({ stage, onPickSource, onSubmitUrl, onCommit
   useEffect(() => {
     if (stage.phase === "confirm") {
       setAllowMcp(false);
+      setAllowServices(false);
     }
   }, [stage]);
 
@@ -76,8 +86,10 @@ export function PluginInstallDialog({ stage, onPickSource, onSubmitUrl, onCommit
         stage={stage}
         urlValue={urlValue}
         allowMcp={allowMcp}
+        allowServices={allowServices}
         onUrlValueChange={setUrlValue}
         onAllowMcpChange={setAllowMcp}
+        onAllowServicesChange={setAllowServices}
         onPickSource={onPickSource}
         onSubmitUrl={onSubmitUrl}
         onCommit={onCommit}
@@ -98,11 +110,14 @@ export interface InstallDialogBodyProps {
   stage: InstallDialogStage;
   urlValue: string;
   allowMcp: boolean;
+  /** Taskana 4750a: the background-services consent checkbox. */
+  allowServices: boolean;
   onUrlValueChange: (value: string) => void;
   onAllowMcpChange: (checked: boolean) => void;
+  onAllowServicesChange: (checked: boolean) => void;
   onPickSource: (source: PluginInstallSource) => void;
   onSubmitUrl: (url: string) => void;
-  onCommit: (token: string, allowMcp: boolean) => void;
+  onCommit: (token: string, allowMcp: boolean, allowServices: boolean) => void;
   onClose: () => void;
 }
 
@@ -110,8 +125,10 @@ export function InstallDialogBody({
   stage,
   urlValue,
   allowMcp,
+  allowServices,
   onUrlValueChange,
   onAllowMcpChange,
+  onAllowServicesChange,
   onPickSource,
   onSubmitUrl,
   onCommit,
@@ -228,6 +245,25 @@ export function InstallDialogBody({
             ) : (
               <p className="mcp-row-hint">This plugin declares no MCP servers.</p>
             )}
+            {sheetHasServices(stage.preview) && (
+              <div className="plugins-mcp-consent plugins-services-consent">
+                <div className="settings-field-label">Background services this plugin would run</div>
+                {(stage.preview.services ?? []).map((service) => (
+                  <div key={service.name} className="plugins-mcp-server-row" role="alert">
+                    <span className="settings-mcp-name">{service.name}</span>
+                    <span className="mcp-row-line2">{serviceCommandLine(service)}</span>
+                    {service.envKeys.length > 0 && (
+                      <span className="mcp-row-hint">env: {service.envKeys.join(", ")}</span>
+                    )}
+                  </div>
+                ))}
+                <p className="mcp-row-hint">
+                  A service is a long-running process. It does not start until you allow it, a
+                  changed command or argument needs fresh approval, and it is stopped when you
+                  disable or remove the plugin.
+                </p>
+              </div>
+            )}
             {stage.preview.hasHooks && (
               <p className="mcp-row-hint plugins-hooks-note">
                 This plugin declares hooks — they stay inactive until a future stage enables them
@@ -252,10 +288,11 @@ export function InstallDialogBody({
             type="button"
             className="settings-button settings-button-primary"
             disabled={stage.error !== undefined}
-            onClick={() => onCommit(stage.token, allowMcp)}
+            onClick={() => onCommit(stage.token, allowMcp, allowServices)}
             data-plugins-allow-mcp={allowMcp}
+            data-plugins-allow-services={allowServices}
           >
-            {sheetPrimaryLabel(stage.preview, allowMcp)}
+            {sheetPrimaryLabel(stage.preview, allowMcp, allowServices)}
           </button>
           {sheetHasMcpServers(stage.preview) && (
             <label className="mcp-consent-row">
@@ -266,6 +303,17 @@ export function InstallDialogBody({
                 disabled={stage.error !== undefined}
               />
               Allow this plugin's MCP servers to start
+            </label>
+          )}
+          {sheetHasServices(stage.preview) && (
+            <label className="mcp-consent-row">
+              <input
+                type="checkbox"
+                checked={allowServices}
+                onChange={(e) => onAllowServicesChange(e.target.checked)}
+                disabled={stage.error !== undefined}
+              />
+              Allow this plugin's background services to run
             </label>
           )}
         </div>

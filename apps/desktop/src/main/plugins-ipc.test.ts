@@ -10,9 +10,13 @@
 import { generateKeyPairSync, sign as ed25519Sign, createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { McpConsentEntry } from "@anycode/core/plugins-admin";
+import { servicesHash, type McpConsentEntry, type ServiceConsentEntry } from "@anycode/core/plugins-admin";
 import {
   PLUGINS_APPROVE_MCP_CHANNEL,
+  PLUGINS_APPROVE_SERVICES_CHANNEL,
+  PLUGINS_SERVICES_CHANNEL,
+  PLUGINS_SERVICE_LOGS_CHANNEL,
+  PLUGINS_SERVICE_RESTART_CHANNEL,
   PLUGINS_CHECK_UPDATES_CHANNEL,
   PLUGINS_CHANGED_CHANNEL,
   PLUGINS_INSTALL_COMMIT_CHANNEL,
@@ -99,6 +103,7 @@ function makeDeps(index?: { raw: string; sigRaw: string; index: PluginIndex }) {
     autoUpdateOfficial: false,
     officialIndexUrl: "https://raw.githubusercontent.com/incadawr/anycode-plugins/main/index.json",
     mcpConsent: undefined as McpConsentEntry[] | undefined,
+    serviceConsent: undefined as ServiceConsentEntry[] | undefined,
   };
   let pickedFile: string | undefined;
   let pickedFolder: string | undefined;
@@ -182,6 +187,9 @@ function makeDeps(index?: { raw: string; sigRaw: string; index: PluginIndex }) {
       },
       setMcpConsent: async (entries: McpConsentEntry[]) => {
         settingsData.mcpConsent = entries;
+      },
+      setServiceConsent: async (entry: ServiceConsentEntry) => {
+        settingsData.serviceConsent = [...(settingsData.serviceConsent ?? []).filter((e) => e.plugin !== entry.plugin), entry];
       },
     },
     pickTgzFile: async () => pickedFile,
@@ -692,5 +700,186 @@ describe("the pane scans the live tab workspace (xfix M6)", () => {
     registerPluginsIpc(scaffold.deps);
     const snapshot = await invoke(PLUGINS_LIST_CHANNEL);
     expect(snapshot.plugins.map((p: { name: string }) => p.name)).toContain("proj");
+  });
+});
+
+describe("plugin services consent (Taskana 4750a)", () => {
+  const SERVICES = [
+    { name: "relay", command: "node", args: ["./relay.js"], env: { LOG_LEVEL: "debug", TOKEN_FILE: "/secret/value-xyz" } },
+  ];
+  const servicesManifest = (name: string) => ({ manifestVersion: 1, name, version: "1.0.0", services: SERVICES });
+
+  function managedWithServices(scaffold: ReturnType<typeof makeDeps>, name: string) {
+    scaffold.storeFiles.set(`/home/tester/.anycode/plugins/.store/${name}/1.0.0/.anycode-plugin/plugin.json`, JSON.stringify(servicesManifest(name)));
+    scaffold.storeFiles.set("/home/tester/.anycode/plugins/state.json", JSON.stringify({
+      version: 1,
+      plugins: { [name]: { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: [] } },
+      removedDefaults: [],
+      disabled: [],
+    }));
+  }
+
+  function serviceTar(name: string): Buffer {
+    return makeTarball([{ path: ".anycode-plugin/plugin.json", data: JSON.stringify(servicesManifest(name)) }]);
+  }
+
+  it("approve-services writes the hash of the current definition", async () => {
+    const scaffold = makeDeps();
+    managedWithServices(scaffold, "bridge");
+    registerPluginsIpc(scaffold.deps);
+    const granted = await invoke(PLUGINS_APPROVE_SERVICES_CHANNEL, { name: "bridge" });
+    expect(granted).toMatchObject({ ok: true });
+    const written = scaffold.settingsData.serviceConsent ?? [];
+    expect(written).toHaveLength(1);
+    expect(written[0]!.plugin).toBe("bridge");
+    expect(written[0]!.servicesHash).toBe(servicesHash(SERVICES));
+  });
+
+  it("approve-services refuses a plugin without services (nothing to consent to)", async () => {
+    const scaffold = makeDeps();
+    registerPluginsIpc(scaffold.deps);
+    const result = await invoke(PLUGINS_APPROVE_SERVICES_CHANNEL, { name: "ghost" });
+    expect(result).toMatchObject({ ok: false, reason: "not_found" });
+    expect(scaffold.settingsData.serviceConsent).toBeUndefined();
+  });
+
+  it("payload with extra key refused (.strict) — a smuggled servicesHash never reaches the write", async () => {
+    const scaffold = makeDeps();
+    managedWithServices(scaffold, "bridge");
+    registerPluginsIpc(scaffold.deps);
+    // approve-services is name-only: the zod schema is strict, so an extra key is refused.
+    const result = await invoke(PLUGINS_APPROVE_SERVICES_CHANNEL, { name: "bridge", servicesHash: "deadbeef" });
+    expect(result).toMatchObject({ ok: false, reason: "invalid" });
+    expect(scaffold.settingsData.serviceConsent).toBeUndefined();
+  });
+
+  it("install default leaves services unconsented", async () => {
+    const scaffold = makeDeps();
+    scaffold.setPickedFile("/Downloads/bridge.tgz");
+    scaffold.storeBinaries.set("/Downloads/bridge.tgz", serviceTar("bridge"));
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "file" } });
+    const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "file" } });
+    expect(committed.ok).toBe(true);
+    expect(scaffold.settingsData.serviceConsent).toBeUndefined();
+  });
+
+  it("install allow records consent for exactly the previewed definition", async () => {
+    const scaffold = makeDeps();
+    scaffold.setPickedFile("/Downloads/bridge.tgz");
+    scaffold.storeBinaries.set("/Downloads/bridge.tgz", serviceTar("bridge"));
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "file" } });
+    const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "file" }, allowServices: true });
+    expect(committed.ok).toBe(true);
+    const grants = scaffold.settingsData.serviceConsent ?? [];
+    expect(grants).toHaveLength(1);
+    expect(grants[0]!.servicesHash).toBe(servicesHash(SERVICES));
+  });
+
+  it("install preview shows each service's command, args and env KEY names — never env values", async () => {
+    const scaffold = makeDeps();
+    scaffold.setPickedFile("/Downloads/bridge.tgz");
+    scaffold.storeBinaries.set("/Downloads/bridge.tgz", serviceTar("bridge"));
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "file" } });
+    expect(prepared.preview.services).toEqual([
+      { name: "relay", command: "node", args: ["./relay.js"], envKeys: ["LOG_LEVEL", "TOKEN_FILE"] },
+    ]);
+    expect(JSON.stringify(prepared.preview)).not.toContain("value-xyz");
+  });
+
+  it("install allow for a folder whose services changed between preview and commit records nothing", async () => {
+    const scaffold = makeDeps();
+    scaffold.storeFiles.set("/work/bridge/.anycode-plugin/plugin.json", JSON.stringify(servicesManifest("bridge")));
+    scaffold.setPickedFolder("/work/bridge");
+    registerPluginsIpc(scaffold.deps);
+    const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "folder" } });
+    expect(prepared.ok).toBe(true);
+    // The folder's manifest moves on between preview and commit: the installed definition
+    // no longer matches the one the sheet showed, so no consent is recorded for it.
+    scaffold.storeFiles.set("/work/bridge/.anycode-plugin/plugin.json", JSON.stringify({
+      ...servicesManifest("bridge"),
+      services: [{ name: "relay", command: "deno", args: ["run", "evil.ts"] }],
+    }));
+    const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "folder" }, allowServices: true });
+    expect(committed.ok).toBe(true);
+    expect(scaffold.settingsData.serviceConsent).toBeUndefined();
+  });
+
+  it("official install with allowServices records no service consent (the index preview carries no definition)", async () => {
+    const tar = makeTarball([{ path: ".anycode-plugin/plugin.json", data: JSON.stringify({ ...servicesManifest("anycode-essentials"), version: "1.0.0" }) }]);
+    const signed = signedIndex(tar);
+    const scaffold = makeDeps(signed);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(new Uint8Array(tar), { status: 200 })) as typeof fetch;
+    try {
+      registerPluginsIpc(scaffold.deps);
+      const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "official", name: "anycode-essentials" } });
+      expect(prepared.ok).toBe(true);
+      const committed = await invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token: prepared.token, source: { kind: "official", name: "anycode-essentials" }, allowServices: true });
+      expect(committed.ok).toBe(true);
+      expect(scaffold.settingsData.serviceConsent).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("plugin services supervision IPC (Taskana 4750a)", () => {
+  function fakeServices() {
+    const restarts: [string, string][] = [];
+    return {
+      restarts,
+      services: {
+        snapshot: () => [
+          { plugin: "bridge", name: "relay", state: "running" as const, pid: 77, restarts: 0 },
+          { plugin: "bridge", name: "other", state: "blocked" as const, reason: "no_consent" as const, restarts: 0 },
+        ],
+        logs: (plugin: string, name: string) => [`log ${plugin}/${name}`, "[err] boom"],
+        restart: async (plugin: string, name: string) => {
+          restarts.push([plugin, name]);
+        },
+      },
+    };
+  }
+
+  it("the services view carries state only — no argv, env values or paths", async () => {
+    const scaffold = makeDeps();
+    const fake = fakeServices();
+    registerPluginsIpc({ ...scaffold.deps, services: fake.services });
+    const list = await invoke(PLUGINS_SERVICES_CHANNEL);
+    expect(list).toEqual([
+      { plugin: "bridge", name: "relay", state: "running", pid: 77, restarts: 0 },
+      { plugin: "bridge", name: "other", state: "blocked", reason: "no_consent", restarts: 0 },
+    ]);
+    expect(JSON.stringify(list)).not.toMatch(/args|env|\/home|root/);
+  });
+
+  it("logs are returned as plain strings for one {plugin,name}", async () => {
+    const scaffold = makeDeps();
+    registerPluginsIpc({ ...scaffold.deps, services: fakeServices().services });
+    expect(await invoke(PLUGINS_SERVICE_LOGS_CHANNEL, { plugin: "bridge", name: "relay" })).toEqual(["log bridge/relay", "[err] boom"]);
+    expect(await invoke(PLUGINS_SERVICE_LOGS_CHANNEL, { plugin: "bridge", name: "relay", extra: "x" })).toMatchObject({ ok: false, reason: "invalid" });
+    expect(await invoke(PLUGINS_SERVICE_LOGS_CHANNEL, { plugin: "../etc", name: "relay" })).toMatchObject({ ok: false, reason: "invalid" });
+  });
+
+  it("restart takes only {plugin,name} (strict) and calls the supervisor with the names", async () => {
+    const scaffold = makeDeps();
+    const fake = fakeServices();
+    registerPluginsIpc({ ...scaffold.deps, services: fake.services });
+    expect(await invoke(PLUGINS_SERVICE_RESTART_CHANNEL, { plugin: "bridge", name: "relay" })).toEqual({ ok: true });
+    expect(fake.restarts).toEqual([["bridge", "relay"]]);
+    expect(await invoke(PLUGINS_SERVICE_RESTART_CHANNEL, { plugin: "bridge", name: "relay", command: "rm -rf /" })).toMatchObject({ ok: false, reason: "invalid" });
+    expect(fake.restarts).toHaveLength(1);
+  });
+
+  it("a mutation fires the onChanged hook so the supervisor reconciles", async () => {
+    const scaffold = makeDeps();
+    const reasons: string[] = [];
+    registerPluginsIpc({ ...scaffold.deps, onChanged: (reason) => reasons.push(reason) });
+    await invoke(PLUGINS_SET_AUTO_UPDATE_CHANNEL, { value: true });
+    await invoke(PLUGINS_APPROVE_SERVICES_CHANNEL, { name: "ghost" });
+    expect(reasons).toEqual(["auto-update"]);
   });
 });

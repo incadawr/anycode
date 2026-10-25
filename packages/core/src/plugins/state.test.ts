@@ -21,6 +21,8 @@ import {
   pluginsStateSchema,
   readPluginState,
   serversHash,
+  servicesHash,
+  hasServiceConsent,
   writePluginState,
   type McpConsentEntry,
   type PluginsState,
@@ -266,5 +268,48 @@ describe("serversHash / consent (design §4)", () => {
     expect(hasMcpConsent(consent, "p2", hash)).toBe(false);
     expect(hasMcpConsent(undefined, "p1", hash)).toBe(false);
     expect(hasMcpConsent([], "p1", hash)).toBe(false);
+  });
+});
+
+describe("servicesHash / service consent (Taskana 4750a)", () => {
+  const svc = (over: Record<string, unknown> = {}) => ({
+    name: "relay",
+    command: "node",
+    args: ["./dist/relay.js"],
+    env: { LOG_LEVEL: "debug" },
+    ...over,
+  });
+
+  it("servicesHash changes with command", () => {
+    expect(servicesHash([svc()])).not.toBe(servicesHash([svc({ command: "deno" })]));
+  });
+
+  it("servicesHash changes with args", () => {
+    expect(servicesHash([svc()])).not.toBe(servicesHash([svc({ args: ["./other.js"] })]));
+  });
+
+  it("servicesHash changes with env KEY added but not with env VALUE changed", () => {
+    const base = servicesHash([svc()]);
+    expect(servicesHash([svc({ env: { LOG_LEVEL: "info" } })])).toBe(base);
+    expect(servicesHash([svc({ env: { LOG_LEVEL: "debug", TOKEN_FILE: "/x" } })])).not.toBe(base);
+  });
+
+  it("servicesHash is independent of service order", () => {
+    const a = svc({ name: "a" });
+    const b = svc({ name: "b", command: "deno" });
+    expect(servicesHash([a, b])).toBe(servicesHash([b, a]));
+  });
+
+  it("servicesHash treats absent args and empty args alike", () => {
+    expect(servicesHash([{ name: "s", command: "node" }])).toBe(servicesHash([{ name: "s", command: "node", args: [] }]));
+  });
+
+  it("hasServiceConsent matches only the current hash for the plugin", () => {
+    const hash = servicesHash([svc()]);
+    const consent = [{ plugin: "p", servicesHash: hash, grantedAt: "2026-10-01T00:00:00.000Z" }];
+    expect(hasServiceConsent(consent, "p", hash)).toBe(true);
+    expect(hasServiceConsent(consent, "q", hash)).toBe(false);
+    expect(hasServiceConsent(consent, "p", servicesHash([svc({ command: "deno" })]))).toBe(false);
+    expect(hasServiceConsent(undefined, "p", hash)).toBe(false);
   });
 });

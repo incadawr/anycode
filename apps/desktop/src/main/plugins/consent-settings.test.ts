@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { grandfatherPluginsMcpConsent, setPluginsMcpConsent } from "./consent-settings.js";
+import { grandfatherPluginsMcpConsent, setPluginsMcpConsent, upsertPluginServiceConsent } from "./consent-settings.js";
 
 let dir: string;
 let settingsPath: string;
@@ -51,5 +51,23 @@ describe("grandfatherPluginsMcpConsent (one-shot migration)", () => {
     await setPluginsMcpConsent(settingsPath, [grant("user", "u")], logger);
     await grandfatherPluginsMcpConsent(settingsPath, [grant("legacy", "h")], logger);
     expect(read().plugins.mcpConsent).toEqual([grant("user", "u")]);
+  });
+});
+
+describe("upsertPluginServiceConsent (Taskana 4750a, read-modify-write under the lock)", () => {
+  const sgrant = (plugin: string, hash: string) => ({ plugin, servicesHash: hash, grantedAt: "2026-10-25T00:00:00.000Z" });
+
+  it("writes the first service grant without touching mcpConsent", async () => {
+    await setPluginsMcpConsent(settingsPath, [grant("a", "m")], logger);
+    await upsertPluginServiceConsent(settingsPath, sgrant("bridge", "s1"), logger);
+    expect(read().plugins.serviceConsent).toEqual([sgrant("bridge", "s1")]);
+    expect(read().plugins.mcpConsent).toEqual([grant("a", "m")]);
+  });
+
+  it("replaces the grant for the same plugin (re-approval after a changed hash) and keeps other plugins", async () => {
+    await upsertPluginServiceConsent(settingsPath, sgrant("bridge", "old"), logger);
+    await upsertPluginServiceConsent(settingsPath, sgrant("other", "x"), logger);
+    await upsertPluginServiceConsent(settingsPath, sgrant("bridge", "new"), logger);
+    expect(read().plugins.serviceConsent).toEqual([sgrant("other", "x"), sgrant("bridge", "new")]);
   });
 });

@@ -84,7 +84,10 @@ import {
 } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
 import { defaultSecretsPath, defaultSettingsPath, loadSettings, readTrustedBinaryConsentsSync, saveSettings, withSettingsFileLock } from "../settings/files.js";
-import { grandfatherPluginsMcpConsent, setPluginsMcpConsent } from "./plugins/consent-settings.js";
+import { grandfatherPluginsMcpConsent, setPluginsMcpConsent, upsertPluginServiceConsent } from "./plugins/consent-settings.js";
+import { createServiceSupervisor, type ServiceSupervisor } from "./plugins/service-supervisor.js";
+import { spawnServiceProcess } from "./plugins/service-process.js";
+import { isWorkspaceTrustedFor, listServiceCandidates } from "./plugins/service-candidates.js";
 import type { AnycodeSettings, SecretKey } from "../shared/settings.js";
 import { activeConnection, activeProviderView, connectionById, resolveProviderConnection } from "../shared/settings.js";
 import {
@@ -561,6 +564,12 @@ let updaterController: UpdaterController | null = null;
 let pluginsIpc: PluginsIpc | undefined;
 /** Taskana 4732 S1-B: the periodic official-index check scheduler (cancelled at quit). */
 let pluginsScheduler: PluginsScheduler | undefined;
+/** Taskana 4750a: supervised plugin background services (stopped at quit). */
+let serviceSupervisor: ServiceSupervisor | undefined;
+/** Every trigger (tabs, trust, consent, sessions API, plugin mutations) funnels here; never throws. */
+function reconcileServices(): void {
+  void serviceSupervisor?.reconcile();
+}
 
 
 
@@ -2410,7 +2419,10 @@ void app.whenReady().then(async () => {
     onTabClosed: (tabId) => {
       previewHost?.closeForTab(tabId);
       artifactConsentStore.clearTab(tabId);
+      reconcileServices();
     },
+    // Taskana 4750a: a newly opened folder may bring project-tier services into scope.
+    onTabOpened: () => reconcileServices(),
   });
 
   // S4-1 arm 2 (W4-F1): the rollout-import IPC (registered further below, once
@@ -2641,6 +2653,8 @@ void app.whenReady().then(async () => {
     onceApprovals: workspaceTrustOnceApprovals,
     logger: { error: (message) => console.error(message) },
     realpathSync,
+    // Taskana 4750a: a trust decision moves project-tier services in or out of scope.
+    onDecided: () => reconcileServices(),
   });
   // Taskana 4739: one-shot migration of legacy non-realpath keys to real
   // keys. Best-effort and inside the module's serialisation queue: errors are
@@ -3066,10 +3080,26 @@ void app.whenReady().then(async () => {
   // dialog below; the renderer never sends a path. The stdio adapter is copied to
   // userData so an external client config survives app updates.
   if (communicationController !== null && communicationSessions !== null) {
+    const commController = communicationController;
     registerCommunicationIpc({
       settingsPath,
       logger: { warn: (message) => console.warn(message), error: (message) => console.error(message) },
-      controller: communicationController,
+      // Taskana 4750a: a Sessions-API start/stop/token change moves
+      // ANYCODE_SESSIONS_DISCOVERY for running services, so reconcile after each.
+      controller: {
+        apply: async (input) => {
+          const status = await commController.apply(input);
+          reconcileServices();
+          return status;
+        },
+        regenerateToken: async () => {
+          const result = await commController.regenerateToken();
+          reconcileServices();
+          return result;
+        },
+        status: () => commController.status(),
+        discoveryFile: () => commController.discoveryFile(),
+      },
       sessions: communicationSessions,
       tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId })),
       env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
@@ -3168,6 +3198,7 @@ void app.whenReady().then(async () => {
             autoUpdateOfficial: current.plugins?.autoUpdateOfficial ?? false,
             ...(current.plugins?.officialIndexUrl !== undefined ? { officialIndexUrl: current.plugins?.officialIndexUrl } : {}),
             ...(current.plugins?.mcpConsent !== undefined ? { mcpConsent: current.plugins.mcpConsent } : {}),
+            ...(current.plugins?.serviceConsent !== undefined ? { serviceConsent: current.plugins.serviceConsent } : {}),
           };
         },
         setAutoUpdateOfficial: async (value) => {
@@ -3187,6 +3218,20 @@ void app.whenReady().then(async () => {
           await setPluginsMcpConsent(settingsPath, entries, fileLogger);
           settings = (await loadSettings(settingsPath, fileLogger)).settings;
         },
+        setServiceConsent: async (entry) => {
+          // Taskana 4750a: per-plugin service grant (read-modify-write under the settings lock).
+          await upsertPluginServiceConsent(settingsPath, entry, fileLogger);
+          settings = (await loadSettings(settingsPath, fileLogger)).settings;
+        },
+      },
+      // Taskana 4750a: every plugins mutation (install, enable, consent, ...) re-reconciles services.
+      onChanged: () => reconcileServices(),
+      services: {
+        snapshot: () => serviceSupervisor?.snapshot() ?? [],
+        logs: (plugin, name) => serviceSupervisor?.logs(plugin, name) ?? [],
+        restart: async (plugin, name) => {
+          await serviceSupervisor?.restart(plugin, name);
+        },
       },
       pickTgzFile: async () => {
         const result = await dialog.showOpenDialog(win!, {
@@ -3204,6 +3249,36 @@ void app.whenReady().then(async () => {
       logger: fileLogger,
     });
     localPluginsIpc = pluginsIpc;
+    // Taskana 4750a: the service supervisor. Candidates come from the same admin scan
+    // the pane uses (managed + legacy under home, project-tier per live workspace).
+    serviceSupervisor = createServiceSupervisor({
+      listCandidates: () =>
+        listServiceCandidates({
+          fs: pluginsFs,
+          home: pluginsHome,
+          appVersion: app.getVersion(),
+          liveWorkspaces: () =>
+            (manager?.listTabs() ?? [])
+              .filter((tab) => tab.childOf === undefined)
+              .map((tab) => tab.workspace),
+          serviceConsent: async () => (await loadSettings(settingsPath, fileLogger)).settings.plugins?.serviceConsent ?? [],
+          isWorkspaceTrusted: (workspace) =>
+            isWorkspaceTrustedFor(
+              pluginsFs,
+              pluginsHome,
+              workspace,
+              workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
+            ),
+        }),
+      spawn: spawnServiceProcess,
+      // Only the PATH of the discovery file crosses into the supervisor; the file itself stays unread.
+      discoveryFile: () => communicationController?.discoveryFile(),
+      now: () => Date.now(),
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      env: process.env,
+      logger: { warn: (message, ...args) => fileLogger.warn(message, ...args) },
+    });
     void (async () => {
       await wipeStaging(pluginsFs, pluginsHome).catch((error) =>
         fileLogger.warn(`[plugins] staging wipe failed (continuing): ${error instanceof Error ? error.message : String(error)}`),
@@ -3242,6 +3317,7 @@ void app.whenReady().then(async () => {
       } else {
         console.log("[plugins] official channel not configured (test keys only) — periodic checks disabled");
       }
+      reconcileServices();
     })();
   }
 
@@ -3337,6 +3413,8 @@ void app.whenReady().then(async () => {
   if (communicationController !== null) {
     const controller = communicationController;
     await controller.apply(applyInputFromBlock(settings?.communication));
+    // Taskana 4750a: the first Sessions-API state is known now — services may start with it.
+    reconcileServices();
     app.on("before-quit", () => { void controller.dispose(); }); // dispose is idempotent
   }
 
@@ -3399,6 +3477,10 @@ async function shutdownEverything(): Promise<void> {
   // Taskana 4732 S1-B: cancel the plugins update scheduler's armed check.
   pluginsScheduler?.stop();
   pluginsScheduler = undefined;
+  // Taskana 4750a: stop every plugin service (tree kill, 5 s hard deadline) before the hosts go.
+  const activeServices = serviceSupervisor;
+  serviceSupervisor = undefined;
+  await activeServices?.stopAll();
   const activeManager = manager;
   const activePersistence = persistence;
   const activeOnboarding = codexOnboarding;

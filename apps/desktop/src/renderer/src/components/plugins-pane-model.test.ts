@@ -16,8 +16,15 @@ import type {
   IndexEntryView,
   PluginInstallPreview,
   PluginRowView,
+  PluginServiceView,
   PluginsSnapshot,
 } from "../../../shared/plugins-config.js";
+import {
+  serviceChip,
+  servicesNeedApproval,
+  sessionsApiHint,
+  sheetHasServices,
+} from "./plugins-pane-model.js";
 import {
   availableRowState,
   filterPluginRows,
@@ -55,8 +62,9 @@ function row(overrides: Partial<PluginRowView> = {}): PluginRowView {
     status: "active",
     source: { kind: "official" },
     managed: { enabled: true, pinned: false, active: "1.0.0" },
-    capabilities: { skills: 2, agents: 1, workflows: 1, mcp: [], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0 },
+    capabilities: { skills: 2, agents: 1, workflows: 1, mcp: [], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0, services: [] },
     mcpServerNames: [],
+    serviceNames: [],
     mcpConsentGranted: false,
     problems: [],
     ...overrides,
@@ -178,7 +186,7 @@ describe("pluginCapabilitiesText", () => {
   it("appends MCP servers with consent state", () => {
     const text = pluginCapabilitiesText(
       row({
-        capabilities: { skills: 1, agents: 0, workflows: 0, mcp: ["a", "b"], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0 },
+        capabilities: { skills: 1, agents: 0, workflows: 0, mcp: ["a", "b"], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0, services: [] },
         mcpServerNames: ["a", "b"],
         mcpConsentGranted: false,
       }),
@@ -189,7 +197,7 @@ describe("pluginCapabilitiesText", () => {
   it("drops the needs-approval suffix once consent is granted", () => {
     const text = pluginCapabilitiesText(
       row({
-        capabilities: { skills: 0, agents: 0, workflows: 0, mcp: ["a"], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0 },
+        capabilities: { skills: 0, agents: 0, workflows: 0, mcp: ["a"], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0, services: [] },
         mcpServerNames: ["a"],
         mcpConsentGranted: true,
       }),
@@ -431,5 +439,84 @@ describe("hasNonOfficialPlugins", () => {
   it("is true for any third-party/local/project/legacy row", () => {
     expect(hasNonOfficialPlugins(snapshot({ plugins: [row({ tier: "third-party" })] }))).toBe(true);
     expect(hasNonOfficialPlugins(snapshot({ plugins: [row({ tier: "legacy-user" })] }))).toBe(true);
+  });
+});
+
+// ── Taskana 4750a: services view model ──
+
+const svcView = (over: Partial<PluginServiceView> = {}): PluginServiceView => ({
+  plugin: "bridge",
+  name: "relay",
+  state: "running",
+  restarts: 0,
+  ...over,
+});
+
+describe("serviceChip — one chip per supervised state (Taskana 4750a)", () => {
+  it("maps every state to its chip text and tone", () => {
+    expect(serviceChip(svcView({ state: "running" }))).toEqual({ text: "Running", tone: "muted" });
+    expect(serviceChip(svcView({ state: "starting" })).text).toBe("Starting");
+    expect(serviceChip(svcView({ state: "stopped" })).text).toBe("Stopped");
+    expect(serviceChip(svcView({ state: "backoff", restartInSec: 8 }))).toEqual({ text: "Restarting in 8s", tone: "warn" });
+    expect(serviceChip(svcView({ state: "crash_loop" }))).toEqual({ text: "Crash loop", tone: "warn" });
+    expect(serviceChip(svcView({ state: "blocked", reason: "no_consent" })).text).toBe("Needs approval");
+    expect(serviceChip(svcView({ state: "blocked", reason: "untrusted" })).text).toBe("Blocked: untrusted folder");
+    expect(serviceChip(svcView({ state: "blocked", reason: "disabled" })).text).toBe("Disabled");
+    expect(serviceChip(svcView({ state: "blocked", reason: "bad_command" })).text).toBe("Blocked: bad command");
+  });
+});
+
+describe("services consent and actions (Taskana 4750a)", () => {
+  const withServices = (over: Partial<PluginRowView> = {}) =>
+    row({ tier: "third-party", managed: { enabled: true, pinned: false, active: "1.0.0" }, serviceNames: ["relay"], ...over });
+
+  it("needs approval when services are declared without a current grant", () => {
+    expect(servicesNeedApproval(withServices({ servicesConsentGranted: false }))).toBe(true);
+    expect(servicesNeedApproval(withServices({ servicesConsentGranted: true }))).toBe(false);
+    expect(servicesNeedApproval(row({ serviceNames: [] }))).toBe(false);
+  });
+
+  it("the row shows 'Services need approval' and offers approve-services", () => {
+    const needs = withServices({ servicesConsentGranted: false });
+    expect(pluginStatusChips(needs).map((c) => c.text)).toContain("Services need approval");
+    expect(pluginRowActions(needs)).toContain("approve-services");
+    const granted = withServices({ servicesConsentGranted: true });
+    expect(pluginStatusChips(granted).map((c) => c.text)).not.toContain("Services need approval");
+    expect(pluginRowActions(granted)).not.toContain("approve-services");
+  });
+});
+
+describe("sessionsApiHint — only when the API is off (Taskana 4750a)", () => {
+  it("shows the enable hint for off and error, and only for plugins with services", () => {
+    expect(sessionsApiHint(true, "off")).toContain("Settings → Sessions API");
+    expect(sessionsApiHint(true, "error")).toContain("Settings → Sessions API");
+    expect(sessionsApiHint(true, "listening")).toBeUndefined();
+    expect(sessionsApiHint(true, "env")).toBeUndefined();
+    expect(sessionsApiHint(false, "off")).toBeUndefined();
+  });
+});
+
+describe("sheetPrimaryLabel — services wording (Taskana 4750a)", () => {
+  const svcPreview = preview({ services: [{ name: "relay", command: "node", args: [], envKeys: [] }] });
+  const bothPreview = preview({
+    mcpServers: [{ name: "api", command: "node", args: [] }],
+    services: [{ name: "relay", command: "node", args: [], envKeys: [] }],
+  });
+
+  it("services only: default keeps them off; allowed names them", () => {
+    expect(sheetHasServices(svcPreview)).toBe(true);
+    expect(sheetPrimaryLabel(svcPreview, false)).toBe("Install (services stay off)");
+    expect(sheetPrimaryLabel(svcPreview, false, true)).toBe("Install and allow services");
+  });
+
+  it("both MCP and services: 'and allow MCP servers and services' only when both are ticked", () => {
+    expect(sheetPrimaryLabel(bothPreview, false, false)).toBe("Install (MCP servers and services stay off)");
+    expect(sheetPrimaryLabel(bothPreview, true, true)).toBe("Install and allow MCP servers and services");
+    expect(sheetPrimaryLabel(bothPreview, true, false)).toBe("Install (services stay off)");
+  });
+
+  it("no services and no MCP keeps the plain Install label", () => {
+    expect(sheetPrimaryLabel(preview(), false)).toBe("Install");
+    expect(sheetHasServices(preview())).toBe(false);
   });
 });

@@ -114,8 +114,9 @@ function installedRow(overrides: Partial<PluginRowView> = {}): PluginRowView {
     status: "active",
     source: { kind: "official" },
     managed: { enabled: true, pinned: false, active: "1.0.0" },
-    capabilities: { skills: 1, agents: 0, workflows: 1, mcp: [], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0 },
+    capabilities: { skills: 1, agents: 0, workflows: 1, mcp: [], commands: 0, hooks: false, docs: false, engineSupport: [], promptOverlays: 0, services: [] },
     mcpServerNames: [],
+    serviceNames: [],
     mcpConsentGranted: false,
     problems: [],
     ...overrides,
@@ -136,6 +137,14 @@ function bodyPropsFor(snap: PluginsSnapshot, overrides: Partial<Parameters<typeo
     onPin: () => {},
     onRemove: () => {},
     onApproveMcp: () => {},
+    onApproveServices: () => {},
+    services: [],
+    sessionsState: "off" as const,
+    openLogKey: null,
+    logLines: {},
+    onRestartService: () => {},
+    onToggleLog: () => {},
+    onCopyLog: () => {},
     onReveal: () => {},
     onInstallAvailable: () => {},
     ...overrides,
@@ -233,8 +242,10 @@ describe("InstallDialogBody (element-level)", () => {
   const dialogBase = {
     urlValue: "",
     allowMcp: false,
+    allowServices: false,
     onUrlValueChange: () => {},
     onAllowMcpChange: () => {},
+    onAllowServicesChange: () => {},
     onPickSource: () => {},
     onSubmitUrl: () => {},
     onCommit: () => {},
@@ -331,5 +342,108 @@ describe("describeSourceForSheet", () => {
     ).toBe("https://x/y.tgz");
     expect(describeSourceForSheet({ kind: "file" }, preview({ source: { kind: "file" } }))).toBe("local archive file");
     expect(describeSourceForSheet({ kind: "folder" }, preview({ source: { kind: "folder" } }))).toBe("linked folder (dev)");
+  });
+});
+
+// ── Taskana 4750a: background services in the pane ──
+
+function findElements(root: unknown, predicate: (el: AnyElement) => boolean): AnyElement[] {
+  const found: AnyElement[] = [];
+  function visit(node: unknown): void {
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    if (!isElement(node)) return;
+    if (predicate(node)) found.push(node);
+    visit(node.props.children);
+    // Component elements are invoked (hook-free by construction) so their subtree is searched too.
+    if (typeof node.type === "function") {
+      visit((node.type as (props: Record<string, unknown>) => unknown)(node.props));
+    }
+  }
+  visit(root);
+  return found;
+}
+
+function serviceRow(overrides: Partial<PluginRowView> = {}): PluginRowView {
+  return installedRow({
+    name: "bridge",
+    displayName: "Bridge",
+    tier: "third-party",
+    managed: { enabled: true, pinned: false, active: "1.0.0" },
+    serviceNames: ["relay"],
+    servicesConsentGranted: true,
+    ...overrides,
+  });
+}
+
+describe("PluginsPaneBody — background services (Taskana 4750a)", () => {
+  it("needs approval shows Approve services and the chip", () => {
+    const snap = snapshot({ plugins: [serviceRow({ servicesConsentGranted: false })] });
+    const html = call(() => PluginsPaneBody(bodyPropsFor(snap)));
+    expect(html).toContain("Approve services");
+    expect(html).toContain("Services need approval");
+  });
+
+  it("a granted service row shows no Approve services button", () => {
+    const snap = snapshot({ plugins: [serviceRow()] });
+    const html = call(() => PluginsPaneBody(bodyPropsFor(snap)));
+    expect(html).not.toContain("Approve services");
+  });
+
+  it("Sessions API hint only when the API is off (and the plugin has services)", () => {
+    const snap = snapshot({ plugins: [serviceRow()] });
+    const off = call(() => PluginsPaneBody(bodyPropsFor(snap, { sessionsState: "off" })));
+    const listening = call(() => PluginsPaneBody(bodyPropsFor(snap, { sessionsState: "listening" })));
+    const errored = call(() => PluginsPaneBody(bodyPropsFor(snap, { sessionsState: "error" })));
+    expect(off).toContain("Sessions API is off");
+    expect(errored).toContain("Sessions API is off");
+    expect(listening).not.toContain("Sessions API is off");
+  });
+
+  it("a service state chip renders per state and the restart button calls back with only {plugin,name}", () => {
+    const snap = snapshot({ plugins: [serviceRow()] });
+    const restarts: [string, string][] = [];
+    const running = call(() =>
+      PluginsPaneBody(
+        bodyPropsFor(snap, {
+          services: [{ plugin: "bridge", name: "relay", state: "running", restarts: 0 }],
+          onRestartService: (plugin: string, name: string) => restarts.push([plugin, name]),
+        }),
+      ),
+    );
+    expect(running).toContain("Running");
+    const backoff = call(() =>
+      PluginsPaneBody(bodyPropsFor(snap, { services: [{ plugin: "bridge", name: "relay", state: "backoff", restartInSec: 4, restarts: 1 }] })),
+    );
+    expect(backoff).toContain("Restarting in 4s");
+    const crash = call(() => PluginsPaneBody(bodyPropsFor(snap, { services: [{ plugin: "bridge", name: "relay", state: "crash_loop", restarts: 5 }] })));
+    expect(crash).toContain("Crash loop");
+    const untrusted = call(() =>
+      PluginsPaneBody(bodyPropsFor(snap, { services: [{ plugin: "bridge", name: "relay", state: "blocked", reason: "untrusted", restarts: 0 }] })),
+    );
+    expect(untrusted).toContain("Blocked: untrusted folder");
+
+    const restartButton = findElements(
+      PluginsPaneBody(bodyPropsFor(snap, { services: [], onRestartService: (plugin: string, name: string) => restarts.push([plugin, name]) })),
+      (el) => el.type === "button" && el.props.onClick !== undefined && renderToString(el.props.children) === "Restart",
+    );
+    expect(restartButton.length).toBeGreaterThan(0);
+    (restartButton[0]!.props.onClick as () => void)();
+    expect(restarts).toEqual([["bridge", "relay"]]);
+  });
+
+  it("log rendered as text (no HTML injection)", () => {
+    const snap = snapshot({ plugins: [serviceRow()] });
+    const hostile = '<img src=x onerror="alert(1)">';
+    const body = () => PluginsPaneBody(bodyPropsFor(snap, { openLogKey: "bridge/relay", logLines: { "bridge/relay": [hostile] } }));
+    const html = call(body);
+    // The hostile line is a plain text child of a <pre>, never raw markup.
+    const pres = findElements(body(), (el) => el.type === "pre");
+    expect(pres).toHaveLength(1);
+    expect(pres[0]!.props.dangerouslySetInnerHTML).toBeUndefined();
+    expect(pres[0]!.props.children).toBe(hostile);
+    expect(html).toContain(hostile);
   });
 });

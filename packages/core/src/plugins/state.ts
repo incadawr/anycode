@@ -195,3 +195,49 @@ export function hasMcpConsent(
 ): boolean {
   return (consent ?? []).some((entry) => entry.plugin === plugin && entry.serversHash === hash);
 }
+
+// ---------------------------------------------------------------------------
+// Service consent (Taskana 4750a): the same consent discipline as MCP, keyed
+// by `servicesHash`. The hash covers name/command/args and the env KEY set —
+// NOT env values, which a user may edit without re-approving the definition.
+
+/** Settings shape for a service grant (same shape as McpConsentEntry). */
+export interface ServiceConsentEntry {
+  plugin: string;
+  servicesHash: string;
+  grantedAt: string;
+}
+
+/** The minimal service shape the hash covers (env values deliberately absent). */
+export interface ServiceHashInput {
+  name: string;
+  command: string;
+  args?: readonly string[];
+  env?: Readonly<Record<string, string>>;
+}
+
+/**
+ * sha256 hex over the canonical JSON of a plugin's services: sorted by name,
+ * `args` defaulted to `[]`, `env` reduced to its sorted KEY list. An empty
+ * list hashes the empty array (callers only consult it when services exist).
+ */
+export function servicesHash(services: readonly ServiceHashInput[] | undefined): string {
+  const canonical = [...(services ?? [])]
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map((service) => ({
+      name: service.name,
+      command: service.command,
+      args: [...(service.args ?? [])],
+      envKeys: Object.keys(service.env ?? {}).sort(),
+    }));
+  return createHash("sha256").update(canonicalJson(canonical)).digest("hex");
+}
+
+/** True when `consent` holds a CURRENT service grant for `plugin` at `hash`. */
+export function hasServiceConsent(
+  consent: readonly ServiceConsentEntry[] | undefined,
+  plugin: string,
+  hash: string,
+): boolean {
+  return (consent ?? []).some((entry) => entry.plugin === plugin && entry.servicesHash === hash);
+}

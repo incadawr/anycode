@@ -776,6 +776,8 @@ export interface TabHostManagerDeps {
    * it. Absent = no-op (every pre-96-A caller/test).
    */
   onTabClosed?: (tabId: string) => void;
+  /** Taskana 4750a: fires after a tab is registered (the service supervisor reconciles on it). Absent = no-op. */
+  onTabOpened?: (tabId: string) => void;
   now?: () => number;
   genId?: () => string;
   limits?: Partial<BreakerLimits>;
@@ -1189,6 +1191,7 @@ export class TabHostManager {
     };
     this.tabs.set(tab.tabId, tab);
     this.bindings.set(params.sessionId, tab.tabId);
+    this.deps.onTabOpened?.(tab.tabId);
     this.deps.onSessionRegistered?.({ sessionId: params.sessionId });
     this.spawnTabHost(tab, { firstSpawn: true });
     return { ok: true, tab };

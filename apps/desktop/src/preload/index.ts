@@ -80,6 +80,10 @@ import {
 } from "../shared/subagents-config.js";
 import {
   PLUGINS_APPROVE_MCP_CHANNEL,
+  PLUGINS_APPROVE_SERVICES_CHANNEL,
+  PLUGINS_SERVICES_CHANNEL,
+  PLUGINS_SERVICE_LOGS_CHANNEL,
+  PLUGINS_SERVICE_RESTART_CHANNEL,
   PLUGINS_CHANGED_CHANNEL,
   PLUGINS_CHECK_UPDATES_CHANNEL,
   PLUGINS_INSTALL_COMMIT_CHANNEL,
@@ -97,6 +101,7 @@ import {
   type PluginsChangedReason,
   type PluginsMutationResult,
   type PluginsSnapshot,
+  type PluginServiceView,
 } from "../shared/plugins-config.js";
 import type {
   McpConfigDeleteRequest,
@@ -891,6 +896,15 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(PLUGINS_REMOVE_CHANNEL, { name }) as Promise<PluginsMutationResult>,
     approveMcp: (name: string): Promise<PluginsMutationResult> =>
       ipcRenderer.invoke(PLUGINS_APPROVE_MCP_CHANNEL, { name }) as Promise<PluginsMutationResult>,
+    // Taskana 4750a: services consent + supervised state, logs and restart. Every payload is a name only.
+    approveServices: (name: string): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_APPROVE_SERVICES_CHANNEL, { name }) as Promise<PluginsMutationResult>,
+    services: (): Promise<PluginServiceView[]> =>
+      ipcRenderer.invoke(PLUGINS_SERVICES_CHANNEL) as Promise<PluginServiceView[]>,
+    serviceLogs: (plugin: string, name: string): Promise<string[]> =>
+      ipcRenderer.invoke(PLUGINS_SERVICE_LOGS_CHANNEL, { plugin, name }) as Promise<string[]>,
+    serviceRestart: (plugin: string, name: string): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_SERVICE_RESTART_CHANNEL, { plugin, name }) as Promise<PluginsMutationResult>,
     reveal: (name: string): Promise<PluginsMutationResult> =>
       ipcRenderer.invoke(PLUGINS_REVEAL_CHANNEL, { name }) as Promise<PluginsMutationResult>,
     setAutoUpdate: (value: boolean): Promise<PluginsMutationResult> =>

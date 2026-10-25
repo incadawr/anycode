@@ -71,6 +71,8 @@ export interface WorkspaceTrustTabs {
 }
 
 export interface WorkspaceTrustIpcDeps {
+  /** Taskana 4750a: fires after a decision lands (the service supervisor reconciles project-tier services). */
+  onDecided?(): void;
   fs: TrustStoreFs;
   /** The user's home; the store lives at `<home>/.anycode/workspace-trust.json`. */
   home: string;
@@ -161,6 +163,11 @@ export async function handleWorkspaceTrustDecide(
   if (!restart.ok) {
     // The decision is recorded; the next boot of this tab applies it.
     deps.logger?.error(`[main] workspace trust decided for tab ${tabId}; host restart skipped (${restart.reason})`);
+  }
+  try {
+    deps.onDecided?.();
+  } catch {
+    // a reconcile trigger must never fail a recorded decision
   }
   return { ok: true };
 }

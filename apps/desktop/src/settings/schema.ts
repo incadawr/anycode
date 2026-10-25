@@ -408,6 +408,16 @@ const mcpConsentEntrySchema = z.object({
   grantedAt: z.string(),
 });
 
+// Taskana 4750a: per-plugin service consent, keyed by servicesHash. Absent =
+// nobody consented (fail closed; services are new, so no grandfathering).
+const serviceConsentEntrySchema = z
+  .object({
+    plugin: z.string().min(1),
+    servicesHash: z.string().min(1),
+    grantedAt: z.string(),
+  })
+  .strict();
+
 // The `plugins` settings block. `autoUpdateOfficial` absent = false (the
 // scheduler never auto-installs without it); `officialIndexUrl` is a
 // dev/automation override never written by the app; `mcpConsent` undefined =
@@ -416,7 +426,10 @@ const pluginsSettingsSchema = z
   .object({
     autoUpdateOfficial: z.boolean().optional(),
     officialIndexUrl: z.string().url().optional(),
-    mcpConsent: z.array(mcpConsentEntrySchema),
+    // Optional: a service-only grant must not drop the whole plugins block
+    // (undefined still means "not yet migrated" for mcpConsent).
+    mcpConsent: z.array(mcpConsentEntrySchema).optional(),
+    serviceConsent: z.array(serviceConsentEntrySchema).optional(),
   })
   .strict()
   .optional()

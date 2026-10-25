@@ -80,6 +80,35 @@ Auto-update for official plugins is OFF by default (toggle **Auto-update
 official plugins** in the pane header); third-party and local plugins never
 update without an explicit **Update** click.
 
+## Services
+
+A plugin can declare **services**: long-running background processes (for
+example, a bridge to a chat app) that AnyCode starts for you. They follow the
+same rules as MCP servers:
+
+- Nothing runs until you consent. The install sheet lists each service's
+  command, arguments and environment variable **names** (never the values) in a
+  red block, behind **Allow this plugin's background services to run**. Without
+  that box, or later through **Approve services** on the plugin's row, the
+  service stays off and the row shows **Services need approval**.
+- A changed command, argument or set of environment variable names needs fresh
+  approval. Changing only an environment variable's value does not.
+- A service runs only while its plugin is enabled. Disabling or removing the
+  plugin stops it, along with the rest of its process tree. Quitting AnyCode
+  stops every service.
+- A plugin in a project folder (`.anycode/plugins/`) runs its services only
+  once you trust that folder.
+- A crashed service restarts after 1, 2, 4 seconds and so on, up to one minute.
+  After five failures within two minutes it stops restarting and shows
+  **Crash loop**; press **Restart** to try again.
+- The row shows each service's state. **View log** shows its recent output as
+  plain text (last 200 lines, newest last), and **Copy log** copies it.
+- A service reaches your AnyCode sessions through the Sessions API. When the
+  Sessions API is off, the service still runs, but the row says so and asks you
+  to enable it in **Settings → Sessions API**. Each service gets the path to the
+  discovery file in `ANYCODE_SESSIONS_DISCOVERY`, only while the Sessions API
+  runs. The token is never placed in its environment, arguments or log.
+
 ## Updates, rollback, pin
 
 - **Update** — moves to the newest version compatible with your AnyCode.

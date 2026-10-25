@@ -24,11 +24,14 @@ import {
 } from "./manifest.js";
 import {
   hasMcpConsent,
+  hasServiceConsent,
   readPluginState,
   serversHash,
+  servicesHash,
   PLUGIN_STATE_FILE,
   type McpConsentEntry,
   type PluginStateEntry,
+  type ServiceConsentEntry,
 } from "./state.js";
 
 /** How the plugin's installation is surfaced (design §6 source column). */
@@ -68,6 +71,14 @@ export interface PluginAdminRow {
   mcpConsentGranted?: boolean;
   /** MCP server names the plugin declares (pre-rename). */
   mcpServerNames: string[];
+  /** Background service names the plugin declares (Taskana 4750a, sorted). */
+  serviceNames: string[];
+  /** sha256 of the services definition (name/command/args/env KEYS); absent when no services. */
+  servicesHash?: string;
+  /** True when serviceConsent holds a CURRENT grant for this plugin's services. */
+  servicesConsentGranted?: boolean;
+  /** Service definitions for the install/consent sheet — env KEY names only, NEVER env values. */
+  services?: { name: string; command: string; args: string[]; envKeys: string[] }[];
   /** Managed-install bookkeeping (absent for project/legacy dir plugins). */
   managed?: {
     enabled: boolean;
@@ -90,6 +101,7 @@ export interface ScanPluginsAdminOptions {
   reservedSkillNames?: ReadonlySet<string>;
   reservedAgentNames?: ReadonlySet<string>;
   mcpConsent?: readonly McpConsentEntry[];
+  serviceConsent?: readonly ServiceConsentEntry[];
 }
 
 export interface PluginsAdminScanResult {
@@ -173,6 +185,7 @@ export async function scanPluginsAdmin(
       ...(discovered?.version !== undefined ? { version: discovered.version } : { version: entry.active }),
       ...(discovered?.root !== undefined ? { root: discovered.root } : {}),
       mcpServerNames: [],
+      serviceNames: [],
     };
     rows.set(name, row);
   }
@@ -191,6 +204,7 @@ export async function scanPluginsAdmin(
       ...(info.version !== undefined ? { version: info.version } : {}),
       ...(info.root !== undefined ? { root: info.root } : {}),
       mcpServerNames: [],
+      serviceNames: [],
     });
   }
 
@@ -208,6 +222,7 @@ export async function scanPluginsAdmin(
       source: { kind: "dir" },
       ...(candidate.dir !== undefined ? { root: candidate.dir } : {}),
       mcpServerNames: [],
+      serviceNames: [],
     });
   }
 
@@ -235,6 +250,20 @@ export async function scanPluginsAdmin(
           const caps = capabilities(parsed.data);
           row.capabilities = caps;
           row.mcpServerNames = caps.mcp;
+          row.serviceNames = caps.services;
+          const services = parsed.data.services ?? [];
+          if (services.length > 0) {
+            const sHash = servicesHash(services);
+            row.servicesHash = sHash;
+            row.servicesConsentGranted =
+              opts.serviceConsent !== undefined && hasServiceConsent(opts.serviceConsent, name, sHash);
+            row.services = services.map((svc) => ({
+              name: svc.name,
+              command: svc.command,
+              args: [...(svc.args ?? [])],
+              envKeys: Object.keys(svc.env ?? {}).sort(),
+            }));
+          }
           const hash = serversHash(parsed.data.mcpServers ?? {});
           row.mcpServersHash = hash;
           row.mcpConsentGranted =
@@ -324,10 +353,14 @@ export {
   pluginTrustSchema,
   readPluginState,
   serversHash,
+  servicesHash,
+  hasServiceConsent,
   writePluginState,
 } from "./state.js";
 export type {
   McpConsentEntry,
+  ServiceConsentEntry,
+  ServiceHashInput,
   PluginStateEntry,
   PluginTrust,
   PluginStateReadResult,
@@ -337,12 +370,13 @@ export {
   capabilities,
   declaresOfficialOnly,
   pluginManifestSchema,
+  pluginServiceSchema,
   pluginWorkflowsDirs,
   MANIFEST_VERSION,
   OFFICIAL_ONLY_CONTRIBUTIONS,
   PLUGIN_NAME_RE,
 } from "./manifest.js";
-export type { PluginManifest, PluginCapabilities } from "./manifest.js";
+export type { PluginManifest, PluginCapabilities, PluginServiceSpec } from "./manifest.js";
 // Taskana 4732 S1-B: the desktop main store reuses the same semver helpers
 // discovery's engines gating uses (one implementation of the grammar).
 export { isValidSemver, parseSemver, rangeMatches, normalizeSemverRange } from "../util/semver-range.js";

@@ -757,6 +757,8 @@ export interface AnycodeSettings {
     autoUpdateOfficial?: boolean;
     officialIndexUrl?: string;
     mcpConsent?: { plugin: string; serversHash: string; grantedAt: string }[];
+    /** Taskana 4750a: per-plugin service grants keyed by servicesHash; absent = none granted (fail closed). */
+    serviceConsent?: { plugin: string; servicesHash: string; grantedAt: string }[];
   };
   /**
    * Sessions API (Taskana 4747; additive-optional, version NOT bumped). Owned

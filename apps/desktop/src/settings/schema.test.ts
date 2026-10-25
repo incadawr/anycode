@@ -814,6 +814,60 @@ describe("plugins (Taskana 4732 S1-B, design §7, additive-optional)", () => {
     }
   });
 
+  it("serviceConsent round-trips with strict entries (Taskana 4750a)", () => {
+    const withPlugins: AnycodeSettings = {
+      ...cloneDefaults(),
+      plugins: {
+        mcpConsent: [],
+        serviceConsent: [{ plugin: "bridge", servicesHash: "abc", grantedAt: "2026-10-25T00:00:00.000Z" }],
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withPlugins)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.plugins?.serviceConsent).toEqual([
+        { plugin: "bridge", servicesHash: "abc", grantedAt: "2026-10-25T00:00:00.000Z" },
+      ]);
+    }
+  });
+
+  it("a serviceConsent-only plugins block is kept (mcpConsent stays optional)", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      plugins: { serviceConsent: [{ plugin: "bridge", servicesHash: "abc", grantedAt: "x" }] },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.plugins?.serviceConsent).toHaveLength(1);
+      expect(parsed.data.plugins?.mcpConsent).toBeUndefined();
+    }
+  });
+
+  it("serviceConsent absent means fail closed (plugins block stays valid, no grants)", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      plugins: { mcpConsent: [] },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.plugins?.serviceConsent).toBeUndefined();
+    }
+  });
+
+  it("a serviceConsent entry with an extra key degrades the whole plugins block (strict)", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      plugins: {
+        mcpConsent: [],
+        serviceConsent: [{ plugin: "bridge", servicesHash: "abc", grantedAt: "x", extra: 1 }],
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.plugins).toBeUndefined();
+    }
+  });
+
   it("a corrupt plugins block degrades alone (catch -> undefined, siblings intact)", () => {
     const bad = {
       ...cloneDefaults(),

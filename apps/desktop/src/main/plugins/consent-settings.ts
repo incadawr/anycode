@@ -13,9 +13,14 @@
  *    the user or an earlier boot) is never overwritten by the migration.
  *
  * Both run under the settings-file lock.
+ *
+ * `upsertPluginServiceConsent` (Taskana 4750a) is the service-consent writer:
+ * the same read-modify-write under the lock, but it replaces the grant for
+ * ONE plugin (keyed by its servicesHash) and leaves every other plugin's grant
+ * alone. There is no legacy migration for services — absent = nobody granted.
  */
 
-import type { McpConsentEntry } from "@anycode/core/plugins-admin";
+import type { McpConsentEntry, ServiceConsentEntry } from "@anycode/core/plugins-admin";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../../settings/files.js";
 
 type SettingsLogger = Parameters<typeof loadSettings>[1];
@@ -45,6 +50,21 @@ export async function grandfatherPluginsMcpConsent(
     await saveSettings(settingsPath, {
       ...current.settings,
       plugins: { ...(current.settings.plugins ?? {}), mcpConsent: [...entries] },
+    });
+  });
+}
+
+export async function upsertPluginServiceConsent(
+  settingsPath: string,
+  entry: ServiceConsentEntry,
+  logger: SettingsLogger,
+): Promise<void> {
+  await withSettingsFileLock(settingsPath, async () => {
+    const current = await loadSettings(settingsPath, logger);
+    const others = (current.settings.plugins?.serviceConsent ?? []).filter((e) => e.plugin !== entry.plugin);
+    await saveSettings(settingsPath, {
+      ...current.settings,
+      plugins: { ...(current.settings.plugins ?? {}), serviceConsent: [...others, { ...entry }] },
     });
   });
 }

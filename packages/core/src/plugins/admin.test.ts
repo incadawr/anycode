@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultPluginStatePath, scanPluginsAdmin } from "./admin.js";
 import type { FileSystemPort } from "../ports/file-system.js";
-import { serversHash, type McpConsentEntry } from "./state.js";
+import { serversHash, servicesHash, type McpConsentEntry, type ServiceConsentEntry } from "./state.js";
 
 interface FakeFsSpec {
   dirs?: Record<string, string[]>;
@@ -262,5 +262,66 @@ describe("scanPluginsAdmin", () => {
   it("defaultPluginStatePath resolves under the user plugins root", () => {
     expect(defaultPluginStatePath(HOME)).toBe(`${USER_PLUGINS}/state.json`);
     expect(defaultPluginStatePath(`${HOME}/`)).toBe(`${USER_PLUGINS}/state.json`);
+  });
+});
+
+describe("scanPluginsAdmin — services (Taskana 4750a)", () => {
+  const SERVICES = [
+    { name: "relay", command: "node", args: ["./relay.js"], env: { LOG_LEVEL: "debug", RELAY_SECRET_LABEL: "super-secret-value-123" } },
+  ];
+  const ROOT = `${USER_PLUGINS}/.store/bridge/1.0.0`;
+  const bridgeFs = () =>
+    makeFs({
+      dirs: { [USER_PLUGINS]: [".store"] },
+      files: {
+        [STATE_PATH]: JSON.stringify({
+          version: 1,
+          plugins: {
+            bridge: { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: [] },
+          },
+          removedDefaults: [],
+          disabled: [],
+        }),
+        ...manifestAt(ROOT, { name: "bridge", version: "1.0.0", skills: [], agents: [], workflows: [], services: SERVICES }),
+      },
+    });
+
+  it("admin row exposes serviceNames and servicesConsentGranted false without consent", async () => {
+    const result = await scanPluginsAdmin(bridgeFs(), { workspace: WORKSPACE, home: HOME });
+    const row = result.rows.find((r) => r.name === "bridge")!;
+    expect(row.serviceNames).toEqual(["relay"]);
+    expect(row.servicesHash).toBe(servicesHash(SERVICES));
+    expect(row.servicesConsentGranted).toBe(false);
+    expect(row.services).toEqual([{ name: "relay", command: "node", args: ["./relay.js"], envKeys: ["LOG_LEVEL", "RELAY_SECRET_LABEL"] }]);
+  });
+
+  it("admin row consent granted for current hash and revoked after change", async () => {
+    const consent: ServiceConsentEntry[] = [
+      { plugin: "bridge", servicesHash: servicesHash(SERVICES), grantedAt: "2026-10-25T00:00:00Z" },
+    ];
+    const granted = await scanPluginsAdmin(bridgeFs(), { workspace: WORKSPACE, home: HOME, serviceConsent: consent });
+    expect(granted.rows.find((r) => r.name === "bridge")!.servicesConsentGranted).toBe(true);
+
+    const stale: ServiceConsentEntry[] = [{ plugin: "bridge", servicesHash: "deadbeef", grantedAt: "2026-10-25T00:00:00Z" }];
+    const revoked = await scanPluginsAdmin(bridgeFs(), { workspace: WORKSPACE, home: HOME, serviceConsent: stale });
+    expect(revoked.rows.find((r) => r.name === "bridge")!.servicesConsentGranted).toBe(false);
+  });
+
+  it("row never carries env values", async () => {
+    const result = await scanPluginsAdmin(bridgeFs(), { workspace: WORKSPACE, home: HOME });
+    expect(JSON.stringify(result.rows)).not.toContain("super-secret-value-123");
+    expect(JSON.stringify(result.rows)).not.toContain("debug");
+  });
+
+  it("a plugin without services has no servicesHash and an empty serviceNames list", async () => {
+    const fs = makeFs({
+      dirs: { [`${WORKSPACE}/.anycode/plugins`]: ["proj-tool"] },
+      files: manifestAt(`${WORKSPACE}/.anycode/plugins/proj-tool`, { name: "proj-tool", skills: [], agents: [], workflows: [] }),
+    });
+    const result = await scanPluginsAdmin(fs, { workspace: WORKSPACE, home: HOME });
+    const row = result.rows.find((r) => r.name === "proj-tool")!;
+    expect(row.serviceNames).toEqual([]);
+    expect(row.servicesHash).toBeUndefined();
+    expect(row.servicesConsentGranted).toBeUndefined();
   });
 });
