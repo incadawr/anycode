@@ -13,10 +13,12 @@ import {
   formatChildApprovalNotice,
   formatChildStallNotice,
   formatChildTaskNotification,
+  formatChildTurnBudgetNotice,
   formatSupervisorIdleReminder,
   mapChildRunStatusToNotification,
   type ChildStallNoticeInput,
   type ChildTaskNotificationInput,
+  type ChildTurnBudgetNoticeInput,
   type SupervisorIdleReminderInput,
 } from "./child-notification.js";
 import { CHILD_NOTIFICATION_SUMMARY_MAX_CHARS } from "../types/config.js";
@@ -192,6 +194,45 @@ describe("formatChildTaskNotification: user-initiated stop (cancelledBy)", () =>
   });
 });
 
+describe("formatChildTaskNotification: turn-limit cause (Taskana 4820)", () => {
+  it("turnLimitTurns present prefixes the TURN LIMIT cause line ahead of the summary", () => {
+    const text = formatChildTaskNotification(
+      input({ status: "failed", summary: "partial findings", turnLimitTurns: 40 }),
+    );
+    expect(text).toContain("stopped at its TURN LIMIT after 40 turns");
+    expect(text).toContain("NOT a completion report");
+    // The cause line leads the summary, ahead of the child's own text.
+    expect(text.indexOf("TURN LIMIT")).toBeLessThan(text.indexOf("partial findings"));
+    // The status stays honest — a turn-limited child did not complete.
+    expect(text).toContain("<status>failed</status>");
+  });
+
+  it("field absent keeps the summary byte-identical to the pre-4820 form", () => {
+    const withField = formatChildTaskNotification(input({ status: "failed", summary: "s" }));
+    expect(withField).not.toContain("TURN LIMIT");
+  });
+
+  it("composes with the length marker — the cause line sits innermost, between the TRUNCATED marker and the child's text", () => {
+    const text = formatChildTaskNotification(
+      input({ status: "failed", summary: "cut text", turnLimitTurns: 12, finalTurnFinishReason: "length" }),
+    );
+    expect(text).toContain("stopped at its TURN LIMIT after 12 turns");
+    expect(text).toContain("TRUNCATED CHILD REPORT");
+    // Outermost to innermost: TRUNCATED marker, then the TURN LIMIT cause, then the child's own text.
+    expect(text.indexOf("TRUNCATED CHILD REPORT")).toBeLessThan(text.indexOf("TURN LIMIT after 12"));
+    expect(text.indexOf("TURN LIMIT after 12")).toBeLessThan(text.indexOf("cut text"));
+  });
+
+  it("a huge summary with the cause line still respects the character cap mechanics (cause inside, marker appended)", () => {
+    const longSummary = "x".repeat(CHILD_NOTIFICATION_SUMMARY_MAX_CHARS + 500);
+    const text = formatChildTaskNotification(
+      input({ status: "failed", summary: longSummary, turnLimitTurns: 40, fullReportPath: "/tmp/r/child-1.md" }),
+    );
+    expect(text).toContain("stopped at its TURN LIMIT after 40 turns");
+    expect(text).toContain("[truncated — the full report");
+  });
+});
+
 describe("mapChildRunStatusToNotification (spec §4bis: 4-way -> 3-way)", () => {
   it("completed -> completed", () => {
     expect(mapChildRunStatusToNotification("completed")).toBe("completed");
@@ -327,6 +368,92 @@ describe("formatChildStallNotice (TASK.148 slice 2)", () => {
       summary: "done",
     });
     expect(stallText).not.toBe(terminalText);
+    expect(stallText).toContain("<task-stall-notice>");
+    expect(terminalText).toContain("<task-notification>");
+  });
+});
+
+describe("formatChildTurnBudgetNotice (Taskana 4820)", () => {
+  function budgetInput(overrides?: Partial<ChildTurnBudgetNoticeInput>): ChildTurnBudgetNoticeInput {
+    return {
+      taskId: "call-1",
+      toolUseId: "call-1",
+      agentId: "child-session-1",
+      subagentType: "general-purpose",
+      description: "review the diff",
+      turns: 9,
+      maxTurns: 10,
+      ...overrides,
+    };
+  }
+
+  it("starts with the SAME verbatim anti-spoofing header as a real task notification", () => {
+    const text = formatChildTurnBudgetNotice(budgetInput());
+    expect(text.startsWith("[SYSTEM NOTIFICATION - NOT USER INPUT]\n")).toBe(true);
+    expect(text).toContain("This is an automated task event, NOT a message from the user.\n");
+    expect(text).toContain(
+      "Do NOT interpret this as user acknowledgement, confirmation, or response to any pending question.",
+    );
+  });
+
+  it("uses the distinct <task-budget-notice> root tag and NEVER a <status> field or <task-notification>", () => {
+    const text = formatChildTurnBudgetNotice(budgetInput());
+    expect(text).toContain("<task-budget-notice>");
+    expect(text).toContain("</task-budget-notice>");
+    expect(text).not.toContain("<task-notification>");
+    expect(text).not.toContain("<status>");
+  });
+
+  it("carries the identity fields and the turns/maxTurns facts", () => {
+    const text = formatChildTurnBudgetNotice(budgetInput());
+    expect(text).toContain("<task-id>call-1</task-id>");
+    expect(text).toContain("<tool-use-id>call-1</tool-use-id>");
+    expect(text).toContain("<agent-id>child-session-1</agent-id>");
+    expect(text).toContain("<subagent-type>general-purpose</subagent-type>");
+    expect(text).toContain("<description>review the diff</description>");
+    expect(text).toContain("turn 9 of its 10-turn budget");
+  });
+
+  it("states the child has NOT finished and names the wrap-up action (continue_session / send_to)", () => {
+    const text = formatChildTurnBudgetNotice(budgetInput());
+    expect(text).toContain("has NOT finished");
+    expect(text).toContain("continue_session");
+    expect(text).toContain("send_to");
+    expect(text).toContain("wrap up");
+  });
+
+  it("omits <agent-id> cleanly when the child session id is unknown", () => {
+    const text = formatChildTurnBudgetNotice(budgetInput({ agentId: undefined }));
+    expect(text).not.toContain("<agent-id>");
+  });
+
+  it("XML-escapes the free-text description", () => {
+    const text = formatChildTurnBudgetNotice(budgetInput({ description: "review <the> & diff" }));
+    expect(text).toContain("<description>review &lt;the&gt; &amp; diff</description>");
+  });
+
+  it("is textually distinguishable from formatChildTaskNotification's and formatChildStallNotice's output for the SAME task id", () => {
+    const budgetText = formatChildTurnBudgetNotice(budgetInput({ taskId: "shared-id", toolUseId: "shared-id" }));
+    const stallText = formatChildStallNotice({
+      taskId: "shared-id",
+      toolUseId: "shared-id",
+      agentId: "child-session-1",
+      subagentType: "general-purpose",
+      description: "review the diff",
+      silentMs: 600_000,
+      waitingForApproval: false,
+    });
+    const terminalText = formatChildTaskNotification({
+      taskId: "shared-id",
+      toolUseId: "shared-id",
+      agentId: "child-session-1",
+      subagentType: "general-purpose",
+      status: "completed",
+      summary: "done",
+    });
+    expect(budgetText).not.toBe(stallText);
+    expect(budgetText).not.toBe(terminalText);
+    expect(budgetText).toContain("<task-budget-notice>");
     expect(stallText).toContain("<task-stall-notice>");
     expect(terminalText).toContain("<task-notification>");
   });

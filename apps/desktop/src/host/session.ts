@@ -4093,6 +4093,14 @@ export class Session {
    * `SUBAGENT_ACTIVITY_MAX_EVENTS` over the whole turn chain); `turn_end`
    * increments the NEW `childTurnEndCount` (the progress report's `turns`,
    * distinct from `childTurns`) and crosses the same progress boundary.
+   *
+   * Taskana 4820 additions: `text_delta`, `reasoning_delta` and
+   * `tool_execution_start` ALSO cross the (throttled) progress boundary —
+   * liveness pushes only, never tool facts or activity reports — so a child
+   * streaming a long model turn or sitting inside one long tool call keeps
+   * feeding the parent-side SubagentStallClock's noteProgress and never
+   * false-stalls (the 25.10 triage incident). The 1000ms leading-edge
+   * throttle bounds the push rate at one per second during streaming.
    */
   private observeChildEvent(event: AgentEvent): void {
     switch (event.type) {
@@ -4108,12 +4116,27 @@ export class Session {
       }
       case "text_delta":
         this.childFinalText = appendFinalText(this.childFinalText, event.text);
+        // Taskana 4820: a streaming turn is a sign of life — crosses the
+        // throttled boundary so the parent-side stall clock keeps getting
+        // re-armed while the child is mid-answer (a long model turn is not
+        // silence; the 25.10 triage false-stall was exactly this gap).
+        this.emitChildProgressBoundary();
         break;
       case "stream_retry":
         this.childFinalText = resetFinalText(this.childFinalText);
         break;
+      // Taskana 4820: same rationale as text_delta — a model emitting
+      // reasoning frames is mid-turn, not hung.
+      case "reasoning_delta":
+        this.emitChildProgressBoundary();
+        break;
       case "tool_execution_start":
         this.pendingChildCalls.set(event.toolCallId, { toolName: event.toolName, input: event.input });
+        // Taskana 4820: dispatch itself is a sign of life — a child inside
+        // one long-running tool call (a 15-min Bash, a slow web fetch) is
+        // working, not stalled. Liveness push only: `childLastTool` stays
+        // result-based and the activity bridge stays result-paired.
+        this.emitChildProgressBoundary();
         break;
       case "tool_result":
         this.childToolCalls += 1;
@@ -4183,7 +4206,9 @@ export class Session {
   /**
    * Crosses a progress-report boundary (CUT-S2 §10.7 п.3: `tool_result` and
    * `turn_end`, mirroring the inline runner's own two `onProgress({kind:
-   * "progress",…})` call sites, runner.ts:503/537). Leading-edge throttled
+   * "progress",…})` call sites, runner.ts:503/537; Taskana 4820 additionally
+   * `text_delta`/`reasoning_delta`/`tool_execution_start` — streaming and
+   * dispatch are signs of life, see observeChildEvent). Leading-edge throttled
    * at 1000ms via the injected `this.now` — the FIRST boundary this session
    * ever crosses always emits (`childLastProgressEmitAt` starts `undefined`);
    * every later boundary within 1000ms of the last emission is silently

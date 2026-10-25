@@ -76,6 +76,7 @@ export {
   formatChildReportCapNotice,
   formatChildStallNotice,
   formatChildApprovalNotice,
+  formatChildTurnBudgetNotice,
   formatSupervisorIdleReminder,
   mapChildRunStatusToNotification,
 } from "./cli/child-notification.js";
@@ -84,6 +85,7 @@ export type {
   ChildApprovalNoticeInput,
   ChildTaskNotificationInput,
   ChildTaskNotificationStatus,
+  ChildTurnBudgetNoticeInput,
   SupervisorIdleReminderInput,
 } from "./cli/child-notification.js";
 // Pure string helper (TASK.27): the plan-discipline reminder both the CLI REPL

@@ -1650,6 +1650,174 @@ describe("detached stall notice delivery (TASK.148 slice 2)", () => {
   });
 });
 
+/**
+ * Taskana 4820: approaching-turn-budget notice for a detached child. The
+ * 25.10 orchestration incident: a review child worked ~50 minutes, crossed
+ * its turn cap, and the parent learned of it only via a bare terminal — no
+ * advance warning, no named cause. This seam fires ONCE per detached run, a
+ * small margin (10% of the budget, min 1 turn) before the cap, so the parent
+ * can tell the child to wrap up BEFORE the budget runs out. Sync-join runs
+ * and budget-less spawns never fire it (the parent is blocked on the call /
+ * has no budget fact to warn about).
+ */
+describe("detached approaching-turn-budget notice (Taskana 4820)", () => {
+  function budgetHarness() {
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    let nextId = 0;
+    const notices: Array<{ info: { turns: number; maxTurns: number }; req: SessionSubagentRequest; childSessionId: string }> = [];
+
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => `req-${++nextId}`,
+      onDetachedTerminal: () => {},
+      onDetachedStall: () => {},
+      onDetachedTurnBudget: (info, req, childSessionId) => {
+        notices.push({ info, req, childSessionId });
+      },
+    });
+
+    return { port, sent, emit: (event: ChildRunEvent) => listener?.(event), notices };
+  }
+
+  function progressEvent(requestId: string, turns: number): ChildRunEvent {
+    return { type: CHILD_RUN_EVENT_TYPE, requestId, kind: "progress", turns, toolCalls: turns };
+  }
+
+  it("fires exactly once when progress reaches maxTurns minus the margin (10%, min 1)", async () => {
+    const { port, sent, emit, notices } = budgetHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "review 4764", prompt: "p", spawnToolCallId: "spawn-bud-1", detach: true, maxTurns: 10 },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-bud-1", childTabId: "t1", model: "m" });
+    await pending; // detach settles at admit
+
+    // Below the margin: turns 1..8 of 10 (margin = 1) stay silent.
+    for (let turns = 1; turns <= 8; turns += 1) {
+      emit(progressEvent(requestId, turns));
+    }
+    expect(notices).toHaveLength(0);
+
+    // The margin turn fires once, carrying the child's session id.
+    emit(progressEvent(requestId, 9));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.info).toEqual({ turns: 9, maxTurns: 10 });
+    expect(notices[0]!.childSessionId).toBe("child-bud-1");
+    expect(notices[0]!.req.spawnToolCallId).toBe("spawn-bud-1");
+    expect(notices[0]!.req.maxTurns).toBe(10);
+
+    // Later progress never re-fires — once per run.
+    emit(progressEvent(requestId, 10));
+    expect(notices).toHaveLength(1);
+
+    emit(terminalEvent(requestId, { childSessionId: "child-bud-1" }));
+  });
+
+  it("a large budget uses a proportional margin (40-turn default: warns from turn 36)", async () => {
+    const { port, sent, emit, notices } = budgetHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-2", detach: true, maxTurns: 40 },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-bud-2", childTabId: "t1", model: "m" });
+    await pending;
+
+    emit(progressEvent(requestId, 35));
+    expect(notices).toHaveLength(0);
+    emit(progressEvent(requestId, 36)); // 40 - ceil(40/10) = 36
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.info).toEqual({ turns: 36, maxTurns: 40 });
+
+    emit(terminalEvent(requestId, { childSessionId: "child-bud-2" }));
+  });
+
+  it("maxTurns:1 warns on the very first progress event (margin floors at 1)", async () => {
+    const { port, sent, emit, notices } = budgetHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-3", detach: true, maxTurns: 1 },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-bud-3", childTabId: "t1", model: "m" });
+    await pending;
+
+    emit(progressEvent(requestId, 1));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.info).toEqual({ turns: 1, maxTurns: 1 });
+
+    emit(terminalEvent(requestId, { childSessionId: "child-bud-3" }));
+  });
+
+  it("a detached spawn with NO maxTurns never fires the seam", async () => {
+    const { port, sent, emit, notices } = budgetHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-4", detach: true },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-bud-4", childTabId: "t1", model: "m" });
+    await pending;
+
+    for (let turns = 1; turns <= 50; turns += 1) {
+      emit(progressEvent(requestId, turns));
+    }
+    expect(notices).toHaveLength(0);
+
+    emit(terminalEvent(requestId, { childSessionId: "child-bud-4" }));
+  });
+
+  it("a NON-detached run (sync join) never fires the seam even with a budget", async () => {
+    const { port, sent, emit, notices } = budgetHarness();
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-5", maxTurns: 10 },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-bud-5", childTabId: "t1", model: "m" });
+
+    for (let turns = 1; turns <= 10; turns += 1) {
+      emit(progressEvent(requestId, turns));
+    }
+    expect(notices).toHaveLength(0);
+
+    emit(terminalEvent(requestId, { childSessionId: "child-bud-5" }));
+    await pending;
+  });
+
+  it("a host wiring no onDetachedTurnBudget at all sees a harmless no-op, never a throw", async () => {
+    const sent: SentMessage[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => {
+        listener = cb;
+        return () => {};
+      },
+      createRequestId: () => "req-x",
+    });
+    const pending = port.run(
+      { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-6", detach: true, maxTurns: 2 },
+      {},
+    );
+    const requestId = spawns(sent)[0]!.requestId;
+    listener?.({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child-bud-6", childTabId: "t1", model: "m" });
+    await pending;
+    listener?.({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "progress", turns: 1, toolCalls: 1 });
+    listener?.(terminalEvent(requestId, { childSessionId: "child-bud-6" }));
+  });
+});
+
 // TASK.180: the profile turn budget rides the wire as ChildSpawnRequest
 // .maxTurns — only for a fresh spawn, validated pre-flight.
 describe("createChildSessionPort — maxTurns (TASK.180)", () => {

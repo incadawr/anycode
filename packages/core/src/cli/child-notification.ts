@@ -78,6 +78,14 @@ export interface ChildTaskNotificationInput {
    * it — a planner's 20k plan used to cost the supervisor a whole extra round.
    */
   fullReportPath?: string;
+  /**
+   * Taskana 4820: present only for a `max_turns` terminal the caller wants
+   * attributed — renders an explicit TURN LIMIT cause line at the head of the
+   * summary so the parent reads "stopped at its budget" instead of a bare
+   * "failed" with orphan text. Absent for every other status (and for a
+   * declaredDoneAtCeiling child, whose report IS final — no cause line).
+   */
+  turnLimitTurns?: number;
 }
 
 /** True when `summary` would be cut by `formatChildTaskNotification` — the caller's cue to save the whole text first. */
@@ -153,9 +161,20 @@ export function formatChildTaskNotification(input: ChildTaskNotificationInput): 
   const status = lengthCut && input.status === "completed" ? "failed" : input.status;
   const base = capSummary(input.summary, CHILD_NOTIFICATION_SUMMARY_MAX_CHARS, input.fullReportPath);
   const userCancelled = input.cancelledBy === "user" && status === "cancelled";
+  // Taskana 4820: the TURN LIMIT cause sits INNERMOST (first line of the
+  // summary body, ahead of the length marker and the child's own text) so it
+  // survives every later wrap and is the first thing a model skimming the
+  // summary reads. Inside `summary`, it is capped along with everything else
+  // rather than prepended past the cap — the cap exists to bound what the
+  // parent pays attention to, and the cause line is short by construction.
+  const withTurnLimit =
+    input.turnLimitTurns !== undefined
+      ? `The child stopped at its TURN LIMIT after ${input.turnLimitTurns} turns. ` +
+        `The text below is its last output (wrap-up or partial), NOT a completion report.\n\n${base}`
+      : base;
   const withLengthMarker = lengthCut
-    ? `[TRUNCATED CHILD REPORT — the child's final turn hit the model's output-token ceiling; the text below is cut mid-stream and its tail is missing.]\n\n${base}`
-    : base;
+    ? `[TRUNCATED CHILD REPORT — the child's final turn hit the model's output-token ceiling; the text below is cut mid-stream and its tail is missing.]\n\n${withTurnLimit}`
+    : withTurnLimit;
   const summary = userCancelled ? `${USER_CANCEL_SUMMARY_PREFIX}\n\n${withLengthMarker}` : withLengthMarker;
   const body = [
     "<task-notification>",
@@ -352,6 +371,78 @@ export function formatChildApprovalNotice(input: ChildApprovalNoticeInput): stri
     "answer. To unblock it, open the child's tab and approve or deny the pending request (or ask the " +
     `user to). ${deadlineSentence}${expiredRecovery}${noBypass}` +
     "This is a progress notice, not a completion report.\n\n" +
+    body
+  );
+}
+
+/**
+ * Taskana 4820: the APPROACHING turn-budget notice for a detached child —
+ * delivered through the SAME ChildReportQueue channel as the stall notice
+ * above, but for the mirror-image failure mode the 25.10 orchestration hit:
+ * a review child worked actively for ~50 minutes, crossed its turn cap
+ * (`max_turns`), and the parent learned of it only as a bare terminal with
+ * no advance warning and no named cause. This notice fires ONCE, while the
+ * child still runs, a small margin before its cap (the host's
+ * `onDetachedTurnBudget` seam owns the timing) — so the parent can tell the
+ * child to wrap up (or take over) BEFORE the budget runs out.
+ *
+ * Deliberately NOT a `<task-notification>` (same reasoning as
+ * `formatChildStallNotice`'s `<task-stall-notice>` above): that tag reports
+ * a CHILD's terminal outcome, and reusing its `<status>` enum here would let
+ * a model read an in-flight warning as a finish. A distinct root tag
+ * (`<task-budget-notice>`), no `<status>` field, and an explicit "has NOT
+ * finished" sentence keep the four synthetic events (terminal report /
+ * stall notice / budget notice / idle reminder) textually disjoint.
+ */
+export interface ChildTurnBudgetNoticeInput {
+  /** Identity of "the task" from the parent's own point of view — the spawning Agent tool_call id (same mapping as formatChildTaskNotification). */
+  taskId: string;
+  toolUseId: string;
+  /**
+   * Identity of the child session that actually ran the task, when already
+   * known. Absent only in the (practically unreachable) case the notice
+   * fires before the child's "accepted" event arrived — omitted rather than
+   * carrying a fabricated placeholder, same posture as the stall notice.
+   */
+  agentId?: string;
+  /** The agent_type the child ran as (e.g. "general-purpose"). */
+  subagentType: string;
+  /** The 3-5 word task label the child was spawned with. */
+  description: string;
+  /** Completed turns at the moment the notice fires (the progress event's `turns`). */
+  turns: number;
+  /** The request's own turn budget (`SessionSubagentRequest.maxTurns`). */
+  maxTurns: number;
+}
+
+/**
+ * Builds the full budget-notice text: the SAME verbatim anti-spoofing header
+ * as a real task notification, an explicit non-terminal framing sentence
+ * carrying the turns/maxTurns facts and the wrap-up instruction, then the
+ * `<task-budget-notice>` block — a distinct shape from every other synthetic
+ * event at every level (root tag, no `<status>` enum) so the two are never
+ * textually confusable.
+ */
+export function formatChildTurnBudgetNotice(input: ChildTurnBudgetNoticeInput): string {
+  const body = [
+    "<task-budget-notice>",
+    `  <task-id>${escapeXmlText(input.taskId)}</task-id>`,
+    `  <tool-use-id>${escapeXmlText(input.toolUseId)}</tool-use-id>`,
+    "  <task-type>subagent_child</task-type>",
+    ...(input.agentId !== undefined ? [`  <agent-id>${escapeXmlText(input.agentId)}</agent-id>`] : []),
+    `  <subagent-type>${escapeXmlText(input.subagentType)}</subagent-type>`,
+    `  <description>${escapeXmlText(input.description)}</description>`,
+    `  <turns>${input.turns}</turns>`,
+    `  <max-turns>${input.maxTurns}</max-turns>`,
+    "</task-budget-notice>",
+  ].join("\n");
+  return (
+    `${NOTIFICATION_HEADER}\n\n` +
+    "This child session has NOT finished — it is still running, but it is at " +
+    `turn ${input.turns} of its ${input.maxTurns}-turn budget and will be stopped there ` +
+    "(with only a wrap-up of what it already found) unless it finishes first. " +
+    "If its task is not nearly done, tell it to wrap up now: send a short message advising it to " +
+    "conclude and report its findings (via send_to to its agent-id, or continue_session on the next agent call).\n\n" +
     body
   );
 }

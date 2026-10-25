@@ -403,6 +403,23 @@ export interface CreateChildSessionPortOptions {
    */
   onDetachedApprovalSettled?: (req: SessionSubagentRequest, childSessionId: string) => void;
   /**
+   * Taskana 4820: invoked when a DETACHED run's progress crosses the
+   * approaching-turn-budget margin (10% of `req.maxTurns`, min 1 turn) — the
+   * ONE advance warning the parent gets before the child is stopped at its
+   * cap. Fires at most ONCE per run (latched per waiter). `info` carries the
+   * progress event's `turns` and the request's own `maxTurns`; `req` is the
+   * ORIGINAL request and `childSessionId` the child's id once known, same
+   * shape as `onDetachedStall` above. Never invoked for a budget-less spawn
+   * (no cap to warn about) or a sync-join run (the parent is blocked inside
+   * the Agent call and cannot act on a warning mid-call anyway). Absent =>
+   * the latch still works but the notice is a harmless no-op.
+   */
+  onDetachedTurnBudget?: (
+    info: { turns: number; maxTurns: number },
+    req: SessionSubagentRequest,
+    childSessionId: string,
+  ) => void;
+  /**
    * Silence threshold for this port's stall clock (TASK.148 slice 1/2).
    * SUBAGENT_STALL_TIMEOUT_MS when omitted — same resolution precedence as
    * the inline tier's `parent.subagentStallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS`
@@ -616,6 +633,10 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // ever reported as settled.
     let detachedAskPending = false;
 
+    // Taskana 4820: latched once this run's approaching-turn-budget notice
+    // has fired — the warning is once per run, never per progress event.
+    let turnBudgetNotified = false;
+
     // TASK.148 slice 1/2: constructed for BOTH tiers now. A non-detached
     // run's notice still bridges to opts.onProgress (unchanged from slice
     // 1). A DETACHED run's notice can no longer reach opts.onProgress (that
@@ -779,6 +800,23 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // to update.
               stallClock.noteProgress(event.lastTool);
               if (req.detach === true) {
+                // Taskana 4820: a detached run's progress is the only place
+                // the parent can learn its child is about to hit its turn
+                // cap. Checked inside the detach branch (a sync-join parent
+                // is blocked inside the Agent call and cannot act on a
+                // mid-call warning). Once per run: the latch above.
+                if (
+                  !turnBudgetNotified &&
+                  req.maxTurns !== undefined &&
+                  event.turns >= req.maxTurns - Math.max(1, Math.ceil(req.maxTurns / 10))
+                ) {
+                  turnBudgetNotified = true;
+                  options.onDetachedTurnBudget?.(
+                    { turns: event.turns, maxTurns: req.maxTurns },
+                    req,
+                    detachedChildSessionId ?? "",
+                  );
+                }
                 return;
               }
               const progress: SubagentProgress = {

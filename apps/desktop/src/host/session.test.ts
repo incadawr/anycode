@@ -6069,6 +6069,118 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
     });
   });
 
+  /**
+   * Taskana 4820: streaming and dispatching are signs of life too. The
+   * 25.10 orchestration incident: two live triage children each tripped the
+   * parent-side 10-minute stall clock while mid-turn — the child host pushed
+   * progress ONLY on tool_result/turn_end boundaries, so a long streaming
+   * model turn or one long-running tool call looked exactly like a hang.
+   * These boundaries now also cross `emitChildProgressBoundary` (same 1000ms
+   * leading-edge throttle), which pushes ChildProgress to main, which feeds
+   * the parent-side SubagentStallClock's noteProgress (child-session-port.ts
+   * feeds the clock BEFORE the detach early-return) — a streaming/dispatching
+   * child keeps resetting the silence window; a genuinely quiet child still
+   * trips at SUBAGENT_STALL_TIMEOUT_MS.
+   */
+  describe("progress: streaming/dispatch boundaries (Taskana 4820)", () => {
+    it("text_delta events cross the throttled progress boundary — a long streaming turn is a sign of life", () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+        observeChildEventDirect(h.session, { type: "text_delta", id: "t1", text: "part 1" });
+        currentTime = 2_000;
+        observeChildEventDirect(h.session, { type: "text_delta", id: "t1", text: "part 2" });
+
+        const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress).toHaveLength(2);
+        // Cumulative counters stay honest: no turn completed, no tool ran.
+        expect(progress[0]).toEqual({ kind: "progress", turns: 0, toolCalls: 0 });
+        expect(progress[1]).toEqual({ kind: "progress", turns: 0, toolCalls: 0 });
+      } finally {
+        h.close();
+      }
+    });
+
+    it("the 1000ms leading-edge throttle bounds the streaming push rate — a second delta within the window emits nothing", () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        observeChildEventDirect(h.session, { type: "text_delta", id: "t1", text: "a" });
+        currentTime = 500;
+        observeChildEventDirect(h.session, { type: "text_delta", id: "t1", text: "b" });
+        currentTime = 999;
+        observeChildEventDirect(h.session, { type: "text_delta", id: "t1", text: "c" });
+
+        const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress).toHaveLength(1);
+
+        currentTime = 1_000;
+        observeChildEventDirect(h.session, { type: "text_delta", id: "t1", text: "d" });
+        const progress2 = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress2).toHaveLength(2);
+      } finally {
+        h.close();
+      }
+    });
+
+    it("reasoning_delta events cross the boundary too — a model mid-reasoning turn is not silence", () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        observeChildEventDirect(h.session, { type: "reasoning_delta", id: "r1", text: "thinking…" });
+        currentTime = 2_000;
+        observeChildEventDirect(h.session, { type: "reasoning_delta", id: "r1", text: "more" });
+
+        const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress).toHaveLength(2);
+      } finally {
+        h.close();
+      }
+    });
+
+    it("tool_execution_start crosses the boundary — a child inside one long-running tool call is not silence", () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        observeChildEventDirect(h.session, {
+          type: "tool_execution_start",
+          toolCallId: "call-1",
+          toolName: "Bash",
+          input: { command: "sleep 900" },
+        });
+
+        const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress).toHaveLength(1);
+        expect(progress[0]).toEqual({ kind: "progress", turns: 0, toolCalls: 0 });
+        // lastTool stays result-based (childLastTool is only written on
+        // tool_result) — the start event is a liveness push, not a tool fact.
+        expect("lastTool" in progress[0]!).toBe(false);
+        // The pending-call buffer still got the start (the activity bridge
+        // stays result-paired, CUT-S2 §10.7 W1-FIX).
+        const activity = h.onProgress.mock.calls.map((c) => c[0]).filter(isActivityReport);
+        expect(activity).toHaveLength(0);
+      } finally {
+        h.close();
+      }
+    });
+
+    it("text_delta's own finalText accumulation is unchanged — the boundary push is purely additive", () => {
+      const h = createChildHarness({ steps: [finishStep()] });
+      try {
+        observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+        observeChildEventDirect(h.session, { type: "text_delta", id: "t1", text: "hello " });
+        observeChildEventDirect(h.session, { type: "text_delta", id: "t1", text: "world" });
+        // No terminal was finalized (no loop_end); the accumulator is private —
+        // assert only that the two pushes did not throw and produced progress.
+        const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
+        expect(progress.length).toBeGreaterThan(0);
+      } finally {
+        h.close();
+      }
+    });
+  });
+
   describe("progress counters (§10.7 п.6a.4)", () => {
     it("`turns` is the turn_end COUNT across the whole chain (mirrors runner.ts's turnEndCount — NOT the loop_end-summed childTurns); a steer turn keeps counting; `lastTool` updates on an invalid_input result too", async () => {
       const h = createChildHarness({

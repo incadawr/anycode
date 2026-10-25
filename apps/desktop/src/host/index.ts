@@ -233,6 +233,7 @@ import {
   formatChildApprovalNotice,
   childNotificationSummaryOverflows,
   formatChildTaskNotification,
+  formatChildTurnBudgetNotice,
   formatSupervisorIdleReminder,
   generateSessionTitle,
   loadEnvConfig,
@@ -880,6 +881,14 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     summary: outcome.finalText,
     ...(fullReportPath !== undefined ? { fullReportPath } : {}),
     ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
+    // Taskana 4820: a max_turns terminal the child did NOT declare done at
+    // its ceiling gets the explicit TURN LIMIT cause line — the parent reads
+    // "stopped at its budget", not a bare "failed" with orphan text. A
+    // declaredDoneAtCeiling child legitimately finished and keeps the plain
+    // (completed) report.
+    ...(outcome.status === "max_turns" && outcome.declaredDoneAtCeiling !== true
+      ? { turnLimitTurns: outcome.turns }
+      : {}),
   });
   childReportQueue.add(outcome.spawnToolCallId, text, {
     status: outcome.status,
@@ -984,6 +993,37 @@ function deliverDetachedChildApproval(
  */
 function retractDetachedChildApprovalNotice(req: SessionSubagentRequest, _childSessionId: string): void {
   childReportQueue.ack(`approval:${req.spawnToolCallId}`);
+}
+
+/**
+ * Taskana 4820: delivers the APPROACHING-turn-budget notice for a detached
+ * child — fired once per run by the child port's `onDetachedTurnBudget` seam
+ * (child-session-port.ts) when the child's progress crosses 10%-before-its-
+ * cap, the advance warning the 25.10 orchestration incident lacked (a review
+ * child crossed its cap after ~50 minutes and the parent saw only a bare
+ * terminal). Rides the SAME ChildReportQueue as the stall notice above, with
+ * the same upsert-coalescing bound: the id is namespaced
+ * `turn-budget:<spawnToolCallId>` — distinct from the stall notice's
+ * `stall:<…>` and the terminal report's bare id, so all three stay
+ * independently-tracked pending entries. The notice text itself is
+ * formatChildTurnBudgetNotice's business (a distinct <task-budget-notice>
+ * root tag, no <status> field — never confusable with a finish).
+ */
+function deliverDetachedTurnBudgetNotice(
+  info: { turns: number; maxTurns: number },
+  req: SessionSubagentRequest,
+  childSessionId: string,
+): void {
+  const text = formatChildTurnBudgetNotice({
+    taskId: req.spawnToolCallId,
+    toolUseId: req.spawnToolCallId,
+    ...(childSessionId !== "" ? { agentId: childSessionId } : {}),
+    subagentType: req.agentType,
+    description: req.description,
+    turns: info.turns,
+    maxTurns: info.maxTurns,
+  });
+  childReportQueue.upsert(`turn-budget:${req.spawnToolCallId}`, text);
 }
 
 /**
@@ -1497,6 +1537,7 @@ async function bootCodexSession(
         send: sendChildSessionMessage, subscribe: subscribeChildRunEvents,
         onDetachedTerminal: deliverDetachedChildReport, onDetachedStall: deliverDetachedChildStall,
         onDetachedApproval: deliverDetachedChildApproval, onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
+        onDetachedTurnBudget: deliverDetachedTurnBudgetNotice,
       });
       codexChildPort = port;
     }
@@ -2140,6 +2181,8 @@ async function bootClaudeSession(
         onDetachedTerminal: deliverDetachedChildReport,
         onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
         onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
+        onDetachedStall: deliverDetachedChildStall,
+        onDetachedTurnBudget: deliverDetachedTurnBudgetNotice,
       });
       claudeChildPort = childPort;
     }
@@ -4194,6 +4237,11 @@ async function boot(): Promise<void> {
         // picture (queue coalescing, id namespacing).
         onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
         onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
+        onDetachedStall: deliverDetachedChildStall,
+        // Taskana 4820: the approaching-turn-budget seam — fires once per
+        // detached run, strictly before the terminal. See
+        // deliverDetachedTurnBudgetNotice's own comment.
+        onDetachedTurnBudget: deliverDetachedTurnBudgetNotice,
         // TASK.148 slice 1/2: same knob as the inline tier just above
         // (config.subagentStallTimeoutMs) so both tiers share one resolved
         // value; the port's own default (SUBAGENT_STALL_TIMEOUT_MS) applies
