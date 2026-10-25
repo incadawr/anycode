@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.42] — 2026-10-25
+
 ### Fixed
 
 - `pnpm test` no longer depends on the developer's own `~/.anycode/config.json`: the core CLI e2e suite now runs every `runCli` drive against an isolated home, so user-scope LSP servers (or any other user config) can't leak into the results (Taskana 4850).
