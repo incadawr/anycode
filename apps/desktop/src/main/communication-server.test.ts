@@ -570,25 +570,26 @@ describe("External approvals on the Sessions API (Taskana 4763)", () => {
 
 
 describe("Sessions API create_session (Taskana 4768)", () => {
-  async function createFixture(options: { creator?: (request: CreateSessionRequest) => Promise<CreateSessionOutcome>; ready?: boolean; clock?: { now: number } } = {}) {
+  type FixtureTab = { sessionId: string; workspace: string; state: string; pid: number };
+  async function createFixture(options: { creator?: (request: CreateSessionRequest, tabs: FixtureTab[]) => Promise<CreateSessionOutcome>; ready?: boolean; clock?: { now: number } } = {}) {
     const dir = await mkdtemp(join(tmpdir(), "anycode-create-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const discoveryFile = join(dir, "communication.json");
-    const tabs: Array<{ sessionId: string; workspace: string; state: string; pid: number }> = [];
+    const tabs: FixtureTab[] = [];
     const request = vi.fn(async (_session: string, op: string, payload?: unknown) => {
       if (op === "get_session_status") { if (options.ready === false) throw new Error("host not ready"); return { engine: "core", state: "idle" }; }
       if (op === "send_message") return { envelope: payload, state: "queued" };
       return undefined;
     });
     let counter = 0;
-    const creator = options.creator ?? (async (input) => {
+    const creator = options.creator ?? (async (input: CreateSessionRequest, liveTabs: FixtureTab[]) => {
       const sessionId = `agent-${++counter}`;
-      tabs.push({ sessionId, workspace: input.workspace, state: "running", pid: 100 + counter });
+      liveTabs.push({ sessionId, workspace: input.workspace, state: "running", pid: 100 + counter });
       return { ok: true, sessionId, tabId: `tab-${counter}`, ...(input.handle ? { handle: input.handle } : {}) };
     });
     const clock = options.clock;
     const service = await startCommunicationServer({
       manager: { listTabs: () => tabs, communicationRequest: request }, userData: dir, config: { workspaces: [], discoveryFile },
-      createSessionByAgent: creator, ...(clock ? { now: () => clock.now } : {}), readyTimeoutMs: 120, readyPollMs: 10,
+      createSessionByAgent: (input) => creator(input, tabs), ...(clock ? { now: () => clock.now } : {}), readyTimeoutMs: 120, readyPollMs: 10,
     });
     cleanups.push(() => service.close());
     const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
@@ -622,6 +623,40 @@ describe("Sessions API create_session (Taskana 4768)", () => {
   it("create_session: not_ready is mapped to its own code", async () => {
     const f = await createFixture({ creator: async () => ({ ok: false, reason: "not_ready" }) });
     expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_ready/);
+  });
+
+  it("create_session: refused creations do not consume the 5/min budget (Taskana 4808, review F2)", async () => {
+    let refusedLeft = 5;
+    let successes = 0;
+    const f = await createFixture({ creator: async () => {
+      if (refusedLeft-- > 0) return { ok: false, reason: "not_trusted" };
+      successes++;
+      return { ok: true, sessionId: `agent-${successes}`, tabId: `tab-${successes}` };
+    } });
+    // Five refusals in a row (untrusted folder) — these must NOT count towards the rate window.
+    for (let i = 0; i < 5; i++) expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_trusted/);
+    expect(f.tabs).toHaveLength(0);
+    // The next, now-valid creation must still succeed (pre-fix it was rate_limited).
+    expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatchObject({ sessionId: "agent-1", tabId: "tab-1" });
+    // Four more successful creations and the window is full again (5 successes).
+    for (let i = 0; i < 4; i++) {
+      const sessionId = `agent-${i + 2}`;
+      expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatchObject({ sessionId });
+    }
+    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session rate_limited/);
+  });
+
+  it("create_session: a throwing creator maps to not_ready and does not consume the budget", async () => {
+    let threwLeft = 5;
+    let successes = 0;
+    const f = await createFixture({ creator: async () => {
+      if (threwLeft-- > 0) throw new Error("hook blew up");
+      successes++;
+      return { ok: true, sessionId: `agent-${successes}`, tabId: `tab-${successes}` };
+    } });
+    for (let i = 0; i < 5; i++) expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_ready/);
+    expect(f.tabs).toHaveLength(0);
+    expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatchObject({ sessionId: "agent-1", tabId: "tab-1" });
   });
 
   it("create_session: rate_limited on the 6th creation within one minute", async () => {

@@ -385,12 +385,14 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         while (creationTimes.length > 0 && creationTimes[0]! <= at - CREATE_SESSION_RATE_WINDOW_MS) creationTimes.shift();
         if (creationTimes.length >= CREATE_SESSION_RATE_LIMIT) throw createRefusal("rate_limited");
         if (aliveAgentOpened() >= MAX_AGENT_OPENED_TABS) throw createRefusal("too_many");
-        creationTimes.push(at);
         let outcome: CreateSessionOutcome;
         try {
           outcome = await options.createSessionByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
         } catch { throw createRefusal("not_ready"); }
         if (!outcome.ok) throw createRefusal(outcome.reason);
+        // Taskana 4808 (review F2): only a successful creation consumes the rate budget — refused
+        // attempts (not_trusted, too_many, not_ready, a throwing hook) never count.
+        creationTimes.push(at);
         agentOpenedSessions.add(outcome.sessionId);
         let messageId: string | undefined;
         if (input.firstMessage !== undefined) {
