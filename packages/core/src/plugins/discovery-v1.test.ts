@@ -458,6 +458,34 @@ describe("discoverPlugins — MCP consent filter (design §4/§9.6)", () => {
   });
 });
 
+describe("discoverPlugins — workspace trust × MCP consent for project plugins (4732 × 4736)", () => {
+  const servers = { alpha: { command: "node", args: ["a.js"] } };
+  const projectPlugin = (): FileSystemPort =>
+    makeFs({
+      dirs: { [PROJECT_PLUGINS]: ["proj"] },
+      files: manifestAt(`${PROJECT_PLUGINS}/proj`, { name: "proj", skills: [], agents: [], mcpServers: servers }),
+    });
+
+  it("untrusted project: project-plugin MCP never starts, even with a matching consent grant", async () => {
+    const consent: McpConsentEntry[] = [
+      { plugin: "proj", serversHash: serversHash(servers), grantedAt: "2026-10-24T00:00:00Z" },
+    ];
+    const result = await discoverPlugins(projectPlugin(), { ...base(), projectTrusted: false, mcpConsent: consent });
+    expect(result.mcpServerSpecs).toEqual([]);
+    expect(result.problems.some((p) => /folder not trusted/.test(p))).toBe(true);
+  });
+
+  it("trusted project: workspace trust covers project-plugin MCP — no second per-plugin consent", async () => {
+    const result = await discoverPlugins(projectPlugin(), { ...base(), projectTrusted: true, mcpConsent: [] });
+    expect(result.mcpServerSpecs.map((s) => s.name)).toEqual(["plugin_proj_alpha"]);
+  });
+
+  it("no trust decision supplied: project-plugin MCP still needs consent", async () => {
+    const result = await discoverPlugins(projectPlugin(), { ...base(), mcpConsent: [] });
+    expect(result.mcpServerSpecs).toEqual([]);
+  });
+});
+
 describe("discoverPlugins — legacy scan untouched alongside the store", () => {
   it("legacy hand-dropped plugins behave exactly as before (no state file, no managed entries)", async () => {
     const fs = makeFs({
