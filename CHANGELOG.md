@@ -11,6 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Sessions API: `cancel_turn`, `list_pending_approvals`, `answer_approval` and a per-session External approvals switch (off by default).
 - Telegram example: `/stop` and inline Allow/Deny buttons for approvals (needs the session's External approvals switch).
+- Claude and Codex tabs get the browser tools (BrowserOpen/Read/Screenshot/Navigate/Snapshot/Click/Type/WaitFor/Console/Eval) through AnyCode's tool bridge, with the same approvals, domain policy and Full browser access switch.
 
 ### Changed
 
