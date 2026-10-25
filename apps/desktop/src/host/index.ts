@@ -3797,6 +3797,10 @@ async function boot(): Promise<void> {
         toolNames: registry.list(),
         env: systemPromptEnv,
         visionFallbackEnabled: registry.has("InspectImage"),
+        // Taskana 4846 (mirror of cli/main.ts): the one-line LSP notice rides
+        // along exactly while the host carries a LspManager (>=1 configured
+        // server); null => [] => the section renders "" (byte-identity).
+        lspCoveredExtensions: lspManager !== null ? lspServerSpecs.flatMap((s) => s.extensions) : [],
       }) + components.map((c) => c.text).join("");
 
     // GitBridge wiring (slice 5.7, design slice-5.7-cut.md §2.3-C3): construction

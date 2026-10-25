@@ -175,6 +175,50 @@ describe("buildSystemPrompt", () => {
     expect(iVision).toBeLessThan(iEnv);
   });
 
+  it("Taskana 4846: omits the LSP-diagnostics section when lspCoveredExtensions is absent or empty", () => {
+    const absent = buildSystemPrompt({ toolNames: ["Read"], env: ENV });
+    const empty = buildSystemPrompt({ toolNames: ["Read"], env: ENV, lspCoveredExtensions: [] });
+    expect(absent).not.toContain("Language-server diagnostics");
+    expect(empty).not.toContain("Language-server diagnostics");
+  });
+
+  it("Taskana 4846: adds the one-line LSP notice naming the covered extensions and Edit/Write when non-empty", () => {
+    const prompt = buildSystemPrompt({
+      toolNames: ["Read"],
+      env: ENV,
+      lspCoveredExtensions: [".ts", ".tsx"],
+    });
+    expect(prompt).toContain("Language-server diagnostics");
+    expect(prompt).toContain(".ts, .tsx");
+    expect(prompt).toContain("Edit or Write");
+    // The multi-file guidance (owner decision 25.10) rides along on the same line.
+    expect(prompt).toContain("finish the change first");
+  });
+
+  it("Taskana 4846: dedupes and sorts covered extensions, so spec order does not affect output", () => {
+    const a = buildSystemPrompt({ lspCoveredExtensions: [".py", ".ts", ".py"] });
+    const b = buildSystemPrompt({ lspCoveredExtensions: [".ts", ".py"] });
+    expect(a).toBe(b);
+    expect(a).toContain(".py, .ts");
+  });
+
+  it("Taskana 4846: the LSP notice sits after tool-discipline and before env", () => {
+    const prompt = buildSystemPrompt({
+      toolNames: ["Read"],
+      env: ENV,
+      visionFallbackEnabled: true,
+      lspCoveredExtensions: [".ts"],
+    });
+    const iTools = prompt.indexOf(SECTION_TOOL_DISCIPLINE_TEMPLATE);
+    const iVision = prompt.indexOf("InspectImage");
+    const iLsp = prompt.indexOf("Language-server diagnostics");
+    const iEnv = prompt.indexOf("<env>");
+    expect(iTools).toBeGreaterThanOrEqual(0);
+    expect(iTools).toBeLessThan(iVision);
+    expect(iVision).toBeLessThan(iLsp);
+    expect(iLsp).toBeLessThan(iEnv);
+  });
+
   it("TASK.198 slice B2: the reviewed full-prompt snapshot is unchanged when visionFallbackEnabled is not passed", () => {
     // Same fixture as the snapshot test above, called without the new option —
     // a new optional field must never change any existing caller's output.

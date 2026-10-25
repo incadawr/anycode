@@ -65,6 +65,24 @@ export const SECTION_VISION_FALLBACK = [
   "Call InspectImage with that number and a question to have a separate vision model look at it and answer in text; call it again with follow-up questions about the same image.",
 ].join(" ");
 
+/**
+ * LSP-diagnostics section (Taskana 4846): present ONLY while the session
+ * carries a LspPort with at least one configured server. The owner incident:
+ * asked "is LSP connected?", the model answered "no LSP tools" and proposed a
+ * manual tsc run — LSP exposes no tool of its own, it appends `diagnostics`
+ * to Edit/Write results, and the model can only know that from this line.
+ * Two short sentences: which extensions are covered + where the diagnostics
+ * arrive, and (owner decision 25.10) the multi-file guidance — intermediate
+ * diagnostics during a multi-file change are expected noise until the change
+ * is finished.
+ */
+export function sectionLspDiagnostics(extensionsList: string): string {
+  return [
+    `Language-server diagnostics are enabled for ${extensionsList}: after each Edit or Write to a matching file, its current diagnostics arrive in that tool's result.`,
+    "During a multi-file change, intermediate diagnostics are expected — finish the change first, then act on what remains.",
+  ].join(" ");
+}
+
 export const SECTION_SUBAGENT_IDENTITY = [
   "You are a subagent that a parent agent has spun up to handle one specific task.",
   "You have no way to ask the user anything, so make your own decisions and stay tightly focused — your turn budget is limited, so use it well.",

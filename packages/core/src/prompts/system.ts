@@ -21,6 +21,7 @@ import {
   SECTION_TOOL_DISCIPLINE_GENERIC,
   SECTION_TOOL_DISCIPLINE_TEMPLATE,
   SECTION_VISION_FALLBACK,
+  sectionLspDiagnostics,
 } from "./sections.js";
 
 /**
@@ -53,6 +54,14 @@ export interface SystemPromptOptions {
    * stays byte-identical — this is additive-optional, not a behavior change.
    */
   visionFallbackEnabled?: boolean;
+  /**
+   * Taskana 4846: dot-prefixed extensions covered by the session's configured
+   * language servers (".ts", ".tsx"), decided by the wiring layer exactly when
+   * a LspPort exists. Absent/[]/[""] renders nothing, so every existing
+   * caller's output stays byte-identical — additive-optional, like
+   * visionFallbackEnabled above.
+   */
+  lspCoveredExtensions?: readonly string[];
 }
 
 /**
@@ -107,6 +116,20 @@ export function renderVisionFallbackSection(enabled?: boolean): string {
 }
 
 /**
+ * LSP-diagnostics section (Taskana 4846): the deduped, sorted, comma-joined
+ * covered extensions render the section template; absent/empty (or only blank
+ * strings — defense against a malformed spec) renders "" so
+ * buildSystemPrompt's empty-section filter drops it with no gap.
+ */
+export function renderLspDiagnosticsSection(extensions?: readonly string[]): string {
+  const cleaned = [...new Set(extensions ?? [])]
+    .map((e) => e.trim())
+    .filter((e) => e.length > 0)
+    .sort();
+  return cleaned.length > 0 ? sectionLspDiagnostics(cleaned.join(", ")) : "";
+}
+
+/**
  * Builds the base system prompt. A zero-arg call stays valid (every existing call
  * site / test compiles unchanged); enrichment is opt-in through `options`.
  */
@@ -117,6 +140,7 @@ export function buildSystemPrompt(options?: SystemPromptOptions): string {
     SECTION_SAFETY,
     renderToolDisciplineSection(options?.toolNames),
     renderVisionFallbackSection(options?.visionFallbackEnabled),
+    renderLspDiagnosticsSection(options?.lspCoveredExtensions),
     renderEnvSection(options?.env),
   ];
   return sections.filter((section) => section.length > 0).join("\n\n");

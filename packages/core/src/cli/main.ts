@@ -1271,7 +1271,14 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     }
   };
   const composeSystemPrompt = (): string =>
-    buildSystemPrompt({ toolNames, env: systemPromptEnv }) +
+    buildSystemPrompt({
+      toolNames,
+      env: systemPromptEnv,
+      // Taskana 4846: the one-line LSP notice rides along exactly while the
+      // session carries a LspPort (>=1 configured server), naming the covered
+      // extensions; `lsp` null => [] => the section renders "" (byte-identity).
+      lspCoveredExtensions: lsp !== null ? lspServerSpecs.flatMap((s) => s.extensions) : [],
+    }) +
     ext.memorySection +
     ext.skillsPromptSection +
     ext.workflowsPromptSection +

@@ -3885,6 +3885,64 @@ describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#6c/L8): no
       homedirSpy.mockRestore();
     }
   }, 15000);
+
+  it("Taskana 4846: with lspServers configured, the system prompt carries the one-line LSP notice (.ts); without it, none", async () => {
+    // Isolated `home` for BOTH halves: user-level `<home>/.anycode/config.json`
+    // lspServers would otherwise merge into the boot specs (project wins per
+    // name, user entries survive), so the owner's real home config could leak
+    // extensions into (or a notice into) the no-config half.
+    {
+      const { workspace, dbPath, home } = setupTitleTestDirs();
+      writeLspConfig(workspace);
+      const port = new RecordingModelPort();
+      const input = new PassThrough();
+      const output = new PassThrough();
+
+      const runPromise = runCli({
+        argv: [],
+        env: trustedWorkspaceEnv(dbPath, home),
+        input,
+        output,
+        modelPort: port,
+        cwd: workspace,
+        home,
+      });
+
+      input.write("hello\n");
+      input.end();
+
+      expect(await runPromise).toBe(0);
+      expect(port.requests).toHaveLength(1);
+      const system = port.requests[0]!.system ?? "";
+      expect(system).toContain("Language-server diagnostics");
+      expect(system).toContain(".ts");
+    }
+    // No lspServers config anywhere (isolated home, no .anycode/config.json in
+    // the workspace): the notice is absent — the L8 byte-identity invariant.
+    {
+      const { workspace, dbPath, home } = setupTitleTestDirs();
+      const port = new RecordingModelPort();
+      const input = new PassThrough();
+      const output = new PassThrough();
+
+      const runPromise = runCli({
+        argv: [],
+        env: trustedWorkspaceEnv(dbPath, home),
+        input,
+        output,
+        modelPort: port,
+        cwd: workspace,
+        home,
+      });
+
+      input.write("hello\n");
+      input.end();
+
+      expect(await runPromise).toBe(0);
+      expect(port.requests).toHaveLength(1);
+      expect(port.requests[0]!.system ?? "").not.toContain("Language-server diagnostics");
+    }
+  }, 15000);
 });
 
 describe("CLI language-server e2e (design slice-6.1-cut.md §2-D4/§6#5): exit-path reap", () => {
