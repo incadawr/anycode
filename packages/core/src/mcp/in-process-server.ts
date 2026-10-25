@@ -54,6 +54,13 @@ export interface McpToolDecl {
 export interface McpToolCallResult {
   text: string;
   isError: boolean;
+  /**
+   * Taskana 4764: image attachments riding the same CallToolResult, base64
+   * with no data-URI prefix (mirrors PreviewScreenshotSuccess.data). Optional
+   * and additive — a result without `images` renders exactly the single text
+   * content block every pre-4764 caller produced.
+   */
+  images?: Array<{ mediaType: string; data: string }>;
 }
 
 /**
@@ -112,7 +119,17 @@ export function createInProcessMcpServer(options: CreateInProcessMcpServerOption
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
     const result = await options.callTool(request.params.name, args, extra.signal, readCallMeta(request.params._meta));
     return {
-      content: [{ type: "text" as const, text: result.text }],
+      content: [
+        { type: "text" as const, text: result.text },
+        // Taskana 4764: each image becomes its own MCP image content block
+        // AFTER the text block; an absent `images` array spreads to nothing,
+        // so the pre-4764 response shape is preserved byte-for-byte.
+        ...(result.images ?? []).map((image) => ({
+          type: "image" as const,
+          data: image.data,
+          mimeType: image.mediaType,
+        })),
+      ],
       isError: result.isError,
     };
   });

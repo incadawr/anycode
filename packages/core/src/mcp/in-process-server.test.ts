@@ -92,6 +92,51 @@ describe("createInProcessMcpServer (SDK Client over InMemoryTransport.createLink
     expect(result.content).toEqual([{ type: "text", text: "Unknown agent_type." }]);
   });
 
+  // Taskana 4764 B1/B2: the additive `images` field on McpToolCallResult.
+  it("B1: a callTool result without images yields exactly one text content block (pre-4764 shape preserved)", async () => {
+    const { client } = await connectedClient({
+      listTools: () => [AGENT_DECL],
+      callTool: async () => ({ text: "plain", isError: false }),
+    });
+    const result = await client.callTool({ name: "agent", arguments: { agent_type: "probe", prompt: "x" } });
+    expect(result.isError).toBe(false);
+    expect(result.content).toEqual([{ type: "text", text: "plain" }]);
+  });
+
+  it("B2: a result with one image yields [text, {type:image,data,mimeType}] with isError preserved", async () => {
+    const { client } = await connectedClient({
+      listTools: () => [AGENT_DECL],
+      callTool: async () => ({
+        text: "Screenshot of http://localhost:3000/ (800x600) attached.",
+        isError: false,
+        images: [{ mediaType: "image/png", data: "aW1hZ2UtYnl0ZXM=" }],
+      }),
+    });
+    const result = await client.callTool({ name: "agent", arguments: { agent_type: "probe", prompt: "x" } });
+    expect(result.isError).toBe(false);
+    expect(result.content).toEqual([
+      { type: "text", text: "Screenshot of http://localhost:3000/ (800x600) attached." },
+      { type: "image", data: "aW1hZ2UtYnl0ZXM=", mimeType: "image/png" },
+    ]);
+  });
+
+  it("B2 (error case): an errored result still carries its images after the text block", async () => {
+    const { client } = await connectedClient({
+      listTools: () => [AGENT_DECL],
+      callTool: async () => ({
+        text: "failed but with an image",
+        isError: true,
+        images: [{ mediaType: "image/png", data: "aW1hZ2UtYnl0ZXM=" }],
+      }),
+    });
+    const result = await client.callTool({ name: "agent", arguments: { agent_type: "probe", prompt: "x" } });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      { type: "text", text: "failed but with an image" },
+      { type: "image", data: "aW1hZ2UtYnl0ZXM=", mimeType: "image/png" },
+    ]);
+  });
+
   it("a client-cancelled call aborts the handler's own signal (extra.signal, not the envelope's)", async () => {
     let capturedSignal: AbortSignal | undefined;
     let releaseCall: (() => void) | undefined;
