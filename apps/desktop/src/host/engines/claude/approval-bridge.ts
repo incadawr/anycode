@@ -25,7 +25,7 @@
 import { classifyBashCommandLine } from "@anycode/core";
 import type { PermissionRequest, ToolMetadata } from "@anycode/core";
 import { NodeFileSystemAdapter, resolveWorkspaceWriteFacts, WORKSPACE_CONFINED_WRITE_TOOLS } from "@anycode/core";
-import type { IpcPermissionBroker, SettleOrigin } from "../../permission-broker.js";
+import type { EngineBridgeBroker, SettleOrigin } from "../../permission-broker.js";
 import type { ControlRequestResponder, InboundControlRequest } from "./claude-client.js";
 import { CLAUDE_ANYCODE_MCP_TOOL_PREFIX, type ClaudeMcpBridge } from "./mcp-bridge.js";
 
@@ -140,7 +140,7 @@ export function denyResponse(approval: ClaudeApprovalRequest, message: string): 
 }
 
 export interface ClaudeApprovalBridgeOptions {
-  broker: IpcPermissionBroker;
+  broker: EngineBridgeBroker;
   /** The session's active permission preset id; `read-only` refuses ExitPlanMode escalation. */
   activePresetId(): string;
   /**

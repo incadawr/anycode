@@ -300,6 +300,18 @@ export function buildChildConfig(
      * stop instead, so the parent gets a partial rather than nothing.
      */
     outcomeDeadlineAt?: number;
+    /**
+     * Taskana 4730: the ROOT loop's human-context thunk for the ask-zone
+     * classifier. Supplied by createSubagentRunner from the PARENT LOOP
+     * (never the parent CONFIG — the config object is shared and must not be
+     * mutated); copied onto the child's askClassifier so the child consults
+     * the SAME classifier with the HUMAN's recent turns. A child's own
+     * history is model-authored (its "user" messages are the parent model's
+     * prompts — an injection channel), so it is never the context source.
+     * Absent (no classifier configured) => the child config carries no
+     * askClassifier, byte-identical to pre-4730.
+     */
+    humanUserContext?: () => string[];
   },
 ): AgentLoopConfig {
   const tokenizer = parent.tokenizer ?? new HeuristicTokenizer();
@@ -356,6 +368,24 @@ export function buildChildConfig(
     // Fail-closed permissions inherited: same engine + broker.
     permissionEngine: parent.permissionEngine,
     permissionBroker: parent.permissionBroker,
+    // Taskana 4730: the ask-zone classifier is inherited too — with the ROOT's
+    // human-derived userContext thunk, never the child's own (model-authored)
+    // history. Children of children keep the ROOT thunk: this field is copied
+    // from the parent CONFIG (which a child's own buildChildConfig reads), and
+    // a child's config carries the same inherited thunk.
+    ...(parent.askClassifier !== undefined
+      ? {
+          askClassifier: {
+            classifier: parent.askClassifier.classifier,
+            ...(parent.askClassifier.timeoutMs !== undefined
+              ? { timeoutMs: parent.askClassifier.timeoutMs }
+              : {}),
+            ...(extras?.humanUserContext !== undefined || parent.askClassifier.userContext !== undefined
+              ? { userContext: extras?.humanUserContext ?? parent.askClassifier.userContext }
+              : {}),
+          },
+        }
+      : {}),
     // Snapshot of the parent mode at spawn (plan child = read-only; never yolo).
     mode: parent.mode,
     // Fresh todos so the child cannot clobber the parent's plan; every other port
@@ -624,6 +654,15 @@ export function createSubagentRunner(
 ): SubagentPort {
   const semaphore = new Semaphore(resolveSubagentConcurrency(opts));
 
+  // Taskana 4730: the PARENT LOOP's human-context thunk for the ask-zone
+  // classifier. The runner is built from the parent CONFIG (withSubagents runs
+  // before `new AgentLoop`), but the thunk lives on the loop (memoized over
+  // the loop's live history) — so the loop registers it here after
+  // construction (AgentLoop calls registerHumanUserContext on its subagents
+  // port when a classifier is configured). A mutable cell, never a config
+  // mutation: the shared AgentLoopConfig object stays untouched.
+  let humanUserContext: (() => string[]) | undefined;
+
   // Profiles keyed by name; a built-in name in the map is unreachable because
   // resolution consults isKnownPersona FIRST (built-in always wins). Rebuilt
   // on EVERY call rather than cached once at construction: opts.profiles may
@@ -717,6 +756,13 @@ export function createSubagentRunner(
     // maxTurns from turnBudget and the inline connection refusal were all dead).
     // Pure delegation: the host owns settings + health; core only walks the chain.
     resolveRoleRoute: opts?.resolveRoleRoute ?? ((agentType: string) => null),
+    // Taskana 4730: the owning AgentLoop registers its human-context thunk
+    // here right after construction (the loop owns the live history the thunk
+    // reads; the runner is built from the config, before the loop exists).
+    // Never read by anything but buildChildConfig's extras below.
+    registerHumanUserContext(thunk: () => string[]): void {
+      humanUserContext = thunk;
+    },
     async run(req: SubagentRequest, runOpts: SubagentRunOptions): Promise<SubagentOutcome> {
       const startedAt = Date.now();
       const { signal, onProgress } = runOpts;
@@ -1260,6 +1306,11 @@ export function createSubagentRunner(
         const childConfig = buildChildConfig(parent, persona, req, {
           env: opts?.env,
           memorySection: opts?.memorySection,
+          // Taskana 4730: the root loop's human-context thunk when the parent
+          // loop registered one (registerHumanUserContext below). Undefined
+          // when no classifier is configured — the child then carries no
+          // askClassifier at all (parent.askClassifier absent).
+          ...(humanUserContext !== undefined ? { humanUserContext } : {}),
           ...(opts?.webSearchTool !== undefined ? { webSearchTool: opts.webSearchTool } : {}),
           // Wall-clock budget anchored at run() entry, i.e. BEFORE the semaphore
           // wait above: the dispatcher bills the Agent call from the moment the

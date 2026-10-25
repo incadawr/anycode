@@ -67,6 +67,8 @@ import {
   type AskClassifier,
   type AskClassifierInput,
 } from "../permissions/ask-classifier.js";
+// Taskana 4730: the shared consultation (same event shape for engine bridges).
+import { consultAskClassifier } from "../permissions/ask-classifier-consult.js";
 
 export interface DispatchContext {
   registry: ToolRegistry;
@@ -501,6 +503,10 @@ export async function executeToolCall(
  * for a valid `allow` verdict. Emits one `permission_auto_decided` journal event
  * per consulted ask (allow, ask-by-verdict or ask-by-error). Never throws: any
  * throw on this path is an ask, so the broker decides.
+ *
+ * Taskana 4730: the consultation itself lives in
+ * permissions/ask-classifier-consult.ts (shared with the engine-session broker
+ * decorator); this wrapper keeps the dispatcher's exact call semantics.
  */
 async function tryAutoDecideAsk(
   ctx: DispatchContext,
@@ -514,34 +520,15 @@ async function tryAutoDecideAsk(
   const config = ctx.askClassifier;
   if (config === undefined) return false;
   try {
-    const eligibility = isClassifiableAsk(request, { decision: rulingDecision }, hookAsk);
-    if (!eligibility.eligible) return false;
-    const command = (request.input as { command?: unknown }).command;
-    if (typeof command !== "string") return false;
-    const input: AskClassifierInput = {
-      toolName: "Bash",
-      command,
-      segments: eligibility.segments,
+    const consulted = await consultAskClassifier(config, request, { decision: rulingDecision }, {
       cwd: ctx.cwd,
-      userContext: config.userContext(),
-    };
-    const consulted = await classifyAsk(config.classifier, input, {
-      ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
+      toolCallId,
+      hookEscalated: hookAsk,
       signal: parentSignal,
     });
-    const autoAllowed = consulted.verdict.decision === "allow" && consulted.error === undefined;
-    emit?.({
-      type: "permission_auto_decided",
-      toolCallId,
-      toolName: request.toolName,
-      classifier: config.classifier.id,
-      decision: autoAllowed ? "allow" : "ask",
-      reason: consulted.verdict.reason,
-      ...(consulted.verdict.score !== undefined ? { score: consulted.verdict.score } : {}),
-      latencyMs: consulted.latencyMs,
-      ...(consulted.error !== undefined ? { error: consulted.error } : {}),
-    });
-    return autoAllowed;
+    if (consulted === null) return false;
+    emit?.(consulted.event);
+    return consulted.autoAllowed;
   } catch {
     return false;
   }

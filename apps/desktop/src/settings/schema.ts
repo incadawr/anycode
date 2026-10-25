@@ -41,16 +41,32 @@ const alwaysAllowRuleSchema = z.object({
 });
 
 /**
- * Taskana 4702 Stage 1: the ask-zone classifier record. Optional and
- * default-off; an invalid record is dropped by the caller's `.catch(undefined)`
- * (classifier off) and never disturbs the sibling permission rules.
+ * Taskana 4702 Stage 1 / Taskana 4730: the ask-zone classifier record — a
+ * discriminated union on `kind`. Optional and default-off; an invalid record
+ * is dropped by the caller's `.catch(undefined)` (classifier off) and never
+ * disturbs the sibling permission rules. `kind:"command"` is the Stage 1
+ * shape, unchanged; `kind:"model"` (4730 implementation B) names a model from
+ * the user's connections (both optional = the session's own connection/model).
  */
-export const permissionClassifierSchema = z.object({
+const permissionClassifierCommandSchema = z.object({
   enabled: z.boolean(),
   kind: z.literal("command"),
   command: z.string().refine((command) => command.trim().length > 0),
   timeoutMs: z.number().int().positive().optional(),
 });
+
+const permissionClassifierModelSchema = z.object({
+  enabled: z.boolean(),
+  kind: z.literal("model"),
+  connectionId: z.string().refine((id) => id.trim().length > 0).optional(),
+  model: z.string().refine((model) => model.trim().length > 0).optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export const permissionClassifierSchema = z.discriminatedUnion("kind", [
+  permissionClassifierCommandSchema,
+  permissionClassifierModelSchema,
+]);
 
 /** One trusted-binary consent (TASK.103, DV-6). Validated PER ELEMENT — a malformed record is dropped alone (= that consent inert, fail-closed) without disturbing siblings. */
 export const trustedBinaryConsentSchema = z.object({

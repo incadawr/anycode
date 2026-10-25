@@ -1423,6 +1423,16 @@ export class Session {
   /** Latches once `startProgrammaticTurn` has been called, so a second call is a refusal (one initial turn per host lifetime). */
   private programmaticTurnStarted = false;
   /** Host-side steer queue (§1.1/§2.6.3): a `user_message` received while busy is parked here instead of rejected, bounded by `CHILD_STEER_QUEUE_MAX`. */
+  /**
+   * Taskana 4730: bounded ring of the last plain HUMAN user-message texts this
+   * session accepted (<= 3 entries x 500 chars), fed from onUserMessage's
+   * accepted path. Sole consumer: `recentHumanUserTurns()` — the host index
+   * hands that getter to the classifying broker decorator so ENGINE-SESSION
+   * (Codex/Claude) asks are classified against the human's turns. Never
+   * assistant text, tool output, or injected frames — same discipline as
+   * core's recentUserTurns.
+   */
+  private readonly humanTurnRing: string[] = [];
   private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[] }> = [];
   /** Final-text accumulator over the WHOLE child session's turn chain (packages/core/src/subagents/final-text.ts — the same reset/append/fixate semantics runner.ts applies to an inline subagent). */
   private childFinalText: FinalTextAccumulator = createFinalTextAccumulator();
@@ -3250,6 +3260,40 @@ export class Session {
   }
 
   /**
+   * Taskana 4730: emits ONE agent event to the renderer exactly the way the
+   * session's own agent_event path does. Sole caller today: the classifying
+   * broker decorator's `permission_auto_decided` journal event (the decorator
+   * is wired in host/index.ts BEFORE the Session exists, so it receives this
+   * method as a late-bound thunk).
+   */
+  emitAgentEvent(event: AgentEvent): void {
+    // The live turn id when one is open, else the engine-switch sentinel:
+    // journal frames are only ever read as history, never as live-stream
+    // deltas, so a stable non-null id is enough (renderer groups by turnId).
+    const turnId = this.turnId ?? ENGINE_SWITCH_TURN_ID;
+    this.outbound.emit({ type: "agent_event", turnId, event: sanitizeAgentEvent(event) });
+  }
+
+  /** Taskana 4730: appends one human turn to the bounded ring (<= 3 x 500 chars). */
+  private noteHumanUserTurn(text: string): void {
+    const capped = text.length > 500 ? text.slice(0, 500) : text;
+    this.humanTurnRing.push(capped);
+    while (this.humanTurnRing.length > 3) {
+      this.humanTurnRing.shift();
+    }
+  }
+
+  /**
+   * Taskana 4730: the last accepted HUMAN user turns, oldest first — the
+   * userContext source for the classifying broker decorator on engine-session
+   * (Codex/Claude) approval bridges. A defensive copy, so the ring can never
+   * be mutated through the getter.
+   */
+  recentHumanUserTurns(): string[] {
+    return [...this.humanTurnRing];
+  }
+
+  /**
    * Parks a busy-time user_message in the child's host-side steer queue
    * (CUT-S2 §1.1: the RENDERER prompt-queue is never used for a child
    * surface — steering must affect the sync-join result, so it lives here,
@@ -3306,6 +3350,14 @@ export class Session {
    * queued item is fully spent and produced nothing to wait on."
    */
   private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): boolean {
+    // Taskana 4730: record the RAW human turn for the ask-zone classifier's
+    // engine-session coverage (classifying-broker.ts). Only genuinely human
+    // turns: origin "system" injections never enter. Recorded at admission,
+    // BEFORE any plan-reminder/notice augmentation, so the classifier sees
+    // what the user typed. Bounded: keep the last 3, 500 chars each.
+    if (origin !== "system") {
+      this.noteHumanUserTurn(text);
+    }
     const attachments = images?.length ? [...images] : undefined;
     if (attachments !== undefined && (!this.engine.capabilities.supportsImages || !this.imagesAccepted())) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });

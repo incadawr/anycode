@@ -13,7 +13,9 @@ import type { AlwaysAllowRule, SettingsMutationResult, SettingsSnapshot } from "
 import { createSettingsStore, type SettingsBridge } from "../settings-store.js";
 import { FileIcon, Gear, Globe, Terminal } from "./icons.js";
 import {
+  buildClassifierRecord,
   canSubmitPermissionAdd,
+  classifierFieldsFromRecord,
   KNOWN_TOOL_NAMES,
   permissionToolOptions,
   ruleDisplayPattern,
@@ -186,5 +188,59 @@ describe("submitPermissionAdd", () => {
     const store = createSettingsStore(bridge);
     await submitPermissionAdd(store, "Bash", "git *");
     expect(store.getState().snapshot).toBe(nextSnapshot);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4730: the classifier control's pure builders.
+// ---------------------------------------------------------------------------
+
+describe("buildClassifierRecord (Taskana 4730)", () => {
+  it("command kind: a non-blank command builds {enabled,kind,command}; blank stays undefined (off)", () => {
+    expect(buildClassifierRecord("command", { command: "  /opt/da --json  ", connectionId: "", model: "" })).toEqual({
+      enabled: true,
+      kind: "command",
+      command: "/opt/da --json",
+    });
+    expect(buildClassifierRecord("command", { command: "   ", connectionId: "", model: "" })).toBeUndefined();
+  });
+
+  it("model kind: both fields optional — blanks are omitted, not stored", () => {
+    expect(buildClassifierRecord("model", { command: "", connectionId: "", model: "" })).toEqual({
+      enabled: true,
+      kind: "model",
+    });
+    expect(buildClassifierRecord("model", { command: "", connectionId: " conn-2 ", model: " glm-flash " })).toEqual({
+      enabled: true,
+      kind: "model",
+      connectionId: "conn-2",
+      model: "glm-flash",
+    });
+  });
+});
+
+describe("classifierFieldsFromRecord (Taskana 4730)", () => {
+  it("absent record => disabled defaults", () => {
+    expect(classifierFieldsFromRecord(undefined)).toEqual({
+      kind: "command",
+      command: "",
+      connectionId: "",
+      model: "",
+      enabled: false,
+    });
+  });
+
+  it("a command record round-trips its command; a model record its optional fields", () => {
+    expect(classifierFieldsFromRecord({ enabled: true, kind: "command", command: "/opt/da" })).toMatchObject({
+      kind: "command",
+      command: "/opt/da",
+      enabled: true,
+    });
+    expect(classifierFieldsFromRecord({ enabled: true, kind: "model", model: "m1" })).toMatchObject({
+      kind: "model",
+      connectionId: "",
+      model: "m1",
+      enabled: true,
+    });
   });
 });

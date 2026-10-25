@@ -187,6 +187,7 @@ import {
   NodeGitAdapter,
   NodeHttpAdapter,
   NodeMcpTransportFactory,
+  createModelAskClassifier,
   parseRunAllowBash,
   RuleAwarePermissionEngine,
   RunAllowBashPermissionEngine,
@@ -478,7 +479,10 @@ import {
   type ChildSpawnRequest,
   type ChildTerminal,
 } from "../shared/child-sessions.js";
-import { parseAskClassifierEnv } from "./ask-classifier-env.js";
+import { parseAskClassifierEnvKind, type AskClassifierBoot } from "./ask-classifier-env.js";
+// Taskana 4730: engine-session approval coverage via a broker decorator.
+import { withAskClassifier } from "./classifying-broker.js";
+import { decorateEngineBroker, type EngineClassifierBoot } from "./engine-classifier-boot.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
 import { TerminalManager } from "./terminal.js";
 import { createWirePort } from "./wire.js";
@@ -1016,6 +1020,14 @@ function translatePreviewEvent(message: PreviewEventMessage): PreviewConsoleAgen
 const PREVIEW_CONSOLE_TURN_ID = "preview-console";
 
 let session: Session | null = null;
+/**
+ * Taskana 4730: late-bound Session reference for the ENGINE-SESSION classifier
+ * coverage. The codex/claude brokers are decorated BEFORE the Session exists
+ * (the bridges capture the broker at construction), so the decorator's
+ * userContext/emit thunks read through this cell; until the Session binds they
+ * answer [] / no-op, matching the decorator's fail-closed "ask" default.
+ */
+let classifierSessionRef: Session | null = null;
 /** Exists before engine-specific boot; owns cleanup when Session was never built. */
 let engineBootstrap: EngineBootstrap | null = null;
 let initFailure: string | null = null;
@@ -1232,6 +1244,25 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     undefined, // default ask deadline
     rules,
   );
+  // Taskana 4730: ask-zone classifier coverage for the Codex approval bridge.
+  // Command kind only (see engine-classifier-boot.ts); the bridges take the
+  // DECORATED broker via `options` below, Session keeps the raw one.
+  const engineClassifierBoot: EngineClassifierBoot | undefined = (() => {
+    const parsed = parseAskClassifierEnvKind(process.env[ENV_PERMISSION_CLASSIFIER]);
+    if (parsed === undefined || parsed.kind !== "command") {
+      if (parsed?.kind === "model") {
+        console.log("[host] codex session: model-kind classifier is core-only for now; command kind covers engine approvals");
+      }
+      return undefined;
+    }
+    console.log(`[host] ${ENV_PERMISSION_CLASSIFIER}: engine approvals classified by ${parsed.boot.classifier.id}`);
+    return parsed.boot;
+  })();
+  const classifierBroker = decorateEngineBroker(broker, engineClassifierBoot, {
+    userContext: () => classifierSessionRef?.recentHumanUserTurns() ?? [],
+    cwd: workspace,
+    emit: (event) => classifierSessionRef?.emitAgentEvent(event),
+  });
   const processOwnership = readHostProcessOwnership(
     process.env,
     process.pid,
@@ -1377,7 +1408,9 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
 
   const options = {
     bootstrap,
-    broker,
+    // Taskana 4730: the bridges get the classifying decorator when a
+    // classifier is configured; Session keeps the raw broker.
+    broker: classifierBroker,
     // Taskana 4265: the codex approval bridge auto-accepts a file change only
     // when every change is an add/update, every target is realpath-provably
     // inside the workspace, AND the session's policy already allows workspace
@@ -1764,6 +1797,9 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
       if (args.child !== undefined) cleanupCodexChildTempDir();
     }) } : {}),
   });
+  // Taskana 4730: bind the late-bound Session ref the classifying broker
+  // decorator reads (userContext ring + agent_event emit).
+  classifierSessionRef = session;
   console.log(`[host] initialized Codex native thread ${connected.threadId} session=${connected.sessionMeta.id} db=${dbPath}`);
   } finally {
     // Taskana 4682 rework: a boot that never reached Session (spawn failure,
@@ -1817,6 +1853,24 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     undefined, // default ask deadline
     rules,
   );
+  // Taskana 4730: ask-zone classifier coverage for the Claude approval bridge
+  // (same shape as the codex boot above).
+  const claudeClassifierBoot: EngineClassifierBoot | undefined = (() => {
+    const parsed = parseAskClassifierEnvKind(process.env[ENV_PERMISSION_CLASSIFIER]);
+    if (parsed === undefined || parsed.kind !== "command") {
+      if (parsed?.kind === "model") {
+        console.log("[host] claude session: model-kind classifier is core-only for now; command kind covers engine approvals");
+      }
+      return undefined;
+    }
+    console.log(`[host] ${ENV_PERMISSION_CLASSIFIER}: engine approvals classified by ${parsed.boot.classifier.id}`);
+    return parsed.boot;
+  })();
+  const claudeClassifierBroker = decorateEngineBroker(broker, claudeClassifierBoot, {
+    userContext: () => classifierSessionRef?.recentHumanUserTurns() ?? [],
+    cwd: workspace,
+    emit: (event) => classifierSessionRef?.emitAgentEvent(event),
+  });
   const processOwnership = readClaudeHostProcessOwnership(
     process.env,
     process.pid,
@@ -2000,7 +2054,8 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
 
   const options = {
     bootstrap,
-    broker,
+    // Taskana 4730: classifying decorator for the Claude approval bridge.
+    broker: claudeClassifierBroker,
     binaryPath,
     cwd: workspace,
     // TASK.180: a claude child enforces the profile budget natively
@@ -2387,6 +2442,8 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
   // Custody (cut §0.2 invariant 2): the ref is a UUID this host generated (or
   // the persisted one, on resume) and the id is our own row id — no account
   // email, token, subscription type or cost figure is ever written to a log line.
+  // Taskana 4730: bind the late-bound Session ref (see the codex branch).
+  classifierSessionRef = session;
   console.log(`[host] initialized Claude native session ${connected.sessionRef} session=${rowId} db=${dbPath}`);
 }
 
@@ -2631,10 +2688,19 @@ async function boot(): Promise<void> {
     // change). Logged unconditionally so a widened run is never silent, even
     // when every configured entry was malformed and none were accepted.
     const runAllowBashEntries = parseRunAllowBash(process.env[ENV_RUN_ALLOW_BASH]);
-    // Taskana 4702 Stage 1: the ask-zone classifier (default off). Parsed
-    // defensively; garbage or absence = off. Only the core AgentLoop config
-    // below receives it — engine sessions have their own approval bridges.
-    const askClassifierBoot = parseAskClassifierEnv(process.env[ENV_PERMISSION_CLASSIFIER]);
+    // Taskana 4702 Stage 1 / Taskana 4730: the ask-zone classifier (default
+    // off). Parsed defensively; garbage or absence = off. kind:"command"
+    // yields a ready boot (Stage 1). kind:"model" (implementation B) names a
+    // model from the connections — the classifier is BUILT below, once the
+    // provider/transport catalog is resolved, and resolution failure (unknown
+    // connection, no key) turns the classifier OFF with one log line, never a
+    // crash. Engine sessions get coverage through the classifying broker
+    // decorator (classifying-broker.ts) instead of the core config alone.
+    const askClassifierKindBoot = parseAskClassifierEnvKind(process.env[ENV_PERMISSION_CLASSIFIER]);
+    const askClassifierBoot: AskClassifierBoot | undefined =
+      askClassifierKindBoot !== undefined && askClassifierKindBoot.kind === "command"
+        ? askClassifierKindBoot.boot
+        : undefined;
     if (askClassifierBoot !== undefined) {
       console.log(`[host] ${ENV_PERMISSION_CLASSIFIER}: ask-zone classifier ${askClassifierBoot.classifier.id} enabled`);
     }
@@ -2727,6 +2793,53 @@ async function boot(): Promise<void> {
     // down this function — a safe forward reference: this closure is never
     // INVOKED until a real turn runs streamText(), long after `media` exists.
     const modelPort = createMediaProjectionPort(switchableModelPort, () => media.imageInputEnabled());
+
+    // Taskana 4730 (implementation B, kind:"model"): build the ask-zone
+    // classifier from a ModelPort. Both `connectionId` and `model` optional =
+    // "the session's own connection/model": unset uses the session's own port
+    // (the switchable one, WITHOUT the media-projection wrap — a classifier
+    // call carries no images) and the session's current model id. An explicit
+    // `model` reuses the SAME modelPortFactory an Agent(model:) override uses
+    // (validated against ANYCODE_CHILD_MODELS exactly like a child override);
+    // an explicit `connectionId` is NOT resolvable in this fork (the fork env
+    // carries only the ACTIVE connection's endpoint — main resolves
+    // connections when forking, not the host), so it degrades to the session's
+    // own port with one log line. Every failure path = classifier OFF, never a
+    // crash. Default timeout for the model kind: 8000 ms (a model call is
+    // slower than a local command) unless the record set one.
+    let modelKindClassifierBoot: AskClassifierBoot | undefined;
+    if (askClassifierKindBoot?.kind === "model") {
+      const record = askClassifierKindBoot;
+      const wantedModel = record.model ?? envConfig.model;
+      let port: ModelPort | undefined;
+      try {
+        if (record.model !== undefined) {
+          assertChildModel(record.model, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model));
+          port = modelPortFactory(record.model);
+        } else {
+          port = switchableModelPort;
+        }
+      } catch (error) {
+        port = undefined;
+        console.log(
+          `[host] ${ENV_PERMISSION_CLASSIFIER}: model classifier OFF — model resolution failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (record.connectionId !== undefined && record.model === undefined) {
+        console.log(
+          `[host] ${ENV_PERMISSION_CLASSIFIER}: classifier connectionId is not resolvable in this fork; using the session's own connection`,
+        );
+      }
+      if (port !== undefined) {
+        modelKindClassifierBoot = {
+          classifier: createModelAskClassifier({ modelPort: port, model: wantedModel }),
+          timeoutMs: record.timeoutMs ?? 8000,
+        };
+        console.log(`[host] ${ENV_PERMISSION_CLASSIFIER}: ask-zone classifier ${modelKindClassifierBoot.classifier.id} enabled (model kind)`);
+      }
+    }
+    const effectiveAskClassifierBoot: AskClassifierBoot | undefined =
+      askClassifierBoot ?? modelKindClassifierBoot;
     // Mutable source of truth for the live model (mirror of the CLI's
     // `currentModel`, loopConfig.mode's model twin). Boot-frozen readers below
     // (`media.imageInputEnabled`, `systemPromptEnv.modelId`) read THIS so a
@@ -3588,8 +3701,8 @@ async function boot(): Promise<void> {
         rules,
       ),
       permissionBroker: broker,
-      // Taskana 4702 Stage 1: optional; absent = byte-identical to pre-4702.
-      ...(askClassifierBoot !== undefined ? { askClassifier: askClassifierBoot } : {}),
+      // Taskana 4702 Stage 1 / 4730: optional; absent = byte-identical to pre-4702.
+      ...(effectiveAskClassifierBoot !== undefined ? { askClassifier: effectiveAskClassifierBoot } : {}),
       mode,
       // TASK.124 remainder (owner rule 2026-08-22): "присмотр есть ⇒ корневая
       // сессия вообще без потолка" — a supervised interactive ROOT has no turn

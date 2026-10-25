@@ -56,3 +56,17 @@ export type {
 } from "./ask-classifier.js";
 export { createCommandAskClassifier, parseClassifierCommand } from "./command-classifier.js";
 export type { CommandClassifierOptions } from "./command-classifier.js";
+// Taskana 4730 (4702 remainder), implementation B: a model-completion classifier.
+export {
+  MODEL_CLASSIFIER_MAX_OUTPUT_TOKENS,
+  MODEL_CLASSIFIER_MAX_REPLY_CHARS,
+  MODEL_CLASSIFIER_SYSTEM_PROMPT,
+  MODEL_CLASSIFIER_UNTRUSTED_CLOSE,
+  MODEL_CLASSIFIER_UNTRUSTED_OPEN,
+  createModelAskClassifier,
+} from "./model-classifier.js";
+export type { ModelClassifierOptions } from "./model-classifier.js";
+// Taskana 4730: the ONE shared consultation + event shape (dispatcher and the
+// engine-session broker decorator both emit through this).
+export { consultAskClassifier, isPermissionAutoDecidedEvent } from "./ask-classifier-consult.js";
+export type { AskClassifierConsultConfig, AskClassifierConsultation } from "./ask-classifier-consult.js";

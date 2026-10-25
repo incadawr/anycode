@@ -24,7 +24,7 @@
  */
 import { useState, type ComponentType, type SVGProps } from "react";
 import { useStore } from "zustand";
-import type { AlwaysAllowRule, SettingsMutationResult } from "../../../shared/settings.js";
+import type { AlwaysAllowRule, PermissionClassifierSettings, SettingsMutationResult } from "../../../shared/settings.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import { groupAlwaysAllowRules } from "../permission-rules.js";
 import { buildAlwaysAllowRule } from "./PermissionModal.js";
@@ -119,6 +119,57 @@ export async function submitPermissionAdd(
   return store.getState().addRule(buildAlwaysAllowRule(trimmedTool, pattern));
 }
 
+// ---------------------------------------------------------------------------
+// Taskana 4730: the ask-zone classifier control (default OFF). Pure builders,
+// unit-tested in PermissionsEditor.test.ts like every other helper here — the
+// pane's vitest config is node-environment, no DOM rendering.
+// ---------------------------------------------------------------------------
+
+/** Kind selector options: command (Stage 1) and model (4730, implementation B). */
+export const CLASSIFIER_KIND_OPTIONS: readonly { id: "command" | "model"; label: string }[] = [
+  { id: "command", label: "Command" },
+  { id: "model", label: "Model" },
+];
+
+/** True iff `value` is a non-blank string — the gate for connectionId/model/command fields. */
+export function classifierFieldValid(value: string): boolean {
+  return value.trim().length > 0;
+}
+
+/** Builds the next classifier record from the pane's local field state. */
+export function buildClassifierRecord(
+  kind: "command" | "model",
+  fields: { command: string; connectionId: string; model: string },
+): PermissionClassifierSettings | undefined {
+  if (kind === "command") {
+    if (!classifierFieldValid(fields.command)) return undefined;
+    return { enabled: true, kind: "command", command: fields.command.trim() };
+  }
+  return {
+    enabled: true,
+    kind: "model",
+    ...(classifierFieldValid(fields.connectionId) ? { connectionId: fields.connectionId.trim() } : {}),
+    ...(classifierFieldValid(fields.model) ? { model: fields.model.trim() } : {}),
+  };
+}
+
+/** Parses a stored record back into the pane's local field state (blank when absent). */
+export function classifierFieldsFromRecord(
+  record: PermissionClassifierSettings | undefined,
+): { kind: "command" | "model"; command: string; connectionId: string; model: string; enabled: boolean } {
+  if (record === undefined) return { kind: "command", command: "", connectionId: "", model: "", enabled: false };
+  if (record.kind === "command") {
+    return { kind: "command", command: record.command, connectionId: "", model: "", enabled: record.enabled };
+  }
+  return {
+    kind: "model",
+    command: "",
+    connectionId: record.connectionId ?? "",
+    model: record.model ?? "",
+    enabled: record.enabled,
+  };
+}
+
 export interface PermissionsEditorProps {
   store?: SettingsStoreApi;
 }
@@ -129,6 +180,22 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
   const snapshot = useStore(store, (s) => s.snapshot);
   const [toolInput, setToolInput] = useState("");
   const [patternInput, setPatternInput] = useState("");
+  // Taskana 4730: classifier control state — initialized from the stored
+  // record, kept as plain strings, submitted through setPatch on Save.
+  const storedClassifier = snapshot?.settings.permissions.classifier;
+  const [classifierEnabled, setClassifierEnabled] = useState(storedClassifier?.enabled ?? false);
+  const [classifierKind, setClassifierKind] = useState<"command" | "model">(
+    storedClassifier?.kind === "model" ? "model" : "command",
+  );
+  const [classifierCommand, setClassifierCommand] = useState(
+    storedClassifier?.kind === "command" ? storedClassifier.command : "",
+  );
+  const [classifierConnectionId, setClassifierConnectionId] = useState(
+    storedClassifier?.kind === "model" ? (storedClassifier.connectionId ?? "") : "",
+  );
+  const [classifierModel, setClassifierModel] = useState(
+    storedClassifier?.kind === "model" ? (storedClassifier.model ?? "") : "",
+  );
 
   // Unreachable from SettingsScreen (it early-returns its own loading row
   // before any pane renders) — a null guard, not a loading state, same
@@ -237,6 +304,115 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
           Add
         </button>
       </div>
+
+      {/*
+        Taskana 4702/4730: the ask-zone classifier (default OFF). A classifier
+        can only turn an "ask" into an "allow"; it never denies, and a failing
+        or slow classifier always falls back to asking.
+      */}
+      <div className="settings-section-title">Ask-zone classifier</div>
+      <label className="settings-toggle-row">
+        <input
+          type="checkbox"
+          checked={classifierEnabled}
+          disabled={readOnly}
+          onChange={(e) => setClassifierEnabled(e.target.checked)}
+        />
+        <span>Classify ask-zone Bash commands (default off)</span>
+      </label>
+      {classifierEnabled && (
+        <div className="settings-classifier-kind">
+          <select
+            aria-label="Classifier kind"
+            value={classifierKind}
+            disabled={readOnly}
+            onChange={(e) => setClassifierKind(e.target.value === "model" ? "model" : "command")}
+          >
+            {CLASSIFIER_KIND_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {classifierKind === "command" ? (
+            <input
+              type="text"
+              className="settings-field-input settings-mcp-name"
+              placeholder="Command (e.g. /opt/da --json)"
+              aria-label="Classifier command"
+              value={classifierCommand}
+              disabled={readOnly}
+              onChange={(e) => setClassifierCommand(e.target.value)}
+            />
+          ) : (
+            <>
+              <input
+                type="text"
+                className="settings-field-input settings-mcp-name"
+                placeholder="Connection (optional — default: this session's)"
+                aria-label="Classifier connection"
+                value={classifierConnectionId}
+                disabled={readOnly}
+                onChange={(e) => setClassifierConnectionId(e.target.value)}
+              />
+              <input
+                type="text"
+                className="settings-field-input settings-mcp-name"
+                placeholder="Model (optional — default: this session's)"
+                aria-label="Classifier model"
+                value={classifierModel}
+                disabled={readOnly}
+                onChange={(e) => setClassifierModel(e.target.value)}
+              />
+            </>
+          )}
+          <button
+            type="button"
+            className="settings-button settings-button-primary"
+            disabled={readOnly || buildClassifierRecord(classifierKind, {
+              command: classifierCommand,
+              connectionId: classifierConnectionId,
+              model: classifierModel,
+            }) === undefined}
+            onClick={() => {
+              const record = buildClassifierRecord(classifierKind, {
+                command: classifierCommand,
+                connectionId: classifierConnectionId,
+                model: classifierModel,
+              });
+              if (record !== undefined) {
+                void store.getState().setPatch({ permissions: { alwaysAllow: rules, classifier: record } });
+              }
+            }}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            className="settings-button"
+            disabled={readOnly || storedClassifier === undefined}
+            onClick={() => {
+              // null crosses the bridge (deepMerge skips undefined), and the
+              // schema's .catch(undefined) drops the record: classifier off.
+              void store.getState().setPatch({
+                permissions: { alwaysAllow: rules, classifier: null as unknown as PermissionClassifierSettings },
+              });
+              setClassifierEnabled(false);
+              setClassifierCommand("");
+              setClassifierConnectionId("");
+              setClassifierModel("");
+            }}
+          >
+            Remove
+          </button>
+        </div>
+      )}
+      {classifierEnabled && (
+        <div className="settings-hint">
+          Privacy: the classifier receives every ask-zone shell command and your last
+          messages; a failing or slow classifier just falls back to asking.
+        </div>
+      )}
     </section>
   );
 }

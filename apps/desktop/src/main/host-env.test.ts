@@ -197,6 +197,24 @@ describe("buildHostEnv — I2 priority (env > vault > settings)", () => {
     expect(unset.ANYCODE_PERMISSION_CLASSIFIER).toBeUndefined();
   });
 
+  it("projects a kind:model classifier record verbatim (Taskana 4730; both optional fields absent = session default)", async () => {
+    const record = { enabled: true, kind: "model" as const, connectionId: "conn-2", model: "glm-4.7-flash", timeoutMs: 8000 };
+    const fromSettings = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ permissions: { alwaysAllow: [], classifier: record } }),
+      getSecret: noSecret,
+    });
+    expect(JSON.parse(fromSettings.ANYCODE_PERMISSION_CLASSIFIER ?? "null")).toEqual(record);
+
+    const bare = { enabled: true, kind: "model" as const };
+    const fromBare = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ permissions: { alwaysAllow: [], classifier: bare } }),
+      getSecret: noSecret,
+    });
+    expect(JSON.parse(fromBare.ANYCODE_PERMISSION_CLASSIFIER ?? "null")).toEqual(bare);
+  });
+
   it("projects tools.grepBackend into ANYCODE_GREP_BACKEND (Taskana 4160; env > settings)", async () => {
     // settings fill when the boot env is blank
     const fromSettings = await buildHostEnv({
