@@ -9,6 +9,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Settings → Permissions now lists remembered trusted/denied project folders
+  with a "Forget" button — forgetting a folder asks again the next time a tab
+  opens it. Symlinked and real paths of a folder now share one trust entry,
+  and older entries are migrated automatically.
+
 - Orchestrate UI: the permission-mode menu has an Orchestrate row (a tab-level
   toggle, not a sixth mode), and `/orchestrate <task>` submits a task under
   orchestrate. The first run without configured roles opens a role picker with
