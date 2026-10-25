@@ -252,6 +252,9 @@ export function InstallDialogBody({
                   <div key={service.name} className="plugins-mcp-server-row" role="alert">
                     <span className="settings-mcp-name">{service.name}</span>
                     <span className="mcp-row-line2">{serviceCommandLine(service)}</span>
+                    {(service.secretNames ?? []).length > 0 && (
+                      <span className="mcp-row-hint">Reads secrets: {(service.secretNames ?? []).join(", ")}</span>
+                    )}
                     {service.envKeys.length > 0 && (
                       <span className="mcp-row-hint">env: {service.envKeys.join(", ")}</span>
                     )}
