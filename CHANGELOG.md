@@ -34,6 +34,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - A background subagent you stop from the UI is reported to the parent as stopped by the user (`<cancelled-by>user</cancelled-by>`), so the parent no longer relaunches it as a failure. The report card reads "stopped by you" and the Agent card shows "Cancelled" instead of "Done".
 - A new session can be started in Orchestrate mode from the start screen: the mode menu lists an Orchestrate row for AnyCode, and `/orchestrate <task>` in the first-message box starts one (the first-run role picker opens when no roles are set yet).
 - Telegram example: stopping the bridge waits for a state write already in flight, so a shutdown no longer makes the process exit with an error, and concurrent state saves queue instead of colliding on the temp file.
+- Network wait follow-ups: the connectivity probe now goes through the configured proxy (a proxied connection no longer reports "online" while the model endpoint is unreachable), the first probe fires at once instead of after the 5 s tick, a recovered wait resumes immediately and reads "network back after N s" instead of showing the wait as a pending retry delay, the "Waiting for network…" banner no longer disappears while a second parked stream (e.g. an inline subagent) is still waiting or lingers over "Host process exited" after the host dies.
 
 ## [0.0.40] — 2026-10-25
 
