@@ -63,7 +63,7 @@ const MEDIA_GATE_ERROR =
  * a deliberately separate slice, §3 96-C).
  */
 function toToolErrorKind(
-  kind: "invalid_input" | "cancelled" | "unavailable" | "load_failed" | "crashed" | "timeout" | undefined,
+  kind: "invalid_input" | "cancelled" | "unavailable" | "load_failed" | "crashed" | "timeout" | "stale_ref" | "not_allowed" | undefined,
 ): ToolResult["errorKind"] {
   switch (kind) {
     case "invalid_input":

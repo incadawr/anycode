@@ -36,7 +36,7 @@ const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
  * SAFER branch (treated as remote, needing approval) rather than silently
  * skipping the consent gate on a malformed value.
  */
-function isRemoteUrl(url: string | undefined): boolean {
+export function isRemoteUrl(url: string | undefined): boolean {
   if (url === undefined || !REMOTE_URL_PATTERN.test(url)) {
     return false;
   }
@@ -116,7 +116,7 @@ const browserReadMetadata: ToolMetadata = {
  * "error" outcome instead of a manufactured status the type doesn't have.
  */
 function toToolErrorKind(
-  kind: "invalid_input" | "cancelled" | "unavailable" | "load_failed" | "crashed" | "timeout" | undefined,
+  kind: "invalid_input" | "cancelled" | "unavailable" | "load_failed" | "crashed" | "timeout" | "stale_ref" | "not_allowed" | undefined,
 ): ToolResult["errorKind"] {
   switch (kind) {
     case "invalid_input":

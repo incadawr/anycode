@@ -92,6 +92,7 @@ any same-name filesystem skill.
 |---|---|---|
 | `using-git-worktrees` | the worktree tools are registered | When and how to use EnterWorktree and ExitWorktree. |
 | `using-browser-preview` | the browser-preview tools are registered | Previewing local HTML and Markdown files and localhost dev servers. |
+| `control-browser` | the browser-preview tools are registered | Operating a page in the preview: navigate, snapshot, click, type and wait. See [browser.md](browser.md). |
 | `creating-subagents` | always | Writing `.anycode/agents/*.md` profiles. |
 | `anycode-setup` | always | Read-only help with configuring AnyCode. It reads your files and explains the fix; any edit needs your approval. It never prints secrets. |
 

@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Native agents can now operate the built-in preview: navigate, read an accessibility snapshot, click, type and wait; remote origins ask first.
+
 ## [0.0.38] — 2026-10-25
 
 ### Added

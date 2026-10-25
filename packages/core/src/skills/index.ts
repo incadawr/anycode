@@ -14,6 +14,7 @@ export { SKILL_NAME_RE } from "./discovery.js";
 export {
   BUILTIN_SKILL_SOURCE,
   CREATING_SUBAGENTS_SKILL,
+  CONTROL_BROWSER_SKILL,
   PREVIEW_BUILTIN_SKILLS,
   SUBAGENT_BUILTIN_SKILLS,
   anycodeSetupBuiltinSkills,
