@@ -1,33 +1,50 @@
 /**
  * Pure view-model for the Settings → Sessions API pane and the per-tab switch
- * (Taskana 4747). Labels, the status line, button enablement, port parsing and
+ * (Taskana 4747). Labels, the status chip, button enablement, port parsing and
  * the mutation-refusal wording live here so they are unit-testable without a DOM.
  * Everything rendered is PLAIN TEXT; nothing here carries a token or a path that
  * the renderer did not already receive from main.
  */
-import type { CommunicationHandleResult, CommunicationMutationReason, CommunicationStatus, CommunicationView } from "../../../shared/communication-config.js";
+import type { CommunicationHandleResult, CommunicationMutationReason, CommunicationStatus } from "../../../shared/communication-config.js";
 
 export const SESSIONS_API_PANE_ID = "sessions-api" as const;
 export const SESSIONS_API_LABEL = "Sessions API";
-export const SESSIONS_API_DESCRIPTION = "Let an external agent list and message your live sessions (local, token-protected).";
+/** The Settings header subtitle (printed once; the pane body does not repeat it). */
+export const SESSIONS_API_DESCRIPTION = "Let external agents (Claude Code, Codex, scripts) read and message the sessions you choose. Local only.";
+export const SESSIONS_API_ENABLE_LABEL = "Allow external agents";
 export const SESSIONS_API_ENV_NOTE = "Controlled by ANYCODE_COMMUNICATION_CONFIG";
 export const SESSIONS_API_REGENERATE_CONFIRM =
   "Existing clients keep working only until they next read the discovery file; connected clients are dropped. " +
   "After regenerating, restart the external client's MCP connection (a running adapter keeps the old token).";
-export const SESSIONS_API_NOTICES: readonly string[] = [
-  "Every holder of the local credential can message the sessions you switch on. Local only (127.0.0.1); the token is never shown here or stored in settings.",
-  "Requires Node 22+ on the machine running the external client.",
-  "Applies immediately; open client connections are dropped on change.",
-];
+export const SESSIONS_API_REGENERATE_HINT = "Disconnects running clients; copy the config again afterwards.";
+export const SESSIONS_API_PORT_HINT = "Empty = random free port.";
+export const SESSIONS_API_NODE_HINT = "Needs Node 22+ where the agent runs.";
+/** The one-line footer under the pane. */
+export const SESSIONS_API_FOOTER =
+  "The token is stored only in a private file on this computer and is never shown here. Anyone who can read that file can message shared sessions.";
+/** The one-line folder hint; the full exact-folder rule is kept as the field's tooltip. */
+export const SESSIONS_API_FOLDER_HINT = "Empty = any folder; only sessions you switch on are shared.";
 export const SESSIONS_API_FOLDER_NOTE =
   "Optional. When empty, only the sessions you switch on are shared. When set, a session must also be inside one of these exact folders (subfolders are not included; symlinks are resolved).";
 
-/** Renders the status line: `Listening on 127.0.0.1:PORT` / `Off` / `Error: …` / `Controlled by environment`. */
+export type SessionsApiTone = "ok" | "danger" | "muted";
+
+/**
+ * Renders the status chip text: `Listening · 127.0.0.1:PORT · N shared` / `Off` /
+ * `Error: …` / `Controlled by environment`.
+ */
 export function sessionsApiStatusLine(status: CommunicationStatus, envControlled: boolean): string {
   if (envControlled || status.state === "env") return "Controlled by environment";
-  if (status.state === "listening") return `Listening on 127.0.0.1:${status.port ?? ""}`;
+  if (status.state === "listening") return `Listening · 127.0.0.1:${status.port ?? ""} · ${status.sessions} shared`;
   if (status.state === "error") return `Error: ${errorDetailText(status.detail)}`;
   return "Off";
+}
+
+/** The chip tone: green when listening, danger on error, muted otherwise. */
+export function sessionsApiStatusTone(status: CommunicationStatus, envControlled: boolean): SessionsApiTone {
+  if (envControlled || status.state === "env" || status.state === "off") return "muted";
+  if (status.state === "listening") return "ok";
+  return "danger";
 }
 
 function errorDetailText(detail: CommunicationStatus["detail"]): string {
@@ -52,12 +69,6 @@ export function regenerateEnabled(status: CommunicationStatus, envControlled: bo
 /** Toggles, folder edits and the port field are read-only under the env override. */
 export function settingsEditable(envControlled: boolean): boolean {
   return !envControlled;
-}
-
-/** A sessions-API note shown when enabled with no folder restriction (the common case). */
-export function folderScopeHint(view: Pick<CommunicationView, "enabled" | "workspaces">): string | null {
-  if (!view.enabled) return null;
-  return view.workspaces.length === 0 ? "No folder restriction: only sessions you switch on are shared." : null;
 }
 
 /** Parses the port field: blank = random (null); otherwise an integer 0..65535. Returns undefined when invalid. */

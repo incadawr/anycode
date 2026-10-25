@@ -7941,3 +7941,136 @@ body {
 .role-picker-save:hover:not(:disabled) {
   background: var(--bg-hover);
 }
+
+/* ── Sessions API settings pane (Taskana 4747 redesign). Layout glue only: every
+   control reuses a settings-* / connection-drawer-* class. ── */
+
+.sessions-api-enable-row {
+  width: 100%;
+}
+
+.sessions-api-status {
+  margin-left: auto;
+}
+
+.sessions-api-connect {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sessions-api-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: sessions-api-step;
+}
+
+.sessions-api-step {
+  counter-increment: sessions-api-step;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--sp-2);
+  align-items: start;
+}
+
+.sessions-api-step::before {
+  content: counter(sessions-api-step);
+  grid-row: span 3;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--r-full);
+  background: var(--bg-inset);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sessions-api-step-title {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  line-height: 1.5rem;
+}
+
+.sessions-api-copy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.sessions-api-copied {
+  margin-top: var(--sp-2);
+}
+
+.sessions-api-copied pre {
+  margin: var(--sp-1) 0 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.sessions-api-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.sessions-api-row-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.sessions-api-row-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.settings-field-input.sessions-api-port-input {
+  flex: 0 0 7rem;
+}
+
+.sessions-api-folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sessions-api-folder-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.sessions-api-folder-path {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.sessions-api-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sessions-api-footer {
+  margin-top: var(--sp-2);
+}

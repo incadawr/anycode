@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   copyConfigEnabled,
   handleErrorText,
-  folderScopeHint,
   mutationRefusalText,
   parsePortInput,
   portFieldValue,
@@ -10,9 +9,12 @@ import {
   sessionSwitchDisabledReason,
   sessionSwitchLabel,
   sessionsApiStatusLine,
+  sessionsApiStatusTone,
   settingsEditable,
+  SESSIONS_API_DESCRIPTION,
+  SESSIONS_API_FOOTER,
   SESSIONS_API_LABEL,
-  SESSIONS_API_NOTICES,
+  SESSIONS_API_NODE_HINT,
   SESSIONS_API_PANE_ID,
   SESSIONS_API_REGENERATE_CONFIRM,
 } from "./sessions-api-model.js";
@@ -27,8 +29,8 @@ describe("Sessions API pane model (Taskana 4747)", () => {
     expect(SESSIONS_API_LABEL).toBe("Sessions API");
   });
 
-  it("renders the four status lines, with env winning over everything", () => {
-    expect(sessionsApiStatusLine(listening, false)).toBe("Listening on 127.0.0.1:4310");
+  it("renders the four status chip texts, with env winning over everything", () => {
+    expect(sessionsApiStatusLine(listening, false)).toBe("Listening · 127.0.0.1:4310 · 1 shared");
     expect(sessionsApiStatusLine(off, false)).toBe("Off");
     expect(sessionsApiStatusLine({ state: "error", reason: "start_failed", detail: "port in use", workspaces: 0, sessions: 0 }, false)).toMatch(/^Error: the port is already in use/);
     expect(sessionsApiStatusLine(listening, true)).toBe("Controlled by environment");
@@ -54,10 +56,11 @@ describe("Sessions API pane model (Taskana 4747)", () => {
     expect(settingsEditable(false)).toBe(true);
   });
 
-  it("explains the open folder scope only when enabled with no folders", () => {
-    expect(folderScopeHint({ enabled: true, workspaces: [] })).toMatch(/No folder restriction/);
-    expect(folderScopeHint({ enabled: true, workspaces: ["/a"] })).toBeNull();
-    expect(folderScopeHint({ enabled: false, workspaces: [] })).toBeNull();
+  it("chip tone: ok when listening, danger on error, muted when off or env-controlled", () => {
+    expect(sessionsApiStatusTone(listening, false)).toBe("ok");
+    expect(sessionsApiStatusTone(off, false)).toBe("muted");
+    expect(sessionsApiStatusTone({ state: "error", reason: "start_failed", detail: "port in use", workspaces: 0, sessions: 0 }, false)).toBe("danger");
+    expect(sessionsApiStatusTone(listening, true)).toBe("muted");
   });
 
   it("parses the port field: blank is random, integers 0..65535 are valid, the rest is invalid", () => {
@@ -87,9 +90,10 @@ describe("Sessions API pane model (Taskana 4747)", () => {
     expect(sessionSwitchDisabledReason(false, true)).toBeNull();
   });
 
-  it("static notices and the regenerate confirm are plain sentences about the real behaviour", () => {
-    expect(SESSIONS_API_NOTICES.join(" ")).toMatch(/127\.0\.0\.1/);
-    expect(SESSIONS_API_NOTICES.join(" ")).toMatch(/Node 22/);
+  it("the footer, the Node hint and the regenerate confirm are plain sentences about the real behaviour", () => {
+    expect(SESSIONS_API_FOOTER).toMatch(/never shown here/);
+    expect(SESSIONS_API_NODE_HINT).toMatch(/Node 22\+/);
+    expect(SESSIONS_API_DESCRIPTION).toMatch(/Local only\.$/);
     expect(SESSIONS_API_REGENERATE_CONFIRM).toMatch(/restart the external client's MCP connection/);
   });
 });
