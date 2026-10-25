@@ -90,6 +90,9 @@ describe("authenticated session inbox", () => {
 });
 
 
+const settle = async (h: { flush(): Promise<void> }) => { for (let i = 0; i < 20; i++) await h.flush(); };
+/** Waits until the scripted engine has opened a turn, then returns its finish trigger. */
+const nextFinish = async (h: { flush(): Promise<void> }, finishes: Array<() => void>) => { for (let i = 0; i < 200 && finishes.length === 0; i++) await h.flush(); return finishes.shift()!; };
 describe("public result retrieval", () => {
   it("returns only latest completed public assistant text with delivered-message correlation", async () => {
     const h = createHarness({ steps: [[
@@ -162,6 +165,54 @@ describe("public result retrieval", () => {
       expect(result.availability).toBe("recovered_unverified");
       expect(result.latestResult).toMatchObject({ source: "history_recovery", terminalReason: "unknown", publicAnswer: "RECOVERED_PUBLIC_ANSWER", turnId: null, nativeTurnId: null, requestId: null, deliveredMessageIds: [] });
       expect(JSON.stringify(result)).not.toContain("PRIVATE_");
+    } finally { h.close(); }
+  });
+  it("communicationMessageResult queued then running then done", async () => {
+    const { h, finishes, make } = fixture();
+    try {
+      await h.session.receiveAgentMessage(make("one"));
+      await h.session.receiveAgentMessage(make("two"));
+      expect(h.session.communicationMessageResult("two")).toEqual({ state: "queued" });
+      expect(h.session.communicationMessageResult("one")).toMatchObject({ state: "running" });
+      finishes.shift()!(); await settle(h);
+      expect(h.session.communicationMessageResult("one")).toMatchObject({ state: "done", latestResult: { terminalReason: "completed", correlationMeaning: "transport_delivery_only" } });
+      expect(h.session.communicationMessageResult("two")).toMatchObject({ state: "running" });
+      (await nextFinish(h, finishes))(); await settle(h);
+      expect(h.session.communicationMessageResult("two")).toMatchObject({ state: "done" });
+    } finally { h.close(); }
+  });
+  it("turnResults keeps the result of the first turn after a second turn completes", async () => {
+    const { h, finishes, make } = fixture();
+    try {
+      await h.session.receiveAgentMessage(make("first"));
+      (await nextFinish(h, finishes))(); await settle(h);
+      await h.session.receiveAgentMessage(make("second"));
+      (await nextFinish(h, finishes))(); await settle(h);
+      const first = h.session.communicationMessageResult("first");
+      const second = h.session.communicationMessageResult("second");
+      expect(first.state).toBe("done"); expect(second.state).toBe("done");
+      if (first.state === "done" && second.state === "done") expect(first.latestResult.turnId).not.toBe(second.latestResult.turnId);
+      expect(h.session.communicationResult().latestResult?.turnId).toBe(second.state === "done" ? second.latestResult.turnId : null);
+    } finally { h.close(); }
+  });
+  it("communicationMessageResult reports unknown and rejected messages", async () => {
+    const { h, make } = fixture();
+    try {
+      expect(h.session.communicationMessageResult("never-seen")).toEqual({ state: "unknown_message" });
+      expect(h.session.communicationMessageResult("idle-steer")).toEqual({ state: "unknown_message" });
+      await h.session.receiveAgentMessage(make("idle-steer", "steer"));
+      expect(h.session.communicationMessageResult("idle-steer")).toMatchObject({ state: "rejected" });
+    } finally { h.close(); }
+  });
+  it("turnResults is bounded: the oldest turn result is evicted after 32 turns", async () => {
+    const { h, finishes, make } = fixture();
+    try {
+      for (let i = 0; i < 33; i++) {
+        await h.session.receiveAgentMessage(make(`m${i}`));
+        (await nextFinish(h, finishes))(); await settle(h);
+      }
+      expect(h.session.communicationMessageResult("m32")).toMatchObject({ state: "done" });
+      expect(h.session.communicationMessageResult("m0")).toMatchObject({ state: "unknown", detail: "Turn ended without a recorded result" });
     } finally { h.close(); }
   });
 });

@@ -17,6 +17,7 @@ import {
   handleSetEnabled,
   handleSetPort,
   handleSetSessionAccess,
+  handleSetSessionHandle,
   tomlString,
   type CommunicationIpcDeps,
 } from "./communication-ipc.js";
@@ -313,5 +314,51 @@ describe("Sessions API IPC — persisted settings never carry the token", () => 
     await handleSetEnabled(deps, { enabled: true });
     await handleRegenerateToken(deps, {});
     expect(await readFile(settingsPath, "utf8")).not.toContain(TOKEN);
+  });
+});
+
+describe("session handles over IPC (Taskana 4750b)", () => {
+  it("set-session-handle maps tabId to session and returns view with handle", async () => {
+    const { deps, sessions } = rig();
+    sessions.register({ sessionId: "sess-1" });
+    const result = await handleSetSessionHandle(deps, { tabId: "tab-1", handle: "build-bot" });
+    expect(result.ok).toBe(true);
+    expect(sessions.getHandle("sess-1")).toBe("build-bot");
+    if (result.ok) expect(result.view.tabs).toEqual([{ tabId: "tab-1", enabled: false, handle: "build-bot" }]);
+    expect(JSON.stringify(result)).not.toContain("sess-1");
+    expect(JSON.stringify(result)).not.toContain(TOKEN);
+  });
+  it("invalid handle -> invalid", async () => {
+    const { deps, sessions } = rig();
+    sessions.register({ sessionId: "sess-1" });
+    expect(await handleSetSessionHandle(deps, { tabId: "tab-1", handle: "Build Bot" })).toEqual({ ok: false, reason: "invalid" });
+    expect(sessions.getHandle("sess-1")).toBeUndefined();
+  });
+  it("duplicate -> duplicate", async () => {
+    const { deps, sessions } = rig();
+    sessions.register({ sessionId: "sess-1" }); sessions.register({ sessionId: "sess-2" });
+    const live = [{ tabId: "tab-1", sessionId: "sess-1" }, { tabId: "tab-2", sessionId: "sess-2" }];
+    const twoTabs = { ...deps, tabs: () => live };
+    expect((await handleSetSessionHandle(twoTabs, { tabId: "tab-1", handle: "shared" })).ok).toBe(true);
+    expect(await handleSetSessionHandle(twoTabs, { tabId: "tab-2", handle: "shared" })).toEqual({ ok: false, reason: "duplicate" });
+  });
+  it("unknown tab -> unknown_tab", async () => {
+    const { deps, sessions } = rig();
+    sessions.register({ sessionId: "sess-1" });
+    expect(await handleSetSessionHandle(deps, { tabId: "ghost", handle: "x" })).toEqual({ ok: false, reason: "unknown_tab" });
+  });
+  it("extra key (sessionId/path) refused by .strict", async () => {
+    const { deps, sessions } = rig();
+    sessions.register({ sessionId: "sess-1" });
+    expect(await handleSetSessionHandle(deps, { tabId: "tab-1", handle: "x", sessionId: "sess-1" })).toEqual({ ok: false, reason: "invalid" });
+    expect(await handleSetSessionHandle(deps, { tabId: "tab-1", handle: "x", path: "/etc" })).toEqual({ ok: false, reason: "invalid" });
+    expect(sessions.getHandle("sess-1")).toBeUndefined();
+  });
+  it("null clears", async () => {
+    const { deps, sessions } = rig();
+    sessions.register({ sessionId: "sess-1" });
+    await handleSetSessionHandle(deps, { tabId: "tab-1", handle: "x" });
+    expect((await handleSetSessionHandle(deps, { tabId: "tab-1", handle: null })).ok).toBe(true);
+    expect(sessions.getHandle("sess-1")).toBeUndefined();
   });
 });

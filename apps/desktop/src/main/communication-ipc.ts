@@ -30,18 +30,20 @@ import {
   COMMUNICATION_SET_ENABLED_CHANNEL,
   COMMUNICATION_SET_PORT_CHANNEL,
   COMMUNICATION_SET_SESSION_ACCESS_CHANNEL,
+  COMMUNICATION_SET_SESSION_HANDLE_CHANNEL,
 } from "../shared/communication-config.js";
 import type {
   CommunicationCopyClient,
   CommunicationCopyConfigResult,
   CommunicationGetResult,
+  CommunicationHandleResult,
   CommunicationMutationReason,
   CommunicationMutationResult,
   CommunicationRegenerateResult,
   CommunicationStatus,
   CommunicationView,
 } from "../shared/communication-config.js";
-import type { SessionAccessStore } from "./communication-sessions.js";
+import { normalizeHandle, type SessionAccessStore } from "./communication-sessions.js";
 
 /** The slice of the controller this module needs (structural, so tests can fake it). */
 export interface CommunicationControllerLike {
@@ -79,6 +81,7 @@ const removeSchema = z.object({ workspace: z.string().min(1).max(4096) }).strict
 const copySchema = z.object({ client: z.enum(["claude-code", "codex", "generic"]) }).strict();
 const defaultAccessSchema = z.object({ access: z.enum(["off", "on"]) }).strict();
 const sessionAccessSchema = z.object({ tabId: z.string().min(1).max(200), enabled: z.boolean() }).strict();
+const sessionHandleSchema = z.object({ tabId: z.string().min(1).max(200), handle: z.string().max(200).nullable() }).strict();
 
 function blockOf(settings: AnycodeSettings): Block {
   const raw = settings.communication;
@@ -93,7 +96,10 @@ function viewOf(deps: CommunicationIpcDeps, block: Block): CommunicationView {
     port: block.port ?? null,
     defaultSessionAccess: block.defaultSessionAccess,
     status: deps.controller.status(),
-    tabs: deps.tabs().map((tab) => ({ tabId: tab.tabId, enabled: deps.sessions.isExposed(tab.sessionId) })),
+    tabs: deps.tabs().map((tab) => {
+      const handle = deps.sessions.getHandle(tab.sessionId);
+      return { tabId: tab.tabId, enabled: deps.sessions.isExposed(tab.sessionId), ...(handle !== undefined ? { handle } : {}) };
+    }),
   };
 }
 
@@ -215,6 +221,24 @@ export async function handleSetSessionAccess(deps: CommunicationIpcDeps, raw: un
   return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
 }
 
+/**
+ * Sets or clears the handle of a live tab's session. The renderer names a tabId;
+ * main maps it to the session. Uniqueness is among live sessions (store-enforced).
+ */
+export async function handleSetSessionHandle(deps: CommunicationIpcDeps, raw: unknown): Promise<CommunicationHandleResult> {
+  const parsed = sessionHandleSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, reason: "invalid" };
+  const normalized = normalizeHandle(parsed.data.handle);
+  if (!normalized.ok) return { ok: false, reason: "invalid" };
+  const tab = deps.tabs().find((candidate) => candidate.tabId === parsed.data.tabId);
+  if (!tab) return { ok: false, reason: "unknown_tab" };
+  const isLive = (sessionId: string) => deps.tabs().some((candidate) => candidate.sessionId === sessionId);
+  const result = deps.sessions.setHandle(tab.sessionId, normalized.handle, isLive);
+  if (!result.ok) return { ok: false, reason: result.reason === "unknown_session" ? "unknown_tab" : result.reason };
+  const loaded = await loadSettings(deps.settingsPath, deps.logger);
+  return { ok: true, view: viewOf(deps, blockOf(loaded.settings)) };
+}
+
 /** Single-quotes a path for a POSIX shell unless it is already safe. */
 export function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_/.:@%+=,-]+$/.test(value)) return value;
@@ -276,4 +300,5 @@ export function registerCommunicationIpc(deps: CommunicationIpcDeps): void {
   ipcMain.handle(COMMUNICATION_COPY_CONFIG_CHANNEL, (_event, raw: unknown) => handleCopyConfig(deps, raw));
   ipcMain.handle(COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetDefaultAccess(deps, raw));
   ipcMain.handle(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetSessionAccess(deps, raw));
+  ipcMain.handle(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, (_event, raw: unknown) => handleSetSessionHandle(deps, raw));
 }

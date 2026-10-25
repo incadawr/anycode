@@ -40,9 +40,11 @@ import {
   COMMUNICATION_SET_ENABLED_CHANNEL,
   COMMUNICATION_SET_PORT_CHANNEL,
   COMMUNICATION_SET_SESSION_ACCESS_CHANNEL,
+  COMMUNICATION_SET_SESSION_HANDLE_CHANNEL,
   type CommunicationCopyClient,
   type CommunicationCopyConfigResult,
   type CommunicationGetResult,
+  type CommunicationHandleResult,
   type CommunicationMutationResult,
   type CommunicationRegenerateResult,
 } from "../shared/communication-config.js";
@@ -1108,6 +1110,8 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL, { access }) as Promise<CommunicationMutationResult>,
     setSessionAccess: (tabId: string, enabled: boolean): Promise<CommunicationMutationResult> =>
       ipcRenderer.invoke(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, { tabId, enabled }) as Promise<CommunicationMutationResult>,
+    setSessionHandle: (tabId: string, handle: string | null): Promise<CommunicationHandleResult> =>
+      ipcRenderer.invoke(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, { tabId, handle }) as Promise<CommunicationHandleResult>,
   },
   // P7.20/F23 W2 (design/slice-P7.20-cut.md §5): `skills.*` — seven thin invoke
   // wrappers over the skills management channels (main owns zod validation +

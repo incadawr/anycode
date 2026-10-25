@@ -304,6 +304,10 @@ export { SESSION_TITLE_MAX_LENGTH, deriveSessionTitle };
 
  * message is replaced by a `fatal` rather than crashing the host.
  */
+/** Bounded per-session turn result memory for message-level waits (oldest evicted). */
+const SESSION_TURN_RESULTS_CAP = 32;
+const SESSION_RESULT_LIMITATION = "Latest completed public text block only. History recovery cannot establish terminal status or turn/message correlation. Completion does not prove a message was applied.";
+
 export class Outbound {
   private readonly buffer: HostToUiMessage[] = [];
   private port: WirePort | null = null;
@@ -1681,19 +1685,57 @@ export class Session {
    */
   private pendingUiSteers: { requestId: string; text: string }[] = [];
 
+  /** Terminal result per live turn, keyed by host turn id. Bounded (LRU-ish, oldest evicted) so a long-running session cannot grow it. */
+  private readonly turnResults = new Map<string, SessionPublicResult>();
+
+  private rememberTurnResult(turnId: string, result: SessionPublicResult): void {
+    this.turnResults.delete(turnId);
+    this.turnResults.set(turnId, result);
+    while (this.turnResults.size > SESSION_TURN_RESULTS_CAP) this.turnResults.delete(this.turnResults.keys().next().value as string);
+  }
+
+  private deliveredIdsFor(result: SessionPublicResult): string[] {
+    return [...this.messageTurns.entries()].filter(([, identity]) =>
+      (result.turnId !== null && identity.hostTurnId === result.turnId) ||
+      (result.nativeTurnId !== null && identity.nativeTurnId === result.nativeTurnId)
+    ).map(([id]) => id);
+  }
+
   communicationResult() {
     const latest = this.latestPublicResult;
-    const deliveredMessageIds = latest ? [...this.messageTurns.entries()].filter(([, identity]) =>
-      (latest.turnId !== null && identity.hostTurnId === latest.turnId) ||
-      (latest.nativeTurnId !== null && identity.nativeTurnId === latest.nativeTurnId)
-    ).map(([id]) => id) : [];
+    const deliveredMessageIds = latest ? this.deliveredIdsFor(latest) : [];
     return {
       sessionId: this.sessionId,
       availability: this.busy ? "pending" : latest ? latest.source === "history_recovery" ? "recovered_unverified" : "available" : "unavailable",
       activeTurnId: this.busy ? this.turnId : null,
       latestResult: latest ? { ...latest, deliveredMessageIds, correlationMeaning: "transport_delivery_only" } : null,
-      limitation: "Latest completed public text block only. History recovery cannot establish terminal status or turn/message correlation. Completion does not prove a message was applied.",
+      limitation: SESSION_RESULT_LIMITATION,
     };
+  }
+
+  /**
+   * Per-message terminal state for `wait_for_result`. `done` reads the result
+   * of the turn that consumed THIS message (turnResults), so a later turn that
+   * overwrote latestPublicResult cannot hide it.
+   */
+  communicationMessageResult(messageId: string):
+    | { state: "unknown_message" }
+    | { state: "rejected"; detail?: string }
+    | { state: "queued" }
+    | { state: "unknown"; detail: string }
+    | { state: "running"; turnId: string }
+    | { state: "done"; latestResult: SessionPublicResult & { deliveredMessageIds: string[]; correlationMeaning: "transport_delivery_only" }; limitation: string } {
+    const delivery = this.agentDeliveries.get(messageId);
+    if (!delivery) return { state: "unknown_message" };
+    if (delivery.state === "rejected") return { state: "rejected", detail: delivery.detail };
+    if (delivery.state === "queued") return { state: "queued" };
+    if (delivery.state === "unknown") return { state: "unknown", detail: delivery.detail ?? "Delivery cannot be confirmed" };
+    const identity = this.messageTurns.get(messageId);
+    if (!identity?.hostTurnId) return { state: "unknown", detail: "No turn recorded for this message" };
+    const result = this.turnResults.get(identity.hostTurnId);
+    if (result) return { state: "done", latestResult: { ...result, deliveredMessageIds: this.deliveredIdsFor(result), correlationMeaning: "transport_delivery_only" }, limitation: SESSION_RESULT_LIMITATION };
+    if (this.busy && this.turnId === identity.hostTurnId) return { state: "running", turnId: identity.hostTurnId };
+    return { state: "unknown", detail: "Turn ended without a recorded result" };
   }
 
   private readonly agentInbox: AgentEnvelope[] = [];
@@ -4097,6 +4139,7 @@ export class Session {
     let nativeTurnId: string | null = null;
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
       this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? null, truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
+      this.rememberTurnResult(turnId, this.latestPublicResult);
       // taskana 4181: thread this turn's final assistant text OUT of runTurn
       // for the supervisor idle-watchdog's noteTurnSettled call — the accept
       // -UserMessage teardown (outside this method) reads the private field.

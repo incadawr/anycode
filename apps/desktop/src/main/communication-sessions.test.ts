@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createSessionAccessStore, defaultSessionAccessFromSettingsFile } from "./communication-sessions.js";
+import { createSessionAccessStore, defaultSessionAccessFromSettingsFile, normalizeHandle } from "./communication-sessions.js";
 
 let dir: string;
 let file: string;
@@ -128,5 +128,125 @@ describe("per-session Sessions API switch (Taskana 4747 owner amendment)", () =>
     broken.register({ sessionId: "b" });
     expect(broken.set("b", true)).toBe(false);
     expect(broken.isExposed("b")).toBe(false);
+  });
+});
+
+describe("session handles (Taskana 4750b)", () => {
+  const handlesFile = () => join(dir, "communication-handles.json");
+  const handleStore = (withFile = true) => createSessionAccessStore({ file, defaultOn: () => false, ...(withFile ? { handlesFile: handlesFile() } : {}) });
+  const alwaysLive = () => true;
+
+  it("accepts lowercase digits and - _ . @", () => {
+    expect(normalizeHandle("build-bot_1.x@y")).toEqual({ ok: true, handle: "build-bot_1.x@y" });
+    expect(normalizeHandle("a")).toEqual({ ok: true, handle: "a" });
+  });
+  it("rejects uppercase (no case folding)", () => {
+    expect(normalizeHandle("Build-Bot")).toEqual({ ok: false, reason: "invalid" });
+  });
+  it("rejects 65 chars and accepts 64", () => {
+    expect(normalizeHandle("a".repeat(64))).toEqual({ ok: true, handle: "a".repeat(64) });
+    expect(normalizeHandle("a".repeat(65))).toEqual({ ok: false, reason: "invalid" });
+  });
+  it("rejects empty after trim as clear not invalid", () => {
+    expect(normalizeHandle("   ")).toEqual({ ok: true, handle: null });
+    expect(normalizeHandle("")).toEqual({ ok: true, handle: null });
+    expect(normalizeHandle(null)).toEqual({ ok: true, handle: null });
+  });
+  it("rejects leading dot or dash", () => {
+    expect(normalizeHandle(".hidden")).toEqual({ ok: false, reason: "invalid" });
+    expect(normalizeHandle("-flag")).toEqual({ ok: false, reason: "invalid" });
+    expect(normalizeHandle("_x")).toEqual({ ok: false, reason: "invalid" });
+  });
+  it("rejects spaces and slash", () => {
+    expect(normalizeHandle("a b")).toEqual({ ok: false, reason: "invalid" });
+    expect(normalizeHandle("a/b")).toEqual({ ok: false, reason: "invalid" });
+  });
+  it("trims surrounding whitespace before validating", () => {
+    expect(normalizeHandle("  build-bot  ")).toEqual({ ok: true, handle: "build-bot" });
+  });
+  it("set then get round-trips and survives reload", () => {
+    const s = handleStore();
+    s.register({ sessionId: "a" });
+    expect(s.setHandle("a", "build-bot", alwaysLive)).toEqual({ ok: true });
+    expect(s.getHandle("a")).toBe("build-bot");
+    expect(handleStore().getHandle("a")).toBe("build-bot");
+    expect(handleStore().sessionIdByHandle("build-bot", alwaysLive)).toBe("a");
+  });
+  it("duplicate among live sessions refused", () => {
+    const s = handleStore();
+    s.register({ sessionId: "a" }); s.register({ sessionId: "b" });
+    s.setHandle("a", "shared", alwaysLive);
+    expect(s.setHandle("b", "shared", alwaysLive)).toEqual({ ok: false, reason: "duplicate" });
+    expect(s.getHandle("b")).toBeUndefined();
+  });
+  it("same handle on same session is idempotent", () => {
+    const s = handleStore();
+    s.register({ sessionId: "a" });
+    expect(s.setHandle("a", "same", alwaysLive)).toEqual({ ok: true });
+    expect(s.setHandle("a", "same", alwaysLive)).toEqual({ ok: true });
+    expect(s.getHandle("a")).toBe("same");
+  });
+  it("stale handle of a dead session does not block reuse", () => {
+    const s = handleStore();
+    s.register({ sessionId: "dead" }); s.register({ sessionId: "fresh" });
+    s.setHandle("dead", "reused", alwaysLive);
+    const live = (id: string) => id !== "dead";
+    expect(s.setHandle("fresh", "reused", live)).toEqual({ ok: true });
+    expect(s.sessionIdByHandle("reused", live)).toBe("fresh");
+  });
+  it("unknown session refused", () => {
+    const s = handleStore();
+    expect(s.setHandle("ghost", "x", alwaysLive)).toEqual({ ok: false, reason: "unknown_session" });
+    expect(s.getHandle("ghost")).toBeUndefined();
+  });
+  it("clear removes handle", () => {
+    const s = handleStore();
+    s.register({ sessionId: "a" });
+    s.setHandle("a", "gone", alwaysLive);
+    expect(s.setHandle("a", null, alwaysLive)).toEqual({ ok: true });
+    expect(s.getHandle("a")).toBeUndefined();
+    expect(handleStore().getHandle("a")).toBeUndefined();
+  });
+  it("invalid handle passed to the store is refused", () => {
+    const s = handleStore();
+    s.register({ sessionId: "a" });
+    expect(s.setHandle("a", "BAD", alwaysLive)).toEqual({ ok: false, reason: "invalid" });
+  });
+  it("corrupt handles file reads as empty", async () => {
+    await writeFile(handlesFile(), "{not json");
+    expect(handleStore().getHandle("a")).toBeUndefined();
+    await writeFile(handlesFile(), JSON.stringify({ a: "good", b: "BAD", c: 7 }));
+    const s = handleStore();
+    expect(s.getHandle("a")).toBe("good");
+    expect(s.getHandle("b")).toBeUndefined();
+    expect(s.getHandle("c")).toBeUndefined();
+  });
+  it("existing boolean access file unchanged and still loads", async () => {
+    const s = handleStore();
+    s.register({ sessionId: "a" }); s.set("a", true); s.setHandle("a", "keep", alwaysLive);
+    expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ a: true });
+    expect(handleStore().isExposed("a")).toBe(true);
+    expect(await stat(handlesFile()).then((x) => x.mode & 0o777)).toBe(0o600);
+  });
+  it("child does not inherit parent handle", () => {
+    const s = handleStore();
+    s.register({ sessionId: "parent" });
+    s.setHandle("parent", "parent-handle", alwaysLive);
+    s.register({ sessionId: "child", parentSessionId: "parent" });
+    expect(s.getHandle("child")).toBeUndefined();
+    expect(s.setHandle("child", "parent-handle", alwaysLive)).toEqual({ ok: false, reason: "duplicate" });
+  });
+  it("failed write keeps previous handle (fail closed)", async () => {
+    await writeFile(join(dir, "blocker"), "x");
+    const s = createSessionAccessStore({ file, defaultOn: () => false, handlesFile: join(dir, "blocker", "handles.json") });
+    s.register({ sessionId: "a" });
+    expect(s.setHandle("a", "first", alwaysLive)).toEqual({ ok: false, reason: "io_error" });
+    expect(s.getHandle("a")).toBeUndefined();
+  });
+  it("without a handles file handles stay in memory", () => {
+    const s = handleStore(false);
+    s.register({ sessionId: "a" });
+    expect(s.setHandle("a", "mem", alwaysLive)).toEqual({ ok: true });
+    expect(handleStore(false).getHandle("a")).toBeUndefined();
   });
 });

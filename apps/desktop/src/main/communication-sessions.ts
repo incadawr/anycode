@@ -21,15 +21,58 @@ export interface SessionAccessStoreDeps {
   file: string;
   /** Initial switch state for a NEW session (settings.communication.defaultSessionAccess === "on"). */
   defaultOn(): boolean;
+  /**
+   * Absolute path of the handles file (a SECOND private file: the boolean switch
+   * file format stays unchanged, because older builds drop non-boolean entries).
+   * Absent = handles are kept in memory only.
+   */
+  handlesFile?: string;
 }
+
+export type SetHandleFailure = "unknown_session" | "invalid" | "duplicate" | "io_error";
 
 export interface SessionAccessStore {
   isExposed(sessionId: string): boolean;
-  /** Ensures a switch entry exists. A child inherits its parent's switch; a resumed session keeps its own. */
+  /** Ensures a switch entry exists. A child inherits its parent's switch; a resumed session keeps its own. A child never inherits a handle. */
   register(info: { sessionId: string; parentSessionId?: string }): void;
   /** Sets the switch of a KNOWN session; false (and no change) for an unknown one. */
   set(sessionId: string, enabled: boolean): boolean;
   exposedCount(): number;
+  /** The stored handle of a session, if any. Callers surface it only for live, exposed sessions. */
+  getHandle(sessionId: string): string | undefined;
+  /**
+   * Sets (or, with null, clears) the handle of a KNOWN session. Uniqueness is
+   * checked among LIVE sessions only (`isLive`), so a dead session's stale
+   * handle never blocks reuse. Fail closed: a failed write keeps the previous handle.
+   */
+  setHandle(sessionId: string, handle: string | null, isLive: (sessionId: string) => boolean): { ok: true } | { ok: false; reason: SetHandleFailure };
+  /** The live session currently holding `handle`, if any. */
+  sessionIdByHandle(handle: string, isLive: (sessionId: string) => boolean): string | undefined;
+}
+
+/** Session handle: lowercase letters, digits and `_ . @ -`; first char alphanumeric; 1..64 chars. No case folding. */
+const HANDLE_PATTERN = /^[a-z0-9][a-z0-9_.@-]{0,63}$/;
+
+/**
+ * Pure normalization for user input. Trim only. Empty after trim = clear
+ * (`handle: null`), which is not an error. Anything else must match the pattern
+ * exactly, so uppercase input is INVALID rather than silently lowered.
+ */
+export function normalizeHandle(raw: string | null | undefined): { ok: true; handle: string | null } | { ok: false; reason: "invalid" } {
+  if (raw === null || raw === undefined) return { ok: true, handle: null };
+  const trimmed = raw.trim();
+  if (trimmed === "") return { ok: true, handle: null };
+  return HANDLE_PATTERN.test(trimmed) ? { ok: true, handle: trimmed } : { ok: false, reason: "invalid" };
+}
+
+function loadHandles(file: string | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!file) return map;
+  try {
+    const parsed = fileSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
+    if (parsed.success) for (const [id, value] of Object.entries(parsed.data)) if (typeof value === "string" && HANDLE_PATTERN.test(value)) map.set(id, value);
+  } catch { /* corrupt or absent: empty */ }
+  return map;
 }
 
 function load(file: string): Map<string, boolean> {
@@ -43,7 +86,7 @@ function load(file: string): Map<string, boolean> {
   }
 }
 
-function persist(file: string, map: Map<string, boolean>): void {
+function persist(file: string, map: Map<string, unknown>): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
@@ -56,7 +99,35 @@ function persist(file: string, map: Map<string, boolean>): void {
 
 export function createSessionAccessStore(deps: SessionAccessStoreDeps): SessionAccessStore {
   const map = load(deps.file);
+  const handles = loadHandles(deps.handlesFile);
   return {
+    getHandle(sessionId) {
+      return handles.get(sessionId);
+    },
+    setHandle(sessionId, handle, isLive) {
+      if (!map.has(sessionId)) return { ok: false, reason: "unknown_session" };
+      if (handle !== null && !HANDLE_PATTERN.test(handle)) return { ok: false, reason: "invalid" };
+      const previous = handles.get(sessionId);
+      if (handle === previous) return { ok: true };
+      if (handle !== null) {
+        for (const [other, value] of handles) if (value === handle && other !== sessionId && isLive(other)) return { ok: false, reason: "duplicate" };
+      }
+      if (handle === null) handles.delete(sessionId); else handles.set(sessionId, handle);
+      if (deps.handlesFile) {
+        try {
+          persist(deps.handlesFile, handles);
+        } catch {
+          // Fail closed: the change did not persist, so it does not take effect.
+          if (previous === undefined) handles.delete(sessionId); else handles.set(sessionId, previous);
+          return { ok: false, reason: "io_error" };
+        }
+      }
+      return { ok: true };
+    },
+    sessionIdByHandle(handle, isLive) {
+      for (const [id, value] of handles) if (value === handle && isLive(id)) return id;
+      return undefined;
+    },
     isExposed(sessionId) {
       return map.get(sessionId) === true;
     },

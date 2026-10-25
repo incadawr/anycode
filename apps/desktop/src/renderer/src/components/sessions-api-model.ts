@@ -5,7 +5,7 @@
  * Everything rendered is PLAIN TEXT; nothing here carries a token or a path that
  * the renderer did not already receive from main.
  */
-import type { CommunicationMutationReason, CommunicationStatus, CommunicationView } from "../../../shared/communication-config.js";
+import type { CommunicationHandleResult, CommunicationMutationReason, CommunicationStatus, CommunicationView } from "../../../shared/communication-config.js";
 
 export const SESSIONS_API_PANE_ID = "sessions-api" as const;
 export const SESSIONS_API_LABEL = "Sessions API";
@@ -99,4 +99,18 @@ export function sessionSwitchDisabledReason(envControlled: boolean, hasTab: bool
   if (envControlled) return SESSIONS_API_ENV_NOTE;
   if (!hasTab) return "Open a session to share it.";
   return null;
+}
+
+export const SESSION_HANDLE_LABEL = "Handle (optional)";
+export const SESSION_HANDLE_PLACEHOLDER = "e.g. build-bot";
+
+/** The inline error under the handle field (plain text). `null` = nothing to show. */
+export function handleErrorText(reason: Extract<CommunicationHandleResult, { ok: false }>["reason"] | undefined): string | null {
+  switch (reason) {
+    case "invalid": return "Use lowercase letters, digits and - _ . @, up to 64.";
+    case "duplicate": return "Another live session already uses this handle.";
+    case "unknown_tab": return "That session is no longer open.";
+    case "io_error": return "The handle could not be saved.";
+    default: return null;
+  }
 }

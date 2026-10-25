@@ -33,6 +33,8 @@ export interface CommunicationControllerDeps {
   env(): string | undefined;
   /** Per-session exposure switch (main-owned), consulted on every request. */
   isSessionExposed(sessionId: string): boolean;
+  /** Session handle for `list_sessions` (main-owned). */
+  handleOf?(sessionId: string): string | undefined;
   /** Number of sessions currently switched on, for the status line. */
   countExposed?(): number;
 }
@@ -95,6 +97,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         userData: deps.userData,
         config: { workspaces: input.workspaces, port: input.port ?? 0 },
         isSessionExposed: (sessionId) => deps.isSessionExposed(sessionId),
+        handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined,
       });
       mode = "settings";
       return listening("listening", running, input.workspaces.length);
@@ -112,7 +115,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         const manager = deps.manager();
         if (!manager) return failed(new Error("host not ready"), 0);
         try {
-          running = await startServer({ manager, userData: deps.userData, configFile: envConfig });
+          running = await startServer({ manager, userData: deps.userData, configFile: envConfig, handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined });
           mode = "env";
           current = listening("env", running, 0);
         } catch (error) {

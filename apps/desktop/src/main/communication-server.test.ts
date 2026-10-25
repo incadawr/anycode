@@ -34,12 +34,12 @@ describe("production communication MCP over real SDK HTTP", () => {
     const client = new Client({ name: "portable-supervisor", version: "1" });
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url)), f.discoveryFile] }));
     cleanups.push(() => client.close());
-    expect((await client.listTools()).tools).toHaveLength(5);
+    expect((await client.listTools()).tools).toHaveLength(6);
     expect(value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).engine).toBe("codex");
   });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {
     const f = await fixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result"]);
     expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["allowed"]);
     expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).state).toBe("idle");
     expect((await f.client.callTool({ name: "send_message", arguments: { sessionId: "forbidden", payload: "no", mode: "next_turn" } })).isError).toBe(true);
@@ -175,5 +175,208 @@ describe("live config option and session exposure (Taskana 4747)", () => {
     const again = await startCommunicationServer({ manager: first.manager, userData: first.dir, config: { workspaces: [], port, discoveryFile: first.discoveryFile } });
     expect(again.url).toBe(`http://127.0.0.1:${port}/mcp`);
     await again.close();
+  });
+});
+
+describe("session handles and wait_for_result (Taskana 4750b)", () => {
+  type Live = Array<{ sessionId: string; workspace: string; state: string; pid: number }>;
+  async function waitFixture(extra: {
+    handleOf?: (sessionId: string) => string | undefined;
+    isSessionExposed?: (sessionId: string) => boolean;
+    pollMs?: number;
+    answer?: (messageId: string) => Promise<unknown> | unknown;
+  } = {}) {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-wait-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const configFile = join(dir, "config.json"); const discoveryFile = join(dir, "endpoint.json");
+    await writeFile(configFile, JSON.stringify({ workspaces: [dir], discoveryFile }));
+    const base: Live = [
+      { sessionId: "allowed", workspace: dir, state: "running", pid: 10 },
+      { sessionId: "allowed2", workspace: dir, state: "running", pid: 12 },
+      { sessionId: "forbidden", workspace: tmpdir(), state: "running", pid: 11 },
+    ];
+    const live = new Set(["allowed", "allowed2", "forbidden"]);
+    const request = vi.fn(async (_session: string, op: string, payload?: unknown) => {
+      if (op === "send_message") return { envelope: payload, state: "queued" };
+      if (op === "get_message_result") return extra.answer ? await extra.answer(payload as string) : { state: "queued" };
+      return undefined;
+    });
+    const manager = { listTabs: () => base.filter((t) => live.has(t.sessionId)), communicationRequest: request };
+    const service = await startCommunicationServer({ manager, configFile, userData: dir, handleOf: extra.handleOf, isSessionExposed: extra.isSessionExposed, pollMs: extra.pollMs ?? 10 });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "wait-test", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    const send = async (sessionId: string, extraArgs: Record<string, unknown> = {}) => value(await client.callTool({ name: "send_message", arguments: { sessionId, payload: "work", mode: "next_turn", ...extraArgs } }));
+    return { dir, discoveryFile, discovery, client, request, service, live, send };
+  }
+  const errorText = (result: unknown) => (result as { content: Array<{ text: string }> }).content[0]!.text;
+  const UNAVAILABLE = "Session unavailable or outside authorized workspace";
+
+  it("list_sessions includes handle for a shared session", async () => {
+    const f = await waitFixture({ handleOf: (id) => (id === "allowed" ? "build-bot" : undefined) });
+    const sessions = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions as Array<{ sessionId: string; handle?: string }>;
+    expect(sessions.map((s) => s.sessionId)).toEqual(["allowed", "allowed2"]);
+    expect(sessions[0]!.handle).toBe("build-bot");
+    expect("handle" in sessions[1]!).toBe(false);
+  });
+
+  it("list_sessions omits handle key when option absent", async () => {
+    const f = await waitFixture();
+    const sessions = value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions as Array<Record<string, unknown>>;
+    expect(sessions.every((s) => !("handle" in s))).toBe(true);
+  });
+
+  it("tools list now has 6 tools in order", async () => {
+    const f = await waitFixture();
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result"]);
+  });
+
+  it("wait_for_result resolves done for messageId", async () => {
+    const f = await waitFixture({ answer: (id) => ({ state: "done", sessionId: "allowed", latestResult: { publicAnswer: `ANSWER ${id}`, turnId: "t1" }, limitation: "L" }) });
+    const sent = await f.send("allowed");
+    const result = value(await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId } }));
+    expect(result).toMatchObject({ status: "done", sessionId: "allowed", messageId: sent.envelope.messageId, availability: "available", activeTurnId: null, limitation: "L" });
+    expect(result.latestResult.publicAnswer).toBe(`ANSWER ${sent.envelope.messageId}`);
+  });
+
+  it("wait_for_result resolves done for correlationId (newest record wins)", async () => {
+    const f = await waitFixture({ answer: (id) => ({ state: "done", latestResult: { publicAnswer: id }, limitation: "L" }) });
+    await f.send("allowed", { correlationId: "c1" });
+    const newest = await f.send("allowed", { correlationId: "c1" });
+    await f.send("allowed2", { correlationId: "c1" });
+    const result = value(await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", correlationId: "c1" } }));
+    expect(result.status).toBe("done");
+    expect(result.messageId).toBe(newest.envelope.messageId);
+  });
+
+  it("wait_for_result returns pending on timeout", async () => {
+    const f = await waitFixture({ answer: () => ({ state: "running", turnId: "t" }) });
+    const sent = await f.send("allowed");
+    const started = Date.now();
+    const result = value(await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 150 } }));
+    expect(result).toEqual({ status: "pending", sessionId: "allowed", messageId: sent.envelope.messageId });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(140);
+  });
+
+  it("wait_for_result neither or both ids is an error", async () => {
+    const f = await waitFixture();
+    const neither = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed" } });
+    const both = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: "m", correlationId: "c" } });
+    expect(neither.isError).toBe(true);
+    expect(errorText(neither)).toContain("Provide messageId or correlationId");
+    expect(both.isError).toBe(true);
+    expect(errorText(both)).toContain("Provide messageId or correlationId");
+  });
+
+  it("wait_for_result timeoutMs 120001 is rejected, 120000 accepted", async () => {
+    const f = await waitFixture({ answer: () => ({ state: "done", latestResult: { publicAnswer: "x" }, limitation: "L" }) });
+    const sent = await f.send("allowed");
+    expect((await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 120001 } })).isError).toBe(true);
+    expect((await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 120000 } })).isError).toBeFalsy();
+  });
+
+  it("wait_for_result unknown session is the unavailable error", async () => {
+    const f = await waitFixture();
+    const result = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "ghost", messageId: "m" } });
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toBe(UNAVAILABLE);
+  });
+
+  it("wait_for_result for a session that is NOT shared returns the identical error as unknown", async () => {
+    const f = await waitFixture({ isSessionExposed: (id) => id !== "allowed" });
+    const sent = await f.send("allowed2");
+    const hidden = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId } });
+    const unknown = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "ghost", messageId: sent.envelope.messageId } });
+    expect(hidden.content).toEqual(unknown.content);
+    expect(errorText(hidden)).toBe(UNAVAILABLE);
+  });
+
+  it("wait_for_result foreign message (recipient is another session) is Message unavailable", async () => {
+    const f = await waitFixture({ answer: () => ({ state: "done", latestResult: { publicAnswer: "x" }, limitation: "L" }) });
+    const sent = await f.send("allowed2");
+    const result = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId } });
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toBe("Message unavailable");
+    expect((await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", correlationId: "nothing-here" } })).isError).toBe(true);
+  });
+
+  it("wait_for_result session closes mid-wait errors", async () => {
+    const f = await waitFixture({ answer: () => { f.live.delete("allowed"); return { state: "queued" }; } });
+    const sent = await f.send("allowed");
+    const result = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 5000 } });
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toBe(UNAVAILABLE);
+  });
+
+  it("wait_for_result session unshared mid-wait errors", async () => {
+    let shared = true;
+    const f = await waitFixture({ isSessionExposed: () => shared, answer: () => { shared = false; return { state: "queued" }; } });
+    const sent = await f.send("allowed");
+    const result = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 5000 } });
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toBe(UNAVAILABLE);
+  });
+
+  it("wait_for_result host RPC failure errors as Session closed", async () => {
+    const f = await waitFixture({ answer: () => { throw new Error("Session host unavailable"); } });
+    const sent = await f.send("allowed");
+    const result = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId } });
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toBe("Session closed");
+  });
+
+  it("wait_for_result rejected delivery returns status rejected", async () => {
+    const f = await waitFixture({ answer: () => ({ state: "rejected", detail: "Inbox full" }) });
+    const sent = await f.send("allowed");
+    const result = value(await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId } }));
+    expect(result).toEqual({ status: "rejected", sessionId: "allowed", messageId: sent.envelope.messageId, detail: "Inbox full" });
+  });
+
+  it("wait_for_result aborts when client disconnects (no pending polls)", async () => {
+    const f = await waitFixture({ answer: () => ({ state: "queued" }) });
+    const sent = await f.send("allowed");
+    const controller = new AbortController();
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 60000 } } });
+    const pending = fetch(f.discovery.url, { method: "POST", signal: controller.signal, headers: { Authorization: `Bearer ${f.discovery.token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body }).catch(() => undefined);
+    await vi.waitFor(() => expect(f.request.mock.calls.filter((c) => c[1] === "get_message_result").length).toBeGreaterThanOrEqual(2), { timeout: 2000, interval: 10 });
+    controller.abort(); await pending;
+    await new Promise((r) => setTimeout(r, 50));
+    const settled = f.request.mock.calls.filter((c) => c[1] === "get_message_result").length;
+    await new Promise((r) => setTimeout(r, 150));
+    expect(f.request.mock.calls.filter((c) => c[1] === "get_message_result").length).toBe(settled);
+  });
+
+  it("server close aborts waiters", async () => {
+    const f = await waitFixture({ answer: () => ({ state: "queued" }) });
+    const sent = await f.send("allowed");
+    const waiting = f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 60000 } }).catch((error: unknown) => ({ isError: true, error }));
+    await vi.waitFor(() => expect(f.request.mock.calls.filter((c) => c[1] === "get_message_result").length).toBeGreaterThanOrEqual(2), { timeout: 2000, interval: 10 });
+    await f.service.close();
+    await waiting;
+    const settled = f.request.mock.calls.filter((c) => c[1] === "get_message_result").length;
+    await new Promise((r) => setTimeout(r, 120));
+    expect(f.request.mock.calls.filter((c) => c[1] === "get_message_result").length).toBe(settled);
+  });
+
+  it("33rd concurrent waiter refused", async () => {
+    const f = await waitFixture({ answer: () => ({ state: "queued" }) });
+    const sent = await f.send("allowed");
+    const calls = Array.from({ length: 33 }, () => f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 1500 } }));
+    const results = await Promise.all(calls);
+    const refused = results.filter((r) => r.isError);
+    expect(refused).toHaveLength(1);
+    expect(errorText(refused[0])).toBe("Too many waiters");
+    expect(results.filter((r) => !r.isError).every((r) => value(r).status === "pending")).toBe(true);
+  }, 20000);
+
+  it("two messages queued each get their own turn result (no overwrite)", async () => {
+    const f = await waitFixture({ answer: (id) => ({ state: "done", latestResult: { publicAnswer: `FOR ${id}`, turnId: id }, limitation: "L" }) });
+    const first = await f.send("allowed");
+    const second = await f.send("allowed");
+    const a = value(await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: first.envelope.messageId } }));
+    const b = value(await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: second.envelope.messageId } }));
+    expect(a.latestResult.publicAnswer).toBe(`FOR ${first.envelope.messageId}`);
+    expect(b.latestResult.publicAnswer).toBe(`FOR ${second.envelope.messageId}`);
   });
 });

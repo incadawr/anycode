@@ -115,6 +115,7 @@ import type {
   CommunicationCopyClient,
   CommunicationCopyConfigResult,
   CommunicationGetResult,
+  CommunicationHandleResult,
   CommunicationMutationResult,
   CommunicationRegenerateResult,
 } from "../../shared/communication-config";
@@ -617,6 +618,7 @@ declare global {
         copyConfig(client: CommunicationCopyClient): Promise<CommunicationCopyConfigResult>;
         setDefaultAccess(access: "off" | "on"): Promise<CommunicationMutationResult>;
         setSessionAccess(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
+        setSessionHandle(tabId: string, handle: string | null): Promise<CommunicationHandleResult>;
       };
       lspConfig: {
         status(req?: LspCatalogStatusRequest): Promise<LspConfigStatus>;

@@ -10,6 +10,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Native agents can now operate the built-in preview: navigate, read an accessibility snapshot, click, type and wait; remote origins ask first.
+- Sessions API: give a shared session a handle (for example `build-bot`) in the
+  session's environment menu. Handles are unique among open sessions, persist
+  across restarts, and appear in `list_sessions`.
+- Sessions API: `wait_for_result` long-polls until the turn that took a message
+  finishes, and returns its answer, `pending`, `rejected` or `unknown`.
+- `examples/channel-echo`: a dependency-free example plugin service that turns
+  files in an inbox folder into messages for a handle and writes the answers to an
+  outbox folder. The author guide is `docs/development/channel-plugins.md`.
 
 ## [0.0.38] — 2026-10-25
 

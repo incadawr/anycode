@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   copyConfigEnabled,
+  handleErrorText,
   folderScopeHint,
   mutationRefusalText,
   parsePortInput,
@@ -90,5 +91,17 @@ describe("Sessions API pane model (Taskana 4747)", () => {
     expect(SESSIONS_API_NOTICES.join(" ")).toMatch(/127\.0\.0\.1/);
     expect(SESSIONS_API_NOTICES.join(" ")).toMatch(/Node 22/);
     expect(SESSIONS_API_REGENERATE_CONFIRM).toMatch(/restart the external client's MCP connection/);
+  });
+});
+
+describe("session handle wording (Taskana 4750b)", () => {
+  it("invalid and duplicate handles show their inline message", () => {
+    expect(handleErrorText("invalid")).toBe("Use lowercase letters, digits and - _ . @, up to 64.");
+    expect(handleErrorText("duplicate")).toBe("Another live session already uses this handle.");
+  });
+  it("other failures have plain wording and success shows nothing", () => {
+    expect(handleErrorText("unknown_tab")).toBe("That session is no longer open.");
+    expect(handleErrorText("io_error")).toBe("The handle could not be saved.");
+    expect(handleErrorText(undefined)).toBeNull();
   });
 });

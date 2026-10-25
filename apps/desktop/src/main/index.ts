@@ -2201,6 +2201,7 @@ void app.whenReady().then(async () => {
   communicationSessions = createSessionAccessStore({
     file: join(app.getPath("userData"), "communication-sessions.json"),
     defaultOn: () => defaultSessionAccessFromSettingsFile(settingsPath),
+    handlesFile: join(app.getPath("userData"), "communication-handles.json"),
   });
   communicationController = createCommunicationController({
     manager: () => manager,
@@ -2208,6 +2209,7 @@ void app.whenReady().then(async () => {
     logger: { error: (message) => console.error(message) },
     env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
     isSessionExposed: (sessionId) => communicationSessions?.isExposed(sessionId) ?? false,
+    handleOf: (sessionId) => communicationSessions?.getHandle(sessionId),
     countExposed: () => communicationSessions?.exposedCount() ?? 0,
   });
 

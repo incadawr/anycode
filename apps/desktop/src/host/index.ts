@@ -4949,6 +4949,7 @@ process.parentPort.on("message", (event) => {
           case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope); break;
           case "restore_agent_messages": session.restoreAgentMessages(communication.payload as import("../shared/communication.js").AgentDelivery[]); result = {}; break;
           case "get_message_status": result = session.agentMessageStatus(String(communication.payload)); break;
+          case "get_message_result": result = session.communicationMessageResult(String(communication.payload)); break;
           default: throw new Error("Unsupported communication operation");
         }
         process.parentPort.postMessage({ type: "communication_response", requestId: communication.requestId, result });

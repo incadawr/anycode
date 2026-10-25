@@ -13,6 +13,7 @@ send them a message. It is a local MCP endpoint that runs while AnyCode is open.
 | `get_session_result` | Latest completed public answer and its turn identity. No reasoning. |
 | `send_message` | Sends a message. `mode: next_turn` queues it for the next turn; `mode: steer` steers an active Codex turn. |
 | `get_message_status` | Delivery state of a message you sent. |
+| `wait_for_result` | Waits (up to 120 s per call) until the turn that took your message finishes, then returns its answer. Returns `pending` on timeout; call it again. |
 
 A session that is not shared is answered as unavailable, exactly like a session
 that does not exist.
@@ -33,7 +34,10 @@ the toggle, the port, the folders or the token.
 ## Share a session
 
 Every tab has a **Sessions API** row in its environment menu. Switch it on to
-share that session. New tabs start with the default from **Sessions API → New
+share that session. Once it is on, you can give the session a **handle** in the
+same row (for example `build-bot`): lowercase letters, digits and `_ . @ -`, up
+to 64 characters, unique among open sessions. An external bridge finds the session
+by its handle through `list_sessions`. New tabs start with the default from **Sessions API → New
 sessions are shared by default**, which is off unless you change it. A child
 session started by a shared session inherits the switch. The switch is saved with
 the session, so it survives a restart and a resume.
@@ -95,6 +99,13 @@ rest of `settings.json` keeps working.
 3. Call `get_message_status` with the returned `messageId`. A state of
    `acknowledged` means the session took the message. It does not prove the
    model has applied it.
+4. Call `wait_for_result` with the same `sessionId` and `messageId` to get the
+   answer. Give a request timeout longer than `timeoutMs` in your MCP client
+   (its default is 60 seconds), or keep `timeoutMs` at 50000 or less and call
+   again while the status is `pending`.
+
+Services that bridge an outside channel use the same tools. See the
+[channel plugin guide](../development/channel-plugins.md).
 
 ## Security model
 
