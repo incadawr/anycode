@@ -20,7 +20,12 @@ export {
   anycodeConfigPath,
   removeDisabledEntry,
 } from "./admin-scan.js";
-export type { SkillAdminRow, SkillAdminScanResult, DeleteSkillResult } from "./admin-scan.js";
+export type {
+  SkillAdminRow,
+  SkillAdminScanResult,
+  ScanSkillsAdminOptions,
+  DeleteSkillResult,
+} from "./admin-scan.js";
 export { loadDisabledSkills, setSkillEnabled } from "./settings.js";
 export { scanHarnessSkills, applySkillImport } from "./harness-skill-import.js";
 export type {

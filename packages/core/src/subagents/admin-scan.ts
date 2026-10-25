@@ -17,7 +17,8 @@
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { FileSystemPort } from "../ports/file-system.js";
-import { discoverPlugins } from "../plugins/discovery.js";
+import { discoverPlugins, type PluginTier } from "../plugins/discovery.js";
+import type { McpConsentEntry } from "../plugins/state.js";
 import { MAX_AGENT_PROFILES, SUBAGENT_MAX_TURNS_CEILING } from "../types/config.js";
 import {
   AGENT_PROFILE_CONNECTION_RE,
@@ -297,11 +298,29 @@ export interface AgentProfileAdminRow {
   model?: string;
   /** Frontmatter `engine:` — absent means the child runs in-process, not on a foreign CLI. */
   engine?: AgentProfileEngine;
+  /**
+   * Taskana 4732 S1-A: the contributing plugin's discovery tier, present ONLY
+   * on plugin-sourced rows (sourceKind === "plugin").
+   */
+  pluginTier?: PluginTier;
+  /** The contributing plugin's manifest version, present only on plugin rows. */
+  pluginVersion?: string;
 }
 
 export interface AgentProfileAdminScanResult {
   rows: AgentProfileAdminRow[];
   problems: string[];
+}
+
+/** Options for scanAgentProfilesAdmin: the Taskana 4732 plugin-world passthroughs. */
+export interface ScanAgentProfilesAdminOptions {
+  workspace: string;
+  home: string;
+  pluginStatePath?: string;
+  appVersion?: string;
+  reservedSkillNames?: ReadonlySet<string>;
+  reservedAgentNames?: ReadonlySet<string>;
+  mcpConsent?: readonly McpConsentEntry[];
 }
 
 /** Maps a precedence label to the coarse kind the pane groups by. */
@@ -341,15 +360,26 @@ async function readProfileNoFollow(fs: FileSystemPort, path: string): Promise<st
  */
 export async function scanAgentProfilesAdmin(
   fs: FileSystemPort,
-  opts: { workspace: string; home: string },
+  opts: ScanAgentProfilesAdminOptions,
 ): Promise<AgentProfileAdminScanResult> {
   const { workspace, home } = opts;
   const problems: string[] = [];
 
   let pluginAgentRoots: AgentProfileRoot[] = [];
+  let pluginInfo = new Map<string, { tier: PluginTier; version?: string; root: string }>();
   try {
-    const plugins = await discoverPlugins(fs, { workspace, home, claimedMcpNames: new Set() });
+    const plugins = await discoverPlugins(fs, {
+      workspace,
+      home,
+      claimedMcpNames: new Set(),
+      ...(opts.pluginStatePath !== undefined ? { pluginStatePath: opts.pluginStatePath } : {}),
+      ...(opts.appVersion !== undefined ? { appVersion: opts.appVersion } : {}),
+      ...(opts.reservedSkillNames !== undefined ? { reservedSkillNames: opts.reservedSkillNames } : {}),
+      ...(opts.reservedAgentNames !== undefined ? { reservedAgentNames: opts.reservedAgentNames } : {}),
+      ...(opts.mcpConsent !== undefined ? { mcpConsent: opts.mcpConsent } : {}),
+    });
     pluginAgentRoots = plugins.agentRoots;
+    pluginInfo = plugins.pluginInfo;
     problems.push(...plugins.problems);
   } catch (error) {
     problems.push(`plugin discovery failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -565,6 +595,11 @@ export async function scanAgentProfilesAdmin(
       for (const suffix of result.ok.problems) {
         problems.push(`Agent profile ${path}: ${suffix}`);
       }
+      // Taskana 4732 S1-A: badge plugin-sourced rows with tier + version.
+      const pluginMeta =
+        root.source.startsWith("plugin:")
+          ? pluginInfo.get(root.source.slice("plugin:".length))
+          : undefined;
       rows.push({
         name,
         description,
@@ -576,6 +611,12 @@ export async function scanAgentProfilesAdmin(
         bodyBytes: Buffer.byteLength(body, "utf8"),
         ...(model !== undefined ? { model } : {}),
         ...(engine !== undefined ? { engine } : {}),
+        ...(pluginMeta !== undefined
+          ? {
+              pluginTier: pluginMeta.tier,
+              ...(pluginMeta.version !== undefined ? { pluginVersion: pluginMeta.version } : {}),
+            }
+          : {}),
       });
     }
   }

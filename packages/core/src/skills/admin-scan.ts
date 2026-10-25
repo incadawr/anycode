@@ -17,7 +17,8 @@ import type { FileSystemPort } from "../ports/file-system.js";
 import type { SkillMeta } from "../ports/skills.js";
 import { discoverSkills, type SkillRoot } from "./discovery.js";
 import { loadDisabledSkills, removeDisabledEntry, anycodeConfigPath } from "./settings.js";
-import { discoverPlugins } from "../plugins/discovery.js";
+import { discoverPlugins, type PluginTier } from "../plugins/discovery.js";
+import type { McpConsentEntry } from "../plugins/state.js";
 import { isUnderOwnRootsResolved } from "../util/path-containment.js";
 
 /** `<baseDir>/<relative>`, tolerating a trailing separator on baseDir (mirrors bootstrap.subdir). */
@@ -69,11 +70,30 @@ export function buildSkillRoots(
 export interface SkillAdminRow extends SkillMeta {
   /** True when this name appears in `skills.disabled` (project or user scope). */
   disabled: boolean;
+  /**
+   * Taskana 4732 S1-A: the contributing plugin's discovery tier, present ONLY
+   * on plugin-sourced rows (sourceKind === "plugin"). The Skills pane shows
+   * it next to the plugin group header.
+   */
+  pluginTier?: PluginTier;
+  /** The contributing plugin's manifest version, present only on plugin rows. */
+  pluginVersion?: string;
 }
 
 export interface SkillAdminScanResult {
   rows: SkillAdminRow[];
   problems: string[];
+}
+
+/** Options for scanSkillsAdmin: the Taskana 4732 plugin-world passthroughs. */
+export interface ScanSkillsAdminOptions {
+  workspace: string;
+  home: string;
+  pluginStatePath?: string;
+  appVersion?: string;
+  reservedSkillNames?: ReadonlySet<string>;
+  reservedAgentNames?: ReadonlySet<string>;
+  mcpConsent?: readonly McpConsentEntry[];
 }
 
 /**
@@ -85,15 +105,26 @@ export interface SkillAdminScanResult {
  */
 export async function scanSkillsAdmin(
   fs: FileSystemPort,
-  opts: { workspace: string; home: string },
+  opts: ScanSkillsAdminOptions,
 ): Promise<SkillAdminScanResult> {
   const { workspace, home } = opts;
   const problems: string[] = [];
 
   let pluginSkillRoots: SkillRoot[] = [];
+  let pluginInfo = new Map<string, { tier: PluginTier; version?: string; root: string }>();
   try {
-    const plugins = await discoverPlugins(fs, { workspace, home, claimedMcpNames: new Set() });
+    const plugins = await discoverPlugins(fs, {
+      workspace,
+      home,
+      claimedMcpNames: new Set(),
+      ...(opts.pluginStatePath !== undefined ? { pluginStatePath: opts.pluginStatePath } : {}),
+      ...(opts.appVersion !== undefined ? { appVersion: opts.appVersion } : {}),
+      ...(opts.reservedSkillNames !== undefined ? { reservedSkillNames: opts.reservedSkillNames } : {}),
+      ...(opts.reservedAgentNames !== undefined ? { reservedAgentNames: opts.reservedAgentNames } : {}),
+      ...(opts.mcpConsent !== undefined ? { mcpConsent: opts.mcpConsent } : {}),
+    });
     pluginSkillRoots = plugins.skillRoots;
+    pluginInfo = plugins.pluginInfo;
     problems.push(...plugins.problems);
   } catch (error) {
     problems.push(`plugin discovery failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -106,10 +137,21 @@ export async function scanSkillsAdmin(
 
   const disabled = await loadDisabledSkills(fs, { workspace, home });
 
-  const rows: SkillAdminRow[] = discovery.metas.map((meta) => ({
-    ...meta,
-    disabled: disabled.has(meta.name),
-  }));
+  const rows: SkillAdminRow[] = discovery.metas.map((meta) => {
+    // Taskana 4732 S1-A: badge plugin-sourced rows with tier + version.
+    if (meta.source.startsWith("plugin:")) {
+      const info = pluginInfo.get(meta.source.slice("plugin:".length));
+      if (info) {
+        return {
+          ...meta,
+          disabled: disabled.has(meta.name),
+          pluginTier: info.tier,
+          ...(info.version !== undefined ? { pluginVersion: info.version } : {}),
+        };
+      }
+    }
+    return { ...meta, disabled: disabled.has(meta.name) };
+  });
 
   return { rows, problems };
 }

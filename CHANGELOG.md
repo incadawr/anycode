@@ -9,6 +9,19 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Plugin manifest v1 groundwork (Taskana 4732, stage 1 core): plugins can
+  declare `displayName`, `publisher`, `author`, `homepage`, `license`, an
+  `engines.anycode` compatibility range (a plugin needing a newer AnyCode
+  stays installed but inactive, with the reason visible), and a `workflows`
+  contribution — plugin workflow presets now sit between your own workflows
+  and the bundled ones. A managed plugin store (`state.json` under
+  `~/.anycode/plugins`) is discovered alongside hand-dropped plugin folders
+  with a tier order (project > official > third-party > local > legacy), and
+  plugin-declared MCP servers start only after you approve them, keyed by a
+  hash of the servers so any command change needs fresh approval. Existing
+  hand-dropped plugins and older manifests keep working unchanged; a boot
+  with no plugins is byte-identical.
+
 - User documentation in `docs/user/`: configuration files, engines, subagents,
   skills, MCP servers, permissions, proxy, orchestration and troubleshooting. The
   app ships a copy, and `docs/user/README.md` indexes it.

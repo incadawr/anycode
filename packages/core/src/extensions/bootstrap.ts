@@ -31,6 +31,7 @@ import { discoverAgentProfiles, type AgentProfileRoot } from "../subagents/profi
 import { buildAgentProfileRoots } from "../subagents/admin-scan.js";
 import { buildProfilesPromptSection } from "../subagents/profiles-prompt-section.js";
 import { discoverPlugins } from "../plugins/discovery.js";
+import type { McpConsentEntry } from "../plugins/state.js";
 import { discoverWorkflows, type WorkflowRoot } from "../workflow/discovery.js";
 import { buildWorkflowsPromptSection } from "../workflow/prompt-section.js";
 import { capUtf8Bytes } from "../util/bytes.js";
@@ -98,6 +99,17 @@ export interface DiscoverExtensionsOptions {
   home: string;
   /** Server names already claimed by explicit config (so it always wins over plugins). */
   claimedMcpNames?: Set<string>;
+  /**
+   * Taskana 4732 S1-A (design §7 host wiring): managed plugin state path,
+   * app version, reserved builtin name sets, and the MCP consent list — all
+   * OPTIONAL passthroughs to discoverPlugins; absent on legacy callers
+   * (CLI, older host wiring), keeping their boot byte-identical.
+   */
+  pluginStatePath?: string;
+  appVersion?: string;
+  reservedSkillNames?: ReadonlySet<string>;
+  reservedAgentNames?: ReadonlySet<string>;
+  mcpConsent?: readonly McpConsentEntry[];
   /** null/undefined keeps repository discovery fully disabled (default). */
   repoMapConfig?: RepoMapConfig | null;
   repoMapMaxFiles?: number;
@@ -240,11 +252,24 @@ export async function discoverExtensions(
 
   let pluginSkillRoots: SkillRoot[] = [];
   let pluginAgentRoots: AgentProfileRoot[] = [];
+  let pluginWorkflowRoots: WorkflowRoot[] = [];
   let pluginMcpServerSpecs: McpServerSpec[] = [];
   try {
-    const result = await discoverPlugins(fs, { workspace, home, claimedMcpNames: claimed });
+    const result = await discoverPlugins(fs, {
+      workspace,
+      home,
+      claimedMcpNames: claimed,
+      ...(opts.pluginStatePath !== undefined ? { pluginStatePath: opts.pluginStatePath } : {}),
+      ...(opts.appVersion !== undefined ? { appVersion: opts.appVersion } : {}),
+      ...(opts.reservedSkillNames !== undefined ? { reservedSkillNames: opts.reservedSkillNames } : {}),
+      ...(opts.reservedAgentNames !== undefined ? { reservedAgentNames: opts.reservedAgentNames } : {}),
+      ...(opts.mcpConsent !== undefined ? { mcpConsent: opts.mcpConsent } : {}),
+    });
     pluginSkillRoots = result.skillRoots;
     pluginAgentRoots = result.agentRoots;
+    // workflowRoots: `?? []` tolerates a pre-4732 discoverPlugins double
+    // (older test mocks) that lacks the field — boot stays fail-soft.
+    pluginWorkflowRoots = result.workflowRoots ?? [];
     pluginMcpServerSpecs = result.mcpServerSpecs;
     problems.push(...result.problems);
   } catch (error) {
@@ -324,13 +349,16 @@ export async function discoverExtensions(
   };
 
   // Workflow discovery is the fourth subsystem (design §2.9): independent
-  // fail-soft block, symmetric with the three above. Roots are project > user
-
-  // so pluginSkillRoots/pluginAgentRoots do NOT feed this one.
+  // fail-soft block, symmetric with the three above. Roots are project >
+  // user > plugin roots (Taskana 4732 S1-A, design §8: plugin workflow roots
+  // sit BETWEEN user and bundled — a plugin preset shadows the bundled
+  // deep-research while project/user definitions shadow the plugin) >
+  // bundled presets.
   const workflowRoots: WorkflowRoot[] = [
     { dir: subdir(workspace, ".anycode/workflows"), source: "project" },
     ...(sameWorkspaceHome ? [] : [{ dir: subdir(home, ".anycode/workflows"), source: "user" }]),
-    // Bundled presets (deep-research …) come LAST: project and user
+    ...pluginWorkflowRoots,
+    // Bundled presets (deep-research …) come LAST: project, user, and plugin
     // definitions shadow them by name (claimed-set semantics). A missing dir
     // (packaged app) is a silent skip — see BUNDLED_WORKFLOWS_DIR above.
     { dir: BUNDLED_WORKFLOWS_DIR, source: "bundled" },

@@ -145,3 +145,182 @@ describe("pluginManifestSchema — fail-soft shape (missing/invalid required fie
     expect(result.success).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Taskana 4732 S1-A — manifest v1 (design §2). Legacy suites above are the
+// byte-identical regression: their exact toEqual assertions still pass with
+// the v1 schema, proving an ecosystem manifest parses EXACTLY as today.
+
+import {
+  MANIFEST_VERSION,
+  OFFICIAL_ONLY_CONTRIBUTIONS,
+  capabilities,
+  declaresOfficialOnly,
+  pluginWorkflowsDirs,
+} from "./manifest.js";
+
+describe("pluginManifestSchema — v1 additive fields", () => {
+  it("manifestVersion is optional; absent parses as legacy (the v1 subset)", () => {
+    const result = pluginManifestSchema.safeParse({ name: "legacy" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.manifestVersion).toBeUndefined();
+    }
+  });
+
+  it("manifestVersion: 1 parses and passes through; MANIFEST_VERSION is 1", () => {
+    const result = pluginManifestSchema.safeParse({ name: "p", manifestVersion: 1 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.manifestVersion).toBe(1);
+    }
+    expect(MANIFEST_VERSION).toBe(1);
+  });
+
+  it("a legacy manifest parses byte-identically (no new defaults leak into it)", () => {
+    const result = pluginManifestSchema.safeParse({
+      name: "my-plugin",
+      version: "1.2.3",
+      description: "does a thing",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // EXACTLY the legacy parsed shape — the v1 `workflows` default is
+      // applied outside the schema (pluginWorkflowsDirs), so a legacy
+      // manifest's schema output is unchanged.
+      expect(result.data).toEqual({
+        name: "my-plugin",
+        version: "1.2.3",
+        description: "does a thing",
+        skills: ["skills"],
+        agents: ["agents"],
+      });
+    }
+  });
+
+  it("accepts the full v1 metadata set and passes values through unchanged", () => {
+    const raw = {
+      manifestVersion: 1,
+      name: "anycode-essentials",
+      version: "1.4.2",
+      displayName: "AnyCode Essentials",
+      description: "official essentials",
+      publisher: "anycode",
+      author: { name: "AnyCode", url: "https://example.com" },
+      homepage: "https://example.com/home",
+      license: "MIT",
+      engines: { anycode: ">=0.0.35 <0.2.0" },
+      skills: ["skills"],
+      agents: ["agents"],
+      workflows: ["workflows"],
+    };
+    const result = pluginManifestSchema.safeParse(raw);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.displayName).toBe("AnyCode Essentials");
+      expect(result.data.publisher).toBe("anycode");
+      expect(result.data.author).toEqual({ name: "AnyCode", url: "https://example.com" });
+      expect(result.data.license).toBe("MIT");
+      expect(result.data.engines).toEqual({ anycode: ">=0.0.35 <0.2.0" });
+    }
+  });
+
+  it("workflows defaults to [\"workflows\"] via pluginWorkflowsDirs; explicit values pass through", () => {
+    const minimal = pluginManifestSchema.parse({ name: "p" });
+    expect(minimal.workflows).toBeUndefined(); // schema output stays legacy-identical
+    expect(pluginWorkflowsDirs(minimal)).toEqual(["workflows"]);
+    expect(pluginWorkflowsDirs(pluginManifestSchema.parse({ name: "p", workflows: [] }))).toEqual([]);
+    expect(pluginWorkflowsDirs(pluginManifestSchema.parse({ name: "p", workflows: ["w"] }))).toEqual(["w"]);
+  });
+
+  it("engines is optional and engines.anycode itself is optional (absent = any)", () => {
+    expect(pluginManifestSchema.safeParse({ name: "p" }).data?.engines).toBeUndefined();
+    expect(pluginManifestSchema.safeParse({ name: "p", engines: {} }).data?.engines).toEqual({});
+  });
+
+  it("rejects a non-integer or non-positive manifestVersion (schema-level, not a skip)", () => {
+    expect(pluginManifestSchema.safeParse({ name: "p", manifestVersion: 1.5 }).success).toBe(false);
+    expect(pluginManifestSchema.safeParse({ name: "p", manifestVersion: 0 }).success).toBe(false);
+    expect(pluginManifestSchema.safeParse({ name: "p", manifestVersion: "1" }).success).toBe(false);
+  });
+
+  it("accepts stage-2/3 placeholders without contributing them (shape-known, value-kept)", () => {
+    const result = pluginManifestSchema.safeParse({
+      name: "p",
+      commands: ["commands"],
+      hooks: "hooks/hooks.json",
+      docs: "docs",
+      engineSupport: { codex: "engine/codex-support.json" },
+      promptOverlays: ["overlays"],
+      permissions: { mcp: { allow: ["*"] } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.commands).toEqual(["commands"]);
+      expect(result.data.hooks).toBe("hooks/hooks.json");
+      expect(result.data.docs).toBe("docs");
+      expect(result.data.engineSupport).toEqual({ codex: "engine/codex-support.json" });
+      expect(result.data.promptOverlays).toEqual(["overlays"]);
+      expect(result.data.permissions).toEqual({ mcp: { allow: ["*"] } });
+    }
+  });
+
+  it("rejects an empty-string directory entry in skills/agents/workflows", () => {
+    expect(pluginManifestSchema.safeParse({ name: "p", skills: [""] }).success).toBe(false);
+    expect(pluginManifestSchema.safeParse({ name: "p", workflows: [""] }).success).toBe(false);
+  });
+});
+
+describe("capabilities() — derived, never self-declared (design §2)", () => {
+  it("derives the summary from content, including sorted mcp names", () => {
+    const parsed = pluginManifestSchema.safeParse({
+      name: "p",
+      skills: ["a", "b"],
+      agents: [],
+      workflows: ["w"],
+      mcpServers: { zeta: { command: "node" }, alpha: { command: "node" } },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(capabilities(parsed.data)).toEqual({
+        skills: 2,
+        agents: 0,
+        workflows: 1,
+        mcp: ["alpha", "zeta"],
+        commands: 0,
+        hooks: false,
+        docs: false,
+        engineSupport: [],
+        promptOverlays: 0,
+      });
+    }
+  });
+
+  it("a minimal manifest derives the default capability set", () => {
+    const parsed = pluginManifestSchema.safeParse({ name: "p", skills: [], agents: [], workflows: [] });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(capabilities(parsed.data).mcp).toEqual([]);
+      expect(capabilities(parsed.data).skills).toBe(0);
+    }
+  });
+});
+
+describe("declaresOfficialOnly — official-only contributions (design §2/§4)", () => {
+  it("false for a plain manifest; true for docs / engineSupport / promptOverlays", () => {
+    expect(declaresOfficialOnly(pluginManifestSchema.parse({ name: "p" }))).toBe(false);
+    expect(declaresOfficialOnly(pluginManifestSchema.parse({ name: "p", docs: "docs" }))).toBe(true);
+    expect(
+      declaresOfficialOnly(pluginManifestSchema.parse({ name: "p", engineSupport: { codex: "e.json" } })),
+    ).toBe(true);
+    expect(declaresOfficialOnly(pluginManifestSchema.parse({ name: "p", promptOverlays: ["o"] }))).toBe(true);
+    // An EMPTY engineSupport record declares nothing.
+    expect(declaresOfficialOnly(pluginManifestSchema.parse({ name: "p", engineSupport: {} }))).toBe(false);
+    // An EMPTY promptOverlays list declares nothing.
+    expect(declaresOfficialOnly(pluginManifestSchema.parse({ name: "p", promptOverlays: [] }))).toBe(false);
+  });
+
+  it("OFFICIAL_ONLY_CONTRIBUTIONS is the design's fixed set", () => {
+    expect([...OFFICIAL_ONLY_CONTRIBUTIONS]).toEqual(["docs", "engineSupport", "promptOverlays"]);
+  });
+});

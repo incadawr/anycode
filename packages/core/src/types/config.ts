@@ -625,8 +625,12 @@ export const MAX_AGENT_PROFILES = 32;
 /** Cap on an agent profile body used as the child subagent's system prompt. */
 export const AGENT_PROFILE_PROMPT_MAX_BYTES = 32_768;
 
-/** Cap on the number of local plugins discovered. */
-export const MAX_PLUGINS = 16;
+/**
+ * Cap on the number of local plugins discovered. Taskana 4732 raised the
+ * legacy 16 to 32 (design §3/§9.13): the managed store adds official +
+ * third-party + local tiers on top of the legacy hand-dropped dirs.
+ */
+export const MAX_PLUGINS = 32;
 
 // ---------------------------------------------------------------------------
 // Phase 3 slice 3.4 constants (workflow engine, design §2.4)

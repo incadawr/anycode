@@ -108,7 +108,17 @@ describe("discoverPlugins — empty world", () => {
   it("returns an all-empty result at zero readdir cost when neither plugins root exists", async () => {
     const fs = makeFs({});
     const result = await discoverPlugins(fs, { workspace: WORKSPACE, home: HOME, claimedMcpNames: new Set() });
-    expect(result).toEqual({ skillRoots: [], agentRoots: [], mcpServerSpecs: [], problems: [] });
+    // Taskana 4732 S1-A: the result gains workflowRoots (additive; still empty
+    // in the no-plugin world).
+    expect(result).toMatchObject({
+      skillRoots: [],
+      agentRoots: [],
+      workflowRoots: [],
+      mcpServerSpecs: [],
+      problems: [],
+    });
+    expect(result.pluginInfo.size).toBe(0);
+    expect(result.skipped).toEqual([]);
   });
 });
 
@@ -119,7 +129,11 @@ describe("discoverPlugins — manifest validation is fail-soft", () => {
   it("a directory with no manifest is silently not a plugin (no problem)", async () => {
     const fs = makeFs({ dirs: { [PROJECT_PLUGINS]: ["not-a-plugin"] } });
     const result = await discoverPlugins(fs, { workspace: WORKSPACE, home: HOME, claimedMcpNames: new Set() });
-    expect(result).toEqual({ skillRoots: [], agentRoots: [], mcpServerSpecs: [], problems: [] });
+    expect(result.problems).toEqual([]);
+    expect(result.skillRoots).toEqual([]);
+    expect(result.workflowRoots).toEqual([]);
+    expect(result.agentRoots).toEqual([]);
+    expect(result.mcpServerSpecs).toEqual([]);
   });
 
   it("bad JSON in one plugin's manifest is skipped+problem; other plugins still load", async () => {

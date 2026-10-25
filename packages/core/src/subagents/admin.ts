@@ -20,6 +20,7 @@ export {
 export type {
   AgentProfileAdminRow,
   AgentProfileAdminScanResult,
+  ScanAgentProfilesAdminOptions,
   AgentProfileSourceKind,
 } from "./admin-scan.js";
 
