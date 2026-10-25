@@ -206,6 +206,19 @@ describe("scrubSecretEnv", () => {
     expect(env.PATH).toBe("/usr/bin");
   });
 
+  // Taskana 4752 part C: the MCP secrets hand-off var is deleted by the same scrub.
+  it("deletes ANYCODE_MCP_SECRETS (the MCP secret hand-off) and keeps unrelated vars", () => {
+    const env = {
+      ANYCODE_MCP_SECRETS: '{"GH":"ghp_value"}',
+      ANYCODE_MODEL: "claude-x",
+      PATH: "/usr/bin",
+    } as NodeJS.ProcessEnv;
+    scrubSecretEnv(env);
+    expect(env.ANYCODE_MCP_SECRETS).toBeUndefined();
+    expect(env.ANYCODE_MODEL).toBe("claude-x");
+    expect(env.PATH).toBe("/usr/bin");
+  });
+
   it("is a safe no-op / idempotent on an env that never had the key", () => {
     const env = { PATH: "/usr/bin" } as NodeJS.ProcessEnv;
     expect(() => scrubSecretEnv(env)).not.toThrow();

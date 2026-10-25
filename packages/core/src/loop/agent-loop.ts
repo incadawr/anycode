@@ -525,7 +525,8 @@ export interface AgentLoopConfig {
    * (backward-compatible).
    */
   systemPromptComponents?: ReadonlyArray<{
-    kind: "memory" | "skills" | "workflows" | "profiles" | "repoMap";
+    /** "mcp": the connected MCP servers' instructions (Taskana 4752); counts as meta like the others. */
+    kind: "memory" | "skills" | "workflows" | "profiles" | "mcp" | "repoMap";
     text: string;
   }>;
 }
@@ -574,7 +575,7 @@ export interface ContextBreakdown {
    * this one category).
    */
   systemPromptTokens: number;
-  /** Proportional share of systemPromptComponents entries with kind "memory" | "workflows" | "profiles" | "repoMap". */
+  /** Proportional share of systemPromptComponents entries with kind "memory" | "workflows" | "profiles" | "mcp" | "repoMap". */
   metaTokens: number;
   /**
    * Provider-anchored total — identical to contextInfo().estimatedTokens.

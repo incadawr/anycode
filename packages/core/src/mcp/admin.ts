@@ -14,3 +14,6 @@ export { applyMcpImport, deleteMcpServer, setMcpServerEnabled, upsertMcpServer }
 export type { ApplyMcpImportResult, UpsertResult } from "./config-write.js";
 export { mcpConfigFileSchema, mcpServerEntrySchema } from "./config.js";
 export type { McpConfigFile, McpServerEntry } from "./config.js";
+export { collectSecretRefs } from "./config.js";
+export type { McpResolveOptions, McpSecretResolver } from "./config.js";
+export { redactSecrets } from "./redact.js";

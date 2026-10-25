@@ -9,6 +9,9 @@
  * rather than a rendered DOM, mirroring PermissionsEditor.test.ts.
  */
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { McpFormDialog, McpSecretsPanel } from "./McpServersPane.js";
 import type { McpServerStatus } from "@anycode/core";
 import type { McpConfigEntryView, McpImportCandidateView, McpPluginServerView } from "../../../shared/mcp-config.js";
 import {
@@ -593,5 +596,63 @@ describe("McpPluginRowItem (read-only plugin row, Taskana 4732 S1-C)", () => {
   it("badges a shadowed row when config overrides it", () => {
     expect(pluginRowText({ shadowed: true })).toContain("overridden by your config");
     expect(pluginRowText({})).not.toContain("overridden by your config");
+  });
+});
+
+// Taskana 4752 part C: the write-only secrets panel. Static render: the names are
+// listed as copyable references, the value input is a password field, and no value
+// is ever part of the markup (C-22).
+describe("McpSecretsPanel — write-only markup (Taskana 4752, C-22)", () => {
+  const noop = async () => {};
+  const render = (names: string[], error: string | null = null) =>
+    renderToStaticMarkup(
+      createElement(McpSecretsPanel, { names, error, busy: false, onSave: noop, onDelete: () => {} }),
+    );
+
+  it("lists names as ${secret:NAME} references, sorted, never a value", () => {
+    const html = render(["ZED", "ALPHA"]);
+    expect(html).toContain("${secret:ALPHA}");
+    expect(html).toContain("${secret:ZED}");
+    expect(html.indexOf("${secret:ALPHA}")).toBeLessThan(html.indexOf("${secret:ZED}"));
+  });
+
+  it("the value input is type=password with autocomplete off", () => {
+    const html = render([]);
+    expect(html).toMatch(/<input[^>]*type="password"[^>]*aria-label="Secret value"/);
+    expect(html).toMatch(/<input[^>]*aria-label="Secret value"[^>]*autoComplete|autoComplete="off"[^>]*aria-label="Secret value"/);
+  });
+
+  it("states the write-only, encrypted, new-sessions notice", () => {
+    expect(render([])).toContain("Values are write-only and stored in AnyCode");
+    expect(render([])).toContain("They apply to new sessions.");
+  });
+
+  it("shows a fixed failure line when a write was refused, with no value", () => {
+    const html = render(["A"], "The secret could not be saved. Try again.");
+    expect(html).toContain("The secret could not be saved. Try again.");
+  });
+
+  it("a rendered list never contains a value that was never passed in (names only)", () => {
+    const html = render(["GH_TOKEN"]);
+    expect(html).not.toContain("ghp_");
+    expect(html).toContain('aria-label="Delete secret GH_TOKEN"');
+  });
+});
+
+describe("McpFormDialog — the env hint names both references (Taskana 4752, part C)", () => {
+  it("the env section hint mentions ${secret:NAME} and ${env:NAME}, and no value is rendered", () => {
+    const html = renderToStaticMarkup(
+      createElement(McpFormDialog, {
+        mode: "add",
+        fields: blankMcpFormFields("project"),
+        error: null,
+        scopeMode: "project",
+        onChange: () => {},
+        onCancel: () => {},
+        onSubmit: () => {},
+      }),
+    );
+    expect(html).toContain("${secret:NAME}");
+    expect(html).toContain("${env:NAME}");
   });
 });

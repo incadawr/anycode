@@ -112,6 +112,13 @@ import type {
   McpImportScanResult,
 } from "../shared/mcp-config.js";
 import { ENGINES_LIST_CHANNEL, type AvailableEngines } from "../shared/tabs.js";
+import {
+  MCP_SECRETS_LIST_CHANNEL,
+  MCP_SECRET_DELETE_CHANNEL,
+  MCP_SECRET_SET_CHANNEL,
+  type McpSecretMutationResult,
+  type McpSecretsListResult,
+} from "../shared/mcp-secrets.js";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
 import type {
@@ -1036,6 +1043,16 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(MCP_IMPORT_SCAN_CHANNEL, req) as Promise<McpImportScanResult>,
     importApply: (req: McpImportApplyRequest): Promise<McpImportApplyResult> =>
       ipcRenderer.invoke(MCP_IMPORT_APPLY_CHANNEL, req) as Promise<McpImportApplyResult>,
+  },
+  // Taskana 4752: `mcpSecrets.*` — write-only MCP secret store. `list` returns
+  // names; `set`/`delete` return names. No channel returns a value.
+  mcpSecrets: {
+    list: (): Promise<McpSecretsListResult> =>
+      ipcRenderer.invoke(MCP_SECRETS_LIST_CHANNEL) as Promise<McpSecretsListResult>,
+    set: (req: { name: string; value: string }): Promise<McpSecretMutationResult> =>
+      ipcRenderer.invoke(MCP_SECRET_SET_CHANNEL, req) as Promise<McpSecretMutationResult>,
+    delete: (req: { name: string }): Promise<McpSecretMutationResult> =>
+      ipcRenderer.invoke(MCP_SECRET_DELETE_CHANNEL, req) as Promise<McpSecretMutationResult>,
   },
   // Taskana 4743: `lspConfig.*` — four thin invoke wrappers over the
   // language-server management channels (catalog+detection+config status,

@@ -68,6 +68,8 @@ import { clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limit
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
 import { ENV_CONNECTION_ID, ENV_MODEL, ENV_REASONING_EFFORT } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
+import { sessionToolEnv } from "../shared/session-env.js";
+import { ENV_MCP_SECRETS } from "../shared/mcp-secrets.js";
 import {
   ENGINE_PROCESS_REGISTRATION_TYPE,
   ENV_ENGINE,
@@ -135,6 +137,11 @@ const CHILD_ENGINE_NOT_READY_MESSAGE =
  * text that actually names the engine — the core text's "the core engine" is
  * simply false for a claude/codex child.
  */
+/** The fork-env entry for the MCP secret hand-off: nothing when there is no value. */
+function mcpSecretsFork(value: string | undefined): NodeJS.ProcessEnv {
+  return value !== undefined && value !== "" ? { [ENV_MCP_SECRETS]: value } : {};
+}
+
 function childEngineNotReadyMessage(engine: EngineId): string {
   if (engine === "core") {
     return CHILD_ENGINE_NOT_READY_MESSAGE;
@@ -632,6 +639,13 @@ export interface TabHostManagerDeps {
    * ANYCODE_WORKSPACE_TRUST_ONCE; absent/undefined = no approval.
    */
   workspaceTrustOnce?: (workspace: string) => string | undefined;
+  /**
+   * Taskana 4752 part C: the JSON `{NAME: value}` of the MCP secrets this
+   * workspace's configs reference, prepared by main (mcp-secret-fork-cache.ts) before
+   * the tab is created. Synchronous by design: spawnTabHost cannot await. Absent or
+   * undefined => the var is not set.
+   */
+  mcpSecretsEnv?: (workspace: string) => string | undefined;
   /** Resolved host entry script path. */
   hostEntry: string;
   /** new MessageChannelMain() (or a fake). */
@@ -1293,6 +1307,13 @@ export class TabHostManager {
           ? { [ENV_REASONING_EFFORT]: tab.effortOverride === "xhigh" ? "max" : tab.effortOverride }
           : {}),
         ...engineEnvOverlay,
+        // Taskana 4752 part A: the session's tools identify their session. Stamped
+        // AFTER baseEnv/engineEnvOverlay so no inherited value overrides it, and
+        // per fork so a respawn carries the same pair. Empty values are omitted.
+        ...sessionToolEnv(tab.sessionId, tab.workspace),
+        // Taskana 4752 part C: the referenced MCP secret values for this workspace.
+        // Consumed and deleted by the host right after its MCP config load.
+        ...mcpSecretsFork(this.deps.mcpSecretsEnv?.(tab.workspace)),
         ...(cleanup !== undefined ? { [WORKTREE_CLEANUP_ENV]: JSON.stringify(cleanup) } : {}),
         // Taskana 4736: a main-approved "trust once" for this workspace, this app run only.
         ...this.workspaceTrustOnceEnv(tab.workspace),

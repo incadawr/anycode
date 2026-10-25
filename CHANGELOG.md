@@ -13,6 +13,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   environment variables, choose allowed folders, share sessions one tab at a
   time, copy the Claude Code / Codex config, and regenerate the token. The
   setup skill can walk through it. See `docs/user/sessions-api.md`.
+- Tools started by a session (Bash, hooks, the terminal, and the Claude and
+  Codex engines) now see `ANYCODE_SESSION_ID`, the same id the Sessions API
+  reports, and `ANYCODE_SESSION_WORKSPACE`. Connected MCP servers' `instructions`
+  are added to the system prompt, labelled and capped, and only for trusted
+  folders. MCP `env` and `headers` accept `${secret:NAME}`, backed by write-only
+  secrets in Settings → MCP → Secrets, so a Dock-launched app needs no shell setup.
 
 - Settings → Language servers: a catalog of known language servers with
   Found / Not installed detection (existence check only — nothing is

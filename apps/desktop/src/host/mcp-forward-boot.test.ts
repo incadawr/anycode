@@ -281,3 +281,50 @@ describe("prepareEngineMcpForward — workspace trust gate (Taskana 4736)", () =
     expect(forward.codexNames.sort()).toEqual(["proj", "user"]);
   });
 });
+
+describe("prepareEngineMcpForward — ${secret:} via the host resolver (Taskana 4752, part C)", () => {
+  const WS = "/ws-secret";
+  const HOME = "/home/secret-user";
+  const SECRET_VALUE = "ghp_FORWARDED_SECRET_VALUE_1";
+  const files = {
+    [`${WS}/.anycode/config.json`]: JSON.stringify({
+      mcpServers: {
+        gh: { url: "https://example.com/mcp", headers: { Authorization: "Bearer ${secret:GH_TOKEN}" } },
+      },
+    }),
+  };
+
+  it("resolves ${secret:} for Codex and Claude through the injected resolver, with no secretValues field in the output", async () => {
+    const tmp = freshTmp();
+    const forward = await prepareEngineMcpForward({
+      fs: memFs(files),
+      workspace: WS,
+      home: HOME,
+      tmpDir: tmp,
+      pid: 7,
+      engines: ["claude", "codex"],
+      secrets: (name) => (name === "GH_TOKEN" ? SECRET_VALUE : undefined),
+    });
+    expect(forward.codexNames).toEqual(["gh"]);
+    expect(forward.claudeNames).toEqual(["gh"]);
+    expect(JSON.stringify(forward.codexServers)).toContain(SECRET_VALUE);
+    expect(forward.claudeJson).toContain(SECRET_VALUE);
+    // the internal provenance field never reaches an engine document
+    expect(JSON.stringify(forward.codexServers)).not.toContain("secretValues");
+    expect(forward.claudeJson).not.toContain("secretValues");
+    forward.cleanupFile();
+  });
+
+  it("without a resolver the unset secret skips the server; the notice names no value", async () => {
+    const forward = await prepareEngineMcpForward({
+      fs: memFs(files),
+      workspace: WS,
+      home: HOME,
+      tmpDir: freshTmp(),
+      pid: 8,
+      engines: ["codex"],
+    });
+    expect(forward.codexNames).toEqual([]);
+    expect(JSON.stringify(forward.notices)).not.toContain(SECRET_VALUE);
+  });
+});

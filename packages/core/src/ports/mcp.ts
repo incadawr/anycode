@@ -12,6 +12,12 @@
 
 /** Resolved server spec (post config: env already built, ${env:VAR} substituted). */
 export interface McpStdioServerSpec {
+  /**
+   * Values a `${secret:NAME}` reference resolved to (Taskana 4752). Set only by the
+   * config resolver, used only to redact diagnostics; never serialized to a status,
+   * a problem, or an engine config file (see mcp-forward-boot).
+   */
+  secretValues?: string[];
   kind: "stdio";
   name: string;
   command: string;
@@ -22,6 +28,8 @@ export interface McpStdioServerSpec {
 }
 
 export interface McpHttpServerSpec {
+  /** See McpStdioServerSpec.secretValues. */
+  secretValues?: string[];
   kind: "http";
   name: string;
   url: string;

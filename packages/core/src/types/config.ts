@@ -607,6 +607,12 @@ export const MCP_RESULT_MAX_BYTES = 100_000;
 /** Ring-buffer cap on captured stderr from a stdio MCP server (diagnostics). */
 export const MCP_STDERR_CAP_BYTES = 8_192;
 
+/** Taskana 4752: cap on one connected MCP server's `instructions` in the system prompt (chars). */
+export const MCP_INSTRUCTIONS_PER_SERVER_MAX_CHARS = 4_000;
+
+/** Taskana 4752: cap on the whole MCP instructions prompt section (chars). */
+export const MCP_INSTRUCTIONS_TOTAL_MAX_CHARS = 12_000;
+
 // ---------------------------------------------------------------------------
 // Phase 3 slice 3.3 constants (skills + agent-profiles + plugins-lite, design §2.10)
 

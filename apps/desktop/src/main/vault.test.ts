@@ -462,3 +462,53 @@ it("does not touch the OS keychain to display an empty first-run profile", async
   expect(isEncryptionAvailable).toHaveBeenCalled();
   expect((await vault.statuses({}))[0]?.tier).toBe("os_encrypted");
 });
+
+// Taskana 4752 part C: MCP secrets live in the same encrypted store under
+// `mcp.secret.<NAME>`; listing is name-only, reading decrypts only what is asked.
+describe("Vault — MCP secrets (Taskana 4752, C-18)", () => {
+  it("C-18: listMcpSecretNames returns sorted names of mcp.secret entries and never decrypts", async () => {
+    const decryptSpy = vi.fn((b: Buffer) => b.toString("utf8").slice("enc:".length));
+    const ss: SafeStorageLike = {
+      isEncryptionAvailable: () => true,
+      encryptString: (s) => Buffer.from(`enc:${s}`, "utf8"),
+      decryptString: decryptSpy,
+      getSelectedStorageBackend: () => "gnome_libsecret",
+    };
+    const vault = makeVault(ss, "darwin");
+    await vault.setSecret("mcp.secret.ZED", "z-value", { allowWeak: false });
+    await vault.setSecret("mcp.secret.ALPHA", "a-value", { allowWeak: false });
+    await vault.setSecret("provider.apiKey", "sk-provider", { allowWeak: false });
+    decryptSpy.mockClear();
+
+    expect(await vault.listMcpSecretNames()).toEqual(["ALPHA", "ZED"]);
+    expect(decryptSpy).not.toHaveBeenCalled();
+  });
+
+  it("C-18: provider Vault.statuses does NOT list mcp.secret.* keys", async () => {
+    const vault = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await vault.setSecret("mcp.secret.GITHUB_TOKEN", "ghp", { allowWeak: false });
+    await vault.setSecret("provider.apiKey", "sk-x", { allowWeak: false });
+    const keys = (await vault.statuses({})).map((s) => s.key);
+    expect(keys).toContain("provider.apiKey");
+    expect(keys.some((k) => k.startsWith("mcp.secret."))).toBe(false);
+  });
+
+  it("getMcpSecretValues decrypts only the requested names; unset ones are omitted", async () => {
+    const vault = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await vault.setSecret("mcp.secret.A", "value-a", { allowWeak: false });
+    await vault.setSecret("mcp.secret.B", "value-b", { allowWeak: false });
+    expect(await vault.getMcpSecretValues(["A", "MISSING"])).toEqual({ A: "value-a" });
+  });
+
+  it("getMcpSecretValues omits an undecryptable entry instead of throwing", async () => {
+    const good = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    await good.setSecret("mcp.secret.A", "value-a", { allowWeak: false });
+    const broken = makeVault(new FakeSafeStorage({ available: true, corruptDecrypt: true }), "darwin");
+    expect(await broken.getMcpSecretValues(["A"])).toEqual({});
+  });
+
+  it("getMcpSecretValues with no names returns an empty record without loading decrypt", async () => {
+    const vault = makeVault(new FakeSafeStorage({ available: true }), "darwin");
+    expect(await vault.getMcpSecretValues([])).toEqual({});
+  });
+});

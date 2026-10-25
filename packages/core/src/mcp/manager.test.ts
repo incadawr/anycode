@@ -43,6 +43,9 @@ import type {
   PermissionRequest,
 } from "../types/index.js";
 import { McpManager, classifyMcpCallError } from "./manager.js";
+import { loadMcpServerSpecs } from "./config.js";
+import { buildMcpInstructionsSection } from "./instructions-section.js";
+import type { FileSystemPort } from "../ports/file-system.js";
 
 // ---------------------------------------------------------------------------
 // Test transports. The boundary cast (SDK -> port) is the single checked cast
@@ -240,6 +243,154 @@ describe("McpManager — lifecycle (item 3)", () => {
     expect(manager.status()[0]!.state).toBe("failed");
     expect(snapshots.length).toBe(afterStart + 1);
     expect(snapshots[snapshots.length - 1]![0]!.state).toBe("failed");
+  });
+});
+
+/** An in-process MCP server that advertises `instructions` in its initialize result (Taskana 4752 B). */
+function instructedServer(instructions: string | undefined): McpServer {
+  const server = new McpServer(
+    { name: "srv", version: "0" },
+    instructions === undefined ? undefined : { instructions },
+  );
+  server.registerTool("ping", { description: "ping", inputSchema: {} }, async () => ({
+    content: [{ type: "text", text: "pong" }],
+  }));
+  return server;
+}
+
+describe("McpManager — server instructions (Taskana 4752, part B)", () => {
+  let manager: McpManager | undefined;
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.dispose();
+      manager = undefined;
+    }
+  });
+
+  it("exposes a connected server's trimmed instructions with its name and transport", async () => {
+    manager = new McpManager({
+      registry: new ToolRegistry(),
+      transports: new LinkedFactory({ docs: instructedServer("  Use search_docs first.  ") }),
+    });
+    await manager.start([spec("docs")]);
+    expect(manager.instructions()).toEqual([{ serverName: "docs", transport: "stdio", text: "Use search_docs first." }]);
+  });
+
+  it("B-6: a whitespace-only instructions string yields no entry", async () => {
+    manager = new McpManager({
+      registry: new ToolRegistry(),
+      transports: new LinkedFactory({ blank: instructedServer("   \n\t  ") }),
+    });
+    await manager.start([spec("blank")]);
+    expect(manager.instructions()).toEqual([]);
+  });
+
+  it("B-6: a server that sends no instructions (undefined) yields no entry", async () => {
+    manager = new McpManager({
+      registry: new ToolRegistry(),
+      transports: new LinkedFactory({ plain: instructedServer(undefined) }),
+    });
+    await manager.start([spec("plain")]);
+    expect(manager.status()[0]!.state).toBe("connected");
+    expect(manager.instructions()).toEqual([]);
+  });
+
+  it("B-7: a server that failed to connect yields no entry", async () => {
+    manager = new McpManager({
+      registry: new ToolRegistry(),
+      transports: new LinkedFactory({ ok: instructedServer("Only the ok server.") }),
+    });
+    await manager.start([spec("ok"), spec("dead")]);
+    expect(manager.instructions().map((e) => e.serverName)).toEqual(["ok"]);
+  });
+
+  it("B-7: a connected server that dies mid-session drops out of instructions()", async () => {
+    const factory = new ExposingLinkedFactory(instructedServer("Gone soon."));
+    manager = new McpManager({ registry: new ToolRegistry(), transports: factory });
+    await manager.start([spec("srv")]);
+    expect(manager.instructions()).toHaveLength(1);
+    factory.clientTransport!.onclose?.();
+    expect(manager.status()[0]!.state).toBe("failed");
+    expect(manager.instructions()).toEqual([]);
+  });
+
+  it("B-9: an untrusted project folder loads no spec for its server, so the server's instructions never appear", async () => {
+    const PROJECT = "/proj/.anycode/config.json";
+    const fsPort = {
+      exists: async (path: string) => path === PROJECT,
+      readFile: async () => JSON.stringify({ mcpServers: { projsrv: { command: "node" } } }),
+    } as unknown as FileSystemPort;
+
+    const untrusted = await loadMcpServerSpecs(fsPort, "/proj", "/home/u", { projectTrusted: false });
+    expect(untrusted.specs).toEqual([]);
+    manager = new McpManager({
+      registry: new ToolRegistry(),
+      transports: new LinkedFactory({ projsrv: instructedServer("Project advice that must not load.") }),
+    });
+    await manager.start(untrusted.specs);
+    expect(manager.instructions()).toEqual([]);
+    expect(buildMcpInstructionsSection(manager.instructions())).toBe("");
+  });
+
+  it("B-9 (contrast): once the folder is trusted the same project server does contribute instructions", async () => {
+    const PROJECT = "/proj/.anycode/config.json";
+    const fsPort = {
+      exists: async (path: string) => path === PROJECT,
+      readFile: async () => JSON.stringify({ mcpServers: { projsrv: { command: "node" } } }),
+    } as unknown as FileSystemPort;
+    const trusted = await loadMcpServerSpecs(fsPort, "/proj", "/home/u", { projectTrusted: true });
+    expect(trusted.specs.map((spec) => spec.name)).toEqual(["projsrv"]);
+    manager = new McpManager({
+      registry: new ToolRegistry(),
+      transports: new LinkedFactory({ projsrv: instructedServer("Project advice.") }),
+    });
+    await manager.start(trusted.specs);
+    expect(manager.instructions().map((e) => e.serverName)).toEqual(["projsrv"]);
+  });
+
+  it("returns entries in the start() spec order (stable, not connect-completion order)", async () => {
+    manager = new McpManager({
+      registry: new ToolRegistry(),
+      transports: new LinkedFactory({ b: instructedServer("B text"), a: instructedServer("A text") }),
+    });
+    await manager.start([spec("b"), spec("a")]);
+    expect(manager.instructions().map((e) => e.serverName)).toEqual(["b", "a"]);
+  });
+});
+
+describe("McpManager — secret redaction in diagnostics (Taskana 4752, C-13)", () => {
+  let manager: McpManager | undefined;
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.dispose();
+      manager = undefined;
+    }
+  });
+
+  it("C-13: a failing connect whose error echoes a secret-bearing header is redacted in status.error", async () => {
+    const SECRET = "ghp_TESTSECRET9876";
+    class EchoingFailTransport extends FailingTransport {
+      override start(): Promise<void> {
+        return Promise.reject(new Error(`401 for header Authorization: Bearer ${SECRET}`));
+      }
+    }
+    const transports: McpTransportFactory = { create: () => new EchoingFailTransport() };
+    manager = new McpManager({ registry: new ToolRegistry(), transports });
+    const httpSpec: McpServerSpec = {
+      kind: "http",
+      name: "gh",
+      url: "https://example.com/mcp",
+      headers: { Authorization: `Bearer ${SECRET}` },
+      secretValues: [SECRET],
+    };
+    await manager.start([httpSpec]);
+    const status = manager.status()[0]!;
+    expect(status.state).toBe("failed");
+    expect(status.error).toContain("[redacted]");
+    expect(status.error).not.toContain(SECRET);
+    expect(JSON.stringify(manager.status())).not.toContain(SECRET);
   });
 });
 

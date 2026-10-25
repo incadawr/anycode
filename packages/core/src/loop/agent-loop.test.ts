@@ -3768,6 +3768,26 @@ describe("AgentLoop.contextBreakdown (design slice-P7.17-cut.md §2.1)", () => {
     expect(breakdown.totalEstimatedTokens).toBe(0);
   });
 
+  it("Taskana 4752: an \"mcp\" component counts into metaTokens exactly like \"profiles\" (not skills, not base)", () => {
+    const build = (kind: "profiles" | "mcp") => {
+      const base = "x".repeat(20);
+      const section = "q".repeat(9);
+      const loop = makeLoop({
+        tokenizer: lengthTokenizer,
+        systemPrompt: base + section,
+        systemPromptComponents: [{ kind, text: section }],
+      });
+      loop.history.append({ role: "user", content: "h".repeat(50) });
+      return loop.contextBreakdown();
+    };
+    const asProfiles = build("profiles");
+    const asMcp = build("mcp");
+    expect(asMcp.metaTokens).toBe(asProfiles.metaTokens);
+    expect(asMcp.skillsTokens).toBe(asProfiles.skillsTokens);
+    expect(asMcp.systemPromptTokens).toBe(asProfiles.systemPromptTokens);
+    expect(asMcp.metaTokens).toBeGreaterThan(0);
+  });
+
   it("splits systemPromptComponents by kind (skills vs memory/workflows/profiles/repoMap => meta) and derives the base by subtraction", () => {
     const base = "x".repeat(20);
     const memory = "m".repeat(5);

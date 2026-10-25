@@ -57,7 +57,8 @@ describe("frozen contract surface (shared/settings.ts)", () => {
   });
 
   it("pins SECRET_ENV_KEYS (ruling R3; TASK.198 срез C widens it with the recognizer's own credential)", () => {
-    expect(SECRET_ENV_KEYS).toEqual(["ANYCODE_API_KEY", "ANYCODE_RECOGNIZER_API_KEY"]);
+    // Taskana 4752 part C: the MCP secret hand-off var is scrubbed by both main and host.
+    expect(SECRET_ENV_KEYS).toEqual(["ANYCODE_API_KEY", "ANYCODE_RECOGNIZER_API_KEY", "ANYCODE_MCP_SECRETS"]);
   });
 });
 

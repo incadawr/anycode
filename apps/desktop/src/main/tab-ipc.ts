@@ -103,6 +103,11 @@ export interface TabIpcDeps {
   providerReadiness?(connectionId?: string): Promise<import("../shared/settings.js").ProviderReadiness>;
   manager: TabHostManager;
   /**
+   * Taskana 4752 part C: awaited before a tab is created so the MCP secret
+   * hand-off for the workspace is current when spawnTabHost reads it. Optional.
+   */
+  primeMcpSecrets?(workspace: string): Promise<void>;
+  /**
    * The picker/resume reads main uses (§2.3), plus `touchSession` (W10-FIX F1):
    * re-pinning a resumed session to a replacement connection writes only
    * `SessionMetaPatch.connectionId` (already part of the core port — ZERO core
@@ -713,6 +718,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // itself is never touched by this pick (session-scoped, not a default
     // change).
     const newConnectionId = engine === "core" ? (explicitConnectionId ?? deps.activeConnectionId?.()) : undefined;
+    await deps.primeMcpSecrets?.(workspace);
     const result = deps.manager.createTab({
       workspace,
       sessionId: randomUUID(),
@@ -827,6 +833,9 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // throw) never spends the pick and a later resume of the reopened session
     // still boots on the chosen model. No await sits between peek and consume
     // (createTab is synchronous), so the consume window cannot race.
+    // The MCP secret prime is awaited BEFORE the peek: no await may sit between
+    // the peek and the consume below (the same-tick window the peek relies on).
+    await deps.primeMcpSecrets?.(meta.workspace);
     const importModelOverride = deps.peekPendingImportModel?.(req.sessionId);
     const result = deps.manager.createTab({
       workspace: meta.workspace,

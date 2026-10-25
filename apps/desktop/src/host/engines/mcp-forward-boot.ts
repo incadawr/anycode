@@ -12,7 +12,7 @@
  * independently of whether either map is empty.
  */
 import { unlinkSync } from "node:fs";
-import type { FileSystemPort, McpServerSpec } from "@anycode/core";
+import type { FileSystemPort, McpSecretResolver, McpServerSpec } from "@anycode/core";
 import { loadMcpServerSpecs, type AgentEvent } from "@anycode/core";
 import { buildClaudeMcpForwardDocument } from "./claude/mcp-forward.js";
 import { materializeMcpForwardFile, sweepOrphanedMcpForwardFiles } from "./claude/mcp-forward-file.js";
@@ -29,6 +29,8 @@ export interface PrepareEngineMcpForwardOptions {
   engines: ReadonlyArray<"claude" | "codex">;
   /** Workspace trust gate (Taskana 4736): false keeps project-level MCP out of the forward. */
   projectTrusted?: boolean;
+  /** Taskana 4752 part C: the host's `${secret:NAME}` resolver (values were handed over at fork time). */
+  secrets?: McpSecretResolver;
 }
 
 export interface PreparedEngineMcpForward {
@@ -62,6 +64,7 @@ export async function prepareEngineMcpForward(
   try {
     const loaded = await loadMcpServerSpecs(opts.fs, opts.workspace, opts.home, {
       projectTrusted: opts.projectTrusted,
+      ...(opts.secrets !== undefined ? { secrets: opts.secrets } : {}),
     });
     specs.push(...loaded.specs);
     loaderProblemCount = loaded.problems.length;

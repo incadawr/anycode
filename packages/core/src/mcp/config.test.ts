@@ -7,7 +7,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadMcpServerSpecs } from "./config.js";
+import { collectSecretRefs, loadMcpServerSpecs } from "./config.js";
 import type { FileSystemPort } from "../ports/file-system.js";
 import type { McpHttpServerSpec, McpStdioServerSpec } from "../ports/mcp.js";
 
@@ -362,5 +362,199 @@ describe("loadMcpServerSpecs — stdio env assembly", () => {
     const { specs } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
     expect(specs[0]!.kind).toBe("http");
     expect((specs[0] as unknown as { env?: unknown }).env).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Taskana 4752 part C: ${secret:NAME} in MCP env/headers (core resolver).
+
+describe("loadMcpServerSpecs — ${secret:NAME} substitution (Taskana 4752, part C)", () => {
+  const secretsFrom = (values: Record<string, string>) => (name: string) =>
+    Object.prototype.hasOwnProperty.call(values, name) ? values[name] : undefined;
+
+  it("C-1: resolves ${secret:NAME} inside an env value from the injected resolver", async () => {
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: { srv: { command: "node", env: { TOKEN: "${secret:GH_TOKEN}" } } },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, {
+      secrets: secretsFrom({ GH_TOKEN: "ghp_live" }),
+    });
+    expect(problems).toEqual([]);
+    expect(asStdio(specs[0]).env.TOKEN).toBe("ghp_live");
+  });
+
+  it("C-2: resolves inside an HTTP header (Bearer example)", async () => {
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: {
+          srv: { url: "https://example.com/mcp", headers: { Authorization: "Bearer ${secret:GITHUB_TOKEN}" } },
+        },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, {
+      secrets: secretsFrom({ GITHUB_TOKEN: "gho_abc" }),
+    });
+    expect(problems).toEqual([]);
+    expect(asHttp(specs[0]).headers).toEqual({ Authorization: "Bearer gho_abc" });
+  });
+
+  it("C-3: an unset secret skips the server; the problem names the secret only", async () => {
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: {
+          needsSecret: { url: "https://example.com/mcp", headers: { Authorization: "Bearer ${secret:GH_TOKEN}" } },
+          fine: { command: "node" },
+        },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, { secrets: secretsFrom({}) });
+    expect(specs.map((s) => s.name)).toEqual(["fine"]);
+    expect(problems).toEqual([
+      `MCP server 'needsSecret' in ${PROJECT_CONFIG}: secret 'GH_TOKEN' is not set — add it in Settings → MCP → Secrets — server skipped`,
+    ]);
+  });
+
+  it("C-4: with no resolver supplied, a ${secret:} reference is skipped with the same message", async () => {
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: { srv: { command: "node", env: { TOKEN: "${secret:GH_TOKEN}" } } },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME);
+    expect(specs).toEqual([]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/secret 'GH_TOKEN' is not set/);
+  });
+
+  it("C-5: mixed ${env:A} and ${secret:B} in one value both resolve", async () => {
+    vi.stubEnv("MCP_TEST_HOST", "api.example.com");
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: {
+          srv: { url: "https://x", headers: { "X-Auth": "${env:MCP_TEST_HOST}:${secret:API_KEY}" } },
+        },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, {
+      secrets: secretsFrom({ API_KEY: "k-123" }),
+    });
+    expect(problems).toEqual([]);
+    expect(asHttp(specs[0]).headers).toEqual({ "X-Auth": "api.example.com:k-123" });
+  });
+
+  it("C-6: a secret VALUE that looks like ${env:HOME} or ${secret:Y} stays literal (no re-scan)", async () => {
+    vi.stubEnv("HOME", "/should/not/leak");
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: {
+          srv: { url: "https://x", headers: { "X-A": "${secret:A}", "X-B": "${secret:B}" } },
+        },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, {
+      secrets: secretsFrom({ A: "${env:HOME}", B: "${secret:Y}" }),
+    });
+    expect(problems).toEqual([]);
+    expect(asHttp(specs[0]).headers).toEqual({ "X-A": "${env:HOME}", "X-B": "${secret:Y}" });
+  });
+
+  it("C-7: ${secret:} in command, args, cwd and url is left untouched (never substituted)", async () => {
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: {
+          srv: {
+            command: "run-${secret:A}",
+            args: ["${secret:A}"],
+            cwd: "/tmp/${secret:A}",
+          },
+          web: { url: "https://h/${secret:A}" },
+        },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, { secrets: secretsFrom({ A: "xyz" }) });
+    expect(problems).toEqual([]);
+    const stdio = asStdio(specs.find((s) => s.name === "srv"));
+    expect(stdio.command).toBe("run-${secret:A}");
+    expect(stdio.args).toEqual(["${secret:A}"]);
+    expect(stdio.cwd).toBe("/tmp/${secret:A}");
+    expect(asHttp(specs.find((s) => s.name === "web")).url).toBe("https://h/${secret:A}");
+  });
+
+  it("C-8: an invalid secret name (a-b, 1x, over 64 chars) is left literal, not an error", async () => {
+    const tooLong = "a".repeat(65);
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: {
+          srv: {
+            url: "https://x",
+            headers: {
+              "X-1": "${secret:a-b}",
+              "X-2": "${secret:1x}",
+              "X-3": `\${secret:${tooLong}}`,
+            },
+          },
+        },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, { secrets: secretsFrom({}) });
+    expect(problems).toEqual([]);
+    expect(asHttp(specs[0]).headers).toEqual({
+      "X-1": "${secret:a-b}",
+      "X-2": "${secret:1x}",
+      "X-3": `\${secret:${tooLong}}`,
+    });
+  });
+
+  it("C-10: a name that is an Object.prototype key is never resolved through the resolver's prototype", async () => {
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: {
+          proto: { url: "https://x", headers: { A: "${secret:__proto__}" } },
+          ctor: { url: "https://x", headers: { A: "${secret:constructor}" } },
+        },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, { secrets: secretsFrom({}) });
+    expect(specs).toEqual([]);
+    expect(problems).toHaveLength(2);
+    expect(problems.join("\n")).toMatch(/secret '__proto__' is not set/);
+    expect(problems.join("\n")).toMatch(/secret 'constructor' is not set/);
+  });
+
+  it("C-11: problems never contain a resolved value, even when another env var in the same entry is missing", async () => {
+    vi.stubEnv("MISSING_ENV_NAME", undefined);
+    const { fs } = makeFs({
+      [PROJECT_CONFIG]: JSON.stringify({
+        mcpServers: {
+          srv: {
+            command: "node",
+            env: { A: "${secret:S_OK}", B: "${env:MISSING_ENV_NAME}" },
+          },
+        },
+      }),
+    });
+    const { specs, problems } = await loadMcpServerSpecs(fs, WORKSPACE, HOME, {
+      secrets: secretsFrom({ S_OK: "super-secret-value-123" }),
+    });
+    expect(specs).toEqual([]);
+    expect(problems.join("\n")).not.toContain("super-secret-value-123");
+    expect(problems.join("\n")).toMatch(/MISSING_ENV_NAME/);
+  });
+});
+
+describe("collectSecretRefs (Taskana 4752, C-9)", () => {
+  it("returns sorted unique names across env and headers, ignoring env refs and other fields", () => {
+    const entries = {
+      a: { command: "node", env: { X: "${secret:ZED}", Y: "${secret:ALPHA}", Z: "${env:HOME}" } },
+      b: { url: "https://x", headers: { Authorization: "Bearer ${secret:ALPHA}", Other: "${secret:MID}" } },
+      c: { command: "run-${secret:NOT_COUNTED}", args: ["${secret:NOT_COUNTED}"] },
+    };
+    expect(collectSecretRefs(entries)).toEqual(["ALPHA", "MID", "ZED"]);
+  });
+
+  it("returns an empty list when nothing is referenced", () => {
+    expect(collectSecretRefs({ a: { command: "node", env: { X: "plain" } } })).toEqual([]);
   });
 });

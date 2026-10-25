@@ -267,6 +267,39 @@ describe("discoverPlugins — mcpServers rename + cwd defaulting", () => {
   });
 });
 
+describe("discoverPlugins — ${secret:NAME} in plugin MCP servers (Taskana 4752, part C)", () => {
+  it("resolves a plugin server's ${secret:} through the injected resolver", async () => {
+    const fs = makeFs({
+      dirs: { [PROJECT_PLUGINS]: ["sp"] },
+      files: pluginFiles(PROJECT_PLUGINS, "sp", {
+        name: "sp",
+        mcpServers: { remote: { url: "https://example.com/mcp", headers: { Authorization: "Bearer ${secret:PLUG_TOKEN}" } } },
+      }),
+    });
+    const result = await discoverPlugins(fs, {
+      workspace: WORKSPACE,
+      home: HOME,
+      claimedMcpNames: new Set(),
+      secrets: (name) => (name === "PLUG_TOKEN" ? "plug-value" : undefined),
+    });
+    expect(result.problems).toEqual([]);
+    expect(asHttp(result.mcpServerSpecs[0]!).headers).toEqual({ Authorization: "Bearer plug-value" });
+  });
+
+  it("without a resolver a plugin's ${secret:} server fails closed with the name-only message", async () => {
+    const fs = makeFs({
+      dirs: { [PROJECT_PLUGINS]: ["sp"] },
+      files: pluginFiles(PROJECT_PLUGINS, "sp", {
+        name: "sp",
+        mcpServers: { remote: { url: "https://example.com/mcp", headers: { Authorization: "Bearer ${secret:PLUG_TOKEN}" } } },
+      }),
+    });
+    const result = await discoverPlugins(fs, { workspace: WORKSPACE, home: HOME, claimedMcpNames: new Set() });
+    expect(result.mcpServerSpecs).toEqual([]);
+    expect(result.problems.join("\n")).toMatch(/secret 'PLUG_TOKEN' is not set/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // ${env:VAR} fail-closed + stdio env scrub, reused from resolveMcpServerEntries
 

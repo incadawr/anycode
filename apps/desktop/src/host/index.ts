@@ -181,6 +181,7 @@ import {
   JsonlTelemetrySink,
   LspManager,
   McpManager,
+  buildMcpInstructionsSection,
   ModePermissionEngine,
   NodeArtifactStore,
   NodeExecutionAdapter,
@@ -338,6 +339,7 @@ import {
 } from "../shared/credentials.js";
 import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
 import { WORKSPACE_TRUST_PENDING_MESSAGE_TYPE } from "../shared/workspace-trust.js";
+import { applySessionToolEnv } from "../shared/session-env.js";
 import { establishHostWorkspaceTrust, type HostWorkspaceTrust } from "./workspace-trust.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
 import { PROVIDER_QUOTA_EVENT_TYPE, type ProviderQuotaEvent } from "../shared/provider-quota.js";
@@ -345,6 +347,8 @@ import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "..
 import { PREVIEW_ARTIFACTS_TYPE } from "../shared/preview.js";
 import type { PreviewEventMessage, PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
 import type { RetryPolicy } from "@anycode/core";
+import type { McpSecretResolver } from "@anycode/core";
+import { takeMcpSecretsEnv } from "./mcp-secrets.js";
 import {
   WORKTREE_CLEANUP_ENV,
   WORKTREE_TRANSITION_MESSAGE_TYPE,
@@ -1244,7 +1248,11 @@ function buildChildSessionOptions(
  * Native Codex branch. Keep this separate from `boot()` so a subscription-only
  * host never constructs the provider/core graph just to reach its session.
  */
-async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin): Promise<void> {
+async function bootCodexSession(
+  bootstrap: EngineBootstrap,
+  plugin: EnginePlugin,
+  mcpSecrets: McpSecretResolver,
+): Promise<void> {
   const binaryPath = process.env[ENV_CODEX_BIN];
   if (binaryPath === undefined || binaryPath.trim() === "") {
     throw new Error("Codex binary is unavailable; configure a validated Codex installation first");
@@ -1367,6 +1375,7 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
     pid: process.pid,
     engines: ["codex"],
     projectTrusted: hostWorkspaceTrust.projectTrusted,
+    secrets: mcpSecrets,
   });
   if (codexMcpForward.codexNames.length > 0) {
     console.log(`[host] codex mcp forward: ${codexMcpForward.codexNames.length} server(s): ${codexMcpForward.codexNames.join(", ")}`);
@@ -1872,7 +1881,11 @@ async function bootCodexSession(bootstrap: EngineBootstrap, plugin: EnginePlugin
  *    fire-and-forget (never the renderer, never a parse of Claude Code's own
  *    on-disk `.jsonl` — invariant §0.2-4).
  */
-async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugin): Promise<void> {
+async function bootClaudeSession(
+  bootstrap: EngineBootstrap,
+  plugin: EnginePlugin,
+  mcpSecrets: McpSecretResolver,
+): Promise<void> {
   const binaryPath = process.env[ENV_CLAUDE_BIN];
   if (binaryPath === undefined || binaryPath.trim() === "") {
     throw new Error("Claude binary is unavailable; configure a validated Claude Code installation first");
@@ -2087,6 +2100,7 @@ async function bootClaudeSession(bootstrap: EngineBootstrap, plugin: EnginePlugi
     pid: process.pid,
     engines: ["claude"],
     projectTrusted: hostWorkspaceTrust.projectTrusted,
+    secrets: mcpSecrets,
   });
   if (mcpForward.claudeNames.length > 0) {
     console.log(`[host] claude mcp forward: ${mcpForward.claudeNames.length} server(s): ${mcpForward.claudeNames.join(", ")}`);
@@ -2647,6 +2661,11 @@ class VisionTelemetryModelPort implements ModelPort {
 
 async function boot(): Promise<void> {
   try {
+    // Taskana 4752 part C: the MCP secret values main handed this fork. Read and
+    // deleted FIRST, before any child can spawn (the relay, the engines, the MCP
+    // load). The resolver closure is the only holder of the values: nothing stores
+    // them on a global, logs them, or emits them.
+    const mcpSecrets = takeMcpSecretsEnv(process.env);
     // TASK.135 follow-up (Taskana 4074): start the credential-free loopback
     // relay BEFORE the first non-engine spawn, when this fork holds a
     // credentialed proxy. await-ed here so the very first Bash child, PTY
@@ -2694,13 +2713,13 @@ async function boot(): Promise<void> {
     const plugin = selectEnginePlugin(process.env);
     engineBootstrap = await beginEngineBootstrap(plugin);
     if (engineBootstrap.id === "codex") {
-      await bootCodexSession(engineBootstrap, plugin);
+      await bootCodexSession(engineBootstrap, plugin, mcpSecrets);
       return;
     }
     // SLICE-CC C4 (cut §1.4): the one new dispatch branch. Everything below
     // stays the core boot path, byte-identical.
     if (engineBootstrap.id === "claude") {
-      await bootClaudeSession(engineBootstrap, plugin);
+      await bootClaudeSession(engineBootstrap, plugin, mcpSecrets);
       return;
     }
     const envConfig = loadEnvConfig(process.env);
@@ -2983,6 +3002,10 @@ async function boot(): Promise<void> {
     });
     let sessionMeta = resolvedSession.sessionMeta;
     const { initialHistory, resumedMissing } = resolvedSession;
+    // Taskana 4752 part A: tools see their session id. Main stamps the pair into
+    // the fork env, so this only fills a bare/legacy boot (dev harness) where it
+    // is absent; `??=` never overrides main's value.
+    applySessionToolEnv(process.env, sessionMeta.id, workspace);
     if (!childRetryBoot && isChildSessionBoot(args, sessionMeta)) {
       childRetryBoot = true;
       switchableModelPort.setPort(modelPortFactory(envConfig.model));
@@ -3395,6 +3418,7 @@ async function boot(): Promise<void> {
     try {
       const loaded = await loadMcpServerSpecs(fsAdapter, workspace, homedir(), {
         projectTrusted: hostWorkspaceTrust.projectTrusted,
+        secrets: mcpSecrets,
       });
       mcpSpecs = loaded.specs;
       mcpProblems = loaded.problems;
@@ -3442,6 +3466,7 @@ async function boot(): Promise<void> {
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
         repoMapConfig,
         projectTrusted: hostWorkspaceTrust.projectTrusted,
+        secrets: mcpSecrets,
         ...(builtinSkills.length > 0 ? { builtinSkills } : {}),
         // Taskana 4732 S1-B (design §7 host wiring): app version (the
         // ANYCODE_APP_VERSION carrier main stamps from app.getVersion()) +
@@ -3496,6 +3521,11 @@ async function boot(): Promise<void> {
       console.error(`[host] failed to start MCP servers; continuing with zero MCP servers: ${describeError(error)}`);
       mcpManager = null;
     }
+    // Taskana 4752 part B: the connected servers' `instructions`, computed ONCE
+    // here (after start, before the first compose) so every turn sees the same
+    // text; a resumed session recomputes at its own boot. Empty => "" (the
+    // prompt stays byte-identical). A failed/unloaded server never contributes.
+    const mcpInstructionsSection = mcpManager ? buildMcpInstructionsSection(mcpManager.instructions()) : "";
 
     // TASK.198 срез C (finding #6): the boot-time `toolNames` snapshot this
     // comment used to describe is GONE — `composeSystemPrompt` below now
@@ -3594,6 +3624,7 @@ async function boot(): Promise<void> {
       { kind: "skills", text: ext.skillsPromptSection },
       { kind: "workflows", text: ext.workflowsPromptSection },
       { kind: "profiles", text: ext.profilesPromptSection },
+      { kind: "mcp", text: mcpInstructionsSection },
       { kind: "repoMap", text: renderRepoMap() },
     ];
 

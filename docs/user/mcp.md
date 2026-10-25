@@ -55,18 +55,51 @@ ignored, even if the higher entry is disabled or failed.
 An entry needs exactly one of `command` (stdio) or `url` (HTTP). An entry with
 both, or with neither, is skipped and reported.
 
-## The `${env:NAME}` secret pattern
+## Secrets: `${env:NAME}` and `${secret:NAME}`
 
-Never paste a literal token into a config file. Reference it instead. The
-substitution works in `env` and `headers` values only. If the variable is unset,
-the whole server is skipped rather than started with an empty credential.
+Never paste a literal token into a config file. Reference it instead. Two
+references are available, and both work in `env` and `headers` values only:
 
-The variable must exist in the environment AnyCode starts from:
+- `${env:NAME}` reads an environment variable.
+- `${secret:NAME}` reads AnyCode's secret store, the same encrypted store that
+  holds your provider keys. It works for an app launched from the Dock or Finder,
+  so no shell setup is needed.
+
+A value can mix both, and a value can carry several references. For example:
+
+```json
+"headers": { "Authorization": "Bearer ${secret:GITHUB_TOKEN}" }
+```
+
+To add a secret, open **Settings → MCP → Secrets**, enter the name and the value,
+and save. Values are write-only: the pane shows names and never shows a value
+again. Names follow the environment-variable shape (letters, digits and
+underscores, starting with a letter or underscore, up to 64 characters).
+
+Changes apply to new sessions, not to a session already running. An unset
+reference, for either form, skips the whole server rather than starting it with
+an empty credential. The problem names the missing variable or secret, never a
+value. `${secret:NAME}` does not apply to `command`, `args`, `cwd` or `url`, and
+it is not available in the terminal CLI, which takes `${env:NAME}` only. Servers
+declared by a plugin can use `${secret:NAME}` only when the same name is also
+referenced by one of your config files; otherwise they skip with the same message.
+
+For `${env:NAME}`, the variable must exist in the environment AnyCode starts from:
 
 - A terminal-launched AnyCode inherits the variables exported in that terminal.
 - A Dock- or Finder-launched app does not read `~/.zshrc` or any other shell
   profile. On macOS, set the variable with `launchctl setenv NAME value`, then
   restart AnyCode.
+
+## Server instructions
+
+A connected MCP server can send short usage instructions. AnyCode adds them to
+the system prompt under a labelled block, one block per server, sorted by server
+name. Each server's text is capped at 4,000 characters and the whole block at
+12,000 characters. A server that is not loaded, or that failed to connect, never
+contributes. Project servers contribute only after you trust the folder. The text
+is third-party advice about that server's tools. It never overrides AnyCode's
+rules, your instructions, or permission prompts.
 
 ## Failure behaviour
 

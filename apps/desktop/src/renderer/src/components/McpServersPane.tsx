@@ -44,7 +44,7 @@
  * remove, type a new value to replace" makes this explicit and intentional —
  * see `buildMcpFormEntryInput`/the env row UI below).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { McpServerStatus } from "@anycode/core";
 import type {
   McpConfigDeleteRequest,
@@ -71,6 +71,15 @@ import type {
 import { describeMcpServer, type McpRowKind } from "./SettingsScreen.js";
 import { Pencil, Search, Trash, X } from "./icons.js";
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
+import type { McpSecretMutationResult, McpSecretsListResult } from "../../../shared/mcp-secrets.js";
+import {
+  MCP_SECRETS_NOTICE,
+  canSubmitMcpSecret,
+  mcpSecretFailureMessage,
+  mcpSecretNameError,
+  secretReferenceSnippet,
+  sortedSecretNames,
+} from "./mcp-secrets-model.js";
 
 // ── bridge (DI, same ethic as SettingsScreen.tsx's SettingsBridge) ──
 
@@ -476,6 +485,150 @@ export interface McpServersPaneProps {
   bridge?: McpConfigBridge;
 }
 
+/** The write-only secret bridge (preload `mcpSecrets.*`): list/set/delete, names only back. */
+export interface McpSecretsBridge {
+  list(): Promise<McpSecretsListResult>;
+  set(req: { name: string; value: string }): Promise<McpSecretMutationResult>;
+  delete(req: { name: string }): Promise<McpSecretMutationResult>;
+}
+
+/**
+ * Presentational half of the secrets block: lists NAMES with their copyable
+ * `${secret:NAME}` reference, a write-only form (password input, autocomplete
+ * off, the value cleared as soon as the save settles), and a per-row delete.
+ * No value is ever a prop, a list item, or rendered back.
+ */
+export function McpSecretsPanel({
+  names,
+  error,
+  busy,
+  onSave,
+  onDelete,
+}: {
+  names: readonly string[];
+  error: string | null;
+  busy: boolean;
+  onSave(name: string, value: string): Promise<void>;
+  onDelete(name: string): void;
+}) {
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const nameError = name === "" ? undefined : mcpSecretNameError(name);
+  const canSave = canSubmitMcpSecret(name, value) && !busy;
+
+  function submit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    if (!canSave) return;
+    const pending = onSave(name, value);
+    // The value leaves component state as soon as the call settles, win or lose.
+    void Promise.resolve(pending).then(
+      () => setValue(""),
+      () => setValue(""),
+    );
+    setName("");
+  }
+
+  return (
+    <details className="mcp-secrets-block">
+      <summary className="mcp-section-title">
+        Secrets <span className="mcp-section-count">{names.length}</span>
+      </summary>
+      <p className="settings-field-hint">{MCP_SECRETS_NOTICE}</p>
+      {names.length > 0 && (
+        <ul className="mcp-secret-list">
+          {sortedSecretNames(names).map((secretName) => (
+            <li key={secretName} className="mcp-secret-row">
+              <code className="settings-mcp-name">{secretReferenceSnippet(secretName)}</code>
+              <button
+                type="button"
+                className="settings-button"
+                aria-label={`Delete secret ${secretName}`}
+                onClick={() => onDelete(secretName)}
+              >
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="mcp-secret-form" autoComplete="off" onSubmit={submit}>
+        <input
+          className="settings-field-input"
+          type="text"
+          aria-label="Secret name"
+          placeholder="NAME"
+          autoComplete="off"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <input
+          className="settings-field-input"
+          type="password"
+          aria-label="Secret value"
+          placeholder="value"
+          autoComplete="off"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <button type="submit" className="settings-button settings-button-primary" disabled={!canSave}>
+          Save secret
+        </button>
+        {nameError !== undefined && <span className="settings-field-hint" role="alert">{nameError}</span>}
+      </form>
+      {error !== null && (
+        <div className="mcp-problem-strip" role="alert">
+          <span>{error}</span>
+        </div>
+      )}
+    </details>
+  );
+}
+
+/** Container: loads names through the bridge and forwards write-only mutations. */
+export function McpSecretsBlock({ bridge = window.anycode.mcpSecrets }: { bridge?: McpSecretsBridge }) {
+  const [names, setNames] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void bridge.list().then((result) => {
+      if (!cancelled && result.ok) setNames(result.names);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge]);
+
+  async function save(secretName: string, secretValue: string): Promise<void> {
+    setBusy(true);
+    setError(null);
+    const result = await bridge.set({ name: secretName, value: secretValue });
+    setBusy(false);
+    if (result.ok) setNames(result.names);
+    else setError(mcpSecretFailureMessage(result.reason));
+  }
+
+  async function remove(secretName: string): Promise<void> {
+    setBusy(true);
+    setError(null);
+    const result = await bridge.delete({ name: secretName });
+    setBusy(false);
+    if (result.ok) setNames(result.names);
+    else setError(mcpSecretFailureMessage(result.reason));
+  }
+
+  return (
+    <McpSecretsPanel
+      names={names}
+      error={error}
+      busy={busy}
+      onSave={save}
+      onDelete={(secretName) => void remove(secretName)}
+    />
+  );
+}
+
 export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConfig }: McpServersPaneProps) {
   const [snapshot, setSnapshot] = useState<McpConfigSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -625,6 +778,8 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
           </button>
         </div>
       </div>
+
+      <McpSecretsBlock />
 
       {visibleProblems.map((problem) => (
         <div key={problem} className="mcp-problem-strip" role="alert">
@@ -868,7 +1023,7 @@ interface McpFormDialogProps {
   onSubmit: () => void;
 }
 
-function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCancel, onSubmit }: McpFormDialogProps) {
+export function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCancel, onSubmit }: McpFormDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -1043,6 +1198,10 @@ function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCancel, onS
               Add variable
             </button>
           </div>
+          <span className="settings-field-hint">
+            Typed values are saved in the config file as written. For a token, prefer a reference:{" "}
+            <code>{"${secret:NAME}"}</code> (add the value under Secrets above) or <code>{"${env:NAME}"}</code>.
+          </span>
         </div>
 
         <div className="settings-field-row">

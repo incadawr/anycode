@@ -666,8 +666,8 @@ describe("TabHostManager — engine identity and process ownership", () => {
 
     expect(tab?.engine).toBe("codex");
     expect(envs).toEqual([
-      { PATH: "/base", ANYCODE_ENGINE: "codex" },
-      { PATH: "/base", ANYCODE_ENGINE: "codex" },
+      { PATH: "/base", ANYCODE_ENGINE: "codex", ANYCODE_SESSION_ID: "s1", ANYCODE_SESSION_WORKSPACE: "/ws" },
+      { PATH: "/base", ANYCODE_ENGINE: "codex", ANYCODE_SESSION_ID: "s1", ANYCODE_SESSION_WORKSPACE: "/ws" },
     ]);
   });
 
@@ -920,8 +920,8 @@ describe("TabHostManager — imported-session model override (codex-profiles S4-
     // lives on the tab object, so the picked model rides every fork.
     hosts[0]!.emit("exit", 1);
     expect(envs).toEqual([
-      { PATH: "/base", ANYCODE_MODEL: "pick-x" },
-      { PATH: "/base", ANYCODE_MODEL: "pick-x" },
+      { PATH: "/base", ANYCODE_MODEL: "pick-x", ANYCODE_SESSION_ID: "s1", ANYCODE_SESSION_WORKSPACE: "/ws" },
+      { PATH: "/base", ANYCODE_MODEL: "pick-x", ANYCODE_SESSION_ID: "s1", ANYCODE_SESSION_WORKSPACE: "/ws" },
     ]);
   });
 
@@ -943,7 +943,12 @@ describe("TabHostManager — imported-session model override (codex-profiles S4-
     });
     manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true });
     // No override ⇒ the base env's model passes through verbatim (byte-as-today).
-    expect(envs[0]).toEqual({ PATH: "/base", ANYCODE_MODEL: "base-m" });
+    expect(envs[0]).toEqual({
+      PATH: "/base",
+      ANYCODE_MODEL: "base-m",
+      ANYCODE_SESSION_ID: "s1",
+      ANYCODE_SESSION_WORKSPACE: "/ws",
+    });
   });
 });
 
@@ -969,8 +974,8 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
     // Respawn (sub-healthy exit still respawns below the per-tab cap).
     hosts[0]!.emit("exit", 1);
     expect(envs).toEqual([
-      { PATH: "/base", ANYCODE_CONNECTION_ID: "conn-work" },
-      { PATH: "/base", ANYCODE_CONNECTION_ID: "conn-work" },
+      { PATH: "/base", ANYCODE_CONNECTION_ID: "conn-work", ANYCODE_SESSION_ID: "s1", ANYCODE_SESSION_WORKSPACE: "/ws" },
+      { PATH: "/base", ANYCODE_CONNECTION_ID: "conn-work", ANYCODE_SESSION_ID: "s1", ANYCODE_SESSION_WORKSPACE: "/ws" },
     ]);
   });
 
@@ -991,7 +996,7 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
       logger: silentLogger,
     });
     manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
-    expect(envs[0]).toEqual({ PATH: "/base" });
+    expect(envs[0]).toEqual({ PATH: "/base", ANYCODE_SESSION_ID: "s1", ANYCODE_SESSION_WORKSPACE: "/ws" });
     expect(envs[0] && "ANYCODE_CONNECTION_ID" in envs[0]).toBe(false);
   });
 
@@ -1053,7 +1058,7 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
     });
     manager.createTab({ workspace: "/ws", sessionId: "s1", resume: true, connectionId: "conn-ok" });
     expect(forkSpy).toHaveBeenCalledOnce();
-    expect(forkSpy.mock.calls[0]?.[2].env).toEqual({ PATH: "/base", ANYCODE_CONNECTION_ID: "conn-ok" });
+    expect(forkSpy.mock.calls[0]?.[2].env).toEqual({ PATH: "/base", ANYCODE_CONNECTION_ID: "conn-ok", ANYCODE_SESSION_ID: "s1", ANYCODE_SESSION_WORKSPACE: "/ws" });
   });
 
   function pinEnvelopeManager(window: WindowLike, describeConnection?: TabHostManagerDeps["describeConnection"]) {
@@ -6397,5 +6402,143 @@ describe("TabHostManager — workspace trust (Taskana 4736)", () => {
     const { forkSpy } = rig();
     const env = (forkSpy.mock.calls[0]?.[2] as { env?: Record<string, string> }).env;
     expect(env?.ANYCODE_WORKSPACE_TRUST_ONCE).toBeUndefined();
+  });
+});
+
+// Taskana 4752 part A: the session's tools (Bash, hooks, terminal, engines) see
+// ANYCODE_SESSION_ID (= the id list_sessions reports) and ANYCODE_SESSION_WORKSPACE,
+// stamped per fork so every spawn — first, resume, respawn — carries them.
+describe("TabHostManager — session tool env (Taskana 4752, part A)", () => {
+  function envRig(baseEnv: NodeJS.ProcessEnv) {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const hosts: FakeHost[] = [];
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => baseEnv,
+      logger: silentLogger,
+    });
+    return { manager, envs, hosts };
+  }
+
+  it("A-1: stamps both keys on the first spawn and keeps them on a respawn", () => {
+    const { manager, envs, hosts } = envRig({ PATH: "/base" });
+    manager.createTab({ workspace: "/ws/one", sessionId: "sess-env-1", resume: false });
+    hosts[0]!.emit("exit", 1); // sub-healthy exit -> respawn
+    expect(envs).toHaveLength(2);
+    for (const env of envs) {
+      expect(env.ANYCODE_SESSION_ID).toBe("sess-env-1");
+      expect(env.ANYCODE_SESSION_WORKSPACE).toBe("/ws/one");
+    }
+  });
+
+  it("A-1: a resumed tab's first spawn carries the stamp too", () => {
+    const { manager, envs } = envRig({ PATH: "/base" });
+    manager.createTab({ workspace: "/ws/two", sessionId: "sess-env-R", resume: true });
+    expect(envs[0]?.ANYCODE_SESSION_ID).toBe("sess-env-R");
+    expect(envs[0]?.ANYCODE_SESSION_WORKSPACE).toBe("/ws/two");
+  });
+
+  it("A-2: a stale ANYCODE_SESSION_WORKSPACE in the base env is overridden by the tab's workspace", () => {
+    const { manager, envs } = envRig({
+      PATH: "/base",
+      ANYCODE_SESSION_ID: "stale-id",
+      ANYCODE_SESSION_WORKSPACE: "/stale/ws",
+    });
+    manager.createTab({ workspace: "/ws/fresh", sessionId: "sess-env-2", resume: false });
+    expect(envs[0]?.ANYCODE_SESSION_ID).toBe("sess-env-2");
+    expect(envs[0]?.ANYCODE_SESSION_WORKSPACE).toBe("/ws/fresh");
+  });
+
+  it("A-3: the stamped ANYCODE_SESSION_ID equals the sessionId listTabs() reports", () => {
+    const { manager, envs } = envRig({ PATH: "/base" });
+    manager.createTab({ workspace: "/ws/three", sessionId: "sess-env-3", resume: false });
+    const summary = manager.listTabs()[0];
+    expect(summary?.sessionId).toBe("sess-env-3");
+    expect(envs[0]?.ANYCODE_SESSION_ID).toBe(summary?.sessionId);
+  });
+
+  it("does not stamp the launch directive ANYCODE_WORKSPACE into the fork", () => {
+    const { manager, envs } = envRig({ PATH: "/base" });
+    manager.createTab({ workspace: "/ws/four", sessionId: "sess-env-4", resume: false });
+    expect(envs[0] && "ANYCODE_WORKSPACE" in envs[0]).toBe(false);
+  });
+});
+
+// Taskana 4752 part C: the MCP secret hand-off rides the fork env only when the
+// tab's workspace has referenced+set secrets; a respawn reads the latest value.
+describe("TabHostManager — MCP secret hand-off env (Taskana 4752, part C)", () => {
+  it("passes ANYCODE_MCP_SECRETS from the injected dep on the fork", () => {
+    const { hosts } = liveForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({ PATH: "/base" }),
+      mcpSecretsEnv: (workspace) => (workspace === "/ws" ? '{"GH":"ghp_value_1"}' : undefined),
+      logger: silentLogger,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s-mcp", resume: false });
+    expect(envs[0]?.ANYCODE_MCP_SECRETS).toBe('{"GH":"ghp_value_1"}');
+  });
+
+  it("does not set ANYCODE_MCP_SECRETS when the dep yields nothing for the workspace", () => {
+    const { hosts } = liveForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({ PATH: "/base" }),
+      mcpSecretsEnv: () => undefined,
+      logger: silentLogger,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s-none", resume: false });
+    expect(envs[0] && "ANYCODE_MCP_SECRETS" in envs[0]).toBe(false);
+  });
+
+  it("a respawn reads the latest cache value (a secret change reaches the next spawn)", () => {
+    const { hosts } = liveForkRig();
+    const envs: NodeJS.ProcessEnv[] = [];
+    let current = '{"GH":"v1-value"}';
+    const manager = new TabHostManager({
+      fork: (_entry, _args, opts) => {
+        envs.push(opts.env);
+        const host = new FakeHost();
+        hosts.push(host);
+        return host as unknown as UtilityProcess;
+      },
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({ PATH: "/base" }),
+      mcpSecretsEnv: () => current,
+      logger: silentLogger,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "s-respawn", resume: false });
+    current = '{"GH":"v2-value"}';
+    hosts[0]!.emit("exit", 1);
+    expect(envs[0]?.ANYCODE_MCP_SECRETS).toBe('{"GH":"v1-value"}');
+    expect(envs[1]?.ANYCODE_MCP_SECRETS).toBe('{"GH":"v2-value"}');
   });
 });

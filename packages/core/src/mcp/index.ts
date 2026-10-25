@@ -7,14 +7,24 @@
  */
 
 export { McpManager } from "./manager.js";
-export type { McpManagerOptions } from "./manager.js";
+export type { McpInstructionSource, McpManagerOptions } from "./manager.js";
+export { buildMcpInstructionsSection, MCP_INSTRUCTIONS_HEADER } from "./instructions-section.js";
+export type { McpInstructionEntry } from "./instructions-section.js";
 export {
+  collectSecretRefs,
   loadMcpServerSpecs,
   mcpConfigFileSchema,
   mcpServerEntrySchema,
   resolveMcpServerEntries,
 } from "./config.js";
-export type { LoadedMcpServerSpecs, McpConfigFile, McpServerEntry } from "./config.js";
+export type {
+  LoadedMcpServerSpecs,
+  McpConfigFile,
+  McpResolveOptions,
+  McpSecretResolver,
+  McpServerEntry,
+} from "./config.js";
+export { redactSecrets } from "./redact.js";
 export { scanHarnessConfigs } from "./harness-import.js";
 export type {
   HarnessImportCandidate,

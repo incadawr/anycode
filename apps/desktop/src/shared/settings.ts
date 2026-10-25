@@ -29,6 +29,7 @@
 // read by main, host AND renderer, and two hand-synced copies of a persisted
 // shape is exactly the drift that silently drops a field on a round-trip.
 import type { ProxyProfile } from "./proxy.js";
+import { ENV_MCP_SECRETS } from "./mcp-secrets.js";
 
 // ── invoke channels (5 — frozen; named consistently with shared/tabs.ts) ──
 
@@ -880,7 +881,12 @@ export type SecretKey =
   // replaced the plain drop with the credential-free loopback relay: those
   // children now receive `http://127.0.0.1:<port>` instead, which keeps
   // npm/git/curl working behind the authenticating proxy.
-  | `proxy.profile.${string}.password`;
+  | `proxy.profile.${string}.password`
+  // ── MCP secret (Taskana 4752 part C): `mcp.secret.<NAME>` backs `${secret:NAME}`
+  // in an MCP server's env/headers. Not a provider credential: it never
+  // materialises into a provider env (secretEnvFor refuses it) and never appears
+  // in the provider status list (isKnownSecretKey is false for it). See shared/mcp-secrets.ts.
+  | `mcp.secret.${string}`;
 
 /** What will actually win when a host is spawned (env-override is visible to the UI). */
 export type SecretSource = "env" | "vault" | "plaintext" | "none";
@@ -1281,7 +1287,7 @@ export interface PermissionRuleAddRequest {
  * name absent from those lists never reaches a `codex`/`claude` child
  * regardless of this array.
  */
-export const SECRET_ENV_KEYS = ["ANYCODE_API_KEY", "ANYCODE_RECOGNIZER_API_KEY"] as const;
+export const SECRET_ENV_KEYS = ["ANYCODE_API_KEY", "ANYCODE_RECOGNIZER_API_KEY", ENV_MCP_SECRETS] as const;
 
 export type SecretEnvKey = (typeof SECRET_ENV_KEYS)[number];
 

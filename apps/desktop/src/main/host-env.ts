@@ -38,6 +38,7 @@ import {
 } from "../shared/proxy.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderTransportId, SecretEnvKey, SecretKey } from "../shared/settings.js";
 import { activeProviderView, connectionById, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
+import { isMcpSecretKey } from "../shared/mcp-secrets.js";
 import type { RecognizerWireConfig } from "../shared/recognizer.js";
 
 // ── env var names (mirror core/provider/env.ts by contract; local literals so
@@ -237,6 +238,11 @@ export const SECRET_KEYS: readonly SecretKey[] = ["provider.apiKey"];
  * this never trips in normal flow.
  */
 export function secretEnvFor(key: SecretKey): SecretEnvKey {
+  if (isMcpSecretKey(key)) {
+    throw new Error(
+      `secretEnvFor refuses an MCP secret key (${key}) — an MCP secret reaches a host only through ANYCODE_MCP_SECRETS (Taskana 4752)`,
+    );
+  }
   if (isProxyProfileSecretKey(key)) {
     throw new Error(
       `secretEnvFor refuses a proxy-profile key (${key}) — a proxy password has no host-env materialisation (TASK.141 §5)`,

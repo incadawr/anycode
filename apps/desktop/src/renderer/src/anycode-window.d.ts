@@ -139,6 +139,7 @@ import type {
   McpImportScanRequest,
   McpImportScanResult,
 } from "../../shared/mcp-config";
+import type { McpSecretMutationResult, McpSecretsListResult } from "../../shared/mcp-secrets";
 // Taskana 4743: Settings → Language servers invoke-API (mirror of preload's
 // `lspConfig.*` wrappers over shared/lsp-config.ts).
 import type {
@@ -589,6 +590,12 @@ declare global {
         promoteCompat(req: McpConfigPromoteCompatRequest): Promise<McpConfigMutationResult>;
         importScan(req?: McpImportScanRequest): Promise<McpImportScanResult>;
         importApply(req: McpImportApplyRequest): Promise<McpImportApplyResult>;
+      };
+      // Taskana 4752: write-only MCP secret store. list/set/delete return names only.
+      mcpSecrets: {
+        list(): Promise<McpSecretsListResult>;
+        set(req: { name: string; value: string }): Promise<McpSecretMutationResult>;
+        delete(req: { name: string }): Promise<McpSecretMutationResult>;
       };
       // Taskana 4743: language-server management invoke-API. `status` returns
       // the joined catalog/detection/config/trust view (detection answers

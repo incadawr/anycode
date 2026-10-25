@@ -60,7 +60,7 @@ import {
 import { discoverExtensions, type ExtensionsBootstrap } from "../extensions/bootstrap.js";
 import { AgentLoop, type AgentLoopConfig } from "../loop/index.js";
 import { LspManager, loadLspServerSpecs } from "../lsp/index.js";
-import { McpManager, loadMcpServerSpecs } from "../mcp/index.js";
+import { McpManager, buildMcpInstructionsSection, loadMcpServerSpecs } from "../mcp/index.js";
 import {
   canonicalWorkspaceKey,
   defaultTrustStorePath,
@@ -1014,6 +1014,9 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   } catch (error) {
     bootWrite(`[warn] mcp startup failed; continuing with zero MCP servers: ${error instanceof Error ? error.message : String(error)}\n`);
   }
+  // Taskana 4752 part B: connected servers' `instructions`, computed ONCE after
+  // start (same as the desktop host). Empty => "" keeps the prompt byte-identical.
+  const mcpInstructionsSection = buildMcpInstructionsSection(mcpManager.instructions());
 
   // Boot snapshot of tool names for the system prompt's tool-discipline
   // section (design slice-3.6-cut.md §6/§0.2): taken AFTER mcpManager.start()
@@ -1218,6 +1221,12 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
       mode,
     }));
 
+  // Taskana 4752 part A: the session's tools (Bash, hooks) see their session id
+  // and workspace. `??=` keeps a value the caller already set; the CLI has no
+  // launch-directive collision (ANYCODE_WORKSPACE is not written here).
+  process.env.ANYCODE_SESSION_ID ??= session.id;
+  process.env.ANYCODE_SESSION_WORKSPACE ??= cwd;
+
   // Title state (Phase 4 slice 4.4-T, design §3): mirrors host/session.ts's
   // hasTitle/titleSet — a resumed session that already has a title (boot meta)
   // is never re-derived. pendingTitleText/titleWork carry the tier-2
@@ -1263,6 +1272,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     ext.skillsPromptSection +
     ext.workflowsPromptSection +
     ext.profilesPromptSection +
+    mcpInstructionsSection +
     renderRepoMap();
   // Section boundaries for AgentLoop.contextBreakdown() (design
   // slice-P7.17-cut.md §2.1, CLI-parity): the SAME strings composeSystemPrompt
@@ -1277,6 +1287,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     { kind: "skills", text: ext.skillsPromptSection },
     { kind: "workflows", text: ext.workflowsPromptSection },
     { kind: "profiles", text: ext.profilesPromptSection },
+    { kind: "mcp", text: mcpInstructionsSection },
     { kind: "repoMap", text: renderRepoMap() },
   ];
 

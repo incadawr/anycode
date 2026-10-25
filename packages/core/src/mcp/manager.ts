@@ -28,6 +28,7 @@ import type {
 } from "../ports/mcp.js";
 import type { ToolContext } from "../types/tools.js";
 import type { ToolRegistry } from "../tools/registry.js";
+import { redactSecrets } from "./redact.js";
 import {
   bridgeServerTools,
   type McpCallOutcome,
@@ -59,6 +60,15 @@ interface ServerRuntime {
   rawTools?: McpRawTool[];
   toolNames: string[];
   lastError?: string;
+  /** Trimmed, non-empty `instructions` from the initialize result (Taskana 4752 part B). Never on the wire. */
+  instructions?: string;
+}
+
+/** One connected server's usage instructions, as the system-prompt section consumes them. */
+export interface McpInstructionSource {
+  serverName: string;
+  transport: "stdio" | "http";
+  text: string;
 }
 
 /** True when an error is the SDK's per-request timeout (McpError code RequestTimeout). */
@@ -176,6 +186,22 @@ export class McpManager {
     return this.servers.map((runtime) => ({ ...runtime.status }));
   }
 
+  /**
+   * Instructions of the servers that are CONNECTED right now, in start() spec
+   * order. A server that failed, is still connecting, or was closed never
+   * contributes, so an unloaded (untrusted, disabled, failed) server cannot put
+   * text into the prompt. Kept off McpServerStatus: it is not sent on every
+   * mcp_status snapshot.
+   */
+  instructions(): ReadonlyArray<McpInstructionSource> {
+    const out: McpInstructionSource[] = [];
+    for (const runtime of this.servers) {
+      if (runtime.status.state !== "connected" || runtime.instructions === undefined) continue;
+      out.push({ serverName: runtime.spec.name, transport: runtime.spec.kind, text: runtime.instructions });
+    }
+    return out;
+  }
+
   /** Graceful close of every transport with deadline, then SIGKILL (stdio). */
   async dispose(opts?: { deadlineMs?: number }): Promise<void> {
     if (this.disposed) return;
@@ -221,7 +247,7 @@ export class McpManager {
         if (!this.disposed && runtime.status.state === "connected") {
           runtime.status.state = "failed";
           if (runtime.lastError && !runtime.status.error) {
-            runtime.status.error = runtime.lastError;
+            runtime.status.error = redactSecrets(runtime.lastError, runtime.spec.secretValues ?? []);
           }
           // Notify the UI: a mid-session death must refresh the Settings row
           // (start()/dispose() are the only other emitters of the snapshot).
@@ -246,12 +272,20 @@ export class McpManager {
         connectTimeoutMs,
         `MCP server '${runtime.spec.name}' tools/list timed out after ${connectTimeoutMs}ms`,
       );
+      // The initialize result's `instructions` (SDK Client keeps it). Blank => none.
+      const instructions = client.getInstructions()?.trim() ?? "";
+      if (instructions !== "") runtime.instructions = instructions;
       runtime.alive = true;
       runtime.status.state = "connected";
     } catch (err) {
       runtime.alive = false;
       runtime.status.state = "failed";
-      runtime.status.error = runtime.lastError ?? (err instanceof Error ? err.message : String(err));
+      // A transport error may echo a resolved `${secret:}` value (e.g. a header):
+      // redact before it can reach status (and so the UI, the wire, the logs).
+      runtime.status.error = redactSecrets(
+        runtime.lastError ?? (err instanceof Error ? err.message : String(err)),
+        runtime.spec.secretValues ?? [],
+      );
       // Reap any partially-started child so a connect failure leaves no orphan.
       try {
         await runtime.transport?.close();

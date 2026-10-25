@@ -136,6 +136,8 @@ import { createSystemProxyResolver, type SystemProxyCache } from "./system-proxy
 import { migrateLegacyProxyUrls, type LegacyProxyImportDeps } from "./proxy-scopes.js";
 import { sendToMainWindow } from "./main-window-send.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
+import { McpSecretForkCache } from "./mcp-secret-fork-cache.js";
+import { registerMcpSecretsIpc } from "./mcp-secrets-ipc.js";
 // Taskana 4743: Settings → Language servers control plane (same deps-bag shape
 // as the MCP registration above; detection is existence-only, nothing spawns).
 import { NodeLspConfigFs, registerLspConfigIpc } from "./lsp-config-ipc.js";
@@ -802,6 +804,21 @@ function createWindow(): void {
 
 /** Vault decrypt accessor; null vault (pre-boot) yields no value. */
 let vault: Vault | null = null;
+/**
+ * Taskana 4752 part C: the MCP secret values each workspace's configs reference,
+ * prepared before a tab is created (tab-ipc `primeMcpSecrets`) and refreshed on
+ * every secret mutation. spawnTabHost reads it synchronously. Only names that are
+ * referenced AND set are included; nothing here is logged.
+ */
+const mcpSecretCache = new McpSecretForkCache({
+  vault: {
+    listMcpSecretNames: () => (vault === null ? Promise.resolve([]) : vault.listMcpSecretNames()),
+    getMcpSecretValues: (names) => (vault === null ? Promise.resolve({}) : vault.getMcpSecretValues(names)),
+  },
+  fs: new NodeMcpConfigFs(),
+  home: () => homedir(),
+  logger: (line) => console.warn(line),
+});
 const getSecret = (key: Parameters<Vault["getSecretValue"]>[0]): Promise<string | undefined> =>
   vault === null ? Promise.resolve(undefined) : vault.getSecretValue(key);
 
@@ -1772,6 +1789,8 @@ async function startInitialTab(opts: {
     console.log(`[main] workspace: ${workspace}`);
   }
 
+  // Taskana 4752 part C: the hand-off for this workspace is ready before the fork.
+  await mcpSecretCache.prime(workspace);
   try {
     const created = manager.createTab({
       workspace,
@@ -2186,6 +2205,7 @@ void app.whenReady().then(async () => {
     onSessionRegistered: (info) => communicationSessions?.register(info),
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),
     workspaceTrustOnce: (workspace) => workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
+    mcpSecretsEnv: (workspace) => mcpSecretCache.get(workspace),
     hostEntry: resolveHostEntry(),
     createChannel: () => new MessageChannelMain(),
     getWindow: () => win,
@@ -2405,6 +2425,8 @@ void app.whenReady().then(async () => {
     manager,
     persistence,
     dialog,
+    // Taskana 4752 part C: prime the MCP secret hand-off before the tab is created.
+    primeMcpSecrets: (workspace) => mcpSecretCache.prime(workspace),
     // Taskana 4104 (TASK.110): best-effort removal of hard-deleted sessions'
     // artifact directories (removeSession per id — never throws by contract).
     removeSessionArtifacts: async (ids) => {
@@ -3004,6 +3026,24 @@ void app.whenReady().then(async () => {
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
     fs: new NodeMcpConfigFs(),
+  });
+
+  // Taskana 4752 part C: the write-only MCP secret store. The weak-storage consent
+  // is read from the same settings flag provider keys use, at call time.
+  registerMcpSecretsIpc({
+    vault: {
+      setSecret: (key, value, opts) => {
+        if (vault === null) throw new Error("vault not ready");
+        return vault.setSecret(key, value, opts);
+      },
+      clearSecret: (key) => {
+        if (vault === null) throw new Error("vault not ready");
+        return vault.clearSecret(key);
+      },
+      listMcpSecretNames: () => (vault === null ? Promise.resolve([]) : vault.listMcpSecretNames()),
+    },
+    allowWeak: async () => (await loadSettings(settingsPath, fileLogger)).settings.security.allowWeakSecretStorage,
+    onMutation: () => mcpSecretCache.refreshAll(),
   });
 
   // Language-server config management control plane (Taskana 4743): same

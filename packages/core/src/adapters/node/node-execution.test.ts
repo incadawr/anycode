@@ -599,6 +599,41 @@ describe("NodeExecutionAdapter", () => {
   });
 
   // ── TASK.135 / Taskana 4074: credentialed proxy vars never reach a non-engine child ──
+  // Taskana 4752 part A (A-4/A-5 at the process boundary): a Bash child sees the
+  // session-identity pair that the parent (host) env carries.
+  describe("session tool env reaches a Bash child (Taskana 4752)", () => {
+    const KEYS = ["ANYCODE_SESSION_ID", "ANYCODE_SESSION_WORKSPACE"] as const;
+
+    it("run and runBinary children inherit ANYCODE_SESSION_ID and ANYCODE_SESSION_WORKSPACE from the parent env", async () => {
+      const saved = KEYS.map((k) => [k, process.env[k]] as const);
+      try {
+        process.env.ANYCODE_SESSION_ID = "sess-bash-child";
+        process.env.ANYCODE_SESSION_WORKSPACE = "/work/repo";
+        tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+        const shell = await adapter.run({
+          command: `"${process.execPath}" -e "process.stdout.write(JSON.stringify([process.env.ANYCODE_SESSION_ID, process.env.ANYCODE_SESSION_WORKSPACE]))"`,
+          cwd: tmpDir,
+          timeoutMs: 10_000,
+        });
+        expect(shell.status).toBe("completed");
+        expect(JSON.parse(shell.stdout)).toEqual(["sess-bash-child", "/work/repo"]);
+
+        const bin = await adapter.runBinary({
+          file: process.execPath,
+          args: ["-e", "process.stdout.write(process.env.ANYCODE_SESSION_ID ?? '<unset>')"],
+          cwd: tmpDir,
+          timeoutMs: 10_000,
+        });
+        expect(bin.stdout).toBe("sess-bash-child");
+      } finally {
+        for (const [k, v] of saved) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    });
+  });
+
   describe("child env proxy scrub (TASK.135)", () => {
     const CREDENTIALED = "http://user:s3cret@127.0.0.1:9";
 

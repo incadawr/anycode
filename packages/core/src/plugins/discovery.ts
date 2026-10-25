@@ -61,6 +61,7 @@ import type { McpServerSpec } from "../ports/mcp.js";
 import {
   isProjectGated,
   resolveMcpServerEntries,
+  type McpResolveOptions,
   type McpServerEntry,
   type ProjectTrustOptions,
 } from "../mcp/config.js";
@@ -96,7 +97,7 @@ const TIER_RANK: Record<PluginTier, number> = {
   "legacy-user": 4,
 };
 
-export interface DiscoverPluginsOptions extends ProjectTrustOptions {
+export interface DiscoverPluginsOptions extends ProjectTrustOptions, McpResolveOptions {
   workspace: string;
   home: string;
   /** Server names already claimed by explicit config; plugins never override them. */
@@ -426,6 +427,7 @@ function resolvePluginMcpServers(
   plugin: AcceptedPlugin,
   claimedMcpNames: Set<string>,
   consent: { allowed: boolean; hash: string },
+  secrets: McpResolveOptions["secrets"],
 ): { specs: McpServerSpec[]; problems: string[] } {
   const entries = plugin.manifest.mcpServers;
   if (!entries || Object.keys(entries).length === 0) {
@@ -455,6 +457,7 @@ function resolvePluginMcpServers(
   return resolveMcpServerEntries(renamed, {
     sourceLabel: `plugin:${plugin.manifest.name}`,
     claimed: claimedMcpNames,
+    secrets,
   });
 }
 
@@ -623,10 +626,12 @@ export async function discoverPlugins(
       opts.mcpConsent === undefined ||
       (plugin.tier === "project" && opts.projectTrusted === true) ||
       hasMcpConsent(opts.mcpConsent, plugin.manifest.name, hash);
-    const resolvedServers = resolvePluginMcpServers(plugin, opts.claimedMcpNames, {
-      allowed: consentAllowed,
-      hash,
-    });
+    const resolvedServers = resolvePluginMcpServers(
+      plugin,
+      opts.claimedMcpNames,
+      { allowed: consentAllowed, hash },
+      opts.secrets,
+    );
     mcpServerSpecs.push(...resolvedServers.specs);
     problems.push(...resolvedServers.problems);
   }

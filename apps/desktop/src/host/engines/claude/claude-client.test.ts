@@ -697,6 +697,48 @@ describe("buildClaudeChildEnv", () => {
   });
 });
 
+// Taskana 4752 part A (A-4): the session-identity pair passes through the
+// engine allowlist when present; the ambient ANYCODE_* namespace stays closed.
+describe("buildClaudeChildEnv — session tool env (Taskana 4752, A-4)", () => {
+  it("A-4: passes ANYCODE_SESSION_ID and ANYCODE_SESSION_WORKSPACE through when present", () => {
+    const env = buildClaudeChildEnv(
+      {
+        HOME: "/home/test",
+        PATH: "/usr/bin",
+        ANYCODE_SESSION_ID: "sess-claude",
+        ANYCODE_SESSION_WORKSPACE: "/work/repo",
+      },
+      undefined,
+      "darwin",
+    );
+    expect(env.ANYCODE_SESSION_ID).toBe("sess-claude");
+    expect(env.ANYCODE_SESSION_WORKSPACE).toBe("/work/repo");
+  });
+
+  it("A-4: absent from the source -> absent from the child env", () => {
+    const env = buildClaudeChildEnv({ HOME: "/home/test", PATH: "/usr/bin" }, undefined, "darwin");
+    expect("ANYCODE_SESSION_ID" in env).toBe(false);
+    expect("ANYCODE_SESSION_WORKSPACE" in env).toBe(false);
+  });
+
+  it("A-4: still blocks ANYCODE_API_KEY and does not newly forward the launch ANYCODE_WORKSPACE", () => {
+    const env = buildClaudeChildEnv(
+      {
+        HOME: "/home/test",
+        PATH: "/usr/bin",
+        ANYCODE_API_KEY: "must-not-pass",
+        ANYCODE_WORKSPACE: "/launch/dir",
+        ANYCODE_SESSION_ID: "sess-claude",
+      },
+      undefined,
+      "darwin",
+    );
+    expect(env.ANYCODE_API_KEY).toBeUndefined();
+    expect(env.ANYCODE_WORKSPACE).toBeUndefined();
+    expect(env.ANYCODE_SESSION_ID).toBe("sess-claude");
+  });
+});
+
 describe("buildClaudeChildEnv — engine proxy carrier (TASK.139)", () => {
   /** Carries `user:pass@` userinfo on purpose — the authenticated-proxy case the field exists for. */
   const ENGINE_PROXY = "http://user:pass@claude-proxy.example.com:3128";

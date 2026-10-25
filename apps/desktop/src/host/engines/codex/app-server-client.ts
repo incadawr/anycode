@@ -13,6 +13,7 @@ import { proxyValueCarriesCredential } from "@anycode/core/child-env";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
 import { ENGINE_PROCESS_REGISTRATION_TYPE, ENV_CODEX_PROXY_URL, applyEngineProxyOverride } from "../../../shared/engines.js";
+import { SESSION_TOOL_ENV_KEYS } from "../../../shared/session-env.js";
 import { checkConsentedBinaryTrust, type BinaryTrustConsent, type CodexPathStat } from "../../../shared/codex-binary-trust.js";
 import {
   CODEX_TEARDOWN_SIGKILL_WAIT_MS,
@@ -258,6 +259,8 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
     "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
     "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
     "REQUESTS_CA_BUNDLE",
+    // Taskana 4752 part A: the session-identity pair, when main/host stamped it.
+    ...SESSION_TOOL_ENV_KEYS,
   ];
   const env: NodeJS.ProcessEnv = {};
   for (const key of [...(platform === "win32" ? win : posix), ...passThrough]) {

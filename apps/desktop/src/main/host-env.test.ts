@@ -1625,6 +1625,16 @@ describe("secretEnvFor (slice 2.5 §4, replaces SECRET_KEY_ENV)", () => {
   });
 });
 
+describe("secretEnvFor / isKnownSecretKey — MCP secret keys (Taskana 4752, part C)", () => {
+  it("refuses an mcp.secret key: an MCP secret has no provider-env materialisation", () => {
+    expect(() => secretEnvFor("mcp.secret.GITHUB_TOKEN")).toThrow(/MCP secret key/);
+  });
+
+  it("isKnownSecretKey is false for an mcp.secret key, so it never shows in the provider status list", () => {
+    expect(isKnownSecretKey("mcp.secret.GITHUB_TOKEN", ["anthropic"])).toBe(false);
+  });
+});
+
 describe("isKnownSecretKey (slice 2.5 §4, generalises SECRET_KEYS)", () => {
   const catalogIds = ["anthropic", "z-ai", "deepseek", "moonshot", "custom"];
 

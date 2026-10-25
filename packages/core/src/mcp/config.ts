@@ -112,48 +112,108 @@ export function isProjectGated(workspace: string, home: string, opts?: ProjectTr
 // values (http) — never to command/args/cwd/url, which are trusted config, not
 // secret-carrying.
 
-const ENV_REF_RE = /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g;
+/**
+ * Taskana 4752 part C: resolves a `${secret:NAME}` reference to its value, or
+ * `undefined` when the name is not set. The desktop host supplies one built from
+ * the values main handed it at fork time; the terminal CLI supplies none.
+ */
+export type McpSecretResolver = (name: string) => string | undefined;
 
-type EnvRefResolution = { ok: true; value: string } | { ok: false; missing: string };
+/** Options shared by every loader that resolves MCP server entries. */
+export interface McpResolveOptions {
+  secrets?: McpSecretResolver;
+}
 
-/** Substitutes every `${env:VAR}` occurrence in `value`; the first unset VAR fails the whole string. */
-function resolveEnvRefs(value: string): EnvRefResolution {
-  let missing: string | undefined;
-  const resolved = value.replace(ENV_REF_RE, (_match, varName: string) => {
+/**
+ * One pass over `${env:VAR}` and `${secret:NAME}`. A secret NAME follows the
+ * env-name shape but is length-capped at 64 (`[A-Za-z_][A-Za-z0-9_]{0,63}`); any
+ * other shape is not a reference and stays literal. A single pass means a
+ * replacement value is never re-scanned.
+ */
+const REF_RE = /\$\{(?:env:([A-Za-z_][A-Za-z0-9_]*)|secret:([A-Za-z_][A-Za-z0-9_]{0,63}))\}/g;
+
+type RefResolution =
+  | { ok: true; value: string; secretValues: string[] }
+  | { ok: false; missing: { kind: "env"; name: string } | { kind: "secret"; name: string } };
+
+/** Substitutes every reference in `value`; the first unresolved one fails the whole string. */
+function resolveRefs(value: string, secrets: McpSecretResolver | undefined): RefResolution {
+  let missing: { kind: "env"; name: string } | { kind: "secret"; name: string } | undefined;
+  const secretValues: string[] = [];
+  const resolved = value.replace(REF_RE, (_match, envName: string | undefined, secretName: string | undefined) => {
     if (missing) {
       return "";
     }
-    const resolvedValue = process.env[varName];
-    if (resolvedValue === undefined) {
-      missing = varName;
+    if (envName !== undefined) {
+      const resolvedValue = process.env[envName];
+      if (resolvedValue === undefined) {
+        missing = { kind: "env", name: envName };
+        return "";
+      }
+      return resolvedValue;
+    }
+    const secretValue = secretName === undefined ? undefined : secrets?.(secretName);
+    if (secretName === undefined || secretValue === undefined) {
+      missing = { kind: "secret", name: secretName ?? "" };
       return "";
     }
-    return resolvedValue;
+    secretValues.push(secretValue);
+    return secretValue;
   });
   if (missing) {
     return { ok: false, missing };
   }
-  return { ok: true, value: resolved };
+  return { ok: true, value: resolved, secretValues };
+}
+
+/** Names every `${secret:NAME}` referenced in `env`/`headers` of an entries record: sorted, unique. */
+export function collectSecretRefs(entries: Record<string, McpServerEntry>): string[] {
+  const names = new Set<string>();
+  for (const entry of Object.values(entries)) {
+    for (const record of [entry.env, entry.headers]) {
+      if (!record) continue;
+      for (const value of Object.values(record)) {
+        for (const match of value.matchAll(REF_RE)) {
+          const secretName = match[2];
+          if (secretName !== undefined) names.add(secretName);
+        }
+      }
+    }
+  }
+  return [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 type EnvRecordResolution =
-  | { ok: true; value: Record<string, string> | undefined }
-  | { ok: false; missing: string };
+  | { ok: true; value: Record<string, string> | undefined; secretValues: string[] }
+  | { ok: false; missing: { kind: "env"; name: string } | { kind: "secret"; name: string } };
 
-/** Resolves every value of a `Record<string,string>` (env or headers); fails closed on the first missing var. */
-function resolveEnvRecord(record: Record<string, string> | undefined): EnvRecordResolution {
+/** Resolves every value of a `Record<string,string>` (env or headers); fails closed on the first unresolved reference. */
+function resolveEnvRecord(
+  record: Record<string, string> | undefined,
+  secrets: McpSecretResolver | undefined,
+): EnvRecordResolution {
   if (!record) {
-    return { ok: true, value: undefined };
+    return { ok: true, value: undefined, secretValues: [] };
   }
   const result: Record<string, string> = {};
+  const secretValues: string[] = [];
   for (const [key, value] of Object.entries(record)) {
-    const resolved = resolveEnvRefs(value);
+    const resolved = resolveRefs(value, secrets);
     if (!resolved.ok) {
       return { ok: false, missing: resolved.missing };
     }
     result[key] = resolved.value;
+    secretValues.push(...resolved.secretValues);
   }
-  return { ok: true, value: result };
+  return { ok: true, value: result, secretValues };
+}
+
+/** The problem line for an unresolved reference. Names only, never a value. */
+function missingRefMessage(name: string, path: string, missing: { kind: "env" | "secret"; name: string }): string {
+  if (missing.kind === "env") {
+    return `MCP server '${name}' in ${path}: env var '${missing.name}' is not set — server skipped`;
+  }
+  return `MCP server '${name}' in ${path}: secret '${missing.name}' is not set — add it in Settings → MCP → Secrets — server skipped`;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +273,7 @@ function resolveEntry(
   entry: McpServerEntry,
   path: string,
   problems: string[],
+  secrets: McpSecretResolver | undefined,
 ): McpServerSpec | undefined {
   const hasCommand = entry.command !== undefined;
   const hasUrl = entry.url !== undefined;
@@ -228,11 +289,9 @@ function resolveEntry(
   }
 
   if (hasCommand) {
-    const envResolved = resolveEnvRecord(entry.env);
+    const envResolved = resolveEnvRecord(entry.env, secrets);
     if (!envResolved.ok) {
-      problems.push(
-        `MCP server '${name}' in ${path}: env var '${envResolved.missing}' is not set — server skipped`,
-      );
+      problems.push(missingRefMessage(name, path, envResolved.missing));
       return undefined;
     }
     const spec: McpStdioServerSpec = {
@@ -242,22 +301,26 @@ function resolveEntry(
       args: entry.args ?? [],
       env: buildStdioEnv(envResolved.value ?? {}, entry.inheritEnv ?? false),
     };
+    if (envResolved.secretValues.length > 0) {
+      spec.secretValues = envResolved.secretValues;
+    }
     if (entry.cwd !== undefined) {
       spec.cwd = entry.cwd;
     }
     return spec;
   }
 
-  const headersResolved = resolveEnvRecord(entry.headers);
+  const headersResolved = resolveEnvRecord(entry.headers, secrets);
   if (!headersResolved.ok) {
-    problems.push(
-      `MCP server '${name}' in ${path}: env var '${headersResolved.missing}' is not set — server skipped`,
-    );
+    problems.push(missingRefMessage(name, path, headersResolved.missing));
     return undefined;
   }
   const spec: McpHttpServerSpec = { kind: "http", name, url: entry.url! };
   if (headersResolved.value !== undefined) {
     spec.headers = headersResolved.value;
+  }
+  if (headersResolved.secretValues.length > 0) {
+    spec.secretValues = headersResolved.secretValues;
   }
   return spec;
 }
@@ -273,7 +336,7 @@ function resolveEntry(
  */
 export function resolveMcpServerEntries(
   entries: Record<string, McpServerEntry>,
-  opts: { sourceLabel: string; claimed: Set<string> },
+  opts: { sourceLabel: string; claimed: Set<string> } & McpResolveOptions,
 ): { specs: McpServerSpec[]; problems: string[] } {
   const specs: McpServerSpec[] = [];
   const problems: string[] = [];
@@ -282,7 +345,7 @@ export function resolveMcpServerEntries(
       continue;
     }
     opts.claimed.add(name);
-    const spec = resolveEntry(name, entry, opts.sourceLabel, problems);
+    const spec = resolveEntry(name, entry, opts.sourceLabel, problems, opts.secrets);
     if (spec) {
       specs.push(spec);
     }
@@ -302,6 +365,7 @@ async function loadSource(
   claimed: Set<string>,
   specs: McpServerSpec[],
   problems: string[],
+  secrets: McpSecretResolver | undefined,
 ): Promise<void> {
   if (!(await fs.exists(path))) {
     return;
@@ -334,7 +398,7 @@ async function loadSource(
     return;
   }
 
-  const resolved = resolveMcpServerEntries(servers, { sourceLabel: path, claimed });
+  const resolved = resolveMcpServerEntries(servers, { sourceLabel: path, claimed, secrets });
   specs.push(...resolved.specs);
   problems.push(...resolved.problems);
 }
@@ -350,7 +414,7 @@ export async function loadMcpServerSpecs(
   fs: FileSystemPort,
   workspace: string,
   home: string,
-  opts?: ProjectTrustOptions,
+  opts?: ProjectTrustOptions & McpResolveOptions,
 ): Promise<LoadedMcpServerSpecs> {
   const specs: McpServerSpec[] = [];
   const problems: string[] = [];
@@ -376,7 +440,7 @@ export async function loadMcpServerSpecs(
       }
       continue;
     }
-    await loadSource(fs, path, claimed, specs, problems);
+    await loadSource(fs, path, claimed, specs, problems, opts?.secrets);
   }
 
   return { specs, problems };

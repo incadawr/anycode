@@ -126,6 +126,26 @@ file replaces the user object wholesale.
 session, then check Settings → MCP for servers and Settings → Environment for
 telemetry and repo map.
 
+## Environment of tools
+
+Tools that a session starts (Bash, hooks, the terminal, and the Claude and Codex
+engine processes) see two variables that identify the session:
+
+- `ANYCODE_SESSION_ID` is the same id that the Sessions API reports as
+  `sessionId` (see [Communicating with live sessions](../development/agent-communication.md)).
+- `ANYCODE_SESSION_WORKSPACE` is the session's workspace folder.
+
+Both are set on every spawn, including a restart of the session's process. The
+engine variables are best-effort: they reach the engine process, and an engine's
+own shell tools see them only if the engine passes its environment through. A
+Codex user config that sets its own shell environment policy can change that.
+MCP stdio servers and language servers do not receive them.
+
+`ANYCODE_WORKSPACE` is a different variable. It is the launch directive that
+opens a workspace when AnyCode starts, so a nested `anycode` started from a
+tool's Bash opens that workspace. Use `ANYCODE_SESSION_WORKSPACE` to find the
+current workspace.
+
 ## Which file do I edit?
 
 | I want to | Edit |

@@ -209,6 +209,25 @@ describe("TerminalManager — fake pty", () => {
     expect(s.spawns[0]?.env.PATH).toBe("/bin");
   });
 
+  // Taskana 4752 part A: the desktop terminal's shell inherits the session pair.
+  it("the PTY shell env includes ANYCODE_SESSION_ID and ANYCODE_SESSION_WORKSPACE", async () => {
+    const s = makeSpawner();
+    const ch = makeChannel();
+    const env: NodeJS.ProcessEnv = {
+      PATH: "/bin",
+      ANYCODE_SESSION_ID: "sess-terminal",
+      ANYCODE_SESSION_WORKSPACE: "/work/repo",
+    };
+    const mgr = new TerminalManager({ workspace: "/ws", env, loadPty: s.loadPty });
+    mgr.bindPort(ch.port);
+
+    ch.send({ type: "term_open", cols: TERM_DEFAULT_COLS, rows: TERM_DEFAULT_ROWS });
+    await flush();
+
+    expect(s.spawns[0]?.env.ANYCODE_SESSION_ID).toBe("sess-terminal");
+    expect(s.spawns[0]?.env.ANYCODE_SESSION_WORKSPACE).toBe("/work/repo");
+  });
+
   // TASK.135 / Taskana 4074: the terminal shell is a non-engine child, so a
   // credentialed proxy URL and the engine proxy carriers are stripped from its
   // env at the spawn choke point — while clean proxies/exemptions pass through
