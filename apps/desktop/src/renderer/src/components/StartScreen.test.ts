@@ -5,6 +5,11 @@
  * directly rather than through DOM rendering.
  */
 import { describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ModeMenu } from "./ModeMenu.js";
+import { startDraftOrchestrateRowProps } from "../orchestrate-start.js";
+import type { EngineId } from "../../../shared/engines.js";
 import {
   applyStarterPreset,
   buildStartModelMenuGroups,
@@ -922,5 +927,22 @@ describe("TASK.241 — catalog refresh invalidation", () => {
     pending[0]!.resolve(ready([{ id: "late-model" }]));
     await flush();
     expect(tabsStore.getState().codexModels).toEqual([]);
+  });
+});
+
+describe("start-screen Orchestrate row (orchestrate-start.ts → ModeMenu)", () => {
+  /** The start screen's core-branch ModeMenu, built the way StartScreen.tsx spreads its row props. */
+  function startModeMenuMarkup(engine: EngineId): string {
+    const rowProps = startDraftOrchestrateRowProps(engine, false, () => {});
+    return renderToStaticMarkup(createElement(ModeMenu, { mode: "build", disabled: false, onChange: () => {}, ...(rowProps ?? {}) }));
+  }
+
+  it("core: the ModeMenu carries the Orchestrate row (its chip exposes aria-pressed, which only the row sets)", () => {
+    expect(startModeMenuMarkup("core")).toContain('aria-pressed="false"');
+  });
+
+  it("Codex and Claude: no Orchestrate row (no aria-pressed on the chip)", () => {
+    expect(startModeMenuMarkup("codex")).not.toContain("aria-pressed");
+    expect(startModeMenuMarkup("claude")).not.toContain("aria-pressed");
   });
 });

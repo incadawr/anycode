@@ -17,6 +17,8 @@ import { handleCreateTabResult } from "./components/SessionPicker.js";
 import { tabRegistry, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
 import { decideCodexDraftModel } from "./codex-draft-model.js";
+import { needsRolePicker, resolveStartOrchestrate } from "./orchestrate-start.js";
+import { useSettingsStore } from "./settings-store.js";
 import type { CreateTabRequest, CreateTabResult } from "../../shared/tabs.js";
 import type { SessionDraft } from "./tabs-store.js";
 
@@ -29,6 +31,13 @@ export interface StartSubmitDeps {
   registry: Pick<TabRegistry, "queueInitialPrompt">;
   /** Default: the app's singleton `useTabsStore`. */
   tabsStore: TabsStoreApi;
+  /**
+   * Default: the settings snapshot's `roles` is present. An orchestrating send
+   * refuses while this is false — the RolePickerDialog (StartScreen) is what
+   * writes roles, so every caller (the Send button and the automation facade)
+   * meets the same first-run gate.
+   */
+  rolesConfigured?(): boolean;
 }
 
 function defaultStartSubmitDeps(): StartSubmitDeps {
@@ -37,6 +46,11 @@ function defaultStartSubmitDeps(): StartSubmitDeps {
     registry: tabRegistry,
     tabsStore: useTabsStore,
   };
+}
+
+/** Whether the settings snapshot already carries orchestration roles (the RolePickerDialog's first-run output). */
+function settingsHaveRoles(): boolean {
+  return !needsRolePicker(useSettingsStore.getState().snapshot?.settings.roles);
 }
 
 /**
@@ -89,8 +103,18 @@ export async function submitStartDraft(
   if (workspace === null) {
     return { ok: false, message: "Choose a project first." };
   }
-  if (prompt.trim() === "") {
+  // `/orchestrate <task>` (orchestrate-start.ts) turns orchestrate on for this
+  // send and sends only the task as the first message.
+  const plan = resolveStartOrchestrate(engine, draft.orchestrate, prompt);
+  if (plan.bareSlash) {
+    return { ok: false, message: "Type a task after /orchestrate." };
+  }
+  if (plan.text.trim() === "") {
     return { ok: false, message: "Type a message to send." };
+  }
+  const rolesConfigured = deps.rolesConfigured ?? settingsHaveRoles;
+  if (plan.orchestrate && !rolesConfigured()) {
+    return { ok: false, message: "Set up orchestration roles first." };
   }
   // TASK.241: decide the Codex draft model BEFORE creating anything — a
   // stale/unavailable pick refuses visibly through the same {ok:false}
@@ -143,7 +167,18 @@ export async function submitStartDraft(
   // own declared vocabulary). Images ride `queueInitialPrompt` for every
   // engine alike — there is no spawn-time attachment channel for any of them.
   if (engine === "core") {
-    deps.registry.queueInitialPrompt(createdTabId, prompt, model ?? undefined, mode, undefined, images, engineEffort);
+    // Orchestrate rides LAST in queueInitialPrompt (tab-registry.ts), so the
+    // host sees set_orchestrate before the first user_message.
+    deps.registry.queueInitialPrompt(
+      createdTabId,
+      plan.text,
+      model ?? undefined,
+      mode,
+      undefined,
+      images,
+      engineEffort,
+      plan.orchestrate,
+    );
   } else {
     deps.registry.queueInitialPrompt(createdTabId, prompt, undefined, undefined, engineEffort, images);
   }

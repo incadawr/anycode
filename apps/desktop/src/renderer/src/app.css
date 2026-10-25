@@ -4099,6 +4099,14 @@ body {
   line-height: var(--lh-tight);
 }
 
+/* Start-composer slash hint (orchestrate-start.ts): a one-line muted note
+   above the textarea while the draft begins like `/orchestrate`. */
+.start-orchestrate-hint {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+}
+
 .composer-file-input {
   display: none;
 }

@@ -86,6 +86,13 @@ import {
 import { ModelDrillMenu } from "./model-drill-menu.js";
 import type { ModelDrillPage, ModelDrillRow } from "./model-drill-rows.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
+import { RolePickerDialog, type RolePickerDialogProps } from "./RolePickerDialog.js";
+import {
+  resolveStartOrchestrate,
+  startDraftOrchestrateRowProps,
+  startOrchestrateHint,
+  startSendNeedsRolePicker,
+} from "../orchestrate-start.js";
 import { EngineModelMenu, EnginePresetMenu } from "./EngineControls.js";
 import {
   COMPOSER_IMAGE_MAX_PER_MESSAGE,
@@ -643,6 +650,10 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const codexProfileRootRef = useRef<HTMLDivElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const submitGuardRef = useRef(false);
+  // Orchestrate first-run gate (orchestrate-start.ts): a send that orchestrates
+  // with no roles configured opens the same RolePickerDialog the in-tab
+  // `/orchestrate` uses. Skip/cancel closes it and sends nothing (draft kept).
+  const [startRolePickerOpen, setStartRolePickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // TASK.81: image attach state. The attachment LIST itself is store-backed
   // (`draft.images`, mirrors the store-controlled `draft.prompt` textarea —
@@ -1118,6 +1129,13 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const showProjectHint = draft.workspace !== null && (projectHintVisible || projectHintHovered);
 
   async function submit(): Promise<void> {
+    if (draft !== null) {
+      const plan = resolveStartOrchestrate(draft.engine, draft.orchestrate, draft.prompt);
+      if (startSendNeedsRolePicker(plan, useSettingsStore.getState().snapshot?.settings.roles)) {
+        setStartRolePickerOpen(true);
+        return;
+      }
+    }
     await guardedSubmit({
       canSend,
       guard: submitGuardRef,
@@ -1125,6 +1143,15 @@ export function StartScreen({ onToast }: StartScreenProps) {
       submit: submitStartDraft,
       onToast,
     });
+  }
+
+  /** RolePickerDialog Save: persists the roles, then sends the draft as an orchestrating send. A failed write keeps the draft and leaves the settings notice to explain it. */
+  async function saveStartRolesAndSubmit(roles: Parameters<RolePickerDialogProps["onSave"]>[0]): Promise<void> {
+    setStartRolePickerOpen(false);
+    const result = await useSettingsStore.getState().setPatch({ roles });
+    if (result.ok) {
+      await submit();
+    }
   }
 
   /**
@@ -1598,6 +1625,17 @@ export function StartScreen({ onToast }: StartScreenProps) {
       </div>
 
       <div className="composer start-composer">
+        <RolePickerDialog
+          open={startRolePickerOpen}
+          connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
+          activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
+          engines={{
+            claudeReady: useTabsStore.getState().availableEngines.includes("claude"),
+            codexReady: useTabsStore.getState().availableEngines.includes("codex"),
+          }}
+          onSave={(roles) => void saveStartRolesAndSubmit(roles)}
+          onSkip={() => setStartRolePickerOpen(false)}
+        />
         {/* TASK.81: image attachments, Composer.tsx's `.composer-pills` grammar
             verbatim — attach/paste only (no drag-and-drop: out of this
             task's scope, the DoD only calls for attach/paste parity). */}
@@ -1621,6 +1659,11 @@ export function StartScreen({ onToast }: StartScreenProps) {
           </div>
         )}
         {imageError !== null && <div className="composer-image-error">{imageError}</div>}
+        {startOrchestrateHint(draft.engine, draft.prompt) && (
+          <div className="start-orchestrate-hint" role="note">
+            Type <code>/orchestrate</code> and your task to delegate it to child agents.
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           className="composer-textarea"
@@ -1729,7 +1772,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
               </>
             ) : (
               <>
-                <ModeMenu mode={draft.mode} disabled={false} onChange={(mode) => useTabsStore.getState().setDraftMode(mode)} />
+                <ModeMenu
+                  mode={draft.mode}
+                  disabled={false}
+                  onChange={(mode) => useTabsStore.getState().setDraftMode(mode)}
+                  {...(startDraftOrchestrateRowProps(draft.engine, draft.orchestrate, (next) => useTabsStore.getState().setDraftOrchestrate(next)) ?? {})}
+                />
                 <div className="model-pill start-model" ref={modelRootRef}>
               <button
                 ref={modelChipRef}

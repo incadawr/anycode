@@ -975,6 +975,51 @@ describe("tab-registry — queueInitialPrompt engine-effort seam (TASK.81)", () 
   });
 });
 
+describe("tab-registry — queueInitialPrompt start-screen Orchestrate (set_orchestrate before the first message)", () => {
+  function sentTypes(port: FakeMessagePort): string[] {
+    return port.sent.map((m) => (m as { type: string }).type);
+  }
+
+  it("host_ready path: set_orchestrate goes AFTER the other picks and BEFORE the first user_message", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "plan it", undefined, "plan", undefined, undefined, undefined, true);
+    expect(sentTypes(port)).toEqual(["ui_ready"]); // not dispatched yet
+
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_mode", "set_orchestrate", "user_message"]);
+    expect(port.sent[2]).toEqual({ type: "set_orchestrate", enabled: true });
+  });
+
+  it("already-ready tab: set_orchestrate still precedes the user_message", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+
+    registry.queueInitialPrompt("tab-a", "hi there", undefined, undefined, undefined, undefined, undefined, true);
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "set_orchestrate", "user_message"]);
+  });
+
+  it("no orchestrate flag: no set_orchestrate is sent (the ordinary first message is unchanged)", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+
+    registry.queueInitialPrompt("tab-a", "hello there");
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message"]);
+  });
+});
+
 describe("tab-registry — queueInitialPrompt core reasoning-effort seam (TASK.131)", () => {
   /** Filters port.sent down to just the message `type`s, in send order. */
   function sentTypes(port: FakeMessagePort): string[] {

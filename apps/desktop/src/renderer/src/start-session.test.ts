@@ -32,6 +32,75 @@ function makeDeps(createTabResult: CreateTabResult, order: string[] = []) {
   return { deps, tabsStore, createTab, queueInitialPrompt, order };
 }
 
+describe("submitStartDraft — Orchestrate (start screen)", () => {
+  it("first-run role gate: an orchestrating send with no roles refuses before createTab, and leaves the draft untouched", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    deps.rolesConfigured = () => false;
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("refactor");
+    tabsStore.getState().setDraftOrchestrate(true);
+
+    const res = await submitStartDraft(deps);
+
+    expect(res).toEqual({ ok: false, message: "Set up orchestration roles first." });
+    expect(createTab).not.toHaveBeenCalled();
+    expect(tabsStore.getState().draft?.prompt).toBe("refactor");
+    expect(tabsStore.getState().draft?.orchestrate).toBe(true);
+  });
+
+  it("with roles configured, an orchestrating core send forwards orchestrate=true as queueInitialPrompt's last argument", async () => {
+    const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    deps.rolesConfigured = () => true;
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("refactor");
+    tabsStore.getState().setDraftOrchestrate(true);
+
+    const res = await submitStartDraft(deps);
+
+    expect(res.ok).toBe(true);
+    expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a" });
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "refactor", undefined, "build", undefined, undefined, undefined, true);
+  });
+
+  it("/orchestrate <task> sends only the task as the first message, with orchestrate on (no toggle needed)", async () => {
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    deps.rolesConfigured = () => true;
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("/orchestrate map the modules");
+
+    await submitStartDraft(deps);
+
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "map the modules", undefined, "build", undefined, undefined, undefined, true);
+  });
+
+  it("a bare /orchestrate is refused with a task prompt, never created", async () => {
+    const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    deps.rolesConfigured = () => true;
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("/orchestrate");
+
+    const res = await submitStartDraft(deps);
+
+    expect(res).toEqual({ ok: false, message: "Type a task after /orchestrate." });
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
+  it("a Codex draft never orchestrates: the flag is ignored and the /orchestrate token is sent literally", async () => {
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    deps.rolesConfigured = () => false;
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("/orchestrate hi");
+    tabsStore.getState().setDraftOrchestrate(true);
+    tabsStore.getState().setCodexModels([{ id: "gpt-5.6-sol" }]);
+    tabsStore.getState().setDraftEngine("codex");
+
+    const res = await submitStartDraft(deps);
+
+    expect(res.ok).toBe(true);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "/orchestrate hi", undefined, undefined, undefined, undefined);
+  });
+});
+
 describe("submitStartDraft — guards (§4.3)", () => {
   it("no draft -> {ok:false}, createTab never called", async () => {
     const { deps, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws" });
@@ -196,7 +265,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(res).toEqual({ ok: true, tabId: "t1" });
     expect(order).toEqual(["createTab", "addTab", "setActive", "queueInitialPrompt"]);
     // No model was picked on the draft (defaults null) -> forwarded as undefined (slice F5#1b, D3).
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", undefined, "build", undefined, undefined, undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", undefined, "build", undefined, undefined, undefined, false);
     expect(tabsStore.getState().draft).toBeNull();
     expect(tabsStore.getState().draftActive).toBe(false);
 
@@ -212,7 +281,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", "gpt-5", "build", undefined, undefined, undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello there", "gpt-5", "build", undefined, undefined, undefined, false);
   });
 
   it("forwards the selected start-screen mode for first-turn setup", async () => {
@@ -223,7 +292,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "make a plan", undefined, "plan", undefined, undefined, undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "make a plan", undefined, "plan", undefined, undefined, undefined, false);
   });
 
   it("TASK.81: forwards the draft's image attachments to queueInitialPrompt for a Core draft", async () => {
@@ -235,7 +304,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "look at this", undefined, "build", undefined, [image], undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "look at this", undefined, "build", undefined, [image], undefined, false);
   });
 
   it("TASK.81: forwards the draft's image attachments to queueInitialPrompt for a Codex draft", async () => {
@@ -276,7 +345,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, "build", undefined, undefined, undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, "build", undefined, undefined, undefined, false);
   });
 
   it("TASK.131: a Core draft's own effort pick rides as queueInitialPrompt's reasoning-effort argument (core speaks set_reasoning_effort, not set_engine_effort)", async () => {
@@ -288,7 +357,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
 
     await submitStartDraft(deps);
 
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", "glm-5.2", "build", undefined, undefined, "max");
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", "glm-5.2", "build", undefined, undefined, "max", false);
   });
 
   it("addTab is idempotent against the port-delivery race — a pre-existing tabId is a harmless no-op", async () => {
