@@ -1,35 +1,37 @@
 /**
- * Plugin install dialog (Taskana 4732 S1-C, design 4732 §4/§6): the two-phase
- * install flow's renderer half. Phase 1 (`source`/`url`) picks a source —
- * file/folder carry NO path (main opens its own picker; path custody), URL
- * is typed here, git is stage-2 disabled. Phase `prepare` shows a spinner
- * while main stages + validates. Phase `confirm` renders the consent sheet:
- * name, version, source, sha256 prefix, derived capabilities, a red row per
- * MCP server (command + args), and the two buttons "Install (MCP servers
- * stay off)" / "Install and allow MCP servers" (design §4). Phase `error`
- * shows the refusal message inline.
+ * Plugin install dialog (Taskana 4732 S1-C, design 4732 §4/§6; reconciled to
+ * the S1-B wire contract): the two-phase install flow's renderer half.
+ * Phase 1 (`source`/`url`) picks a source — file/folder carry NO path (main
+ * opens its own picker; path custody), URL is typed here, git is stage-2
+ * disabled. Phase `prepare` shows a spinner while main stages + validates.
+ * Phase `confirm` renders the consent sheet: name, version, source, sha256
+ * prefix, derived capabilities, a red row per MCP server (command + args),
+ * and the "Install and allow MCP servers" consent checkbox (design §4).
+ * Phase `error` shows the refusal message inline.
+ *
+ * The S1-B preview carries `engines` (range string), `hasHooks`, and
+ * `mcpServers: {name, command, args}`; the command line shown on a red row
+ * is joined here from command+args (main never sends env values).
  *
  * Pure label/state helpers live in plugins-pane-model.ts; this file is the
  * DOM wiring only (same split as McpServersPane/McpFormDialog).
  */
 import { useEffect, useRef, useState } from "react";
-import type { PluginInstallSourceRequest } from "../../../shared/plugins-config.js";
-import { installMenuOptions, pluginsRefusalMessage, sheetHasMcpServers, sheetPrimaryLabel } from "./plugins-pane-model.js";
+import type { PluginInstallPreview, PluginInstallSource } from "../../../shared/plugins-config.js";
+import { installMenuOptions, mcpServerCommandLine, pluginsRefusalMessage, sheetHasMcpServers, sheetPrimaryLabel } from "./plugins-pane-model.js";
 import { Warning, X } from "./icons.js";
 
 /** The dialog's stage machine — the pane drives it, this component renders it. */
 export type InstallDialogStage =
   | { phase: "source" }
   | { phase: "url"; url: string }
-  | { phase: "prepare"; source: PluginInstallSourceRequest; preview: null }
-  | { phase: "confirm"; source: PluginInstallSourceRequest; preview: import("../../../shared/plugins-config.js").PluginInstallPreview; token: string; error?: string }
-  | { phase: "error"; source: PluginInstallSourceRequest; error: string };
+  | { phase: "prepare"; source: PluginInstallSource; preview: null }
+  | { phase: "confirm"; source: PluginInstallSource; preview: PluginInstallPreview; token: string; error?: string }
+  | { phase: "error"; source: PluginInstallSource; error: string };
 
 export interface PluginInstallDialogProps {
   stage: InstallDialogStage;
-  /** Present for future main-side project resolution; unused in stage 1's sources. */
-  tabId?: string;
-  onPickSource: (source: PluginInstallSourceRequest) => void;
+  onPickSource: (source: PluginInstallSource) => void;
   onSubmitUrl: (url: string) => void;
   onCommit: (token: string, allowMcp: boolean) => void;
   onClose: () => void;
@@ -66,6 +68,9 @@ export function PluginInstallDialog({ stage, onPickSource, onSubmitUrl, onCommit
     >
       <div className="mcp-dialog-header">
         <span className="mcp-dialog-title">Install plugin</span>
+        <button type="button" className="mcp-problem-dismiss" aria-label="Close" onClick={onClose}>
+          <X />
+        </button>
       </div>
       <InstallDialogBody
         stage={stage}
@@ -95,7 +100,7 @@ export interface InstallDialogBodyProps {
   allowMcp: boolean;
   onUrlValueChange: (value: string) => void;
   onAllowMcpChange: (checked: boolean) => void;
-  onPickSource: (source: PluginInstallSourceRequest) => void;
+  onPickSource: (source: PluginInstallSource) => void;
   onSubmitUrl: (url: string) => void;
   onCommit: (token: string, allowMcp: boolean) => void;
   onClose: () => void;
@@ -179,29 +184,31 @@ export function InstallDialogBody({
           <>
             <div className="plugins-confirm-head">
               <span className="mcp-row-name settings-mcp-name">{stage.preview.displayName || stage.preview.name}</span>
-              <span className="mcp-badge">{stage.preview.version === "" ? "unversioned" : stage.preview.version}</span>
+              <span className="mcp-badge">{stage.preview.version}</span>
               {stage.preview.sha256Prefix !== undefined && (
                 <span className="mcp-badge mcp-badge-user" title="Archive checksum prefix">
                   sha256 {stage.preview.sha256Prefix}…
                 </span>
               )}
             </div>
-            <div className="mcp-row-hint" title={stage.preview.description}>
-              {stage.preview.description}
-            </div>
+            {stage.preview.description !== undefined && (
+              <div className="mcp-row-hint" title={stage.preview.description}>
+                {stage.preview.description}
+              </div>
+            )}
             <div className="plugins-confirm-row">
               <span className="settings-field-label">Source</span>
               <span>{describeSourceForSheet(stage.source, stage.preview)}</span>
             </div>
-            {stage.preview.enginesRange !== undefined && (
+            {stage.preview.engines !== undefined && (
               <div className="plugins-confirm-row">
                 <span className="settings-field-label">Requires AnyCode</span>
-                <span>{stage.preview.enginesRange}</span>
+                <span>{stage.preview.engines}</span>
               </div>
             )}
             <div className="plugins-confirm-row">
               <span className="settings-field-label">Capabilities</span>
-              <span>{stage.preview.capabilities.join(", ") === "" ? "none" : stage.preview.capabilities.join(", ")}</span>
+              <span>{stage.preview.capabilities.length === 0 ? "none" : stage.preview.capabilities.join(", ")}</span>
             </div>
 
             {sheetHasMcpServers(stage.preview) ? (
@@ -210,7 +217,7 @@ export function InstallDialogBody({
                 {stage.preview.mcpServers.map((server) => (
                   <div key={server.name} className="plugins-mcp-server-row" role="alert">
                     <span className="settings-mcp-name">{server.name}</span>
-                    <span className="mcp-row-line2">{server.commandLine}</span>
+                    <span className="mcp-row-line2">{mcpServerCommandLine(server)}</span>
                   </div>
                 ))}
                 <p className="mcp-row-hint">
@@ -220,6 +227,12 @@ export function InstallDialogBody({
               </div>
             ) : (
               <p className="mcp-row-hint">This plugin declares no MCP servers.</p>
+            )}
+            {stage.preview.hasHooks && (
+              <p className="mcp-row-hint plugins-hooks-note">
+                This plugin declares hooks — they stay inactive until a future stage enables them
+                with their own consent.
+              </p>
             )}
 
             {stage.error !== undefined && (
@@ -263,8 +276,8 @@ export function InstallDialogBody({
 
 /** The sheet's source line — request kind + the preview's resolved provenance. */
 export function describeSourceForSheet(
-  source: PluginInstallSourceRequest,
-  preview: import("../../../shared/plugins-config.js").PluginInstallPreview,
+  source: PluginInstallSource,
+  preview: PluginInstallPreview,
 ): string {
   if (source.kind === "official") {
     return "AnyCode plugin index (signed)";
@@ -273,9 +286,9 @@ export function describeSourceForSheet(
     case "url":
       return preview.source.url;
     case "file":
-      return preview.source.fileName;
-    case "local":
-      return preview.source.path;
+      return "local archive file";
+    case "folder":
+      return "linked folder (dev)";
     default:
       return preview.source.kind;
   }

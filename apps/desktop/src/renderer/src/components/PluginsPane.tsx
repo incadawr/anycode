@@ -1,36 +1,36 @@
 /**
- * Plugins pane (Settings → Plugins; design 4732 §6, Taskana 4732 S1-C).
+ * Plugins pane (Settings → Plugins; design 4732 §6, Taskana 4732 S1-C,
+ * reconciled to the S1-B wire contract).
  *
  * DATA: the pane fetches a `PluginsSnapshot` via `window.anycode.plugins`
  * (preload bridge over the `anycode:plugins-*` channels of
- * shared/plugins-config.ts) on mount, refetches on every tabId change, and
- * re-renders from the snapshot a mutation RETURNS (never a second `list()`
- * round-trip). All display decisions (chips, actions, index header, install
- * menu, available-row states, sheet labels) live in plugins-pane-model.ts —
- * this file only wires them to the bridge and the DOM.
+ * shared/plugins-config.ts) on mount and re-renders from the snapshot a
+ * mutation RETURNS where one is returned (main's S1-B mutations return
+ * `{ok:true}` and push `plugins-changed`, so the pane refetches `list()`
+ * after those — the push subscription covers the rest). All display
+ * decisions (chips, actions, index header, install menu, available-row
+ * states, sheet labels) live in plugins-pane-model.ts — this file only
+ * wires them to the bridge and the DOM.
  *
  * UNAVAILABLE STATE (S1-C's hard requirement): when the main handlers are
- * absent (an app where S1-B is not built), every bridge call rejects —
- * `load()` catches, sets `unavailable`, and the pane renders an honest
- * "Plugins service unavailable" card instead of crashing. Hand-dropped
- * plugin directories keep working through discovery exactly as before;
- * nothing here mutates them.
+ * absent, every bridge call rejects — `load()` catches, sets `unavailable`,
+ * and the pane renders an honest "Plugins service unavailable" card instead
+ * of crashing. Hand-dropped plugin directories keep working through
+ * discovery exactly as before; nothing here mutates them.
  *
  * CUSTODY (plugins-config.ts header): no filesystem path ever crosses in a
  * request — file/folder installs carry no path (main opens its own picker),
  * plugins are identified by `name`, and `reveal` re-resolves main-side.
+ * Install commit sends the single-use token plus the ORIGINAL source
+ * (main binds the token to it); `allowMcp` rides the consent checkbox.
  */
 import { useEffect, useState } from "react";
 import type {
   PluginInstallPreview,
-  PluginInstallSourceRequest,
+  PluginInstallSource,
   PluginRowView,
   PluginsChangedPayload,
-  PluginsCheckUpdatesResult,
-  PluginsInstallPrepareResult,
   PluginsMutationResult,
-  PluginsRevealResult,
-  PluginsSetAutoUpdateRequest,
   PluginsSnapshot,
 } from "../../../shared/plugins-config.js";
 import { Search, X } from "./icons.js";
@@ -39,6 +39,9 @@ import {
   filterPluginRows,
   hasNonOfficialPlugins,
   installMenuOptions,
+  pluginEnabled,
+  pluginMcpNeedsApproval,
+  pluginPinned,
   pluginsEmptyKind,
   type PluginsEmptyKind,
   pluginsRefusalMessage,
@@ -49,6 +52,7 @@ import {
   pluginSourceText,
   pluginStatusChips,
   pluginTierLabel,
+  pluginUpdateVersion,
   rollbackLabel,
 } from "./plugins-pane-model.js";
 import { PluginInstallDialog, type InstallDialogStage } from "./PluginInstallSheet.js";
@@ -56,22 +60,22 @@ import { PluginInstallDialog, type InstallDialogStage } from "./PluginInstallShe
 // ── bridge (DI, same ethic as McpServersPane's McpConfigBridge) ──
 
 /**
- * Subset of `window.anycode.plugins` this pane drives, injectable so tests
- * never touch a real `window`.
+ * Subset of `window.anycode.plugins` (the S1-B preload bridge) this pane
+ * drives, injectable so tests never touch a real `window`.
  */
 export interface PluginsBridge {
-  list(tabId?: string): Promise<PluginsSnapshot>;
-  checkUpdates(tabId?: string): Promise<PluginsCheckUpdatesResult>;
-  installPrepare(source: PluginInstallSourceRequest, tabId?: string): Promise<PluginsInstallPrepareResult>;
-  installCommit(token: string, allowMcp: boolean): Promise<PluginsMutationResult>;
-  update(name: string, tabId?: string): Promise<PluginsMutationResult>;
-  rollback(name: string, tabId?: string): Promise<PluginsMutationResult>;
-  setPinned(name: string, pinned: boolean, tabId?: string): Promise<PluginsMutationResult>;
-  setEnabled(name: string, enabled: boolean, tabId?: string): Promise<PluginsMutationResult>;
-  remove(name: string, tabId?: string): Promise<PluginsMutationResult>;
-  approveMcp(name: string, tabId?: string): Promise<PluginsMutationResult>;
-  reveal(name: string, tabId?: string): Promise<PluginsRevealResult>;
-  setAutoUpdate(req: PluginsSetAutoUpdateRequest): Promise<PluginsMutationResult>;
+  list(): Promise<PluginsSnapshot>;
+  checkUpdates(): Promise<PluginsSnapshot>;
+  installPrepare(source: PluginInstallSource): Promise<{ ok: true; token: string; preview: PluginInstallPreview } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
+  installCommit(token: string, source: PluginInstallSource): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
+  update(name: string): Promise<PluginsMutationResult>;
+  rollback(name: string): Promise<PluginsMutationResult>;
+  setPinned(name: string, value: boolean): Promise<PluginsMutationResult>;
+  setEnabled(name: string, value: boolean): Promise<PluginsMutationResult>;
+  remove(name: string): Promise<PluginsMutationResult>;
+  approveMcp(name: string): Promise<PluginsMutationResult>;
+  reveal(name: string): Promise<PluginsMutationResult>;
+  setAutoUpdate(value: boolean): Promise<PluginsMutationResult>;
   /** Push subscription: main fires it after any plugin-set change (reason only). */
   onPluginsChanged(callback: (payload: PluginsChangedPayload) => void): () => void;
 }
@@ -89,13 +93,11 @@ export function isPluginsServiceUnavailable(state: PluginsLoadState, snapshot: P
 }
 
 export interface PluginsPaneProps {
-  /** Active tab id, so project-tier plugins resolve main-side; omit for user-only. */
-  tabId?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.plugins`. */
   bridge?: PluginsBridge;
 }
 
-export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsPaneProps) {
+export function PluginsPane({ bridge = window.anycode.plugins }: PluginsPaneProps) {
   const [loadState, setLoadState] = useState<PluginsLoadState>("loading");
   const [snapshot, setSnapshot] = useState<PluginsSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -104,17 +106,17 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
   const [checking, setChecking] = useState(false);
   const [installOpen, setInstallOpen] = useState(false);
   const [installStage, setInstallStage] = useState<InstallDialogStage>({ phase: "source" });
+  const [pendingSource, setPendingSource] = useState<PluginInstallSource | null>(null);
   // One-slot banner driven by the plugins-changed push (design §7): main
   // fires it after any plugin-set change OUTSIDE this pane (auto-updates,
-  // another window); our own mutations already re-render from the returned
-  // snapshot, so the banner is informational — "applies to newly started
-  // tasks" — and self-dismisses.
+  // another window); our own mutations refetch immediately, so the banner
+  // is informational — "applies to newly started tasks" — and self-dismisses.
   const [changedNotice, setChangedNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     bridge
-      .list(tabId)
+      .list()
       .then((snap) => {
         if (!cancelled) {
           setSnapshot(snap);
@@ -122,7 +124,7 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
         }
       })
       .catch(() => {
-        // S1-C: no main handlers (S1-B not built) → honest unavailable state.
+        // No main handlers → honest unavailable state (never a crash).
         if (!cancelled) {
           setLoadState("unavailable");
         }
@@ -131,7 +133,7 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridge, tabId]);
+  }, [bridge]);
 
   // plugins-changed push: subscribe once per bridge; a mid-session channel
   // loss just stops the banner (never a crash).
@@ -146,7 +148,7 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
         // (auto-update in the background, another window's Plugins pane) —
         // refetch so the rows stay truthful.
         bridge
-          .list(tabId)
+          .list()
           .then((snap) => setSnapshot(snap))
           .catch(() => setLoadState("unavailable"));
       });
@@ -161,13 +163,23 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
   const indexHeader = snapshot ? pluginIndexStatusText(snapshot.index.status) : null;
   const autoUpdate = snapshot?.settings.autoUpdateOfficial ?? true;
 
+  /**
+   * Run a `{ok:true}`-style mutation and refetch: main's S1-B per-plugin
+   * handlers return a bare ok/refusal (no snapshot), then push
+   * `plugins-changed`; the pane refetches `list()` on success so the rows
+   * always render main's truth.
+   */
   async function runMutation(name: string, run: () => Promise<PluginsMutationResult>): Promise<void> {
     setBusyName(name);
     setActionError(null);
     try {
       const result = await run();
       if (result.ok) {
-        setSnapshot(result.snapshot);
+        try {
+          setSnapshot(await bridge.list());
+        } catch {
+          setLoadState("unavailable");
+        }
       } else {
         setActionError(pluginsRefusalMessage(result.reason));
       }
@@ -183,12 +195,8 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
     setChecking(true);
     setActionError(null);
     try {
-      const result = await bridge.checkUpdates(tabId);
-      if (result.ok) {
-        setSnapshot(result.snapshot);
-      } else {
-        setActionError(pluginsRefusalMessage(result.reason));
-      }
+      // check-updates resolves with the fresh snapshot itself (S1-B).
+      setSnapshot(await bridge.checkUpdates());
     } catch {
       setLoadState("unavailable");
     } finally {
@@ -200,16 +208,14 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
     const next = !autoUpdate;
     // Optimistic: the toggle is instant; a refusal restores on the next snapshot.
     if (snapshot) {
-      setSnapshot({ ...snapshot, settings: { autoUpdateOfficial: next } });
+      setSnapshot({ ...snapshot, settings: { ...snapshot.settings, autoUpdateOfficial: next } });
     }
     try {
-      const result = await bridge.setAutoUpdate({ enabled: next });
-      if (result.ok) {
-        setSnapshot(result.snapshot);
-      } else {
+      const result = await bridge.setAutoUpdate(next);
+      if (!result.ok) {
         setActionError(pluginsRefusalMessage(result.reason));
         if (snapshot) {
-          setSnapshot({ ...snapshot, settings: { autoUpdateOfficial: !next } });
+          setSnapshot({ ...snapshot, settings: { ...snapshot.settings, autoUpdateOfficial: !next } });
         }
       }
     } catch {
@@ -217,7 +223,7 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
     }
   }
 
-  function openInstall(source?: PluginInstallSourceRequest): void {
+  function openInstall(source?: PluginInstallSource): void {
     setActionError(null);
     setInstallStage(
       source !== undefined && source.kind === "url"
@@ -232,13 +238,15 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
   function closeInstall(): void {
     setInstallOpen(false);
     setInstallStage({ phase: "source" });
+    setPendingSource(null);
   }
 
-  async function prepare(source: PluginInstallSourceRequest, url?: string): Promise<void> {
-    const resolved: PluginInstallSourceRequest = source.kind === "url" && url !== undefined ? { kind: "url", url } : source;
+  async function prepare(source: PluginInstallSource, url?: string): Promise<void> {
+    const resolved: PluginInstallSource = source.kind === "url" && url !== undefined ? { kind: "url", url } : source;
     setInstallStage({ phase: "prepare", source: resolved, preview: null });
+    setPendingSource(resolved);
     try {
-      const result = await bridge.installPrepare(resolved, tabId);
+      const result = await bridge.installPrepare(resolved);
       if (result.ok) {
         setInstallStage({ phase: "confirm", source: resolved, preview: result.preview, token: result.token });
       } else {
@@ -251,12 +259,19 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
   }
 
   async function commitInstall(token: string, allowMcp: boolean): Promise<void> {
+    if (pendingSource === null) {
+      return;
+    }
     try {
-      const result = await bridge.installCommit(token, allowMcp);
+      // CUSTODY: the wire carries the token + the ORIGINAL source only —
+      // never a path or hash; `allowMcp` is the consent checkbox. Main
+      // re-validates that the token was prepared for exactly this source.
+      const result = await bridge.installCommit(token, pendingSource);
       if (result.ok) {
         setSnapshot(result.snapshot);
         setInstallOpen(false);
         setInstallStage({ phase: "source" });
+        setPendingSource(null);
       } else {
         setInstallStage((stage) => (stage.phase === "confirm" ? { ...stage, error: pluginsRefusalMessage(result.reason) } : stage));
       }
@@ -269,7 +284,7 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
   async function reveal(row: PluginRowView): Promise<void> {
     setBusyName(row.name);
     try {
-      const result = await bridge.reveal(row.name, tabId);
+      const result = await bridge.reveal(row.name);
       if (!result.ok) {
         setActionError(pluginsRefusalMessage(result.reason));
       }
@@ -361,21 +376,20 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
           rows={rows}
           emptyKind={emptyKind}
           busyName={busyName}
-          onToggle={(row) => void runMutation(row.name, () => bridge.setEnabled(row.name, !row.enabled, tabId))}
-          onUpdate={(row) => void runMutation(row.name, () => bridge.update(row.name, tabId))}
-          onRollback={(row) => void runMutation(row.name, () => bridge.rollback(row.name, tabId))}
-          onPin={(row) => void runMutation(row.name, () => bridge.setPinned(row.name, !row.pinned, tabId))}
-          onRemove={(row) => void runMutation(row.name, () => bridge.remove(row.name, tabId))}
-          onApproveMcp={(row) => void runMutation(row.name, () => bridge.approveMcp(row.name, tabId))}
+          onToggle={(row) => void runMutation(row.name, () => bridge.setEnabled(row.name, !pluginEnabled(row)))}
+          onUpdate={(row) => void runMutation(row.name, () => bridge.update(row.name))}
+          onRollback={(row) => void runMutation(row.name, () => bridge.rollback(row.name))}
+          onPin={(row) => void runMutation(row.name, () => bridge.setPinned(row.name, !pluginPinned(row)))}
+          onRemove={(row) => void runMutation(row.name, () => bridge.remove(row.name))}
+          onApproveMcp={(row) => void runMutation(row.name, () => bridge.approveMcp(row.name))}
           onReveal={(row) => void reveal(row)}
-          onInstallAvailable={(name, version) => void prepare({ kind: "official", name, version })}
+          onInstallAvailable={(name, version) => void prepare({ kind: "official", name, ...(version !== undefined ? { version } : {}) })}
         />
       )}
 
       {installOpen && (
         <PluginInstallDialog
           stage={installStage}
-          tabId={tabId}
           onPickSource={(source) => void prepare(source)}
           onSubmitUrl={(url) => void prepare({ kind: "url", url })}
           onCommit={(token, allowMcp) => void commitInstall(token, allowMcp)}
@@ -388,7 +402,7 @@ export function PluginsPane({ tabId, bridge = window.anycode.plugins }: PluginsP
 
 // ── hook-FREE presentational pieces (directly callable in the no-jsdom tests) ──
 
-/** The honest degraded card (S1-C: never a crash when main handlers are absent). */
+/** The honest degraded card (never a crash when main handlers are absent). */
 export function PluginsUnavailableCard() {
   return (
     <section className="settings-section plugins-pane" data-plugins-state="unavailable">
@@ -486,7 +500,7 @@ export function PluginsPaneBody({
                     <div className="mcp-row-lines">
                       <div className="mcp-row-line1">
                         <span className="mcp-row-name settings-mcp-name">{entry.displayName || entry.name}</span>
-                        {entry.defaultInstall && <span className="mcp-badge mcp-badge-tools">default</span>}
+                        {entry.default && <span className="mcp-badge mcp-badge-tools">default</span>}
                         {entry.version !== undefined && <span className="mcp-badge">{entry.version}</span>}
                       </div>
                       <div className="mcp-row-line2" title={entry.description}>
@@ -537,21 +551,23 @@ function PluginCard({ row, busy, onToggle, onUpdate, onRollback, onPin, onRemove
   const chips = pluginStatusChips(row);
   const capabilities = pluginCapabilitiesText(row);
   const actions = pluginRowActions(row);
+  const enabled = pluginEnabled(row);
+  const pinned = pluginPinned(row);
 
   return (
     <li
-      className={`mcp-row plugins-row${row.enabled ? "" : " plugins-row-disabled"}`}
+      className={`mcp-row plugins-row${enabled ? "" : " plugins-row-disabled"}`}
       data-plugin-name={row.name}
       data-plugin-tier={row.tier}
-      data-plugin-enabled={row.enabled}
+      data-plugin-enabled={enabled}
     >
       <div className="mcp-row-main">
         <div className="mcp-row-lines">
           <div className="mcp-row-line1">
             <span className="mcp-row-name settings-mcp-name">{row.displayName || row.name}</span>
             <span className={`mcp-badge plugins-tier-${row.tier}`}>{pluginTierLabel(row.tier)}</span>
-            {row.version !== "" && <span className="mcp-badge">{row.version}</span>}
-            {row.pinned && <span className="mcp-badge">pinned</span>}
+            {row.version !== undefined && <span className="mcp-badge">{row.version}</span>}
+            {pinned && <span className="mcp-badge">pinned</span>}
           </div>
           <div className="mcp-row-line2" title={row.description}>
             {row.name} · {pluginSourceText(row.source)}
@@ -578,9 +594,9 @@ function PluginCard({ row, busy, onToggle, onUpdate, onRollback, onPin, onRemove
         <button
           type="button"
           role="switch"
-          aria-checked={row.enabled}
-          aria-label={`${row.enabled ? "Disable" : "Enable"} ${row.name}`}
-          className={`settings-switch${row.enabled ? " settings-switch-on" : ""}`}
+          aria-checked={enabled}
+          aria-label={`${enabled ? "Disable" : "Enable"} ${row.name}`}
+          className={`settings-switch${enabled ? " settings-switch-on" : ""}`}
           disabled={busy}
           onClick={onToggle}
         >
@@ -596,14 +612,14 @@ function PluginCard({ row, busy, onToggle, onUpdate, onRollback, onPin, onRemove
             {rollbackLabel(row)}
           </button>
         )}
-        {row.mcpNeedsApproval && (
+        {pluginMcpNeedsApproval(row) && (
           <button type="button" className="settings-button" disabled={busy} onClick={onApproveMcp}>
             Approve MCP
           </button>
         )}
         {(actions.includes("pin") || actions.includes("unpin")) && (
           <button type="button" className="settings-button" disabled={busy} onClick={onPin}>
-            {row.pinned ? "Unpin" : "Pin"}
+            {pinned ? "Unpin" : "Pin"}
           </button>
         )}
         {actions.includes("reveal") && (

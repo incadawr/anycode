@@ -1853,8 +1853,9 @@ export function SettingsScreen({ store = useSettingsStore, onClose, initialPane,
 
           {/* Taskana 4732 S1-C: the Plugins pane — NOT scope-bar-dependent (it
               shows every tier at once: managed installs + project plugins of
-              the active tab + legacy dirs), so it renders for itself. */}
-          {activePane === "plugins" && <PluginsPane tabId={activeTabId ?? undefined} />}
+              the active workspace + legacy dirs); main resolves the workspace
+              itself, so the pane takes no props beyond its bridge. */}
+          {activePane === "plugins" && <PluginsPane />}
 
           {activePane === "environment" && (
             <>

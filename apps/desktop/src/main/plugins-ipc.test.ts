@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { McpConsentEntry } from "@anycode/core/plugins-admin";
 import {
+  PLUGINS_APPROVE_MCP_CHANNEL,
   PLUGINS_CHECK_UPDATES_CHANNEL,
   PLUGINS_CHANGED_CHANNEL,
   PLUGINS_INSTALL_COMMIT_CHANNEL,
@@ -256,7 +257,7 @@ describe("two-phase install (official)", () => {
     // instead serve the artifact through the fs port? Simplest: intercept by
     // monkey-patching global fetch (createArchiveFetch defaults to it).
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => new Response(tar, { status: 200 })) as typeof fetch;
+    globalThis.fetch = (async () => new Response(new Uint8Array(tar), { status: 200 })) as typeof fetch;
     try {
       registerPluginsIpc(scaffold.deps);
       const prepared = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "official", name: "anycode-essentials" } });
@@ -325,6 +326,57 @@ describe("path custody", () => {
     const result = await invoke(PLUGINS_REVEAL_CHANNEL, { name: "p" });
     expect(result.ok).toBe(true);
     expect(scaffold.reveals).toEqual(["/home/tester/.anycode/plugins/.store/p/1.0.0"]);
+  });
+
+  it("a file source ignores an injected path — main opens its OWN picker (custody)", async () => {
+    // The renderer may only send {kind:"file"}; zod strips any smuggled
+    // `path`, and the bytes main reads come from the dialog main opened —
+    // never from a renderer-supplied string.
+    const scaffold = makeDeps();
+    const pickedByMain = "/home/tester/Downloads/picked-by-main.tgz";
+    const rendererPath = "/home/tester/Downloads/smuggled.tgz";
+    scaffold.setPickedFile(pickedByMain);
+    scaffold.storeBinaries.set(pickedByMain, pluginTar("picked", "1.0.0"));
+    scaffold.storeBinaries.set(rendererPath, pluginTar("smuggled", "9.9.9"));
+    registerPluginsIpc(scaffold.deps);
+    const result = await invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source: { kind: "file", path: rendererPath } });
+    expect(result).toMatchObject({ ok: true });
+    expect(result.preview.name).toBe("picked");
+    expect(result.preview.name).not.toBe("smuggled");
+  });
+
+  it("approve-mcp takes a NAME only — main computes the serversHash from its own scan", async () => {
+    // Security invariant (design §4): consent is keyed by a hash main
+    // derives from the plugin's CURRENT mcpServers; the renderer never
+    // supplies a hash. Plant a managed install whose manifest declares one
+    // server (the manifest on disk is plain JSON — discovery reads it as text).
+    const scaffold = makeDeps();
+    scaffold.storeFiles.set(
+      "/home/tester/.anycode/plugins/.store/with-mcp/1.0.0/.anycode-plugin/plugin.json",
+      JSON.stringify({ manifestVersion: 1, name: "with-mcp", version: "1.0.0", mcpServers: { api: { command: "node", args: ["api.js"] } } }),
+    );
+    scaffold.storeFiles.set("/home/tester/.anycode/plugins/state.json", JSON.stringify({
+      version: 1,
+      plugins: { "with-mcp": { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: ["mcp:api"] } },
+      removedDefaults: [],
+      disabled: [],
+    }));
+    registerPluginsIpc(scaffold.deps);
+    // A smuggled serversHash field must not reach the settings write.
+    const granted = await invoke(PLUGINS_APPROVE_MCP_CHANNEL, { name: "with-mcp", serversHash: "deadbeef" });
+    expect(granted).toMatchObject({ ok: true });
+    const written = scaffold.settingsData.mcpConsent ?? [];
+    expect(written).toHaveLength(1);
+    expect(written[0]!.plugin).toBe("with-mcp");
+    expect(written[0]!.serversHash).not.toBe("deadbeef");
+    expect(written[0]!.serversHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("approve-mcp refuses a plugin that declares no MCP servers (nothing to consent to)", async () => {
+    const scaffold = makeDeps();
+    registerPluginsIpc(scaffold.deps);
+    const result = await invoke(PLUGINS_APPROVE_MCP_CHANNEL, { name: "ghost" });
+    expect(result).toMatchObject({ ok: false, reason: "not_found" });
   });
 });
 
