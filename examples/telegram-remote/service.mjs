@@ -145,6 +145,8 @@ export function sanitizeState(raw, now) {
 /** The default state store: a 0700 directory and 0600 files, written atomically. */
 export function fileStore(dir, now = () => Date.now()) {
   const file = join(dir, "state.json");
+  // Saves run one at a time: overlapping writes would share the temp name and the second rename would find nothing.
+  let saveChain = Promise.resolve();
   return {
     async load() {
       try {
@@ -153,13 +155,17 @@ export function fileStore(dir, now = () => Date.now()) {
         return emptyState();
       }
     },
-    async save(state) {
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      await chmod(dir, 0o700).catch(() => {});
-      const temporary = `${file}.${process.pid}.tmp`;
-      await writeFile(temporary, JSON.stringify(state), { mode: 0o600 });
-      await rename(temporary, file);
-      await chmod(file, 0o600).catch(() => {});
+    save(state) {
+      const write = saveChain.then(async () => {
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        await chmod(dir, 0o700).catch(() => {});
+        const temporary = `${file}.${process.pid}.tmp`;
+        await writeFile(temporary, JSON.stringify(state), { mode: 0o600 });
+        await rename(temporary, file);
+        await chmod(file, 0o600).catch(() => {});
+      });
+      saveChain = write.catch(() => {});
+      return write;
     },
   };
 }
@@ -227,8 +233,12 @@ export function createBridge(options = {}) {
     return stoppedPromise;
   }
 
+  // Writes go through one tail so stop() can wait for the last one started, even with an injected store.
+  let writeTail = Promise.resolve();
   async function persist() {
-    await store.save(state);
+    const write = writeTail.then(() => store.save(state));
+    writeTail = write.catch(() => {});
+    await write;
   }
 
   // ── Telegram transport ──
@@ -874,7 +884,10 @@ export function createBridge(options = {}) {
           state.lastUpdateId = update.update_id;
         }
         state.offset = update.update_id + 1;
-        await persist();
+        // A save that fails because stop() already began (state dir gone, shutdown) is not a poll failure.
+        await persist().catch((error) => {
+          if (!stopped) throw error;
+        });
       }
     }
   }
@@ -911,6 +924,7 @@ export function createBridge(options = {}) {
     clearInterval(keepAlive);
     resolveStopped();
     await Promise.allSettled([...waiters.values(), ...chainByChat.values()]);
+    await writeTail;
     await persist().catch(() => {});
   }
 
