@@ -86,6 +86,73 @@ function rig(options: { fullAccess?: () => boolean; decision?: PermissionDecisio
 
 const signal = (): AbortSignal => new AbortController().signal;
 
+/**
+ * Minimal JSON Schema (2020-12 subset) validator for the exact constructs the
+ * bridged schemas use: type/properties/additionalProperties/required/oneOf/
+ * anyOf/allOf/not + string minLength/maxLength/pattern + enum. Used by B4c to
+ * prove the DECLARED schema (what the Claude/Codex CLI validates against)
+ * rejects the same inputs the host zod schema rejects — not a general ajv.
+ */
+function schemaValidate(schema: Record<string, unknown>): (value: unknown) => boolean {
+  const check = (value: unknown, node: unknown): boolean => {
+    if (node === true || node === undefined) return true;
+    if (node === false) return false;
+    const s = node as Record<string, unknown>;
+    if (typeof s.type === "string") {
+      const t = typeof value;
+      const okType =
+        (s.type === "object" && t === "object" && value !== null && !Array.isArray(value)) ||
+        (s.type === "string" && t === "string") ||
+        (s.type === "boolean" && t === "boolean") ||
+        (s.type === "number" && t === "number") ||
+        (s.type === "array" && Array.isArray(value));
+      if (!okType) return false;
+    }
+    if (Array.isArray(s.enum) && !s.enum.includes(value as never)) return false;
+    if (Array.isArray(s.required) && t_is(value)) {
+      for (const key of s.required) {
+        if (typeof key !== "string" || value[key] === undefined) return false;
+      }
+    }
+    if (s.type === "string" && typeof value === "string") {
+      if (typeof s.minLength === "number" && value.length < s.minLength) return false;
+      if (typeof s.maxLength === "number" && value.length > s.maxLength) return false;
+      if (typeof s.pattern === "string" && !new RegExp(s.pattern).test(value)) return false;
+    }
+    if (t_is(s.properties) && t_is(value)) {
+      const props = s.properties as Record<string, unknown>;
+      for (const [key, sub] of Object.entries(props)) {
+        if (value[key] !== undefined && !check(value[key], sub)) return false;
+      }
+      if (s.additionalProperties === false) {
+        for (const key of Object.keys(value)) {
+          if (!(key in props)) return false;
+        }
+      }
+    }
+    if (Array.isArray(s.allOf)) {
+      for (const sub of s.allOf) {
+        if (!check(value, sub)) return false;
+      }
+    }
+    if (Array.isArray(s.oneOf)) {
+      const hits = s.oneOf.filter((sub) => check(value, sub)).length;
+      if (hits !== 1) return false;
+    }
+    if (Array.isArray(s.anyOf)) {
+      if (!s.anyOf.some((sub) => check(value, sub))) return false;
+    }
+    if (t_is(s.not)) {
+      if (check(value, s.not)) return false;
+    }
+    return true;
+  };
+  function t_is(v: unknown): v is Record<string, unknown> {
+    return typeof v === "object" && v !== null && !Array.isArray(v);
+  }
+  return (value: unknown) => check(value, schema);
+}
+
 describe("engine browser bridge — declarations (B3..B5)", () => {
   it("B3: specs has exactly the 10 fixed entries in order; lookups resolve each and reject unknown/hostile names", () => {
     const { bridge } = rig();
@@ -118,6 +185,78 @@ describe("engine browser bridge — declarations (B3..B5)", () => {
     }
     const navigate = bridge.specs.find((spec) => spec.canonical === "BrowserNavigate")!;
     expect(navigate.inputSchema).toMatchObject({ properties: { url: {}, history: {} } });
+  });
+
+  it("B4b: F15 — the bridged schemas carry the cross-field constraints the zod refinements enforce (exactly-one-of / at-least-one-of)", () => {
+    const { bridge } = rig();
+    // Validate every generated schema with ajv-style JSON Schema semantics is
+    // overkill here; assert the constraint fragments directly, per tool:
+    const navigate = bridge.specs.find((spec) => spec.canonical === "BrowserNavigate")!;
+    // exactly one of url/history
+    expect(navigate.inputSchema.allOf).toEqual([
+      {
+        oneOf: [
+          { required: ["url"], not: { required: ["history"] } },
+          { required: ["history"], not: { required: ["url"] } },
+        ],
+      },
+    ]);
+
+    // exactly one of ref/selector, shared by click and type
+    const exactlyTarget = [
+      {
+        oneOf: [
+          { required: ["ref"], not: { required: ["selector"] } },
+          { required: ["selector"], not: { required: ["ref"] } },
+        ],
+      },
+    ];
+    expect(bridge.specs.find((spec) => spec.canonical === "BrowserClick")!.inputSchema.allOf).toEqual(exactlyTarget);
+    expect(bridge.specs.find((spec) => spec.canonical === "BrowserType")!.inputSchema.allOf).toEqual(exactlyTarget);
+
+    // at least one of text/selector
+    expect(bridge.specs.find((spec) => spec.canonical === "BrowserWaitFor")!.inputSchema.anyOf).toEqual([
+      { required: ["text"] },
+      { required: ["selector"] },
+    ]);
+
+    // The other six tools carry no cross-field constraint.
+    for (const canonical of ["BrowserOpen", "BrowserRead", "BrowserScreenshot", "BrowserSnapshot", "BrowserConsole", "BrowserEval"]) {
+      const spec = bridge.specs.find((candidate) => candidate.canonical === canonical)!;
+      expect(spec.inputSchema.allOf).toBeUndefined();
+      expect(spec.inputSchema.anyOf).toBeUndefined();
+    }
+  });
+
+  it("B4c: F15 — a refinement-violating input the OLD schema accepted is now rejected by the schema itself (spot checks)", async () => {
+    const { bridge } = rig();
+    const spec = bridge.specs.find((candidate) => candidate.canonical === "BrowserWaitFor")!;
+    // Reproduce the CLI-side check locally with the schema the door declares.
+    const AjvLike = schemaValidate(spec.inputSchema);
+    // valid: text only / selector only / both
+    expect(AjvLike({ text: "hello" })).toBe(true);
+    expect(AjvLike({ selector: "#app" })).toBe(true);
+    expect(AjvLike({ text: "hello", selector: "#app", gone: true })).toBe(true);
+    // invalid (the F15 scenario: gone only)
+    expect(AjvLike({ gone: true })).toBe(false);
+    // invalid: neither url nor history
+    const navigate = bridge.specs.find((candidate) => candidate.canonical === "BrowserNavigate")!;
+    const navValidate = schemaValidate(navigate.inputSchema);
+    expect(navValidate({ url: "http://localhost:3000/" })).toBe(true);
+    expect(navValidate({ history: "reload" })).toBe(true);
+    expect(navValidate({})).toBe(false);
+    expect(navValidate({ url: "http://localhost:3000/", history: "reload" })).toBe(false);
+    // click: neither target
+    const click = bridge.specs.find((candidate) => candidate.canonical === "BrowserClick")!;
+    const clickValidate = schemaValidate(click.inputSchema);
+    expect(clickValidate({ ref: "e1" })).toBe(true);
+    expect(clickValidate({})).toBe(false);
+    expect(clickValidate({ ref: "e1", selector: "a" })).toBe(false);
+
+    // The bridge still fail-closes with the zod message for a direct bad call.
+    const result = await bridge.call(spec, { gone: true }, signal(), "t-b4c");
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("at least one of text or selector is required");
   });
 
   it("B5: canonicalBrowserToolName maps only mcp__anycode__browser_* names", () => {
