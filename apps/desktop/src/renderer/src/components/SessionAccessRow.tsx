@@ -6,7 +6,7 @@
  */
 import { useContext, useEffect, useState } from "react";
 import { TabContext } from "../tab-context.js";
-import { handleErrorText, sessionApprovalsLabel, sessionSwitchDisabledReason, sessionSwitchLabel, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER } from "./sessions-api-model.js";
+import { handleErrorText, sessionApprovalsLabel, sessionSwitchDisabledReason, sessionSwitchLabel, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER } from "./sessions-api-model.js";
 import type { CommunicationGetResult, CommunicationHandleResult, CommunicationMutationResult } from "../../../shared/communication-config.js";
 
 export interface SessionAccessBridge {
@@ -129,6 +129,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication }: { br
             aria-label={SESSION_HANDLE_LABEL}
             data-environment-action="sessions-api-handle"
             placeholder={SESSION_HANDLE_PLACEHOLDER}
+            title={SESSION_HANDLE_HINT}
             maxLength={200}
             value={handle}
             onChange={(event) => setHandle(event.target.value)}
