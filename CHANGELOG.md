@@ -9,20 +9,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Native agents can now operate the built-in preview: navigate, read an accessibility snapshot, click, type and wait; remote origins ask first.
-- Sessions API: give a shared session a handle (for example `build-bot`) in the
-  session's environment menu. Handles are unique among open sessions, persist
-  across restarts, and appear in `list_sessions`.
-- Sessions API: `wait_for_result` long-polls until the turn that took a message
-  finishes, and returns its answer, `pending`, `rejected` or `unknown`.
-- `examples/channel-echo`: a dependency-free example plugin service that turns
-  files in an inbox folder into messages for a handle and writes the answers to an
-  outbox folder. The author guide is `docs/development/channel-plugins.md`.
-
-## [0.0.38] — 2026-10-25
-
-### Added
-
 - Plugins can declare background services (`services` in the manifest): AnyCode
   runs them after you consent to their exact command, supervises restarts, shows
   their state and a plain-text log in Settings → Plugins, and stops them when the
@@ -38,6 +24,20 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   are added to the system prompt, labelled and capped, and only for trusted
   folders. MCP `env` and `headers` accept `${secret:NAME}`, backed by write-only
   secrets in Settings → MCP → Secrets, so a Dock-launched app needs no shell setup.
+
+- Native agents can now operate the built-in preview: navigate, read an accessibility snapshot, click, type and wait; remote origins ask first.
+- Sessions API: give a shared session a handle (for example `build-bot`) in the
+  session's environment menu. Handles are unique among open sessions, persist
+  across restarts, and appear in `list_sessions`.
+- Sessions API: `wait_for_result` long-polls until the turn that took a message
+  finishes, and returns its answer, `pending`, `rejected` or `unknown`.
+- `examples/channel-echo`: a dependency-free example plugin service that turns
+  files in an inbox folder into messages for a handle and writes the answers to an
+  outbox folder. The author guide is `docs/development/channel-plugins.md`.
+
+## [0.0.38] — 2026-10-25
+
+### Added
 
 - Settings → Language servers: a catalog of known language servers with
   Found / Not installed detection (existence check only — nothing is
