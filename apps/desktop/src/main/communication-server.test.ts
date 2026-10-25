@@ -769,6 +769,31 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect(request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(0);
   });
 
+  it("create_session: not_allowed for a workspace outside a non-empty folders list (restricted branch)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-create-res-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const outside = await mkdtemp(join(tmpdir(), "anycode-create-out-")); cleanups.push(() => rm(outside, { recursive: true, force: true }));
+    const discoveryFile = join(dir, "communication.json");
+    const creator = vi.fn(async () => ({ ok: true as const, sessionId: "never", tabId: "never" }));
+    const request = vi.fn(async () => undefined);
+    const service = await startCommunicationServer({
+      manager: { listTabs: () => [], communicationRequest: request }, userData: dir, config: { workspaces: [dir], discoveryFile },
+      createSessionByAgent: creator, readyTimeoutMs: 100, readyPollMs: 10,
+    });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "create-restricted", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    const result = await client.callTool({ name: "create_session", arguments: { workspace: outside } });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(errorText(result)).toMatch(/^create_session not_allowed/);
+    // Refused before any tab was opened and before any host call.
+    expect(creator).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    // The same workspace inside the list is not refused on this branch.
+    expect(value(await client.callTool({ name: "create_session", arguments: { workspace: dir } })).sessionId).toBe("never");
+  });
+
   it("send_message schema errors name sessionId, payload and mode instead of a zod issue list", async () => {
     const f = await fixture();
     const result = await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed" } });
