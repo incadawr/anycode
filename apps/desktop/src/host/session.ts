@@ -1560,6 +1560,17 @@ export class Session {
   private childLastTool: string | undefined;
   /** Wall-clock (per `this.now`) of the last emitted progress report — `undefined` until the first boundary, so the first boundary always emits (leading edge). */
   private childLastProgressEmitAt: number | undefined;
+  /**
+   * Taskana 4820 review F3: liveness interval armed while a child tool call
+   * is EXECUTING (dispatch crossed one boundary; the result may be minutes
+   * away). Re-crosses the throttled progress boundary every 60s so the
+   * parent-side SubagentStallClock keeps being re-armed — a long-but-working
+   * tool call is never silence. Cleared when the last pending call settles
+   * (tool_result), on turn_end/error terminal shapes, in shutdown(), and on
+   * port close; the boundary itself stays throttled, so the interval can
+   * never add pushes beyond one per second.
+   */
+  private childToolLivenessTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
@@ -1698,6 +1709,11 @@ export class Session {
       this.route(raw);
     });
     port.onClose(() => {
+      // Taskana 4820 review F3: a closed port can deliver no further
+      // progress — the liveness interval stops speaking for a dead wire.
+      // (Before the reload-grace branch below: even a reload-adjacent close
+      // must not keep pushing while no port is bound.)
+      this.disarmChildToolLiveness();
       // TASK.117: the old unconditional denyAll here destroyed the parked
       // ask mid-reload (live S2: "ui disconnected" deny + no_pending_request
       // 1.3s after a Page.reload — the close is observed BEFORE main re-posts
@@ -2011,6 +2027,9 @@ export class Session {
     // TASK.102 CUT-S2 §10.11.1 N1: flipped FIRST, strictly before abort/
     // denyAll/dispose below, so teardown woken by the abort already sees it.
     this.closeAdmissions();
+    // Taskana 4820 review F3: the in-tool liveness interval must not survive
+    // the session — clear it before any teardown await can interleave.
+    this.disarmChildToolLiveness();
     // TASK.117: shutdown is the terminal settlement — disarm the reconnect
     // grace window so its timer can never fire a disconnect-origin denyAll
     // after (or beside) the shutdown settlement below.
@@ -4147,10 +4166,17 @@ export class Session {
         // working, not stalled. Liveness push only: `childLastTool` stays
         // result-based and the activity bridge stays result-paired.
         this.emitChildProgressBoundary();
+        // Taskana 4820 review F3: ONE boundary at dispatch is not enough —
+        // a tool call longer than the parent-side stall timeout then looks
+        // like silence. Arm the 60s liveness interval until the result.
+        this.armChildToolLiveness();
         break;
       case "tool_result":
         this.childToolCalls += 1;
         this.childLastTool = event.outcome.toolName;
+        // F3: the paired result settles the last open call — the liveness
+        // interval has nothing left to vouch for.
+        this.disarmChildToolLiveness();
         this.emitChildProgressBoundary();
         this.emitChildActivity(event.outcome.toolCallId, event.outcome.status);
         break;
@@ -4177,6 +4203,8 @@ export class Session {
           this.childTurnEndCount += 1;
         }
         this.childFinalTurnFinishReason = event.finishReason === "length" ? "length" : undefined;
+        // F3: the turn ended — no tool call is executing anymore.
+        this.disarmChildToolLiveness();
         this.emitChildProgressBoundary();
         break;
       case "loop_end":
@@ -4261,6 +4289,40 @@ export class Session {
       toolCalls: this.childToolCalls,
       ...(this.childLastTool !== undefined ? { lastTool: this.childLastTool } : {}),
     });
+  }
+
+  /**
+   * Taskana 4820 review F3: arms the in-tool liveness interval (see the
+   * field's own doc). Idempotent — a second concurrent tool call keeps the
+   * ONE interval (the boundary re-cross is per-session, not per-call).
+   * `unref`-less on purpose: Electron's main-thread host has no exit-to-war
+   * concern, and Node tests drive it with fake timers; the disarm sites
+   * (result/turn_end/shutdown/port-close) bound its lifetime.
+   */
+  private armChildToolLiveness(): void {
+    if (this.childToolLivenessTimer !== null) {
+      return;
+    }
+    this.childToolLivenessTimer = setInterval(() => {
+      // Still-executing calls only: the interval speaks for work in flight.
+      if (this.pendingChildCalls.size === 0) {
+        this.disarmChildToolLiveness();
+        return;
+      }
+      this.emitChildProgressBoundary();
+    }, 60_000);
+  }
+
+  /**
+   * Taskana 4820 review F3: clears the liveness interval. Called on the
+   * paired tool_result, on turn_end, in shutdown(), and on port close —
+   * never a push after the session's life or the call's settle.
+   */
+  private disarmChildToolLiveness(): void {
+    if (this.childToolLivenessTimer !== null) {
+      clearInterval(this.childToolLivenessTimer);
+      this.childToolLivenessTimer = null;
+    }
   }
 
   private async runTurn(

@@ -6057,7 +6057,9 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
           // would register a setTimeout during one of the calls above, which
           // fake timers (armed BEFORE those calls) would intercept; advancing
           // them proves no such timer exists (this is a red test the moment
-          // one is added).
+          // one is added). Still true after 4820 F3: the F3 liveness INTERVAL
+          // arms only on tool_execution_start (none here — tool_results
+          // arrive paired); the throttle itself stays timer-free.
           vi.advanceTimersByTime(10_000);
           expect(h.onProgress.mock.calls.length).toBe(countBefore);
         } finally {
@@ -6241,6 +6243,87 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
         observeChildEventDirect(h.session, { type: "turn_end", turn: 1, finishReason: "stop" });
         const progress = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport);
         expect(progress.at(-1)!.turns).toBe(1);
+      } finally {
+        h.close();
+      }
+    });
+  });
+
+  /**
+   * Taskana 4820 review F3: a single tool call longer than the parent-side
+   * stall timeout (SUBAGENT_STALL_TIMEOUT_MS, 10 min) still false-stalled —
+   * tool_execution_start crossed ONE boundary at dispatch, then silence
+   * until the result landed. While a child tool call is executing, the
+   * session now re-crosses the throttled progress boundary on a 60s timer,
+   * cleared on the paired tool_result, on abort, and on dispose — the
+   * parent's SubagentStallClock keeps being re-armed and a long-but-working
+   * tool call is never silence.
+   */
+  describe("progress: in-tool liveness timer (Taskana 4820 F3)", () => {
+    it("a tool call executing longer than 60s keeps emitting liveness progress on a timer, and the timer stops at tool_result", () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        vi.useFakeTimers();
+        try {
+          observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+          currentTime = 1_000;
+          observeChildEventDirect(h.session, {
+            type: "tool_execution_start",
+            toolCallId: "tc-long",
+            toolName: "Bash",
+            input: { command: "sleep 900" },
+          });
+          const atDispatch = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport).length;
+
+          // Three minutes of silence INSIDE the tool call: the liveness timer
+          // re-crosses the boundary every 60s (t=61k/121k/181k).
+          currentTime = 61_000;
+          vi.advanceTimersByTime(61_000);
+          currentTime = 121_000;
+          vi.advanceTimersByTime(60_000);
+          currentTime = 181_000;
+          vi.advanceTimersByTime(60_000);
+          const midTool = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport).length;
+          expect(midTool - atDispatch).toBe(3);
+
+          // The paired result clears the timer: advancing another 10 minutes
+          // emits NOTHING further (this is the red test for the clear).
+          observeChildEventDirect(h.session, toolResultEvent("tc-long", "Bash"));
+          const atResult = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport).length;
+          currentTime = 781_000;
+          vi.advanceTimersByTime(600_000);
+          expect(h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport).length).toBe(atResult);
+        } finally {
+          vi.useRealTimers();
+        }
+      } finally {
+        h.close();
+      }
+    });
+
+    it("shutdown clears the timer — no progress after the session's life", async () => {
+      let currentTime = 0;
+      const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
+      try {
+        vi.useFakeTimers();
+        try {
+          observeChildEventDirect(h.session, { type: "turn_start", turn: 1 });
+          currentTime = 1_000;
+          observeChildEventDirect(h.session, {
+            type: "tool_execution_start",
+            toolCallId: "tc-zombie",
+            toolName: "Bash",
+            input: { command: "sleep 900" },
+          });
+          await h.session.shutdown();
+          const atShutdown = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport).length;
+          currentTime = 601_000;
+          vi.advanceTimersByTime(600_000);
+          expect(h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport).length).toBe(atShutdown);
+        } finally {
+          vi.useRealTimers();
+        }
       } finally {
         h.close();
       }
