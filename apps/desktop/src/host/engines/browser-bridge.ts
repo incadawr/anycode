@@ -43,10 +43,12 @@ import type {
   ToolResult,
 } from "@anycode/core";
 import {
+  applyResultBudget,
   browserOpenTool,
   browserReadTool,
   browserScreenshotTool,
   createBrowserControlTools,
+  DEFAULT_TOOL_RESULT_BUDGET,
 } from "@anycode/core";
 import type { IpcPermissionBroker } from "../permission-broker.js";
 
@@ -268,6 +270,14 @@ export function createEngineBrowserBridge(deps: EngineBrowserBridgeDeps): Engine
     const text =
       (tool.formatResultForModel as ((value: ToolResult) => string) | undefined)?.(result) ??
       (result.ok ? "" : result.error ?? `${spec.canonical} failed`);
+    // 4764 review F5: this dispatch bypasses the core dispatcher, the
+    // component that owns the model-visible result budget — so the SAME clamp
+    // (declared `metadata.resultBudget`, falling back to the dispatcher's
+    // default) is applied here. BrowserRead's formatted text can otherwise
+    // ride the preview-host 200_000-char cap (plus the console tail) straight
+    // into the engine's context, where the native tab would have received
+    // <= 60 KB. Images are already bounded separately (IMAGE_MAX_BYTES).
+    const budget = meta.resultBudget ?? DEFAULT_TOOL_RESULT_BUDGET;
     const images =
       result.ok && Array.isArray(result.images)
         ? result.images
@@ -276,7 +286,7 @@ export function createEngineBrowserBridge(deps: EngineBrowserBridgeDeps): Engine
             .map((image) => ({ mediaType: "image/png" as const, data: image.data }))
         : undefined;
     return {
-      text,
+      text: applyResultBudget(text, budget.maxModelBytes, budget.previewDirection ?? "head"),
       isError: !result.ok,
       ...(images !== undefined && images.length > 0 ? { images } : {}),
       status: result.ok ? "success" : "error",
