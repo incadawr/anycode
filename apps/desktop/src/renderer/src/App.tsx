@@ -24,7 +24,7 @@
  * the app shows the shell with zero tabs until the user opens or resumes a
  * session.
  */
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useStore } from "zustand";
 import { startConnectionManager } from "./port.js";
@@ -84,7 +84,7 @@ import { projectChildSplitRows } from "./child-split-projection.js";
 import { projectChildHistoryResult, type ChildHistoryResult, type ChildHistoryViewState } from "./child-history.js";
 import { ChildSplitPane, type ChildSplitRow } from "./components/ChildSplitPane.js";
 import { canSplit, clampDockWidth, computeDockMode, derivePreviewTabs, DOCK_HANDLE_PX, type DockMode } from "./dock/dock-layout.js";
-import { selectDockOpen, useDockStore } from "./dock/dock-store.js";
+import { selectDockOpenFor, selectDockView, useDockStore } from "./dock/dock-store.js";
 import { isSessionBusy, type SubagentSubStatus, type TranscriptBlock } from "./store.js";
 import "./settings.css";
 
@@ -559,15 +559,32 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
     reviewRootRef.current = node;
     setReviewRootEl(node);
   }, []);
+  // Taskana 4738: this conversation tab takes ownership of the dock store's
+  // tab set BEFORE paint. The store is a singleton across conversation tabs;
+  // without this, the first render of a switched tab reads the PREVIOUS
+  // tab's leftover tabs (its own derivation effects run only after that
+  // commit) and paints them for one frame. A LAYOUT effect, declared before
+  // the derivation effects below: it resets the owned triple synchronously
+  // before the browser paints, and `selectDockView` (the read path below)
+  // gates the very first render empty even before that. `adopt` touches
+  // renderer state only — the per-tab sources (previews/subagents/git) stay
+  // in their own stores and the derivation effects re-open them on the clean
+  // store right after.
+  useLayoutEffect(() => {
+    useDockStore.getState().adopt(tabId);
+  }, [tabId]);
+
   // Taskana 4703: the ONE dock width + window-width tracking. `available` is
   // the .session-content width (reviewRootRef measure), kept live by a
   // ResizeObserver so a sidebar collapse/expand (no window resize) re-clamps.
+  // Taskana 4738: `tabs`/`activeTabId`/`splitTabId` render ONLY through the
+  // owner-gated `selectDockView` — a non-owner (the frame before adopt, or a
+  // foreign store state) reads the frozen EMPTY_DOCK_VIEW, never another
+  // conversation tab's items. Width/hidden are global, not owner-scoped.
   const dockWidth = useDockStore((state) => state.width);
-  const dockTabs = useDockStore((state) => state.tabs);
-  const dockActiveTabId = useDockStore((state) => state.activeTabId);
-  const dockHidden = useDockStore((state) => state.hidden);
-  const dockOpenRaw = selectDockOpen(useDockStore.getState());
-  const dockOpen = dockTabs.length > 0 && !dockHidden && dockOpenRaw;
+  const dockTabs = useDockStore((state) => selectDockView(state, tabId).tabs);
+  const dockActiveTabId = useDockStore((state) => selectDockView(state, tabId).activeTabId);
+  const dockOpen = useDockStore((state) => selectDockOpenFor(state, tabId));
   const [availableWidth, setAvailableWidth] = useState(() =>
     typeof window === "undefined" ? 1280 : (document.querySelector(".session-content") as HTMLElement | null)?.getBoundingClientRect().width || window.innerWidth,
   );
@@ -575,7 +592,7 @@ function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToast }: Ac
   const effectiveDockWidth = clampDockWidth(dockWidth, availableWidth);
   // Stage 2 (§3): the split gate over the SAME measured available width.
   const canSplitNow = canSplit(availableWidth);
-  const splitTabId = useDockStore((state) => state.splitTabId);
+  const splitTabId = useDockStore((state) => selectDockView(state, tabId).splitTabId);
   // The dock participates in the grid only in column mode — drawer mode is
   // an absolute overlay (conversation full width).
   const splitOpen = dockOpen && dockMode === "column";

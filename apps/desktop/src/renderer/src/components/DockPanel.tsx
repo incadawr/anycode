@@ -17,7 +17,7 @@
  */
 import { useContext, type ReactNode } from "react";
 import { TabContext, useTabStoreApi } from "../tab-context.js";
-import { useDockStore } from "../dock/dock-store.js";
+import { selectDockView, useDockStore } from "../dock/dock-store.js";
 import { childLayoutStore } from "../child-layout.js";
 import { DOCK_SPLIT_MIN_PX, isSplittableTab, type DockMode, type DockTab } from "../dock/dock-layout.js";
 import { usePreviewStore } from "../preview/preview-store.js";
@@ -81,9 +81,13 @@ export function DockPanel({ mode, width, onResizeStart, onToast, subagents, canS
   }
   const { tabId } = ctx;
 
-  const tabs = useDockStore((state) => state.tabs);
+  // Taskana 4738: the tab set renders ONLY through the owner-gated
+  // `selectDockView` — the store is global across conversation tabs, and an
+  // un-gated read would paint another tab's strip for one frame on switch.
+  // `splitTabId` arrives as a prop (App.tsx already gates it the same way).
+  const tabs = useDockStore((state) => selectDockView(state, tabId).tabs);
   const previews = usePreviewStore((state) => state.byTab[tabId]?.previews ?? EMPTY_PREVIEWS);
-  const activeTabId = useDockStore((state) => state.activeTabId);
+  const activeTabId = useDockStore((state) => selectDockView(state, tabId).activeTabId);
   const focus = useDockStore((state) => state.focus);
   const close = useDockStore((state) => state.close);
   const splitRight = useDockStore((state) => state.splitRight);
