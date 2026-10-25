@@ -221,6 +221,12 @@ describe("transportOptions ( W5; reused by ConnectionDrawer,  W12)", () => {
 });
 
 describe("buildToolsPatch", () => {
+  it(": the adaptive toggle is sent only when the user has a value (absent stays absent)", () => {
+    expect(buildToolsPatch("", "", "", "", "", "")).toEqual({ tools: {} });
+    expect(buildToolsPatch("", "", "", "", "", "", true)).toEqual({ tools: { adaptiveTurnBudget: true } });
+    expect(buildToolsPatch("", "", "", "", "", "", false)).toEqual({ tools: { adaptiveTurnBudget: false } });
+  });
+
   it("includes both fields when both parse", () => {
     expect(buildToolsPatch("4", "30000")).toEqual({ tools: { concurrency: 4, stallTimeoutMs: 30000 } });
   });

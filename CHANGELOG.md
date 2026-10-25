@@ -22,6 +22,55 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   hand-dropped plugins and older manifests keep working unchanged; a boot
   with no plugins is byte-identical.
 
+### Fixed
+
+- The "provider reported" model note on a subagent card now appears as soon as
+  the first response arrives, not only after the run ends, so a mismatched
+  model is visible during a long run.
+- Workflow steps that use an engine role (claude/codex) now follow the role's
+  fallback chain like Agent calls do: a cooling primary hands the step to the
+  next healthy entry, or to the parent's model, with a visible notice. Engine
+  roles in orchestrate mode also run in the background by default.
+
+### Security
+
+- A project folder's own process declarations no longer start on open: project
+  MCP servers, hooks, LSP servers and project-plugin MCP servers wait until you
+  trust the folder. The desktop app shows a dialog listing the commands (Trust,
+  Trust once, Don't trust); the CLI asks at startup. Non-interactive runs skip
+  them with a warning; `ANYCODE_TRUST_WORKSPACE=1` trusts one run only. Your
+  user-level config is unaffected. This is a behaviour change for existing
+  projects: each one asks once, and asks again if its commands change.
+
+## [0.0.36] — 2026-10-25
+
+### Added
+
+- Built-in `planner`, `executor` and `reviewer` roles for orchestration, each
+  with its own turn budget. A same-named profile in `.anycode/agents/` replaces
+  the built-in role, and a role claimed by such a profile ignores the `roles`
+  settings.
+- Orchestrate mode (`/orchestrate <task>`): the tab plans read-only and hands
+  work to background child sessions, whose reports arrive as new turns.
+  Children run in the permission mode you had before orchestrate (never plan).
+  Leaving plan mode, including an approved plan, turns orchestrate off.
+- `roles` settings: per role, an ordered fallback chain of engine, connection,
+  model and effort. Infrastructure failures (quota, auth, unreachable, unknown
+  model) put an entry on cooldown and the next healthy one is used; when the
+  whole chain is down, the child runs on the parent's model with a notice. A
+  cap on parallel role children (`roles.maxParallelChildren`, default 4) refuses
+  extra spawns instead of queueing them.
+- Adaptive turn budget, off by default: turn on `tools.adaptiveTurnBudget` in
+  Settings (or `ANYCODE_ADAPTIVE_TURN_BUDGET=1`). Subagents then get extra turns
+  while their work makes real progress, and the base subagent budget is learned
+  from finished tasks that were accepted (completed, or declared done at the
+  limit). Your explicit turn limits still win, and the learned value stays within
+  fixed bounds.
+- Optional permission classifier, off by default (`permissions.classifier`
+  in settings). It is consulted only on a Bash call that would otherwise ask
+  you, and it can only turn that ask into allow. Its first form runs an
+  external command that gets the command line on stdin. Any failure, timeout
+  or unclear answer still asks you, and every decision is journaled.
 - User documentation in `docs/user/`: configuration files, engines, subagents,
   skills, MCP servers, permissions, proxy, orchestration and troubleshooting. The
   app ships a copy, and `docs/user/README.md` indexes it.
@@ -55,6 +104,17 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Side panels (Markdown and web previews, subagents, Review) share one
+  right-hand dock with tabs instead of stacking separate columns, so opening a
+  second panel no longer squashes the conversation. The dock has one resizable
+  width, keeps the conversation at least 420px wide, and becomes an overlay
+  drawer on narrow windows. On wide windows a non-active tab can be split into
+  a second pane (not the active tab, and not a web preview). `⌘\` hides and
+  shows the dock; `⌘W` closes the active tab. Tab buttons are keyboard
+  reachable.
+- Language-server and hooks status moved from the header buttons into the
+  Environment menu. Each row shows its state with a Details action; a crashed
+  language server also gets a Restart action that respawns it.
 - Provider requests are retried harder: up to 8 attempts, network outages are
   ridden out for up to 5 minutes, and a stream cut off mid-answer is replayed
   (at most twice) instead of failing the turn. Stop cancels retries at once;
@@ -66,6 +126,22 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
   a tgrep binary whose searches keep timing out is switched off for the rest of
   the session. The `settings.tools.grepBackend` setting applies to the desktop
   app only; the CLI reads just `ANYCODE_GREP_BACKEND`.
+
+### Fixed
+
+- `Agent(send_to)`, added in 0.0.35, now actually reaches the running child in
+  the desktop app (every call failed with "unavailable in this host"), and a
+  cancelled turn stops waiting for the delivery at once.
+- Switching the engine twice in a row without a message in between keeps the
+  conversation: the next engine receives the full imported history, and a
+  reload no longer shows an empty transcript. The switch notice now appears in
+  the transcript, and a reload after a switch no longer repeats the turns from
+  before it.
+- A role whose primary model is an engine (Claude or Codex) and whose whole
+  route is cooling down no longer runs its session on that dead engine and
+  model: it runs on the parent's model, with a notice that names every skipped
+  entry and its reason. When only the primary is cooling, the session takes the
+  next healthy entry and says so.
 
 ### Security
 
@@ -83,28 +159,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ## [0.0.35] — 2026-10-24
 
 ### Added
-- Built-in `planner`/`executor`/`reviewer` role personas for orchestration
-  (read-only planner briefs, literal executor implementation, adversarial
-  reviewer verdicts), overridable by a same-named user md-profile in
-  `.anycode/agents/` (the profile wins; `general-purpose`/`explore` stay
-  reserved). Each role carries its own turn budget (planner 30, executor 80,
-  reviewer 40).
-- Orchestrate tab mode and `/orchestrate <task>`: enabling orchestrate puts
-  the tab's session in plan permission with an orchestration reminder instead
-  of the plan reminder, and an Agent call with `tier:"session"` and no explicit
-  `detach` defaults to `detach:true` (reports arrive as new turns). Child
-  sessions spawned by an orchestrate parent run under the permission mode the
-  user had before enabling orchestrate (never `plan`; `yolo` only if it was
-  already `yolo`).
-- Roles settings (`roles` section, additive-optional): per role an ordered
-  engine/connection+model+effort fallback chain with a process-local health
-  cache (exponential cooldown, infrastructure failures only — quota/auth/
-  unreachable/model-not-found after retries; ordinary task failures never
-  fall back), detached role children respawn on the next healthy entry,
-  per-role turn budgets, and a parallel-children cap
-  (`roles.maxParallelChildren`, default 4, honest refusal — never queued).
-  The 4131 explore default folds into the same generic chain
-  (`ANYCODE_EXPLORE_MODEL` still feeds the chain head).
 - The built-in `explore` recon subagent can run on a cheaper model: set
   `ANYCODE_EXPLORE_MODEL` (exact model id) and every inline explore child
   defaults to it. An explicit `Agent(model: …)` still wins, and unset keeps

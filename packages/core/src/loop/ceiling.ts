@@ -167,6 +167,24 @@ export function adaptiveGrantForRound(round: number, maxTurns: number): number {
 }
 
 /**
+ * : the ceiling object for one loop, built from the two facts every
+ * build site knows: whether adaptive mode is on and whether the loop is a
+ * supervised root. The `adaptive` key is ABSENT when off, so the off path
+ * stays byte-identical to the pre-4721 objects (`{}` / `{ supervisedRoot }`).
+ * Callers spread the child-only clamps (maxTurnsCeiling, outcomeDeadlineAt)
+ * on top.
+ */
+export function buildCeilingConfig(parts: {
+  adaptive?: boolean;
+  supervisedRoot?: () => boolean;
+}): CeilingConfig {
+  return {
+    ...(parts.supervisedRoot !== undefined ? { supervisedRoot: parts.supervisedRoot } : {}),
+    ...(parts.adaptive === true ? { adaptive: true } : {}),
+  };
+}
+
+/**
  *  follow-up: tools whose WORK is dispatching other agents. Both are
  * declared `readOnly: true` (tools/agent.ts, tools/workflow.ts) and that flag
  * STAYS as-is — the permission plane treats a dispatch as side-effect-free

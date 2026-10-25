@@ -499,6 +499,27 @@ describe("subagentResponseModelNote ( slice C1)", () => {
       mismatch: false,
     });
   });
+
+  it(": a live claim (no final yet) renders the same note, with mismatch against the requested model", () => {
+    expect(subagentResponseModelNote({ model: "opus", responseModel: "glm-5.3", final: null })).toEqual({
+      text: "provider reported: glm-5.3",
+      mismatch: true,
+    });
+    expect(subagentResponseModelNote({ model: "glm-5.3", responseModel: "glm-5.3", final: null })).toEqual({
+      text: "provider reported: glm-5.3",
+      mismatch: false,
+    });
+  });
+
+  it(": the settled final claim overrides a live one", () => {
+    expect(
+      subagentResponseModelNote({ model: "opus", responseModel: "live-model", final: { responseModel: "glm-5.3" } }),
+    ).toEqual({ text: "provider reported: glm-5.3", mismatch: true });
+  });
+
+  it(": neither a live nor a final claim => null", () => {
+    expect(subagentResponseModelNote({ model: "opus", final: null })).toBeNull();
+  });
 });
 
 describe("shouldAutoCollapse", () => {
