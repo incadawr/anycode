@@ -1714,11 +1714,17 @@ export class Session {
     ).map(([id]) => id);
   }
 
+  /** One busy-derived state for both Sessions API reads, so status and result can never disagree (Taskana 4768). */
+  private communicationState(): "idle" | "running" | "closing" {
+    return this.shuttingDown ? "closing" : this.busy ? "running" : "idle";
+  }
+
   communicationResult() {
     const latest = this.latestPublicResult;
     const deliveredMessageIds = latest ? this.deliveredIdsFor(latest) : [];
     return {
       sessionId: this.sessionId,
+      state: this.communicationState(),
       availability: this.busy ? "pending" : latest ? latest.source === "history_recovery" ? "recovered_unverified" : "available" : "unavailable",
       activeTurnId: this.busy ? this.turnId : null,
       latestResult: latest ? { ...latest, deliveredMessageIds, correlationMeaning: "transport_delivery_only" } : null,
@@ -1755,7 +1761,7 @@ export class Session {
   private readonly agentDeliveries = new Map<string, AgentDelivery>();
 
   communicationStatus(): { sessionId: string; engine: string; state: string; steering: { supported: boolean; ready: boolean; nativeTurnId?: string } } {
-    return { sessionId: this.sessionId, engine: this.engine.id, state: this.shuttingDown ? "closing" : this.busy ? "running" : "idle", steering: this.engine.steeringStatus?.() ?? { supported: false, ready: false } };
+    return { sessionId: this.sessionId, engine: this.engine.id, state: this.communicationState(), steering: this.engine.steeringStatus?.() ?? { supported: false, ready: false } };
   }
 
   /**
