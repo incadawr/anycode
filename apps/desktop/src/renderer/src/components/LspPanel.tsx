@@ -38,6 +38,38 @@ export function formatLspSummary(servers: readonly LspServerStatus[]): string {
     .join(" · ");
 }
 
+/**
+ * Empty state = the setup guide. Language servers have no Settings pane:
+ * they are declared in `lspServers` of `.anycode/config.json` (this project)
+ * or `~/.anycode/config.json` (every project), so the panel says exactly that
+ * and shows a copyable entry instead of a dead "not configured" line.
+ */
+export const LSP_SETUP_EXAMPLE = `{
+  "lspServers": [
+    {
+      "name": "typescript",
+      "command": "typescript-language-server",
+      "args": ["--stdio"],
+      "extensions": [".ts", ".tsx", ".js", ".jsx"]
+    }
+  ]
+}`;
+
+function LspSetupHint() {
+  return (
+    <div className="lsp-empty">
+      <p>No language servers configured.</p>
+      <p>
+        Language servers give the agent go-to-definition, references and diagnostics. Add an <code>lspServers</code> entry
+        to <code>.anycode/config.json</code> in this project, or to <code>~/.anycode/config.json</code> for every
+        project, then open a new tab. The server binary must be installed and on your PATH.
+      </p>
+      <pre className="lsp-setup-example">{LSP_SETUP_EXAMPLE}</pre>
+      <p>A project's own language servers start only after you trust the folder.</p>
+    </div>
+  );
+}
+
 function LspServerRow({ server }: { server: LspServerStatus }) {
   const hasStderr = server.stderrTail.trim().length > 0;
 
@@ -114,7 +146,7 @@ export function LspPanel() {
 
       <div className="lsp-panel-body">
         {servers.length === 0 ? (
-          <div className="lsp-empty">No language servers configured.</div>
+          <LspSetupHint />
         ) : (
           servers.map((server) => <LspServerRow key={server.name} server={server} />)
         )}
