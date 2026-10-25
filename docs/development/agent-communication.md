@@ -1,6 +1,8 @@
 # Communicating with live AnyCode sessions
 
 AnyCode 0.0.31 and later can expose a production MCP endpoint while its desktop runtime is open.
+Users enable it in Settings → Sessions API and share sessions one by one (see
+[docs/user/sessions-api.md](../user/sessions-api.md)); the environment variable below still overrides those settings.
 It is separate from developer automation/CDP and disabled by default. This first
 slice is GUI-backed: it neither starts a headless daemon nor creates agents.
 
