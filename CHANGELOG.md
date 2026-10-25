@@ -7,7 +7,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.0.37] — 2026-10-25
+## [0.0.38] — 2026-10-25
 
 ### Added
 
@@ -74,6 +74,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Connection drawer: Provider, Label, credentials and Model stay on top; Transport, Max output tokens, Context window, Image input and Proxy move under a collapsed "Advanced" section that opens by itself when a value is set; catalog values show as placeholders, Max output is one Default/8K/16K/32K/Custom control, and long helper text moved into "?" tooltips.
 
 ### Fixed
+
+- The app window no longer starts blank: a startup module the window depends
+  on failed to load in the v0.0.37 build, which was never published.
 
 - Switching conversation tabs no longer flashes the previous tab's side-panel
   tabs (previews/subagents/git) in the dock for one frame — the dock's tab
