@@ -680,6 +680,44 @@ describe("Sessions API create_session (Taskana 4768)", () => {
     expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } })).sessionId).toBe("agent-9");
   });
 
+  it("create_session: two concurrent calls at the alive cap cannot both create (Taskana 4808, review F4)", async () => {
+    const clock = { now: 0 };
+    let creatorCalls = 0;
+    let successes = 0;
+    let releaseSecond!: () => void;
+    const secondEntered = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const f = await createFixture({
+      clock,
+      creator: async (input, tabs) => {
+        creatorCalls++;
+        // The racing pair (calls 8 and 9): hold the first inside the creator until the second
+        // one enters too, proving both passed the alive-cap check (pre-fix TOCTOU). The 1 s
+        // safety release matters post-fix, where the second call never reaches the creator.
+        if (creatorCalls === 8) await Promise.race([secondEntered, new Promise((resolve) => setTimeout(resolve, 1000))]);
+        if (creatorCalls === 9) releaseSecond();
+        successes++;
+        const sessionId = `agent-${successes}`;
+        tabs.push({ sessionId, workspace: input.workspace, state: "running", pid: 100 + successes });
+        return { ok: true, sessionId, tabId: `tab-${successes}` };
+      },
+    });
+    // Seven alive agent-opened tabs, spread across clock minutes so the rate window never bites.
+    for (let i = 0; i < 7; i++) {
+      expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatchObject({ sessionId: `agent-${i + 1}` });
+      clock.now += 20_000;
+    }
+    clock.now += 60_000; // a fresh minute: the rate window is empty for the racing pair
+    const settled = await Promise.all([
+      f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }),
+      f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }),
+    ]);
+    const refused = settled.filter((r) => (r as { isError?: boolean }).isError).map((r) => errorText(r));
+    const created = settled.filter((r) => !(r as { isError?: boolean }).isError).map((r) => value(r));
+    expect(refused).toEqual([expect.stringMatching(/^create_session too_many/)]);
+    expect(created).toEqual([expect.objectContaining({ sessionId: "agent-8" })]);
+    expect(f.tabs).toHaveLength(8); // pre-fix both created and 9 tabs were alive
+  }, 20000);
+
   it("create_session: creates a shared session, returns ids+handle, and delivers firstMessage through the next_turn ledger", async () => {
     const f = await createFixture();
     const created = value(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir, handle: "worker-1", firstMessage: "do the thing" } }));

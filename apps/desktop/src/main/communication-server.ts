@@ -209,6 +209,19 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const now = options.now ?? Date.now;
   const creationTimes: number[] = [];
   const agentOpenedSessions = new Set<string>();
+  /**
+   * Taskana 4808 (review F4): one in-flight create_session at a time. The rate check, the
+   * alive-cap check and the creator hook run as one critical section, so two concurrent
+   * calls cannot both pass `aliveAgentOpened() >= MAX_AGENT_OPENED_TABS` and overshoot the
+   * cap (a plain per-request handler has no such serialization). The firstMessage readiness
+   * wait is deliberately OUTSIDE: it can last 10 s and must not block other creations.
+   */
+  let creating: Promise<unknown> = Promise.resolve();
+  const inCreationSection = <T>(task: () => Promise<T>): Promise<T> => {
+    const result = creating.then(task);
+    creating = result.catch(() => undefined);
+    return result;
+  };
   const aliveAgentOpened = (): number => {
     const live = new Set(options.manager.listTabs().map((t) => t.sessionId));
     for (const id of agentOpenedSessions) if (!live.has(id)) agentOpenedSessions.delete(id);
@@ -381,19 +394,23 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         let resolved: string;
         try { resolved = await realpath(input.workspace); } catch { throw createRefusal("folder_not_found"); }
         if (restricted && !allowed.has(resolved)) throw createRefusal("not_allowed");
-        const at = now();
-        while (creationTimes.length > 0 && creationTimes[0]! <= at - CREATE_SESSION_RATE_WINDOW_MS) creationTimes.shift();
-        if (creationTimes.length >= CREATE_SESSION_RATE_LIMIT) throw createRefusal("rate_limited");
-        if (aliveAgentOpened() >= MAX_AGENT_OPENED_TABS) throw createRefusal("too_many");
-        let outcome: CreateSessionOutcome;
-        try {
-          outcome = await options.createSessionByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
-        } catch { throw createRefusal("not_ready"); }
-        if (!outcome.ok) throw createRefusal(outcome.reason);
-        // Taskana 4808 (review F2): only a successful creation consumes the rate budget — refused
-        // attempts (not_trusted, too_many, not_ready, a throwing hook) never count.
-        creationTimes.push(at);
-        agentOpenedSessions.add(outcome.sessionId);
+        const outcome = await inCreationSection(async () => {
+          const at = now();
+          while (creationTimes.length > 0 && creationTimes[0]! <= at - CREATE_SESSION_RATE_WINDOW_MS) creationTimes.shift();
+          if (creationTimes.length >= CREATE_SESSION_RATE_LIMIT) throw createRefusal("rate_limited");
+          if (aliveAgentOpened() >= MAX_AGENT_OPENED_TABS) throw createRefusal("too_many");
+          let created: CreateSessionOutcome;
+          try {
+            created = await options.createSessionByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
+          } catch { throw createRefusal("not_ready"); }
+          if (!created.ok) throw createRefusal(created.reason);
+          // Taskana 4808 (review F2): only a successful creation consumes the rate budget — refused
+          // attempts (not_trusted, too_many, not_ready, a throwing hook) never count. Still inside
+          // the section, together with the cap bookkeeping (review F4).
+          creationTimes.push(at);
+          agentOpenedSessions.add(created.sessionId);
+          return created;
+        });
         let messageId: string | undefined;
         if (input.firstMessage !== undefined) {
           const deadline = Date.now() + (options.readyTimeoutMs ?? 10_000);
