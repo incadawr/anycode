@@ -51,6 +51,8 @@ import {
   shouldSkipConnectionHealthBinding,
   snapshotBootEnv,
   type ProxyMaterializationDeps,
+  ENV_APP_VERSION,
+  parseAppVersionEnv,
 } from "./host-env.js";
 import {
   hostForkProxyChain,
@@ -2899,5 +2901,22 @@ describe("engineProxyOutcome threads relayFor end-to-end (Taskana 4685 rework)",
       url: RELAY,
       noProxy: LOOPBACK_NO_PROXY,
     });
+  });
+});
+
+
+describe("ENV_APP_VERSION (Taskana 4732 S1-B, design §7 host wiring)", () => {
+  it("parseAppVersionEnv maps empty/whitespace/undefined to undefined", () => {
+    expect(parseAppVersionEnv(undefined)).toBeUndefined();
+    expect(parseAppVersionEnv("")).toBeUndefined();
+    expect(parseAppVersionEnv("   ")).toBeUndefined();
+  });
+
+  it("parseAppVersionEnv trims a real version", () => {
+    expect(parseAppVersionEnv(" 0.0.36 ")).toBe("0.0.36");
+  });
+
+  it("the carrier name is the ANYCODE_APP_VERSION contract", () => {
+    expect(ENV_APP_VERSION).toBe("ANYCODE_APP_VERSION");
   });
 });

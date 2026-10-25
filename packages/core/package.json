@@ -21,6 +21,7 @@
     "./workspace-trust": "./src/trust/index.ts",
     "./subagents-admin": "./src/subagents/admin.ts",
     "./plugins-admin": "./src/plugins/admin.ts",
+    "./plugins": "./src/plugins/index.ts",
     "./telemetry-admin": "./src/telemetry/admin.ts",
     "./network-failure": "./src/provider/network-failure.ts",
     "./provider/quota": "./src/provider/quota.ts",

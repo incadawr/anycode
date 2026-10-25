@@ -725,6 +725,25 @@ export interface AnycodeSettings {
     childSessionsPerParentMax?: number;
     childSessionsGlobalMax?: number;
   };
+  /**
+   * Plugins control-plane settings (Taskana 4732 S1-B, design §7;
+   * additive-optional, version NOT bumped — an existing settings.json with
+   * no `plugins` key round-trips byte-identically and every reader applies
+   * its own absent-default).
+   *
+   * `autoUpdateOfficial` (absent = false): the scheduler's gate for
+   * auto-installing official updates whose capability set did not grow.
+   * `officialIndexUrl`: dev/automation override of the compiled official
+   * index URL — never set by the app itself.
+   * `mcpConsent` (design §4): per-plugin MCP-server grants keyed by the
+   * serversHash; `undefined` = never migrated/granted (legacy grandfathering
+   * writes the initial list once); `[]` = user saw and declined everything.
+   */
+  plugins?: {
+    autoUpdateOfficial?: boolean;
+    officialIndexUrl?: string;
+    mcpConsent?: { plugin: string; serversHash: string; grantedAt: string }[];
+  };
 }
 
 /**

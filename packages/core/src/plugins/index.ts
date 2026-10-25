@@ -39,3 +39,7 @@ export type {
   PluginStateReadResult,
   PluginsState,
 } from "./state.js";
+// Taskana 4732 S1-B: semver helpers shared with the desktop main store —
+// re-exported here so `@anycode/core/plugins` stays the one import surface
+// for plugin semver (discovery's own engines gating uses the same module).
+export { isValidSemver, parseSemver, rangeMatches, normalizeSemverRange } from "../util/semver-range.js";

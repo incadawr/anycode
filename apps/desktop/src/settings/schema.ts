@@ -357,6 +357,29 @@ export const rolesSchema = z
   .optional()
   .catch(undefined);
 
+// Taskana 4732 S1-B (design §4/§7): per-plugin MCP-server consent entries.
+// Keyed by the manifest's serversHash so ANY server/arg change invalidates
+// the grant (host discovery enforces; this schema only validates the shape).
+const mcpConsentEntrySchema = z.object({
+  plugin: z.string().min(1),
+  serversHash: z.string().min(1),
+  grantedAt: z.string(),
+});
+
+// The `plugins` settings block. `autoUpdateOfficial` absent = false (the
+// scheduler never auto-installs without it); `officialIndexUrl` is a
+// dev/automation override never written by the app; `mcpConsent` undefined =
+// not yet migrated, `[]` = explicitly declined everything.
+const pluginsSettingsSchema = z
+  .object({
+    autoUpdateOfficial: z.boolean().optional(),
+    officialIndexUrl: z.string().url().optional(),
+    mcpConsent: z.array(mcpConsentEntrySchema),
+  })
+  .strict()
+  .optional()
+  .catch(undefined);
+
 const codexProfilesArraySchema = z.preprocess(
   (raw) => parseElementsTolerantly(codexProfileSchema, raw),
   z.array(codexProfileSchema),
@@ -735,6 +758,12 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // means "built-in defaults"; the whole-object catch degrades a corrupt
     // value alone.
     roles: rolesSchema,
+    // Plugins control-plane (Taskana 4732 S1-B, design §7; additive-optional,
+    // version NOT bumped). Declared explicitly (not left to `.passthrough()`)
+    // so it validates and survives a read-modify-write cycle. The whole-object
+    // `.catch(undefined)` keeps the fail-soft document contract: a corrupt
+    // `plugins` value degrades alone, every sibling section survives.
+    plugins: pluginsSettingsSchema,
   })
   .passthrough() as unknown as z.ZodType<AnycodeSettings>;
 

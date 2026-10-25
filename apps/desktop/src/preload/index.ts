@@ -118,6 +118,26 @@ import type {
   ProxyProfileUpsertRequest,
   ProxyRefSetRequest,
 } from "../shared/proxy.js";
+import {
+  PLUGINS_APPROVE_MCP_CHANNEL,
+  PLUGINS_CHANGED_CHANNEL,
+  PLUGINS_CHECK_UPDATES_CHANNEL,
+  PLUGINS_INSTALL_COMMIT_CHANNEL,
+  PLUGINS_INSTALL_PREPARE_CHANNEL,
+  PLUGINS_LIST_CHANNEL,
+  PLUGINS_REMOVE_CHANNEL,
+  PLUGINS_REVEAL_CHANNEL,
+  PLUGINS_ROLLBACK_CHANNEL,
+  PLUGINS_SET_AUTO_UPDATE_CHANNEL,
+  PLUGINS_SET_ENABLED_CHANNEL,
+  PLUGINS_SET_PINNED_CHANNEL,
+  PLUGINS_UPDATE_CHANNEL,
+  type PluginInstallPrepareResult,
+  type PluginInstallSource,
+  type PluginsChangedReason,
+  type PluginsMutationResult,
+  type PluginsSnapshot,
+} from "../shared/plugins-config.js";
 import { RECOGNIZER_PROBE_CHANNEL, RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
 import {
   WORKSPACE_TRUST_DECIDE_CHANNEL,
@@ -790,6 +810,44 @@ contextBridge.exposeInMainWorld("anycode", {
       }
       ipcRenderer.on(CLAUDE_SNAPSHOT_CHANGED_CHANNEL, listener);
       return () => ipcRenderer.removeListener(CLAUDE_SNAPSHOT_CHANGED_CHANNEL, listener);
+    },
+  },
+  // Taskana 4732 S1-B (design §7): `plugins.*` — thin invoke wrappers over
+  // the plugins control-plane channels in main/plugins-ipc.ts. Same narrow
+  // rule as skills/subagents: the renderer sends NAMEs and_KIND sources only
+  // — never filesystem paths (path custody, design §4). install is two-phase:
+  // prepare returns a preview + token; commit sends the token back.
+  plugins: {
+    list: (): Promise<PluginsSnapshot> =>
+      ipcRenderer.invoke(PLUGINS_LIST_CHANNEL) as Promise<PluginsSnapshot>,
+    checkUpdates: (): Promise<PluginsSnapshot> =>
+      ipcRenderer.invoke(PLUGINS_CHECK_UPDATES_CHANNEL) as Promise<PluginsSnapshot>,
+    installPrepare: (source: PluginInstallSource): Promise<PluginInstallPrepareResult> =>
+      ipcRenderer.invoke(PLUGINS_INSTALL_PREPARE_CHANNEL, { source }) as Promise<PluginInstallPrepareResult>,
+    installCommit: (token: string, source: PluginInstallSource): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: string; detail?: string }> =>
+      ipcRenderer.invoke(PLUGINS_INSTALL_COMMIT_CHANNEL, { token, source }),
+    update: (name: string): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_UPDATE_CHANNEL, { name }) as Promise<PluginsMutationResult>,
+    rollback: (name: string): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_ROLLBACK_CHANNEL, { name }) as Promise<PluginsMutationResult>,
+    setPinned: (name: string, value: boolean): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_SET_PINNED_CHANNEL, { name, value }) as Promise<PluginsMutationResult>,
+    setEnabled: (name: string, value: boolean): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_SET_ENABLED_CHANNEL, { name, value }) as Promise<PluginsMutationResult>,
+    remove: (name: string): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_REMOVE_CHANNEL, { name }) as Promise<PluginsMutationResult>,
+    approveMcp: (name: string): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_APPROVE_MCP_CHANNEL, { name }) as Promise<PluginsMutationResult>,
+    reveal: (name: string): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_REVEAL_CHANNEL, { name }) as Promise<PluginsMutationResult>,
+    setAutoUpdate: (value: boolean): Promise<PluginsMutationResult> =>
+      ipcRenderer.invoke(PLUGINS_SET_AUTO_UPDATE_CHANNEL, { value }) as Promise<PluginsMutationResult>,
+    onChanged: (callback: (reason: PluginsChangedReason) => void): (() => void) => {
+      function listener(_event: unknown, payload: { reason: PluginsChangedReason }): void {
+        callback(payload.reason);
+      }
+      ipcRenderer.on(PLUGINS_CHANGED_CHANNEL, listener);
+      return () => ipcRenderer.removeListener(PLUGINS_CHANGED_CHANNEL, listener);
     },
   },
   settings: {

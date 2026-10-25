@@ -89,6 +89,7 @@ import {
   type RecognizerFingerprint,
 } from "../shared/recognizer.js";
 import {
+  ENV_APP_VERSION,
   applyCodexProfilesHomeOverride,
   applySubagentsHomeOverride,
   buildHostEnv,
@@ -134,6 +135,16 @@ import { NodeProfileFs, registerProfileIpc } from "./profile-ipc.js";
 // Taskana 4109 (old TASK.122): telemetry-directory retention sweep.
 import { startTelemetryRetention, type TelemetryRetentionHandle } from "./telemetry-retention.js";
 import { NodeSkillsFs, registerSkillsIpc } from "./skills-ipc.js";
+import { NodePluginsFs } from "./plugins-fs.js";
+import { registerPluginsIpc, type PluginsIpc } from "./plugins-ipc.js";
+import {
+  gcStore,
+  legacyMcpGrandfathering,
+  wipeStaging,
+  statePath as pluginStatePath,
+} from "./plugins/store.js";
+import { createPluginsScheduler, type PluginsScheduler } from "./plugins/scheduler.js";
+import { isOfficialChannelConfigured } from "../shared/plugin-trust.js";
 import { NodeSubagentsFs, registerSubagentsIpc } from "./subagents-ipc.js";
 import {
   ArtifactConsentStore,
@@ -532,6 +543,10 @@ let quitting = false;
 let settingsPathForQuitFlush: string | null = null;
 /** Auto-updater controller (TASK.47 W15) — held module-level so before-quit can clear its armed schedule timer. Null until boot registers it. */
 let updaterController: UpdaterController | null = null;
+/** Taskana 4732 S1-B: the plugins control-plane handle (shutdown cancel + snapshot push). */
+let pluginsIpc: PluginsIpc | undefined;
+/** Taskana 4732 S1-B: the periodic official-index check scheduler (cancelled at quit). */
+let pluginsScheduler: PluginsScheduler | undefined;
 
 
 
@@ -1475,6 +1490,9 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   // longer exists by construction.
   applyCodexProfilesHomeOverride(env, codexProfilesHome ?? null);
   env.ANYCODE_DIAGNOSTICS_DIR = join(app.getPath("userData"), "diagnostics");
+  // Taskana 4732 S1-B (design §7): the app-version carrier for the host's
+  // plugin engines gating — app.getVersion() stamped into every fork env.
+  env[ENV_APP_VERSION] = app.getVersion();
   const connection = activeConnection(current);
   const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
   const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
@@ -2984,6 +3002,120 @@ void app.whenReady().then(async () => {
   // testable off a plain deps bag.
   registerArtifactsIpc(artifactsIpcDeps);
 
+  // Taskana 4732 S1-B (design §5/§7): the plugins control plane. IPC
+  // registers synchronously; the maintenance passes — staging wipe (crash
+  // residue), store GC (versions outside {active, previous}), legacy MCP
+  // grandfathering (one-shot consent for pre-S1 user-dir MCP plugins) — run
+  // fire-and-forget exactly like the Codex doctor chain above: a slow disk
+  // must not delay the window or the updater registration. Order among the
+  // three is still sequential (wipe → GC → grandfather → scheduler arm);
+  // installs cannot race them because install IPC is registered but the
+  // renderer only reaches it after load.
+  if (selfCheckProfile === undefined) {
+    const pluginsHome = homedir();
+    const pluginsFs = new NodePluginsFs();
+    let localPluginsIpc: PluginsIpc | undefined;
+    pluginsIpc = registerPluginsIpc({
+      home: pluginsHome,
+      appVersion: app.getVersion(),
+      isPackaged: app.isPackaged,
+      fs: pluginsFs,
+      workspace: pluginsHome,
+      settings: {
+        getPlugins: async () => {
+          const current = settings ?? (await loadSettings(settingsPath, fileLogger)).settings;
+          return {
+            autoUpdateOfficial: current.plugins?.autoUpdateOfficial ?? false,
+            ...(current.plugins?.officialIndexUrl !== undefined ? { officialIndexUrl: current.plugins?.officialIndexUrl } : {}),
+            ...(current.plugins?.mcpConsent !== undefined ? { mcpConsent: current.plugins.mcpConsent } : {}),
+          };
+        },
+        setAutoUpdateOfficial: async (value) => {
+          await withSettingsFileLock(settingsPath, async () => {
+            const current = await loadSettings(settingsPath, fileLogger);
+            await saveSettings(settingsPath, {
+              ...current.settings,
+              plugins: { ...(current.settings.plugins ?? {}), autoUpdateOfficial: value },
+            });
+          });
+          settings = (await loadSettings(settingsPath, fileLogger)).settings;
+        },
+        setMcpConsent: async (entries) => {
+          await withSettingsFileLock(settingsPath, async () => {
+            const current = await loadSettings(settingsPath, fileLogger);
+            if (current.settings.plugins?.mcpConsent !== undefined) return; // lost a race: keep the winner
+            await saveSettings(settingsPath, {
+              ...current.settings,
+              plugins: { ...(current.settings.plugins ?? {}), mcpConsent: [...entries] },
+            });
+          });
+          settings = (await loadSettings(settingsPath, fileLogger)).settings;
+        },
+      },
+      pickTgzFile: async () => {
+        const result = await dialog.showOpenDialog(win!, {
+          properties: ["openFile"],
+          filters: [{ name: "AnyCode plugin archive (.tgz)", extensions: ["tgz", "tar.gz"] }],
+        });
+        return result.canceled ? undefined : result.filePaths[0];
+      },
+      pickPluginFolder: async () => {
+        const result = await dialog.showOpenDialog(win!, { properties: ["openDirectory"] });
+        return result.canceled ? undefined : result.filePaths[0];
+      },
+      revealPath: (path) => shell.showItemInFolder(path),
+      getWindows: () => BrowserWindow.getAllWindows(),
+      logger: fileLogger,
+    });
+    localPluginsIpc = pluginsIpc;
+    void (async () => {
+      await wipeStaging(pluginsFs, pluginsHome).catch((error) =>
+        fileLogger.warn(`[plugins] staging wipe failed (continuing): ${error instanceof Error ? error.message : String(error)}`),
+      );
+      const gc = await gcStore(pluginsFs, pluginsHome).catch((error) => {
+        fileLogger.warn(`[plugins] store GC failed (continuing): ${error instanceof Error ? error.message : String(error)}`);
+        return { removed: [], problems: [] };
+      });
+      for (const problem of gc.problems) {
+        console.log(`[plugins] ${problem}`);
+      }
+      await legacyMcpGrandfathering({
+        home: pluginsHome,
+        appVersion: app.getVersion(),
+        fs: pluginsFs,
+        now: () => Date.now(),
+        readMcpConsent: async () => {
+          const current = await loadSettings(settingsPath, fileLogger);
+          return current.settings.plugins?.mcpConsent;
+        },
+        writeMcpConsent: async (entries) => {
+          await withSettingsFileLock(settingsPath, async () => {
+            const current = await loadSettings(settingsPath, fileLogger);
+            if (current.settings.plugins?.mcpConsent !== undefined) return; // lost a race: keep the winner
+            await saveSettings(settingsPath, {
+              ...current.settings,
+              plugins: { ...(current.settings.plugins ?? {}), mcpConsent: [...entries] },
+            });
+          });
+        },
+      }).catch((error) =>
+        fileLogger.warn(`[plugins] legacy MCP grandfathering failed (continuing): ${error instanceof Error ? error.message : String(error)}`),
+      );
+      if (isOfficialChannelConfigured()) {
+        pluginsScheduler = createPluginsScheduler({
+          runPass: async () => ({ ...(await localPluginsIpc!.runUpdatePass()), needsApproval: [] }),
+          shouldRun: () =>
+            BrowserWindow.getAllWindows().length > 0 &&
+            (settings?.plugins?.autoUpdateOfficial ?? false),
+          logger: { warn: (message, ...args) => fileLogger.warn(message, ...args), info: (message, ...args) => console.log(message, ...args) },
+        });
+        pluginsScheduler.start();
+      } else {
+        console.log("[plugins] official channel not configured (test keys only) — periodic checks disabled");
+      }
+    })();
+  }
+
   // Profile-stats control plane (design/slice-P7.22-cut.md §2-D5 W2): mirrors
   // the skills/subagents registration exactly. `home` resolves via
   // `ANYCODE_PROFILE_HOME` ONLY under the same dev/automation double gate as
@@ -3134,6 +3266,9 @@ async function shutdownEverything(): Promise<void> {
   // awaited teardown below, so no sweep can start mid-shutdown.
   telemetryRetention?.stop();
   telemetryRetention = null;
+  // Taskana 4732 S1-B: cancel the plugins update scheduler's armed check.
+  pluginsScheduler?.stop();
+  pluginsScheduler = undefined;
   const activeManager = manager;
   const activePersistence = persistence;
   const activeOnboarding = codexOnboarding;

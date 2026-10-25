@@ -159,6 +159,23 @@ export const ENV_RECOGNIZER_MODEL = "ANYCODE_RECOGNIZER_MODEL";
 export const ENV_RECOGNIZER_PROVIDER_NAME = "ANYCODE_RECOGNIZER_PROVIDER_NAME";
 
 /**
+ * Taskana 4732 S1-B (design §7 host wiring): the app version carrier. Main
+ * stamps the ELECTRON app version (app.getVersion()) into every host fork's
+ * env; the host reads it (trimmed-non-empty-or-undefined, same convention as
+ * ENV_SETTINGS_PATH) and passes it to discoverExtensions as `appVersion`, so
+ * plugin `engines.anycode` gating in the host matches the store's compat
+ * checks exactly. Absent (bare test-harness boots, pre-S1-B main) keeps
+ * discovery byte-identical — core omits the field entirely.
+ */
+export const ENV_APP_VERSION = "ANYCODE_APP_VERSION";
+
+/** trimmed-non-empty-or-undefined read of {@link ENV_APP_VERSION} (host-side helper). */
+export function parseAppVersionEnv(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+}
+
+/**
  * The four proxy env vars a connection's `proxyUrl` materialises as (TASK.132),
  * treated as ONE atomic family — see `applyConnectionProxy`. Both cases of both
  * names are emitted because the consumers disagree: node/undici reads the

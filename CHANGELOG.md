@@ -9,6 +9,24 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Plugin store, signed official index, updates and rollback (Taskana 4732,
+  stage 1 main). AnyCode can now install plugins from a signed official
+  channel: the index is ed25519-verified over its exact bytes (with
+  serial anti-rollback and expiry), artifacts are pinned by sha256+size,
+  and archives pass a hardened extraction (regular files only, contained
+  paths, size/entry caps, gzip-bomb refusal) before landing atomically in
+  `~/.anycode/plugins/.store/<name>/<version>`. Official plugins update in
+  the background on a ~24h jittered schedule — only when the capability
+  set did not grow (any new MCP server or hook needs your explicit OK) —
+  with one-click rollback+pin and boot-time cleanup of stale versions.
+  Existing hand-dropped plugin folders keep working unchanged and get a
+  one-time MCP consent carried over; a boot with no plugins is
+  byte-identical. Settings gain an optional `plugins` block
+  (`autoUpdateOfficial`, `mcpConsent`); the app passes its version into
+  plugin `engines` checks via `ANYCODE_APP_VERSION`. Packaging scripts for
+  the channel live in `scripts/plugins/` (`keygen`, `sign-index`,
+  `verify-index`); until production keys are minted the official channel
+  reports "not configured" in packaged builds and never auto-installs.
 - Plugin manifest v1 groundwork (Taskana 4732, stage 1 core): plugins can
   declare `displayName`, `publisher`, `author`, `homepage`, `license`, an
   `engines.anycode` compatibility range (a plugin needing a newer AnyCode

@@ -325,6 +325,7 @@ import { attachChildReportDurability, attachEngineChildReportDurability } from "
 import { createSpawnModeCell } from "./spawn-mode-cell.js";
 import { RoleHealthCache, decideRoutedTerminal, entryLabel, pickEntry, resolveRoleRouteChain, respawnReportId, toCoreEntry } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
+import { ENV_APP_VERSION, parseAppVersionEnv } from "../main/host-env.js";
 import { readFileSync } from "node:fs";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
@@ -554,6 +555,27 @@ function refreshRolesSettings(): void {
   }
 }
 refreshRolesSettings();
+
+/**
+ * Taskana 4732 S1-B (design §4/§7): plugins settings cell — same live-cell
+ * pattern as rolesSettings. Carries ONLY what discovery needs: the MCP
+ * consent list (`mcpConsent`, keyed by serversHash; undefined = never
+ * migrated/granted, [] = explicitly declined). Refreshed at boot and on
+ * every settings change notification, read fail-soft (absent block =
+ * undefined, byte-identical pre-S1-B discovery).
+ */
+type PluginsSettings = NonNullable<import("../shared/settings.js").AnycodeSettings["plugins"]>;
+let pluginsSettings: PluginsSettings | undefined;
+function refreshPluginsSettings(): void {
+  try {
+    const raw = JSON.parse(readFileSync(defaultSettingsPath(), "utf8"));
+    const parsed = parseSettings(raw);
+    pluginsSettings = parsed.status === "ok" ? parsed.settings.plugins : undefined;
+  } catch {
+    pluginsSettings = undefined;
+  }
+}
+refreshPluginsSettings();
 
 /**
  * Taskana 4704 §3.6: the host-side role-route resolver — the ONE port method
@@ -2552,6 +2574,10 @@ async function boot(): Promise<void> {
     // Taskana 4736: decide the workspace trust gate ONCE, before any engine, hook,
     // LSP, MCP or plugin wiring. A pending decision is reported to main on the
     // control channel (main keys the answer by tab and hash, never by the UI).
+    // Taskana 4732 S1-B: the app-version carrier (main stamps app.getVersion()
+    // into the fork env as ANYCODE_APP_VERSION). Read once, fail-soft — absent
+    // (bare test harness) leaves discovery byte-identical.
+    const hostAppVersion = parseAppVersionEnv(process.env[ENV_APP_VERSION]);
     hostWorkspaceTrust = await establishHostWorkspaceTrust(new NodeFileSystemAdapter(), {
       workspace,
       home: homedir(),
@@ -3245,6 +3271,15 @@ async function boot(): Promise<void> {
         repoMapConfig,
         projectTrusted: hostWorkspaceTrust.projectTrusted,
         ...(builtinSkills.length > 0 ? { builtinSkills } : {}),
+        // Taskana 4732 S1-B (design §7 host wiring): app version (the
+        // ANYCODE_APP_VERSION carrier main stamps from app.getVersion()) +
+        // the MCP consent list from settings `plugins.mcpConsent`. Both
+        // conditional so a bare boot (no env var, no settings block) keeps
+        // discovery byte-identical. 4736 interplay: projectTrusted above
+        // already gates project-tier plugin MCP; mcpConsent governs the
+        // user-tier (official/third-party/local/legacy) plugins only.
+        ...(hostAppVersion !== undefined ? { appVersion: hostAppVersion } : {}),
+        ...(pluginsSettings?.mcpConsent !== undefined ? { mcpConsent: pluginsSettings.mcpConsent } : {}),
       });
     } catch (error) {
       console.error(`[host] extensions discovery failed; continuing with zero skills/agent profiles/plugins: ${describeError(error)}`);

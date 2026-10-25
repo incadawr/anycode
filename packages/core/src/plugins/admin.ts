@@ -340,5 +340,9 @@ export {
   pluginWorkflowsDirs,
   MANIFEST_VERSION,
   OFFICIAL_ONLY_CONTRIBUTIONS,
+  PLUGIN_NAME_RE,
 } from "./manifest.js";
 export type { PluginManifest, PluginCapabilities } from "./manifest.js";
+// Taskana 4732 S1-B: the desktop main store reuses the same semver helpers
+// discovery's engines gating uses (one implementation of the grammar).
+export { isValidSemver, parseSemver, rangeMatches, normalizeSemverRange } from "../util/semver-range.js";

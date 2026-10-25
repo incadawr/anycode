@@ -772,6 +772,60 @@ describe("codex.profiles (codex-profiles cut §2.3, amended §A1.1) — round-tr
   });
 });
 
+describe("plugins (Taskana 4732 S1-B, design §7, additive-optional)", () => {
+  it("reads a file with no plugins field, round-tripping byte-identically (v2)", () => {
+    const legacy = cloneDefaults();
+    const before = JSON.stringify(legacy);
+    const result = parseSettings(JSON.parse(before));
+    expect(result.status).toBe("ok");
+    expect(result.settings.plugins).toBeUndefined();
+    expect(JSON.stringify(result.settings)).toBe(before); // byte-identical round-trip
+  });
+
+  it("validates a populated plugins block", () => {
+    const withPlugins: AnycodeSettings = {
+      ...cloneDefaults(),
+      plugins: {
+        autoUpdateOfficial: true,
+        mcpConsent: [
+          { plugin: "anycode-essentials", serversHash: "abc123", grantedAt: "2026-10-20T00:00:00.000Z" },
+        ],
+      },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withPlugins)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.plugins?.autoUpdateOfficial).toBe(true);
+      expect(parsed.data.plugins?.mcpConsent).toHaveLength(1);
+    }
+  });
+
+  it("an empty mcpConsent array round-trips as [] (explicitly declined everything)", () => {
+    const withPlugins: AnycodeSettings = {
+      ...cloneDefaults(),
+      plugins: { mcpConsent: [] },
+    };
+    const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withPlugins)));
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.plugins?.mcpConsent).toEqual([]);
+    }
+  });
+
+  it("a corrupt plugins block degrades alone (catch -> undefined, siblings intact)", () => {
+    const bad = {
+      ...cloneDefaults(),
+      plugins: { autoUpdateOfficial: "yes please" },
+    };
+    const parsed = settingsSchema.safeParse(bad);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.plugins).toBeUndefined();
+      expect(parsed.data.ui.theme).toBe(cloneDefaults().ui.theme);
+    }
+  });
+});
+
 describe("isHttpsOrLocalhostUrl (cut §9.2, amendment-1 FX2-1 — single source of truth, re-exported by main/provider-ipc.ts)", () => {
   it("accepts https with no userinfo, for any host", () => {
     expect(isHttpsOrLocalhostUrl("https://api.example.com")).toBe(true);
