@@ -2181,7 +2181,6 @@ async function bootClaudeSession(
         onDetachedTerminal: deliverDetachedChildReport,
         onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
         onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
-        onDetachedStall: deliverDetachedChildStall,
         onDetachedTurnBudget: deliverDetachedTurnBudgetNotice,
       });
       claudeChildPort = childPort;
@@ -4237,7 +4236,6 @@ async function boot(): Promise<void> {
         // picture (queue coalescing, id namespacing).
         onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
         onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
-        onDetachedStall: deliverDetachedChildStall,
         // Taskana 4820: the approaching-turn-budget seam — fires once per
         // detached run, strictly before the terminal. See
         // deliverDetachedTurnBudgetNotice's own comment.
